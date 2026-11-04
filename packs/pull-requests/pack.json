@@ -35,13 +35,6 @@
   ],
   "settings": [
     {
-      "key": "pull-requests.reviewRounds",
-      "question": "After how many review rounds should agents stop and ask you?",
-      "type": "number",
-      "default": 3,
-      "ask": "never"
-    },
-    {
       "key": "pull-requests.commentApproval",
       "question": "Which comments should agents show you before they post them?",
       "type": "choice",
@@ -68,6 +61,34 @@
       "type": "string",
       "default": "gh pr merge --merge",
       "ask": "never"
+    },
+    {
+      "key": "pull-requests.freeReviews",
+      "question": "How many review rounds may run before the review arbiter decides whether another round is worth it?",
+      "type": "number",
+      "default": 2,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.reviewCeiling",
+      "question": "After how many review rounds does review stop for good?",
+      "type": "number",
+      "default": 6,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.reviewTimeoutMinutes",
+      "question": "How many minutes may one review run before it counts as failed?",
+      "type": "number",
+      "default": 20,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.panelSlots",
+      "question": "How many reviewers may run at once in a review panel?",
+      "type": "number",
+      "default": 3,
+      "ask": "never"
     }
   ],
   "workflows": [
@@ -79,7 +100,10 @@
         "gh"
       ],
       "settings": [
-        "pull-requests.reviewRounds"
+        "pull-requests.freeReviews",
+        "pull-requests.reviewCeiling",
+        "pull-requests.reviewTimeoutMinutes",
+        "pull-requests.panelSlots"
       ],
       "sentence": "Every fix or feature ends as a proven, reviewed draft pull request that you mark ready yourself.",
       "moment": {
