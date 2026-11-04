@@ -1,12 +1,21 @@
-import type { AiPlan, LoadedPack, PackSetting, Preset, ProfileFile, SettingValue } from "../pack/types.ts";
+import type { AiPlan, AvailableSource, LoadedPack, PackSetting, Preset, ProfileFile, SettingValue } from "../pack/types.ts";
 import { workflowDefaults, workflowOverrides } from "../profile/profile.ts";
 import { FlagError, hasPicks, parseSettingValue, type SetupFlags } from "./flags.ts";
 import type { Step, StepOutcome } from "./runner.ts";
+import { teamSources } from "./signins.ts";
 import type { Terminal } from "./terminal.ts";
 
 export type Draft = Partial<Pick<ProfileFile, "packs" | "plan" | "settings" | "workflows" | "sources">>;
 
-export type Catalog = { packs: LoadedPack[]; presets: Preset[] };
+export type Catalog = {
+  presets: Preset[];
+  /** The engine source first, then each team source. */
+  sources: AvailableSource[];
+  packs: LoadedPack[];
+  /** Packs from team sources: setup offers them only to the team's members, and ticks them by default. */
+  teamPacks: string[];
+  add(source: AvailableSource): void;
+};
 
 export type QuestionContext = {
   terminal: Terminal;
@@ -38,6 +47,10 @@ export function settingSteps(context: QuestionContext, asked: PackSetting[]): St
     .map((setting) => ({ id: `setting:${setting.key}`, title: setting.question, minutes: 0.5, kind: "question" as const, run: () => askSetting(context, setting) }));
 }
 
+function presetPacks(preset: Preset, catalog: Catalog) {
+  return [...new Set([...preset.packs, ...catalog.teamPacks])];
+}
+
 export function choosablePacks(catalog: Catalog) {
   const order = [...new Set(catalog.presets.flatMap((preset) => preset.packs))];
   const rank = (name: string) => (order.includes(name) ? order.indexOf(name) : order.length);
@@ -52,12 +65,12 @@ export function picksFrom(flags: SetupFlags, catalog: Catalog): Required<Pick<Dr
   const presetId = flags.preset ?? defaultPreset;
   const preset = catalog.presets.find((item) => item.id === presetId);
   if (!preset) throw new FlagError(`--preset ${presetId}: choose ${catalog.presets.map((item) => item.id).join(", ")}`);
-  const names = new Set(choosablePacks(catalog).map((manifest) => manifest.name));
+  const names = new Set([...choosablePacks(catalog).map((manifest) => manifest.name), ...teamSources.map((team) => team.source.name)]);
   for (const name of [...flags.add, ...flags.remove]) {
     if (name === "base") throw new FlagError("the base pack is always on");
     if (!names.has(name)) throw new FlagError(`no pack named ${name}. Packs: ${[...names].join(", ")}`);
   }
-  const packs = [...new Set([...preset.packs, ...flags.add])].filter((name) => !flags.remove.includes(name));
+  const packs = [...new Set([...presetPacks(preset, catalog), ...flags.add])].filter((name) => !flags.remove.includes(name));
   const [unmet] = unmetNeeds(packs, catalog);
   if (unmet) throw new FlagError(`${title(unmet.pack)} needs ${unmet.needs.map(title).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const manifests = catalog.packs.map((pack) => pack.manifest);
@@ -102,10 +115,10 @@ async function askPacks(context: QuestionContext): Promise<StepOutcome> {
     if (reply === "keep") return context.answer(picked).then(() => show(picked));
   }
   const presets = [...catalog.presets].sort((left, right) => Number(right.id === defaultPreset) - Number(left.id === defaultPreset));
-  const lines = [...presets.map((preset) => `${preset.name}  ${packList(preset.packs, catalog)}`), "One by one"];
+  const lines = [...presets.map((preset) => `${preset.name}  ${packList(presetPacks(preset, catalog), catalog)}`), "One by one"];
   const fallback = presets.findIndex((preset) => preset.id === defaultPreset);
   const index = await chooseFrom(terminal, lines, fallback, presets[fallback]!.name);
-  const chosen = index < presets.length ? { packs: presets[index]!.packs, workflows: workflowOverrides(presets[index]!.workflows, catalog.packs.map((pack) => pack.manifest)) } : await oneByOne(terminal, catalog, picked.packs);
+  const chosen = index < presets.length ? { packs: presetPacks(presets[index]!, catalog), workflows: workflowOverrides(presets[index]!.workflows, catalog.packs.map((pack) => pack.manifest)) } : await oneByOne(terminal, catalog, picked.packs);
   await context.answer(chosen);
   show(chosen);
 }

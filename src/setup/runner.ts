@@ -25,8 +25,9 @@ export type RunResult = { finished: boolean; unanswered: string[] };
 /**
  * Runs the first step that is not done, again and again, rebuilding the list
  * each time because answers add and remove steps. A question that a run
- * without a person cannot answer is left open, and the run stops before the
- * first step that is not a question.
+ * without a person cannot answer, or a sign-in it cannot wait for, is left
+ * open, and the run stops before the next step that is not a question,
+ * because a passing sign-in goes on to change the machine.
  */
 export async function runSteps(steps: () => Step[], options: RunOptions): Promise<RunResult> {
   const done = new Set(options.done);

@@ -61,6 +61,18 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, jobs } }))).rejects.toThrow("job prune runs on t3 but has no task");
   });
 
+  test("rejects a step that waits for a human step the pack does not declare", async () => {
+    const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"] }];
+    expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder" }] } }))).resolves.toHaveLength(1);
+    expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "github" }] } }))).rejects.toThrow("steps start: after must name a human step of this pack");
+  });
+
+  test("rejects a step that runs on machines its human step does not", async () => {
+    const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"], on: ["darwin"] }];
+    expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder", on: ["darwin"] }] } }))).resolves.toHaveLength(1);
+    expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder" }] } }))).rejects.toThrow("steps start: runs where its human step coder does not; give it the same on");
+  });
+
   test("rejects malformed nested items with a clear error", async () => {
     const setting = base.settings[0];
     const row = { role: "review", work: "Review", provider: "codex", model: "m", effort: "high" };

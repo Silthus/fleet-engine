@@ -12,7 +12,7 @@ import { readNotice, update } from "./update.ts";
 import { setup, type SetupOptions } from "./setup/setup.ts";
 import { ttyTerminal, type Terminal } from "./setup/terminal.ts";
 
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; setup?: Pick<SetupOptions, "has"> };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; setup?: Pick<SetupOptions, "machine" | "fetchSource"> };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
