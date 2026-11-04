@@ -1,5 +1,5 @@
 import {
-  lastActivityAt, listLinkedProjects, listLinkedThreads, readLinkedThread, readSnapshots, readThread, readThreadWords, readTurnItems, withT3Session,
+  lastActivityAt, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedThread, readSnapshots, readThread, readThreadWords, readTurnItems, withT3Session,
   type LinkedThread, type LinkedTimelineItem, type ShellPullRequest, type ShellSnapshot, type T3Client, type T3HttpClient, type T3SessionOptions, type ThreadWord,
 } from "../../base/lib/t3/index.ts";
 import { liveStatuses, pickMachine, readEachMachine, readMachines, type MachineReport } from "./machines.ts";
@@ -108,7 +108,8 @@ export async function readLinkedWorkSince(client: T3HttpClient, environmentId: s
     return {
       id: thread.threadId, title: thread.title, project: projects.get(thread.projectId) ?? thread.projectId, status: thread.status, branch,
       pullRequests: pullRequestKeys(thread.pullRequests ?? []),
-      messages: items.filter((item) => item.type === "user_message" && item.createdBy === "user" && item.updatedAt >= from && item.text).map((item) => item.text!),
+      messages: await Promise.all(items.filter((item) => item.type === "user_message" && item.createdBy === "user" && item.updatedAt >= from && item.text)
+        .map(async (item) => (await readLinkedItemText(client, environmentId, thread.threadId, item))!)),
     };
   }));
   return work.filter((thread) => thread.messages.length);
@@ -116,9 +117,9 @@ export async function readLinkedWorkSince(client: T3HttpClient, environmentId: s
 
 async function readLinkedMessages(client: T3HttpClient, environmentId: string, threadId: string): Promise<{ branch: string | null; items: LinkedTimelineItem[] }> {
   const items: LinkedTimelineItem[] = [];
-  let afterPosition = -1;
+  let afterPosition: number | undefined;
   for (;;) {
-    const page = await readLinkedThread(client, environmentId, { threadId, view: "messages", afterPosition, limit: 100, maxCharsPerItem: 50_000 });
+    const page = await readLinkedThread(client, environmentId, { threadId, view: "messages", ...(afterPosition === undefined ? {} : { afterPosition }), limit: 100, maxCharsPerItem: 50_000 });
     items.push(...page.items);
     if (!page.hasMore || page.nextPosition === null) return { branch: page.thread.branch, items };
     afterPosition = page.nextPosition;
