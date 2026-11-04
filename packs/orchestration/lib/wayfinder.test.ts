@@ -32,6 +32,9 @@ test("a fence closes only on the same character, at least as long as its opener,
   expect(proseLines("a\n```\n```js\nhidden\n```\nb")).toEqual(["a", "b"]);
   expect(proseLines("a\n```\nhidden\n`````  \nb")).toEqual(["a", "b"]);
   expect(proseLines("a\n```a`b\nshown")).toEqual(["a", "```a`b", "shown"]);
+  expect(proseLines("a\n```\n    ```\n- hidden\n```\nb")).toEqual(["a", "b"]);
+  expect(proseLines("- item\n    ```\n    code\n    ```\nafter")).toEqual(["- item", "after"]);
+  expect(proseLines("- item\n  ```\n  code\n     ```\nafter")).toEqual(["- item", "after"]);
   expect(proseLines("a\n````\nhidden to the end\n```")).toEqual(["a"]);
 });
 

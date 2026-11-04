@@ -38,12 +38,13 @@ test("no tracker comes from a profile without a GitHub origin", async () => {
 
 test("only a github.com origin, in its SSH or HTTPS form, names the tracker", async () => {
   const accepted = [
-    "https://github.com/acme/maps/", "git@github.com:acme/maps", "ssh://git@github.com/acme/maps", "ssh://git@github.com/acme/maps.git",
+    "https://github.com/acme/maps/", "git@github.com:acme/maps", "ssh://git@github.com/acme/maps", "ssh://git@github.com/acme/maps.git", "ssh://git@github.com:22/acme/maps.git",
   ];
   const rejected = [
     "https://notgithub.com/acme/maps.git", "https://github.com.evil.test/acme/maps.git", "https://evil.test/github.com/acme/maps.git",
     "git@notgithub.com:acme/maps.git", "git@evil.test:github.com/acme/maps.git", "ssh://git@notgithub.com/acme/maps",
     "http://github.com/acme/maps.git", "https://github.com/acme/maps/tree/main", "https://github.com/acme", "git://github.com/acme/maps.git",
+    "ssh://git@github.com:2222/acme/maps.git", "https://github.com:8443/acme/maps.git",
   ];
   for (const origin of accepted) expect(mapTracker(undefined, await profileWithOrigin(origin))).toBe("acme/maps");
   for (const origin of rejected) expect([origin, mapTracker(undefined, await profileWithOrigin(origin))]).toEqual([origin, ""]);

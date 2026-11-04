@@ -194,7 +194,33 @@ test("fleet lessons skips malformed miss ledger entries with a warning, and stil
   await runLessons(["acme/maps#1"], io(home, lines, log, warnings));
 
   expect(lines.join("\n")).toBe([...failures, "", ...signals("this-box", log)].join("\n"));
-  expect(warnings).toEqual([1, 3, 4, 5, 6, 7].map((line) => `Skipped line ${line} of ${ledger}: ${line === 3 ? "not valid JSON" : "missing or mistyped fields"}.`));
+  expect(warnings).toEqual([
+    ...[1, 3, 4, 5, 6].map((line) => `Skipped line ${line} of ${ledger}: ${line === 3 ? "not valid JSON" : "missing or mistyped fields"}.`),
+    `Skipped 1 more line of ${ledger}.`,
+  ]);
+});
+
+test("fleet lessons caps the warnings for one file, and reads no ledger for a map without stack PRs", async () => {
+  const home = await temporaryHome();
+  const log = await writeLedger(home);
+  await writeFile(missesPath(home), Array.from({ length: 2000 }, () => "null").join("\n"));
+  await writeFile(log, Array.from({ length: 2000 }, () => "null").join("\n"));
+  const warnings: string[] = [];
+
+  await runLessons(["acme/maps#1"], io(home, [], log, warnings));
+  expect(warnings).toEqual([
+    ...[1, 2, 3, 4, 5].map((line) => `Skipped line ${line} of ${missesPath(home)}: missing or mistyped fields.`),
+    `Skipped 1995 more lines of ${missesPath(home)}.`,
+    ...[1, 2, 3, 4, 5].map((line) => `Skipped line ${line} of ${log}: missing or mistyped fields.`),
+    `Skipped 1995 more lines of ${log}.`,
+  ]);
+
+  const quiet: string[] = [];
+  await runLessons(["acme/maps#1"], {
+    ...io(home, [], log, quiet),
+    ...fixtureFetchers({ issues: [issueNode(repository, 1)], discussions: { "acme/maps#1": { body: "No stacks yet.", comments: [] } } }),
+  });
+  expect(quiet).toEqual([]);
 });
 
 test("fleet lessons refuses bad arguments", async () => {

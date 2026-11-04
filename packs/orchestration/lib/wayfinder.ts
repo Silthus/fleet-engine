@@ -15,8 +15,9 @@ export type MapIo = { print(line: string): void; tracker: Tracker; fetchIssue?: 
 
 export const parked = "wayfinder:awaiting-human";
 export const trackerSetting = "orchestration.tracker";
-const fenceOpener = /^\s*(`{3,}(?=[^`]*$)|~{3,})/;
-const fenceCloser = /^\s*(`{3,}|~{3,})\s*$/;
+const fenceOpener = /^(\s*)(`{3,}(?=[^`]*$)|~{3,})/;
+const fenceCloser = /^(\s*)(`{3,}|~{3,})\s*$/;
+type Fence = { indent: number; marker: string };
 
 export function mapRef(value: string, usage: string, tracker: Tracker = () => ""): MapRef {
   const bare = value.match(/^#?(\d+)$/);
@@ -34,20 +35,23 @@ function trackerRepository(tracker: string): { owner: string; repo: string } {
 }
 
 export function proseLines(text: string): string[] {
-  let opener: string | undefined;
+  let open: Fence | undefined;
   return text.split("\n").filter((line) => {
-    if (opener) {
-      if (closesFence(line, opener)) opener = undefined;
+    if (open) {
+      if (closesFence(line, open)) open = undefined;
       return false;
     }
-    opener = line.match(fenceOpener)?.[1];
-    return !opener;
+    const opener = line.match(fenceOpener);
+    open = opener ? { indent: opener[1]!.length, marker: opener[2]! } : undefined;
+    return !open;
   });
 }
 
-function closesFence(line: string, opener: string): boolean {
-  const closer = line.match(fenceCloser)?.[1];
-  return Boolean(closer && closer[0] === opener[0] && closer.length >= opener.length);
+function closesFence(line: string, open: Fence): boolean {
+  const closer = line.match(fenceCloser);
+  if (!closer || closer[1]!.length > open.indent + 3) return false;
+  const marker = closer[2]!;
+  return marker[0] === open.marker[0] && marker.length >= open.marker.length;
 }
 
 export function tableCell(text: string): string {

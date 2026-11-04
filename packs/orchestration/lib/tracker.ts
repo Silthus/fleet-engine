@@ -16,7 +16,8 @@ export function githubRepository(remote: string): string | undefined {
 
 function urlPath(remote: string): string | undefined {
   const url = URL.parse(remote);
-  if (!url || url.hostname !== "github.com" || url.port || url.search || url.hash) return undefined;
-  if (url.protocol === "https:" || (url.protocol === "ssh:" && url.username === "git" && !url.password)) return url.pathname.slice(1);
+  if (!url || url.hostname !== "github.com" || url.search || url.hash) return undefined;
+  if (url.protocol === "https:" && !url.port) return url.pathname.slice(1);
+  if (url.protocol === "ssh:" && url.username === "git" && !url.password && (url.port === "" || url.port === "22")) return url.pathname.slice(1);
   return undefined;
 }

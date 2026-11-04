@@ -86,6 +86,7 @@ function signalLines(pullRequests: PullRequest[], signals: Signals): string[] {
 }
 
 export function localReview(home: string, pullRequests: PullRequest[], warn: Warn): PrReview[] {
+  if (!pullRequests.length) return [];
   const misses = validLines(missesPath(home), missShape, warn);
   return pullRequests.map(({ repo, pr }) => {
     const reviews = join(ledgerRoot(home), repo, String(pr), "reviews");
@@ -102,8 +103,8 @@ export function localReview(home: string, pullRequests: PullRequest[], warn: War
 }
 
 function rolloutTrouble(rolloutLog: string, warn: Warn): (pr: PullRequest) => string[] {
-  const rollouts = rolloutLog ? validLines(rolloutLog, rolloutShape, warn) : [];
-  return ({ repo, pr }) => rollouts
+  let rollouts: Rollout[] | undefined;
+  return ({ repo, pr }) => (rollouts ??= rolloutLog ? validLines(rolloutLog, rolloutShape, warn) : [])
     .filter((entry) => entry.repo === repo && entry.pr === pr && settledRollouts.has(entry.state))
     .map((entry) => `rollout ${entry.state} at ${entry.stage}: ${entry.note}`);
 }
@@ -115,18 +116,24 @@ function rolloutSource(rolloutLog: string): string {
 
 const key = ({ repo, pr }: PullRequest) => `${repo}#${pr}`;
 
+const detailedWarnings = 5;
+
 function validLines<T>(path: string, shape: Shape<T>, warn: Warn): T[] {
   if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8").split("\n").flatMap((line, index) => {
+  let skipped = 0;
+  const valid = readFileSync(path, "utf8").split("\n").flatMap((line, index) => {
     if (!line.trim()) return [];
     const skip = (reason: string) => {
-      warn(`Skipped line ${index + 1} of ${path}: ${reason}.`);
+      if (++skipped <= detailedWarnings) warn(`Skipped line ${index + 1} of ${path}: ${reason}.`);
       return [];
     };
     let value: unknown;
     try { value = JSON.parse(line); } catch { return skip("not valid JSON"); }
     return matches(value, shape) ? [value as T] : skip("missing or mistyped fields");
   });
+  const more = skipped - detailedWarnings;
+  if (more > 0) warn(`Skipped ${more} more ${more === 1 ? "line" : "lines"} of ${path}.`);
+  return valid;
 }
 
 function matches<T>(value: unknown, shape: Shape<T>): boolean {
