@@ -50,7 +50,8 @@ COVERED: feature.txt
   const sweep = reviewer.prompts().at(-1)!;
   expect(sweep).toContain("Find what the other lenses missed.");
   expect(sweep).toContain("The findings of the other lenses, which you sweep:\n\n### Correctness\n\nFINDINGS:\n- feature.txt:1 | major");
-  const check = readFileSync(join(pr.pullRequest, "reviews/1/findings.md"), "utf8").split("## Anchor check")[1]!;
+  const check = readFileSync(join(pr.pullRequest, "reviews/1/anchors.md"), "utf8");
+  expect(readFileSync(join(pr.pullRequest, "reviews/1/findings.md"), "utf8")).not.toContain("## Anchor check");
   expect(check).toContain("Not in the diff, so check it before triage: - feature.txt:1 | minor");
   expect(check).not.toContain("| major |");
 });

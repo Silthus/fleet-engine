@@ -261,8 +261,9 @@ async function finishPanel(directory: string) {
   const identity = { repository: round.repository, pr: round.pr, commit: round.commit };
   const joined = answers.join("\n\n");
   const diff = plan.from ? roundDiff(plan, plan.from, round.commit) : undefined;
-  const findings = [joined, diff ? anchorCheck(joined, diff, await earlierFindings(directory)) : ""].filter(Boolean).join("\n\n");
-  await storeCapturedFindings(directory, identity, roundId(basename(directory)), findings, [...new Set(plan.lenses.map((lens) => lens.model))].join(", "));
+  const anchors = diff ? anchorCheck(joined, diff, await earlierFindings(directory)) : "";
+  if (anchors) await writeFile(join(directory, "anchors.md"), anchors + "\n", { mode: 0o600 });
+  await storeCapturedFindings(directory, identity, roundId(basename(directory)), joined, [...new Set(plan.lenses.map((lens) => lens.model))].join(", "));
   return true;
 }
 

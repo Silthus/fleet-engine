@@ -76,10 +76,12 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     git("checkout", "-q", "feature");
   };
   const words: ThreadWord[] = [];
-  const say = (text: string, answered = "Shall I run one more round?") => words.push({ id: `message-${words.length + 1}`, text, answered, at: clock.now.toISOString() });
-  const choose = (option: string, question = "Run one more review round? example/product#42: the arbiter escalates.") => words.push({ id: `request-${words.length + 1}:0`, text: option, answered: question, at: clock.now.toISOString() });
-  const threadWords = async (thread: string) => {
-    if (thread !== "thread-1") throw new Error(`No thread ${thread}`);
+  const thread = "mcp:thread-1";
+  const say = (text: string, answered = "Shall I run one more round?", id = `message-${words.length + 1}`) => words.push({ thread, id, text, answered, at: clock.now.toISOString(), source: "typed" });
+  const choose = (option: string, question = "Run one more review round? example/product#42: the arbiter escalates.") => words.push({ thread, id: `request-${words.length + 1}:0`, text: option, answered: question, at: clock.now.toISOString(), source: "question" });
+  const chooseGap = (kind: string, reason: string, option = "Accept the gap", number = 42) => choose(option, `Accept the ${kind} gap? example/product#${number}: ${reason}`);
+  const threadWords = async (name: string) => {
+    if (name !== "thread-1" && name !== thread) throw new Error(`No thread ${name}`);
     return words;
   };
   const reader: { words?: ThreadWords } = { words: threadWords };
@@ -108,7 +110,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   commit("shared.txt", "one\n");
   git("update-ref", "refs/remotes/origin/main", "HEAD");
   git("checkout", "-q", "-b", "feature");
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, githubHead, githubCalls, clock, say, choose, reader, panel };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel };
 }
 
 export const panelGuide = `# QA swarm panel

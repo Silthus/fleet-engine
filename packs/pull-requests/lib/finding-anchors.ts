@@ -71,10 +71,10 @@ function diffLines(diff: string) {
 
 function inDiff({ file, lines: [first, last], anchor }: Finding, lines: Map<string, FileLines>) {
   const changed = lines.get(file);
-  if (!changed) return false;
+  if (!changed || !Number.isSafeInteger(first) || !Number.isSafeInteger(last)) return false;
   const quoted = (text: string | undefined) => text !== undefined && (text === anchor || (anchor.length >= shortestQuote && text.includes(anchor)));
-  for (let line = first; line <= last; line++) if (quoted(changed.added.get(line)) || quoted(changed.removed.get(line))) return true;
-  return false;
+  const inRange = ([line, text]: [number, string]) => line >= first && line <= last && quoted(text);
+  return [...changed.added, ...changed.removed].some(inRange);
 }
 
 function sameFinding(left: Finding, right: Finding) {

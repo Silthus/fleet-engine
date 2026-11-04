@@ -20,11 +20,11 @@ test("the user's accepted gap settles its kind even when the judge rejects that 
   expect(unaccepted.code).toBe(1);
   expect(unaccepted.output).toContain("judge proof: fail: plan.log is pre-apply plan output, not a run");
 
-  pr.say("Accept the live-run gap.");
-  await pr.fleet("gap", "--kind", "live-run", "--accept", `2026-10-25 "Accept the live-run gap."`, "--thread", "thread-1");
+  pr.chooseGap("live-run", "Applying needs production access");
+  await pr.fleet("gap", "--kind", "live-run", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
-  expect(accepted.output).toContain(`live-run: gap from ${pr.git("rev-parse", "--short=7", "HEAD")}, accepted ("2026-10-25 "Accept the live-run gap.""): Applying needs production access`);
+  expect(accepted.output).toContain(`live-run: gap from ${pr.git("rev-parse", "--short=7", "HEAD")}, accepted ("2026-10-25 "Accept the gap""): Applying needs production access`);
 });
 
 test("once the mechanical gate passes, the other family's judge weighs the evidence, the review, and the code, and its verdict is cached", async () => {
@@ -95,8 +95,8 @@ test("a judge that keeps failing goes to the arbiter, and only the user's accept
 
   await pr.fleet("gap", "--kind", "judge", "--reason", "The judge reads feature.txt as code");
   expect((await pr.fleet("gate")).code).toBe(3);
-  pr.say("Ship it; the judge is wrong about feature.txt.", "The judge failed the owed kinds three times. Accept a judge gap?");
-  await pr.fleet("gap", "--kind", "judge", "--accept", `2026-10-25 "Ship it; the judge is wrong about feature.txt."`, "--thread", "thread-1");
+  pr.chooseGap("judge", "The judge reads feature.txt as code");
+  await pr.fleet("gap", "--kind", "judge", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
   expect(accepted.output.split("\n").at(-1)).toContain("judge: fail accepted by the user");
