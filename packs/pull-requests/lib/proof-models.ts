@@ -23,11 +23,16 @@ export function reviewerRow(author: Family, env: Record<string, string | undefin
   return codexReviewer ?? modelFor("review", env);
 }
 
+export function sameFamilyRow(author: Family, env: Record<string, string | undefined>) {
+  const reviewers = modelTable(env).filter((row) => ["review", "review-codex"].includes(row.role));
+  return reviewers.find((row) => familyOf(row) === author) ?? reviewerRow(author, env);
+}
+
 export type ModelAnswer = { ok: true; text: string; model: string } | { ok: false; cause: string; model: string };
 export type ModelRequest = { prompt: string; cwd: string; readable?: string[]; images?: string[]; schema?: object };
-export type Role = "arbiter" | "reviewer";
+export type Role = "arbiter" | "reviewer" | "judge";
 
-const prefixes: Record<Role, string> = { arbiter: "FLEET_REVIEW_ARBITER", reviewer: "FLEET_PROOF_REVIEWER" };
+const prefixes: Record<Role, string> = { arbiter: "FLEET_REVIEW_ARBITER", reviewer: "FLEET_PROOF_REVIEWER", judge: "FLEET_PROOF_JUDGE" };
 const prefixOf = (role: Role) => prefixes[role];
 
 export function modelLabel(role: Role, row: ModelRow, env: Record<string, string | undefined>) {

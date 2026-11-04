@@ -371,10 +371,17 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
 const findingItem = /^(?:[-*]|\d+[.)])\s+\S/;
 const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
 
+const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
+
 function findingCount(findings: string) {
-  const reviewed = findings.split(anchorHeading)[0]!;
-  if (/^no findings\.?$/i.test(reviewed.trim())) return 0;
-  return Math.max(1, reviewed.split("\n").filter((line) => findingItem.test(line)).length);
+  let covered = false;
+  const reviewed = findings.split(anchorHeading)[0]!.split("\n").filter((line) => {
+    if (/^#/.test(line)) covered = false;
+    if (/^COVERED\b/.test(line)) covered = true;
+    return !covered && line.trim();
+  });
+  const items = reviewed.filter((line) => findingItem.test(line)).length;
+  return items || (reviewed.every((line) => noFinding.test(line.trim())) ? 0 : 1);
 }
 
 function unanswered(findings: string, responses: string) {
@@ -560,6 +567,11 @@ function standingCommands(instructions: string) {
   return [...commands].map(([, kinds, until, rule]) => ({ kinds: kinds!.split(","), until: until!, rule: rule! }));
 }
 
+export async function judgeGap(home: string, identity: ProofIdentity, now: Date) {
+  const gap = await readJson<Gap | undefined>(gapPath(home, identity, "judge"), undefined);
+  return gap?.commit === identity.commit ? { reason: gap.reason, acceptance: await gapAcceptance(home, gap, "judge", now) } : undefined;
+}
+
 type Acceptance = { by: "the user" | "standing rule"; line: string };
 
 async function gapAcceptance(home: string, gap: Gap, kind: GapKind, now: Date): Promise<Acceptance | undefined> {
@@ -738,3 +750,12 @@ export async function reviewRecords(home: string, identity: ProofIdentity) {
     };
   }));
 }
+
+export async function reviewOfCommit(home: string, identity: ProofIdentity) {
+  const review = (await finishedReviews(home, identity)).filter((finished) => finished.commit === identity.commit).at(-1);
+  if (!review) return undefined;
+  const reservation = await readJson<Reservation | undefined>(join(pullRequestDirectory(home, identity), "reviews", review.name, "round.json"), undefined);
+  return { label: reviewLabel(review.name), scope: reservation?.scope ?? "full", base: reservation?.base, reviewer: review.reviewer };
+}
+
+export const judgeDirectory = (home: string, identity: ProofIdentity) => join(pullRequestDirectory(home, identity), "judge");

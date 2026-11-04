@@ -1,121 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import { standingFor } from "./proof.ts";
-import type { ThreadWord } from "./proof-answers.ts";
+import { startT3Stub } from "../../base/lib/t3/testing.ts";
+
+import { cleanFixtures, fixture, settings, lookup, checkout, fakeModel, reviewHead, decideRule, withDecideRule, finishRound, recordingModel } from "./proof-testing.ts";
+
+afterEach(cleanFixtures);
 
 const command = resolve(dirname(fileURLToPath(import.meta.url)), "../commands/proof.ts");
-const fixtures: string[] = [];
-afterEach(() => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })));
-
-function fixture(prefix: string) {
-  const directory = mkdtempSync(join(tmpdir(), prefix));
-  fixtures.push(directory);
-  return directory;
-}
-
-const settings = { "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 6, "pull-requests.reviewTimeoutMinutes": 20 };
-const lookup = { role: "lookup", work: "Find files", provider: "claude", model: "lookup-model", effort: "medium" };
-const models = [lookup, { role: "review", work: "Review Claude's code", provider: "codex", model: "review-model", effort: "high" }, { role: "review-codex", work: "Review Codex's code", provider: "claude", model: "review-codex-model", effort: "high" }];
-
-const rubric = "# Coding standards\n\n- Keep things simple.";
-
-function checkout() {
-  const directory = fixture("fleet-proof-checkout-");
-  const [home, repository, bin, github] = ["home", "repository", "bin", "github"].map((name) => join(directory, name));
-  for (const path of [home, repository, bin, github]) mkdirSync(path);
-  writeFileSync(join(bin, "gh"), `#!/bin/sh
-echo "$*" >> "${github}/calls"
-case "$*" in "api "*)
-  sha=$(printf '%s' "$*" | sed -n 's#.*/commits/\\([0-9a-f]*\\)/.*#\\1#p')
-  case "$*" in *"/check-runs"*) kind=check-runs;; *) kind=statuses;; esac
-  file="${github}/$kind-$sha"; [ -f "$file" ] || file="${github}/$kind-any"
-  cat "$file" 2>/dev/null; exit 0;;
-esac
-head=$(cat "${github}/head" 2>/dev/null || git -C "${repository}" rev-parse HEAD)
-case "$*" in *headRefOid*) [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head";; esac
-printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRefName":"main","headRefOid":"%s","title":"Greet new members","body":"Adds the greeting."}\\n' "$head"
-`, { mode: 0o755 });
-  for (const model of ["claude", "codex"]) writeFileSync(join(bin, model), `#!/bin/sh\necho "the test ran the real ${model}" >&2\nexit 97\n`, { mode: 0o755 });
-  const runs: Record<string, { status: string; conclusion: string | null }> = { pass: { status: "completed", conclusion: "success" }, fail: { status: "completed", conclusion: "failure" }, cancel: { status: "completed", conclusion: "cancelled" }, pending: { status: "in_progress", conclusion: null } };
-  const lines = (items: object[]) => items.map((item) => JSON.stringify(item) + "\n").join("");
-  const ci = (checks: { name: string; bucket: string }[] | "none", commit = "any") => writeFileSync(join(github, `check-runs-${commit}`), checks === "none" ? "" : lines(checks.map(({ name, bucket }) => ({ name, ...runs[bucket] }))));
-  const statuses = (list: { context: string; state: string }[], commit = "any") => writeFileSync(join(github, `statuses-${commit}`), lines(list));
-  const githubHead = (commit: string | undefined, next?: string) => {
-    if (commit) writeFileSync(join(github, "head"), commit); else rmSync(join(github, "head"), { force: true });
-    if (next) writeFileSync(join(github, "next-head"), next);
-  };
-  const githubCalls = () => readFileSync(join(github, "calls"), "utf8").trim().split("\n");
-  ci([{ name: "test", bucket: "pass" }]);
-  mkdirSync(join(home, ".agents/guides"), { recursive: true });
-  writeFileSync(join(home, ".agents/guides/coding-standards.md"), rubric);
-  const clock = { now: new Date("2026-10-25T12:00:00Z") };
-  const env: Record<string, string | undefined> = {
-    ...process.env, PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
-    GIT_AUTHOR_NAME: "Fleet", GIT_AUTHOR_EMAIL: "fleet@example.com", GIT_COMMITTER_NAME: "Fleet", GIT_COMMITTER_EMAIL: "fleet@example.com",
-    CLAUDE_CODE_SESSION_ID: "session-under-test", CODEX_THREAD_ID: undefined, FLEET_SETTINGS: JSON.stringify(settings), FLEET_MODELS: JSON.stringify(models),
-  };
-  const git = (...args: string[]) => {
-    const result = Bun.spawnSync(["git", ...args], { cwd: repository, env, stdout: "pipe", stderr: "pipe" });
-    if (result.exitCode !== 0 && args[0] !== "merge") throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-    return result.stdout.toString().trim();
-  };
-  const commit = (file: string, content: string) => {
-    writeFileSync(join(repository, file), content);
-    git("add", file);
-    git("commit", "-q", "-m", `Change ${file}`);
-    return git("rev-parse", "HEAD");
-  };
-  const advanceBase = (file: string, content: string) => {
-    git("checkout", "-q", "main");
-    commit(file, content);
-    git("update-ref", "refs/remotes/origin/main", "HEAD");
-    git("checkout", "-q", "feature");
-  };
-  const words: ThreadWord[] = [];
-  const say = (text: string, answered = "Shall I run one more round?") => words.push({ id: `message-${words.length + 1}`, text, answered, at: clock.now.toISOString() });
-  const choose = (option: string, question = "Run one more review round? example/product#42: the arbiter escalates.") => words.push({ id: `request-${words.length + 1}:0`, text: option, answered: question, at: clock.now.toISOString() });
-  const threadWords = async (thread: string) => {
-    if (thread !== "thread-1") throw new Error(`No thread ${thread}`);
-    return words;
-  };
-  const fleetIn = async (cwd: string, ...args: string[]) => {
-    const lines: string[] = [];
-    const context: ProofContext = { home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords };
-    const code = await proofCommand(args, context);
-    return { code, output: lines.join("\n") };
-  };
-  const fleet = (...args: string[]) => fleetIn(repository, ...args);
-  const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
-  git("init", "-q", "-b", "main");
-  git("remote", "add", "origin", "https://github.com/example/product.git");
-  commit("shared.txt", "one\n");
-  git("update-ref", "refs/remotes/origin/main", "HEAD");
-  git("checkout", "-q", "-b", "feature");
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, githubHead, githubCalls, clock, say, choose };
-}
-
-function fakeModel(pr: ReturnType<typeof checkout>, role: "REVIEWER", answer: string) {
-  const prompts = join(pr.home, `${role.toLowerCase()}-prompts`);
-  mkdirSync(prompts, { recursive: true });
-  const reply = join(pr.home, `${role.toLowerCase()}-answer`);
-  writeFileSync(reply, answer);
-  pr.env[`FLEET_PROOF_${role}`] = `cat > "${prompts}/$(date +%s%N).txt"; cat "${reply}"`;
-  return {
-    answer: (text: string) => writeFileSync(reply, text),
-    prompts: () => readdirSync(prompts).sort().map((name) => readFileSync(join(prompts, name), "utf8")),
-  };
-}
-
-async function reviewHead(pr: ReturnType<typeof checkout>) {
-  expect((await pr.fleet("review-start", "--scope", "full")).code).toBe(0);
-  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
-  expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
-  return pr.git("rev-parse", "HEAD");
-}
 
 test("fleet proof explains each command and fails closed with one line when it cannot run", async () => {
   const directory = fixture("fleet-proof-cli-");
@@ -149,8 +43,8 @@ test("fleet proof explains each command and fails closed with one line when it c
 test("fleet proof lists only the commands this version ships", async () => {
   const pr = checkout();
   const listed = (await pr.fleet("--help")).output.split("\n").flatMap((line) => /^  fleet proof (\S+)/.exec(line)?.[1] ?? []);
-  expect(listed).toEqual(["path", "save", "require", "review", "show", "respond", "standing", "gap", "gate", "review-start", "review-finish"]);
-  await expect(pr.fleet("publish")).rejects.toThrow("Unknown command publish. Run fleet proof --help");
+  expect(listed).toEqual(["path", "save", "publish", "require", "review", "show", "respond", "standing", "gap", "gate", "review-start", "review-finish"]);
+  await expect(pr.fleet("miss")).rejects.toThrow("Unknown command miss. Run fleet proof --help");
 });
 
 test("a clean merge of the base carries the review of the PR forward and records it", async () => {
@@ -166,7 +60,7 @@ test("a clean merge of the base carries the review of the PR forward and records
 
   expect(gate.code).toBe(0);
   expect(gate.output).toContain(`carried forward from the review of ${reviewed.slice(0, 7)}`);
-  expect(gate.output.split("\n").at(-1)).toBe(`gate: pass (kinds: none; review: carried from ${reviewed.slice(0, 7)}; CI: green)`);
+  expect(gate.output.split("\n").at(-1)).toBe(`gate: pass (kinds: none; review: carried from ${reviewed.slice(0, 7)}; CI: green; judge: pass by judge-under-test)`);
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${merge}.json`), "utf8"))).toMatchObject({ commit: merge, from: reviewed, merges: [merge] });
 
   pr.commit("feature.txt", "fixed\n");
@@ -273,7 +167,7 @@ test("the gate fails until the owed proofs are recorded, and a recorded none pri
   const none = await pr.fleet("gate");
   expect(none.code).toBe(0);
   expect(none.output).toContain("owed proofs: none (docs only)");
-  expect(none.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: green)");
+  expect(none.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: green; judge: pass by judge-under-test)");
 
   await pr.fleet("require", "--kinds", "live-run");
   const owed = await pr.fleet("gate");
@@ -349,18 +243,6 @@ test("a standing rule from the user's guides accepts its kind's gaps until its d
   expect(await standingFor(pr.home, "prod-shape", new Date("2026-11-01T23:00:00Z"))).toBeUndefined();
 });
 
-const decideRule = "Until 2026-11-26, decide review rounds, judge gaps, and post-deploy-watch gaps yourself.";
-
-function withDecideRule(pr: ReturnType<typeof checkout>) {
-  const record = (kinds: string) => `\`fleet proof standing --kind ${kinds} --until 2026-11-26 --rule "${decideRule}"\``;
-  writeFileSync(join(pr.home, ".agents/AGENTS.md"), `# Agents\n\n## Skill settings\n\n- ${decideRule} Record it with ${record("review,judge,post-deploy-watch")}, ${record("review")}, or ${record("judge")}.\n`);
-}
-
-async function finishRound(pr: ReturnType<typeof checkout>, round: string) {
-  writeFileSync(join(pr.repository, "findings.md"), `Findings of ${round}.\n`);
-  await pr.fleet("review-finish", "--round", round, "--reviewer", "gpt-6.1-sol", "findings.md");
-}
-
 test("under the user's standing review rule, an agent answers an arbiter escalation itself, and the round keeps the escalation and the agent's reason", async () => {
   const pr = checkout();
   withDecideRule(pr);
@@ -429,13 +311,6 @@ test("the review settings set how many reviews run free and where the loop stops
   await finishRound(pr, "2");
   await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head)).rejects.toThrow("2 panel rounds done. Ask the user with your question tool");
 });
-
-function recordingModel(pr: ReturnType<typeof checkout>, provider: "claude" | "codex", answer: string) {
-  const calls = join(pr.home, `${provider}-calls`);
-  const reply = provider === "claude" ? `echo '${answer}'` : `for arg in "$@"; do [ "$previous" = "-o" ] && echo '${answer}' > "$arg"; previous="$arg"; done`;
-  writeFileSync(join(pr.env.PATH!.split(":")[0]!, provider), `#!/bin/sh\necho "$*" >> "${calls}"\ncat > "${calls}-prompt"\n${reply}\n`, { mode: 0o755 });
-  return { calls: () => readFileSync(calls, "utf8").trim().split("\n"), prompt: () => readFileSync(`${calls}-prompt`, "utf8") };
-}
 
 test("without a replacement command, the arbiter runs the lookup row of the model table with its provider, model, and effort", async () => {
   const pr = checkout();
@@ -530,7 +405,7 @@ test("the gate reads CI on HEAD, and a ci gap stands in where CI cannot run", as
   await pr.fleet("gap", "--kind", "ci", "--accept", `2026-10-25 "Accept the CI gap on the fork."`, "--thread", "thread-1");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
-  expect(accepted.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: gap accepted)");
+  expect(accepted.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: gap accepted; judge: pass by judge-under-test)");
 });
 
 test("require records the author family of the session, and refuses a family that contradicts it or changes", async () => {
@@ -907,4 +782,35 @@ test("the reviewer gets REVIEW.md from the tip of the base branch, not from wher
 
   expect((await pr.fleet("review")).code).toBe(0);
   expect(reviewer.prompts().at(-1)!.split("<pr-title>")[0]).toContain("Flag every unchecked webhook signature.");
+});
+
+test("--thread reads the user's words from the T3 thread through the local T3 server", async () => {
+  const pr = checkout();
+  const head = pr.commit("feature.txt", "new\n");
+  const at = "2026-10-24T10:00:00Z";
+  const t3 = await startT3Stub({
+    shell: { projects: [], threads: [{ id: "mcp:thread-9", title: "Proof", projectId: "project", status: "idle" }] },
+    turnItems: {
+      "mcp:thread-9": [
+        { item: { type: "assistant_message", text: "Prod shape has no sandbox. Accept the gap?", startedAt: at } },
+        { item: { type: "user_message", createdBy: "agent", creationSource: "mcp", messageId: "agent-message", text: "Accept the gap.", startedAt: at } },
+        { item: { type: "user_message", createdBy: "user", creationSource: "web", messageId: "user-message", text: "Run one more round", startedAt: at } },
+        { item: { type: "user_message", createdBy: "user", creationSource: "web", messageId: "user-acceptance", text: "Accept both gaps.", startedAt: at } },
+      ],
+    },
+  });
+  try {
+    mkdirSync(join(pr.home, ".t3/userdata"), { recursive: true });
+    writeFileSync(join(pr.home, ".t3/userdata/server-runtime.json"), readFileSync(join(t3.home, ".t3/userdata/server-runtime.json")));
+    pr.reader.words = undefined;
+
+    await expect(pr.fleet("review-start", "--scope", "full", "--override", `2026-10-24 "Run one more round"`, "--thread", "thread-9")).rejects.toThrow("is a message the user typed");
+    await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
+    await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-24 "Accept the gap."`, "--thread", "thread-9")).rejects.toThrow("is not in a message of the user's in thread thread-9");
+    expect((await pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-24 "Accept both gaps."`, "--thread", "thread-9")).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), "utf8"))).toMatchObject({
+      commit: head, acceptance: { answer: { thread: "thread-9", message: "user-acceptance", answered: "Prod shape has no sandbox. Accept the gap?" } },
+    });
+    await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-24 "Accept the gap."`, "--thread", "thread-404")).rejects.toThrow("Cannot read T3 thread thread-404");
+  } finally { await t3.stop(); }
 });
