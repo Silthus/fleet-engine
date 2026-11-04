@@ -1,7 +1,7 @@
 export type Run = (command: string[]) => Promise<{ code: number; out: string }>;
 
 const updates: Array<{ name: string; installed: string[]; marker: string; update: string[] }> = [
-  { name: "Claude Code", installed: ["claude", "--version"], marker: "", update: ["claude", "update"] },
+  { name: "Claude Code", installed: ["sh", "-c", 'test -x "$HOME/.local/bin/claude" && echo native'], marker: "native", update: ["claude", "update"] },
   { name: "Codex", installed: ["bun", "pm", "ls", "-g"], marker: "@openai/codex", update: ["bun", "add", "-g", "@openai/codex@latest"] },
 ];
 

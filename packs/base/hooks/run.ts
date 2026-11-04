@@ -5,21 +5,39 @@ import { join } from "node:path";
 export type HookResult = { code: number; stdout: string; stderr: string };
 export type RunHook = (path: string, provider: string, input: string) => Promise<HookResult>;
 
+type Decision = { decision?: string; reason?: string; hookSpecificOutput?: unknown };
+
 /**
- * Runs each hook in name order. The first hook that blocks (exit 2) wins. Otherwise the first
- * hook that prints a decision wins, and a hook that fails only reports, so it never hides a decision.
+ * Runs every hook in name order and picks one answer. A JSON block wins, then an exit-2 block, then a
+ * JSON answer that redacts or suppresses, then the first other output. A block keeps the first
+ * redaction or suppression, so another hook can never undo the secret guard. A failing hook only reports.
  */
 export async function dispatch(dir: string, provider: string, input: string, run: RunHook = runWithBun): Promise<HookResult> {
-  const hooks = listHooks(dir);
-  let decision = "";
-  const problems: string[] = [];
-  for (const name of hooks) {
+  const results: Array<HookResult & { name: string; json?: Decision }> = [];
+  for (const name of listHooks(dir)) {
     const result = await run(join(dir, name), provider, input);
-    if (result.code === 2) return { code: 2, stdout: "", stderr: result.stderr };
-    if (result.code !== 0) problems.push(`${name}: ${result.stderr.trim() || `exit ${result.code}`}`);
-    else if (!decision && result.stdout.trim()) decision = result.stdout;
+    results.push({ ...result, name, json: result.code === 0 ? parseDecision(result.stdout) : undefined });
   }
-  return { code: decision || !problems.length ? 0 : 1, stdout: decision, stderr: problems.map((line) => `fleet hook ${line}\n`).join("") };
+  const problems = results.filter((result) => result.code !== 0 && result.code !== 2).map((result) => `fleet hook ${result.name}: ${result.stderr.trim() || `exit ${result.code}`}\n`).join("");
+  const blockJson = results.find((result) => result.json?.decision === "block")?.json;
+  const protect = results.find((result) => result.json?.hookSpecificOutput)?.json?.hookSpecificOutput;
+  const blocked = results.find((result) => result.code === 2);
+  const answer = (decision: Decision): HookResult => ({ code: 0, stdout: `${JSON.stringify(decision)}\n`, stderr: problems });
+  if (blockJson) return answer({ ...blockJson, hookSpecificOutput: blockJson.hookSpecificOutput ?? protect });
+  if (blocked && protect) return answer({ decision: "block", reason: blocked.stderr.trim(), hookSpecificOutput: protect });
+  if (blocked) return { code: 2, stdout: "", stderr: problems + blocked.stderr };
+  if (protect) return answer({ ...results.find((result) => result.json?.hookSpecificOutput)!.json });
+  const first = results.find((result) => result.code === 0 && result.stdout.trim());
+  return { code: first || !problems ? 0 : 1, stdout: first?.stdout ?? "", stderr: problems };
+}
+
+function parseDecision(stdout: string): Decision | undefined {
+  try {
+    const value = JSON.parse(stdout);
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function listHooks(dir: string) {

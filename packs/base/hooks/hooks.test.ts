@@ -91,6 +91,21 @@ describe("secret guard", () => {
     for (const provider of ["claude", "codex"] as const) expect(guard(provider, toolEvent("Exit code: 0\nOutput:\nHOME=/home/coder"))).toBeUndefined();
   });
 
+  test("the hook runner blocks when it cannot find Bun, so no secret slips through unchecked", async () => {
+    if (["/opt/homebrew/bin/bun", "/usr/local/bin/bun"].some((path) => existsSync(path))) return;
+    const home = temp.make("home-");
+    const bin = temp.make("bin-");
+    symlinkSync(Bun.which("sh")!, join(bin, "sh"));
+    const child = Bun.spawn([join(bin, "sh"), join(import.meta.dir, "run.sh"), "claude", "UserPromptSubmit"], { env: { HOME: home, PATH: bin }, stdin: new Blob(["{}"]), stderr: "pipe" });
+    expect(await child.exited).toBe(2);
+    expect(await new Response(child.stderr).text()).toContain("Fleet hooks need Bun");
+  });
+
+  test("points at file delivery for a secret a shell command needs", () => {
+    const decision = guard("claude", toolEvent(`token ${githubToken}`))!;
+    expect(JSON.stringify(decision)).toContain('delivery: \\"file\\"');
+  });
+
   test("the hook runner blocks a secret and ignores Bun configuration in the session's working directory", async () => {
     const home = temp.make("home-");
     const hooks = join(home, ".config/fleet/hooks");
@@ -141,14 +156,29 @@ describe("hook runner", () => {
     expect(await dispatch(join(temp.make("hooks-"), "PostToolUse"), "claude", "{}")).toEqual({ code: 0, stdout: "", stderr: "" });
   });
 
-  test("returns the first block and stops", async () => {
-    const run = scripted({ "a.ts": ok('{"x":1}'), "b.ts": { code: 2, stdout: "", stderr: "no" }, "c.ts": ok() });
+  const suppress = { decision: "block", reason: "secret", hookSpecificOutput: { hookEventName: "UserPromptSubmit", suppressOriginalPrompt: true } };
+  const redaction = { hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: "[redacted]", additionalContext: "redacted" } };
+
+  test("blocks with exit 2 when only a plain hook blocks", async () => {
+    const run = scripted({ "a.ts": ok("context"), "b.ts": { code: 2, stdout: "", stderr: "no" }, "c.ts": ok() });
     expect(await dispatch(dirWith("c.ts", "a.ts", "b.ts", "notes.md", "a.test.ts"), "claude", "{}", run)).toEqual({ code: 2, stdout: "", stderr: "no" });
+  });
+
+  test("keeps the secret guard's prompt suppression when another hook also blocks", async () => {
+    const run = scripted({ "a.ts": { code: 2, stdout: "", stderr: "no" }, "secret-guard.ts": ok(JSON.stringify(suppress)) });
+    expect(await dispatch(dirWith("a.ts", "secret-guard.ts"), "claude", "{}", run)).toEqual({ code: 0, stdout: `${JSON.stringify(suppress)}\n`, stderr: "" });
+  });
+
+  test("keeps the secret guard's redaction when another hook blocks or prints first", async () => {
+    const blocked = scripted({ "a.ts": { code: 2, stdout: "", stderr: "no" }, "secret-guard.ts": ok(JSON.stringify(redaction)) });
+    expect(JSON.parse((await dispatch(dirWith("a.ts", "secret-guard.ts"), "claude", "{}", blocked)).stdout)).toEqual({ decision: "block", reason: "no", ...redaction });
+    const printed = scripted({ "a.ts": ok("some context"), "secret-guard.ts": ok(JSON.stringify(redaction)) });
+    expect(JSON.parse((await dispatch(dirWith("a.ts", "secret-guard.ts"), "claude", "{}", printed)).stdout)).toEqual(redaction);
   });
 
   test("keeps the first decision when a later hook fails, and reports the failure", async () => {
     const run = scripted({ "a.ts": { code: 1, stdout: "", stderr: "boom" }, "b.ts": ok('{"decision":"block"}'), "c.ts": ok('{"other":true}') });
-    expect(await dispatch(dirWith("a.ts", "b.ts", "c.ts"), "codex", "{}", run)).toEqual({ code: 0, stdout: '{"decision":"block"}', stderr: "fleet hook a.ts: boom\n" });
+    expect(await dispatch(dirWith("a.ts", "b.ts", "c.ts"), "codex", "{}", run)).toEqual({ code: 0, stdout: '{"decision":"block"}\n', stderr: "fleet hook a.ts: boom\n" });
   });
 
   test("fails without a decision when a hook fails", async () => {
