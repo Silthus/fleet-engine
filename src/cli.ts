@@ -11,8 +11,12 @@ import { engineCommands, resolve } from "./reconciler/resolve.ts";
 import { readNotice, update } from "./update.ts";
 import { setup, type SetupOptions } from "./setup/setup.ts";
 import { ttyTerminal, type Terminal } from "./setup/terminal.ts";
+import { FlagError } from "./setup/flags.ts";
+import type { ChangeContext } from "./commands/change.ts";
+import { packsCommand } from "./commands/packs.ts";
+import { setCommand, settingsCommand } from "./commands/settings.ts";
 
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; setup?: Pick<SetupOptions, "machine" | "fetchSource"> };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource"> };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -25,9 +29,16 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet doctor [--profile <dir>]
                      Check this machine against your profile without changing it
   fleet update       Move the engine and your profile forward, then apply
+  fleet packs [--add <pack>]... [--remove <pack>]... [--workflows <id=on|off,...>]
+                     List your packs, or turn packs and workflows on and off
+  fleet settings     List the settings of your packs
+  fleet set <pack.key=value>...
+                     Change settings
   fleet <command>    Run a command that one of your packs ships`;
 
-const later = new Set(engineCommands.filter((name) => !["setup", "apply", "doctor", "update"].includes(name)));
+const changes = { packs: packsCommand, settings: settingsCommand, set: setCommand };
+
+const later = new Set(engineCommands.filter((name) => !["setup", "apply", "doctor", "update", ...Object.keys(changes)].includes(name)));
 
 export async function main(argv: string[], options: CliOptions): Promise<number> {
   const [command, ...rest] = argv;
@@ -36,7 +47,8 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
-    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, ...options.setup });
+    if (command in changes) return await change(command as keyof typeof changes, rest, options);
+    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), ...options.setup });
     return await runPackCommand(command, rest, options);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -56,6 +68,30 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   if (notice) report.findings.push({ id: "update:major", pack: "engine", say: notice });
   printReport(report, command, options.print, flags.dryRun);
   return report.ok ? 0 : 1;
+}
+
+function applyProfile(dir: string, options: CliOptions) {
+  return options.apply ? options.apply(dir) : reconcile("apply", ["--profile", dir], options);
+}
+
+async function change(command: keyof typeof changes, args: string[], options: CliOptions) {
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const profileDir = plan.machine.profileDir!;
+  const context: ChangeContext = {
+    profileDir,
+    profile: await loadProfile(profileDir),
+    plan,
+    packs: sources.flatMap((source) => ("error" in source ? [] : source.packs)),
+    print: options.print,
+    apply: () => applyProfile(profileDir, options),
+  };
+  try {
+    return await changes[command](args, context);
+  } catch (error) {
+    if (!(error instanceof FlagError)) throw error;
+    options.print(`fleet ${command}: ${error.message}`);
+    return 2;
+  }
 }
 
 async function runUpdate(options: CliOptions) {

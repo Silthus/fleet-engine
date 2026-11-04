@@ -2,13 +2,14 @@ import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import { cachedSource, fetchSource } from "../pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SourceRef } from "../pack/types.ts";
-import { loadMachine, saveMachine } from "../profile/profile.ts";
+import { loadMachine, loadProfile, saveAnswers, saveMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import { FlagError, parseSetupFlags, type SetupFlags } from "./flags.ts";
 import { packList, packsStep, picksFrom, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
+import { profileStep } from "./profile.ts";
 import { runSteps, type Step } from "./runner.ts";
 import { chatgptSignIn, claudeSignIn, githubSignIn, memberSources } from "./signins.ts";
 import { Stopped, type Terminal } from "./terminal.ts";
@@ -20,6 +21,8 @@ export type SetupOptions = {
   terminal: Terminal;
   machine?: Partial<Machine>;
   fetchSource?: (ref: SourceRef, cacheRoot: string) => Promise<FetchedSource>;
+  /** Runs fleet apply with this profile and prints its report. */
+  apply?: (profileDir: string) => Promise<number>;
 };
 
 export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
@@ -28,16 +31,17 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   const { terminal } = options;
   let flags: SetupFlags;
   const machine: MachineFile = (await loadMachine(options.home)) ?? { schema: 1, role: options.platform === "darwin" ? "mac" : "linux" };
-  const progress = { done: machine.setup?.done ?? [], draft: { ...machine.setup?.draft } as Draft };
+  const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
   const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
-  const remember = () => saveMachine(options.home, { ...machine, setup: { done: progress.done, draft: progress.draft } });
+  const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, draft: progress.draft } });
   try {
     flags = parseSetupFlags(args);
     picksFrom(flags, catalog);
     const fromFlags = settingsFrom(flags, catalog);
     if (Object.keys(fromFlags).length) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
-      await remember();
+      if (machine.profileDir) await saveAnswers(machine.profileDir, { settings: fromFlags }, { push: true });
+      else await remember();
     }
   } catch (error) {
     if (!(error instanceof FlagError)) throw error;
@@ -69,7 +73,31 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       terminal.print(`  ✓ You are in the ${ref.repo.split("/")[0]} org, so the ${packList(fetched.packs.map((pack) => pack.manifest.name), catalog)} pack is ticked`);
     }
   };
-  const steps = () => setupSteps(context, machine, options, human, addTeamSources);
+  const profile = profileStep({
+    terminal,
+    machine: box,
+    home: options.home,
+    engineRoot: options.engineRoot,
+    nonInteractive: flags.nonInteractive,
+    draft: progress.draft,
+    packs: catalog.packs.map((pack) => pack.manifest),
+    async saved(dir) {
+      machine.profileDir = dir;
+      await remember();
+    },
+  });
+  const applyStep: Step = {
+    id: "apply",
+    title: machine.role === "mac" ? "Set up this Mac" : "Set up this machine",
+    minutes: 3,
+    kind: "auto",
+    async run() {
+      if (!machine.profileDir || !options.apply) throw new Error("no profile to apply yet");
+      terminal.print(`▶ ${applyStep.title}: fleet apply installs your packs`);
+      if ((await options.apply(machine.profileDir)) !== 0) throw new Error("fleet apply could not set up this machine. Fix what it says above, then run fleet setup again.");
+    },
+  };
+  const steps = () => setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep]);
   try {
     const result = await runSteps(steps, {
       terminal,
@@ -81,7 +109,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     });
     if (result.unanswered.length) return printNeeds(terminal, steps(), result.unanswered), 2;
     terminal.print("");
-    terminal.print("Your answers are saved on this machine. The next steps of setup come in a later version of Fleet.");
+    terminal.print("This machine is set up. The devbox and the final check come in a later version of Fleet.");
     return 0;
   } catch (error) {
     if (!(error instanceof Stopped)) throw error;
@@ -92,7 +120,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
 }
 
-function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>): Step[] {
+function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>, machineSteps: Step[]): Step[] {
   const draft = context.draft.packs ? context.draft : { ...context.draft, ...picksFrom(context.flags, context.catalog) };
   const profile = draftProfile(draft);
   const fetched = new Set(context.catalog.sources.map((source) => source.ref.name));
@@ -104,10 +132,15 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     packsStep(context),
     plansStep(context),
     ...settingSteps(context, plan.ask),
+    ...machineSteps,
     ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human), human)),
     ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),
     ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)]),
   ];
+}
+
+function profileDraft(profile: Profile): Draft {
+  return { packs: profile.packs, plan: profile.plan, settings: profile.settings, workflows: profile.workflows, sources: profile.sources };
 }
 
 function teamRefs(draft: Draft) {

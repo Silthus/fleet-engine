@@ -3,9 +3,10 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
-import { tempDirs } from "../testing/git.ts";
-import { fakeMachine, fleetSetup, machineFile } from "./testing.ts";
+import { isolateGit, tempDirs } from "../testing/git.ts";
+import { fakeMachine, fleetSetup, machineFile, savedAnswers } from "./testing.ts";
 
+isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
@@ -27,39 +28,41 @@ function teamSource(): (ref: SourceRef) => Promise<FetchedSource> {
 describe("fleet setup sign-ins", () => {
   test("GitHub opens the device page, polls every 2 s with no key press, and asks for all four scopes", async () => {
     const home = temp.make("home-");
-    const box = fakeMachine({ github: 3 });
-    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], [""], box);
+    const box = fakeMachine(home, { github: 3 });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], box);
     expect(result.code).toBe(0);
     expect(box.starts[0]).toEqual(["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--scopes", "repo,read:org,admin:public_key,admin:ssh_signing_key"]);
     expect(box.opened).toEqual(["https://github.com/login/device"]);
     expect(box.sleeps).toEqual([2000, 2000, 2000]);
-    expect(result.prompts).toEqual(["Press ↵ to keep them, or e to change them: "]);
+    expect(result.prompts).toEqual(["Press ↵ to keep them, or e to change them: ", "  Go ahead? (Y/n) "]);
     expect(result.output).toContain("  Waiting for you. Nothing to press here: setup notices when you are done.");
     expect(result.output).toContain("  ✓ Sign in to GitHub: done");
   });
 
   test("GitHub refreshes a sign-in that lacks scopes, and a run without a person only lists it", async () => {
     const narrow = { scopes: "  - Token scopes: 'gist', 'read:org', 'repo'" };
-    const listed = fakeMachine({}, narrow);
-    const unattended = await fleetSetup(temp.make("home-"), ["--non-interactive"], [], listed);
+    const first = temp.make("home-");
+    const listed = fakeMachine(first, {}, narrow);
+    const unattended = await fleetSetup(first, ["--non-interactive"], [], listed);
     expect(unattended.code).toBe(2);
     expect(unattended.output).toContain("  Sign in to GitHub: do it once in a terminal, then run fleet setup again");
     expect(listed.starts).toEqual([]);
 
-    const box = fakeMachine({}, narrow);
-    expect((await fleetSetup(temp.make("home-"), ["--preset", "starter", "--plan", "claude"], [""], box)).code).toBe(0);
+    const home = temp.make("home-");
+    const box = fakeMachine(home, {}, narrow);
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], box)).code).toBe(0);
     expect(box.starts[0]).toEqual(["gh", "auth", "refresh", "--hostname", "github.com", "--scopes", "repo,read:org,admin:public_key,admin:ssh_signing_key"]);
   });
 
   test("a member of the PostHog org gets its pack ticked, and the pack's sign-in runs its waiting steps", async () => {
     const home = temp.make("home-");
-    const box = fakeMachine({ coder: 1 }, { org: true });
-    const result = await fleetSetup(home, ["--plan", "claude"], ["", ""], box, teamSource());
+    const box = fakeMachine(home, { coder: 1 }, { org: true });
+    const result = await fleetSetup(home, ["--plan", "claude"], ["", "", ""], box, teamSource());
     expect(result.code).toBe(0);
     expect(result.output).toContain("  ✓ You are in the PostHog org, so the Posthog pack is ticked");
     expect(result.output).toContain("  1) Everyday  Pull-requests, Orchestration, Communication, Posthog (default)");
-    expect(machineFile(home).setup.draft.packs).toEqual(["pull-requests", "orchestration", "communication", "posthog"]);
-    expect(machineFile(home).setup.draft.sources.map((source: SourceRef) => source.name)).toEqual(["agent-skills", "mattpocock-skills", "posthog"]);
+    expect(savedAnswers(home).packs).toEqual(["pull-requests", "orchestration", "communication", "posthog"]);
+    expect(savedAnswers(home).sources.map((source: SourceRef) => source.name)).toEqual(["agent-skills", "mattpocock-skills", "posthog"]);
     expect(box.starts).toContainEqual(["sh", "-c", "coder login"]);
     expect(box.calls.map((call) => call.command.join(" "))).toContain("hogli devbox:start");
     expect(machineFile(home).setup.done).toContain("human:posthog:coder");
@@ -67,8 +70,8 @@ describe("fleet setup sign-ins", () => {
 
   test("Claude and ChatGPT advance on their probes, only for the chosen plans, and the ChatGPT probe is isolated", async () => {
     const home = temp.make("home-");
-    const box = fakeMachine({ claude: 1, chatgpt: 2 });
-    const result = await fleetSetup(home, ["--preset", "starter"], ["", ""], box);
+    const box = fakeMachine(home, { claude: 1, chatgpt: 2 });
+    const result = await fleetSetup(home, ["--preset", "starter"], ["", "", ""], box);
     expect(result.code).toBe(0);
     expect(box.starts.slice(-2)).toEqual([["claude", "auth", "login"], ["codex", "login"]]);
     const probes = box.calls.filter((call) => call.command[0] === "codex");
@@ -82,8 +85,9 @@ describe("fleet setup sign-ins", () => {
     }
     expect(existsSync(join(home, ".codex"))).toBe(false);
 
-    const claudeOnly = fakeMachine({ claude: 1, chatgpt: 1 });
-    await fleetSetup(temp.make("home-"), ["--preset", "starter", "--plan", "claude"], [""], claudeOnly);
+    const other = temp.make("home-");
+    const claudeOnly = fakeMachine(other, { claude: 1, chatgpt: 1 });
+    await fleetSetup(other, ["--preset", "starter", "--plan", "claude"], ["", ""], claudeOnly);
     expect(claudeOnly.calls.some((call) => call.command[0] === "codex")).toBe(false);
   });
 });
