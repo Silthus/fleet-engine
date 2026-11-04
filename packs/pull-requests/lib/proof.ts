@@ -3,7 +3,6 @@ import { access, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } f
 import { dirname, extname, join } from "node:path";
 import { normalized, withoutThread, type Hear, type HeardAnswer } from "./proof-answers.ts";
 import type { Family } from "./proof-models.ts";
-import { anchorHeading } from "./finding-anchors.ts";
 
 export type ProofIdentity = { repository: string; pr: number; commit: string };
 const sha = /^[0-9a-f]{40}$/;
@@ -149,13 +148,13 @@ async function askUser(home: string, identity: ProofIdentity, now: Date, stop: s
 }
 
 export type CapturedBy = "fleet" | "author";
-export type ReviewRequest = { scope: string; base?: string; override?: string; standing?: string; hear?: Hear; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; capturedBy?: CapturedBy; now?: Date };
+export type ReviewRequest = { scope: string; base?: string; from?: string; override?: string; standing?: string; hear?: Hear; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; capturedBy?: CapturedBy; now?: Date };
 type Reserved = { round: number | "final"; id: string; directory: string };
 type Decision = { override: string; answer: HeardAnswer } | { standing: StandingDecision } | undefined;
 type StandingDecision = { reason: string; rule: string; until: string };
 type Permit = { arbiter: Arbiter; limits: ReviewLimits; now: Date };
 
-async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: Decision, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, capturedBy: CapturedBy): Promise<Reserved> {
+async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: Decision, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {
   if (base === undefined) throw new Error("A final read needs --base with the latest reviewed commit");
   if (base === identity.commit) throw new Error("HEAD is already reviewed. Skip the final read.");
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
@@ -173,7 +172,7 @@ async function startFinalRead(home: string, identity: ProofIdentity, base: strin
     let read = 1;
     while (started.includes(finalReadPrefix + read)) read++;
     const name = finalReadPrefix + read;
-    if (await reserve(reviews, name, { ...identity, round: "final", read, scope: "final", base, phase, ...decision, arbiter: verdict, capturedBy })) return { round: "final", id: name, directory: join(reviews, name) };
+    if (await reserve(reviews, name, { ...identity, round: "final", read, scope: "final", base, from, phase, ...decision, arbiter: verdict, capturedBy })) return { round: "final", id: name, directory: join(reviews, name) };
   }
   throw new Error("Final read limit exceeded");
 }
@@ -184,6 +183,7 @@ const isDatedQuote = (text: string) => /\b\d{4}-\d{2}-\d{2}\b/.test(text) && /["
 
 export async function startReview(home: string, identity: ProofIdentity, request: ReviewRequest): Promise<Reserved> {
   const { scope, base, phase, hear = withoutThread, cleanBaseMerge = () => undefined, capturedBy = "author", now = new Date() } = request;
+  const from = request.from ?? base;
   const permit = { arbiter: request.arbiter, limits: request.limits, now };
   if (!["full", "fixes", "final"].includes(scope)) throw new Error("Review scope must be full, fixes, or final");
   if (phase !== undefined && scope !== "final") throw new Error("--phase applies only to final reads");
@@ -192,19 +192,20 @@ export async function startReview(home: string, identity: ProofIdentity, request
   const decision = await decisionOf(home, identity, request, hear, now);
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   await mkdir(reviews, { recursive: true, mode: 0o700 });
-  const release = decision && "override" in decision ? await claimAnswer(home, identity, decision.answer) : undefined;
+  let release: (() => Promise<void>) | undefined;
   try {
-    if (scope === "final") return await startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, capturedBy);
-    return await startRound(home, identity, reviews, { scope, base, decision, permit, cleanBaseMerge, capturedBy });
+    if (decision && "override" in decision) release = await claimAnswer(home, identity, decision.answer);
+    if (scope === "final") return await startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, capturedBy, from);
+    return await startRound(home, identity, reviews, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy });
   } catch (error) {
     await release?.();
     throw error;
   }
 }
 
-type RoundStart = { scope: string; base?: string; decision: Decision; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
+type RoundStart = { scope: string; base?: string; from?: string; decision: Decision; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
 
-async function startRound(home: string, identity: ProofIdentity, reviews: string, { scope, base, decision, permit, cleanBaseMerge, capturedBy }: RoundStart): Promise<Reserved> {
+async function startRound(home: string, identity: ProofIdentity, reviews: string, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy }: RoundStart): Promise<Reserved> {
   for (let round = 1; round <= 100; round++) {
     const directory = join(reviews, String(round));
     try { await access(directory); continue; }
@@ -214,7 +215,7 @@ async function startRound(home: string, identity: ProofIdentity, reviews: string
     const { free, ceiling } = permit.limits;
     const stop = round > ceiling ? `The loop did not converge: ${ceiling} panel rounds done.` : undefined;
     const verdict = await permitReview(home, identity, round > free, stop, decision, permit);
-    if (await reserve(reviews, String(round), { ...identity, round, scope, base, ...decision, arbiter: verdict, capturedBy })) return { round, id: String(round), directory };
+    if (await reserve(reviews, String(round), { ...identity, round, scope, base, from, ...decision, arbiter: verdict, capturedBy })) return { round, id: String(round), directory };
   }
   throw new Error("Review limit exceeded");
 }
@@ -230,8 +231,7 @@ async function claimAnswer(home: string, identity: ProofIdentity, answer: HeardA
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     const held = await readJson<Claim | undefined>(path, undefined);
-    if (held?.repository === identity.repository && held.pr === identity.pr) return undefined;
-    throw new Error(`This answer is already used on ${held ? `${held.repository}#${held.pr}` : "another PR"}. Each round needs the user's answer to its own question`);
+    throw new Error(`This answer already started a round on ${held ? `${held.repository}#${held.pr}` : "a PR"}. One answer starts one round. Ask the user again`);
   }
   return async () => {
     const recorded = (await recordedAnswers(home)).some((entry) => entry.message === messageOf(answer));
@@ -260,23 +260,33 @@ async function decisionOf(home: string, identity: ProofIdentity, { override, sta
 
 async function heardOverride(home: string, identity: ProofIdentity, override: string, hear: Hear): Promise<Decision> {
   if (!isDatedQuote(override)) throw new Error(`--override needs a dated quote of the user's answer to this round, such as '2026-10-24 "${runOption}"'. A general instruction does not answer a round`);
-  await refuseBorrowedAnswer(home, identity, override, "round");
+  await refuseInstructionQuote(home, override);
   const answer = await hear(override);
-  refuseOtherChoice(answer);
-  await refuseBorrowedMessage(home, identity, answer, "round");
+  requireChoice(answer, `${roundQuestion} ${identity.repository}#${identity.pr}:`, [runOption, stopOption], "Stop the review loop");
+  await refuseBorrowedMessage(home, answer);
   return { override, answer };
 }
 
-const questionToolAnswer = /:\d+$/;
-const runChoices = [runOption, `${runOption} (Recommended)`].map(normalized);
+export const acceptGapOption = "Accept the gap";
+export const keepGapOption = "Keep the gap open";
+const gapLead = (identity: ProofIdentity, kind: string) => `Accept the ${kind} gap? ${identity.repository}#${identity.pr}:`;
+export const gapQuestion = (identity: ProofIdentity, kind: string, reason: string) => `${gapLead(identity, kind)} ${reason}`;
 
-function refuseOtherChoice(answer: HeardAnswer) {
-  if (!questionToolAnswer.test(answer.message)) throw new Error(`"${answer.words}" is a message the user typed. Only their answer to your question tool counts: ask "${roundQuestion}" with the options "${runOption}" and "${stopOption}"`);
-  if (!normalized(answer.answered).startsWith(normalized(roundQuestion))) throw new Error(`"${answer.words}" answers another question ("${answer.answered}"). Ask the question that fleet proof printed`);
-  if (!runChoices.includes(normalized(answer.words))) throw new Error(`The user chose "${answer.words}", not "${runOption}". Stop the review loop`);
+export function askGap(identity: ProofIdentity, kind: string, reason: string) {
+  return `Ask the user with your question tool. Question: "${gapQuestion(identity, kind, reason)}" Options: "${acceptGapOption}", "${keepGapOption}". When they choose "${acceptGapOption}", run fleet proof gap --kind ${kind} --accept '<date> "${acceptGapOption}"' --thread <your T3 thread id>`;
 }
 
-type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; capturedBy?: CapturedBy; reviewer?: string };
+export function requireGapChoice(answer: HeardAnswer, identity: ProofIdentity, kind: string) {
+  requireChoice(answer, gapLead(identity, kind), [acceptGapOption, keepGapOption], "The gap stays open");
+}
+
+function requireChoice(answer: HeardAnswer, lead: string, [accept, decline]: [string, string], refused: string) {
+  if (answer.source !== "question") throw new Error(`"${answer.words}" is a message the user typed. Only their answer to your question tool counts: ask "${lead} …" with the options "${accept}" and "${decline}"`);
+  if (!normalized(answer.answered).startsWith(normalized(lead))) throw new Error(`"${answer.words}" answers another question ("${answer.answered}"). Ask the question that fleet proof printed, which starts "${lead}"`);
+  if (![accept, `${accept} (Recommended)`].map(normalized).includes(normalized(answer.words))) throw new Error(`The user chose "${answer.words}", not "${accept}". ${refused}`);
+}
+
+type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; from?: string; capturedBy?: CapturedBy; reviewer?: string };
 
 export type RoundId = number | `final-${number}`;
 
@@ -368,18 +378,27 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
   return destination;
 }
 
-const findingItem = /^(?:[-*]|\d+[.)])\s+\S/;
+const findingItem = /^\s*(?:[-*]|\d+[.)])\s+\S/;
 const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
 
 const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
 
+const findingsBlock = /^\s*FINDINGS\b:?/;
+
+function reviewedLines(findings: string) {
+  const lines = findings.split("\n");
+  const lensAnswer = lines.some((line) => findingsBlock.test(line));
+  let inside = !lensAnswer;
+  return lines.flatMap((line) => {
+    if (findingsBlock.test(line)) { inside = true; return [line.replace(findingsBlock, "")]; }
+    if (/^#/.test(line)) inside = !lensAnswer;
+    if (/^COVERED\b/.test(line)) inside = false;
+    return inside ? [line] : [];
+  }).filter((line) => line.trim());
+}
+
 function findingCount(findings: string) {
-  let covered = false;
-  const reviewed = findings.split(anchorHeading)[0]!.split("\n").filter((line) => {
-    if (/^#/.test(line)) covered = false;
-    if (/^COVERED\b/.test(line)) covered = true;
-    return !covered && line.trim();
-  });
+  const reviewed = reviewedLines(findings);
   const items = reviewed.filter((line) => findingItem.test(line)).length;
   return items || (reviewed.every((line) => noFinding.test(line.trim())) ? 0 : 1);
 }
@@ -471,9 +490,10 @@ export async function recordGap(home: string, identity: ProofIdentity, kind: str
   if (!update.accept.trim()) throw new Error("Accepting a gap needs the explicit user instruction");
   const gap = await readJson<Gap | undefined>(path, undefined);
   if (!gap) throw new Error(`No ${kind} gap is recorded. Record it with --reason first.`);
-  await refuseBorrowedAnswer(home, identity, update.accept, "gap");
+  await refuseInstructionQuote(home, update.accept);
   const answer = await update.hear(update.accept);
-  await refuseBorrowedMessage(home, identity, answer, "gap");
+  requireGapChoice(answer, identity, kind);
+  await refuseBorrowedMessage(home, answer);
   const accepted: Gap = { ...gap, acceptance: { instruction: update.accept, acceptedAt: new Date().toISOString(), answer } };
   await writeJson(path, accepted);
   return accepted;
@@ -490,7 +510,7 @@ function instructionSentences(instructions: string) {
   return instructions.split(/[.!?\n]+/).map((sentence) => normalized(sentence).replace(/^[^a-z0-9]+/, "")).filter((sentence) => sentence.length >= minimumRule);
 }
 
-type RecordedAnswer = { where: string; repository: string; pr: number; use: "round" | "gap"; text: string; message?: string };
+type RecordedAnswer = { where: string; message?: string };
 const messageOf = (answer: HeardAnswer | undefined) => answer && `${answer.thread}/${answer.message}`;
 
 async function recordedAnswers(home: string) {
@@ -500,32 +520,26 @@ async function recordedAnswers(home: string) {
     const [directory, repository] = [join(root, owner, name, pr), `${owner}/${name}`];
     for (const review of await reviewNames(join(directory, "reviews"))) {
       const round = await readJson<{ override?: string; answer?: HeardAnswer } | undefined>(join(directory, "reviews", review, "round.json"), undefined);
-      if (round?.override) answers.push({ where: `${repository}#${pr} ${reviewLabel(review)}`, repository, pr: Number(pr), use: "round", text: round.override, message: messageOf(round.answer) });
+      if (round?.override) answers.push({ where: `${repository}#${pr} ${reviewLabel(review)}`, message: messageOf(round.answer) });
     }
     for (const file of (await entries(join(directory, "gaps"))).filter((entry) => entry.endsWith(".json"))) {
       const acceptance = (await readJson<Gap | undefined>(join(directory, "gaps", file), undefined))?.acceptance;
-      if (acceptance) answers.push({ where: `${repository}#${pr} ${file.slice(0, -5)} gap`, repository, pr: Number(pr), use: "gap", text: acceptance.instruction, message: messageOf(acceptance.answer) });
+      if (acceptance) answers.push({ where: `${repository}#${pr} ${file.slice(0, -5)} gap`, message: messageOf(acceptance.answer) });
     }
   }
   return answers;
 }
 
-async function refuseBorrowedAnswer(home: string, identity: ProofIdentity, text: string, use: "round" | "gap") {
+export async function refuseInstructionQuote(home: string, text: string) {
   const answer = normalized(text);
   if (instructionSentences(await agentInstructions(home)).some((sentence) => answer.includes(sentence))) {
     throw new Error("This quotes the user's instructions in ~/.agents, not their answer to this question. A standing rule there is recorded once with fleet proof standing; otherwise ask the user and record their reply");
   }
-  if (use === "gap") await refuseBorrowed(home, identity, use, (recorded) => normalized(recorded.text) === answer);
 }
 
-export async function refuseBorrowedMessage(home: string, identity: ProofIdentity, heard: HeardAnswer, use: "round" | "gap") {
-  await refuseBorrowed(home, identity, use, (recorded) => recorded.message === messageOf(heard));
-}
-
-async function refuseBorrowed(home: string, identity: ProofIdentity, use: "round" | "gap", same: (recorded: RecordedAnswer) => boolean) {
-  const samePrGaps = (recorded: RecordedAnswer) => use === "gap" && recorded.use === "gap" && recorded.repository === identity.repository && recorded.pr === identity.pr;
-  const borrowed = (await recordedAnswers(home)).find((recorded) => same(recorded) && !samePrGaps(recorded));
-  if (borrowed) throw new Error(`This answer is already recorded on ${borrowed.where}. Each round, and the gaps of each PR, need the user's answer to that question; quote it with what it answers`);
+export async function refuseBorrowedMessage(home: string, heard: HeardAnswer) {
+  const borrowed = (await recordedAnswers(home)).find((recorded) => recorded.message === messageOf(heard));
+  if (borrowed) throw new Error(`This answer is already recorded on ${borrowed.where}. Each round and each gap needs the user's answer to its own question. Ask the user again`);
 }
 
 const standingKinds = [...gapKinds, "review"] as const;
@@ -755,7 +769,7 @@ export async function reviewOfCommit(home: string, identity: ProofIdentity) {
   const review = (await finishedReviews(home, identity)).filter((finished) => finished.commit === identity.commit).at(-1);
   if (!review) return undefined;
   const reservation = await readJson<Reservation | undefined>(join(pullRequestDirectory(home, identity), "reviews", review.name, "round.json"), undefined);
-  return { label: reviewLabel(review.name), scope: reservation?.scope ?? "full", base: reservation?.base, reviewer: review.reviewer };
+  return { label: reviewLabel(review.name), scope: reservation?.scope ?? "full", from: reservation?.from ?? reservation?.base, reviewer: review.reviewer };
 }
 
 export const judgeDirectory = (home: string, identity: ProofIdentity) => join(pullRequestDirectory(home, identity), "judge");

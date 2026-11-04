@@ -26,6 +26,7 @@ function plan(overrides: Partial<Plan> = {}): Plan {
     models: [],
     settings: {},
     unanswered: [],
+    ask: [],
     dropped: [],
     ...overrides,
   };
@@ -105,6 +106,40 @@ describe("apply", () => {
     const run = async (command: string[]) => (ran.push(command[0]!), command[0] === "fresh-version" ? 1 : 0);
     await apply(plan({ steps }), { home: temp.make("home-"), run });
     expect(ran).toEqual(["cli-version", "fresh-version", "install-fresh"]);
+  });
+
+  test("a step that waits for a sign-in runs only once its probe passes, and doctor does not report it", async () => {
+    const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"], pack: "team" }];
+    const steps = [{ id: "devbox", run: ["devbox-start"], check: ["devbox-status"], after: "coder", pack: "team" }];
+    const ran: string[] = [];
+    const signedOut = async (command: string[]) => (ran.push(command[0]!), 1);
+    const report = await apply(plan({ human, steps }), { home: temp.make("home-"), run: signedOut });
+    expect(ran).toEqual(["coder"]);
+    expect(report.findings).toEqual([]);
+    const doctor = await check(plan({ human, steps }), { home: temp.make("home-"), run: signedOut });
+    expect(doctor.findings.map((finding) => finding.id).filter((id) => !id.startsWith("files:"))).toEqual(["human:coder"]);
+    ran.length = 0;
+    await apply(plan({ human, steps }), { home: temp.make("home-"), run: async (command) => (ran.push(command[0]!), command[0] === "devbox-status" ? 1 : 0) });
+    expect(ran).toEqual(["coder", "devbox-status", "devbox-start"]);
+  });
+
+  test("a sign-in is probed when its first waiting step comes up, after the steps before it ran", async () => {
+    const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"], pack: "team" }];
+    const steps = [
+      { id: "install-coder", run: ["install-coder"], check: ["coder-installed"], pack: "team" },
+      { id: "devbox", run: ["devbox-start"], after: "coder", pack: "team" },
+    ];
+    let installed = false;
+    const ran: string[] = [];
+    const run = async (command: string[]) => {
+      ran.push(command[0]!);
+      if (command[0] === "install-coder") installed = true;
+      if (command[0] === "coder-installed") return installed ? 0 : 1;
+      if (command[0] === "coder") return installed ? 0 : 127;
+      return 0;
+    };
+    await apply(plan({ human, steps }), { home: temp.make("home-"), run });
+    expect(ran).toEqual(["coder-installed", "install-coder", "coder", "devbox-start"]);
   });
 
   test("runs steps with the plan's home directory as HOME", async () => {

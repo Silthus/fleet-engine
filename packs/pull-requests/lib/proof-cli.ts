@@ -1,8 +1,8 @@
-import { closeSync, openSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
+import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
 import { askModel, family, familyOf, modelLabel, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge } from "./proof-judge.ts";
 import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO } from "./proof-panel.ts";
@@ -32,15 +32,16 @@ type Subcommand = {
 };
 
 const answerHelp = `--thread names the T3 thread where the user gave the answer; a conductor may pass its own thread id. fleet
-reads that thread, and the quoted words must appear in a message the user typed there or in the answer they gave to a
-question tool in the T3 app; an answer sent through MCP does not count. The ledger keeps the thread, the message, the
-user's words, and the question they answered.`;
+reads that thread, and the quoted words must be the user's whole answer to the question tool in the T3 app, given to
+the question that fleet printed for this PR. A message they typed, or an answer sent through MCP, does not count. The
+ledger keeps the thread, the message, the user's words, and the question they answered. Each answer counts once.`;
 
 const overrideHelp = `--override takes the user's answer to the question that review-start prints when the arbiter escalates, gives no
 verdict, or the ceiling stops the loop. Ask it with your question tool, with the options "Run one more round" and "Stop
 here". Only their choice of "Run one more round" there counts, quoted with the date they gave it, for example
 --override '2026-10-24 "Run one more round"' --thread <T3 thread id>. A typed message, a refusal, or a general rule,
-such as "ship everything autonomously", does not answer a round. One answer starts one round.
+such as "ship everything autonomously", does not answer a round. The question names the PR, and an answer to the
+question of another PR does not count. One answer starts one round.
 ${answerHelp}
 --standing takes your own reason for a round that the arbiter escalates or the ceiling refuses, when the user's
 standing review rule (fleet proof standing --kind review) lets agents decide them. The round keeps the reason, the
@@ -112,8 +113,8 @@ review-codex row for one that Codex wrote when the table has one. The recorded f
 row for a PR that Claude wrote, and the review-codex row for a PR that Codex wrote when the table has one, else the
 review row. On the both plan that reviewer is the family that did not write the PR; on a single plan it is a fresh
 session of that provider. fleet builds the prompt from the diff, the PR title and description, and the coding
-standards in ~/.agents/guides/coding-standards.md, and saves the reviewer's answer as the findings, with an anchor
-check of each finding against the diff. Answer them with fleet proof respond. Scope and --base work as for
+standards in ~/.agents/guides/coding-standards.md, and saves the reviewer's answer as the findings. fleet checks each
+finding's anchor against the diff and prints the result after the findings; it keeps it apart, in anchors.md. Answer them with fleet proof respond. Scope and --base work as for
 review-start. When the reviewer gives no answer, the round stays reserved and the next fleet proof review on the same
 commit retries it. The setting pull-requests.reviewTimeoutMinutes limits the reviewer. FLEET_PROOF_REVIEWER replaces
 its command, and FLEET_PROOF_REVIEWER_MODEL its model.
@@ -194,10 +195,12 @@ list the standing rules.`,
   },
   gap: {
     usage: "gap --kind <kind> (--reason <why it could not run> | --accept <the user's words> --thread <id>)",
-    summary: `Record why an owed proof could not run, or the user's acceptance of that gap. --accept takes their answer to
-this gap, with their words in quotes. It refuses a quote of the user's instructions, which a standing rule covers, and
-an answer already recorded on another PR or round. Their acceptance settles the kind: the gate then ignores that
-kind's evidence, and the judge does not see it. Kind ci records that CI cannot run on HEAD, such as on a fork PR.
+    summary: `Record why an owed proof could not run, or the user's acceptance of that gap. --reason prints a question
+that names the gap kind and the PR, with the options "Accept the gap" and "Keep the gap open". Ask it with your
+question tool. --accept takes their choice of "Accept the gap" there, with their words in quotes. A typed message, a
+refusal, an answer to another question, a quote of the user's instructions, or an answer already recorded elsewhere
+does not count. A standing rule (fleet proof standing) covers a kind without asking. Their acceptance settles the
+kind: the gate then ignores that kind's evidence, and the judge does not see it. Kind ci records that CI cannot run on HEAD, such as on a fork PR.
 ${answerHelp}`,
     examples: ["fleet proof gap --kind prod-shape --reason 'No production read access'", `fleet proof gap --kind prod-shape --accept '2026-10-25 "Accept the gap"' --thread mcp:1a2b`],
     options: ["--kind", "--reason", "--accept", "--thread"],
@@ -206,7 +209,9 @@ ${answerHelp}`,
       const [reason, accept] = [options.get("--reason"), options.get("--accept")];
       if ((reason === undefined) === (accept === undefined)) throw usageError("gap", "Pass either --reason or --accept");
       const update = reason === undefined ? { accept: accept!, hear: hearing(options, context) } : { reason };
-      context.print(JSON.stringify(await recordGap(context.home, identity(), kind, update)));
+      const gap = await recordGap(context.home, identity(), kind, update);
+      context.print(JSON.stringify(gap));
+      if (reason !== undefined) context.print(askGap(identity(), kind, reason));
       return 0;
     },
   },
@@ -224,7 +229,8 @@ findings and responses, and the coding standards in ~/.agents/guides/coding-stan
 does the evidence prove HEAD, do the owed kinds fit the diff, does the review hold, and how good is the code. A failed
 question or a high quality finding fails the gate; medium and low findings are listed. The verdict is cached per set
 of inputs. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
---kind judge) that they or their standing rule accept lets the gate pass. The setting
+--kind judge) lets the gate pass once their standing rule covers it, or once they choose "Accept the gap" in your
+question tool for the question that the gate prints. A refusal or a typed message never accepts it. The setting
 pull-requests.reviewTimeoutMinutes limits the judge. FLEET_PROOF_JUDGE replaces its command, and
 FLEET_PROOF_JUDGE_MODEL its model.`,
     examples: ["fleet proof gate", "fleet proof gate --landed"], flags: ["--landed"],
@@ -261,7 +267,7 @@ JSON line in ${missesPath("~")}. fleet proof eval reruns the reviewer on every c
       const head = identity();
       const review = await reviewOfCommit(home, head);
       if (!review) throw new Error(`No finished review of ${head.repository}#${head.pr} read ${short(head.commit)}, so no reviewer missed it there. Pass --commit with the reviewed commit that held the problem`);
-      const base = review.base ?? mergeBase(head, run);
+      const base = review.from ?? mergeBase(head, run);
       if (base === head.commit) throw new Error(`Cannot rebuild the diff the review read: the base of ${head.repository}#${head.pr} already contains ${short(head.commit)}`);
       const pr = pullRequestDetails(head, run);
       const miss = await recordMiss(home, {
@@ -307,7 +313,8 @@ ${overrideHelp}`,
     run: async ({ options }, identity, context) => {
       const head = identity();
       const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-      context.print(JSON.stringify(await startReview(context.home, head, { scope: options.get("--scope") ?? "full", base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
+      const scope = options.get("--scope") ?? "full";
+      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
       return 0;
     },
   },
@@ -338,9 +345,9 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const pending = await unfinishedFleetReview(home, head);
   if (pending && await readPlan(pending.directory)) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
   const reserved = pending
-    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base }
+    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
     : await reserveFleetReview(options, head, context);
-  const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
+  const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const rules = reviewRules(changedFilesOf(from, head.commit, run), baseTip(head, run), run);
   const diff = diffOf(from, head.commit, run);
@@ -350,10 +357,12 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory] }, env, limit);
   const label = reserved.round === "final" ? "The final read" : `Round ${reserved.round}`;
   if (!answer.ok) throw new Error(`The reviewer ${answer.model} gave no findings (${answer.cause}). ${label} stays reserved; run fleet proof review again to retry it`);
-  const findings = [answer.text.trim(), anchorCheck(answer.text, diff, await reviewRecords(home, head))].filter(Boolean).join("\n\n");
-  await storeCapturedFindings(reserved.directory, head, roundId(reserved.id), findings, answer.model);
+  const anchors = anchorCheck(answer.text, diff, await reviewRecords(home, head));
+  await storeCapturedFindings(reserved.directory, head, roundId(reserved.id), answer.text, answer.model);
+  if (anchors) await writeFile(join(reserved.directory, "anchors.md"), anchors + "\n", { mode: 0o600 });
   print(JSON.stringify({ round: reserved.round, id: reserved.id, directory: reserved.directory, reviewer: answer.model }));
-  print(findings);
+  print(answer.text.trim());
+  if (anchors) print(`\n${anchors}`);
   return 0;
 }
 
@@ -361,9 +370,12 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   const scope = options.get("--scope") ?? "full";
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-  const reserved = await startReview(context.home, head, { scope, base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
-  return { ...reserved, scope, base };
+  const from = rangeStart(scope, base, head, context.run);
+  const reserved = await startReview(context.home, head, { scope, base, from, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
+  return { ...reserved, scope, from };
 }
+
+const rangeStart = (scope: string, base: string | undefined, head: ProofIdentity, run: Run) => scope === "full" ? mergeBase(head, run) : base;
 
 const waitPolls = 108;
 const pollInterval = 5_000;
@@ -410,7 +422,7 @@ async function reservePanel(options: Map<string, string>, head: ProofIdentity, l
   const { home, cwd, env, run } = context;
   const rubric = await readRubric(home);
   const reserved = await reserveFleetReview(options, head, context);
-  const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
+  const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const owed = await readOwed(home, head);
   const settled = (await reviewRecords(home, head)).filter((review) => review.responses).map((review) => `${review.label}:\n${review.responses!.trim()}`).join("\n\n");
@@ -538,7 +550,7 @@ async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContex
   if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}` };
   const gap = await judgeGap(home, head, today);
   if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}` };
-  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: not accepted: ${gap.reason}`], covered: "" };
+  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: not accepted: ${gap.reason}. ${askGap(head, "judge", gap.reason)}`], covered: "" };
   const standing = await standingFor(home, "judge", today);
   const hint = standing ? [`judge gap: the user's standing rule accepts a judge gap on HEAD until ${standing.until}. Record it with fleet proof gap --kind judge --reason <why the judge is wrong>`] : [];
   return { code: 1, lines: [...outcome.lines, ...hint], covered: "" };
@@ -549,8 +561,9 @@ async function roundLines(directory: string, { now }: CommandContext) {
   if (!round) throw new Error(`${directory} has no reservation`);
   const finished = round.reviewer ? `finished by ${round.reviewer}, ${round.capturedBy === "fleet" ? "captured by fleet" : "saved by the author"}: ${join(directory, "findings.md")}` : "reserved, no findings yet";
   const header = `${round.round === "final" ? "final read" : `round ${round.round}`} on ${short(round.commit)}: ${finished}`;
+  const anchors = join(directory, "anchors.md");
   const standing = round.standing ? [`accepted by the standing rule until ${round.standing.until}: ${round.standing.reason}`] : [];
-  return [header, ...standing, ...(await readPlan(directory) ? await panelLines(directory, now?.() ?? new Date()) : [])];
+  return [header, ...(existsSync(anchors) ? [`anchor check by fleet: ${anchors}`] : []), ...standing, ...(await readPlan(directory) ? await panelLines(directory, now?.() ?? new Date()) : [])];
 }
 
 function roundOption(options: Map<string, string>) {

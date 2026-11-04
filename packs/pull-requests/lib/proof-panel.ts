@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { anchorCheck } from "./finding-anchors.ts";
 import { readJson, roundId, storeCapturedFindings, writeJson, type ProofIdentity } from "./proof.ts";
@@ -170,11 +171,11 @@ export async function runLens(directory: string, name: string, io: PanelIO) {
   if (name === sweep && !await othersFinished(directory, io)) {
     return void await save({ state: "failed", finishedAt: io.now().toISOString(), cause: "a lens it sweeps failed; rerun the panel" });
   }
-  await withSlot(io, async () => {
+  await withSlot(io, async (slot) => {
     let cause = status.cause ?? "no attempt ran";
     while (status.attempts < attemptsPerLens) {
       await save({ state: "running", attempts: status.attempts + 1, startedAt: status.startedAt ?? io.now().toISOString() });
-      const problem = await askLens(directory, plan, lens, io).catch((error: Error) => error.message);
+      const problem = await askLens(directory, plan, lens, io, slot).catch((error: Error) => error.message);
       if (problem === undefined) {
         await save({ state: "done", finishedAt: io.now().toISOString(), cause: undefined });
         return void await finishPanel(directory);
@@ -194,10 +195,10 @@ async function othersFinished(directory: string, io: PanelIO) {
   }
 }
 
-async function askLens(directory: string, plan: Plan, lens: Plan["lenses"][number], io: PanelIO) {
+async function askLens(directory: string, plan: Plan, lens: Plan["lenses"][number], io: PanelIO, slot: Slot) {
   const brief = await readFile(lensFile(directory, lens.name, ".prompt.md"), "utf8");
   const prompt = lens.name === sweep ? `${brief}\n${await otherFindings(directory, plan)}` : brief;
-  const answer = await askModel("reviewer", lens.row, { prompt, cwd: plan.cwd, readable: plan.readable }, io.env, io.limit);
+  const answer = await askModel("reviewer", lens.row, { prompt, cwd: plan.cwd, readable: plan.readable, started: slot.recordReviewer }, io.env, io.limit);
   if (!answer.ok) return answer.cause;
   await writeFile(lensFile(directory, lens.name, ".md"), answer.text + "\n", { mode: 0o600 });
   return laneProblem(answer.text, plan.changedFiles);
@@ -225,25 +226,69 @@ function laneProblem(answer: string, changedFiles: string[]) {
   return missed.length ? `COVERED misses ${missed.join(", ")}` : undefined;
 }
 
-export async function withSlot<T>(io: PanelIO, work: () => Promise<T>) {
-  const slot = await takeSlot(io);
-  try { return await work(); }
-  finally { await rm(slot, { force: true }); }
+type Holder = { pid: number; token?: string; reviewer?: number };
+export type Slot = { recordReviewer: (pid: number) => Promise<void> };
+
+export async function withSlot<T>(io: PanelIO, work: (slot: Slot) => Promise<T>) {
+  const holder: Holder = { pid: io.pid, token: crypto.randomUUID() };
+  const slot = await takeSlot(io, holder);
+  const owned = async () => holderOf(await readSlot(slot))?.token === holder.token;
+  const recordReviewer = async (reviewer: number) => {
+    if (!await owned()) return;
+    const temporary = `${slot}.${holder.token}`;
+    await writeFile(temporary, JSON.stringify({ ...holder, reviewer }), { mode: 0o600 });
+    await rename(temporary, slot);
+  };
+  try { return await work({ recordReviewer }); }
+  finally { if (await owned()) await rm(slot, { force: true }); }
 }
 
-async function takeSlot(io: PanelIO) {
+async function takeSlot(io: PanelIO, holder: Holder) {
   const slots = Math.max(1, io.slotCount);
   await mkdir(io.slots, { recursive: true, mode: 0o700 });
   for (;;) {
     for (let index = 0; index < slots; index++) {
       const slot = join(io.slots, String(index));
-      try { await writeFile(slot, String(io.pid), { flag: "wx", mode: 0o600 }); return slot; }
+      try { await writeFile(slot, JSON.stringify(holder), { flag: "wx", mode: 0o600 }); return slot; }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-      const holder = Number(await readFile(slot, "utf8").catch(() => ""));
-      if (holder && !isAlive(holder)) { await rm(slot, { force: true }); index--; }
+      if (await reclaim(slot)) index--;
     }
     await io.pause();
   }
+}
+
+export async function reclaimSlots(io: PanelIO) {
+  const names = await readdir(io.slots).catch(() => []);
+  for (const name of names.filter((entry) => /^\d+$/.test(entry))) await reclaim(join(io.slots, name));
+}
+
+async function reclaim(slot: string) {
+  const text = await readSlot(slot);
+  const holder = holderOf(text);
+  if (!holder?.pid || isAlive(holder.pid)) return false;
+  const lock = `${slot}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
+  try { await mkdir(lock, { mode: 0o700 }); }
+  catch { return false; }
+  try {
+    if (await readSlot(slot) !== text) return false;
+    stopGroup(holder.reviewer);
+    await rm(slot, { force: true });
+    return true;
+  } finally { await rm(lock, { recursive: true, force: true }); }
+}
+
+const readSlot = (slot: string) => readFile(slot, "utf8").catch(() => "");
+
+function holderOf(text: string): Holder | undefined {
+  try {
+    const value = JSON.parse(text) as Holder | number;
+    return typeof value === "number" ? { pid: value } : value;
+  } catch { return undefined; }
+}
+
+function stopGroup(group: number | undefined) {
+  if (!group) return;
+  try { process.kill(-group, "SIGKILL"); } catch {}
 }
 
 function isAlive(pid: number) {
@@ -261,8 +306,9 @@ async function finishPanel(directory: string) {
   const identity = { repository: round.repository, pr: round.pr, commit: round.commit };
   const joined = answers.join("\n\n");
   const diff = plan.from ? roundDiff(plan, plan.from, round.commit) : undefined;
-  const findings = [joined, diff ? anchorCheck(joined, diff, await earlierFindings(directory)) : ""].filter(Boolean).join("\n\n");
-  await storeCapturedFindings(directory, identity, roundId(basename(directory)), findings, [...new Set(plan.lenses.map((lens) => lens.model))].join(", "));
+  const anchors = diff ? anchorCheck(joined, diff, await earlierFindings(directory)) : "";
+  if (anchors) await writeFile(join(directory, "anchors.md"), anchors + "\n", { mode: 0o600 });
+  await storeCapturedFindings(directory, identity, roundId(basename(directory)), joined, [...new Set(plan.lenses.map((lens) => lens.model))].join(", "));
   return true;
 }
 
@@ -283,6 +329,7 @@ export async function waitForPanel(directory: string, io: PanelIO, restart: Rest
   for (let poll = 0; ; poll++) {
     for (const { name, status } of await lensStates(directory)) {
       if (!["queued", "running"].includes(status.state) || await workerAlive(directory, name)) continue;
+      await reclaimSlots(io);
       if (status.attempts < attemptsPerLens) await restart(name);
       else await writeStatus(directory, name, { ...status, state: "failed", finishedAt: io.now().toISOString(), cause: "the worker exited without an answer" });
     }

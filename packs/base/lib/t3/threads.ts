@@ -31,7 +31,7 @@ export type TurnItem = {
 type BoundedThread = { projection: { visibleTurnItems: TurnItem[] }; historyCursor: string | null; hasMoreHistory: boolean };
 type HistoryPage = { items: TurnItem[]; nextCursor: string | null; hasMoreHistory: boolean };
 
-export type ThreadWord = { id: string; text: string; answered: string; at: string };
+export type ThreadWord = { thread: string; id: string; text: string; answered: string; at: string; source: "question" | "typed" };
 
 export function readSnapshots(client: T3Client): Promise<[ShellSnapshot, ShellSnapshot]> {
   return Promise.all([client.getShell<ShellSnapshot>(), client.call<ShellSnapshot>("orchestration.getArchivedShellSnapshot", {})]);
@@ -84,10 +84,10 @@ export async function readThreadWords(client: T3HttpClient, value: string, state
   let lastAssistant = "";
   for (const { item } of items) {
     if (item.type === "assistant_message" && item.text) lastAssistant = item.text;
-    if (typedByUser(item) && item.text) words.push({ id: item.messageId ?? item.id ?? "", text: item.text, answered: lastAssistant.slice(0, answeredCap), at: item.startedAt });
+    if (typedByUser(item) && item.text) words.push({ thread: threadId, id: item.messageId ?? item.id ?? "", text: item.text, answered: lastAssistant.slice(0, answeredCap), at: item.startedAt, source: "typed" });
     const answer = item.type === "user_input_request" && answeredInClient().has(item.requestId ?? "") ? item.questionAnswer : undefined;
     Object.entries(answer?.answers ?? {}).forEach(([question, text], index) => words.push({
-      id: `${item.id}:${index}`, text: [text].flat().join(", "), answered: (answer!.questionTextById[question] ?? question).slice(0, answeredCap), at: item.startedAt,
+      thread: threadId, id: `${item.id}:${index}`, text: [text].flat().join(", "), answered: (answer!.questionTextById[question] ?? question).slice(0, answeredCap), at: item.startedAt, source: "question",
     }));
   }
   return words;

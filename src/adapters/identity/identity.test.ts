@@ -32,6 +32,7 @@ function plan(os: "darwin" | "linux", settings: Record<string, SettingValue> = {
     commands: {},
     settings,
     unanswered: [],
+    ask: [],
     dropped: [],
     models: [],
   };

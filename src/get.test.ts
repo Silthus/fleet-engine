@@ -15,7 +15,7 @@ let engineRepo: string;
 
 beforeAll(() => {
   engineRepo = shared.make("engine-repo-");
-  for (const path of ["src", "packs", "fleet", "package.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
+  for (const path of ["src", "packs", "fleet", "package.json", "presets.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
   git(engineRepo, "init", "-q", "-b", "main");
   git(engineRepo, "add", ".");
   git(engineRepo, "commit", "-q", "-m", "engine");
@@ -98,6 +98,15 @@ describe("get.sh", () => {
     expect(readFileSync(join(box.home, ".agents/AGENTS.md"), "utf8")).toStartWith("# Agent rules\n");
   });
 
+  test("--install-only installs the tools and the engine, then stops before setup", () => {
+    const box = sandbox("Linux");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    expect(result.output).toEndWith("Fleet: Engine ready at v0.1.0 in " + join(box.home, ".local/share/fleet/engine") + ".\n");
+    expect(existsSync(join(box.home, ".local/bin/gh"))).toBe(true);
+    expect(existsSync(join(box.home, ".config/fleet/machine.json"))).toBe(false);
+  });
+
   test("on macOS installs Homebrew, gh, and the T3 Code app, then applies the profile", () => {
     const box = sandbox("Darwin");
     const result = getSh(box, ["--ref", "v0.1.0", "--profile", profile()]);
@@ -131,8 +140,8 @@ describe("get.sh", () => {
   test("passes flags after -- to fleet and rejects others", () => {
     const box = sandbox("Linux");
     expect(getSh(box, ["--preset", "everyday"])).toMatchObject({ code: 1, output: expect.stringContaining("unknown option --preset. Put flags for fleet after --.") });
-    const result = getSh(box, ["--ref", "v0.1.0", "--", "--preset", "everyday"]);
-    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("fleet setup is not available in this version yet.") });
+    const result = getSh(box, ["--ref", "v0.1.0", "--", "--preset", "nope"]);
+    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("fleet setup: --preset nope: choose starter, everyday, michael") });
   });
 });
 

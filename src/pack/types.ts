@@ -69,6 +69,8 @@ export type PackStep = Scope & {
   id: string;
   run: string[];
   check?: string[];
+  /** The id of a human step of the same pack that must pass before this step runs. */
+  after?: string;
 };
 
 export type Provider = "claude" | "codex" | "t3";
@@ -133,7 +135,7 @@ export type Profile = ProfileFile & { dir: string; aboutMe?: string };
 
 export type SetupProgress = { done: string[]; draft?: Partial<ProfileFile> };
 
-export type MachineFile = { schema: 1; role: MachineRole; profileDir?: string; setup?: SetupProgress };
+export type MachineFile = { schema: 1; role: MachineRole; profileDir?: string; devboxes?: string[]; setup?: SetupProgress };
 
 import type { Action, DesiredFile } from "../files/install.ts";
 
@@ -160,6 +162,7 @@ export type Plan = {
   models: ModelRow[];
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];
+  ask: PackSetting[];
   dropped: Array<{ pack: string; item: string; reason: string }>;
 };
 

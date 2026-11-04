@@ -20,11 +20,11 @@ test("the user's accepted gap settles its kind even when the judge rejects that 
   expect(unaccepted.code).toBe(1);
   expect(unaccepted.output).toContain("judge proof: fail: plan.log is pre-apply plan output, not a run");
 
-  pr.say("Accept the live-run gap.");
-  await pr.fleet("gap", "--kind", "live-run", "--accept", `2026-10-25 "Accept the live-run gap."`, "--thread", "thread-1");
+  pr.chooseGap("live-run", "Applying needs production access");
+  await pr.fleet("gap", "--kind", "live-run", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
-  expect(accepted.output).toContain(`live-run: gap from ${pr.git("rev-parse", "--short=7", "HEAD")}, accepted ("2026-10-25 "Accept the live-run gap.""): Applying needs production access`);
+  expect(accepted.output).toContain(`live-run: gap from ${pr.git("rev-parse", "--short=7", "HEAD")}, accepted ("2026-10-25 "Accept the gap""): Applying needs production access`);
 });
 
 test("once the mechanical gate passes, the other family's judge weighs the evidence, the review, and the code, and its verdict is cached", async () => {
@@ -95,8 +95,8 @@ test("a judge that keeps failing goes to the arbiter, and only the user's accept
 
   await pr.fleet("gap", "--kind", "judge", "--reason", "The judge reads feature.txt as code");
   expect((await pr.fleet("gate")).code).toBe(3);
-  pr.say("Ship it; the judge is wrong about feature.txt.", "The judge failed the owed kinds three times. Accept a judge gap?");
-  await pr.fleet("gap", "--kind", "judge", "--accept", `2026-10-25 "Ship it; the judge is wrong about feature.txt."`, "--thread", "thread-1");
+  pr.chooseGap("judge", "The judge reads feature.txt as code");
+  await pr.fleet("gap", "--kind", "judge", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
   expect(accepted.output.split("\n").at(-1)).toContain("judge: fail accepted by the user");
@@ -162,4 +162,25 @@ test("after the free judge failures, only an exact CONTINUE from the arbiter kee
       if (reason === "third") expect(gate.output).toContain("judge: escalate to the user: the arbiter gave no verdict");
     }
   }
+});
+
+test("a refusal never waives the judge, typed or chosen in the question tool", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "greet new members\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: ["feature.txt"] } }));
+  expect((await pr.fleet("gate")).code).toBe(1);
+  const recorded = await pr.fleet("gap", "--kind", "judge", "--reason", "The judge reads feature.txt as code");
+  expect(recorded.output).toContain(`Question: "Accept the judge gap? example/product#42: The judge reads feature.txt as code" Options: "Accept the gap", "Keep the gap open".`);
+  const refuse = () => pr.fleet("gap", "--kind", "judge", "--accept", `2026-10-25 "Do not accept the gap."`, "--thread", "thread-1");
+
+  pr.say("Do not accept the gap.", "Accept the judge gap? example/product#42: The judge reads feature.txt as code");
+  await expect(refuse()).rejects.toThrow("is a message the user typed");
+  expect((await pr.fleet("gate")).code).not.toBe(0);
+  pr.chooseGap("judge", "The judge reads feature.txt as code", "Do not accept the gap.");
+  await expect(refuse()).rejects.toThrow(`The user chose "Do not accept the gap.", not "Accept the gap"`);
+  const gate = await pr.fleet("gate");
+  expect(gate.code).not.toBe(0);
+  expect(gate.output).toContain(`judge gap: not accepted: The judge reads feature.txt as code. Ask the user with your question tool. Question: "Accept the judge gap? example/product#42: The judge reads feature.txt as code"`);
 });
