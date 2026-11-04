@@ -37,7 +37,7 @@ function plan(os: "darwin" | "linux", settings: Record<string, SettingValue> = {
   };
 }
 
-type Account = { user?: { login: string; id: number; name: string | null; email: string | null }; emails?: Array<{ email: string; primary: boolean; verified: boolean; visibility: string | null }>; scopes?: boolean; otherKeys?: string[] };
+type Account = { user?: { login: string; id: number; name: string | null; email: string | null }; emails?: Array<{ email: string; primary: boolean; verified: boolean; visibility: string | null }>; scopes?: boolean; otherKeys?: string[]; agent?: string[] };
 
 function github(home: string, account: Account) {
   const keys = { authentication: [] as string[], signing: [] as string[] };
@@ -57,6 +57,7 @@ function github(home: string, account: Account) {
       keys[type].push(readFileSync(command[3]!, "utf8").trim().split(" ").slice(0, 2).join(" "));
       return { code: 0, stdout: "" };
     }
+    if (tool === "ssh-add" && verb === "-L") return account.agent?.length ? { code: 0, stdout: account.agent.map((key) => `${key} agent\n`).join("") } : { code: 1, stdout: "The agent has no identities.\n" };
     if (tool === "ssh-keygen" && command.includes("-y")) {
       const file = command[command.indexOf("-f") + 1]!;
       return existsSync(file) && readFileSync(file, "utf8") === "PRIVATE\n" ? { code: 0, stdout: `${sshKey} fleet\n` } : { code: 255, stdout: "", stderr: `Load key "${file}": invalid format` };
@@ -161,10 +162,25 @@ describe("the ssh signer", () => {
     writeFileSync(join(home, ".ssh/fleet_ed25519"), "SOMEONE ELSE\n");
     const mismatched = await apply(plan("linux"), { home, adapters: [gh.adapter] });
 
-    const say = "~/.ssh/fleet_ed25519 cannot sign for ~/.ssh/fleet_ed25519.pub: the private key is missing, locked, or belongs to another key. Move both files away, then run fleet apply to make a new Fleet key.";
+    const say = "~/.ssh/fleet_ed25519 cannot sign for ~/.ssh/fleet_ed25519.pub: the private key is missing, locked and not in your SSH agent, or belongs to another key. Move both files away, then run fleet apply to make a new Fleet key.";
     expect(missing.findings).toContainEqual({ id: "identity:key", pack: "engine", say, repair: "human" });
     expect(mismatched.findings).toContainEqual({ id: "identity:key", pack: "engine", say, repair: "human" });
     expect(existsSync(join(home, ".config/fleet/gitconfig"))).toBe(false);
+  });
+
+  test("signs with a passphrase-protected key that the SSH agent holds", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".ssh"));
+    writeFileSync(join(home, ".ssh/fleet_ed25519"), "ENCRYPTED\n");
+    writeFileSync(join(home, ".ssh/fleet_ed25519.pub"), `${sshKey} fleet\n`);
+    const locked = await check(plan("linux"), { home, adapters: [github(home, { ...octo, agent: [coderKey] }).adapter] });
+    expect(locked.findings.map((item) => item.id)).toContain("identity:key");
+
+    const gh = github(home, { ...octo, agent: [coderKey, sshKey] });
+    const report = await apply(plan("linux"), { home, adapters: [gh.adapter] });
+    expect(report.findings.map((item) => item.id)).not.toContain("identity:key");
+    expect(readFileSync(join(home, ".config/fleet/gitconfig"), "utf8")).toContain("gpgsign = true");
+    expect(gh.keys.signing).toEqual([sshKey]);
   });
 
   test("finds Fleet's key on a later page of the GitHub key lists", async () => {
