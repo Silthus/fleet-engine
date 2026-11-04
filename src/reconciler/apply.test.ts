@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Plan } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
-import { apply, check } from "./apply.ts";
+import { apply, check, filesAdapter, type Adapter } from "./apply.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -52,6 +52,36 @@ describe("apply", () => {
     expect((await apply(plan(), { home })).actions).toContainEqual({ target: ".agents/skills/team", operation: "remove" });
   });
 
+  test("keeps skills whose source is unreachable, and shared files that would lose an unreachable pack's part", async () => {
+    const home = temp.make("home-");
+    const skill = temp.make("skill-");
+    const rules = { target: ".agents/AGENTS.md", content: "rules\nteam rules\n" };
+    const link = { target: ".agents/skills/team", source: skill };
+    await apply(plan({ files: [rules, link] }), { home });
+    rmSync(skill, { recursive: true });
+    const offline = plan({
+      packs: [...plan().packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }],
+      dropped: [{ pack: "base", item: "skill team:review", reason: "its source is unreachable" }],
+    });
+    const report = await apply(offline, { home });
+    expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toBe("rules\nteam rules\n");
+    expect(lstatSync(join(home, ".agents/skills/team")).isSymbolicLink()).toBe(true);
+    expect(report.findings).toContainEqual(expect.objectContaining({ id: "outage", say: expect.stringContaining("Left .agents/AGENTS.md, .agents/skills/team as they are") }));
+    const back = await apply(plan(), { home });
+    expect(back.actions).toContainEqual({ target: ".agents/AGENTS.md", operation: "replace" });
+    expect(back.actions).toContainEqual({ target: ".agents/skills/team", operation: "remove" });
+  });
+
+  test("routes --adopt to the adapter that owns the target and rejects unknown targets", async () => {
+    const home = temp.make("home-");
+    const seen: string[][] = [];
+    const config: Adapter = { name: "config", targets: () => [".claude/settings.json"], apply: async (_plan, context) => (seen.push(context.adopt), { actions: [], findings: [] }) };
+    const report = await apply(plan(), { home, adopt: [".claude/settings.json"], adapters: [filesAdapter, config] });
+    expect(report.ok).toBe(true);
+    expect(seen).toEqual([[".claude/settings.json"]]);
+    expect(apply(plan(), { home, adopt: [".bashrc"] })).rejects.toThrow("nothing to adopt at .bashrc");
+  });
+
   test("marks only the failing pack when a pack step fails", async () => {
     const steps = [
       { id: "a", run: ["one"], pack: "hub" },
@@ -76,5 +106,23 @@ describe("check", () => {
     expect(report.ok).toBe(false);
     expect(report.humanLeft.map((step) => step.id)).toEqual(["github"]);
     expect(report.findings).toEqual([{ id: "human:github", pack: "base", say: "Sign in to GitHub. Run: gh auth login --web", repair: "human" }]);
+  });
+
+  test("runs each step's check", async () => {
+    const steps = [{ id: "proxy", run: ["start-proxy"], check: ["proxy-health"], pack: "base" }];
+    const home = temp.make("home-");
+    await apply(plan(), { home });
+    const report = await check(plan({ steps }), { home, run: exitCodes({ "proxy-health": 1 }) });
+    expect(report.ok).toBe(false);
+    expect(report.findings).toContainEqual({ id: "step:proxy", pack: "base", say: "Step proxy of the base pack does not pass its check.", repair: "apply" });
+  });
+
+  test("fails while a kept file differs from the profile", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".agents"), { recursive: true });
+    writeFileSync(join(home, ".agents/AGENTS.md"), "mine\n");
+    const report = await check(plan(), { home, run: exitCodes({}) });
+    expect(report.ok).toBe(false);
+    expect(report.findings.map((finding) => finding.id)).toEqual(["kept:.agents/AGENTS.md"]);
   });
 });

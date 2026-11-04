@@ -67,10 +67,11 @@ function record(file: DesiredFile): RecordEntry {
 }
 
 // Skipped targets leave the group: Fleet neither writes nor tracks them.
-export async function plan(home: string, files: DesiredFile[], group = "core", adopt: string[] = [], skip: string[] = []): Promise<Action[]> {
+// Held targets stay in the group as they are: Fleet neither writes nor forgets them.
+export async function plan(home: string, files: DesiredFile[], group = "core", adopt: string[] = [], skip: string[] = [], hold: string[] = []): Promise<Action[]> {
   const state = await readState(home);
   const previous = state.groups[group] ?? {};
-  files = files.filter((file) => !skip.includes(file.target));
+  files = files.filter((file) => !skip.includes(file.target) && !hold.includes(file.target));
   const targets = new Set<string>();
   const actions: Action[] = [];
   for (const file of files) {
@@ -95,17 +96,21 @@ export async function plan(home: string, files: DesiredFile[], group = "core", a
   }
   for (const [target, entry] of Object.entries(previous)) {
     if (targets.has(target) || skip.includes(target)) continue;
+    if (hold.includes(target)) {
+      actions.push({ target, operation: "keep" });
+      continue;
+    }
     await checkParents(home, target);
     if (!(await stat(inside(home, target)))) continue;
     actions.push(await matches(inside(home, target), entry)
       ? { target, operation: "remove" }
       : { target, operation: "conflict", reason: "Removed item changed locally; preserve it" });
   }
-  for (const target of adopt) if (!targets.has(target)) throw new Error(`Adoption target is not in this plan: ${target}`);
+  for (const target of adopt) if (!targets.has(target) && !hold.includes(target)) throw new Error(`Adoption target is not in this plan: ${target}`);
   return actions;
 }
 
-export async function install(home: string, files: DesiredFile[], group = "core", adopt: string[] = [], skip: string[] = []) {
+export async function install(home: string, files: DesiredFile[], group = "core", adopt: string[] = [], skip: string[] = [], hold: string[] = []) {
   home = resolve(home);
   await mkdir(home, { recursive: true });
   await checkParents(home, statePath);
@@ -117,7 +122,7 @@ export async function install(home: string, files: DesiredFile[], group = "core"
     throw error;
   }
   try {
-    const actions = await plan(home, files, group, adopt, skip);
+    const actions = await plan(home, files, group, adopt, skip, hold);
     const conflicts = actions.filter((action) => action.operation === "conflict");
     if (conflicts.length) throw new Error(`Installation stopped. Resolve, adopt, or skip: ${conflicts.map((a) => a.target).join(", ")}`);
     const state = await readState(home);
@@ -127,8 +132,10 @@ export async function install(home: string, files: DesiredFile[], group = "core"
     const nextEntries: Record<string, RecordEntry> = {};
     try {
       for (const action of actions) {
-        const file = files.find((item) => item.target === action.target);
+        const file = hold.includes(action.target) ? undefined : files.find((item) => item.target === action.target);
+        const held = state.groups[group]?.[action.target];
         if (file) nextEntries[file.target] = record(file);
+        else if (held && action.operation === "keep") nextEntries[action.target] = held;
         if (action.operation === "keep") continue;
         const path = inside(home, action.target);
         await checkParents(home, action.target);

@@ -37,9 +37,10 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
 async function reconcile(command: "apply" | "doctor", args: string[], options: CliOptions) {
   const flags = parseFlags(args);
   const doctor = command === "doctor";
-  const { plan } = await loadPlan(options, flags.profile, { fetch: !doctor, remember: !doctor });
+  const preview = doctor || flags.dryRun;
+  const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview });
   const report = doctor ? await check(plan, { home: options.home }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun });
-  printReport(report, command, options.print);
+  printReport(report, command, options.print, flags.dryRun);
   return report.ok ? 0 : 1;
 }
 
@@ -89,11 +90,12 @@ function parseFlags(args: string[]) {
   return flags;
 }
 
-function printReport(report: Report, command: string, print: (line: string) => void) {
+function printReport(report: Report, command: string, print: (line: string) => void, dryRun = false) {
   const changes = report.actions.filter((action) => action.operation !== "keep" && action.operation !== "conflict");
   if (command === "apply") for (const action of changes) print(`${action.operation} ${action.target}`);
   for (const finding of report.findings) print(`${finding.repair === "human" ? "To do" : finding.repair ? "Fix" : "Note"}: ${finding.say}`);
   if (command === "doctor") print(report.ok ? "Everything matches your profile." : "Run fleet apply to fix what Fleet can fix.");
+  else if (dryRun) print(report.ok ? `Preview: ${changes.length} change${changes.length === 1 ? "" : "s"} to apply. Nothing was written.` : "Preview: Fleet could not apply your profile. Nothing was written.");
   else print(report.ok ? `Applied ${changes.length} change${changes.length === 1 ? "" : "s"}.` : "Fleet could not apply your profile.");
 }
 
