@@ -223,6 +223,17 @@ describe("resolve guards", () => {
     }
   });
 
+  test("refuses a pack file that is a broken link, so it cannot point outside later", () => {
+    const source = withPack(pack("dangling", { files: [{ path: "hook.ts", target: ".config/fleet/hooks/hook.ts" }] }));
+    symlinkSync(join(temp.make("outside-"), "later.ts"), join(source.dir, "packs/dangling/hook.ts"));
+    expect(() => plan({ packs: ["dangling"] }, mac, [engine, source])).toThrow("dangling: path hook.ts is a broken link");
+  });
+
+  test("refuses a pack file on a file that the provider config owns", () => {
+    const rival = withPack(pack("rival", { files: [{ path: "settings.json", target: ".claude/settings.json" }] }), { "settings.json": "{}" });
+    expect(() => plan({ packs: ["rival"] }, mac, [engine, rival])).toThrow(".claude/settings.json belongs to the provider config");
+  });
+
   test("rejects a workflow id or a job id that two packs declare", () => {
     const sync = { id: "sync", name: "Sync", sentence: "Sync.", default: true };
     const one = withPack(pack("one", { workflows: [{ ...sync, needs: ["hub"] }] }));
@@ -282,6 +293,15 @@ describe("resolve per AI plan", () => {
     { "AGENTS.md": "# Models fragment\n", "hooks/guard.ts": "export {};\n", "heavy.slice": "[Slice]\n" },
   );
   const withTables = (overrides: Partial<Profile> = {}, machine = mac) => plan({ packs: ["pull-requests", "orchestration", "models"], ...overrides }, machine, [engine, agentSkills, tables]);
+
+  test("refuses a T3 job whose model role the plan's model table lacks", () => {
+    const task = { prompt: "Run.", projectSetting: "jobs.project", modelRole: "worker", workspaceStrategy: "worktree" as const, runtimeMode: "auto" as const };
+    const jobs = withPack({ schema: 1, name: "jobs", summary: "Jobs.", settings: [{ key: "jobs.project", question: "Which project?", type: "string", default: "fleet" }], jobs: [{ id: "nightly", command: [], runner: "t3", schedule: { every: "1d" }, task }] });
+    const resolveJobs = (overrides: Partial<Profile> = {}) => plan({ packs: ["pull-requests", "orchestration", "models", "jobs"], ...overrides }, mac, [engine, agentSkills, tables, jobs]);
+    expect(() => resolveJobs()).toThrow("job nightly asks for model role worker, which the model table lacks");
+    const worker = { role: "worker", work: "Workers", provider: "claude" as const, model: "claude-worker", effort: "high" as const };
+    expect(resolveJobs({ overrides: { models: [worker] } }).jobs.map((job) => job.id)).toContain("nightly");
+  });
 
   test("keeps only the items whose plans hold and records why the others dropped", () => {
     const claude = withTables({ plan: "claude" }, devbox);
