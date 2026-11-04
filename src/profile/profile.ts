@@ -71,7 +71,7 @@ async function readJson(path: string): Promise<Record<string, unknown> | undefin
 }
 
 async function run(cwd: string, ...command: string[]) {
-  const process = Bun.spawn(command, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const process = Bun.spawn(command, { cwd, env: { ...Bun.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [code, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
   return { ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim() };
 }
