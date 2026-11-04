@@ -53,10 +53,14 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
   try {
     flags = parseSetupFlags(args);
-    picksFrom(flags, catalog);
+    const picked = picksFrom(flags, catalog);
     const fromFlags = settingsFrom(flags, catalog);
-    const reopened = [...(hasPicks(flags) ? ["packs"] : []), ...(flags.plan ? ["plans"] : [])];
-    if (reopened.length || Object.keys(fromFlags).length) reopened.push(...answersChanged);
+    const saved = progress.draft;
+    const reopened = [
+      ...(hasPicks(flags) && JSON.stringify(picked) !== JSON.stringify({ packs: saved.packs, workflows: saved.workflows ?? {} }) ? ["packs"] : []),
+      ...(flags.plan && flags.plan !== saved.plan ? ["plans"] : []),
+    ];
+    if (reopened.length || Object.entries(fromFlags).some(([key, value]) => saved.settings?.[key] !== value)) reopened.push(...answersChanged);
     progress.done = progress.done.filter((id) => !reopened.includes(id));
     if (Object.keys(fromFlags).length) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
