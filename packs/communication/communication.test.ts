@@ -3,14 +3,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
-import { agentSkillsSource, engineSource, fileContent, resolveEngine } from "../../src/testing/packs.ts";
+import { skillSources, engineSource, fileContent, resolveEngine } from "../../src/testing/packs.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 let engine: AvailableSource;
 beforeAll(async () => (engine = await engineSource()));
 
-const withPack = (fields = {}) => resolveEngine([engine, agentSkillsSource(temp.make("agent-skills-"), engine)], { packs: ["communication"], ...fields });
+const withPack = (fields = {}) => resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs: ["communication"], ...fields });
 const skillSource = (result: ReturnType<typeof withPack>, name: string) => result.files.find((file) => file.target === `.claude/skills/${name}` && "source" in file);
 
 describe("the Communication pack", () => {

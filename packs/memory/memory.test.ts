@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { git, gitEnv, tempDirs } from "../../src/testing/git.ts";
-import { agentSkillsSource, devbox, engineSource, fileContent, resolveEngine } from "../../src/testing/packs.ts";
+import { skillSources, devbox, engineSource, fileContent, resolveEngine } from "../../src/testing/packs.ts";
 import { memoryUrl, syncMemory } from "./commands/memory-sync.ts";
 import { check, indexLimit } from "./hooks/memory-cap.ts";
 
@@ -13,7 +13,7 @@ let engine: AvailableSource;
 beforeAll(async () => (engine = await engineSource()));
 
 const withPack = (fields = {}) =>
-  resolveEngine([engine, agentSkillsSource(temp.make("agent-skills-"), engine)], { packs: ["memory"], settings: { "memory.repo": "me/notes" }, ...fields }, devbox);
+  resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs: ["memory"], settings: { "memory.repo": "me/notes" }, ...fields }, devbox);
 const lines = (count: number) => Array.from({ length: count }, (_, index) => `- note ${index}`).join("\n") + "\n";
 const fakeToken = () => "ghp_" + "a1B2c3D4e5".repeat(4).slice(0, 36);
 

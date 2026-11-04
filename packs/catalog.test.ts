@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { needValues, type AvailableSource, type Concept, type PackManifest, type Preset } from "../src/pack/types.ts";
 import { tempDirs } from "../src/testing/git.ts";
-import { agentSkillsSource, devbox, engineSource, resolveEngine } from "../src/testing/packs.ts";
+import { skillSources, devbox, engineSource, resolveEngine } from "../src/testing/packs.ts";
 
 const root = join(import.meta.dir, "..");
 const temp = tempDirs();
@@ -60,7 +60,7 @@ describe("the catalog", () => {
       expect([preset.id, preset.packs.filter((pack) => !names.includes(pack))]).toEqual([preset.id, []]);
       const offered = workflows().filter((workflow) => workflow.pack === "base" || preset.packs.includes(workflow.pack)).map((workflow) => workflow.id);
       expect([preset.id, Object.keys(preset.workflows).filter((id) => !offered.includes(id))]).toEqual([preset.id, []]);
-      const plan = resolveEngine([engine, agentSkillsSource(temp.make("agent-skills-"), engine)], { packs: preset.packs, workflows: preset.workflows }, devbox);
+      const plan = resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs: preset.packs, workflows: preset.workflows }, devbox);
       expect([preset.id, plan.packs.filter((pack) => !pack.available)]).toEqual([preset.id, []]);
       const on = new Set(plan.workflows.filter((workflow) => workflow.active).map((workflow) => workflow.id));
       expect([preset.id, Object.keys(preset.workflows).filter((id) => preset.workflows[id] && !on.has(id))]).toEqual([preset.id, []]);
