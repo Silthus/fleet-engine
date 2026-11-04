@@ -11,6 +11,7 @@ const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
 const claude = ".claude/settings.json";
+const claudeJson = ".claude.json";
 const codex = ".codex/config.toml";
 const record = ".config/fleet/provider-fields.json";
 
@@ -397,6 +398,62 @@ describe("provider config", () => {
   test("names config files as adoptable targets", () => {
     const targets = providerConfigAdapter().targets(plan([{ provider: "claude", key: "a", value: 1 }, { provider: "codex", key: "b", value: 2 }, { provider: "t3", key: "c", value: 3 }]));
     expect(targets).toEqual([claude, codex]);
+    expect(providerConfigAdapter().targets(plan([{ provider: "claude", key: "mcpServers.metabase", value: {} }]))).toEqual([claudeJson]);
+  });
+});
+
+describe("Claude MCP servers", () => {
+  const metabase = { type: "stdio", command: "fleet", args: ["posthog-mcp", "metabase"] };
+  const server = { provider: "claude" as const, key: "mcpServers.metabase", value: metabase, pack: "posthog" };
+  const claudeState = { numStartups: 41, oauthAccount: { emailAddress: "nora@example.com" }, projects: { "/work/app": { allowedTools: [], history: [{ display: "hi" }] } }, mcpServers: { mine: { type: "http", url: "http://localhost:9000/mcp" } } };
+
+  test("go into ~/.claude.json key by key, keep every other key and a server the user added, and leave when the pack does", async () => {
+    const home = temp.make("home-");
+    write(home, claudeJson, claudeState);
+
+    const added = await apply(plan([server]), { home, adapters: adapters() });
+    expect(read(home, claudeJson)).toEqual({ ...claudeState, mcpServers: { mine: claudeState.mcpServers.mine, metabase } });
+    expect(added.actions).toContainEqual({ target: claudeJson, operation: "replace", reason: "set mcpServers.metabase" });
+    expect(existsSync(join(home, claude))).toBe(false);
+    expect(read(home, record)[claudeJson]).toEqual([{ path: ["mcpServers", "metabase"], value: metabase, pack: "posthog" }]);
+
+    const removed = await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claudeJson)).toEqual(claudeState);
+    expect(removed.actions).toContainEqual({ target: claudeJson, operation: "replace", reason: "remove mcpServers.metabase" });
+    expect(backups(home)).toHaveLength(2);
+  });
+
+  test("keep a server of the same name that the user wrote, until they adopt Fleet's", async () => {
+    const home = temp.make("home-");
+    const theirs = { type: "stdio", command: "my-metabase" };
+    write(home, claudeJson, { mcpServers: { metabase: theirs } });
+
+    const report = await apply(plan([server]), { home, adapters: adapters() });
+    expect(read(home, claudeJson)).toEqual({ mcpServers: { metabase: theirs } });
+    expect(report.findings).toContainEqual({ id: `kept:${claudeJson}`, pack: "engine", say: `Kept your mcpServers.metabase in ${claudeJson}. Run fleet apply --adopt ${claudeJson} to take Fleet's value.` });
+
+    await apply(plan([server]), { home, adapters: adapters(), adopt: [claudeJson] });
+    expect(read(home, claudeJson)).toEqual({ mcpServers: { metabase } });
+  });
+
+  test("keep a server name with dots as one key, and leave Claude's plugins to its settings file", async () => {
+    const home = temp.make("home-");
+    const cli = claudeCli();
+    const plugin = { provider: "claude" as const, key: "enabledPlugins.context7@claude-plugins-official", value: true };
+    await apply(plan([plugin, { ...server, key: "mcpServers.team.metabase" }]), { home, adapters: [cli.adapter] });
+    expect(read(home, claudeJson)).toEqual({ mcpServers: { "team.metabase": metabase } });
+    expect(read(home, claude)).toEqual({ enabledPlugins: { "context7@claude-plugins-official": true } });
+    expect(cli.calls).toContainEqual(["claude", "plugin", "install", "context7@claude-plugins-official", "--scope", "user"]);
+  });
+
+  test("leave ~/.claude.json as it is while it is a link", async () => {
+    const home = temp.make("home-");
+    const dotfiles = temp.make("dotfiles-");
+    write(dotfiles, "claude.json", claudeState);
+    symlinkSync(join(dotfiles, "claude.json"), join(home, claudeJson));
+    const report = await apply(plan([server]), { home, adapters: adapters() });
+    expect(read(dotfiles, "claude.json")).toEqual(claudeState);
+    expect(report.findings.map((finding) => finding.id)).toContain(`kept:${claudeJson}`);
   });
 });
 

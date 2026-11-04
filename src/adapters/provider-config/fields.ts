@@ -13,10 +13,10 @@ export function checkPath(path: string[], label: string) {
   return path;
 }
 
-/** A dotted key as a path. A plugin id after enabledPlugins stays one key, dots included. */
+/** A dotted key as a path. A plugin id after enabledPlugins, or a server name after mcpServers, stays one key, dots included. */
 export function keyPath(key: string) {
-  const plugin = key.match(/^enabledPlugins\.(.+)$/);
-  return checkPath(plugin ? ["enabledPlugins", plugin[1]!] : key.split("."), key);
+  const named = key.match(/^(enabledPlugins|mcpServers)\.(.+)$/);
+  return checkPath(named ? [named[1]!, named[2]!] : key.split("."), key);
 }
 
 export const same = (left: unknown, right: unknown) => left === right || (left !== undefined && right !== undefined && sortedJson(left) === sortedJson(right));
