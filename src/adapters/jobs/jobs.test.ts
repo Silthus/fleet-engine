@@ -6,6 +6,7 @@ import { apply, check } from "../../reconciler/apply.ts";
 import { tempDirs } from "../../testing/git.ts";
 import type { CommandRunner } from "../run.ts";
 import { jobsAdapter, type FleetTask, type T3Tasks } from "./adapter.ts";
+import { labelOf } from "./launchd.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -309,6 +310,22 @@ describe("launchd jobs on a Mac", () => {
     expect(readdirSync(agents).sort()).toEqual(["com.example.backup.plist", "dev.fleet.skills-pull.plist"]);
     expect(mac.calls).toContainEqual(["launchctl", "bootout", "gui/501/dev.fleet.prune"]);
   });
+});
+
+describe("the Label of a plist", () => {
+  const head = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n';
+  const cases: Array<[string, string, string | undefined]> = [
+    ["plain", "<dict><key>Label</key><string>dev.fleet.prune</string></dict>", "dev.fleet.prune"],
+    ["nested first", "<dict><key>EnvironmentVariables</key><dict><key>Label</key><string>dev.fleet.prune</string></dict><key>Label</key><string>com.example.backup</string></dict>", "com.example.backup"],
+    ["whitespace in tags", "<dict ><key>EnvironmentVariables</key><dict ><key>Label</key><string>dev.fleet.prune</string></dict ><key >Label</key ><string >com.example.backup</string ></dict >", "com.example.backup"],
+    ["empty containers", "<dict><key>A</key><dict/><key>B</key><array /><key>Label</key><string>dev.fleet.prune</string></dict>", "dev.fleet.prune"],
+    ["comment hides a label", "<dict><!-- <key>Label</key><string>dev.fleet.prune</string> --><key>Label</key><string>com.example.backup</string></dict>", "com.example.backup"],
+    ["cdata and entities", "<dict><key>Label</key><string><![CDATA[dev.fleet.]]>pr&#117;ne</string></dict>", "dev.fleet.prune"],
+    ["array of labels", "<dict><key>ProgramArguments</key><array><string>Label</string><string>dev.fleet.prune</string></array><key>Label</key><string>com.example.backup</string></dict>", "com.example.backup"],
+    ["label not a string", "<dict><key>Label</key><integer>3</integer><key>Other</key><string>dev.fleet.prune</string></dict>", undefined],
+    ["no label", "<dict><key>Program</key><string>/bin/sh</string></dict>", undefined],
+  ];
+  for (const [name, body, label] of cases) test(`reads the top-level Label as a plist parser does: ${name}`, () => expect(labelOf(`${head}${body}\n</plist>\n`)).toBe(label));
 });
 
 describe("another home directory", () => {
