@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { askGap, authorOf, finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewRecords, roundId, saveProof, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
@@ -85,8 +86,8 @@ family does not change.`,
 row for a PR that Claude wrote, and the review-codex row for a PR that Codex wrote when the table has one, else the
 review row. On the both plan that reviewer is the family that did not write the PR; on a single plan it is a fresh
 session of that provider. fleet builds the prompt from the diff, the PR title and description, and the coding
-standards in ~/.agents/guides/coding-standards.md, and saves the reviewer's answer as the findings, with an anchor
-check of each finding against the diff. Answer them with fleet proof respond. Scope and --base work as for
+standards in ~/.agents/guides/coding-standards.md, and saves the reviewer's answer as the findings. fleet checks each
+finding's anchor against the diff and prints the result after the findings; it keeps it apart, in anchors.md. Answer them with fleet proof respond. Scope and --base work as for
 review-start. When the reviewer gives no answer, the round stays reserved and the next fleet proof review on the same
 commit retries it. The setting pull-requests.reviewTimeoutMinutes limits the reviewer. FLEET_PROOF_REVIEWER replaces
 its command, and FLEET_PROOF_REVIEWER_MODEL its model.
@@ -229,10 +230,12 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory] }, env, limit);
   const label = reserved.round === "final" ? "The final read" : `Round ${reserved.round}`;
   if (!answer.ok) throw new Error(`The reviewer ${answer.model} gave no findings (${answer.cause}). ${label} stays reserved; run fleet proof review again to retry it`);
-  const findings = [answer.text.trim(), anchorCheck(answer.text, diff, await reviewRecords(home, head))].filter(Boolean).join("\n\n");
-  await storeCapturedFindings(reserved.directory, head, roundId(reserved.id), findings, answer.model);
+  const anchors = anchorCheck(answer.text, diff, await reviewRecords(home, head));
+  await storeCapturedFindings(reserved.directory, head, roundId(reserved.id), answer.text, answer.model);
+  if (anchors) await writeFile(join(reserved.directory, "anchors.md"), anchors + "\n", { mode: 0o600 });
   print(JSON.stringify({ round: reserved.round, id: reserved.id, directory: reserved.directory, reviewer: answer.model }));
-  print(findings);
+  print(answer.text.trim());
+  if (anchors) print(`\n${anchors}`);
   return 0;
 }
 
@@ -249,7 +252,8 @@ async function roundLines(directory: string) {
   if (!round) throw new Error(`${directory} has no reservation`);
   const finished = round.reviewer ? `finished by ${round.reviewer}, ${round.capturedBy === "fleet" ? "captured by fleet" : "saved by the author"}: ${join(directory, "findings.md")}` : "reserved, no findings yet";
   const header = `${round.round === "final" ? "final read" : `round ${round.round}`} on ${short(round.commit)}: ${finished}`;
-  return [header, ...(round.standing ? [`accepted by the standing rule until ${round.standing.until}: ${round.standing.reason}`] : [])];
+  const anchors = join(directory, "anchors.md");
+  return [header, ...(existsSync(anchors) ? [`anchor check by fleet: ${anchors}`] : []), ...(round.standing ? [`accepted by the standing rule until ${round.standing.until}: ${round.standing.reason}`] : [])];
 }
 
 function roundOption(options: Map<string, string>) {

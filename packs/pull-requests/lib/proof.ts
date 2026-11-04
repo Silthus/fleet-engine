@@ -3,7 +3,6 @@ import { access, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } f
 import { dirname, extname, join } from "node:path";
 import { normalized, withoutThread, type Hear, type HeardAnswer } from "./proof-answers.ts";
 import type { Family } from "./proof-models.ts";
-import { anchorHeading } from "./finding-anchors.ts";
 
 export type ProofIdentity = { repository: string; pr: number; commit: string };
 const sha = /^[0-9a-f]{40}$/;
@@ -382,9 +381,8 @@ const findingItem = /^\s*(?:[-*]|\d+[.)])\s+\S/;
 const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
 
 function findingCount(findings: string) {
-  const reviewed = findings.split(anchorHeading)[0]!;
-  if (/^no findings\.?$/i.test(reviewed.trim())) return 0;
-  return Math.max(1, reviewed.split("\n").filter((line) => findingItem.test(line)).length);
+  if (/^no findings\.?$/i.test(findings.trim())) return 0;
+  return Math.max(1, findings.split("\n").filter((line) => findingItem.test(line)).length);
 }
 
 function unanswered(findings: string, responses: string) {

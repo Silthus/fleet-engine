@@ -800,9 +800,10 @@ test("fleet proof review runs the reviewer of the model table on the PR diff and
   const prompt = reviewer.prompts().at(-1)!;
   for (const part of ["+greet the new member", "Greet new members", "Keep things simple.", ".agents/skills/tdd/SKILL.md"]) expect(prompt).toContain(part);
   const findings = readFileSync(join(pr.pullRequest, "reviews/1/findings.md"), "utf8");
-  expect(findings).toContain("names no member");
-  expect(findings).toContain("## Anchor check");
-  expect(findings).toContain("1 finding quotes no anchor.");
+  expect(findings).toBe("1. [medium] feature.txt:1 names no member.\n");
+  const anchors = readFileSync(join(pr.pullRequest, "reviews/1/anchors.md"), "utf8");
+  expect(anchors).toContain("## Anchor check");
+  expect(anchors).toContain("1 finding quotes no anchor.");
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"))).toMatchObject({ round: 1, capturedBy: "fleet", reviewer: expect.stringContaining("command:") });
 
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in the next commit.\n");
@@ -982,4 +983,15 @@ test("a gap counts as accepted only when the user chose Accept the gap in the qu
   pr.chooseGap("prod-shape", "No sandbox");
   expect((await accept("Accept the gap")).code).toBe(0);
   expect((await pr.fleet("gate")).code).toBe(0);
+});
+
+test("a finding that quotes the anchor heading hides no later finding from the response gate", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "greet the new member\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", '1. [medium] feature.txt:1 the label is wrong | anchor: const label = "## Anchor check";\n2. [high] feature.txt:1 names no member.\n');
+  expect((await pr.fleet("review")).code).toBe(0);
+  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in the next commit.\n");
+  await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 2");
+  expect((await pr.fleet("gate")).output).toContain("unanswered findings 1, 2");
 });

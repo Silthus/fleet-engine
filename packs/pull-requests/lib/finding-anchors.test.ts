@@ -34,3 +34,10 @@ test("an anchor in a deleted file counts at its old line", () => {
   expect(anchorCheck(finding("legacy.ts:1", `export const legacyGreeting = "Hello there";`), diff, [])).toBe("");
   expect(anchorCheck(finding("legacy.ts:2", `export const legacyGreeting = "Hello there";`), diff, [])).toContain("Not in the diff");
 });
+
+test("a line range is checked against the diff's lines, so a huge or unsafe range ends at once", () => {
+  const started = performance.now();
+  expect(anchorCheck(finding("greeting.ts:1-2000000000", "send(greeting, name);"), diff, [])).toBe("");
+  expect(anchorCheck(finding("greeting.ts:9007199254740992-9007199254740994", "send(greeting, name);"), diff, [])).toContain("Not in the diff");
+  expect(performance.now() - started).toBeLessThan(1000);
+});
