@@ -5,11 +5,11 @@ import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Plan, Report } from "./pack/types.ts";
 import { loadMachine, loadProfile, saveMachine } from "./profile/profile.ts";
-import { apply, check } from "./reconciler/apply.ts";
+import { apply, check, type Runner } from "./reconciler/apply.ts";
 import { engineCommands, resolve } from "./reconciler/resolve.ts";
 import { readNotice, update } from "./update.ts";
 
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -42,7 +42,7 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const doctor = command === "doctor";
   const preview = doctor || flags.dryRun;
   const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview });
-  const report = doctor ? await check(plan, { home: options.home }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun });
+  const report = doctor ? await check(plan, { home: options.home, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, run: options.run });
   const notice = doctor ? await readNotice(options.home) : undefined;
   if (notice) report.findings.push({ id: "update:major", pack: "engine", say: notice });
   printReport(report, command, options.print, flags.dryRun);
