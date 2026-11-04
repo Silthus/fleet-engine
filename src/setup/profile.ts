@@ -52,7 +52,6 @@ async function makeProfile(context: ProfileContext) {
     terminal.print(`  ✓ Created the private repo ${repo}`);
   }
   for (const repo of [profileRepo, memoryRepo]) if (repo && !missing.includes(repo)) terminal.print(`  ✓ Reusing your repo ${repo}`);
-  await gh("auth", "setup-git");
 
   if (!profileExists) await checkout(machine, dir, profileRepo);
   await git(machine, dir, "config", "user.name", login);

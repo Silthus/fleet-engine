@@ -45,7 +45,7 @@ function realGit(home: string, args: string[], cwd?: string): ExecResult {
  * started never passes. Its gh makes repos as bare repos under the home, and
  * git runs for real with github.com rewritten to them.
  */
-export function fakeMachine(home: string, polls: Partial<Record<"github" | "claude" | "chatgpt" | "coder", number>> = {}, options: { org?: boolean; scopes?: string; failApply?: boolean } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<"github" | "claude" | "chatgpt" | "coder", number>> = {}, options: { org?: boolean; scopes?: string; failApply?: boolean; exits?: Partial<Record<"github" | "claude" | "chatgpt" | "coder", number>> } = {}) {
   const left = { github: 0, claude: 0, chatgpt: 0, coder: 0, ...polls };
   const started = new Set<keyof typeof left>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number }> = [];
@@ -60,6 +60,7 @@ export function fakeMachine(home: string, polls: Partial<Record<"github" | "clau
       calls.push({ command, ...run });
       const line = command.join(" ");
       if (line.startsWith("gh auth status")) return passes("github") ? result(true, `github.com\n${started.has("github") ? scopes : (options.scopes ?? scopes)}\n`) : result(false, "You are not logged in");
+      if (line === "gh auth setup-git") return result(true);
       if (line.startsWith("gh api user/memberships/orgs/")) return options.org ? result(true, "active\n") : result(false, "Not Found");
       if (line === "claude auth status") return result(passes("claude"), JSON.stringify({ loggedIn: passes("claude") }));
       if (line.startsWith("codex exec")) return result(passes("chatgpt"), "ok");
@@ -67,7 +68,6 @@ export function fakeMachine(home: string, polls: Partial<Record<"github" | "clau
       if (line === "hogli devbox:status") return result(devbox);
       if (line === "hogli devbox:start") return (devbox = true), result(true, "up");
       if (line === "gh api user --jq .login") return result(true, "nora\n");
-      if (line === "gh auth setup-git") return result(true);
       if (line.startsWith("gh repo view ")) return result(existsSync(githubRepo(home, command[3]!)), "");
       if (line.startsWith("gh repo create ")) {
         const bare = githubRepo(home, command[3]!);
@@ -81,7 +81,8 @@ export function fakeMachine(home: string, polls: Partial<Record<"github" | "clau
       starts.push(command);
       const name = command[0] === "gh" ? "github" : command[0] === "claude" ? "claude" : command[0] === "codex" ? "chatgpt" : "coder";
       started.add(name);
-      return { stop: () => {} };
+      const exit = options.exits?.[name];
+      return { stop: () => {}, exited: exit === undefined ? new Promise<number>(() => {}) : Promise.resolve(exit) };
     },
     async sleep(ms) {
       sleeps.push(ms);

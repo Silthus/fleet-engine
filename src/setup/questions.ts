@@ -2,6 +2,7 @@ import type { AiPlan, AvailableSource, LoadedPack, PackSetting, Preset, ProfileF
 import { workflowDefaults, workflowOverrides } from "../profile/profile.ts";
 import { FlagError, hasPicks, parseSettingValue, type SetupFlags } from "./flags.ts";
 import type { Step, StepOutcome } from "./runner.ts";
+import { teamSources } from "./signins.ts";
 import type { Terminal } from "./terminal.ts";
 
 export type Draft = Partial<Pick<ProfileFile, "packs" | "plan" | "settings" | "workflows" | "sources">>;
@@ -64,7 +65,7 @@ export function picksFrom(flags: SetupFlags, catalog: Catalog): Required<Pick<Dr
   const presetId = flags.preset ?? defaultPreset;
   const preset = catalog.presets.find((item) => item.id === presetId);
   if (!preset) throw new FlagError(`--preset ${presetId}: choose ${catalog.presets.map((item) => item.id).join(", ")}`);
-  const names = new Set(choosablePacks(catalog).map((manifest) => manifest.name));
+  const names = new Set([...choosablePacks(catalog).map((manifest) => manifest.name), ...teamSources.map((team) => team.source.name)]);
   for (const name of [...flags.add, ...flags.remove]) {
     if (name === "base") throw new FlagError("the base pack is always on");
     if (!names.has(name)) throw new FlagError(`no pack named ${name}. Packs: ${[...names].join(", ")}`);

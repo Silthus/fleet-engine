@@ -37,6 +37,16 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
   const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
   const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, draft: progress.draft } });
+  const box: Machine = { ...realMachine, ...options.machine };
+  const fetchTeam = (ref: SourceRef) => (options.fetchSource ?? fetchSource)(ref, sourceCache(options.home));
+  if (progress.done.includes("github")) {
+    for (const ref of teamRefs(progress.draft)) {
+      if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
+      const fetched = await fetchTeam(ref);
+      if ("error" in fetched) terminal.print(`  · The ${ref.name} pack could not be fetched (${fetched.error}). Setup goes on without it.`);
+      else catalog.add(fetched);
+    }
+  }
   try {
     flags = parseSetupFlags(args);
     picksFrom(flags, catalog);
@@ -63,12 +73,11 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       await remember();
     },
   };
-  const box: Machine = { ...realMachine, ...options.machine };
   const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive };
   const addTeamSources = async () => {
     for (const ref of await memberSources(box)) {
       if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
-      const fetched = await (options.fetchSource ?? fetchSource)(ref, sourceCache(options.home));
+      const fetched = await fetchTeam(ref);
       if ("error" in fetched) {
         terminal.print(`  · You are in the ${ref.repo.split("/")[0]} org, but its pack could not be fetched (${fetched.error}). Setup goes on without it.`);
         continue;

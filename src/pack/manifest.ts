@@ -130,8 +130,13 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("steps", (item, label) => {
     need(typeof item.id === "string" && isStrings(item.run), `${label}: needs an id and a run list`);
     need(item.check === undefined || isStrings(item.check), `${label}: check must be a command list`);
-    const human = Array.isArray(raw.human) ? raw.human.map((step) => (step as { id?: unknown }).id) : [];
-    need(item.after === undefined || (typeof item.after === "string" && human.includes(item.after)), `${label}: after must name a human step of this pack`);
+    const human = Array.isArray(raw.human) ? (raw.human as Array<Record<string, unknown>>) : [];
+    const waited = human.find((step) => step.id === item.after);
+    need(item.after === undefined || (typeof item.after === "string" && waited !== undefined), `${label}: after must name a human step of this pack`);
+    for (const scope of ["on", "roles", "plans", "workflow"]) {
+      const wider = waited?.[scope] !== undefined && (Array.isArray(waited[scope]) ? !(Array.isArray(item[scope]) && (item[scope] as unknown[]).every((value) => (waited[scope] as unknown[]).includes(value))) : item[scope] !== waited[scope]);
+      need(!wider, `${label}: runs where its human step ${String(item.after)} does not; give it the same ${scope}`);
+    }
     filters(item, label);
   });
   each("checks", (item, label) => {
