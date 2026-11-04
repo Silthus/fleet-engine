@@ -276,6 +276,14 @@ describe("provider config", () => {
     expect(read(home, claude)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://localhost:8317", MY_FLAG: "1" } });
   });
 
+  test("releases an unedited parent when a pack narrows to a new field, and keeps it when that field leaves", async () => {
+    const home = temp.make("home-");
+    await apply(plan([{ provider: "claude", key: "env", value: { A: "1", B: "2" } }]), { home, adapters: adapters() });
+    await apply(plan([{ provider: "claude", key: "env.C", value: "3" }]), { home, adapters: adapters() });
+    await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual({ env: { A: "1", B: "2" } });
+  });
+
   test("removes the token that went with a recorded proxy URL", async () => {
     const home = temp.make("home-");
     await apply(plan([{ provider: "claude", key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", pack: "hub" }]), { home, adapters: adapters() });
