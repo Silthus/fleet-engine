@@ -12,7 +12,7 @@ import { linkOnPath, optional, readState, withLock, writeWithBackups, type Write
 export type { CommandRunner } from "../run.ts";
 
 type Target = { provider: Provider; path: string; format: Format };
-type FieldRecord = { [target: string]: Field[] };
+export type FieldRecord = { [target: string]: Field[] };
 type Merged = { record: Field[]; kept: string[]; reason: string; after?: string; document: Document };
 type FilesResult = AdapterResult & { plugins?: string[] };
 
@@ -42,7 +42,7 @@ export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Ad
 }
 
 async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: string[], outage: boolean): Promise<FilesResult> {
-  const previous = await readRecord(home);
+  const previous = await readFieldRecord(home);
   const next: FieldRecord = {};
   const writes: Array<Write & { action: Action }> = [];
   const result: FilesResult = { actions: [], findings: [] };
@@ -161,15 +161,15 @@ export function sourceOutage(plan: Plan) {
   return plan.packs.some((pack) => !pack.available && (pack.reason ?? "").startsWith("not found; unreachable"));
 }
 
-async function readRecord(home: string): Promise<FieldRecord> {
-  const text = await readState(home, recordTarget);
+export async function readFieldRecord(home: string, target = recordTarget): Promise<FieldRecord> {
+  const text = await readState(home, target);
   if (text === undefined) return {};
   const value = JSON.parse(text) as unknown;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${recordTarget} is not a field record`);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${target} is not a field record`);
   const record: FieldRecord = {};
   for (const [target, fields] of Object.entries(value)) {
-    if (!Array.isArray(fields) || fields.some((field) => !Array.isArray(field?.path) || field.path.some((key: unknown) => typeof key !== "string"))) throw new Error(`${recordTarget} holds an invalid field path`);
-    for (const field of fields) checkPath(field.path, `${recordTarget} path ${field.path.join(".")}`);
+    if (!Array.isArray(fields) || fields.some((field) => !Array.isArray(field?.path) || field.path.some((key: unknown) => typeof key !== "string"))) throw new Error(`${target} holds an invalid field path`);
+    for (const field of fields) checkPath(field.path, `${target} path ${field.path.join(".")}`);
     record[target] = fields;
   }
   return record;
