@@ -1,0 +1,8 @@
+[Unit]
+Description=Fleet heavy jobs: builds, broad tests, typechecks, and previews
+
+[Slice]
+MemoryHigh=45%
+MemoryMax=50%
+CPUWeight=20
+IOWeight=20

@@ -28,7 +28,9 @@ export type T3Stub = {
 export const shellToken = "shell-token";
 export const mcpToken = "mcp-token";
 
-const fakeCli = `[ $# -eq 0 ] && { read -r _; exit 0; }
+const runningLine = "t3-stub-running";
+
+const fakeCli = `[ $# -eq 0 ] && { echo ${runningLine}; read -r _; exit 0; }
 echo "$*" >> "$(dirname "$0")/cli.log"
 case "$*" in
   *"auth session issue"*mcp-client*) echo '{"sessionId":"mcp-session","token":"${mcpToken}"}' ;;
@@ -91,7 +93,8 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
   });
   const cli = join(home, "t3-server.js");
   await writeFile(cli, fakeCli);
-  const serverProcess = Bun.spawn(["sh", cli], { stdin: "pipe", stdout: "ignore", stderr: "ignore" });
+  const serverProcess = Bun.spawn(["sh", cli], { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+  await untilRunning(serverProcess.stdout);
   const origin = `http://127.0.0.1:${server.port}`;
   await writeFile(join(userdata, "server-runtime.json"), JSON.stringify({ pid: serverProcess.pid, origin }));
   return {
@@ -108,6 +111,18 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
   };
 }
 
+async function untilRunning(stdout: ReadableStream<Uint8Array>): Promise<void> {
+  const reader = stdout.getReader();
+  const decoder = new TextDecoder();
+  let seen = "";
+  while (!seen.includes(runningLine)) {
+    const { value, done } = await reader.read();
+    if (done) throw new Error("The T3 stub server ended before it ran");
+    seen += decoder.decode(value, { stream: true });
+  }
+  reader.releaseLock();
+}
+
 async function mcp(request: Request, fixture: T3Fixture, toolCalls: T3Stub["toolCalls"]): Promise<Response> {
   const body = await request.json() as { id?: number; method: string; params?: { name: string; arguments: Record<string, unknown> } };
   if (body.method === "initialize") return Response.json({ jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-06-18", capabilities: {} } }, { headers: { "mcp-session-id": "mcp-stub-session" } });
@@ -116,12 +131,52 @@ async function mcp(request: Request, fixture: T3Fixture, toolCalls: T3Stub["tool
   const { name, arguments: args } = body.params!;
   toolCalls.push({ name, args });
   try {
+    checkToolArguments(name, args);
     const value = fixture.tools?.(name, args);
     if (value === undefined) throw new ToolRefusal("invalid_request", `no stub for ${name}`);
     return events({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify(value) }] } });
   } catch (error) {
     const code = error instanceof ToolRefusal ? error.code : "orchestration_error";
     return events({ jsonrpc: "2.0", id: body.id, result: { isError: true, content: [{ type: "text", text: JSON.stringify({ code, message: (error as Error).message }) }] } });
+  }
+}
+
+type ArgumentRule = (value: unknown) => boolean;
+
+const isString: ArgumentRule = (value) => typeof value === "string" && value.length > 0;
+const isBoolean: ArgumentRule = (value) => typeof value === "boolean";
+const nonNegativeInt: ArgumentRule = (value) => Number.isInteger(value) && (value as number) >= 0;
+const positiveInt: ArgumentRule = (value) => Number.isInteger(value) && (value as number) >= 1;
+const pageLimit: ArgumentRule = (value) => positiveInt(value) && (value as number) <= 100;
+
+const toolContracts: Record<string, { required: string[]; rules: Record<string, ArgumentRule> }> = {
+  t3_thread_list: {
+    required: [],
+    rules: {
+      environmentId: isString, projectId: isString, allProjects: isBoolean, statuses: Array.isArray, titleContains: isString,
+      settled: isBoolean, snoozed: isBoolean, includeSubagents: isBoolean, cursor: nonNegativeInt, limit: pageLimit,
+    },
+  },
+  t3_thread_read: {
+    required: ["threadId"],
+    rules: {
+      environmentId: isString, threadId: isString, itemId: isString, textOffset: nonNegativeInt,
+      view: (value) => value === "messages" || value === "activity", afterPosition: nonNegativeInt,
+      limit: positiveInt, runLimit: positiveInt, maxCharsPerItem: positiveInt,
+    },
+  },
+  t3_project_list: { required: [], rules: { environmentId: isString, cursor: nonNegativeInt, limit: pageLimit } },
+};
+
+function checkToolArguments(name: string, args: Record<string, unknown>): void {
+  const contract = toolContracts[name];
+  if (!contract) return;
+  const missing = contract.required.find((key) => args[key] === undefined);
+  if (missing) throw new ToolRefusal("invalid_request", `Invalid ${name} arguments: ${missing} is required`);
+  for (const [key, value] of Object.entries(args)) {
+    const rule = contract.rules[key];
+    if (!rule) throw new ToolRefusal("invalid_request", `Invalid ${name} arguments: unknown ${key}`);
+    if (!rule(value)) throw new ToolRefusal("invalid_request", `Invalid ${name} arguments: ${key} ${JSON.stringify(value)}`);
   }
 }
 

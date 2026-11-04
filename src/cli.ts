@@ -5,30 +5,53 @@ import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Plan, Report } from "./pack/types.ts";
 import { loadMachine, loadProfile, saveMachine } from "./profile/profile.ts";
-import { apply, check } from "./reconciler/apply.ts";
-import { engineCommands, resolve } from "./reconciler/resolve.ts";
+import { engineAdapters } from "./adapters/index.ts";
+import { apply, check, type Runner } from "./reconciler/apply.ts";
+import { resolve } from "./reconciler/resolve.ts";
 import { readNotice, update } from "./update.ts";
+import { setup, type SetupOptions } from "./setup/setup.ts";
+import { ttyTerminal, type Terminal } from "./setup/terminal.ts";
+import { FlagError } from "./setup/flags.ts";
+import type { ChangeContext } from "./commands/change.ts";
+import { packsCommand } from "./commands/packs.ts";
+import { setCommand, settingsCommand } from "./commands/settings.ts";
+import { devboxCommand } from "./commands/devbox.ts";
+import { realMachine } from "./setup/commands.ts";
 
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env"> };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
+  fleet setup [--preset <id>] [--add <pack>]... [--remove <pack>]...
+              [--workflows <id=on|off,...>] [--set <pack.key=value>]...
+              [--plan <claude|codex|both>] [--non-interactive]
+                     Answer a few questions and set up this machine
   fleet apply [--profile <dir>] [--adopt <path>]... [--dry-run]
                      Put your profile's packs onto this machine
   fleet doctor [--profile <dir>]
                      Check this machine against your profile without changing it
   fleet update       Move the engine and your profile forward, then apply
+  fleet packs [--add <pack>]... [--remove <pack>]... [--workflows <id=on|off,...>] [--set <pack.key=value>]...
+                     List your packs, or turn packs and workflows on and off
+  fleet settings     List the settings of your packs
+  fleet set [--set] <pack.key=value>...
+                     Change settings
+  fleet devbox [add <ssh host>]
+                     List your devboxes, or make an SSH host one
   fleet <command>    Run a command that one of your packs ships`;
 
-const later = new Set(engineCommands.filter((name) => !["apply", "doctor", "update"].includes(name)));
+const changes = { packs: packsCommand, settings: settingsCommand, set: setCommand };
+
 
 export async function main(argv: string[], options: CliOptions): Promise<number> {
   const [command, ...rest] = argv;
   if (!command || command === "help" || command === "--help") return options.print(usage), 0;
-  if (later.has(command)) return options.print(`fleet ${command} is not available in this version yet.`), 2;
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
+    if (command in changes) return await change(command as keyof typeof changes, rest, options);
+    if (command === "devbox") return await devbox(rest, options);
+    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
     return await runPackCommand(command, rest, options);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -42,11 +65,48 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const doctor = command === "doctor";
   const preview = doctor || flags.dryRun;
   const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview });
-  const report = doctor ? await check(plan, { home: options.home }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun });
+  const adapters = engineAdapters();
+  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, adapters, run: options.run });
   const notice = doctor ? await readNotice(options.home) : undefined;
   if (notice) report.findings.push({ id: "update:major", pack: "engine", say: notice });
   printReport(report, command, options.print, flags.dryRun);
   return report.ok ? 0 : 1;
+}
+
+async function devbox(args: string[], options: CliOptions) {
+  const { plan } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const terminal = options.terminal ?? { ...ttyTerminal(), print: options.print };
+  try {
+    return await devboxCommand(args, { home: options.home, terminal, machine: { ...realMachine, ...options.setup?.machine }, machineFile: plan.machine, plan });
+  } catch (error) {
+    if (!(error instanceof FlagError)) throw error;
+    options.print(`fleet devbox: ${error.message}`);
+    return 2;
+  }
+}
+
+function applyProfile(dir: string, options: CliOptions) {
+  return options.apply ? options.apply(dir) : reconcile("apply", ["--profile", dir], options);
+}
+
+async function change(command: keyof typeof changes, args: string[], options: CliOptions) {
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const profileDir = plan.machine.profileDir!;
+  const context: ChangeContext = {
+    profileDir,
+    profile: await loadProfile(profileDir),
+    plan,
+    packs: sources.flatMap((source) => ("error" in source ? [] : source.packs)),
+    print: options.print,
+    apply: () => applyProfile(profileDir, options),
+  };
+  try {
+    return await changes[command](args, context);
+  } catch (error) {
+    if (!(error instanceof FlagError)) throw error;
+    options.print(`fleet ${command}: ${error.message}`);
+    return 2;
+  }
 }
 
 async function runUpdate(options: CliOptions) {
@@ -73,7 +133,7 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   }
   const child = Bun.spawn(["bun", command.path, ...args], {
     stdio: ["inherit", "inherit", "inherit"],
-    env: { ...Bun.env, HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings) },
+    env: { ...Bun.env, HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models) },
   });
   return child.exited;
 }
@@ -121,6 +181,12 @@ function printReport(report: Report, command: string, print: (line: string) => v
 
 if (import.meta.main) {
   const engineRoot = resolvePath(import.meta.dir, "..");
+  if (Bun.argv[2] === "setup") {
+    process.on("SIGINT", () => {
+      console.log("\nStopped. Run fleet setup again to pick up where it stopped.");
+      process.exit(130);
+    });
+  }
   const code = await main(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), engineRoot, platform: process.platform, print: (line) => console.log(line) });
   process.exit(code);
 }
