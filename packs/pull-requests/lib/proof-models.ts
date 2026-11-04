@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ModelRow } from "../../base/lib/models.ts";
+import { modelFor, modelTable, type ModelRow } from "../../base/lib/models.ts";
 
 export const families = ["claude", "gpt"] as const;
 export type Family = (typeof families)[number];
@@ -16,11 +16,18 @@ export function sessionFamily(env: Record<string, string | undefined>): Family |
   return claude === gpt ? undefined : claude ? "claude" : "gpt";
 }
 
+export const familyOf = (row: ModelRow): Family => row.provider === "claude" ? "claude" : "gpt";
+
+export function reviewerRow(author: Family, env: Record<string, string | undefined>) {
+  const codexReviewer = author === "gpt" ? modelTable(env).find((row) => row.role === "review-codex") : undefined;
+  return codexReviewer ?? modelFor("review", env);
+}
+
 export type ModelAnswer = { ok: true; text: string; model: string } | { ok: false; cause: string; model: string };
 export type ModelRequest = { prompt: string; cwd: string; readable?: string[]; images?: string[]; schema?: object };
-export type Role = "arbiter";
+export type Role = "arbiter" | "reviewer";
 
-const prefixes: Record<Role, string> = { arbiter: "FLEET_REVIEW_ARBITER" };
+const prefixes: Record<Role, string> = { arbiter: "FLEET_REVIEW_ARBITER", reviewer: "FLEET_PROOF_REVIEWER" };
 const prefixOf = (role: Role) => prefixes[role];
 
 export function modelLabel(role: Role, row: ModelRow, env: Record<string, string | undefined>) {
@@ -71,3 +78,11 @@ async function spawnWithLimit(command: string[], request: ModelRequest, env: Rec
     return { cause: (error as Error).message };
   }
 }
+
+export async function readRubric(home: string) {
+  const standards = (await readFile(join(home, ".agents/guides/coding-standards.md"), "utf8").catch(() => "")).trim();
+  if (!standards) throw new Error("~/.agents/guides/coding-standards.md is missing or empty; it holds the coding standards to review against");
+  return standards;
+}
+
+export const skillReferences = (home: string) => ["tdd", "codebase-design"].map((skill) => join(home, ".agents/skills", skill, "SKILL.md"));

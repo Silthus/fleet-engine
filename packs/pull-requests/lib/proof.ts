@@ -3,6 +3,7 @@ import { access, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } f
 import { dirname, extname, join } from "node:path";
 import { normalized, withoutThread, type Hear, type HeardAnswer } from "./proof-answers.ts";
 import type { Family } from "./proof-models.ts";
+import { anchorHeading } from "./finding-anchors.ts";
 
 export type ProofIdentity = { repository: string; pr: number; commit: string };
 const sha = /^[0-9a-f]{40}$/;
@@ -285,6 +286,17 @@ export function roundId(value: string): RoundId {
   throw new Error(`--round takes a round number, or the id of a final read that review-start printed, such as final-2${value === "final" ? ". Pass final-<n>" : ""}`);
 }
 
+export async function unfinishedFleetReview(home: string, identity: ProofIdentity) {
+  const reviews = join(pullRequestDirectory(home, identity), "reviews");
+  for (const name of await reviewNames(reviews)) {
+    const directory = join(reviews, name);
+    const reservation = await readJson<Reservation | undefined>(join(directory, "round.json"), undefined);
+    const finished = await access(join(directory, "findings.md")).then(() => true, () => false);
+    if (reservation?.capturedBy === "fleet" && reservation.commit === identity.commit && !finished) return { reservation, directory };
+  }
+  return undefined;
+}
+
 async function latestFinalRead(reviews: string) {
   const reads = (await reviewNames(reviews)).filter((name) => name.startsWith(finalReadPrefix)).map((name) => Number(name.slice(finalReadPrefix.length)));
   if (!reads.length) throw new Error("No final read is reserved");
@@ -315,6 +327,10 @@ export async function finishReview(home: string, identity: ProofIdentity, round:
   const directory = await roundDirectory(home, identity, round);
   await storeFindings(directory, identity, round, bytes, reviewer.trim(), "author");
   return directory;
+}
+
+export async function storeCapturedFindings(directory: string, identity: ProofIdentity, round: RoundId, answer: string, reviewer: string) {
+  await storeFindings(directory, identity, round, Buffer.from(answer.trim() + "\n"), reviewer, "fleet");
 }
 
 async function storeFindings(directory: string, identity: ProofIdentity, round: RoundId, bytes: Buffer, reviewer: string, capturedBy: CapturedBy) {
@@ -354,8 +370,9 @@ const findingItem = /^(?:[-*]|\d+[.)])\s+\S/;
 const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
 
 function findingCount(findings: string) {
-  if (/^no findings\.?$/i.test(findings.trim())) return 0;
-  return Math.max(1, findings.split("\n").filter((line) => findingItem.test(line)).length);
+  const reviewed = findings.split(anchorHeading)[0]!;
+  if (/^no findings\.?$/i.test(reviewed.trim())) return 0;
+  return Math.max(1, reviewed.split("\n").filter((line) => findingItem.test(line)).length);
 }
 
 function unanswered(findings: string, responses: string) {
@@ -421,6 +438,12 @@ export async function requireNone(home: string, identity: ProofIdentity, reason:
   const owed: Owed = { kinds: [], none: { reason, recordedAt: new Date().toISOString() }, author: settleAuthor(recorded, author) };
   await writeJson(requiredPath(home, identity), owed);
   return owed;
+}
+
+export async function authorOf(home: string, identity: ProofIdentity) {
+  const author = (await readOwed(home, identity))?.author;
+  if (!author) throw new Error("The PR has no recorded author family. Run fleet proof require with --author claude|gpt, or from the author's session");
+  return author;
 }
 
 type Gap = { commit: string; reason: string; recordedAt: string; acceptance?: { instruction: string; acceptedAt: string; answer?: HeardAnswer } };
@@ -700,4 +723,16 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const summary = `kinds: ${owed?.kinds.length ? owed.kinds.join(", ") : "none"}; review: ${review.covered}; CI: ${checks.covered}`;
   const evidence = kinds.map(({ kind, line, evidence }) => ({ kind, line, directory: evidence }));
   return { code, lines: statuses.map((status) => status.line), summary, owed, evidence, ci: ciResult };
+}
+
+export async function reviewRecords(home: string, identity: ProofIdentity) {
+  const reviews = join(pullRequestDirectory(home, identity), "reviews");
+  return Promise.all((await finishedReviews(home, identity)).map(async ({ name, commit, reviewer }) => {
+    const reservation = await readJson<Reservation | undefined>(join(reviews, name, "round.json"), undefined);
+    return {
+      label: reviewLabel(name), commit, reviewer, capturedBy: reservation?.capturedBy ?? "author",
+      findings: await readFile(join(reviews, name, "findings.md"), "utf8"),
+      responses: await readFile(join(reviews, name, "responses.md"), "utf8").catch(() => undefined),
+    };
+  }));
 }

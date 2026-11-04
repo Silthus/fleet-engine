@@ -1,6 +1,9 @@
-import { join, resolve } from "node:path";
-import { finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, roundId, saveProof, startReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
-import { askModel, family, sessionFamily, type Family } from "./proof-models.ts";
+import { basename, join, resolve } from "node:path";
+import { authorOf, finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewRecords, roundId, saveProof, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
+import { askModel, family, familyOf, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
+import { reviewPrompt } from "./proof-review.ts";
+import { anchorCheck } from "./finding-anchors.ts";
+import { reviewRules } from "./review-rules.ts";
 import { listenIn, withoutThread, type ThreadWords } from "./proof-answers.ts";
 import { modelFor } from "../../base/lib/models.ts";
 import { numberSetting } from "../../base/lib/settings.ts";
@@ -73,6 +76,22 @@ family does not change.`,
       print((await requireProofs(home, identity(), kinds, author)).join(","));
       return 0;
     },
+  },
+  review: {
+    usage: "review [--scope full|fixes|final] [--base <reviewed-sha>] [--phase review|babysit] [--override <dated quote> --thread <id> | --standing <reason>]",
+    summary: `Reserve a review round and run the reviewer yourself, read-only, from the model table of your AI plan: the review
+row for a PR that Claude wrote, and the review-codex row for a PR that Codex wrote when the table has one, else the
+review row. On the both plan that reviewer is the family that did not write the PR; on a single plan it is a fresh
+session of that provider. fleet builds the prompt from the diff, the PR title and description, and the coding
+standards in ~/.agents/guides/coding-standards.md, and saves the reviewer's answer as the findings, with an anchor
+check of each finding against the diff. Answer them with fleet proof respond. Scope and --base work as for
+review-start. When the reviewer gives no answer, the round stays reserved and the next fleet proof review on the same
+commit retries it. The setting pull-requests.reviewTimeoutMinutes limits the reviewer. FLEET_PROOF_REVIEWER replaces
+its command, and FLEET_PROOF_REVIEWER_MODEL its model.
+${overrideHelp}`,
+    examples: ["fleet proof review", "fleet proof review --scope fixes --base 1a2b3c4"],
+    options: ["--scope", "--base", "--phase", "--override", "--thread", "--standing"],
+    run: async ({ options }, identity, context) => runReview(options, identity(), context),
   },
   show: {
     usage: "show [--round <number|final|final-n>]",
@@ -184,6 +203,38 @@ printed. --reviewer names the model that wrote them; the gate prints it. The fin
   },
 };
 
+async function runReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+  const { print, home, cwd, env, run } = context;
+  const author = await authorOf(home, head);
+  const row = reviewerRow(author, env);
+  const limit = numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
+  const rubric = await readRubric(home);
+  const pending = await unfinishedFleetReview(home, head);
+  const reserved = pending
+    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base }
+    : await reserveFleetReview(options, head, context);
+  const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
+  const pr = pullRequestDetails(head, run);
+  const rules = reviewRules(changedFilesOf(from, head.commit, run), mergeBase(head, run), run);
+  const diff = diffOf(from, head.commit, run);
+  const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules });
+  const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills")] }, env, limit);
+  const label = reserved.round === "final" ? "The final read" : `Round ${reserved.round}`;
+  if (!answer.ok) throw new Error(`The reviewer ${answer.model} gave no findings (${answer.cause}). ${label} stays reserved; run fleet proof review again to retry it`);
+  const findings = [answer.text.trim(), anchorCheck(answer.text, diff, await reviewRecords(home, head))].filter(Boolean).join("\n\n");
+  await storeCapturedFindings(reserved.directory, head, roundId(reserved.id), findings, answer.model);
+  print(JSON.stringify({ round: reserved.round, id: reserved.id, directory: reserved.directory, reviewer: answer.model }));
+  print(findings);
+  return 0;
+}
+
+async function reserveFleetReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+  const scope = options.get("--scope") ?? "full";
+  const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
+  const reserved = await startReview(context.home, head, { scope, base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
+  return { ...reserved, scope, base };
+}
+
 async function roundLines(directory: string) {
   const round = await readJson<{ round: number | "final"; commit: string; reviewer?: string; capturedBy?: string; standing?: { reason: string; until: string } } | undefined>(join(directory, "round.json"), undefined);
   if (!round) throw new Error(`${directory} has no reservation`);
@@ -290,6 +341,36 @@ function resolvePullRequest(repository: string | undefined, pr: string | undefin
 function resolveIdentity(options: Map<string, string>, run: Run): ProofIdentity {
   const commit = resolveCommit(options.get("--commit") ?? "HEAD", run);
   return { ...resolvePullRequest(options.get("--repo"), options.get("--pr"), run), commit };
+}
+
+function topLevel(run: Run) {
+  const result = run(["git", "rev-parse", "--show-toplevel"]);
+  return result.code === 0 ? result.stdout.trim() : undefined;
+}
+
+function mergeBase(identity: ProofIdentity, run: Run) {
+  for (const ref of baseRefs(identity, run)) {
+    const result = run(["git", "merge-base", ref, identity.commit]);
+    if (result.code === 0) return result.stdout.trim();
+  }
+  throw new Error(`Cannot find where ${identity.repository}#${identity.pr} branched from its base here. Fetch the base branch from a remote of ${identity.repository}`);
+}
+
+function changedFilesOf(from: string, to: string, run: Run) {
+  return run(["git", "diff", "--name-only", "--no-relative", from, to]).stdout.split("\n").filter(Boolean);
+}
+
+function diffOf(from: string, to: string, run: Run) {
+  const diff = run(["git", "diff", "--no-ext-diff", "--no-textconv", "--no-relative", from, to]);
+  if (diff.code !== 0) throw new Error(`Cannot diff ${short(from)}..${short(to)} here (${firstLine(diff.stderr)})`);
+  return diff.stdout;
+}
+
+function pullRequestDetails(identity: ProofIdentity, run: Run) {
+  const view = run(["gh", "pr", "view", String(identity.pr), "--repo", identity.repository, "--json", "title,body,baseRefName"]);
+  if (view.code !== 0) throw new Error(`Cannot read ${identity.repository}#${identity.pr} with gh (${firstLine(view.stderr)})`);
+  const { title = "", body = "", baseRefName = "" } = JSON.parse(view.stdout) as { title?: string; body?: string; baseRefName?: string };
+  return { title, body, baseRefName };
 }
 
 function baseRefs(identity: ProofIdentity, run: Run) {
