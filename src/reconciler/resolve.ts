@@ -13,9 +13,11 @@ import type {
   PackSetting,
   Plan,
   Profile,
+  Owned,
   ResolvedPack,
   Scope,
   SettingValue,
+  T3ProjectScript,
 } from "../pack/types.ts";
 import { signerSetting } from "../adapters/identity/signers.ts";
 import { engineSettings } from "../pack/manifest.ts";
@@ -105,6 +107,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   for (const job of plan.models.length ? plan.jobs : []) {
     if (job.task && !plan.models.some((row) => row.role === job.task!.modelRole)) throw new ResolveError(`job ${job.id} asks for model role ${job.task.modelRole}, which the model table lacks`);
   }
+  plan.t3ProjectScripts = plan.t3ProjectScripts?.map((script) => withProjectSetting(script, plan.settings));
   plan.jobs = plan.jobs.map((job) => {
     const project = job.task && plan.settings[job.task.projectSetting];
     return job.task && project !== undefined ? { ...job, task: { ...job.task, project: String(project) } } : job;
@@ -224,6 +227,13 @@ function activeSettings(order: Candidate[], active: Set<string>): Array<PackSett
 }
 
 /** Keeps the last declaration of a setting, so a later pack sets the default of one the engine reads. Base's signer default is coder in a Coder workspace. */
+function withProjectSetting(script: Owned<T3ProjectScript>, settings: Record<string, SettingValue>): Owned<T3ProjectScript> {
+  const value = script.projectSetting === undefined ? undefined : settings[script.projectSetting];
+  if (value === undefined) return script;
+  if (typeof value !== "string" || !(value.startsWith("/") || value.startsWith("~/"))) throw new ResolveError(`setting ${script.projectSetting} must be an absolute path or start with ~/, because t3 project script ${script.id} of ${script.pack} uses it as a project`);
+  return script.projects.includes(value) ? script : { ...script, projects: [...script.projects, value] };
+}
+
 function machineDefaults(settings: Array<PackSetting & { pack: string }>, machine: MachineFile) {
   const last = new Map(settings.map((setting) => [setting.key, setting]));
   return settings

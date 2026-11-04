@@ -83,7 +83,8 @@ export type PackStep = Scope & {
  * where * stands for one folder name. The T3 adapter owns it as
  * fleet-<pack>-<id>.
  */
-export type T3ProjectScript = Scope & { id: string; name: string; command: string; projects: string[] };
+/** projectSetting names a setting whose value, a path, is one more project; resolve adds it to projects. */
+export type T3ProjectScript = Scope & { id: string; name: string; command: string; projects: string[]; projectSetting?: string };
 
 export type Provider = "claude" | "codex" | "t3";
 export type ConfigEntry = Scope & { provider: Provider; key: string; value: unknown };

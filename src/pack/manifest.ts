@@ -154,7 +154,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     filters(item, label);
   });
   each("t3ProjectScripts", (item, label) => {
-    need(typeof item.id === "string" && filled(item.name) && filled(item.command) && isStrings(item.projects) && item.projects.length > 0, `${label}: needs an id, a name, a command, and a projects list`);
+    need(item.projectSetting === undefined || filled(item.projectSetting), `${label}: projectSetting must name a setting`);
+    need(typeof item.id === "string" && filled(item.name) && filled(item.command) && isStrings(item.projects) && (item.projects.length > 0 || item.projectSetting !== undefined), `${label}: needs an id, a name, a command, and projects or a projectSetting`);
     need(packName.test(item.id as string), `${label}: id must be lowercase words joined by dashes`);
     need((item.projects as string[]).every((path) => path.startsWith("/") || path.startsWith("~/")), `${label}: each project must be an absolute path or start with ~/`);
     filters(item, label);

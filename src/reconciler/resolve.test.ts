@@ -285,6 +285,14 @@ describe("resolve guards", () => {
     expect(plan({ packs: ["team"] }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, id: "mac-only", on: ["darwin"], pack: "team" }]);
   });
 
+  test("adds the path a T3 project script's setting names to its projects", () => {
+    const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: ["~/app"], projectSetting: "team.checkout" };
+    const team = withPack(pack("team", { settings: [{ key: "team.checkout", question: "Where is the checkout?", type: "string", default: "~/dev/app", ask: "never" }], t3ProjectScripts: [script] }));
+    expect(plan({ packs: ["team"] }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, projects: ["~/app", "~/dev/app"], pack: "team" }]);
+    expect(plan({ packs: ["team"], settings: { "team.checkout": "~/app" } }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, pack: "team" }]);
+    expect(() => plan({ packs: ["team"], settings: { "team.checkout": "app" } }, mac, [engine, team])).toThrow(new ResolveError("setting team.checkout must be an absolute path or start with ~/, because t3 project script prepare of team uses it as a project"));
+  });
+
   test("rejects two T3 project scripts that would get the same id", () => {
     const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: ["~/app"] };
     const team = withPack(pack("team", { t3ProjectScripts: [{ ...script, id: "extra-prepare" }] }));
