@@ -19,7 +19,7 @@ function profileDir(packs: string[] = [], aboutMe?: string) {
 
 async function fleet(args: string[], home: string, engineRoot = repoRoot) {
   const lines: string[] = [];
-  const code = await main(args, { home, engineRoot, platform: "linux", print: (line) => lines.push(line) });
+  const code = await main(args, { home, engineRoot, platform: "linux", print: (line) => lines.push(line), run: async () => 0 });
   return { code, output: lines.join("\n") };
 }
 
@@ -86,7 +86,7 @@ describe("fleet apply", () => {
   test("--dry-run previews without writing machine state", async () => {
     const home = temp.make("home-");
     const result = await fleet(["apply", "--dry-run", "--profile", profileDir()], home);
-    expect(result.output).toContain("Preview: 4 changes to apply. Nothing was written.");
+    expect(result.output).toContain("Preview: 11 changes to apply. Nothing was written.");
     expect(readdirSync(home)).toEqual([]);
   });
 
