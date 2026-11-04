@@ -198,7 +198,7 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     plansStep(context),
     ...settingSteps(context, plan.ask),
     ...machineSteps,
-    ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human), human)),
+    ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human)),
     ...(sshDevbox ? [devbox.question] : []),
     ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),
     ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)]),

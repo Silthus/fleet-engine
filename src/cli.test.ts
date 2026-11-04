@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { main } from "./cli.ts";
 import { tempDirs } from "./testing/git.ts";
@@ -230,6 +230,21 @@ describe("fleet routing", () => {
     const models = JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"));
     expect(models.map((row: { role: string }) => row.role)).toEqual(["lookup", "survey", "research", "implementation", "review", "review-codex"]);
     expect(models.find((row: { role: string }) => row.role === "review")).toMatchObject({ provider: "codex" });
+  });
+
+  test("runs a leading fleet in a pack step with this engine's launcher, not one on PATH", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithCommands();
+    cpSync(join(repoRoot, "src"), join(engine, "src"), { recursive: true });
+    cpSync(join(repoRoot, "fleet"), join(engine, "fleet"));
+    symlinkSync(join(repoRoot, "node_modules"), join(engine, "node_modules"));
+    const base = JSON.parse(readFileSync(join(engine, "packs/base/pack.json"), "utf8"));
+    writeFileSync(join(engine, "packs/base/pack.json"), JSON.stringify({ ...base, steps: [] }));
+    writeFileSync(join(engine, "packs/tools/pack.json"), JSON.stringify({ schema: 1, name: "tools", summary: "tools pack.", steps: [{ id: "greet", run: ["fleet", "hello", "from-step"] }] }));
+    const lines: string[] = [];
+    const code = await main(["apply", "--profile", profileDir(["tools"])], { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line) });
+    expect({ code, output: lines.join("\n") }).toMatchObject({ code: 0 });
+    expect(readFileSync(join(home, "hello.txt"), "utf8")).toBe("tools from-step");
   });
 
   test("reports a command that two enabled packs ship", async () => {

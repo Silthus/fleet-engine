@@ -5,6 +5,8 @@ import { loadPacks } from "../pack/manifest.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { fakeMachine, fleetSetup, machineFile, savedAnswers } from "./testing.ts";
+import type { Machine } from "./commands.ts";
+import { packSignIn } from "./human.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -145,5 +147,28 @@ describe("fleet setup sign-ins", () => {
     const claudeOnly = fakeMachine(other, { claude: 1, chatgpt: 1 });
     await fleetSetup(other, ["--preset", "starter", "--plan", "claude"], ["", ""], claudeOnly);
     expect(claudeOnly.calls.some((call) => call.command[0] === "codex")).toBe(false);
+  });
+});
+
+describe("a pack's sign-in", () => {
+  test("runs this engine's launcher for a leading fleet in its probe, command, and steps", async () => {
+    const calls: string[] = [];
+    let started = false;
+    const machine = {
+      async exec(command: string[]) {
+        calls.push(command.join(" "));
+        const status = command.at(-1) === "status";
+        return { code: status && !started ? 1 : 0, output: "" };
+      },
+    } as unknown as Machine;
+    const human = { id: "login", pack: "team", say: "Sign in.", command: "fleet login --web", probe: ["fleet", "whoami"] };
+    const steps = [{ id: "start", pack: "team", run: ["fleet", "start"], check: ["fleet", "status"], after: "login" }];
+    const signIn = packSignIn(human, steps, { terminal: { print() {}, ask: async () => "" }, machine, nonInteractive: false }, "/engine");
+    expect(signIn.command).toEqual(["sh", "-c", "/bin/sh '/engine/fleet' login --web"]);
+    await signIn.probe();
+    const run = machine.exec.bind(machine);
+    machine.exec = async (command: string[]) => (command.at(-1) === "start" && (started = true), run(command));
+    await signIn.after!();
+    expect(calls).toEqual(["/bin/sh /engine/fleet whoami", "/bin/sh /engine/fleet status", "/bin/sh /engine/fleet start", "/bin/sh /engine/fleet status"]);
   });
 });
