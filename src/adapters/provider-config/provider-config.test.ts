@@ -267,14 +267,39 @@ describe("provider config", () => {
     expect(read(home, claude)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://localhost:8317" } });
   });
 
-  test("keeps a proxy URL the user changed when a pack now owns only a field beside it", async () => {
+  test("keeps the user's keys when a pack narrows from a parent they edited", async () => {
     const home = temp.make("home-");
-    await apply(plan([{ provider: "claude", key: "env", value: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" }, pack: "hub" }]), { home, adapters: adapters() });
-    write(home, claude, { env: { ANTHROPIC_BASE_URL: "http://localhost:8317" } });
+    await apply(plan([{ provider: "claude", key: "env", value: { A: "1" } }]), { home, adapters: adapters() });
+    write(home, claude, { env: { A: "mine" } });
     const narrowed = plan([{ provider: "claude", key: "env.MY_FLAG", value: "1" }]);
     await apply(narrowed, { home, adapters: adapters() });
     await apply(narrowed, { home, adapters: adapters() });
-    expect(read(home, claude)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://localhost:8317", MY_FLAG: "1" } });
+    expect(read(home, claude)).toEqual({ env: { A: "mine", MY_FLAG: "1" } });
+    await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual({ env: { A: "mine" } });
+  });
+
+  test("keeps released keys when a pack narrows to a key the user added, then drops it", async () => {
+    const home = temp.make("home-");
+    await apply(plan([{ provider: "claude", key: "env", value: { A: "1", B: "2" } }]), { home, adapters: adapters() });
+    write(home, claude, { env: { A: "1", B: "2", C: "user" } });
+    const narrowed = plan([{ provider: "claude", key: "env.C", value: "user" }]);
+    await apply(narrowed, { home, adapters: adapters() });
+    await apply(narrowed, { home, adapters: adapters() });
+    await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual({ env: { A: "1", B: "2" } });
+  });
+
+  test("keeps a released Codex table when a pack narrows to a field the user added, then drops it", async () => {
+    const home = temp.make("home-");
+    const sample = { name: "Sample", wire_api: "responses" };
+    await apply(plan([{ provider: "codex", key: "model_providers", value: { sample } }]), { home, adapters: adapters() });
+    writeFileSync(join(home, codex), `[model_providers.sample]\nname = "Sample"\nwire_api = "responses"\nenv_key = "KEY"\n`);
+    const narrowed = plan([{ provider: "codex", key: "model_providers.sample.env_key", value: "KEY" }]);
+    await apply(narrowed, { home, adapters: adapters() });
+    await apply(plan(), { home, adapters: adapters() });
+    expect(readFileSync(join(home, codex), "utf8")).toContain('[model_providers.sample]\nname = "Sample"\nwire_api = "responses"');
+    expect(readFileSync(join(home, codex), "utf8")).not.toContain("env_key");
   });
 
   test("releases an unedited parent when a pack narrows to a new field, and keeps it when that field leaves", async () => {
