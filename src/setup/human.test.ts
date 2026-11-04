@@ -68,6 +68,62 @@ describe("fleet setup sign-ins", () => {
     expect(machineFile(home).setup.done).toContain("human:posthog:coder");
   });
 
+  test("a sign-in command that fails, or is missing, stops setup with what to do instead of waiting", async () => {
+    const starter = ["--preset", "starter", "--plan", "claude"];
+    const failedHome = temp.make("home-");
+    const failed = await fleetSetup(failedHome, starter, ["", ""], fakeMachine(failedHome, { claude: 50 }, { exits: { claude: 1 } }));
+    expect(failed.code).toBe(1);
+    expect(failed.output).toContain("fleet: claude auth login ended with code 1, but Sign in to Claude still does not pass its check. Fix what it says above, then run fleet setup again.");
+
+    const missingHome = temp.make("home-");
+    const missing = await fleetSetup(missingHome, starter, ["", ""], fakeMachine(missingHome, { claude: 50 }, { exits: { claude: 127 } }));
+    expect(missing.output).toContain("fleet: claude is not installed here. Install it, then run fleet setup again.");
+
+    const quietHome = temp.make("home-");
+    const box = fakeMachine(quietHome, { claude: 50 }, { exits: { claude: 0 } });
+    const quiet = await fleetSetup(quietHome, starter, ["", ""], box);
+    expect(quiet.output).toContain("fleet: claude auth login ended, but Sign in to Claude still does not pass its check.");
+    expect(box.sleeps).toHaveLength(16);
+  });
+
+  test("GitHub sets up Git's credentials before a team pack is fetched, and checks the active account", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, {}, { org: true });
+    expect((await fleetSetup(home, ["--plan", "claude"], ["", "", ""], box, teamSource())).code).toBe(0);
+    const lines = box.calls.map((call) => call.command.join(" "));
+    expect(lines).toContain("gh auth status --active --hostname github.com");
+    expect(lines.indexOf("gh auth setup-git")).toBeLessThan(lines.findIndex((line) => line.startsWith("gh api user/memberships")));
+  });
+
+  test("a rerun fetches a team pack whose cache is gone, and --remove takes a team pack before it is found", async () => {
+    const home = temp.make("home-");
+    const fetch = teamSource();
+    const stopped = await fleetSetup(home, ["--plan", "claude"], [], fakeMachine(home, {}, { org: true }), fetch);
+    expect(stopped.code).toBe(130);
+    expect(machineFile(home).setup.done).toContain("github");
+    const fetched: string[] = [];
+    const resumed = await fleetSetup(home, ["--plan", "claude"], ["", "", ""], fakeMachine(home, { coder: 1 }, { org: true }), async (ref) => (fetched.push(ref.name), fetch(ref)));
+    expect(resumed.code).toBe(0);
+    expect(fetched).toEqual(["posthog"]);
+    expect(machineFile(home).setup.done).toContain("human:posthog:coder");
+
+    const removed = temp.make("home-");
+    const result = await fleetSetup(removed, ["--remove", "posthog", "--plan", "claude"], ["", "", ""], fakeMachine(removed, {}, { org: true }), teamSource());
+    expect(result.code).toBe(0);
+    expect(savedAnswers(removed).packs).not.toContain("posthog");
+  });
+
+  test("a run without a person changes nothing for a sign-in while answers are missing", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".config/fleet"), { recursive: true });
+    writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "devbox" }));
+    const box = fakeMachine(home, {}, { org: true });
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "michael"], [], box, teamSource());
+    expect(result.code).toBe(2);
+    expect(result.output).toContain("  --set orchestration.loopProject=<value>");
+    expect(box.calls.map((call) => call.command.join(" "))).not.toContain("hogli devbox:start");
+  });
+
   test("Claude and ChatGPT advance on their probes, only for the chosen plans, and the ChatGPT probe is isolated", async () => {
     const home = temp.make("home-");
     const box = fakeMachine(home, { claude: 1, chatgpt: 2 });

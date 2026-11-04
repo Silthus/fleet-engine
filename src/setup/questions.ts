@@ -2,6 +2,7 @@ import type { AiPlan, AvailableSource, LoadedPack, PackSetting, Preset, ProfileF
 import { workflowDefaults, workflowOverrides } from "../profile/profile.ts";
 import { FlagError, hasPicks, parseSettingValue, type SetupFlags } from "./flags.ts";
 import type { Step, StepOutcome } from "./runner.ts";
+import { teamSources } from "./signins.ts";
 import type { Terminal } from "./terminal.ts";
 
 export type Draft = Partial<Pick<ProfileFile, "packs" | "plan" | "settings" | "workflows" | "sources">>;
@@ -64,19 +65,30 @@ export function picksFrom(flags: SetupFlags, catalog: Catalog): Required<Pick<Dr
   const presetId = flags.preset ?? defaultPreset;
   const preset = catalog.presets.find((item) => item.id === presetId);
   if (!preset) throw new FlagError(`--preset ${presetId}: choose ${catalog.presets.map((item) => item.id).join(", ")}`);
-  const names = new Set(choosablePacks(catalog).map((manifest) => manifest.name));
+  const names = new Set([...choosablePacks(catalog).map((manifest) => manifest.name), ...teamSources.map((team) => team.source.name)]);
   for (const name of [...flags.add, ...flags.remove]) {
     if (name === "base") throw new FlagError("the base pack is always on");
     if (!names.has(name)) throw new FlagError(`no pack named ${name}. Packs: ${[...names].join(", ")}`);
   }
   const packs = [...new Set([...presetPacks(preset, catalog), ...flags.add])].filter((name) => !flags.remove.includes(name));
+  const [unmet] = unmetNeeds(packs, catalog);
+  if (unmet) throw new FlagError(`${title(unmet.pack)} needs ${unmet.needs.map(title).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const manifests = catalog.packs.map((pack) => pack.manifest);
   const known = workflowDefaults(manifests);
-  for (const id of Object.keys(flags.workflows)) if (!(id in known)) throw new FlagError(`--workflows: no workflow named ${id}`);
+  for (const id of Object.keys(flags.workflows)) if (!Object.hasOwn(known, id)) throw new FlagError(`--workflows: no workflow named ${id}`);
   return { packs, workflows: workflowOverrides({ ...preset.workflows, ...flags.workflows }, manifests) };
 }
 
-export function settingsFrom(flags: SetupFlags, catalog: Catalog): Record<string, SettingValue> {
+/** Picked packs whose required packs are not picked. */
+export function unmetNeeds(packs: string[], catalog: Pick<Catalog, "packs">) {
+  return catalog.packs
+    .map((pack) => pack.manifest)
+    .filter((manifest) => packs.includes(manifest.name))
+    .map((manifest) => ({ pack: manifest.name, needs: (manifest.requires ?? []).filter((name) => name !== "base" && !packs.includes(name)) }))
+    .filter((item) => item.needs.length);
+}
+
+export function settingsFrom(flags: SetupFlags, catalog: Pick<Catalog, "packs">): Record<string, SettingValue> {
   const settings = catalog.packs.flatMap((pack) => pack.manifest.settings ?? []);
   return Object.fromEntries(
     Object.entries(flags.set).map(([key, raw]) => {
@@ -88,14 +100,15 @@ export function settingsFrom(flags: SetupFlags, catalog: Catalog): Record<string
 }
 
 async function askPacks(context: QuestionContext): Promise<StepOutcome> {
-  const { terminal, flags, catalog } = context;
-  const picked = picksFrom(flags, catalog);
+  const { terminal, flags, catalog, draft } = context;
+  const last = draft.packs && !hasPicks(flags) ? { packs: draft.packs, workflows: draft.workflows ?? {} } : undefined;
+  const picked = last ?? picksFrom(flags, catalog);
   const show = (picks: typeof picked) => terminal.print(`  ✓ ${packList(picks.packs, catalog)}`);
   if (flags.nonInteractive) return context.answer(picked).then(() => show(picked));
   terminal.print("? Which packs do you want?");
   terminal.print("  A pack is a set of workflows. Base is always on. Read what each does on the explainer page.");
-  if (hasPicks(flags)) {
-    terminal.print(`  From your command: ${packList(picked.packs, catalog)}`);
+  if (last || hasPicks(flags)) {
+    terminal.print(`  From your ${last ? "last answer" : "command"}: ${packList(picked.packs, catalog)}`);
     const changed = Object.entries(flags.workflows).map(([id, on]) => `${id} ${on ? "on" : "off"}`);
     if (changed.length) terminal.print(`  Workflows: ${changed.join(", ")}`);
     const reply = await askUntil(terminal, "Press ↵ to keep them, or e to change them: ", (text) => (text === "" ? "keep" : text.toLowerCase() === "e" ? "edit" : undefined));
@@ -117,20 +130,25 @@ async function oneByOne(terminal: Terminal, catalog: Catalog, current: string[])
     terminal.print(`  ${title(manifest.name)}: ${manifest.summary}`);
     if (await yesNo(terminal, "  Turn it on?", on)) packs.push(manifest.name);
   }
+  for (const unmet of unmetNeeds(packs, catalog)) {
+    terminal.print(`  ${title(unmet.pack)} needs ${unmet.needs.map(title).join(", ")}, so ${unmet.needs.length === 1 ? "it is" : "they are"} on too.`);
+    packs.push(...unmet.needs.filter((name) => !packs.includes(name)));
+  }
   return { packs, workflows: {} };
 }
 
 async function askPlan(context: QuestionContext): Promise<StepOutcome> {
-  const { terminal, flags } = context;
+  const { terminal, flags, draft } = context;
   const show = (plan: AiPlan) => terminal.print(`  ✓ ${planLabels[plan]}`);
   if (flags.plan || flags.nonInteractive) {
-    const plan = flags.plan ?? "both";
+    const plan = flags.plan ?? draft.plan ?? "both";
     return context.answer({ plan }).then(() => show(plan));
   }
   terminal.print("? Which AI plans do you pay for?");
   terminal.print("  You get only the sign-ins and model defaults that match.");
   const order: AiPlan[] = ["both", "claude", "codex"];
-  const index = await chooseFrom(terminal, order.map((plan) => planLabels[plan]), 0, planLabels.both);
+  const fallback = order.indexOf(draft.plan ?? "both");
+  const index = await chooseFrom(terminal, order.map((plan) => planLabels[plan]), fallback, planLabels[order[fallback]!]);
   await context.answer({ plan: order[index] });
   show(order[index]!);
 }
@@ -142,22 +160,24 @@ async function askSetting(context: QuestionContext, setting: PackSetting): Promi
     terminal.print(`  ✓ ${label(setting, value)}`);
   };
   if (flags.set[setting.key] !== undefined) return save(parseSettingValue(setting, flags.set[setting.key]!));
+  const saved = draft.settings?.[setting.key];
+  const fallback = saved ?? setting.default;
   if (flags.nonInteractive) {
-    if (setting.default !== undefined) return terminal.print(`  ✓ ${label(setting, setting.default)}`);
+    if (fallback !== undefined) return terminal.print(`  ✓ ${label(setting, fallback)}`);
     if (setting.optional) return terminal.print(`  ✓ Skipped. Set it later with fleet set ${setting.key}=<value>.`);
     return "unanswered";
   }
   terminal.print(`? ${setting.question}`);
   if (setting.type === "choice" && setting.choices?.length) {
-    const fallback = setting.choices.findIndex((choice) => choice.value === setting.default);
-    const skip = setting.optional && fallback < 0;
-    const index = await chooseFrom(terminal, setting.choices.map((choice) => choice.label), fallback, fallback >= 0 ? setting.choices[fallback]!.label : undefined, skip);
+    const preferred = setting.choices.findIndex((choice) => choice.value === fallback);
+    const skip = setting.optional && preferred < 0;
+    const index = await chooseFrom(terminal, setting.choices.map((choice) => choice.label), preferred, preferred >= 0 ? setting.choices[preferred]!.label : undefined, skip);
     if (index < 0) return terminal.print(`  ✓ Skipped. Set it later with fleet set ${setting.key}=<value>.`);
     return save(setting.choices[index]!.value);
   }
-  const hint = setting.default !== undefined ? `Press ↵ for ${String(setting.default)}, or type a value: ` : setting.optional ? `Press ↵ to skip, or type a value: ` : "Type a value: ";
+  const hint = fallback !== undefined ? `Press ↵ for ${String(fallback)}, or type a value: ` : setting.optional ? `Press ↵ to skip, or type a value: ` : "Type a value: ";
   const value = await askUntil(terminal, hint, (text) => {
-    if (text === "") return setting.default ?? (setting.optional ? null : undefined);
+    if (text === "") return fallback ?? (setting.optional ? null : undefined);
     try {
       return parseSettingValue(setting, text);
     } catch (error) {

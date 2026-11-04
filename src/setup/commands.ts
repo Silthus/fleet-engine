@@ -1,8 +1,10 @@
+import { spawn } from "node:child_process";
 import { platform } from "node:os";
 
 export type ExecResult = { code: number; output: string };
 export type Exec = (command: string[], options?: { cwd?: string; timeoutMs?: number }) => Promise<ExecResult>;
-export type Started = { stop(): void };
+/** A command running in the background: stop ends it and everything it started, and exited gives its exit code, 127 when it could not start. */
+export type Started = { stop(): void; exited: Promise<number> };
 
 /** What setup needs from the machine: commands, a clock, and a browser. Tests replace each one. */
 export type Machine = {
@@ -27,12 +29,23 @@ export const realMachine: Machine = {
     }
   },
   start(command) {
-    try {
-      const child = Bun.spawn(command, { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
-      return { stop: () => child.kill() };
-    } catch {
-      return { stop: () => {} };
-    }
+    const child = spawn(command[0]!, command.slice(1), { stdio: ["ignore", "inherit", "inherit"], detached: true });
+    const exited = new Promise<number>((resolve) => {
+      child.once("error", () => resolve(127));
+      child.once("exit", (code) => resolve(code ?? 1));
+    });
+    let running = true;
+    void exited.then(() => (running = false));
+    const stop = () => {
+      if (!running || child.pid === undefined) return;
+      running = false;
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {}
+    };
+    process.once("exit", stop);
+    void exited.then(() => process.off("exit", stop));
+    return { stop, exited };
   },
   async run(command, options = {}) {
     try {

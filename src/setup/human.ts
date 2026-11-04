@@ -5,6 +5,15 @@ import type { Terminal } from "./terminal.ts";
 
 export const pollMs = 2000;
 
+/** Polls left once the sign-in command finished well, for the probe to see the new sign-in, such as a T3 Connect tunnel after its restart. */
+const graceAfterExit = 15;
+
+function ended(signIn: SignIn, code: number) {
+  const name = signIn.command![0];
+  if (code === 127) return `${name} is not installed here. Install it, then run fleet setup again.`;
+  return `${signIn.command!.join(" ")} ended${code ? ` with code ${code}` : ""}, but ${signIn.title} still does not pass its check. Fix what it says above, then run fleet setup again.`;
+}
+
 export type SignIn = {
   id: string;
   title: string;
@@ -43,9 +52,15 @@ async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive
     terminal.print(`  Opened your browser. If it did not open, go to ${signIn.url}`);
   }
   terminal.print("  Waiting for you. Nothing to press here: setup notices when you are done.");
+  let exit: number | undefined;
+  void started?.exited.then((code) => (exit = code));
   try {
-    do await machine.sleep(pollMs);
-    while (!(await signIn.probe()));
+    let pollsAfterExit = 0;
+    for (;;) {
+      await machine.sleep(pollMs);
+      if (await signIn.probe()) break;
+      if (exit !== undefined && (exit !== 0 || ++pollsAfterExit > graceAfterExit)) throw new Error(ended(signIn, exit));
+    }
   } finally {
     started?.stop();
   }

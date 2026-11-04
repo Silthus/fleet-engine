@@ -69,6 +69,43 @@ describe("fleet setup profile", () => {
     expect(git(githubRepo(home, "nora/fleet-profile"), "rev-list", "--count", "main")).toBe("3");
   });
 
+  test("uses a memory repo named on the command, and a second machine keeps the one the profile names", async () => {
+    const home = temp.make("home-");
+    const custom = await fleetSetup(home, ["--preset", "starter", "--add", "memory", "--plan", "claude", "--set", "memory.repo=nora/custom-notes"], ["", ""]);
+    expect(custom.code).toBe(0);
+    expect(custom.output).toContain("private repos nora/fleet-profile and nora/custom-notes");
+    expect(existsSync(githubRepo(home, "nora/custom-notes"))).toBe(true);
+    expect(pushedAnswers(home).settings).toEqual({ "memory.repo": "nora/custom-notes" });
+
+    rmSync(join(home, ".config/fleet"), { recursive: true });
+    rmSync(profilePath(home), { recursive: true });
+    const second = await fleetSetup(home, ["--preset", "starter", "--add", "memory", "--plan", "claude"], [""]);
+    expect(second.code).toBe(0);
+    expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(false);
+    expect(pushedAnswers(home).settings).toEqual({ "memory.repo": "nora/custom-notes" });
+  });
+
+  test("pushes the start files a stopped run wrote but did not commit", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, starter, ["", ""])).code).toBe(0);
+    const dir = profilePath(home);
+    git(dir, "rm", "-q", "--cached", "README.md");
+    git(dir, "commit", "-q", "-m", "Lose the guide");
+    git(dir, "push", "-q");
+    const rerun = await fleetSetup(home, ["--set", "pull-requests.freeReviews=2"]);
+    expect(rerun.code).toBe(0);
+    expect(pushedFiles(home)).toContain("README.md");
+  });
+
+  test("refuses a profile folder cloned from a repo with a longer name", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, starter, ["", ""])).code).toBe(0);
+    git(profilePath(home), "remote", "set-url", "origin", "https://github.com/nora/fleet-profile-public.git");
+    const rerun = await fleetSetup(home, ["--set", "pull-requests.freeReviews=2"]);
+    expect(rerun.code).toBe(1);
+    expect(rerun.output).toContain(`fleet: ${profilePath(home)} is a clone of https://github.com/nora/fleet-profile-public.git, not nora/fleet-profile.`);
+  });
+
   test("refuses to take over a folder that is not the profile", async () => {
     const home = temp.make("home-");
     mkdirSync(profilePath(home), { recursive: true });

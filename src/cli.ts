@@ -31,10 +31,10 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet doctor [--profile <dir>]
                      Check this machine against your profile without changing it
   fleet update       Move the engine and your profile forward, then apply
-  fleet packs [--add <pack>]... [--remove <pack>]... [--workflows <id=on|off,...>]
+  fleet packs [--add <pack>]... [--remove <pack>]... [--workflows <id=on|off,...>] [--set <pack.key=value>]...
                      List your packs, or turn packs and workflows on and off
   fleet settings     List the settings of your packs
-  fleet set <pack.key=value>...
+  fleet set [--set] <pack.key=value>...
                      Change settings
   fleet devbox [add <ssh host>]
                      List your devboxes, or make an SSH host one
