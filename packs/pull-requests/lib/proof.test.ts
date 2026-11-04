@@ -73,10 +73,12 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     git("checkout", "-q", "feature");
   };
   const words: ThreadWord[] = [];
-  const say = (text: string, answered = "Shall I run one more round?") => words.push({ id: `message-${words.length + 1}`, text, answered, at: clock.now.toISOString() });
-  const choose = (option: string, question = "Run one more review round? example/product#42: the arbiter escalates.") => words.push({ id: `request-${words.length + 1}:0`, text: option, answered: question, at: clock.now.toISOString() });
-  const threadWords = async (thread: string) => {
-    if (thread !== "thread-1") throw new Error(`No thread ${thread}`);
+  const thread = "mcp:thread-1";
+  const say = (text: string, answered = "Shall I run one more round?", id = `message-${words.length + 1}`) => words.push({ thread, id, text, answered, at: clock.now.toISOString(), source: "typed" });
+  const choose = (option: string, question = "Run one more review round? example/product#42: the arbiter escalates.") => words.push({ thread, id: `request-${words.length + 1}:0`, text: option, answered: question, at: clock.now.toISOString(), source: "question" });
+  const chooseGap = (kind: string, reason: string, option = "Accept the gap", number = 42) => choose(option, `Accept the ${kind} gap? example/product#${number}: ${reason}`);
+  const threadWords = async (name: string) => {
+    if (name !== "thread-1" && name !== thread) throw new Error(`No thread ${name}`);
     return words;
   };
   const fleetIn = async (cwd: string, ...args: string[]) => {
@@ -92,7 +94,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   commit("shared.txt", "one\n");
   git("update-ref", "refs/remotes/origin/main", "HEAD");
   git("checkout", "-q", "-b", "feature");
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, githubHead, githubCalls, clock, say, choose };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, githubHead, githubCalls, clock, say, choose, chooseGap };
 }
 
 async function reviewHead(pr: ReturnType<typeof checkout>) {
@@ -222,13 +224,13 @@ test("an override and a gap acceptance need the user's words from the T3 thread 
   expect((await pr.fleet("review-start", "--commit", head.slice(0, 8), "--override", `2026-10-24 "Run one more round (Recommended)"`, "--thread", "thread-1")).code).toBe(0);
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"))).toMatchObject({
     commit: head, override: `2026-10-24 "Run one more round (Recommended)"`,
-    answer: { thread: "thread-1", message: "request-1:0", words: "Run one more round (Recommended)", answered: question },
+    answer: { thread: "mcp:thread-1", message: "request-1:0", words: "Run one more round (Recommended)", answered: question },
   });
 
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
-  pr.say("Accept the gap (Recommended)", "Prod shape needs production read access. Accept the gap?");
+  pr.chooseGap("prod-shape", "No production read access", "Accept the gap (Recommended)");
   await pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap (Recommended)" for prod-shape on #42`, "--thread", "thread-1");
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), "utf8")).acceptance).toMatchObject({ answer: { message: "message-2", answered: "Prod shape needs production read access. Accept the gap?" } });
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), "utf8")).acceptance).toMatchObject({ answer: { message: "request-2:0", answered: "Accept the prod-shape gap? example/product#42: No production read access" } });
 });
 
 test("a gap acceptance needs a recorded gap and the user's words from the T3 thread it names", async () => {
@@ -240,7 +242,7 @@ test("a gap acceptance needs a recorded gap and the user's words from the T3 thr
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
   await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", accept)).rejects.toThrow("--thread");
   await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", accept, "--thread", "thread-1")).rejects.toThrow("not in a message of the user's in thread thread-1");
-  pr.say("Accept the gap (Recommended)");
+  pr.chooseGap("prod-shape", "No production read access", "Accept the gap (Recommended)");
   expect((await pr.fleet("gap", "--kind", "prod-shape", "--accept", accept, "--thread", "thread-1")).code).toBe(0);
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), "utf8"))).toMatchObject({ reason: "No production read access", acceptance: { instruction: accept } });
 });
@@ -457,15 +459,15 @@ test("an answer recorded on one round or PR cannot be reused on another", async 
   await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", answer, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42 round 1");
   await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", `2026-10-25 "Run one more round" for round 2`, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42 round 1");
 
-  const accept = `2026-10-25 "Accept both gaps."`;
-  pr.say("Accept both gaps.");
+  const accept = `2026-10-25 "Accept the gap"`;
   for (const kind of ["prod-shape", "cross-version"]) {
     await pr.fleet("gap", "--kind", kind, "--reason", "No sandbox");
+    pr.chooseGap(kind, "No sandbox");
     expect((await pr.fleet("gap", "--kind", kind, "--accept", accept, "--thread", "thread-1")).code).toBe(0);
   }
   const otherPr = ["--repo", "example/product", "--pr", "43"];
   await pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--reason", "No sandbox");
-  await expect(pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--accept", accept, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42");
+  await expect(pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--accept", accept, "--thread", "thread-1")).rejects.toThrow("answers another question");
 });
 
 test("evidence counts at HEAD, across a clean base merge, or reused with a reason, and older evidence alone is missing", async () => {
@@ -511,8 +513,8 @@ test("the gate reads CI on HEAD, and a ci gap stands in where CI cannot run", as
   pr.ci("none");
   await pr.fleet("gap", "--kind", "ci", "--reason", "Fork CI cannot create its GitHub App token");
   expect((await pr.fleet("gate")).code).toBe(3);
-  pr.say("Accept the CI gap on the fork.");
-  await pr.fleet("gap", "--kind", "ci", "--accept", `2026-10-25 "Accept the CI gap on the fork."`, "--thread", "thread-1");
+  pr.chooseGap("ci", "Fork CI cannot create its GitHub App token");
+  await pr.fleet("gap", "--kind", "ci", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
   expect(accepted.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: gap accepted)");
@@ -532,15 +534,15 @@ test("require records the author family of the session, and refuses a family tha
   expect((await pr.fleet("require", "--kinds", "live-run")).code).toBe(0);
 });
 
-test("one message of the user's accepts the gaps of one PR only, however the agent words what it answers", async () => {
+test("one answer accepts the gap of the kind and PR its question names, however the agent words what it answers", async () => {
   const pr = checkout();
   pr.commit("feature.txt", "new\n");
-  pr.say("Accept the gap.");
+  pr.chooseGap("prod-shape", "No sandbox");
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
-  expect((await pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap." for PR 42`, "--thread", "thread-1")).code).toBe(0);
+  expect((await pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap" for PR 42`, "--thread", "thread-1")).code).toBe(0);
   const otherPr = ["--repo", "example/product", "--pr", "43"];
   await pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--reason", "No sandbox");
-  await expect(pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap." for PR 43`, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42");
+  await expect(pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap" for PR 43`, "--thread", "thread-1")).rejects.toThrow("answers another question");
 });
 
 test("a refusal never reads as an acceptance: the quote must be the user's whole message", async () => {
@@ -640,16 +642,18 @@ test("an override counts only when the user chose Run one more round in the ques
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8"))).toMatchObject({ answer: { message: "request-4:0", answered: question } });
 });
 
-test("one answer cannot start rounds on two PRs at once, and a start that fails releases it", async () => {
+test("one answer starts one round, counts only on the PR its question names, and a start that fails releases it", async () => {
   const pr = checkout();
   const base = pr.commit("feature.txt", "new\n");
   pr.choose("Run one more round");
   const start = (number: string, ...scope: string[]) => pr.fleet("review-start", "--repo", "example/product", "--pr", number, ...(scope.length ? scope : ["--scope", "full"]), "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1");
-  await expect(start("44", "--scope", "fixes", "--base", base)).rejects.toThrow("Round 1 is --scope full");
-  const results = await Promise.allSettled([start("42"), start("43")]);
+  await expect(start("42", "--scope", "fixes", "--base", base)).rejects.toThrow("Round 1 is --scope full");
+  await expect(start("43")).rejects.toThrow("answers another question");
+  const results = await Promise.allSettled([start("42"), start("42")]);
   expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
-  expect(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason)).toContain("already");
-  expect(["42", "43"].filter((number) => existsSync(join(pr.home, `.local/state/fleet/proof/example/product/${number}/reviews/1`)))).toHaveLength(1);
+  expect(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason)).toContain("Ask the user again");
+  expect(existsSync(join(pr.pullRequest, "reviews/1"))).toBe(true);
+  expect(existsSync(join(pr.pullRequest, "reviews/2"))).toBe(false);
 });
 
 test("round 1 reviews the full diff and takes no base", async () => {
@@ -692,8 +696,8 @@ test("an accepted ci gap never waives a commit that is not the PR's head on GitH
   await pr.fleet("require", "--none", "--reason", "docs only");
   pr.ci("none");
   await pr.fleet("gap", "--kind", "ci", "--reason", "Fork CI cannot create its GitHub App token");
-  pr.say("Accept the CI gap on the fork.");
-  await pr.fleet("gap", "--kind", "ci", "--accept", `2026-10-25 "Accept the CI gap on the fork."`, "--thread", "thread-1");
+  pr.chooseGap("ci", "Fork CI cannot create its GitHub App token");
+  await pr.fleet("gap", "--kind", "ci", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
   expect((await pr.fleet("gate")).code).toBe(0);
 
   pr.githubHead("b".repeat(40));
@@ -744,4 +748,75 @@ test("respond and review-finish take the id of the final read review-start print
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the nit is gone.\n");
   expect((await pr.fleet("respond", "--round", "final-1", "responses.md")).output).toBe(join(pr.pullRequest, "reviews/final-1/responses.md"));
   expect(existsSync(join(pr.pullRequest, "reviews/final-2/responses.md"))).toBe(false);
+});
+
+test("an answer typed by the user never counts, whatever its message id looks like", async () => {
+  const pr = checkout();
+  const third = await twoRounds(pr);
+  pr.env.FLEET_REVIEW_ARBITER = escalate;
+  pr.say("Run one more round", "Run one more review round? example/product#42: The arbiter escalates: Round 2 undoes the rename round 1 asked for.", "message:123");
+  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("is a message the user typed");
+});
+
+test("an approval counts only for the PR its question names", async () => {
+  const pr = checkout();
+  const third = await twoRounds(pr);
+  pr.env.FLEET_REVIEW_ARBITER = escalate;
+  pr.choose("Run one more round", "Run one more review round? example/product#43: The arbiter escalates.");
+  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("answers another question");
+  pr.choose("Run one more round", "Run one more review round? example/product#420: The arbiter escalates.");
+  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("answers another question");
+});
+
+test("one answer cannot start two rounds of one PR at once, nor one round after another under another spelling of its thread", async () => {
+  const pr = checkout();
+  const third = await twoRounds(pr);
+  const reviewed = pr.git("rev-parse", "HEAD");
+  pr.commit("feature.txt", "fixed\n");
+  pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
+  pr.choose("Run one more round");
+  const override = (thread: string) => ["--override", `2026-10-25 "Run one more round"`, "--thread", thread];
+  const results = await Promise.allSettled([pr.fleet(...third, ...override("thread-1")), pr.fleet("review-start", "--scope", "final", "--base", reviewed, ...override("thread-1"))]);
+  expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
+  expect(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason)).toContain("Ask the user again");
+
+  const pr2 = checkout();
+  const later = await twoRounds(pr2);
+  pr2.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
+  pr2.choose("Run one more round");
+  expect((await pr2.fleet(...later, ...override("thread-1"))).code).toBe(0);
+  await finishRound(pr2, "3");
+  await expect(pr2.fleet(...later, ...override("mcp:thread-1"))).rejects.toThrow("Ask the user again");
+});
+
+test("indented findings each need an answer", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "new\n");
+  await pr.fleet("review-start", "--scope", "full");
+  writeFileSync(join(pr.repository, "findings.md"), "Findings:\n\n  1. high, feature.txt:1, the greeting is wrong\n  2. low, feature.txt:1, a nit\n");
+  await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md");
+  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting is right now.\n");
+  await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 2");
+});
+
+test("a gap counts as accepted only when the user chose Accept the gap in the question tool for that kind and PR", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "new\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--kinds", "prod-shape");
+  const recorded = await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
+  expect(recorded.output).toContain(`Question: "Accept the prod-shape gap? example/product#42: No sandbox" Options: "Accept the gap", "Keep the gap open".`);
+  const accept = (words: string) => pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "${words}"`, "--thread", "thread-1");
+
+  pr.say("Accept the gap", "Accept the prod-shape gap? example/product#42: No sandbox");
+  await expect(accept("Accept the gap")).rejects.toThrow("is a message the user typed");
+  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
+  await expect(accept("Keep the gap open")).rejects.toThrow(`The user chose "Keep the gap open", not "Accept the gap"`);
+  pr.chooseGap("cross-version", "No sandbox");
+  await expect(accept("Accept the gap")).rejects.toThrow("answers another question");
+  expect((await pr.fleet("gate")).code).toBe(3);
+
+  pr.chooseGap("prod-shape", "No sandbox");
+  expect((await accept("Accept the gap")).code).toBe(0);
+  expect((await pr.fleet("gate")).code).toBe(0);
 });
