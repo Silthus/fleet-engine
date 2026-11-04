@@ -169,10 +169,10 @@ export async function readFieldRecord(home: string, target = recordTarget): Prom
   const value = JSON.parse(text) as unknown;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${target} is not a field record`);
   const record: FieldRecord = {};
-  for (const [target, fields] of Object.entries(value)) {
+  for (const [file, fields] of Object.entries(value)) {
     if (!Array.isArray(fields) || fields.some((field) => !Array.isArray(field?.path) || field.path.some((key: unknown) => typeof key !== "string"))) throw new Error(`${target} holds an invalid field path`);
     for (const field of fields) checkPath(field.path, `${target} path ${field.path.join(".")}`);
-    record[target] = fields;
+    record[file] = fields;
   }
   return record;
 }
