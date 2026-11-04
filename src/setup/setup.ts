@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import { cachedSource, fetchSource } from "../pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SourceRef } from "../pack/types.ts";
-import { loadMachine, loadProfile, saveAnswers, saveMachine } from "../profile/profile.ts";
+import { loadMachine, loadProfile, saveMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
@@ -25,6 +25,9 @@ export type SetupOptions = {
   apply?: (profileDir: string) => Promise<number>;
 };
 
+/** Steps that run again when the command changes an answer: the profile saves it, and apply puts it on this machine. */
+const answersChanged = ["profile", "apply"];
+
 export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
 
 export async function setup(args: string[], options: SetupOptions): Promise<number> {
@@ -37,13 +40,13 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   try {
     flags = parseSetupFlags(args);
     picksFrom(flags, catalog);
-    const reopened = [...(hasPicks(flags) ? ["packs"] : []), ...(flags.plan ? ["plans"] : [])];
-    progress.done = progress.done.filter((id) => !reopened.includes(id));
     const fromFlags = settingsFrom(flags, catalog);
+    const reopened = [...(hasPicks(flags) ? ["packs"] : []), ...(flags.plan ? ["plans"] : [])];
+    if (reopened.length || Object.keys(fromFlags).length) reopened.push(...answersChanged);
+    progress.done = progress.done.filter((id) => !reopened.includes(id));
     if (Object.keys(fromFlags).length) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
-      if (machine.profileDir) await saveAnswers(machine.profileDir, { settings: fromFlags }, { push: true });
-      else await remember();
+      await remember();
     }
   } catch (error) {
     if (!(error instanceof FlagError)) throw error;

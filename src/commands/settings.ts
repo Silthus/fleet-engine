@@ -33,7 +33,7 @@ export async function setCommand(args: string[], context: ChangeContext): Promis
   const on = new Set(activePacks(context).map((manifest) => manifest.name));
   const values: Record<string, SettingValue> = {};
   const off = new Set<string>();
-  for (const arg of args) {
+  for (const arg of args.filter((item) => item !== "--set")) {
     const at = arg.indexOf("=");
     if (at <= 0) throw new FlagError(`${arg}: write it as pack.key=value`);
     const key = arg.slice(0, at);

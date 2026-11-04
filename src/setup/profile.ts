@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PackManifest, ProfileFile } from "../pack/types.ts";
@@ -38,10 +38,14 @@ async function makeProfile(context: ProfileContext) {
   };
   const login = await gh("api", "user", "--jq", ".login");
   const profileRepo = `${login}/${profileRepoName}`;
-  const memoryRepo = draft.packs?.includes("memory") && draft.settings?.["memory.repo"] === undefined ? `${login}/${memoryRepoName}` : undefined;
   const exists = async (repo: string) => (await machine.exec(["gh", "repo", "view", repo, "--json", "name"])).code === 0;
-  const missing = [];
-  for (const repo of [profileRepo, memoryRepo]) if (repo && !(await exists(repo))) missing.push(repo);
+  const dir = profilePath(home);
+  const profileExists = await exists(profileRepo);
+  if (profileExists) await checkout(machine, dir, profileRepo);
+  const saved = profileExists ? savedSettings(dir) : {};
+  const namedMemory = draft.settings?.["memory.repo"] ?? saved["memory.repo"];
+  const memoryRepo = draft.packs?.includes("memory") ? (typeof namedMemory === "string" ? namedMemory : `${login}/${memoryRepoName}`) : undefined;
+  const missing = [...(profileExists ? [] : [profileRepo]), ...(memoryRepo && !(await exists(memoryRepo)) ? [memoryRepo] : [])];
   await confirm(context, missing);
   for (const repo of missing) {
     await gh("repo", "create", repo, "--private", "--description", repo === profileRepo ? "My Fleet profile" : "My agents' shared memory");
@@ -50,15 +54,15 @@ async function makeProfile(context: ProfileContext) {
   for (const repo of [profileRepo, memoryRepo]) if (repo && !missing.includes(repo)) terminal.print(`  ✓ Reusing your repo ${repo}`);
   await gh("auth", "setup-git");
 
-  const dir = profilePath(home);
-  await checkout(machine, dir, profileRepo);
+  if (!profileExists) await checkout(machine, dir, profileRepo);
   await git(machine, dir, "config", "user.name", login);
   await git(machine, dir, "config", "user.email", `${login}@users.noreply.github.com`);
-  const started = await startFiles(dir, context);
+  await startFiles(dir, context);
+  const started = await untracked(machine, dir, startFileNames);
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, settings: {}, workflows: {} }),
     ...draft,
-    ...(memoryRepo ? { settings: { ...draft.settings, "memory.repo": memoryRepo } } : {}),
+    ...(memoryRepo && namedMemory === undefined ? { settings: { ...draft.settings, "memory.repo": memoryRepo } } : {}),
   };
   if (started.length) {
     await git(machine, dir, "add", "--", ...started);
@@ -86,11 +90,14 @@ async function confirm({ terminal, nonInteractive }: ProfileContext, missing: st
 
 async function checkout(machine: Machine, dir: string, repo: string) {
   if (existsSync(join(dir, ".git"))) {
-    const origin = (await machine.exec(["git", "-C", dir, "remote", "get-url", "origin"])).output.trim();
-    if (!origin.includes(`github.com/${repo}`) && !origin.includes(`github.com:${repo}`)) throw new Error(`${dir} is a clone of ${origin}, not ${repo}. Move it away, then run fleet setup again.`);
+    const urls = (await machine.exec(["git", "-C", dir, "config", "--get-regexp", "^remote\\.origin\\.(push)?url$"])).output.trim().split("\n").map((line) => line.split(" ").slice(1).join(" "));
+    const other = urls.find((url) => githubRepoOf(url)?.toLowerCase() !== repo.toLowerCase());
+    if (other !== undefined) throw new Error(`${dir} is a clone of ${other || "nothing"}, not ${repo}. Move it away, then run fleet setup again.`);
     await git(machine, dir, "fetch", "-q", "origin");
     const remote = await machine.exec(["git", "-C", dir, "rev-parse", "--verify", "-q", "origin/main"]);
-    if (remote.code === 0) await git(machine, dir, "merge", "-q", "--ff-only", "origin/main");
+    if (remote.code !== 0) return;
+    const merged = await machine.exec(["git", "-C", dir, "merge", "-q", "--ff-only", "origin/main"]);
+    if (merged.code !== 0) throw new Error(`${dir} and ${repo} both have changes the other lacks. Move ${dir} away, then run fleet setup again: it clones ${repo} and saves your answers on top.`);
     return;
   }
   if (existsSync(dir)) throw new Error(`${dir} exists and is not your profile. Move it away, then run fleet setup again.`);
@@ -99,19 +106,36 @@ async function checkout(machine: Machine, dir: string, repo: string) {
   if (cloned.code !== 0) throw new Error(`could not clone ${repo}: ${lastLine(cloned.output)}`);
 }
 
-/** Writes the shim, "about me", and the guide when the profile lacks them, and returns what it wrote. */
+const startFileNames = ["install.sh", "about-me.md", "README.md"];
+
+/** owner/name of a GitHub clone URL, or undefined for any other URL. */
+export function githubRepoOf(url: string) {
+  return /^(?:https:\/\/github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url)?.[1];
+}
+
+function savedSettings(dir: string): Record<string, unknown> {
+  try {
+    return (JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8")) as { settings?: Record<string, unknown> }).settings ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function untracked(machine: Machine, dir: string, names: string[]) {
+  const status = await machine.exec(["git", "-C", dir, "status", "--porcelain", "--untracked-files=all", "--", ...names]);
+  return status.output.split("\n").filter((line) => line.startsWith("?? ")).map((line) => line.slice(3));
+}
+
+/** Writes the shim, "about me", and the guide when the profile lacks them. */
 async function startFiles(dir: string, context: ProfileContext) {
-  const written: string[] = [];
   const write = async (name: string, make: (path: string) => Promise<void>) => {
     const path = join(dir, name);
     if (existsSync(path)) return;
     await make(path);
-    written.push(name);
   };
   await write("install.sh", (path) => copyFile(join(context.engineRoot, "templates/profile/install.sh"), path));
   await write("about-me.md", (path) => writeFile(path, "# About me\n\nWrite how you like to work here. Agents read it after your packs' rules.\n"));
   await write("README.md", (path) => writeFile(path, profileGuide(context.packs)));
-  return written;
 }
 
 /** The engine ref this profile pins: the release tag the engine runs on, or main on the track channel. */

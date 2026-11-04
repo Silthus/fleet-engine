@@ -43,7 +43,7 @@ describe("fleet packs", () => {
     expect(result.output).toContain("  ✓ pull-requests  ");
     expect(result.output).toContain("      Workflows: draft-prs on, pr-care on, ship-words on");
     expect(result.output).toContain("  · memory  ");
-    expect(result.output).toEndWith("Change them with fleet packs [--add <pack>]... [--remove <pack>]... [--workflows <id=on|off,...>].");
+    expect(result.output).toEndWith("Change them with fleet packs [--add <pack>]... [--remove <pack>]... [--workflows <id=on|off,...>] [--set <pack.key=value>]....");
   });
 
   test("turns packs and workflows on and off, pushes the profile, and applies here", async () => {
@@ -58,6 +58,25 @@ describe("fleet packs", () => {
     const removed = await fleet(home, ["packs", "--remove", "communication", "--workflows", "pr-care=on"]);
     expect(removed.code).toBe(0);
     expect(pushed()).toMatchObject({ packs: ["pull-requests"], workflows: { "quality-loop": true } });
+  });
+
+  test("keeps workflow choices of packs whose source is not on this machine, and takes --set like setup", async () => {
+    const { home, pushed } = machineWithProfile();
+    const dir = join(home, "profile");
+    writeFileSync(join(dir, "fleet.json"), JSON.stringify({ ...JSON.parse(git(dir, "show", "HEAD:fleet.json")), workflows: { "team-dangerous": false } }, null, 2) + "\n");
+    git(dir, "commit", "-q", "-am", "Turn off a team workflow");
+    const result = await fleet(home, ["packs", "--add", "communication", "--set", "pull-requests.freeReviews=3"]);
+    expect(result.code).toBe(0);
+    expect(pushed()).toMatchObject({ packs: ["pull-requests", "communication"], workflows: { "team-dangerous": false }, settings: { "pull-requests.freeReviews": 3 } });
+  });
+
+  test("refuses to leave a pack without a pack it needs", async () => {
+    const { home, pushed } = machineWithProfile();
+    expect((await fleet(home, ["packs", "--add", "orchestration"])).code).toBe(0);
+    const result = await fleet(home, ["packs", "--remove", "pull-requests"]);
+    expect(result.code).toBe(2);
+    expect(result.output).toStartWith("fleet packs: Orchestration needs Pull-requests. Add pull-requests, or remove orchestration.");
+    expect(pushed().packs).toEqual(["pull-requests", "orchestration"]);
   });
 
   test("a change that does not apply here stays saved, and says how to finish", async () => {
@@ -98,7 +117,7 @@ describe("fleet settings and fleet set", () => {
 
   test("checks each value against its type, then pushes and applies it", async () => {
     const { home, pushed } = machineWithProfile();
-    const result = await fleet(home, ["set", "pull-requests.freeReviews=4", "memory.repo=me/notes"]);
+    const result = await fleet(home, ["set", "pull-requests.freeReviews=4", "--set", "memory.repo=me/notes"]);
     expect(result.code).toBe(0);
     expect(pushed().settings).toEqual({ "pull-requests.freeReviews": 4, "memory.repo": "me/notes" });
     expect(result.output).toContain("✓ Saved pull-requests.freeReviews, memory.repo in your profile and pushed it.");
