@@ -13,7 +13,8 @@ export type { CommandRunner } from "../run.ts";
 
 type Target = { provider: Provider; path: string; format: Format };
 type FieldRecord = { [target: string]: Field[] };
-type Merged = { record: Field[]; kept: string[]; reason: string; after?: string };
+type Merged = { record: Field[]; kept: string[]; reason: string; after?: string; document: Document };
+type FilesResult = AdapterResult & { plugins?: string[] };
 
 export const recordTarget = ".config/fleet/provider-fields.json";
 export const configTargets: Target[] = [
@@ -29,8 +30,8 @@ export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Ad
     async apply(plan, context) {
       const outage = sourceOutage(plan);
       const reconcile = async () => {
-        const result = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage);
-        result.findings.push(...(await reconcilePlugins(plan, context.home, context.dryRun, run, outage)));
+        const { plugins, ...result } = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage);
+        result.findings.push(...(await reconcilePlugins(plan, context.home, context.dryRun, run, { outage, accepted: plugins })));
         return result;
       };
       const result = context.dryRun ? await reconcile() : await withLock(context.home, reconcile);
@@ -40,19 +41,20 @@ export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Ad
   };
 }
 
-async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: string[], outage: boolean): Promise<AdapterResult> {
+async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: string[], outage: boolean): Promise<FilesResult> {
   const previous = await readRecord(home);
   const next: FieldRecord = {};
   const writes: Array<Write & { action: Action }> = [];
-  const result: AdapterResult = { actions: [], findings: [] };
+  const result: FilesResult = { actions: [], findings: [] };
   for (const target of configTargets) {
     const old = previous[target.path] ?? [];
     const keepOld = () => void (old.length && (next[target.path] = old));
     const before = await optional(inside(home, target.path));
     const link = await linkOnPath(home, target.path);
+    const fields = owned(plan, target);
     let merged: Merged;
     try {
-      merged = merge(target, before, old, owned(plan, target), adopt.includes(target.path), { outage, configPath: join(home, target.path) });
+      merged = merge(target, before, old, fields, adopt.includes(target.path), { outage, configPath: join(home, target.path) });
     } catch (error) {
       keepOld();
       result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept ${target.path} as it is: Fleet cannot read it (${(error as Error).message}). Fix the file, then run fleet apply.`, repair: "human" });
@@ -64,6 +66,7 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
       continue;
     }
     if (merged.record.length) next[target.path] = merged.record;
+    if (target.provider === "claude") result.plugins = acceptedPlugins(merged.document);
     if (merged.kept.length) result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept your ${merged.kept.join(", ")} in ${target.path}. Run fleet apply --adopt ${target.path} to take Fleet's value.` });
     if (merged.after !== undefined) writes.push({ target: target.path, before, after: merged.after, action: { target: target.path, operation: before === undefined ? "create" : "replace", reason: merged.reason } });
   }
@@ -79,7 +82,12 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
 }
 
 function owned(plan: Plan, target: Target): Field[] {
-  return plan.config.filter((entry) => entry.provider === target.provider).map((entry) => ({ path: keyPath(entry.key), value: entry.value, pack: entry.pack }));
+  const fields = plan.config.filter((entry) => entry.provider === target.provider).map((entry) => ({ path: keyPath(entry.key), value: entry.value, pack: entry.pack }));
+  fields.forEach((field, index) => {
+    const other = fields.slice(index + 1).find((item) => overlaps(item.path, field.path));
+    if (other) throw new Error(`${target.provider} keys ${field.path.join(".")} (${field.pack}) and ${other.path.join(".")} (${other.pack}) overlap. Each key owns its whole value, so a pack must own only one of them.`);
+  });
+  return fields;
 }
 
 function merge(target: Target, text: string | undefined, previous: Field[], wanted: Field[], adopt: boolean, options: { outage: boolean; configPath: string }): Merged {
@@ -112,18 +120,21 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
   };
   const applied = reconcile(wanted);
   const trust: Field[] = [];
+  const departed = previous.filter((field) => !wanted.some((item) => overlaps(item.path, field.path)) && !isHookTrust(field));
+  const keepsEdit = (field: Field) => get(current, field.path) !== undefined && !same(get(current, field.path), field.value);
   if (target.provider === "codex") {
-    const keptEvents = wanted.filter((field) => field.path[0] === "hooks" && field.path.length === 2 && !applied.includes(field)).map((field) => field.path[1]!);
+    const isEvent = (field: Field) => field.path[0] === "hooks" && field.path.length === 2;
+    const keptEvents = [...wanted.filter((field) => isEvent(field) && !applied.includes(field)), ...departed.filter((field) => isEvent(field) && (options.outage || keepsEdit(field)))].map((field) => field.path[1]!);
     trust.push(...reconcile(codexHookTrust(applied, options.configPath)));
-    const retained = previous.filter((field) => keptEvents.some((event) => isTrustOf(field, options.configPath, event)));
+    const retained = previous.filter((field) => keptEvents.some((event) => isTrustOf(field, options.configPath, event)) && !trust.some((item) => samePath(item.path, field.path)));
     record.push(...retained);
     trust.push(...retained);
   }
   const all = [...wanted, ...trust];
   for (const field of previous) {
     if (all.some((item) => overlaps(item.path, field.path))) continue;
-    if (options.outage) record.push(field);
-    else if (same(get(current, field.path), field.value)) {
+    if (options.outage || keepsEdit(field)) record.push(field);
+    else if (get(current, field.path) !== undefined) {
       remove(current, field.path);
       removed.push(field.path.join("."));
     }
@@ -135,8 +146,15 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
   }
   const reason = [changed.length ? `set ${changed.join(", ")}` : "", removed.length ? `remove ${removed.join(", ")}` : ""].filter(Boolean).join("; ");
   const after = target.format.encode(current);
-  return { record, kept, reason, after: after === original ? undefined : after };
+  return { record, kept, reason, after: after === original ? undefined : after, document: current };
 }
+
+function acceptedPlugins(document: Document) {
+  const enabled = get(document, ["enabledPlugins"]);
+  return enabled && typeof enabled === "object" ? Object.entries(enabled).flatMap(([id, on]) => (on === true ? [id] : [])) : [];
+}
+
+const isHookTrust = (field: Field) => field.path[0] === "hooks" && field.path[1] === "state";
 
 /** True while an enabled pack is missing because its source cannot be fetched. Its settings must not look departed. */
 export function sourceOutage(plan: Plan) {

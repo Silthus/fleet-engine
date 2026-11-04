@@ -18,18 +18,21 @@ export function wantedPlugins(plan: Plan) {
 }
 
 /** Installs the plugins packs enable, through Claude Code in the given home. Removes only plugins that Fleet installed. */
-export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, outage = false): Promise<Finding[]> {
-  const wanted = wantedPlugins(plan);
+export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: { outage: boolean; accepted?: string[] }): Promise<Finding[]> {
+  const outage = settings.outage;
+  const planned = wantedPlugins(plan);
+  const wanted = planned.filter((id) => settings.accepted?.includes(id));
   const text = await readState(home, pluginsTarget);
   const owned = parseOwned(text);
-  if (!wanted.length && !owned.claude.length) return [];
+  if (!planned.length && !owned.claude.length) return [];
+  if (!settings.accepted) return planned.length ? [{ id: "plugins:claude", pack: "engine", say: `Claude plugins wait until Fleet can change .claude/settings.json: ${planned.join(", ")}.`, repair: "apply" }] : [];
   const claude = (args: string[]) => run(["claude", "plugin", ...args], { home });
   const installed = await listInstalled(claude);
   if (!installed) {
-    return wanted.length ? [{ id: "plugins:claude", pack: "engine", say: `Claude Code is not installed yet, so its plugins wait: ${wanted.join(", ")}.`, repair: "apply" }] : [];
+    return planned.length ? [{ id: "plugins:claude", pack: "engine", say: `Claude Code is not installed yet, so its plugins wait: ${planned.join(", ")}.`, repair: "apply" }] : [];
   }
   const missing = wanted.filter((id) => !installed.includes(id));
-  const departed = outage ? [] : owned.claude.filter((id) => !wanted.includes(id) && installed.includes(id));
+  const departed = outage ? [] : owned.claude.filter((id) => !planned.includes(id) && installed.includes(id));
   if (dryRun) {
     return [
       ...missing.map((id) => ({ id: `plugin:${id}`, pack: "engine", say: `The Claude plugin ${id} needs to be installed.`, repair: "apply" as const })),
@@ -37,7 +40,7 @@ export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean
     ];
   }
   const findings: Finding[] = [];
-  const next = new Set(owned.claude.filter((id) => installed.includes(id) || (outage && !wanted.includes(id))));
+  const next = new Set(owned.claude.filter((id) => installed.includes(id) || (outage && !planned.includes(id))));
   for (const id of missing) {
     if ((await claude(["install", id, "--scope", "user"])).code === 0) next.add(id);
     else findings.push({ id: `plugin:${id}`, pack: "engine", say: `Could not install the Claude plugin ${id}.`, repair: "apply" });

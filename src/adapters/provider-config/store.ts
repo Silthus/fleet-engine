@@ -30,14 +30,12 @@ export async function linkOnPath(home: string, target: string): Promise<string |
 }
 
 export async function readState(home: string, target: string) {
-  const link = await linkOnPath(home, target);
-  if (link) throw new Error(`${link} is a link or not a directory; Fleet keeps its state only in real directories`);
+  await requireRealPath(home, target);
   return optional(inside(home, target));
 }
 
 export async function withLock<T>(home: string, work: () => Promise<T>): Promise<T> {
-  const link = await linkOnPath(home, lockTarget);
-  if (link) throw new Error(`${link} is a link or not a directory; Fleet keeps its state only in real directories`);
+  await requireRealPath(home, lockTarget);
   const lock = inside(home, lockTarget);
   await mkdir(dirname(lock), { recursive: true, mode: 0o700 });
   try {
@@ -59,28 +57,45 @@ export async function writeWithBackups(home: string, writes: Write[]) {
   const done: Write[] = [];
   try {
     for (const write of writes) {
-      const link = await linkOnPath(home, write.target);
-      if (link) throw new Error(`${link} became a link while Fleet was applying`);
+      await requireRealPath(home, write.target);
       const path = inside(home, write.target);
-      if ((await optional(path)) !== write.before) throw new Error(`${write.target} changed while Fleet was applying. Run fleet apply again.`);
       if (write.before !== undefined) {
-        const backup = inside(home, `${backupRoot}/${write.target}`);
-        await mkdir(dirname(backup), { recursive: true, mode: 0o700 });
-        await writeFile(backup, write.before, { mode: 0o600, flag: "wx" });
+        const backup = `${backupRoot}/${write.target}`;
+        await requireRealPath(home, backup);
+        await mkdir(dirname(inside(home, backup)), { recursive: true, mode: 0o700 });
+        await requireRealPath(home, backup);
+        await writeFile(inside(home, backup), write.before, { mode: 0o600, flag: "wx" });
       }
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
       const temporary = `${path}.${randomUUID()}.tmp`;
       await writeFile(temporary, write.after, { mode: 0o600, flag: "wx" });
-      await rename(temporary, path);
+      try {
+        await requireRealPath(home, write.target);
+        if ((await optional(path)) !== write.before) throw new Error(`${write.target} changed while Fleet was applying. Run fleet apply again.`);
+        await rename(temporary, path);
+      } catch (error) {
+        await rm(temporary, { force: true });
+        throw error;
+      }
       done.push(write);
     }
   } catch (error) {
-    for (const write of done.reverse()) {
-      const path = inside(home, write.target);
-      if ((await optional(path)) !== write.after) continue;
-      if (write.before === undefined) await rm(path, { force: true });
-      else await writeFile(path, write.before);
-    }
+    for (const write of done.reverse()) await restore(home, write);
     throw error;
   }
+}
+
+async function requireRealPath(home: string, target: string) {
+  const link = await linkOnPath(home, target);
+  if (link) throw new Error(`${link} is a link or not a directory; Fleet writes only through real directories`);
+}
+
+async function restore(home: string, write: Write) {
+  if (await linkOnPath(home, write.target)) return;
+  const path = inside(home, write.target);
+  if ((await optional(path)) !== write.after) return;
+  if (write.before === undefined) return void (await rm(path, { force: true }));
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temporary, write.before, { mode: 0o600, flag: "wx" });
+  await rename(temporary, path);
 }
