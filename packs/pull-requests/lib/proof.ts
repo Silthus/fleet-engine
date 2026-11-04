@@ -229,8 +229,7 @@ async function claimAnswer(home: string, identity: ProofIdentity, answer: HeardA
   try { await writeFile(path, JSON.stringify(claim) + "\n", { flag: "wx", mode: 0o600 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const held = await readJson<Claim | undefined>(path, undefined);
-    throw new Error(`This answer already started a round on ${held ? `${held.repository}#${held.pr}` : "a PR"}. One answer starts one round. Ask the user again`);
+    throw new Error(await usedAnswer(home, answer) ?? usedOn("a PR"));
   }
   return async () => {
     const recorded = (await recordedAnswers(home)).some((entry) => entry.message === messageOf(answer));
@@ -260,10 +259,30 @@ async function decisionOf(home: string, identity: ProofIdentity, { override, sta
 async function heardOverride(home: string, identity: ProofIdentity, override: string, hear: Hear): Promise<Decision> {
   if (!isDatedQuote(override)) throw new Error(`--override needs a dated quote of the user's answer to this round, such as '2026-10-24 "${runOption}"'. A general instruction does not answer a round`);
   await refuseInstructionQuote(home, override);
-  const answer = await hear(override);
-  requireChoice(answer, `${roundQuestion} ${identity.repository}#${identity.pr}:`, [runOption, stopOption], "Stop the review loop");
-  await refuseBorrowedMessage(home, answer);
+  const answer = await chooseAnswer(home, await hear(override), (heard) => requireChoice(heard, `${roundQuestion} ${identity.repository}#${identity.pr}:`, [runOption, stopOption], "Stop the review loop"));
   return { override, answer };
+}
+
+async function chooseAnswer(home: string, candidates: HeardAnswer[], check: (answer: HeardAnswer) => void) {
+  const refusals: unknown[] = [];
+  for (const answer of candidates) {
+    try {
+      check(answer);
+      const used = await usedAnswer(home, answer);
+      if (used) throw new Error(used);
+      return answer;
+    } catch (error) { refusals.push(error); }
+  }
+  throw refusals[0];
+}
+
+const usedOn = (where: string) => `This answer is already used on ${where}. One answer counts once. Ask the user again`;
+
+async function usedAnswer(home: string, answer: HeardAnswer) {
+  const claim = await readJson<Claim | undefined>(claimPath(home, answer), undefined);
+  if (claim) return usedOn(`${claim.repository}#${claim.pr}`);
+  const recorded = (await recordedAnswers(home)).find((entry) => entry.message === messageOf(answer));
+  return recorded && usedOn(recorded.where);
 }
 
 export const acceptGapOption = "Accept the gap";
@@ -490,11 +509,11 @@ export async function recordGap(home: string, identity: ProofIdentity, kind: str
   const gap = await readJson<Gap | undefined>(path, undefined);
   if (!gap) throw new Error(`No ${kind} gap is recorded. Record it with --reason first.`);
   await refuseInstructionQuote(home, update.accept);
-  const answer = await update.hear(update.accept);
-  requireGapChoice(answer, identity, kind);
-  await refuseBorrowedMessage(home, answer);
+  const answer = await chooseAnswer(home, await update.hear(update.accept), (heard) => requireGapChoice(heard, identity, kind));
+  const release = await claimAnswer(home, identity, answer);
   const accepted: Gap = { ...gap, acceptance: { instruction: update.accept, acceptedAt: new Date().toISOString(), answer } };
-  await writeJson(path, accepted);
+  try { await writeJson(path, accepted); }
+  catch (error) { await release(); throw error; }
   return accepted;
 }
 
@@ -534,11 +553,6 @@ export async function refuseInstructionQuote(home: string, text: string) {
   if (instructionSentences(await agentInstructions(home)).some((sentence) => answer.includes(sentence))) {
     throw new Error("This quotes the user's instructions in ~/.agents, not their answer to this question. A standing rule there is recorded once with fleet proof standing; otherwise ask the user and record their reply");
   }
-}
-
-export async function refuseBorrowedMessage(home: string, heard: HeardAnswer) {
-  const borrowed = (await recordedAnswers(home)).find((recorded) => recorded.message === messageOf(heard));
-  if (borrowed) throw new Error(`This answer is already recorded on ${borrowed.where}. Each round and each gap needs the user's answer to its own question. Ask the user again`);
 }
 
 const standingKinds = [...gapKinds, "review"] as const;

@@ -343,8 +343,8 @@ test("an answer recorded on one round or PR cannot be reused on another", async 
   writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
   await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md");
   pr.commit("feature.txt", "fixed\n");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", answer, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42 round 1");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", `2026-10-25 "Run one more round" for round 2`, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42 round 1");
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", answer, "--thread", "thread-1")).rejects.toThrow("already used on example/product#42. One answer counts once. Ask the user again");
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", `2026-10-25 "Run one more round" for round 2`, "--thread", "thread-1")).rejects.toThrow("already used on example/product#42. One answer counts once. Ask the user again");
 
   const accept = `2026-10-25 "Accept the gap"`;
   for (const kind of ["prod-shape", "cross-version"]) {
