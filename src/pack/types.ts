@@ -15,6 +15,8 @@ export type PackSetting = {
   question: string;
   type: "string" | "number" | "boolean" | "choice";
   default?: SettingValue;
+  /** Setup's default by the machine's time zone, before default: the longest prefix of the zone wins, such as "Europe/" for Europe/Berlin. */
+  defaultByTimeZone?: Record<string, SettingValue>;
   choices?: Array<{ value: SettingValue; label: string }>;
   optional?: true;
   ask?: "setup" | "never";

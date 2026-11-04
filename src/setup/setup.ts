@@ -27,6 +27,8 @@ export type SetupOptions = {
   apply?: (profileDir: string) => Promise<number>;
   /** Runs fleet doctor with this profile and prints its report. */
   doctor?: (profileDir: string) => Promise<number>;
+  /** This machine's IANA time zone, which picks a setting's time-zone default. */
+  timeZone?: string;
   /** The environment the standalone check reads, and that tells a Coder workspace apart. */
   env?: Record<string, string | undefined>;
 };
@@ -78,6 +80,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     flags,
     catalog,
     draft: progress.draft,
+    timeZone: options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     async answer(fields) {
       Object.assign(progress.draft, fields);
       await remember();

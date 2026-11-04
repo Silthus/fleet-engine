@@ -24,7 +24,17 @@ export type QuestionContext = {
   draft: Draft;
   /** Saves answers to the machine file's draft before the step counts as done. */
   answer(fields: Draft): Promise<void>;
+  /** This machine's IANA time zone, such as Europe/Berlin. */
+  timeZone: string;
 };
+
+/** The value of the longest prefix of the time zone in the setting's defaultByTimeZone. */
+export function timeZoneDefault(setting: PackSetting, timeZone: string) {
+  const prefix = Object.keys(setting.defaultByTimeZone ?? {})
+    .filter((key) => timeZone.startsWith(key))
+    .sort((left, right) => right.length - left.length)[0];
+  return prefix === undefined ? undefined : setting.defaultByTimeZone![prefix];
+}
 
 export const defaultPreset = "everyday";
 
@@ -161,8 +171,10 @@ async function askSetting(context: QuestionContext, setting: PackSetting): Promi
   };
   if (flags.set[setting.key] !== undefined) return save(parseSettingValue(setting, flags.set[setting.key]!));
   const saved = draft.settings?.[setting.key];
-  const fallback = saved ?? setting.default;
+  const zoned = timeZoneDefault(setting, context.timeZone);
+  const fallback = saved ?? zoned ?? setting.default;
   if (flags.nonInteractive) {
+    if (saved === undefined && zoned !== undefined) return save(zoned);
     if (fallback !== undefined) return terminal.print(`  ✓ ${label(setting, fallback)}`);
     if (setting.optional) return terminal.print(`  ✓ Skipped. Set it later with fleet set ${setting.key}=<value>.`);
     return "unanswered";
