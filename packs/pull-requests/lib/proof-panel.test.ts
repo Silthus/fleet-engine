@@ -173,7 +173,8 @@ test("a reclaimed slot's reviewer stops with it, and a lens records its reviewer
   try {
     writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: exitedPid(), token: "dead", reviewer: reviewer.pid }));
     await withSlot(io, async () => undefined);
-    expect(await Promise.race([reviewer.exited.then(() => "stopped"), new Promise((done) => setImmediate(() => setImmediate(() => done("running"))))])).toBe("stopped");
+    await reviewer.exited;
+    expect(reviewer.signalCode).toBe("SIGKILL");
   } finally { reviewer.kill("SIGKILL"); }
 
   const pr = checkout();
@@ -200,7 +201,8 @@ test("--wait stops the reviewer of a lens whose worker died before it restarts t
   try {
     writeFileSync(join(slots, "2"), JSON.stringify({ pid: exitedPid(), token: "dead", reviewer: reviewer.pid }));
     expect((await pr.fleet("review", "--wait")).code).toBe(0);
-    expect(await Promise.race([reviewer.exited.then(() => "stopped"), new Promise((done) => setImmediate(() => setImmediate(() => done("running"))))])).toBe("stopped");
+    await reviewer.exited;
+    expect(reviewer.signalCode).toBe("SIGKILL");
     expect(readdirSync(slots).filter((name) => !name.startsWith("."))).toEqual([]);
   } finally { reviewer.kill("SIGKILL"); }
 });
