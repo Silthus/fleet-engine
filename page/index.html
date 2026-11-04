@@ -129,9 +129,7 @@ button, input, select { font: inherit; color: inherit; }
 .moment { display: grid; grid-template-columns: 72px minmax(0, 1fr) minmax(0, 240px); gap: 20px; padding-block: 18px; border-top: 1px solid var(--line); }
 .time { font: 500 1.05rem var(--f-mono); color: var(--accent); font-variant-numeric: tabular-nums; }
 .night .time { color: var(--muted); }
-.off > :not(.notes) { opacity: .42; }
-.off .get { opacity: 1; }
-.off .get * { opacity: 1; }
+.off .time, .off h3, .off p, .off .tag, .off .warnbox { opacity: .42; }
 .tag { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: var(--muted); margin-top: 6px; flex-wrap: wrap; }
 .get { margin-top: 8px; }
 .get button { background: var(--surface); border: 1px solid var(--accent); color: var(--accent); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 0.85rem; }
