@@ -33,8 +33,10 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   const os: Os = machine.role === "mac" ? "darwin" : "linux";
   const { order, packs } = choosePacks(profile, sources);
   checkUniqueIds(order);
+  const engine = sources.find((source): source is AvailableSource => source.ref.name === "engine" && !("error" in source));
   const plan: Plan = {
     machine,
+    ...(engine ? { engineRoot: engine.dir } : {}),
     os,
     ai: profile.plan,
     packs,

@@ -1,4 +1,5 @@
 import type { HumanStep, Owned, PackStep } from "../pack/types.ts";
+import { engineCommand, engineShellCommand } from "../reconciler/engine-command.ts";
 import type { Machine } from "./commands.ts";
 import type { Step, StepOutcome } from "./runner.ts";
 import type { Terminal } from "./terminal.ts";
@@ -68,22 +69,23 @@ async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive
   return signIn.after?.();
 }
 
-/** A pack's human step, followed by the pack steps that wait for it. */
-export function packSignIn(step: Owned<HumanStep>, steps: Array<Owned<PackStep>>, context: HumanContext): SignIn {
+/** A pack's human step, followed by the pack steps that wait for it. A leading fleet in their commands runs the engine at engineRoot. */
+export function packSignIn(step: Owned<HumanStep>, steps: Array<Owned<PackStep>>, context: HumanContext, engineRoot: string | undefined): SignIn {
   const { machine, terminal } = context;
-  const passes = async (command: string[]) => (await machine.exec(command)).code === 0;
+  const exec = (command: string[]) => machine.exec(engineCommand(command, engineRoot));
+  const passes = async (command: string[]) => (await exec(command)).code === 0;
   return {
     id: `human:${step.pack}:${step.id}`,
     title: step.say,
     minutes: 2,
     why: `The ${step.pack} pack needs this.`,
     probe: () => passes(step.probe),
-    ...(step.command ? { command: ["sh", "-c", step.command] } : {}),
+    ...(step.command ? { command: ["sh", "-c", engineShellCommand(step.command, engineRoot)] } : {}),
     async after() {
       for (const next of steps.filter((item) => item.pack === step.pack && item.after === step.id)) {
         if (next.check && (await passes(next.check))) continue;
         terminal.print(`  $ ${next.run.join(" ")}`);
-        const result = await machine.exec(next.run);
+        const result = await exec(next.run);
         if (result.code !== 0 || (next.check && !(await passes(next.check)))) {
           throw new Error(`step ${next.id} of the ${step.pack} pack failed${result.output.trim() ? `: ${result.output.trim().split("\n").at(-1)}` : ""}`);
         }

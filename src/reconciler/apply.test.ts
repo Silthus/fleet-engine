@@ -181,3 +181,36 @@ describe("check", () => {
     expect(report.findings.map((finding) => finding.id)).toEqual(["kept:.agents/AGENTS.md"]);
   });
 });
+
+describe("a leading fleet in a pack's commands", () => {
+  const launcher = ["/bin/sh", "/engine/fleet"];
+  const team = {
+    engineRoot: "/engine",
+    files: [],
+    human: [{ id: "login", pack: "team", say: "Sign in.", command: "fleet login", probe: ["fleet", "whoami"] }],
+    steps: [{ id: "start", pack: "team", run: ["fleet", "start"], check: ["fleet", "status"], after: "login" }],
+    checks: [{ id: "healthy", pack: "team", run: ["fleet", "health"], say: "Unhealthy." }],
+  };
+  const recorder = (codes: Record<string, number> = {}) => {
+    const calls: string[] = [];
+    return { calls, run: async (command: string[]) => (calls.push(command.join(" ")), codes[command.join(" ")] ?? 0) };
+  };
+
+  test("runs this engine's launcher in apply", async () => {
+    const { calls, run } = recorder({ "/bin/sh /engine/fleet status": 1 });
+    await apply(plan(team), { home: temp.make("home-"), run });
+    expect(calls).toEqual([[...launcher, "whoami"], [...launcher, "status"], [...launcher, "start"]].map((command) => command.join(" ")));
+  });
+
+  test("runs this engine's launcher in check", async () => {
+    const { calls, run } = recorder();
+    await check(plan(team), { home: temp.make("home-"), run });
+    expect(calls).toEqual([[...launcher, "health"], [...launcher, "whoami"], [...launcher, "status"], [...launcher, "whoami"]].map((command) => command.join(" ")));
+  });
+
+  test("leaves other commands and a plan without an engine as they are", async () => {
+    const { calls, run } = recorder();
+    await check(plan({ ...team, engineRoot: undefined, checks: [{ id: "gh", pack: "team", run: ["gh", "fleet"], say: "No gh." }] }), { home: temp.make("home-"), run });
+    expect(calls).toEqual(["gh fleet", "fleet whoami", "fleet status", "fleet whoami"]);
+  });
+});

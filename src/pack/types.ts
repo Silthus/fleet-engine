@@ -148,6 +148,8 @@ export type ResolvedPack = { name: string; source: string; ref: string; availabl
 
 export type Plan = {
   machine: MachineFile;
+  /** The engine whose launcher a leading fleet in a pack's commands runs. */
+  engineRoot?: string;
   os: Os;
   ai: AiPlan;
   packs: ResolvedPack[];

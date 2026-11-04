@@ -8,6 +8,7 @@ import { linkOnPath, readState, withLock, writeWithBackups, type Write } from ".
 import { skipOtherHome, spawnRunner, type CommandRunner } from "../run.ts";
 import { cronLine, cronSafe, reconcileCrontab } from "./cron.ts";
 import { labelPrefix, plist } from "./launchd.ts";
+import { engineCommand } from "../../reconciler/engine-command.ts";
 import { agentCopyTarget, jobsFolder, launcherScript, launcherTarget, logTarget } from "./launcher.ts";
 import { cronExpression, launchdTimer, t3Schedule, type T3Schedule } from "./schedule.ts";
 
@@ -45,7 +46,7 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       for (const job of plan.jobs) if (!jobId.test(job.id)) throw new Error(`job id ${job.id} of the ${job.pack} pack may hold only letters, digits, dots, dashes, and underscores`);
       const skipped = skipOtherHome("jobs", "your scheduled jobs", home, options);
       if (skipped) return skipped;
-      const command = (job: PackJob) => (job.command[0] === "fleet" ? ["/bin/sh", join(engineRoot, "fleet"), ...job.command.slice(1)] : job.command);
+      const command = (job: PackJob) => engineCommand(job.command, engineRoot);
       const context = { home, dryRun, run, result, outage: sourceOutage(plan) };
       const reconcile = async () => {
         const path = [`${home}/.local/bin`, `${home}/.bun/bin`, ...(plan.os === "darwin" ? ["/opt/homebrew/bin"] : []), "/usr/local/bin", "/usr/bin", "/bin"].join(":");
