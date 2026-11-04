@@ -13,17 +13,23 @@ export async function engineSource(): Promise<AvailableSource> {
   return { ref: { name: "engine", repo: "Silthus/fleet-engine", ref: "main" }, dir: engineDir, packs: await loadPacks(engineDir) };
 }
 
-/** A stand-in for the agent-skills source that holds every skill the engine's packs link from it. */
-export function agentSkillsSource(dir: string, engine: AvailableSource): AvailableSource {
+const skillRepos: Record<string, string> = { "agent-skills": "Silthus/agent-skills", "mattpocock-skills": "mattpocock/skills" };
+
+/** Stand-ins for the skill sources the engine's packs link from, such as agent-skills, each holding every skill the packs name. */
+export function skillSources(dir: string, engine: AvailableSource): AvailableSource[] {
+  const names = new Set<string>();
   for (const { manifest } of engine.packs) {
     for (const path of manifest.skills ?? []) {
-      if (!path.startsWith("agent-skills:")) continue;
-      const skill = join(dir, "skills", path.slice("agent-skills:".length));
+      const colon = path.indexOf(":");
+      if (colon < 0) continue;
+      const name = path.slice(0, colon);
+      const skill = join(dir, name, "skills", path.slice(colon + 1));
       mkdirSync(skill, { recursive: true });
       writeFileSync(join(skill, "SKILL.md"), `# ${path}\n`);
+      names.add(name);
     }
   }
-  return { ref: { name: "agent-skills", repo: "Silthus/agent-skills", ref: "main" }, dir, packs: [] };
+  return [...names].map((name) => ({ ref: { name, repo: skillRepos[name] ?? name, ref: "main" }, dir: join(dir, name), packs: [] }));
 }
 
 export function resolveEngine(sources: AvailableSource[], fields: Partial<Profile> & { plan?: AiPlan } = {}, machine = mac): Plan {
