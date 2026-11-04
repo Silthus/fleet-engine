@@ -215,4 +215,46 @@ describe("privacy scan", () => {
     const invalid = scan(dir, base, "[\n", undefined, { TMPDIR: tmp });
     expect(invalid).toMatchObject({ code: 2, output: "privacy: the deny-list holds an invalid pattern; failing closed.\n" });
   });
+
+  test("finds secrets that gitleaks chunks would hide: binary headers at chunk starts and long keys", () => {
+    const chars = [..."x".repeat(22000)];
+    for (const offset of [4980, 9981]) chars.splice(offset, 8, ..."%PDF-1.4");
+    const secret = fakeGitHubToken();
+    // Built from parts, so this file holds no key that gitleaks would flag.
+    const marker = (edge: string) => ["-----", edge, " PRIVATE KEY", "-----"].join("");
+    const pem = `${marker("BEGIN")}\n${"A".repeat(6000)}\n${marker("END")}\n`;
+    const cases: Array<[string, string]> = [
+      ["headers.txt", `${chars.slice(0, 20000).join("")}"${secret}"\n${chars.slice(20000).join("")}`],
+      ["key.txt", `${"x".repeat(4500)}\n${pem}`],
+    ];
+    for (const [name, content] of cases) {
+      const { dir, base } = repoWithBase();
+      commit(dir, name, content);
+      const result = scan(dir, base);
+      expect(result.code).toBe(1);
+      expect(result.output).toContain("gitleaks rule");
+      expect(result.output.includes(secret)).toBe(false);
+    }
+  });
+
+  test("reports the line of a secret far into a file", () => {
+    const { dir, base } = repoWithBase();
+    const lines = Array.from({ length: 3000 }, (_, index) => `line ${index + 1}`);
+    lines[2499] = `"${fakeGitHubToken()}"`;
+    commit(dir, "long.txt", lines.join("\n") + "\n");
+    const blob = git(dir, "rev-parse", "HEAD:long.txt");
+    expect(scan(dir, base).output).toContain(`matched ${blob}, line 2500.`);
+  });
+
+  test("fails closed on empty PR text and on a work directory it cannot make, without printing paths", () => {
+    const { dir, base } = repoWithBase();
+    expect(scan(dir, "--text", denylist, "")).toMatchObject({ code: 2 });
+    const tmp = mkdtempSync(join(tmpdir(), `privacy-${plantedTerm}-`));
+    repos.push(tmp);
+    chmodSync(tmp, 0o500);
+    const result = scan(dir, base, denylist, undefined, { TMPDIR: tmp });
+    chmodSync(tmp, 0o700);
+    expect(result.code).toBe(2);
+    expect(result.output).toBe("privacy: could not make a work directory; failing closed.\n");
+  });
 });

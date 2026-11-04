@@ -46,4 +46,7 @@ jobs:
         env:
           FLEET_PRIVACY_DENYLIST: ${{ secrets.FLEET_PRIVACY_DENYLIST }}
         # Read from the event file, not step env: the runner prints step env values in the log.
-        run: jq -r '.pull_request.title, (.pull_request.body // "")' "$GITHUB_EVENT_PATH" | sh scripts/privacy-scan.sh --text
+        run: |
+          jq -r '.pull_request.title, (.pull_request.body // "")' "$GITHUB_EVENT_PATH" >"$RUNNER_TEMP/pr-text" 2>/dev/null ||
+            { echo "privacy: could not read the pull request text; failing closed." >&2; exit 2; }
+          sh scripts/privacy-scan.sh --text <"$RUNNER_TEMP/pr-text"

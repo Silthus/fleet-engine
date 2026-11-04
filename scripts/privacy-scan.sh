@@ -21,7 +21,7 @@ mode=${1:?usage: privacy-scan.sh <base-commit> | --all | --text}
 
 work=$(mktemp -d 2>/dev/null) || { echo "privacy: could not make a work directory; failing closed." >&2; exit 2; }
 trap 'rm -rf "$work"' EXIT
-mkdir "$work/blobs" "$work/leaks-in"
+mkdir "$work/blobs" "$work/leaks-in" 2>/dev/null || { echo "privacy: could not make a work directory; failing closed." >&2; exit 2; }
 patterns=$work/patterns
 failed=0
 
@@ -41,13 +41,27 @@ grep -q -E -f "$patterns" </dev/null 2>/dev/null || status=$?
 command -v gitleaks >/dev/null 2>&1 || broken "gitleaks is missing"
 command -v jq >/dev/null 2>&1 || broken "jq is missing"
 
-# feed <name> <file>: hands <file> to gitleaks twice. A header line first stops
-# gitleaks from skipping it as a recognized binary type. Gitleaks 8.21.2 reads
-# files in 10,000-byte chunks without overlap, so the second copy is shifted by
-# 5,000 bytes: a secret shorter than that lies whole in one chunk of a copy.
+# feed <name> <file>: hands <file> to gitleaks as overlapping windows of 9,900
+# bytes, 1,900 bytes apart. Gitleaks 8.21.2 reads 10,000-byte chunks without
+# overlap and skips a chunk that starts like a binary file. A window is one
+# chunk that starts with a header line, so any secret up to 8,000 bytes lies
+# whole in a window that gitleaks reads. Each window's name carries its byte
+# offset and the number of lines before it, so findings keep their line.
+window=9900
+step=1900
 feed() {
-  { printf 'fleet privacy scan\n'; cat "$2"; } >"$work/leaks-in/$1" 2>/dev/null || broken "could not stage $1 for gitleaks"
-  { printf 'fleet privacy scan\n%5000s\n' ''; cat "$2"; } >"$work/leaks-in/$1.shifted" 2>/dev/null || broken "could not stage $1 for gitleaks"
+  size=$(wc -c <"$2" 2>/dev/null) || broken "could not stage $1 for gitleaks"
+  size=$((size + 0))
+  offset=0
+  lines=0
+  while :; do
+    { printf 'fleet privacy scan\n'; tail -c +"$((offset + 1))" "$2" | head -c "$window"; } >"$work/leaks-in/$1~$offset~$lines" 2>/dev/null ||
+      broken "could not stage $1 for gitleaks"
+    [ $((offset + window)) -lt "$size" ] || break
+    skipped=$(tail -c +"$((offset + 1))" "$2" 2>/dev/null | head -c "$step" | tr -dc '\n' | wc -c) || broken "could not stage $1 for gitleaks"
+    lines=$((lines + skipped))
+    offset=$((offset + step))
+  done
 }
 
 # denied <file> <what>: reports each line of <file> that matches the deny-list.
@@ -94,6 +108,7 @@ scan_commit() {
 case "$mode" in
   --text)
     cat >"$work/blobs/text" 2>/dev/null || broken "could not read stdin"
+    [ -s "$work/blobs/text" ] || broken "the pull request text is empty"
     denied "$work/blobs/text" "the pull request title or body"
     feed text "$work/blobs/text"
     ;;
@@ -111,10 +126,9 @@ GITLEAKS_CONFIG='' gitleaks dir --no-banner --redact --ignore-gitleaks-allow --l
 [ -f "$work/leaks.json" ] || broken "gitleaks failed"
 leaks=$(jq length "$work/leaks.json" 2>/dev/null) || broken "could not read the gitleaks report"
 if [ "$leaks" -gt 0 ]; then
-  # Line numbers count from the content: one header line, plus the padding line in a shifted copy.
-  jq -r '.[] | (.File | split("/") | last) as $file
-    | ($file | endswith(".shifted")) as $shifted
-    | "privacy: gitleaks rule \(.RuleID) matched \($file | sub("\\.shifted$"; "")), line \(.StartLine - (if $shifted then 2 else 1 end))."' \
+  # A window's line number counts its header line and starts after the lines before the window.
+  jq -r '.[] | (.File | split("/") | last | split("~")) as $name
+    | "privacy: gitleaks rule \(.RuleID) matched \($name[0]), line \(($name[2] | tonumber) + .StartLine - 1)."' \
     "$work/leaks.json" 2>/dev/null | sort -u >&2 || broken "could not read the gitleaks report"
   failed=1
 elif [ "$status" -ne 0 ]; then
