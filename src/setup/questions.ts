@@ -80,7 +80,7 @@ export function picksFrom(flags: SetupFlags, catalog: Catalog): Required<Pick<Dr
 }
 
 /** Picked packs whose required packs are not picked. */
-export function unmetNeeds(packs: string[], catalog: Catalog) {
+export function unmetNeeds(packs: string[], catalog: Pick<Catalog, "packs">) {
   return catalog.packs
     .map((pack) => pack.manifest)
     .filter((manifest) => packs.includes(manifest.name))
@@ -88,7 +88,7 @@ export function unmetNeeds(packs: string[], catalog: Catalog) {
     .filter((item) => item.needs.length);
 }
 
-export function settingsFrom(flags: SetupFlags, catalog: Catalog): Record<string, SettingValue> {
+export function settingsFrom(flags: SetupFlags, catalog: Pick<Catalog, "packs">): Record<string, SettingValue> {
   const settings = catalog.packs.flatMap((pack) => pack.manifest.settings ?? []);
   return Object.fromEntries(
     Object.entries(flags.set).map(([key, raw]) => {
