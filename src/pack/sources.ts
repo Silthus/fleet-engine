@@ -91,3 +91,9 @@ async function git(dir: string, ...args: string[]) {
   const message = process.signalCode ? `git timed out after ${fetchTimeoutMs / 1000} seconds` : (stderr.trim().split("\n").at(-1) ?? "");
   return { ok: code === 0, stdout: stdout.trim(), stderr: message };
 }
+
+export async function cachedSource(ref: SourceRef, cacheRoot: string): Promise<FetchedSource> {
+  const dir = join(cacheRoot, ref.name);
+  if (!existsSync(join(dir, ".git"))) return { ref, error: "never fetched; run fleet apply" };
+  return { ref, dir, packs: await loadPacks(dir) };
+}

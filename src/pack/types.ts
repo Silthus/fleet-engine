@@ -128,7 +128,9 @@ export type SetupProgress = { done: string[]; draft?: Partial<ProfileFile> };
 
 export type MachineFile = { schema: 1; role: MachineRole; profileDir?: string; setup?: SetupProgress };
 
-export type DesiredFile = { target: string; conflict?: string } & ({ source: string } | { content: string });
+import type { Action, DesiredFile } from "../files/install.ts";
+
+export type { Action, DesiredFile };
 
 export type Owned<T> = T & { pack: string };
 
@@ -152,3 +154,7 @@ export type Plan = {
   unanswered: PackSetting[];
   dropped: Array<{ pack: string; item: string; reason: string }>;
 };
+
+export type Finding = { id: string; pack: string; say: string; repair?: "apply" | "human" };
+
+export type Report = { ok: boolean; actions: Action[]; findings: Finding[]; humanLeft: HumanStep[] };
