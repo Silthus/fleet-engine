@@ -2,10 +2,10 @@ import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import { cachedSource, fetchSource } from "../pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SourceRef } from "../pack/types.ts";
-import { loadMachine, loadProfile, saveAnswers, saveMachine } from "../profile/profile.ts";
+import { loadMachine, loadProfile, saveMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
-import { FlagError, parseSetupFlags, type SetupFlags } from "./flags.ts";
+import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
 import { packList, packsStep, picksFrom, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
@@ -26,6 +26,9 @@ export type SetupOptions = {
   apply?: (profileDir: string) => Promise<number>;
 };
 
+/** Steps that run again when the command changes an answer: the profile saves it, and apply puts it on this machine. */
+const answersChanged = ["profile", "apply"];
+
 export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
 
 export async function setup(args: string[], options: SetupOptions): Promise<number> {
@@ -35,14 +38,26 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
   const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
   const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, draft: progress.draft } });
+  const box: Machine = { ...realMachine, ...options.machine };
+  const fetchTeam = (ref: SourceRef) => (options.fetchSource ?? fetchSource)(ref, sourceCache(options.home));
+  if (progress.done.includes("github")) {
+    for (const ref of teamRefs(progress.draft)) {
+      if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
+      const fetched = await fetchTeam(ref);
+      if ("error" in fetched) terminal.print(`  · The ${ref.name} pack could not be fetched (${fetched.error}). Setup goes on without it.`);
+      else catalog.add(fetched);
+    }
+  }
   try {
     flags = parseSetupFlags(args);
     picksFrom(flags, catalog);
     const fromFlags = settingsFrom(flags, catalog);
+    const reopened = [...(hasPicks(flags) ? ["packs"] : []), ...(flags.plan ? ["plans"] : [])];
+    if (reopened.length || Object.keys(fromFlags).length) reopened.push(...answersChanged);
+    progress.done = progress.done.filter((id) => !reopened.includes(id));
     if (Object.keys(fromFlags).length) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
-      if (machine.profileDir) await saveAnswers(machine.profileDir, { settings: fromFlags }, { push: true });
-      else await remember();
+      await remember();
     }
   } catch (error) {
     if (!(error instanceof FlagError)) throw error;
@@ -59,12 +74,11 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       await remember();
     },
   };
-  const box: Machine = { ...realMachine, ...options.machine };
   const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive };
   const addTeamSources = async () => {
     for (const ref of await memberSources(box)) {
       if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
-      const fetched = await (options.fetchSource ?? fetchSource)(ref, sourceCache(options.home));
+      const fetched = await fetchTeam(ref);
       if ("error" in fetched) {
         terminal.print(`  · You are in the ${ref.repo.split("/")[0]} org, but its pack could not be fetched (${fetched.error}). Setup goes on without it.`);
         continue;

@@ -52,7 +52,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * devbox whose sign-ins work the same way; Claude there signs in when its
  * foreground sign-in runs.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>> } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number }> = [];
@@ -84,6 +84,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       if (remote !== undefined) return box(remote);
       const line = command.join(" ");
       if (line.startsWith("gh auth status")) return ghStatus("github", started.has("github") ? scopes : (options.scopes ?? scopes));
+      if (line === "gh auth setup-git") return result(true);
       if (line.startsWith("gh api user/memberships/orgs/")) return options.org ? result(true, "active\n") : result(false, "Not Found");
       if (line === "claude auth status") return result(passes("claude"), JSON.stringify({ loggedIn: passes("claude") }));
       if (line.startsWith("codex exec")) return result(passes("chatgpt"), "ok");
@@ -91,7 +92,6 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       if (line === "hogli devbox:status") return result(devbox);
       if (line === "hogli devbox:start") return (devbox = true), result(true, "up");
       if (line === "gh api user --jq .login") return result(true, "nora\n");
-      if (line === "gh auth setup-git") return result(true);
       if (line.startsWith("gh repo view ")) return result(existsSync(githubRepo(home, command[3]!)), "");
       if (line.startsWith("gh repo create ")) {
         const bare = githubRepo(home, command[3]!);
@@ -106,8 +106,10 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       const remote = onBox(command);
       const word = (remote ?? command.join(" ")).split(" ")[0];
       const name = word === "gh" ? "github" : word === "claude" ? "claude" : word === "codex" ? "chatgpt" : word === "t3" ? "t3" : "coder";
-      started.add((remote === undefined ? name : `box:${name}`) as SignInName);
-      return { stop: () => {} };
+      const signIn = (remote === undefined ? name : `box:${name}`) as SignInName;
+      started.add(signIn);
+      const exit = options.exits?.[signIn];
+      return { stop: () => {}, exited: exit === undefined ? new Promise<number>(() => {}) : Promise.resolve(exit) };
     },
     async run(command, run = {}) {
       runs.push({ command, input: run.input ?? false });
