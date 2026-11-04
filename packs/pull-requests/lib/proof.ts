@@ -292,7 +292,9 @@ export async function unfinishedFleetReview(home: string, identity: ProofIdentit
     const directory = join(reviews, name);
     const reservation = await readJson<Reservation | undefined>(join(directory, "round.json"), undefined);
     const finished = await access(join(directory, "findings.md")).then(() => true, () => false);
-    if (reservation?.capturedBy === "fleet" && reservation.commit === identity.commit && !finished) return { reservation, directory };
+    if (reservation?.capturedBy !== "fleet" || reservation.commit !== identity.commit || finished) continue;
+    if (reservation.scope !== "full" && !reservation.base) { await rm(directory, { recursive: true, force: true }); continue; }
+    return { reservation, directory };
   }
   return undefined;
 }

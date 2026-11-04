@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { authorOf, finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewRecords, roundId, saveProof, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
 import { askModel, family, familyOf, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
@@ -215,10 +216,12 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
     : await reserveFleetReview(options, head, context);
   const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
   const pr = pullRequestDetails(head, run);
-  const rules = reviewRules(changedFilesOf(from, head.commit, run), mergeBase(head, run), run);
+  const rules = reviewRules(changedFilesOf(from, head.commit, run), baseTip(head, run), run);
   const diff = diffOf(from, head.commit, run);
-  const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules });
-  const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills")] }, env, limit);
+  const diffFile = join(reserved.directory, "diff.patch");
+  await writeFile(diffFile, diff, { mode: 0o600 });
+  const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, diffFile, crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules });
+  const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory] }, env, limit);
   const label = reserved.round === "final" ? "The final read" : `Round ${reserved.round}`;
   if (!answer.ok) throw new Error(`The reviewer ${answer.model} gave no findings (${answer.cause}). ${label} stays reserved; run fleet proof review again to retry it`);
   const findings = [answer.text.trim(), anchorCheck(answer.text, diff, await reviewRecords(home, head))].filter(Boolean).join("\n\n");
@@ -230,6 +233,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
 
 async function reserveFleetReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
   const scope = options.get("--scope") ?? "full";
+  if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
   const reserved = await startReview(context.home, head, { scope, base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
   return { ...reserved, scope, base };
@@ -354,6 +358,14 @@ function mergeBase(identity: ProofIdentity, run: Run) {
     if (result.code === 0) return result.stdout.trim();
   }
   throw new Error(`Cannot find where ${identity.repository}#${identity.pr} branched from its base here. Fetch the base branch from a remote of ${identity.repository}`);
+}
+
+function baseTip(identity: ProofIdentity, run: Run) {
+  for (const ref of baseRefs(identity, run)) {
+    const result = run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+    if (result.code === 0) return result.stdout.trim();
+  }
+  throw new Error(`Cannot find the base branch of ${identity.repository}#${identity.pr} here. Fetch it from a remote of ${identity.repository}`);
 }
 
 function changedFilesOf(from: string, to: string, run: Run) {

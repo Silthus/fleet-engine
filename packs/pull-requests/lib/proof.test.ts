@@ -841,7 +841,7 @@ test("on the both plan, review is cross-family: the review row reads Claude's co
   await pr.fleet("require", "--repo", "example/product", "--pr", "43", "--none", "--reason", "docs only", "--author", "gpt");
   const claude = recordingModel(pr, "claude", "No findings.");
   expect((await pr.fleet("review", "--repo", "example/product", "--pr", "43")).code).toBe(0);
-  expect(claude.calls()).toEqual([expect.stringMatching(/^-p --model review-codex-model --effort high .*--no-session-persistence --add-dir \S+\/\.agents\/skills$/)]);
+  expect(claude.calls()).toEqual([expect.stringMatching(/^-p --model review-codex-model --effort high .*--no-session-persistence --add-dir \S+\/\.agents\/skills --add-dir \S+\/43\/reviews\/1$/)]);
 });
 
 test("on a single plan, the reviewer is a fresh session of that provider, whatever family wrote the PR", async () => {
@@ -862,4 +862,49 @@ test("on a single plan, the reviewer is a fresh session of that provider, whatev
   expect(claude.calls()).toHaveLength(2);
   expect(claude.calls()[1]).toContain("--model solo-review-model");
   expect(claude.prompt()).toContain("from the model family that did not write it");
+});
+
+test("a diff over the prompt cap goes whole into a file in the round directory, and the reviewer may read it", async () => {
+  const pr = checkout();
+  pr.commit("big.txt", Array.from({ length: 20_000 }, (_, index) => `line ${index} of the generated fixture`).join("\n") + "\nthe last line\n");
+  pr.env.CLAUDE_CODE_SESSION_ID = undefined;
+  const target = ["--repo", "example/product", "--pr", "43"];
+  await pr.fleet("require", ...target, "--none", "--reason", "docs only", "--author", "gpt");
+  const claude = recordingModel(pr, "claude", "No findings.");
+
+  expect((await pr.fleet("review", ...target)).code).toBe(0);
+  const round = join(pr.home, ".local/state/fleet/proof/example/product/43/reviews/1");
+  expect(readFileSync(join(round, "diff.patch"), "utf8")).toContain("+the last line");
+  expect(claude.prompt()).toContain(`The full diff is in ${join(round, "diff.patch")}`);
+  expect(claude.prompt()).toContain("[cut at 300000 characters");
+  expect(claude.prompt()).not.toContain("git diff");
+  expect(claude.calls()[0]).toContain(`--add-dir ${round}`);
+});
+
+test("review checks --base before it reserves a round, and a retry recovers a reservation without a review", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "new\n");
+  const reviewed = await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", "No findings.\n");
+  const head = pr.commit("feature.txt", "fixed\n");
+
+  await expect(pr.fleet("review", "--scope", "fixes")).rejects.toThrow("--scope fixes and --scope final need --base");
+  expect(existsSync(join(pr.pullRequest, "reviews/2"))).toBe(false);
+
+  mkdirSync(join(pr.pullRequest, "reviews/2"));
+  writeFileSync(join(pr.pullRequest, "reviews/2/round.json"), JSON.stringify({ repository: "example/product", pr: 42, commit: head, round: 2, scope: "fixes", capturedBy: "fleet" }));
+  expect((await pr.fleet("review", "--scope", "fixes", "--base", reviewed)).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/2/round.json"), "utf8"))).toMatchObject({ round: 2, base: reviewed, reviewer: expect.any(String) });
+});
+
+test("the reviewer gets REVIEW.md from the tip of the base branch, not from where the PR branched", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "greet the new member\n");
+  pr.advanceBase("REVIEW.md", "Flag every unchecked webhook signature.\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewer = fakeModel(pr, "REVIEWER", "No findings.\n");
+
+  expect((await pr.fleet("review")).code).toBe(0);
+  expect(reviewer.prompts().at(-1)!.split("<pr-title>")[0]).toContain("Flag every unchecked webhook signature.");
 });

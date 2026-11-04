@@ -1,5 +1,5 @@
 export type ReviewInput = {
-  scope: string; from: string; commit: string; diff: string; crossFamily: boolean;
+  scope: string; from: string; commit: string; diff: string; diffFile: string; crossFamily: boolean;
   title: string; body: string; rubric: string; references: string[]; reviewRules: string;
 };
 
@@ -14,7 +14,7 @@ export function reviewPrompt(input: ReviewInput) {
   const independence = input.crossFamily ? "from the model family that did not write it" : "in a fresh session, apart from the session that wrote it";
   return `You review a pull request as an independent reviewer ${independence}. Work read-only.
 
-Review the change ${range} (scope: ${input.scope}). The full diff is \`git diff ${range}\` in this checkout; read any file you need around it.
+Review the change ${range} (scope: ${input.scope}). The full diff is in ${input.diffFile}; the copy below is cut when it is long. Read any file of this checkout you need around it.
 
 Check, in order:
 1. Correctness: bugs, broken edge cases, data loss, races, and behavior the PR description promises but the code lacks.
