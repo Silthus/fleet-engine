@@ -107,6 +107,17 @@ test("--since lists the top-level threads the user wrote in since then, with the
   expect(reports[1].work).toEqual([{ id: "mcp:linked-done", title: "Thread mcp:linked-done", project: "Linked project", status: "completed", branch: "feature/done", pullRequests: [], messages: ["Ship it"] }]);
 });
 
+test("--since keeps a user message longer than one read whole", async () => {
+  const long = "y".repeat(60_000);
+  const t3 = await stub({ ...fixture(), tools: linkedTools([
+    linkedThread("mcp:linked-long", { status: "completed", updatedAt: minutesAgo(10), items: [linkedItem("user_message", long, { itemId: "long-ask", updatedAt: minutesAgo(10) })] }),
+  ]) });
+  const reports = JSON.parse((await activity(t3, "--since", minutesAgo(150))).output);
+
+  expect(reports[1].work.map((work: { id: string; messages: string[] }) => [work.id, work.messages.map((message) => message.length)])).toEqual([["mcp:linked-long", [60_000]]]);
+  expect(reports[1].work[0].messages[0]).toBe(long);
+});
+
 test("a host reads one machine: a linked environment by label or id, or this one by name", async () => {
   const t3 = await stub(fixture());
 

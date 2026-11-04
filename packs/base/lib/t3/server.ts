@@ -6,7 +6,10 @@ import { platform } from "node:process";
 
 export type T3ServerCommand = { command: string; args: string[] };
 export type T3Server = { origin: string; wsUrl: string; cli: T3ServerCommand };
-export type T3CliResult = { status: number | null; stdout: string };
+export type T3CliResult = { status: number | null; stdout: string; stderr?: string; error?: string };
+export type SpawnT3Cli = (command: string, args: string[], options: { encoding: "utf8"; env: NodeJS.ProcessEnv; timeout: number }) => {
+  status: number | null; stdout: string; stderr: string; signal?: string | null; error?: Error & { code?: string };
+};
 export type RunT3Cli = (server: T3Server, args: string[]) => T3CliResult;
 
 const scriptArg = /^(\/.*?\.[cm]?js)(?:\s|$)/;
@@ -77,8 +80,23 @@ function scriptArgs(candidate: string): string[] {
   return match ? [match[1]!] : [];
 }
 
-export const runT3Cli: RunT3Cli = (server, argv) => {
-  const { command, args } = server.cli;
-  const env = args.length ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" } : process.env;
-  return spawnSync(command, [...args, ...argv], { encoding: "utf8", env });
-};
+const defaultCliTimeoutMs = 10_000;
+
+export function t3CliRunner({ timeoutMs = defaultCliTimeoutMs, spawn = spawnSync as SpawnT3Cli }: { timeoutMs?: number; spawn?: SpawnT3Cli } = {}): RunT3Cli {
+  return (server, argv) => {
+    const { command, args } = server.cli;
+    const env = args.length ? { ...process.env, ELECTRON_RUN_AS_NODE: "1" } : process.env;
+    const result = spawn(command, [...args, ...argv], { encoding: "utf8", env, timeout: timeoutMs });
+    const error = result.error?.code === "ETIMEDOUT" ? `timed out after ${timeoutMs} ms`
+      : result.error?.message ?? (result.status === null && result.signal ? `ended by ${result.signal}` : undefined);
+    return { status: result.status, stdout: result.stdout ?? "", ...(result.stderr ? { stderr: result.stderr } : {}), ...(error ? { error } : {}) };
+  };
+}
+
+export const runT3Cli: RunT3Cli = t3CliRunner();
+
+export function t3CliFailure(result: T3CliResult): string {
+  if (result.error) return result.error;
+  const stderr = result.stderr?.trim();
+  return `exit ${result.status}${stderr ? `: ${stderr}` : ""}`;
+}
