@@ -125,6 +125,10 @@ describe("fleet setup questions", () => {
     expect(changed.code).toBe(0);
     expect(pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "orchestration", "communication"], plan: "claude" });
     expect(changed.output).toContain("Set up this machine");
+
+    const same = await fleetSetup(home, ["--non-interactive", "--preset", "everyday", "--plan", "claude"]);
+    expect(same.code).toBe(0);
+    expect(same.output).not.toContain("Fleet setup ·");
   });
 
   test("refuses a pick that leaves a pack without a pack it needs", async () => {
