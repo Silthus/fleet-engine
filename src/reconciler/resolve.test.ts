@@ -144,6 +144,30 @@ describe("resolve", () => {
     expect(plan({ workflows: { "quality-loop": true } }, devbox).unanswered.map((setting) => setting.key)).toEqual(["orchestration.loopProject"]);
   });
 
+  test("keeps a setting that two workflows share while one of them is on", () => {
+    const loops = withPack({
+      schema: 1,
+      name: "loops",
+      summary: "Loops.",
+      settings: [{ key: "loops.project", question: "Which project?", type: "string" }],
+      workflows: [
+        { id: "night", name: "Night", sentence: "Runs at night.", default: true, settings: ["loops.project"] },
+        { id: "morning", name: "Morning", sentence: "Runs in the morning.", default: false, settings: ["loops.project"] },
+      ],
+    });
+    const result = plan({ packs: ["loops"], settings: { "loops.project": "fleet" } }, mac, [engine, loops]);
+    expect(result.settings["loops.project"]).toBe("fleet");
+    expect(plan({ packs: ["loops"] }, mac, [engine, loops]).unanswered.map((setting) => setting.key)).toEqual(["loops.project"]);
+    expect(plan({ packs: ["loops"], workflows: { night: false } }, mac, [engine, loops]).unanswered).toEqual([]);
+  });
+
+  test("keeps a setting that another pack's active workflow lists", () => {
+    const owner = withPack({ schema: 1, name: "owner", summary: "Owner.", settings: [{ key: "owner.project", question: "Which project?", type: "string" }], workflows: [{ id: "owned", name: "Owned", sentence: "Owned.", default: false, settings: ["owner.project"] }] });
+    const user = withPack({ schema: 1, name: "user", summary: "User.", workflows: [{ id: "borrowed", name: "Borrowed", sentence: "Borrowed.", default: true, settings: ["owner.project"] }] });
+    const result = plan({ packs: ["owner", "user"] }, mac, [engine, owner, user]);
+    expect(result.unanswered.map((setting) => setting.key)).toEqual(["owner.project"]);
+  });
+
   test("limits items by os and role", () => {
     expect(plan({ packs: ["posthog"] }).human.map((step) => step.id)).toEqual(["coder"]);
     expect(plan({ packs: ["posthog"] }, devbox).human).toEqual([]);
