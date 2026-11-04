@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join, relative, resolve as resolvePath, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { basename, isAbsolute, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import type {
   AvailableSource,
   DesiredFile,
@@ -19,15 +19,20 @@ export class ResolveError extends Error {}
 
 export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox"];
 
+/** Guide names the engine writes itself. */
+const engineGuides = ["skill-settings"];
+
 type Candidate = LoadedPack & { source: AvailableSource };
 type Scoped = { on?: Os[]; roles?: MachineFile["role"][]; workflow?: string };
 
 export function resolve(profile: Profile, machine: MachineFile, sources: FetchedSource[]): Plan {
   const os: Os = machine.role === "mac" ? "darwin" : "linux";
   const { order, packs } = choosePacks(profile, sources);
+  checkUniqueIds(order);
   const plan: Plan = {
     machine,
     os,
+    ai: profile.plan,
     packs,
     workflows: [],
     files: [],
@@ -65,6 +70,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
     }
   }
   for (const entry of profile.overrides?.config ?? []) {
+    if (!fits("profile", entry, `config ${entry.provider}:${entry.key}`)) continue;
     const owner = `${entry.provider}:${entry.key}`;
     plan.config = plan.config.filter((item) => `${item.provider}:${item.key}` !== owner);
     plan.owners[owner] = "profile";
@@ -74,9 +80,39 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   const settings = activeSettings(order, active);
   plan.settings = settingValues(settings, profile.settings);
   plan.unanswered = settings.filter((setting) => plan.settings[setting.key] === undefined && !setting.optional && setting.ask !== "never");
-  plan.files = [...instructionFiles(order, profile), ...guideFiles(order, settings, plan.settings), ...skillFiles(order, profile, sources, plan)];
+  plan.jobs = plan.jobs.map((job) => {
+    const project = job.task && plan.settings[job.task.projectSetting];
+    return job.task && project !== undefined ? { ...job, task: { ...job.task, project: String(project) } } : job;
+  });
+  plan.files = checkTargets([...instructionFiles(order, profile), ...guideFiles(order, settings, plan.settings), ...skillFiles(order, profile, sources, plan)]);
   plan.commands = packCommands(order);
   return plan;
+}
+
+/** Workflow and job ids are global: the profile and the Jobs adapter key on them alone. */
+function checkUniqueIds(order: Candidate[]) {
+  for (const kind of ["workflows", "jobs"] as const) {
+    const seen = new Map<string, string>();
+    for (const { manifest } of order) {
+      for (const { id } of manifest[kind] ?? []) {
+        const other = seen.get(id);
+        if (other) throw new ResolveError(`${kind === "jobs" ? "job" : "workflow"} ${id} is declared by both ${other} and ${manifest.name}`);
+        seen.set(id, manifest.name);
+      }
+    }
+  }
+}
+
+/** Every target stays inside the home directory, and no two files share one. */
+function checkTargets(files: DesiredFile[]) {
+  const seen = new Set<string>();
+  for (const { target } of files) {
+    const clean = normalize(target);
+    if (isAbsolute(target) || clean !== target || clean === ".." || clean.startsWith(`..${sep}`)) throw new ResolveError(`target ${target} leaves the home directory`);
+    if (seen.has(target)) throw new ResolveError(`two files want ${target}`);
+    seen.add(target);
+  }
+  return files;
 }
 
 function choosePacks(profile: Profile, sources: FetchedSource[]) {
@@ -118,6 +154,8 @@ function choosePacks(profile: Profile, sources: FetchedSource[]) {
     return true;
   };
   for (const name of ["base", ...profile.packs.filter((name) => name !== "base")]) visit(name);
+  const base = packs.find((pack) => pack.name === "base");
+  if (!base?.available) throw new ResolveError(`the base pack is not available: ${base?.reason ?? "missing"}`);
   return { order, packs };
 }
 
@@ -172,6 +210,7 @@ function guideFiles(order: Candidate[], settings: Array<PackSetting & { pack: st
   const sections = new Map<string, string[]>();
   for (const { manifest, dir } of order) {
     for (const guide of manifest.guides ?? []) {
+      if (engineGuides.includes(guide.guide)) throw new ResolveError(`${manifest.name}: guide ${guide.guide} is written by the engine`);
       const text = read(dir, guide.path, manifest.name).trim();
       if (guide.section) {
         sections.set(guide.guide, [...(sections.get(guide.guide) ?? []), `## ${guide.section}\n\n${text}`]);
@@ -236,6 +275,7 @@ function packCommands(order: Candidate[]) {
     if (!existsSync(root)) continue;
     for (const file of readdirSync(root).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts")).sort()) {
       const name = file.slice(0, -3);
+      within(root, file, manifest.name);
       if (engineCommands.includes(name)) throw new ResolveError(`${manifest.name}: command ${name} is reserved by the engine`);
       const other = commands[name];
       if (other) throw new ResolveError(`command ${name} is shipped by both ${other.pack} and ${manifest.name}`);
@@ -249,10 +289,15 @@ function read(dir: string, path: string, pack: string) {
   return readFileSync(within(dir, path, pack), "utf8");
 }
 
+/** Resolves path under root, following symlinks, and refuses anything that ends up outside root. */
 function within(root: string, path: string, pack: string) {
   const full = resolvePath(root, path);
-  const rel = relative(resolvePath(root), full);
-  if (!rel || rel === ".." || rel.startsWith(`..${sep}`)) throw new ResolveError(`${pack}: path ${path} leaves its pack`);
+  const leaves = (from: string, to: string) => {
+    const rel = relative(from, to);
+    return !rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  };
+  if (leaves(resolvePath(root), full)) throw new ResolveError(`${pack}: path ${path} leaves its pack`);
+  if (existsSync(full) && leaves(realpathSync(root), realpathSync(full))) throw new ResolveError(`${pack}: path ${path} links outside its pack`);
   return full;
 }
 

@@ -14,7 +14,7 @@
   ],
   "jobs": [
     { "id": "quality-loop", "command": [], "schedule": { "every": "1d" }, "runner": "t3", "workflow": "quality-loop",
-      "task": { "id": "fleet:quality-loop", "prompt": "Run the quality-loop skill.", "projectSetting": "orchestration.loopProject", "modelRole": "implementation", "workspaceStrategy": "worktree", "runtimeMode": "full-access", "schedule": "0 9 * * 1-5" } },
+      "task": { "prompt": "Run the quality-loop skill.", "projectSetting": "orchestration.loopProject", "modelRole": "implementation", "workspaceStrategy": "worktree", "runtimeMode": "full-access" } },
     { "id": "box-pool", "command": ["fleet", "box", "pool", "--hub", "hub-tunnel"], "schedule": { "every": "15m" }, "workflow": "boxes" }
   ]
 }

@@ -40,6 +40,8 @@ export type T3Task = {
   modelRole: string;
   workspaceStrategy: "worktree";
   runtimeMode: "full-access" | "auto" | "approval-required";
+  /** Set by resolve from the projectSetting's value; packs leave it out. */
+  project?: string;
 };
 
 export type PackJob = {
@@ -135,6 +137,7 @@ export type ResolvedPack = { name: string; source: string; ref: string; availabl
 export type Plan = {
   machine: MachineFile;
   os: Os;
+  ai: AiPlan;
   packs: ResolvedPack[];
   workflows: Array<{ id: string; pack: string; active: boolean; reason?: string }>;
   files: DesiredFile[];

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import type { AvailableSource, FetchedSource, MachineFile, MachineRole, PackManifest, Plan, Profile } from "../pack/types.ts";
@@ -43,7 +43,7 @@ function file(result: Plan, target: string) {
   return found.content;
 }
 
-function withPack(manifest: PackManifest, files: Record<string, string> = {}): FetchedSource {
+function withPack(manifest: PackManifest, files: Record<string, string> = {}): AvailableSource {
   const dir = temp.make("source-");
   const packDir = join(dir, "packs", manifest.name);
   mkdirSync(packDir, { recursive: true });
@@ -191,5 +191,68 @@ describe("resolve without the hub pack", () => {
       expect(hubFree(result)).toBe(true);
     }
     expect(hubFree(plan({ packs: ["hub", "orchestration", "pull-requests"] }, devbox))).toBe(false);
+  });
+});
+
+describe("resolve guards", () => {
+  const pack = (name: string, fields: Partial<PackManifest> = {}): PackManifest => ({ schema: 1, name, summary: `${name}.`, ...fields });
+
+  test("keeps every target inside the home directory", () => {
+    const escape = withPack(pack("escape", { guides: [{ guide: "../../../../tmp/escape", path: "g.md" }] }), { "g.md": "x" });
+    expect(() => plan({ packs: ["escape"] }, mac, [engine, escape])).toThrow("target .agents/guides/../../../../tmp/escape.md leaves the home directory");
+  });
+
+  test("refuses instructions, skills, and commands that link outside their pack", () => {
+    const outside = temp.make("outside-");
+    writeFileSync(join(outside, "secret.md"), "outside\n");
+    mkdirSync(join(outside, "skill"));
+    const linked = (manifest: PackManifest, link: string, target: string) => {
+      const source = withPack(manifest);
+      const packDir = join(source.dir, "packs", manifest.name);
+      mkdirSync(join(packDir, link, ".."), { recursive: true });
+      symlinkSync(target, join(packDir, link));
+      return source;
+    };
+    const cases: Array<[PackManifest, string, string]> = [
+      [pack("rules", { instructions: "rules.md" }), "rules.md", join(outside, "secret.md")],
+      [pack("skills", { skills: ["skills/leak"] }), "skills/leak", join(outside, "skill")],
+      [pack("tools"), "commands/leak.ts", join(outside, "secret.md")],
+    ];
+    for (const [manifest, link, target] of cases) {
+      expect(() => plan({ packs: [manifest.name] }, mac, [engine, linked(manifest, link, target)])).toThrow("links outside its pack");
+    }
+  });
+
+  test("rejects a workflow id or a job id that two packs declare", () => {
+    const sync = { id: "sync", name: "Sync", sentence: "Sync.", default: true };
+    const one = withPack(pack("one", { workflows: [{ ...sync, needs: ["hub"] }] }));
+    const two = withPack(pack("two", { workflows: [sync] }));
+    expect(() => plan({ packs: ["one", "two"] }, mac, [engine, one, two])).toThrow("workflow sync is declared by both one and two");
+    const prune = withPack(pack("prune", { jobs: [{ id: "prune", command: ["true"], schedule: { every: "1d" } }] }));
+    expect(() => plan({ packs: ["prune"] }, mac, [engine, prune])).toThrow("job prune is declared by both base and prune");
+  });
+
+  test("keeps the AI plan and resolves a T3 job's project", () => {
+    expect(plan({ plan: "claude" }).ai).toBe("claude");
+    const result = plan({ workflows: { "quality-loop": true }, settings: { "orchestration.tracker": "me/maps", "orchestration.loopProject": "chosen-project" } }, devbox);
+    expect(result.jobs.find((job) => job.id === "quality-loop")?.task?.project).toBe("chosen-project");
+  });
+
+  test("throws when the base pack is not available", () => {
+    const base = engine.packs.find((item) => item.manifest.name === "base");
+    if (!base) throw new Error("no base fixture");
+    const broken: AvailableSource = { ...engine, packs: [{ ...base, manifest: { ...base.manifest, requires: ["hub"] } }] };
+    expect(() => resolve(profile({ packs: [] }), mac, [broken])).toThrow("the base pack is not available: requires hub");
+  });
+
+  test("reserves the skill-settings guide for the engine", () => {
+    const rival = withPack(pack("rival", { guides: [{ guide: "skill-settings", path: "g.md" }] }), { "g.md": "x" });
+    expect(() => plan({ packs: ["rival"] }, mac, [engine, rival])).toThrow("rival: guide skill-settings is written by the engine");
+  });
+
+  test("drops a profile config override whose workflow is off", () => {
+    const result = plan({ workflows: { prune: false }, overrides: { config: [{ provider: "claude", key: "model", value: "x", workflow: "prune" }] } });
+    expect(result.config.some((entry) => entry.key === "model")).toBe(false);
+    expect(result.dropped).toContainEqual({ pack: "profile", item: "config claude:model", reason: "workflow prune is off" });
   });
 });
