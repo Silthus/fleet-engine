@@ -61,8 +61,21 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, jobs } }))).rejects.toThrow("job prune runs on t3 but has no task");
   });
 
+  test("rejects a step that waits for a human step the pack does not declare", async () => {
+    const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"] }];
+    expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder" }] } }))).resolves.toHaveLength(1);
+    expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "github" }] } }))).rejects.toThrow("steps start: after must name a human step of this pack");
+  });
+
+  test("rejects a step that runs on machines its human step does not", async () => {
+    const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"], on: ["darwin"] }];
+    expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder", on: ["darwin"] }] } }))).resolves.toHaveLength(1);
+    expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder" }] } }))).rejects.toThrow("steps start: runs where its human step coder does not; give it the same on");
+  });
+
   test("rejects malformed nested items with a clear error", async () => {
     const setting = base.settings[0];
+    const row = { role: "review", work: "Review", provider: "codex", model: "m", effort: "high" };
     const task = { prompt: "Run the loop.", projectSetting: "base.project", modelRole: "worker", workspaceStrategy: "worktree", runtimeMode: "auto" };
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ settings: [{ ...setting, default: "two" }] }, "settings base.heavySlots: default does not fit type number"],
@@ -71,6 +84,12 @@ describe("loadPacks", () => {
       [{ jobs: [{ ...base.jobs[0], runner: "t3", task: { ...task, schedule: "daily" } }] }, "drop task.id and task.schedule"],
       [{ steps: [null] }, "steps[0] must be an object"],
       [{ guides: [{ guide: "../../escape", path: "g.md" }] }, "guide must be lowercase words joined by dashes"],
+      [{ steps: [{ id: "cli", run: ["true"], plans: ["gemini"] }] }, "steps cli: plans must list claude, codex, or both"],
+      [{ files: [{ path: "hook.ts" }] }, "files [0]: needs a path and a target"],
+      [{ files: [{ path: "hook.ts", target: ".hook.ts", workflow: "nope" }] }, "files .hook.ts names unknown workflow nope"],
+      [{ models: { gemini: [] } }, "models must map claude, codex, or both to rows"],
+      [{ models: { claude: [{ role: "review", work: "Review", provider: "claude", model: "m", effort: "huge" }] } }, "each row needs a role, work"],
+      [{ models: { claude: [row, row] } }, "models claude: role review is listed twice"],
     ];
     for (const [fields, message] of cases) {
       expect(loadPacks(sourceWith({ base: { ...base, ...fields } }))).rejects.toThrow(message);

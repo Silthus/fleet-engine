@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
+import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
 
 export class ProfileError extends Error {}
 
@@ -62,7 +63,9 @@ export async function loadMachine(home: string): Promise<MachineFile | undefined
 export async function saveMachine(home: string, machine: MachineFile) {
   const path = machinePath(home);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(machine, null, 2) + "\n");
+  const partial = `${path}.${process.pid}.partial`;
+  await writeFile(partial, JSON.stringify(machine, null, 2) + "\n");
+  await rename(partial, path);
 }
 
 async function readJson(path: string): Promise<Record<string, unknown> | undefined> {
@@ -96,6 +99,14 @@ function checkProfile(file: Record<string, unknown>, path: string): ProfileFile 
   if (!isRecord(file.settings) || !Object.values(file.settings).every((value) => ["string", "number", "boolean"].includes(typeof value))) fail("settings must map keys to text, numbers, or true and false");
   if (!isRecord(file.workflows) || !Object.values(file.workflows).every((value) => typeof value === "boolean")) fail("workflows must map ids to true or false");
   if (file.overrides !== undefined && !isRecord(file.overrides)) fail("overrides must be an object");
+  const config = isRecord(file.overrides) ? file.overrides.config : undefined;
+  if (config !== undefined && !Array.isArray(config)) fail("overrides.config must list config entries");
+  ((config as unknown[] | undefined) ?? []).forEach((entry, index) => {
+    const problem = configEntryProblem(entry);
+    if (problem) fail(`overrides.config[${index}]: ${problem}`);
+  });
+  const models = isRecord(file.overrides) ? file.overrides.models : undefined;
+  if (models !== undefined && !(Array.isArray(models) && models.every(isModelRow))) fail("overrides.models must list rows with a role, work, a claude or codex provider, a model, and an effort");
   return file as ProfileFile;
 }
 
@@ -106,6 +117,7 @@ function checkMachine(file: Record<string, unknown>, path: string): MachineFile 
   if (file.schema !== 1) fail(`unknown schema ${String(file.schema)}`);
   if (!roles.includes(file.role as string)) fail("role must be mac, devbox, linux, or hub");
   if (file.profileDir !== undefined && typeof file.profileDir !== "string") fail("profileDir must be a path");
+  if (file.devboxes !== undefined && !(Array.isArray(file.devboxes) && file.devboxes.every((host) => typeof host === "string"))) fail("devboxes must list SSH hosts");
   const setup = file.setup;
   if (setup !== undefined && (!isRecord(setup) || !Array.isArray(setup.done) || !setup.done.every((step) => typeof step === "string") || (setup.draft !== undefined && !isRecord(setup.draft)))) {
     fail("setup needs a done list and an optional draft object");

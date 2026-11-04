@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { startT3Stub, type T3Fixture, type T3Stub } from "../../base/lib/t3/testing.ts";
+import { startT3Stub, ToolRefusal, type T3Fixture, type T3Stub } from "../../base/lib/t3/testing.ts";
 import { linkedEnvironment, linkedItem, linkedThread, linkedTools, minutesAgo, now, shellThread } from "./testing.ts";
 import { needsHuman, runLanes } from "./lanes.ts";
 import type { Discussion, IssueNode } from "./wayfinder.ts";
@@ -122,6 +122,42 @@ cat "$(dirname "$0")/\${kind:-discussion}-$number.json"
   expect(stderr).toBe("");
   expect(stdout).toBe(`${[expected(hostname())[0], expected(hostname())[1], expected(hostname())[5]].join("\n")}\n`);
   expect(code).toBe(1);
+});
+
+async function laneReport(fixture: T3Fixture, laneTickets: Ticket[]) {
+  const t3 = await stub(fixture);
+  const lines: string[] = [];
+  const laneMap = { ...map, childCount: laneTickets.length, children: laneTickets.map(issue) };
+  const code = await runLanes(["acme/maps#1"], {
+    home: t3.home, host: "this-box", now, print: (line) => lines.push(line),
+    fetchIssue: async (_owner, _repo, number) => (number === 1 ? laneMap : issue(laneTickets.find((ticket) => ticket.number === number)!)),
+    fetchDiscussion: async (_owner, _repo, number) => discussion(laneTickets.find((ticket) => ticket.number === number)!),
+  });
+  return { code, output: lines.join("\n"), t3 };
+}
+
+test("a linked environment that fails to read a lane is named as not answering, and the lane is not called gone", async () => {
+  const tools = linkedTools([linkedThread("mcp:linked-flaky", { status: "completed" })]);
+  const { code, output } = await laneReport({ shell: { projects: [], threads: [] }, links: [linkedEnvironment], tools(name, args) {
+    if (name === "t3_thread_read") throw new ToolRefusal("orchestration_error", "The linked environment answered HTTP 503.");
+    return tools(name, args);
+  } }, [{ number: 2, thread: "mcp:linked-flaky" }]);
+
+  expect(output).toBe("devbox-2 did not answer: The linked environment answered HTTP 503.");
+  expect(code).toBe(1);
+});
+
+test("a lane's final message longer than one read still shows the ask on its last line", async () => {
+  const long = `${"x".repeat(60_000)}\nNEEDS_HUMAN: pick a region`;
+  const { output, t3 } = await laneReport({ shell: { projects: [], threads: [] }, links: [linkedEnvironment], tools: linkedTools([
+    linkedThread("mcp:linked-long", { status: "completed", itemCount: 60, items: [
+      ...Array.from({ length: 58 }, (_, index) => linkedItem("tool_call", `step ${index}`, { itemId: `step-${index}` })),
+      linkedItem("user_message", "Go", { itemId: "ask" }), linkedItem("assistant_message", long, { itemId: "final" }),
+    ] }),
+  ]) }, [{ number: 2, thread: "mcp:linked-long" }]);
+
+  expect(output).toBe("Lanes of acme/maps#1 that need attention:\n  #2 task needs the human: pick a region. Ask them with the question tool, then send the answer to its thread. Thread mcp:linked-long on devbox-2.");
+  expect(t3.toolCalls.filter(({ name, args }) => name === "t3_thread_read" && args.itemId).map(({ args }) => [args.itemId, args.textOffset])).toEqual([["final", 50_000]]);
 });
 
 test("fleet lanes refuses a bad map or stall, and says when no lane needs attention", async () => {

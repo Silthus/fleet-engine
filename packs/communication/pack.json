@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "name": "communication",
+  "summary": "Agents write in your voice, give short updates, and share plans and previews as links.",
+  "day": "Agents draft messages, pull request descriptions, and docs the way you write them. Plans and running apps reach other people as links.",
+  "cost": "No extra usage beyond the drafts you ask for.",
+  "risk": "Shared plans are secret gists: anyone with the link can read them.",
+  "instructions": "AGENTS.md",
+  "skills": [
+    "skills/writing-voice",
+    "agent-skills:communication/share-plan",
+    "agent-skills:communication/explain-diff",
+    "agent-skills:communication/share-preview"
+  ],
+  "workflows": [
+    {
+      "id": "voice",
+      "name": "Your voice",
+      "default": true,
+      "sentence": "Agents write messages, pull request descriptions, and docs in your voice, from a skill you own.",
+      "moment": {
+        "time": "11:00",
+        "title": "A draft that sounds like you",
+        "body": "You ask for a reply to a long thread. The agent drafts it in your voice, with the point first, and you send it with one edit.",
+        "words": ["skill"]
+      }
+    },
+    {
+      "id": "updates",
+      "name": "Updates and shared plans",
+      "default": true,
+      "sentence": "Agents give updates with the outcome first, and share plans and reports as one link. Type /explain-diff to have a change explained.",
+      "moment": {
+        "time": "16:30",
+        "title": "One link for the team",
+        "body": "You ask for the plan as a page. The agent publishes it to an unlisted link that you paste into the team channel.",
+        "words": ["agent"]
+      }
+    },
+    {
+      "id": "previews",
+      "name": "Previews",
+      "default": true,
+      "needs": ["coder"],
+      "sentence": "A running app or UI change on your devbox opens as a private link on any of your devices.",
+      "moment": {
+        "time": "14:00",
+        "title": "Try it on your phone",
+        "body": "The agent finishes a UI change on the devbox and sends you a private preview link. You open it on your phone before you read the diff.",
+        "words": ["devbox"]
+      }
+    }
+  ]
+}
