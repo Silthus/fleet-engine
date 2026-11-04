@@ -7,6 +7,9 @@ export type SettingValue = string | number | boolean;
 export const needValues = ["gh", "devbox", "always-on devbox", "hub", "coder", "posthog-org"] as const;
 export type Need = (typeof needValues)[number];
 
+export type Preset = { id: string; name: string; blurb: string; packs: string[]; workflows: Record<string, boolean> };
+export type Concept = { word: string; note: string; audience?: Audience };
+
 export type PackSetting = {
   key: string;
   question: string;
@@ -44,38 +47,40 @@ export type T3Task = {
   project?: string;
 };
 
-export type PackJob = {
+/** Limits an item to some machines, plans, or one workflow. An item without a field fits every value. */
+export type Scope = { on?: Os[]; roles?: MachineRole[]; plans?: AiPlan[]; workflow?: string };
+
+export type PackJob = Scope & {
   id: string;
   command: string[];
   schedule: { every: "5m" | "15m" | "1h" | "1d"; at?: string };
-  on?: Os[];
-  roles?: MachineRole[];
   runner?: "os" | "t3";
   task?: T3Task;
-  workflow?: string;
 };
 
-export type HumanStep = {
+export type HumanStep = Scope & {
   id: string;
   say: string;
   command?: string;
   probe: string[];
-  on?: Os[];
-  roles?: MachineRole[];
-  workflow?: string;
 };
 
-export type PackStep = {
+export type PackStep = Scope & {
   id: string;
   run: string[];
   check?: string[];
-  on?: Os[];
-  roles?: MachineRole[];
-  workflow?: string;
 };
 
 export type Provider = "claude" | "codex" | "t3";
-export type ConfigEntry = { provider: Provider; key: string; value: unknown; workflow?: string };
+export type ConfigEntry = Scope & { provider: Provider; key: string; value: unknown };
+
+/** A file from the pack, linked at target under the home directory. */
+export type PackFile = Scope & { path: string; target: string };
+
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** One row of the model table: the model and effort agents use for one kind of work. */
+export type ModelRow = { role: string; work: string; provider: "claude" | "codex"; model: string; effort: Effort };
 
 export type GuideEntry = { guide: string; section?: string; path: string };
 
@@ -98,9 +103,11 @@ export type PackManifest = {
   human?: HumanStep[];
   steps?: PackStep[];
   checks?: PackCheck[];
+  files?: PackFile[];
+  models?: Partial<Record<AiPlan, ModelRow[]>>;
 };
 
-export type PackCheck = { id: string; run: string[]; say: string; on?: Os[]; roles?: MachineRole[]; workflow?: string };
+export type PackCheck = Scope & { id: string; run: string[]; say: string };
 
 export type SourceRef = { name: string; repo: string; ref: string };
 
@@ -119,7 +126,7 @@ export type ProfileFile = {
   settings: Record<string, SettingValue>;
   workflows: Record<string, boolean>;
   devboxes?: string[];
-  overrides?: { config?: ConfigEntry[]; skills?: string[] };
+  overrides?: { config?: ConfigEntry[]; skills?: string[]; models?: ModelRow[] };
 };
 
 export type Profile = ProfileFile & { dir: string; aboutMe?: string };
@@ -150,6 +157,7 @@ export type Plan = {
   steps: Array<Owned<PackStep>>;
   checks: Array<Owned<PackCheck>>;
   commands: Record<string, { pack: string; path: string }>;
+  models: ModelRow[];
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];
   dropped: Array<{ pack: string; item: string; reason: string }>;

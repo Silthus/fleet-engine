@@ -19,7 +19,7 @@ function profileDir(packs: string[] = [], aboutMe?: string) {
 
 async function fleet(args: string[], home: string, engineRoot = repoRoot) {
   const lines: string[] = [];
-  const code = await main(args, { home, engineRoot, platform: "linux", print: (line) => lines.push(line) });
+  const code = await main(args, { home, engineRoot, platform: "linux", print: (line) => lines.push(line), run: async () => 0 });
   return { code, output: lines.join("\n") };
 }
 
@@ -50,6 +50,21 @@ describe("fleet apply", () => {
     expect(readFileSync(join(home, ".codex/AGENTS.md"), "utf8")).toBe(readFileSync(join(home, ".agents/AGENTS.md"), "utf8"));
     expect(JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"))).toEqual({ schema: 1, role: "linux", profileDir: profile });
     expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
+  });
+
+  test("removes a stale proxy URL from Claude Code's settings, and doctor sees it first", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude/settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317", ANTHROPIC_AUTH_TOKEN: "proxy-key" }, model: "opus" }));
+    const profile = profileDir();
+    await fleet(["apply", "--profile", profile, "--dry-run"], home);
+    const doctor = await fleet(["doctor", "--profile", profile], home);
+    expect(doctor.output).toMatch(/Fix: \.claude\/settings\.json needs an update: .*remove env\.ANTHROPIC_BASE_URL, env\.ANTHROPIC_AUTH_TOKEN\./);
+    const result = await fleet(["apply", "--profile", profile], home);
+    expect(result.output).toContain("replace .claude/settings.json");
+    const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+    expect(settings.env).toBeUndefined();
+    expect(settings.model).toBe("opus");
   });
 
   test("keeps an unmanaged file and a local edit, and says so", async () => {
@@ -86,7 +101,7 @@ describe("fleet apply", () => {
   test("--dry-run previews without writing machine state", async () => {
     const home = temp.make("home-");
     const result = await fleet(["apply", "--dry-run", "--profile", profileDir()], home);
-    expect(result.output).toContain("Preview: 4 changes to apply. Nothing was written.");
+    expect(result.output).toContain("Preview: 11 changes to apply. Nothing was written.");
     expect(readdirSync(home)).toEqual([]);
   });
 
