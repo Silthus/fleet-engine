@@ -5,7 +5,7 @@ import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import type { T3Tasks } from "../jobs/adapter.ts";
 import { sourceOutage } from "../provider-config/adapter.ts";
 import { withLock } from "../provider-config/store.ts";
-import { spawnRunner, type CommandRunner } from "../run.ts";
+import { isAccountHome, spawnRunner, type CommandRunner } from "../run.ts";
 import type { T3Rpc, T3Server } from "./port.ts";
 import { reconcileService } from "./service.ts";
 import { localT3Server } from "./session.ts";
@@ -37,7 +37,7 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
     async apply(plan, { home, dryRun, adopt }) {
       live = undefined;
       const result: AdapterResult = { actions: [], findings: [] };
-      if (!options.run && resolve(home) !== resolve(userInfo().homedir)) return result;
+      if (!options.run && !isAccountHome(home)) return result;
       const reconcile = async () => {
         if (plan.os === "linux") await reconcileService(run, user, dryRun, result);
         const settings = { adopt, dryRun, outage: sourceOutage(plan) };

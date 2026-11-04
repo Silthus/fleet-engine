@@ -422,6 +422,21 @@ describe("T3 adapter guards", () => {
     expect(existsSync(join(home, ".t3"))).toBe(false);
   });
 
+  test("still does nothing when a test points HOME at a temporary folder", async () => {
+    const home = temp.make("home-");
+    const server = fakeServer();
+    const saved = { HOME: process.env.HOME, PATH: process.env.PATH };
+    Object.assign(process.env, { HOME: home, PATH: "" });
+    try {
+      const report = await apply(plan("linux", base, [loop]), { home, adapters: [t3Adapter({ server: server.server })] });
+      expect(report).toMatchObject({ actions: [], findings: [] });
+      expect(server.calls).toEqual([]);
+      expect(existsSync(join(home, ".t3"))).toBe(false);
+    } finally {
+      Object.assign(process.env, saved);
+    }
+  });
+
   test("doctor reports each missing piece and writes nothing", async () => {
     const home = temp.make("home-");
     const { server, commands, adapter } = setup({}, { t3: false, service: "not installed" });
