@@ -89,6 +89,11 @@ async function reconcileIdentity(plan: Plan, signer: Signer, context: Context) {
 
 type Key = { fields?: string; write?: Write };
 
+async function agentHolds(run: CommandRunner, fields: string) {
+  const listed = await run(["ssh-add", "-L"]);
+  return listed.code === 0 && listed.stdout.split("\n").some((line) => keyFields(line) === fields);
+}
+
 async function signingKey(signer: Signer, { home, dryRun, run, result, engineRoot, host }: Context): Promise<Key | null> {
   if (signer.name === "coder") {
     const printed = await run(["/bin/sh", coderScript(engineRoot), "public"]);
@@ -107,7 +112,8 @@ async function signingKey(signer: Signer, { home, dryRun, run, result, engineRoo
     const fields = keyFields(text);
     if (!fields) return result.findings.push(finding("key", `~/${signer.publicKey} is not an SSH public key. Move it away, then run fleet apply to make a new Fleet key.`, "human")), null;
     const derived = await run(["ssh-keygen", "-y", "-P", "", "-f", inside(home, sshKeyTarget)]);
-    if (derived.code !== 0 || keyFields(derived.stdout.split("\n")[0]) !== fields) return result.findings.push(finding("key", `~/${sshKeyTarget} cannot sign for ~/${signer.publicKey}: the private key is missing, locked, or belongs to another key. Move both files away, then run fleet apply to make a new Fleet key.`, "human")), null;
+    const signs = (derived.code === 0 && keyFields(derived.stdout.split("\n")[0]) === fields) || (await agentHolds(run, fields));
+    if (!signs) return result.findings.push(finding("key", `~/${sshKeyTarget} cannot sign for ~/${signer.publicKey}: the private key is missing, locked and not in your SSH agent, or belongs to another key. Move both files away, then run fleet apply to make a new Fleet key.`, "human")), null;
     return { fields };
   }
   if (existsSync(inside(home, sshKeyTarget))) return result.findings.push(finding("key", `~/${sshKeyTarget} has no public key next to it. Run ssh-keygen -y -f ~/${sshKeyTarget} > ~/${signer.publicKey}, then fleet apply.`, "human")), null;
