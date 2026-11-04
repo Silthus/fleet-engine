@@ -255,9 +255,9 @@ test("only the user's own messages and question answers in T3 count as their wor
 
   const words = await readThreadWords(client as never, "thread-1", events);
 
-  expect(words.map((word) => [word.id, word.text, word.answered])).toEqual([
-    ["m1", "Yes, run it.", "Shall I run round 3?"],
-    ["m2", "Yes from the phone.", "Shall I run round 3?"],
-    ["q1:0", "Accept both (Recommended)", "Accept both gaps?"],
+  expect(words.map((word) => [word.thread, word.id, word.text, word.answered, word.source])).toEqual([
+    ["mcp:thread-1", "m1", "Yes, run it.", "Shall I run round 3?", "typed"],
+    ["mcp:thread-1", "m2", "Yes from the phone.", "Shall I run round 3?", "typed"],
+    ["mcp:thread-1", "q1:0", "Accept both (Recommended)", "Accept both gaps?", "question"],
   ]);
 });
