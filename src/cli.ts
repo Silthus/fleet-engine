@@ -9,11 +9,17 @@ import { engineAdapters } from "./adapters/index.ts";
 import { apply, check, type Runner } from "./reconciler/apply.ts";
 import { engineCommands, resolve } from "./reconciler/resolve.ts";
 import { readNotice, update } from "./update.ts";
+import { setup, type SetupOptions } from "./setup/setup.ts";
+import { ttyTerminal, type Terminal } from "./setup/terminal.ts";
 
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; setup?: Pick<SetupOptions, "has"> };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
+  fleet setup [--preset <id>] [--add <pack>]... [--remove <pack>]...
+              [--workflows <id=on|off,...>] [--set <pack.key=value>]...
+              [--plan <claude|codex|both>] [--non-interactive]
+                     Answer a few questions and set up this machine
   fleet apply [--profile <dir>] [--adopt <path>]... [--dry-run]
                      Put your profile's packs onto this machine
   fleet doctor [--profile <dir>]
@@ -21,7 +27,7 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet update       Move the engine and your profile forward, then apply
   fleet <command>    Run a command that one of your packs ships`;
 
-const later = new Set(engineCommands.filter((name) => !["apply", "doctor", "update"].includes(name)));
+const later = new Set(engineCommands.filter((name) => !["setup", "apply", "doctor", "update"].includes(name)));
 
 export async function main(argv: string[], options: CliOptions): Promise<number> {
   const [command, ...rest] = argv;
@@ -30,6 +36,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
+    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, ...options.setup });
     return await runPackCommand(command, rest, options);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -123,6 +130,12 @@ function printReport(report: Report, command: string, print: (line: string) => v
 
 if (import.meta.main) {
   const engineRoot = resolvePath(import.meta.dir, "..");
+  if (Bun.argv[2] === "setup") {
+    process.on("SIGINT", () => {
+      console.log("\nStopped. Run fleet setup again to pick up where it stopped.");
+      process.exit(130);
+    });
+  }
   const code = await main(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), engineRoot, platform: process.platform, print: (line) => console.log(line) });
   process.exit(code);
 }

@@ -160,6 +160,7 @@ export type Plan = {
   models: ModelRow[];
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];
+  ask: PackSetting[];
   dropped: Array<{ pack: string; item: string; reason: string }>;
 };
 

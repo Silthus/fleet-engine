@@ -31,6 +31,7 @@ function plan(config: Array<ConfigEntry & { pack?: string }> = []): Plan {
     commands: {},
     settings: {},
     unanswered: [],
+    ask: [],
     dropped: [],
     models: [],
   };

@@ -78,6 +78,7 @@ function plan(): Plan {
     commands: {},
     settings: {},
     unanswered: [],
+    ask: [],
     dropped: [],
     models: [],
   };
