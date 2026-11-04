@@ -47,13 +47,13 @@ The module that resolves a plan, applies it, and checks it.
 _Avoid_: Installer, sync
 
 **Machine file**:
-`~/.config/fleet/machine.json`: this machine's role, its profile directory, and setup progress. It never enters the profile.
+`~/.config/fleet/machine.json`: this machine's role, whether it is a Coder workspace, its profile directory, and setup progress. It never enters the profile.
 _Avoid_: Local config, state file
 
 ## Machines
 
 **Devbox**:
-A Linux machine, local or in the cloud, where agents and T3 threads run.
+A Linux machine, local or in the cloud, where agents and T3 threads run. A Coder workspace is a devbox from its first `fleet apply`, and signs Git commits with its Coder key.
 _Avoid_: Coding box, agent box
 
 **Hub**:

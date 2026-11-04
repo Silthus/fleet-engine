@@ -46,6 +46,12 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, settings } }))).rejects.toThrow("setting hub.heavySlots must start with base.");
   });
 
+  test("lets any pack declare identity.signer, which the engine reads", async () => {
+    const signer = { key: "identity.signer", question: "Which key signs?", type: "choice", choices: [{ value: "ssh", label: "SSH" }], default: "ssh" };
+    const packs = await loadPacks(sourceWith({ base, team: { schema: 1, name: "team", summary: "Team rules.", settings: [signer] } }));
+    expect(packs.map((pack) => pack.manifest.settings?.[0]?.key)).toEqual(["base.heavySlots", "identity.signer"]);
+  });
+
   test("rejects a workflow need outside the closed set", async () => {
     const workflows = [{ ...base.workflows[0], needs: ["laptop"] }];
     expect(loadPacks(sourceWith({ base: { ...base, workflows } }))).rejects.toThrow("workflow heavy has unknown need laptop");

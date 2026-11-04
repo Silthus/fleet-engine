@@ -9,6 +9,7 @@ import type {
   ModelRow,
   Need,
   Os,
+  PackManifest,
   PackSetting,
   Plan,
   Profile,
@@ -16,6 +17,8 @@ import type {
   Scope,
   SettingValue,
 } from "../pack/types.ts";
+import { signerSetting } from "../adapters/identity/signers.ts";
+import { engineSettings } from "../pack/manifest.ts";
 
 export class ResolveError extends Error {}
 
@@ -87,7 +90,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
     plan.config.push({ ...entry, pack: "profile" });
   }
 
-  const settings = activeSettings(order, active);
+  const settings = machineDefaults(activeSettings(order, active), machine);
   plan.settings = settingValues(settings, profile.settings);
   plan.unanswered = settings.filter((setting) => plan.settings[setting.key] === undefined && !setting.optional && setting.ask !== "never");
   plan.ask = settings.filter((setting) => setting.ask === "setup" || (setting.ask !== "never" && setting.default === undefined)).map(({ pack: _, ...setting }) => setting);
@@ -203,9 +206,21 @@ function activeSettings(order: Candidate[], active: Set<string>): Array<PackSett
   const workflows = order.flatMap(({ manifest }) => manifest.workflows ?? []);
   const listed = new Set(workflows.flatMap((workflow) => workflow.settings ?? []));
   const wanted = new Set(workflows.filter((workflow) => active.has(workflow.id)).flatMap((workflow) => workflow.settings ?? []));
-  return order.flatMap(({ manifest }) =>
-    (manifest.settings ?? []).filter((setting) => !listed.has(setting.key) || wanted.has(setting.key)).map((setting) => ({ ...setting, pack: manifest.name })),
-  );
+  const ownListing = (manifest: PackManifest, key: string) => (manifest.workflows ?? []).filter((workflow) => workflow.settings?.includes(key));
+  const keeps = (manifest: PackManifest, key: string) => {
+    if (!engineSettings.includes(key)) return !listed.has(key) || wanted.has(key);
+    const listing = ownListing(manifest, key);
+    return !listing.length || listing.some((workflow) => active.has(workflow.id));
+  };
+  return order.flatMap(({ manifest }) => (manifest.settings ?? []).filter((setting) => keeps(manifest, setting.key)).map((setting) => ({ ...setting, pack: manifest.name })));
+}
+
+/** Keeps the last declaration of a setting, so a later pack sets the default of one the engine reads. Base's signer default is coder in a Coder workspace. */
+function machineDefaults(settings: Array<PackSetting & { pack: string }>, machine: MachineFile) {
+  const last = new Map(settings.map((setting) => [setting.key, setting]));
+  return settings
+    .filter((setting) => last.get(setting.key) === setting)
+    .map((setting) => (setting.key === signerSetting && setting.pack === "base" && machine.coder ? { ...setting, default: "coder" } : setting));
 }
 
 function settingValues(settings: PackSetting[], answers: Record<string, SettingValue>) {

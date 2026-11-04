@@ -4,7 +4,7 @@ import { join, resolve as resolvePath } from "node:path";
 import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Plan, Report } from "./pack/types.ts";
-import { loadMachine, loadProfile, saveMachine } from "./profile/profile.ts";
+import { loadMachine, loadProfile, saveMachine, thisMachine } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
 import { apply, check, type Runner } from "./reconciler/apply.ts";
 import { resolve } from "./reconciler/resolve.ts";
@@ -18,7 +18,8 @@ import { setCommand, settingsCommand } from "./commands/settings.ts";
 import { devboxCommand } from "./commands/devbox.ts";
 import { realMachine } from "./setup/commands.ts";
 
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env"> };
+/** env: the environment that tells a Coder workspace apart; tests pass their own. */
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env"> };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -51,7 +52,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
     if (command === "update") return await runUpdate(options);
     if (command in changes) return await change(command as keyof typeof changes, rest, options);
     if (command === "devbox") return await devbox(rest, options);
-    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
+    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
     return await runPackCommand(command, rest, options);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -142,13 +143,14 @@ async function loadPlan(options: CliOptions, profileFlag: string | undefined, mo
   const saved = await loadMachine(options.home);
   const profileDir = profileFlag ? resolvePath(profileFlag) : saved?.profileDir;
   if (!profileDir) throw new Error("no profile on this machine. Run get.sh, or pass --profile <dir>.");
-  const machine: MachineFile = { ...saved, schema: 1, role: saved?.role ?? (options.platform === "darwin" ? "mac" : "linux"), profileDir };
+  const machine: MachineFile = { ...thisMachine(saved, options.platform, options.env ?? {}), profileDir };
   const profile = await loadProfile(profileDir);
   const cache = join(options.home, ".local", "share", "fleet", "sources");
   const engine: AvailableSource = { ref: { name: "engine", repo: profile.engine.repo, ref: profile.engine.ref }, dir: options.engineRoot, packs: await loadPacks(options.engineRoot) };
   const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => (mode.fetch ? fetchSource(ref, cache) : cachedSource(ref, cache)))))];
   const plan = resolve(profile, machine, sources);
-  if (mode.remember && saved?.profileDir !== profileDir) await saveMachine(options.home, machine);
+  const changed = saved?.profileDir !== profileDir || saved.role !== machine.role || saved.coder !== machine.coder;
+  if (mode.remember && changed) await saveMachine(options.home, machine);
   return { plan, sources };
 }
 
@@ -187,6 +189,6 @@ if (import.meta.main) {
       process.exit(130);
     });
   }
-  const code = await main(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), engineRoot, platform: process.platform, print: (line) => console.log(line) });
+  const code = await main(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), engineRoot, platform: process.platform, env: Bun.env, print: (line) => console.log(line) });
   process.exit(code);
 }

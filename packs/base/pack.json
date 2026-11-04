@@ -150,6 +150,27 @@
       "type": "number",
       "default": 10,
       "ask": "never"
+    },
+    {
+      "key": "identity.signer",
+      "question": "Which key signs your Git commits? Fleet picks coder in a Coder workspace and ssh everywhere else.",
+      "type": "choice",
+      "choices": [
+        {
+          "value": "ssh",
+          "label": "A Fleet SSH key"
+        },
+        {
+          "value": "coder",
+          "label": "Your Coder workspace's Git SSH key"
+        },
+        {
+          "value": "1password",
+          "label": "Your 1Password SSH key"
+        }
+      ],
+      "default": "ssh",
+      "ask": "never"
     }
   ],
   "workflows": [

@@ -60,6 +60,19 @@ export async function loadMachine(home: string): Promise<MachineFile | undefined
   return checkMachine(file, path);
 }
 
+/** Coder sets these in a workspace's login sessions and startup script. */
+export function inCoderWorkspace(env: Record<string, string | undefined>) {
+  return Boolean(env.CODER_AGENT_URL) || env.CODER === "true";
+}
+
+/** This machine as saved, or its defaults: a Mac, a devbox in a Coder workspace, or a Linux machine. A Coder workspace saved as linux becomes a devbox. */
+export function thisMachine(saved: MachineFile | undefined, platform: NodeJS.Platform, env: Record<string, string | undefined>): MachineFile {
+  const coder = saved?.coder ?? (platform !== "darwin" && inCoderWorkspace(env) ? true : undefined);
+  const fallback = platform === "darwin" ? "mac" : coder ? "devbox" : "linux";
+  const role = !saved || (saved.role === "linux" && coder) ? fallback : saved.role;
+  return { ...saved, schema: 1, role, ...(coder ? { coder } : {}) };
+}
+
 export async function saveMachine(home: string, machine: MachineFile) {
   const path = machinePath(home);
   await mkdir(dirname(path), { recursive: true });
@@ -116,6 +129,7 @@ function checkMachine(file: Record<string, unknown>, path: string): MachineFile 
   };
   if (file.schema !== 1) fail(`unknown schema ${String(file.schema)}`);
   if (!roles.includes(file.role as string)) fail("role must be mac, devbox, linux, or hub");
+  if (file.coder !== undefined && file.coder !== true) fail("coder must be true or left out");
   if (file.profileDir !== undefined && typeof file.profileDir !== "string") fail("profileDir must be a path");
   if (file.devboxes !== undefined && !(Array.isArray(file.devboxes) && file.devboxes.every((host) => typeof host === "string"))) fail("devboxes must list SSH hosts");
   const setup = file.setup;

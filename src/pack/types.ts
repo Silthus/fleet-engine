@@ -135,7 +135,8 @@ export type Profile = ProfileFile & { dir: string; aboutMe?: string };
 
 export type SetupProgress = { done: string[]; draft?: Partial<ProfileFile> };
 
-export type MachineFile = { schema: 1; role: MachineRole; profileDir?: string; devboxes?: string[]; setup?: SetupProgress };
+/** coder: this machine is a Coder workspace. Saved once seen, because cron and services lack the Coder variables. */
+export type MachineFile = { schema: 1; role: MachineRole; coder?: true; profileDir?: string; devboxes?: string[]; setup?: SetupProgress };
 
 import type { Action, DesiredFile } from "../files/install.ts";
 
