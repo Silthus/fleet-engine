@@ -1,12 +1,11 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { userInfo } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import type { Finding, Owned, PackJob, Plan } from "../../pack/types.ts";
 import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { sourceOutage } from "../provider-config/adapter.ts";
 import { inside } from "../../files/install.ts";
 import { linkOnPath, readState, withLock, writeWithBackups, type Write } from "../provider-config/store.ts";
-import { spawnRunner, type CommandRunner } from "../run.ts";
+import { isAccountHome, spawnRunner, type CommandRunner } from "../run.ts";
 import { cronLine, cronSafe, reconcileCrontab } from "./cron.ts";
 import { labelPrefix, plist } from "./launchd.ts";
 import { agentCopyTarget, launcherScript, launcherTarget, logTarget } from "./launcher.ts";
@@ -44,10 +43,7 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       const result: AdapterResult = { actions: [], findings: [] };
       const osJobs = plan.jobs.filter((job) => job.runner !== "t3");
       for (const job of plan.jobs) if (!jobId.test(job.id)) throw new Error(`job id ${job.id} of the ${job.pack} pack may hold only letters, digits, dots, dashes, and underscores`);
-      if (!options.run && resolve(home) !== resolve(userInfo().homedir)) {
-        if (osJobs.length) result.findings.push({ id: "jobs:home", pack: "engine", say: `Left jobs alone: ${home} is not your home directory, and cron and launchd belong to your user.` });
-        return result;
-      }
+      if (!options.run && !isAccountHome(home)) return result;
       const command = (job: PackJob) => (job.command[0] === "fleet" ? ["/bin/sh", join(engineRoot, "fleet"), ...job.command.slice(1)] : job.command);
       const context = { home, dryRun, run, result, outage: sourceOutage(plan) };
       const reconcile = async () => {
