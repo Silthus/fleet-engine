@@ -225,7 +225,8 @@ findings and responses, and the coding standards in ~/.agents/guides/coding-stan
 does the evidence prove HEAD, do the owed kinds fit the diff, does the review hold, and how good is the code. A failed
 question or a high quality finding fails the gate; medium and low findings are listed. The verdict is cached per set
 of inputs. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
---kind judge) that they or their standing rule accept lets the gate pass. The setting
+--kind judge) lets the gate pass once their standing rule covers it, or once they choose "Accept the gap" in your
+question tool for the question that the gate prints. A refusal or a typed message never accepts it. The setting
 pull-requests.reviewTimeoutMinutes limits the judge. FLEET_PROOF_JUDGE replaces its command, and
 FLEET_PROOF_JUDGE_MODEL its model.`,
     examples: ["fleet proof gate", "fleet proof gate --landed"], flags: ["--landed"],
@@ -432,7 +433,7 @@ async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContex
   if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}` };
   const gap = await judgeGap(home, head, today);
   if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}` };
-  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: not accepted: ${gap.reason}`], covered: "" };
+  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: not accepted: ${gap.reason}. ${askGap(head, "judge", gap.reason)}`], covered: "" };
   const standing = await standingFor(home, "judge", today);
   const hint = standing ? [`judge gap: the user's standing rule accepts a judge gap on HEAD until ${standing.until}. Record it with fleet proof gap --kind judge --reason <why the judge is wrong>`] : [];
   return { code: 1, lines: [...outcome.lines, ...hint], covered: "" };

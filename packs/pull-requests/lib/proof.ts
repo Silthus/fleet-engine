@@ -382,13 +382,22 @@ const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
 
 const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
 
+const findingsBlock = /^\s*FINDINGS\b:?/;
+
+function reviewedLines(findings: string) {
+  const lines = findings.split("\n");
+  const lensAnswer = lines.some((line) => findingsBlock.test(line));
+  let inside = !lensAnswer;
+  return lines.flatMap((line) => {
+    if (findingsBlock.test(line)) { inside = true; return [line.replace(findingsBlock, "")]; }
+    if (/^#/.test(line)) inside = !lensAnswer;
+    if (/^COVERED\b/.test(line)) inside = false;
+    return inside ? [line] : [];
+  }).filter((line) => line.trim());
+}
+
 function findingCount(findings: string) {
-  let covered = false;
-  const reviewed = findings.split("\n").filter((line) => {
-    if (/^#/.test(line)) covered = false;
-    if (/^COVERED\b/.test(line)) covered = true;
-    return !covered && line.trim();
-  });
+  const reviewed = reviewedLines(findings);
   const items = reviewed.filter((line) => findingItem.test(line)).length;
   return items || (reviewed.every((line) => noFinding.test(line.trim())) ? 0 : 1);
 }
