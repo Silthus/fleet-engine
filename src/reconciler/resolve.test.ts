@@ -285,6 +285,15 @@ describe("resolve guards", () => {
     expect(plan({ packs: ["team"] }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, id: "mac-only", on: ["darwin"], pack: "team" }]);
   });
 
+  test("rejects two T3 project scripts that would get the same id", () => {
+    const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: ["~/app"] };
+    const team = withPack(pack("team", { t3ProjectScripts: [{ ...script, id: "extra-prepare" }] }));
+    const teamExtra = withPack(pack("team-extra", { t3ProjectScripts: [script] }));
+    expect(() => plan({ packs: ["team", "team-extra"] }, mac, [engine, team, teamExtra])).toThrow(new ResolveError("t3 project script prepare of team-extra and extra-prepare of team both get the id fleet-team-extra-prepare"));
+    const twice = withPack(pack("twice", { t3ProjectScripts: [script, { ...script, name: "Again" }] }));
+    expect(() => plan({ packs: ["twice"] }, mac, [engine, twice])).toThrow(new ResolveError("t3 project script prepare of twice and prepare of twice both get the id fleet-twice-prepare"));
+  });
+
   test("keeps the AI plan and resolves a T3 job's project", () => {
     expect(plan({ plan: "claude" }).ai).toBe("claude");
     const result = plan({ workflows: { "quality-loop": true }, settings: { "orchestration.tracker": "me/maps", "orchestration.loopProject": "chosen-project" } }, devbox);

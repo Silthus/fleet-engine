@@ -88,6 +88,14 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, command: undefined }] } }))).rejects.toThrow("t3ProjectScripts prepare: needs an id, a name, a command, and a projects list");
     expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, projects: ["posthog"] }] } }))).rejects.toThrow("t3ProjectScripts prepare: each project must be an absolute path or start with ~/");
     expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, id: "Prepare It" }] } }))).rejects.toThrow("t3ProjectScripts Prepare It: id must be lowercase words joined by dashes");
+    await expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, name: "" }] } }))).rejects.toThrow("t3ProjectScripts prepare: needs an id, a name, a command, and a projects list");
+    await expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, command: "   " }] } }))).rejects.toThrow("t3ProjectScripts prepare: needs an id, a name, a command, and a projects list");
+  });
+
+  test("leaves T3's project settings to t3ProjectScripts", async () => {
+    for (const key of ["projectSettingsOverrides", "projectScriptOverrides"]) {
+      await expect(loadPacks(sourceWith({ base: { ...base, config: [{ provider: "t3", key, value: {} }] } }))).rejects.toThrow(`config ${key}: T3 project settings hold Fleet's worktree scripts, so set those with t3ProjectScripts`);
+    }
   });
 
   test("accepts a Claude MCP server only by name, with a server object", async () => {

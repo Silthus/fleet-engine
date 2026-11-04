@@ -79,6 +79,14 @@ const backups = (home: string) => (existsSync(join(home, ".local/state/fleet/bac
 type Link = { environmentId: string; label: string; status: "reachable" | "unreachable" | "expired"; lastError: string | null };
 type StoredTask = Record<string, unknown> & { id: string; enabled: boolean };
 
+/** As T3 Code serves settings before it folds its old fields: projectScriptOverrides is a view derived from projectSettingsOverrides. */
+function withLegacyView(settings: Record<string, unknown>) {
+  const copy = structuredClone(settings);
+  const entries = copy.projectSettingsOverrides as Record<string, { defaultProjectScripts?: unknown }> | undefined;
+  if (copy.projectSettingsFolded || !entries) return copy;
+  return { ...copy, projectScriptOverrides: Object.fromEntries(Object.entries(entries).flatMap(([id, entry]) => (entry.defaultProjectScripts === undefined ? [] : [[id, entry.defaultProjectScripts]]))) };
+}
+
 function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>; links?: Link[]; projects?: string[]; ignorePatch?: boolean } = {}) {
   const defaults = { defaultThreadEnvMode: "local", sidebarAutoSettleAfterDays: 7, storageCleanup: { worktreeOnMerge: false, logsAfterDays: 30, browserArtifactsAfterDays: 7 }, defaultModelSelection: fastModel };
   const state = {
@@ -93,7 +101,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
   const rpc: T3Rpc = {
     async call<T>(tag: string, payload: unknown) {
       calls.push({ tag, payload });
-      if (tag === "server.getConfig") return { settings: structuredClone(state.settings) } as T;
+      if (tag === "server.getConfig") return { settings: withLegacyView(state.settings) } as T;
       if (tag === "server.updateSettings") {
         const { projectSettingsOverrides: entries, ...patch } = (payload as { patch: Record<string, unknown> }).patch;
         if (state.ignorePatch) return structuredClone(state.settings) as T;
@@ -448,10 +456,20 @@ describe("T3 project scripts", () => {
     server.state.projects[0]!.scripts = [userSetup, lint];
 
     await apply(withScripts([prepare]), { home, adapters: [adapter] });
-    expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [{ ...ours, command: `${ours.command} && (\npnpm install\n)` }, userSetup, lint] } });
+    expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [{ ...ours, command: `(\n${ours.command}\n) && (\npnpm install\n)` }, userSetup, lint] } });
 
     await apply(withScripts([]), { home, adapters: [adapter] });
     expect(server.state.settings.projectSettingsOverrides).toEqual({});
+  });
+
+  test("chains commands that end in ; or & into a script the shell can run", async () => {
+    const home = temp.make("home-");
+    const { server, adapter } = setup({ projects: ["/work/app"], settings: { projectSettingsOverrides: {} } });
+    server.state.projects[0]!.scripts = [{ ...userSetup, command: "pnpm install &" }];
+    await apply(withScripts([{ ...prepare, command: "printf ready;" }, { ...prepare, id: "warm", command: "printf warm" }]), { home, adapters: [adapter] });
+    const first = (server.state.settings.projectSettingsOverrides as Record<string, { defaultProjectScripts: Array<{ command: string }> }>)["project-0"]!.defaultProjectScripts[0]!;
+    expect(first.command).toBe("(\nprintf ready;\n) && (\nprintf warm\n) && (\npnpm install &\n)");
+    expect(Bun.spawnSync(["sh", "-n", "-c", first.command]).exitCode).toBe(0);
   });
 
   test("matches ~/ and * patterns under the user's home, and skips a deleted project", async () => {
@@ -469,6 +487,19 @@ describe("T3 project scripts", () => {
     const outage = withScripts([]);
     outage.packs = [{ name: "team", source: "team", ref: "main", available: false, reason: "not found; unreachable source team" }];
     await apply(outage, { home, adapters: [adapter] });
+    expect(updates(server)).toBe(1);
+  });
+
+  test("leaves a project as it is while one of two packs that put scripts on it cannot be fetched", async () => {
+    const home = temp.make("home-");
+    const { server, adapter } = setup({ projects: ["/work/app"], settings: { projectSettingsOverrides: {} } });
+    const other = { ...prepare, pack: "other" };
+    await apply(withScripts([prepare, other]), { home, adapters: [adapter] });
+    const before = structuredClone(server.state.settings.projectSettingsOverrides);
+    const outage = withScripts([prepare]);
+    outage.packs = [{ name: "other", source: "other", ref: "main", available: false, reason: "not found; unreachable source other" }];
+    await apply(outage, { home, adapters: [adapter] });
+    expect(server.state.settings.projectSettingsOverrides).toEqual(before);
     expect(updates(server)).toBe(1);
   });
 

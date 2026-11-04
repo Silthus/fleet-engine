@@ -61,9 +61,13 @@ function scopeProblem(item: Record<string, unknown>) {
 }
 
 /** What is wrong with a config entry from a pack or a profile's overrides, or undefined when it is sound. */
+const t3ProjectKeys = ["projectSettingsOverrides", "projectScriptOverrides"];
+const filled = (value: unknown) => typeof value === "string" && value.trim().length > 0;
+
 export function configEntryProblem(item: unknown) {
   if (!isRecord(item)) return "must be an object";
   if (!providers.includes(item.provider as string) || typeof item.key !== "string") return "needs a provider and a key";
+  if (item.provider === "t3" && t3ProjectKeys.includes(item.key)) return "T3 project settings hold Fleet's worktree scripts, so set those with t3ProjectScripts";
   if (item.provider === "claude" && item.key === "mcpServers") return "a Claude MCP server key names one server, such as mcpServers.<name>";
   if (item.provider === "claude" && item.key.startsWith("mcpServers.") && !isRecord(item.value)) return 'a Claude MCP server must be an object, such as { "type": "stdio", "command": ... }';
   return scopeProblem(item);
@@ -150,7 +154,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     filters(item, label);
   });
   each("t3ProjectScripts", (item, label) => {
-    need(typeof item.id === "string" && typeof item.name === "string" && typeof item.command === "string" && isStrings(item.projects) && item.projects.length > 0, `${label}: needs an id, a name, a command, and a projects list`);
+    need(typeof item.id === "string" && filled(item.name) && filled(item.command) && isStrings(item.projects) && item.projects.length > 0, `${label}: needs an id, a name, a command, and a projects list`);
     need(packName.test(item.id as string), `${label}: id must be lowercase words joined by dashes`);
     need((item.projects as string[]).every((path) => path.startsWith("/") || path.startsWith("~/")), `${label}: each project must be an absolute path or start with ~/`);
     filters(item, label);

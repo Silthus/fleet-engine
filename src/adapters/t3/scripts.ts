@@ -42,13 +42,14 @@ function matches(pattern: string, root: string, home: string) {
   return new RegExp(`^${parts.join("/")}$`).test(resolve(root));
 }
 
-/** T3 Code runs only the first script marked runOnWorktreeCreate, so Fleet's scripts go first and the first one also runs the rest, the project's own setup script last. */
-function desired(current: Script[], wanted: Array<Owned<T3ProjectScript>>, engineRoot: string | undefined, kept: Script[]): Script[] {
+/** T3 Code runs only the first script marked runOnWorktreeCreate, so Fleet's scripts go first and the first one also runs the rest, the project's own setup script last. Each command runs in its own subshell, so one that ends in ; or & still chains. */
+function desired(current: Script[], wanted: Array<Owned<T3ProjectScript>>, engineRoot: string | undefined): Script[] {
   const own = current.filter((script) => !isFleet(script));
-  if (!wanted.length) return [...kept, ...own];
+  if (!wanted.length) return own;
   const commands = wanted.map((script) => engineShellCommand(script.command, engineRoot));
   const setup = own.find((script) => script.runOnWorktreeCreate);
-  const chain = [commands[0]!, ...[...commands.slice(1), ...(setup ? [setup.command] : [])].map((command) => `(\n${command}\n)`)].join(" && ");
+  const parts = [...commands, ...(setup ? [setup.command] : [])];
+  const chain = parts.length === 1 ? parts[0]! : parts.map((command) => `(\n${command}\n)`).join(" && ");
   const fleet = wanted.map((script, index) => ({ id: scriptId(script), name: script.name, icon: "configure", command: index === 0 ? chain : commands[index]!, runOnWorktreeCreate: index === 0, async: false }));
   return [...fleet, ...own];
 }
@@ -61,7 +62,7 @@ function change(before: Script[], after: Script[]) {
   return [added.length ? `add script ${added.join(", ")}` : "", removed.length ? `remove script ${removed.join(", ")}` : "", !added.length && !removed.length ? "update Fleet's scripts" : ""].filter(Boolean).join("; ");
 }
 
-/** Puts each pack's worktree scripts on the T3 projects they match, and takes Fleet's scripts off every other project. */
+/** Puts each pack's worktree scripts on the T3 projects they match, and takes Fleet's scripts off every other project. While a pack source is out, a project that would lose a Fleet script stays as it is. T3 Code derives projectScriptOverrides from projectSettingsOverrides, so what a project inherits leaves out both. */
 export async function reconcileScripts(rpc: T3Rpc, plan: Plan, home: string, dryRun: boolean, result: AdapterResult) {
   const wanted = plannedScripts(plan);
   const outage = sourceOutage(plan);
@@ -71,11 +72,12 @@ export async function reconcileScripts(rpc: T3Rpc, plan: Plan, home: string, dry
   for (const project of projects) {
     const before = effectiveScripts(settings, project);
     const mine = wanted.filter((script) => script.projects.some((pattern) => matches(pattern, project.workspaceRoot, home)));
-    const kept = outage ? before.filter((script) => isFleet(script) && !mine.some((item) => scriptId(item) === script.id)) : [];
-    const after = desired(before, mine, plan.engineRoot, kept);
+    const after = desired(before, mine, plan.engineRoot);
     if (same(before, after)) continue;
+    if (outage && before.some((script) => isFleet(script) && !after.some((item) => item.id === script.id))) continue;
     const { defaultProjectScripts: _, ...rest } = settings.projectSettingsOverrides?.[project.id] ?? {};
-    const inherited = effectiveScripts({ ...settings, projectSettingsOverrides: { ...settings.projectSettingsOverrides, [project.id]: rest } }, project);
+    const { [project.id]: _derived, ...legacy } = settings.projectScriptOverrides ?? {};
+    const inherited = effectiveScripts({ ...settings, projectSettingsOverrides: { ...settings.projectSettingsOverrides, [project.id]: rest }, projectScriptOverrides: legacy }, project);
     changes.push({ project, before, after, entry: same(after, inherited) ? rest : { ...rest, defaultProjectScripts: after } });
   }
   if (!changes.length) return;
