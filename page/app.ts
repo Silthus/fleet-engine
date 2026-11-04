@@ -20,7 +20,7 @@ import {
 const data: PageData = JSON.parse(document.getElementById("fleet-data")!.textContent!);
 let picks = presetPicks(data, data.defaultPreset);
 let tab: "command" | "profile" = "command";
-const opened = new Set<string>();
+let opened = new Set<string>();
 
 const esc = (text: unknown) => String(text).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 const fmt = (text: string) => esc(text).replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -203,6 +203,7 @@ function diagram() {
 function render() {
   const focus = document.activeElement instanceof HTMLElement && document.activeElement.dataset.act ? `[data-act="${document.activeElement.dataset.act}"][data-id="${document.activeElement.dataset.id}"]` : undefined;
   const top = window.scrollY;
+  opened = new Set([...document.querySelectorAll<HTMLDetailsElement>("details[data-pack][open]")].map((details) => details.dataset.pack!));
   document.getElementById("app")!.innerHTML = `<div class="wrap">
     <header class="hero"><span class="eyebrow">Fleet · agent workflows</span>
       <h1>A day with Fleet</h1>
@@ -257,12 +258,6 @@ document.addEventListener("click", (event) => {
   if (act === "wf") picks = toggleWorkflow(data, picks, id);
   render();
 });
-
-document.addEventListener("toggle", (event) => {
-  const details = event.target as HTMLDetailsElement;
-  const name = details.dataset?.pack;
-  if (name) details.open ? opened.add(name) : opened.delete(name);
-}, true);
 
 function onSetting(event: Event, full: boolean) {
   const input = event.target as HTMLInputElement | HTMLSelectElement;
