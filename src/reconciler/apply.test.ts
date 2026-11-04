@@ -26,6 +26,7 @@ function plan(overrides: Partial<Plan> = {}): Plan {
     models: [],
     settings: {},
     unanswered: [],
+    ask: [],
     dropped: [],
     ...overrides,
   };

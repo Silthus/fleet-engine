@@ -47,6 +47,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
     models: modelTable(order, profile),
     settings: {},
     unanswered: [],
+    ask: [],
     dropped: [],
   };
   const names = new Set(order.map((pack) => pack.manifest.name));
@@ -89,6 +90,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   const settings = activeSettings(order, active);
   plan.settings = settingValues(settings, profile.settings);
   plan.unanswered = settings.filter((setting) => plan.settings[setting.key] === undefined && !setting.optional && setting.ask !== "never");
+  plan.ask = settings.filter((setting) => setting.ask === "setup" || (setting.ask !== "never" && setting.default === undefined)).map(({ pack: _, ...setting }) => setting);
   for (const job of plan.models.length ? plan.jobs : []) {
     if (job.task && !plan.models.some((row) => row.role === job.task!.modelRole)) throw new ResolveError(`job ${job.id} asks for model role ${job.task.modelRole}, which the model table lacks`);
   }

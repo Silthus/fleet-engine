@@ -29,6 +29,7 @@ function plan(os: "darwin" | "linux", jobs: Array<PackJob & { pack?: string }>):
     commands: {},
     settings: {},
     unanswered: [],
+    ask: [],
     dropped: [],
     models: [],
   };

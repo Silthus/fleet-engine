@@ -15,7 +15,7 @@ let engineRepo: string;
 
 beforeAll(() => {
   engineRepo = shared.make("engine-repo-");
-  for (const path of ["src", "packs", "fleet", "package.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
+  for (const path of ["src", "packs", "fleet", "package.json", "presets.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
   git(engineRepo, "init", "-q", "-b", "main");
   git(engineRepo, "add", ".");
   git(engineRepo, "commit", "-q", "-m", "engine");
@@ -131,8 +131,8 @@ describe("get.sh", () => {
   test("passes flags after -- to fleet and rejects others", () => {
     const box = sandbox("Linux");
     expect(getSh(box, ["--preset", "everyday"])).toMatchObject({ code: 1, output: expect.stringContaining("unknown option --preset. Put flags for fleet after --.") });
-    const result = getSh(box, ["--ref", "v0.1.0", "--", "--preset", "everyday"]);
-    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("fleet setup is not available in this version yet.") });
+    const result = getSh(box, ["--ref", "v0.1.0", "--", "--preset", "nope"]);
+    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("fleet setup: --preset nope: choose starter, everyday, michael") });
   });
 });
 

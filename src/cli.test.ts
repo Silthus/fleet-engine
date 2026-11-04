@@ -154,7 +154,7 @@ describe("fleet routing", () => {
   test("runs an engine command", async () => {
     const { home, engine } = await machineWith(["tools"]);
     expect(await fleet(["doctor"], home, engine)).toMatchObject({ code: 0 });
-    expect(await fleet(["setup"], home, engine)).toMatchObject({ code: 2, output: "fleet setup is not available in this version yet." });
+    expect(await fleet(["packs"], home, engine)).toMatchObject({ code: 2, output: "fleet packs is not available in this version yet." });
   });
 
   test("runs a command from an enabled pack with its arguments", async () => {
