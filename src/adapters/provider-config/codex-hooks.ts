@@ -3,7 +3,7 @@ import { sortedJson, type Field } from "./fields.ts";
 
 type HookGroup = { matcher?: string; hooks: Array<Record<string, unknown>> };
 
-const snakeCase = (name: string) => name.replace(/(?<!^)[A-Z]/g, (letter) => `_${letter}`).toLowerCase();
+export const snakeCase = (name: string) => name.replace(/(?<!^)[A-Z]/g, (letter) => `_${letter}`).toLowerCase();
 
 export function trustedHash(event: string, group: HookGroup, handler: Record<string, unknown>) {
   const declaration = { event_name: snakeCase(event), ...(group.matcher === undefined ? {} : { matcher: group.matcher }), hooks: [{ async: false, timeout: 600, ...handler }] };
@@ -23,3 +23,5 @@ export function codexHookTrust(owned: Field[], configPath: string): Field[] {
     );
   });
 }
+
+export const isTrustOf = (field: Field, configPath: string, event: string) => field.path[0] === "hooks" && field.path[1] === "state" && (field.path[2] ?? "").startsWith(`${configPath}:${snakeCase(event)}:`);

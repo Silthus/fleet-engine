@@ -5,6 +5,20 @@ export type Field = { path: string[]; value: unknown; pack?: string };
 
 export const isDocument = (value: unknown): value is Document => value !== null && typeof value === "object" && !Array.isArray(value);
 export const samePath = (left: string[], right: string[]) => left.length === right.length && left.every((key, index) => key === right[index]);
+export const overlaps = (left: string[], right: string[]) => left.slice(0, right.length).every((key, index) => key === right[index]) || right.slice(0, left.length).every((key, index) => key === left[index]);
+const unsafe = new Set(["__proto__", "prototype", "constructor"]);
+
+export function checkPath(path: string[], label: string) {
+  if (!path.length || path.some((key) => !key || unsafe.has(key))) throw new Error(`${label} is not a usable settings key`);
+  return path;
+}
+
+/** A dotted key as a path. A plugin id after enabledPlugins stays one key, dots included. */
+export function keyPath(key: string) {
+  const plugin = key.match(/^enabledPlugins\.(.+)$/);
+  return checkPath(plugin ? ["enabledPlugins", plugin[1]!] : key.split("."), key);
+}
+
 export const same = (left: unknown, right: unknown) => left === right || (left !== undefined && right !== undefined && sortedJson(left) === sortedJson(right));
 
 export function sortedJson(value: unknown): string {

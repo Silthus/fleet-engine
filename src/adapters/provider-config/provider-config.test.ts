@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { parse } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 import type { ConfigEntry, Plan } from "../../pack/types.ts";
 import { apply, check, filesAdapter } from "../../reconciler/apply.ts";
 import { tempDirs } from "../../testing/git.ts";
@@ -217,7 +217,7 @@ describe("provider config", () => {
 
     expect(lstatSync(join(home, claude)).isSymbolicLink()).toBe(true);
     expect(read(dotfiles, "settings.json")).toEqual({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" } });
-    expect(report.findings).toContainEqual({ id: `kept:${claude}`, pack: "engine", say: `Kept ${claude} because it is a link. Fleet would remove env.ANTHROPIC_BASE_URL there. Make it a plain file to let Fleet change it.` });
+    expect(report.findings).toContainEqual({ id: `kept:${claude}`, pack: "engine", say: `Kept ${claude} because it is a link. Fleet would remove env.ANTHROPIC_BASE_URL there. Make it a plain file in a plain folder to let Fleet change it.` });
   });
 
   test("leaves a settings file it cannot read as it is", async () => {
@@ -228,6 +228,90 @@ describe("provider config", () => {
 
     expect(readFileSync(join(home, claude), "utf8")).toBe("{ not json");
     expect(report.findings.find((finding) => finding.id === `kept:${claude}`)?.repair).toBe("human");
+  });
+
+  test("leaves a settings file alone when its folder is a link", async () => {
+    const home = temp.make("home-");
+    const dotfiles = temp.make("dotfiles-");
+    write(dotfiles, "settings.json", { env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" } });
+    symlinkSync(dotfiles, join(home, ".claude"));
+
+    const report = await apply(plan(), { home, adapters: adapters() });
+
+    expect(read(dotfiles, "settings.json")).toEqual({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" } });
+    expect(report.findings.map((finding) => finding.id)).toContain(`kept:${claude}`);
+  });
+
+  test("keeps a provider whose field a pack owns, and the selection that names it", async () => {
+    const home = temp.make("home-");
+    write(home, codex, 'model_provider = "hub"\n\n[model_providers.hub]\nbase_url = "http://127.0.0.1:8317/v1"\nname = "Hub"\n');
+    await apply(plan([{ provider: "codex", key: "model_providers.hub.base_url", value: "http://127.0.0.1:8317/v1", pack: "hub" }]), { home, adapters: adapters() });
+    expect(parse(readFileSync(join(home, codex), "utf8"))).toEqual({ model_provider: "hub", model_providers: { hub: { base_url: "http://127.0.0.1:8317/v1", name: "Hub" } } });
+  });
+
+  test("keeps a parent when a pack now owns only a field under it", async () => {
+    const home = temp.make("home-");
+    await apply(plan([{ provider: "claude", key: "env", value: { A: "1", B: "2" } }]), { home, adapters: adapters() });
+    await apply(plan([{ provider: "claude", key: "env.A", value: "1" }]), { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual({ env: { A: "1", B: "2" } });
+  });
+
+  test("keeps a proxy URL the user changed after Fleet wrote it", async () => {
+    const home = temp.make("home-");
+    await apply(plan([{ provider: "claude", key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", pack: "hub" }]), { home, adapters: adapters() });
+    write(home, claude, { env: { ANTHROPIC_BASE_URL: "http://localhost:8317" } });
+    await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://localhost:8317" } });
+  });
+
+  test("removes the token that went with a recorded proxy URL", async () => {
+    const home = temp.make("home-");
+    await apply(plan([{ provider: "claude", key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", pack: "hub" }]), { home, adapters: adapters() });
+    write(home, claude, { env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317", ANTHROPIC_AUTH_TOKEN: "key" } });
+    await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual({});
+  });
+
+  test("removes nothing while a pack source cannot be fetched", async () => {
+    const home = temp.make("home-");
+    const hub = [{ provider: "claude" as const, key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", pack: "hub" }];
+    await apply(plan(hub), { home, adapters: adapters() });
+    const offline = { ...plan(), packs: [...plan().packs, { name: "hub", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] };
+
+    const report = await apply(offline, { home, adapters: adapters() });
+
+    expect(read(home, claude)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" } });
+    expect(read(home, record)[claude]).toHaveLength(1);
+    expect(report.findings.map((finding) => finding.id)).toContain("config:outage");
+  });
+
+  test("keeps the old hook trust while the user's own hook list is kept", async () => {
+    const home = temp.make("home-");
+    const hook = (command: string) => ({ provider: "codex" as const, key: "hooks.UserPromptSubmit", value: [{ hooks: [{ type: "command", command }] }] });
+    await apply(plan([hook("guard-v1")]), { home, adapters: adapters() });
+    const trusted = () => (parse(readFileSync(join(home, codex), "utf8")) as { hooks: { state: Record<string, { trusted_hash: string }> } }).hooks.state;
+    const first = trusted();
+    const config = parse(readFileSync(join(home, codex), "utf8")) as { hooks: Record<string, unknown> };
+    config.hooks.UserPromptSubmit = [{ hooks: [{ type: "command", command: "my-guard" }] }];
+    write(home, codex, stringify(config));
+
+    await apply(plan([hook("guard-v2")]), { home, adapters: adapters() });
+
+    expect(trusted()).toEqual(first);
+  });
+
+  test("refuses a key that would reach the object prototype", async () => {
+    const home = temp.make("home-");
+    await expect(apply(plan([{ provider: "claude", key: "__proto__.polluted", value: true }]), { home, adapters: adapters() })).rejects.toThrow("not a usable settings key");
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  test("stops while another Fleet run holds the lock, and writes nothing", async () => {
+    const home = temp.make("home-");
+    write(home, claude, { env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" } });
+    mkdirSync(join(home, ".local/state/fleet/lock"), { recursive: true });
+    await expect(apply(plan(), { home, adapters: [claudeCli().adapter] })).rejects.toThrow("Another Fleet operation holds");
+    expect(read(home, claude)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" } });
   });
 
   test("names config files as adoptable targets", () => {
@@ -259,6 +343,39 @@ describe("Claude plugins", () => {
     await apply(plan(), { home, adapters: [cli.adapter] });
 
     expect(cli.calls.some((call) => call[2] === "install" || call[2] === "uninstall")).toBe(false);
+  });
+
+  test("runs Claude Code with the target home", async () => {
+    const home = temp.make("home-");
+    const homes = new Set<string | undefined>();
+    const adapter = providerConfigAdapter({ run: async (_command, options) => (homes.add(options?.home), { code: 0, stdout: "[]" }) });
+    await apply(plan([enabled]), { home, adapters: [adapter] });
+    expect([...homes]).toEqual([home]);
+  });
+
+  test("does not own a plugin whose install failed, so a later user install stays", async () => {
+    const home = temp.make("home-");
+    const installed: string[] = [];
+    const calls: string[][] = [];
+    const adapter = providerConfigAdapter({
+      run: async (command) => {
+        calls.push(command);
+        if (command[2] === "list") return { code: 0, stdout: JSON.stringify(installed.map((id) => ({ id, scope: "user", version: "1", enabled: true }))) };
+        return { code: command[2] === "install" ? 1 : 0, stdout: "" };
+      },
+    });
+    await apply(plan([enabled]), { home, adapters: [adapter] });
+    installed.push("context7@claude-plugins-official");
+    await apply(plan(), { home, adapters: [adapter] });
+    expect(calls.some((call) => call[2] === "uninstall")).toBe(false);
+  });
+
+  test("keeps a plugin id with dots as one key", async () => {
+    const home = temp.make("home-");
+    const cli = claudeCli();
+    await apply(plan([{ provider: "claude", key: "enabledPlugins.my.tool@team.market", value: true }]), { home, adapters: [cli.adapter] });
+    expect(read(home, claude)).toEqual({ enabledPlugins: { "my.tool@team.market": true } });
+    expect(cli.calls).toContainEqual(["claude", "plugin", "install", "my.tool@team.market", "--scope", "user"]);
   });
 
   test("reports plugins as pending while Claude Code is not installed", async () => {

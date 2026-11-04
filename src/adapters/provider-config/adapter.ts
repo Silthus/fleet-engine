@@ -1,19 +1,19 @@
-import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { inside } from "../../files/install.ts";
 import type { Action, Finding, Plan, Provider } from "../../pack/types.ts";
 import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
-import { codexHookTrust } from "./codex-hooks.ts";
-import { get, json, remove, same, samePath, set, toml, type Document, type Field, type Format } from "./fields.ts";
+import { spawnRunner, type CommandRunner } from "../run.ts";
+import { codexHookTrust, isTrustOf } from "./codex-hooks.ts";
+import { checkPath, get, json, keyPath, overlaps, remove, same, samePath, set, toml, type Document, type Field, type Format } from "./fields.ts";
 import { reconcilePlugins } from "./plugins.ts";
 import { staleKeys } from "./stale.ts";
+import { linkOnPath, optional, readState, withLock, writeWithBackups, type Write } from "./store.ts";
 
-export type CommandRunner = (command: string[]) => Promise<{ code: number; stdout: string }>;
+export type { CommandRunner } from "../run.ts";
 
 type Target = { provider: Provider; path: string; format: Format };
-type Record = { [target: string]: Field[] };
-type Change = { target: string; before?: string; after: string; action: Action; kept: string[] };
+type FieldRecord = { [target: string]: Field[] };
+type Merged = { record: Field[]; kept: string[]; reason: string; after?: string };
 
 export const recordTarget = ".config/fleet/provider-fields.json";
 export const configTargets: Target[] = [
@@ -26,150 +26,133 @@ export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Ad
   return {
     name: "config",
     targets: (plan) => configTargets.filter((target) => plan.config.some((entry) => entry.provider === target.provider)).map((target) => target.path),
-    async apply(plan, { home, dryRun, adopt }) {
-      const previous = await readRecord(home);
-      const next: Record = {};
-      const changes: Change[] = [];
-      const held: Finding[] = [];
-      for (const target of configTargets) {
-        const wanted = wantedFields(plan, target, home);
-        const before = await optional(inside(home, target.path));
-        let change: ReturnType<typeof merge>;
-        try {
-          change = merge(target, before, previous[target.path] ?? [], wanted, adopt.includes(target.path));
-        } catch (error) {
-          if (previous[target.path]) next[target.path] = previous[target.path]!;
-          held.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept ${target.path} as it is: Fleet cannot read it (${(error as Error).message}). Fix the file, then run fleet apply.`, repair: "human" });
-          continue;
-        }
-        if (change.after !== undefined && (await isLink(inside(home, target.path)))) {
-          if (previous[target.path]) next[target.path] = previous[target.path]!;
-          held.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept ${target.path} because it is a link. Fleet would ${change.reason} there. Make it a plain file to let Fleet change it.` });
-          continue;
-        }
-        if (change.record.length) next[target.path] = change.record;
-        if (change.after !== undefined) changes.push({ target: target.path, before, after: change.after, kept: change.kept, action: { target: target.path, operation: before === undefined ? "create" : "replace", reason: change.reason } });
-        else if (change.kept.length) changes.push({ target: target.path, before, after: before ?? "", kept: change.kept, action: { target: target.path, operation: "keep" } });
-      }
-      const result: AdapterResult = { actions: [], findings: held };
-      for (const change of changes.filter((item) => item.kept.length)) result.findings.push(keptFinding(change));
-      const writes = changes.filter((change) => change.action.operation !== "keep");
-      if (dryRun) {
-        for (const change of writes) result.findings.push({ id: `config:${change.target}`, pack: "engine", say: `${change.target} needs an update: ${change.action.reason}.`, repair: "apply" });
-      } else {
-        const recordText = `${JSON.stringify(next, null, 2)}\n`;
-        const recordBefore = await optional(inside(home, recordTarget));
-        const all = recordBefore === recordText ? writes : [...writes, { target: recordTarget, before: recordBefore, after: recordText, kept: [], action: { target: recordTarget, operation: "replace" as const } }];
-        await writeWithBackups(home, all);
-        result.actions.push(...writes.map((change) => change.action));
-      }
-      result.findings.push(...(await reconcilePlugins(plan, home, dryRun, run)));
+    async apply(plan, context) {
+      const outage = sourceOutage(plan);
+      const reconcile = async () => {
+        const result = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage);
+        result.findings.push(...(await reconcilePlugins(plan, context.home, context.dryRun, run, outage)));
+        return result;
+      };
+      const result = context.dryRun ? await reconcile() : await withLock(context.home, reconcile);
+      if (outage) result.findings.push({ id: "config:outage", pack: "engine", say: "Kept every provider setting and plugin that Fleet would remove until all your pack sources can be fetched.", repair: "apply" });
       return result;
     },
   };
 }
 
-function wantedFields(plan: Plan, target: Target, home: string): Field[] {
-  const owned = plan.config.filter((entry) => entry.provider === target.provider).map((entry) => ({ path: entry.key.split("."), value: entry.value, pack: entry.pack }));
-  return target.provider === "codex" ? [...owned, ...codexHookTrust(owned, join(home, target.path))] : owned;
+async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: string[], outage: boolean): Promise<AdapterResult> {
+  const previous = await readRecord(home);
+  const next: FieldRecord = {};
+  const writes: Array<Write & { action: Action }> = [];
+  const result: AdapterResult = { actions: [], findings: [] };
+  for (const target of configTargets) {
+    const old = previous[target.path] ?? [];
+    const keepOld = () => void (old.length && (next[target.path] = old));
+    const before = await optional(inside(home, target.path));
+    const link = await linkOnPath(home, target.path);
+    let merged: Merged;
+    try {
+      merged = merge(target, before, old, owned(plan, target), adopt.includes(target.path), { outage, configPath: join(home, target.path) });
+    } catch (error) {
+      keepOld();
+      result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept ${target.path} as it is: Fleet cannot read it (${(error as Error).message}). Fix the file, then run fleet apply.`, repair: "human" });
+      continue;
+    }
+    if (merged.after !== undefined && link) {
+      keepOld();
+      result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept ${target.path} because ${link === inside(home, target.path) ? "it is a link" : `${link} is a link`}. Fleet would ${merged.reason} there. Make it a plain file in a plain folder to let Fleet change it.` });
+      continue;
+    }
+    if (merged.record.length) next[target.path] = merged.record;
+    if (merged.kept.length) result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept your ${merged.kept.join(", ")} in ${target.path}. Run fleet apply --adopt ${target.path} to take Fleet's value.` });
+    if (merged.after !== undefined) writes.push({ target: target.path, before, after: merged.after, action: { target: target.path, operation: before === undefined ? "create" : "replace", reason: merged.reason } });
+  }
+  if (dryRun) {
+    for (const write of writes) result.findings.push({ id: `config:${write.target}`, pack: "engine", say: `${write.target} needs an update: ${write.action.reason}.`, repair: "apply" });
+    return result;
+  }
+  const recordText = `${JSON.stringify(next, null, 2)}\n`;
+  const recordBefore = await readState(home, recordTarget);
+  await writeWithBackups(home, recordBefore === recordText ? writes : [...writes, { target: recordTarget, before: recordBefore, after: recordText }]);
+  result.actions.push(...writes.map((write) => write.action));
+  return result;
 }
 
-function merge(target: Target, text: string | undefined, previous: Field[], wanted: Field[], adopt: boolean) {
+function owned(plan: Plan, target: Target): Field[] {
+  return plan.config.filter((entry) => entry.provider === target.provider).map((entry) => ({ path: keyPath(entry.key), value: entry.value, pack: entry.pack }));
+}
+
+function merge(target: Target, text: string | undefined, previous: Field[], wanted: Field[], adopt: boolean, options: { outage: boolean; configPath: string }): Merged {
   const current: Document = text === undefined ? {} : target.format.decode(text);
   const original = target.format.encode(current);
+  const edited = previous.filter((field) => get(current, field.path) !== undefined && !same(get(current, field.path), field.value));
+  const stale = options.outage ? [] : staleKeys(target.provider, current, (path) => !wanted.some((field) => overlaps(field.path, path)) && !edited.some((field) => overlaps(field.path, path)));
   const record: Field[] = [];
   const kept: string[] = [];
-  const set_: string[] = [];
+  const changed: string[] = [];
   const removed: string[] = [];
-  for (const field of wanted) {
-    const value = get(current, field.path);
-    const old = previous.find((item) => samePath(item.path, field.path));
-    if (same(value, field.value)) record.push(field);
-    else if (value === undefined || (old && same(value, old.value)) || adopt) {
-      set(current, field.path, field.value);
-      set_.push(field.path.join("."));
+  const reconcile = (fields: Field[]) => {
+    const applied: Field[] = [];
+    for (const field of fields) {
+      const value = get(current, field.path);
+      const old = previous.find((item) => samePath(item.path, field.path));
+      if (!same(value, field.value) && value !== undefined && !(old && same(value, old.value)) && !adopt) {
+        kept.push(field.path.join("."));
+        if (old) record.push(old);
+        continue;
+      }
+      if (!same(value, field.value)) {
+        set(current, field.path, field.value);
+        changed.push(field.path.join("."));
+      }
       record.push(field);
-    } else {
-      kept.push(field.path.join("."));
-      if (old) record.push(old);
+      applied.push(field);
+    }
+    return applied;
+  };
+  const applied = reconcile(wanted);
+  const trust: Field[] = [];
+  if (target.provider === "codex") {
+    const keptEvents = wanted.filter((field) => field.path[0] === "hooks" && field.path.length === 2 && !applied.includes(field)).map((field) => field.path[1]!);
+    trust.push(...reconcile(codexHookTrust(applied, options.configPath)));
+    const retained = previous.filter((field) => keptEvents.some((event) => isTrustOf(field, options.configPath, event)));
+    record.push(...retained);
+    trust.push(...retained);
+  }
+  const all = [...wanted, ...trust];
+  for (const field of previous) {
+    if (all.some((item) => overlaps(item.path, field.path))) continue;
+    if (options.outage) record.push(field);
+    else if (same(get(current, field.path), field.value)) {
+      remove(current, field.path);
+      removed.push(field.path.join("."));
     }
   }
-  for (const field of previous) {
-    if (wanted.some((item) => samePath(item.path, field.path))) continue;
-    if (!same(get(current, field.path), field.value)) continue;
-    remove(current, field.path);
-    removed.push(field.path.join("."));
-  }
-  for (const path of staleKeys(target.provider, current, wanted)) {
+  for (const path of stale) {
+    if (get(current, path) === undefined) continue;
     remove(current, path);
     removed.push(path.join("."));
   }
-  const reason = [set_.length ? `set ${set_.join(", ")}` : "", removed.length ? `remove ${removed.join(", ")}` : ""].filter(Boolean).join("; ");
+  const reason = [changed.length ? `set ${changed.join(", ")}` : "", removed.length ? `remove ${removed.join(", ")}` : ""].filter(Boolean).join("; ");
   const after = target.format.encode(current);
   return { record, kept, reason, after: after === original ? undefined : after };
 }
 
-function keptFinding(change: Change): Finding {
-  return { id: `kept:${change.target}`, pack: "engine", say: `Kept your ${change.kept.join(", ")} in ${change.target}. Run fleet apply --adopt ${change.target} to take Fleet's value.` };
+/** True while an enabled pack is missing because its source cannot be fetched. Its settings must not look departed. */
+export function sourceOutage(plan: Plan) {
+  return plan.packs.some((pack) => !pack.available && (pack.reason ?? "").startsWith("not found; unreachable"));
 }
 
-async function readRecord(home: string): Promise<Record> {
-  const text = await optional(inside(home, recordTarget));
+async function readRecord(home: string): Promise<FieldRecord> {
+  const text = await readState(home, recordTarget);
   if (text === undefined) return {};
   const value = JSON.parse(text) as unknown;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${recordTarget} is not a field record`);
-  for (const fields of Object.values(value)) {
-    if (!Array.isArray(fields) || fields.some((field) => !Array.isArray(field?.path) || !field.path.length || field.path.some((key: unknown) => typeof key !== "string"))) throw new Error(`${recordTarget} holds an invalid field path`);
+  const record: FieldRecord = {};
+  for (const [target, fields] of Object.entries(value)) {
+    if (!Array.isArray(fields) || fields.some((field) => !Array.isArray(field?.path) || field.path.some((key: unknown) => typeof key !== "string"))) throw new Error(`${recordTarget} holds an invalid field path`);
+    for (const field of fields) checkPath(field.path, `${recordTarget} path ${field.path.join(".")}`);
+    record[target] = fields;
   }
-  return value as Record;
-}
-
-async function writeWithBackups(home: string, changes: Change[]) {
-  const backupRoot = `.local/state/fleet/backups/${new Date().toISOString().replaceAll(":", "-")}-${randomUUID()}`;
-  const done: Change[] = [];
-  try {
-    for (const change of changes) {
-      const path = inside(home, change.target);
-      if (change.before !== undefined) {
-        const backup = inside(home, `${backupRoot}/${change.target}`);
-        await mkdir(dirname(backup), { recursive: true, mode: 0o700 });
-        await writeFile(backup, change.before, { mode: 0o600 });
-      }
-      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      const temporary = `${path}.${randomUUID()}.tmp`;
-      await writeFile(temporary, change.after, { mode: 0o600 });
-      await rename(temporary, path);
-      done.push(change);
-    }
-  } catch (error) {
-    for (const change of done.reverse()) {
-      const path = inside(home, change.target);
-      if (change.before === undefined) await rm(path, { force: true });
-      else await writeFile(path, change.before);
-    }
-    throw error;
-  }
-}
-
-async function isLink(path: string) {
-  return lstat(path).then((info) => info.isSymbolicLink(), () => false);
-}
-
-async function optional(path: string) {
-  try {
-    return await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-}
-
-async function spawnRunner(command: string[]) {
-  try {
-    const child = Bun.spawn(command, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-    const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-    return { code, stdout };
-  } catch {
-    return { code: 127, stdout: "" };
-  }
+  return record;
 }

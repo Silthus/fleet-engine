@@ -1,5 +1,5 @@
 import type { Provider } from "../../pack/types.ts";
-import { get, isDocument, samePath, type Document, type Field } from "./fields.ts";
+import { get, isDocument, type Document } from "./fields.ts";
 
 export const proxyPort = "8317";
 
@@ -12,8 +12,9 @@ export function pointsAtProxy(value: unknown) {
   }
 }
 
-export function staleKeys(provider: Provider, document: Document, wanted: Field[]): string[][] {
-  const free = (path: string[]) => !wanted.some((field) => samePath(field.path, path)) && get(document, path) !== undefined;
+/** Proxy keys a Hub pack once wrote. free says whether no pack owns a path and the user did not change it. */
+export function staleKeys(provider: Provider, document: Document, isFree: (path: string[]) => boolean): string[][] {
+  const free = (path: string[]) => isFree(path) && get(document, path) !== undefined;
   const stale: string[][] = [];
   if (provider === "claude") {
     const base = ["env", "ANTHROPIC_BASE_URL"];
