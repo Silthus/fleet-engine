@@ -1,6 +1,6 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { userInfo } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Finding, Owned, PackJob, Plan } from "../../pack/types.ts";
 import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { sourceOutage } from "../provider-config/adapter.ts";
@@ -8,8 +8,8 @@ import { inside } from "../../files/install.ts";
 import { linkOnPath, readState, withLock, writeWithBackups, type Write } from "../provider-config/store.ts";
 import { spawnRunner, type CommandRunner } from "../run.ts";
 import { cronLine, cronSafe, reconcileCrontab } from "./cron.ts";
-import { labelOf, labelPrefix, plist } from "./launchd.ts";
-import { launcherScript, launcherTarget, logTarget } from "./launcher.ts";
+import { labelPrefix, plist } from "./launchd.ts";
+import { agentCopyTarget, launcherScript, launcherTarget, logTarget } from "./launcher.ts";
 import { cronExpression, launchdTimer, t3Schedule, type T3Schedule } from "./schedule.ts";
 
 export type FleetTask = {
@@ -24,7 +24,6 @@ export type FleetTask = {
   runtimeMode: NonNullable<PackJob["task"]>["runtimeMode"];
 };
 
-/** The T3 server's scheduled tasks, as the T3 config adapter's client exposes them. */
 export type T3Tasks = { list(): Promise<FleetTask[]>; upsert(task: FleetTask): Promise<void>; setEnabled(id: string, enabled: boolean): Promise<void> };
 
 export type JobsOptions = { run?: CommandRunner; engineRoot?: string; uid?: number; t3?: () => Promise<T3Tasks | undefined> };
@@ -127,11 +126,16 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     const { code } = await run(["launchctl", "print", `${domain}/${label}`]);
     return code === 0 ? "loaded" : code === notFound ? "absent" : `launchctl print exit ${code}`;
   };
-  const foreign = (name: string, label: string, text: string | undefined, pack = "engine") => {
-    const found = text === undefined ? undefined : labelOf(text);
-    if (text === undefined || found === label) return false;
-    result.findings.push({ id: `job:${label.slice(labelPrefix.length)}`, pack, say: `Left Library/LaunchAgents/${name} alone: its Label is ${found ?? "missing"}, not ${label}.`, repair: "human" });
+  const written = async (id: string) => (jobId.test(id) ? await readState(home, agentCopyTarget(id)).catch(() => undefined) : undefined);
+  const foreign = async (name: string, id: string, text: string | undefined, wanted?: string, pack = "engine") => {
+    if (text === undefined || text === wanted || text === (await written(id))) return false;
+    result.findings.push({ id: `job:${id}`, pack, say: `Left Library/LaunchAgents/${name} alone: Fleet did not write it, or it changed since. Move it away, then run fleet apply.`, repair: "human" });
     return true;
+  };
+  const keepCopy = async (id: string, content: string) => {
+    if (await linkOnPath(home, agentCopyTarget(id))) return;
+    await mkdir(dirname(inside(home, agentCopyTarget(id))), { recursive: true });
+    await writeFile(inside(home, agentCopyTarget(id)), content);
   };
   const stop = async (job: { id: string; pack: string } | string, label: string) => {
     await run(["launchctl", "bootout", `${domain}/${label}`]);
@@ -149,7 +153,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     const script = scripts.get(job.id)!;
     const content = plist(job.id, inside(home, script.target), launchdTimer(job.schedule), inside(home, logTarget(job.id)));
     const current = await readFile(file, "utf8").catch(() => undefined);
-    if (foreign(name, label, current, job.pack)) continue;
+    if (await foreign(name, job.id, current, content, job.pack)) continue;
     const reload = current !== content || (await state(label)) !== "loaded";
     if (!reload && !stale(script)) continue;
     if (dryRun) {
@@ -161,6 +165,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     if (!reload) continue;
     await mkdir(agents, { recursive: true });
     await writeFile(file, content);
+    await keepCopy(job.id, content);
     if ((await run(["launchctl", "bootstrap", domain, file])).code !== 0) result.findings.push({ id: `job:${job.id}`, pack: job.pack, say: `launchd did not load the ${job.id} job.`, repair: "apply" });
     result.actions.push({ target: `Library/LaunchAgents/${name}`, operation: current === undefined ? "create" : "replace" });
   }
@@ -168,7 +173,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     const label = name.slice(0, -".plist".length);
     const id = label.slice(labelPrefix.length);
     if (outage || jobs.some((job) => `${labelPrefix}${job.id}` === label)) continue;
-    if (foreign(name, label, await readFile(join(agents, name), "utf8").catch(() => undefined))) continue;
+    if (await foreign(name, id, await readFile(join(agents, name), "utf8").catch(() => undefined))) continue;
     if (dryRun) {
       result.findings.push(needs(id, "removed"));
       continue;
@@ -176,6 +181,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     if (!(await stop(id, label))) continue;
     await rm(join(agents, name), { force: true });
     if (jobId.test(id)) await removeLauncher(home, id);
+    if (jobId.test(id) && !(await linkOnPath(home, agentCopyTarget(id)))) await rm(inside(home, agentCopyTarget(id)), { force: true });
     result.actions.push({ target: `Library/LaunchAgents/${name}`, operation: "remove" });
   }
 }
