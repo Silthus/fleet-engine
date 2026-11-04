@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "name": "pull-requests",
+  "summary": "Draft pull requests, reviewed and proved.",
+  "instructions": "AGENTS.md",
+  "guides": [
+    { "guide": "pull-requests", "path": "pull-requests.md" },
+    { "guide": "coding-standards", "section": "Pull requests", "path": "standards-section.md" }
+  ],
+  "skills": ["skills/full-stop", "agent-skills:communication/writing-voice"],
+  "settings": [
+    { "key": "pull-requests.reviewer", "question": "Which model reviews your pull requests?", "type": "choice", "choices": [{ "value": "other", "label": "The other family" }] },
+    { "key": "pull-requests.mergeCommand", "question": "Which command merges a pull request?", "type": "string", "optional": true }
+  ],
+  "workflows": [{ "id": "draft-prs", "name": "Draft PRs", "sentence": "Work ends in a draft pull request.", "default": true }]
+}

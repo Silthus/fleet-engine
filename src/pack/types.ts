@@ -40,6 +40,8 @@ export type T3Task = {
   modelRole: string;
   workspaceStrategy: "worktree";
   runtimeMode: "full-access" | "auto" | "approval-required";
+  /** Set by resolve from the projectSetting's value; packs leave it out. */
+  project?: string;
 };
 
 export type PackJob = {
@@ -95,16 +97,18 @@ export type PackManifest = {
   jobs?: PackJob[];
   human?: HumanStep[];
   steps?: PackStep[];
-  checks?: Array<{ id: string; run: string[]; say: string; on?: Os[]; roles?: MachineRole[] }>;
+  checks?: PackCheck[];
 };
+
+export type PackCheck = { id: string; run: string[]; say: string; on?: Os[]; roles?: MachineRole[]; workflow?: string };
 
 export type SourceRef = { name: string; repo: string; ref: string };
 
 export type LoadedPack = { manifest: PackManifest; dir: string };
 
-export type FetchedSource =
-  | { ref: SourceRef; dir: string; packs: LoadedPack[]; stale?: string }
-  | { ref: SourceRef; error: string };
+export type AvailableSource = { ref: SourceRef; dir: string; packs: LoadedPack[]; stale?: string };
+
+export type FetchedSource = AvailableSource | { ref: SourceRef; error: string };
 
 export type ProfileFile = {
   schema: 1;
@@ -114,6 +118,7 @@ export type ProfileFile = {
   plan: AiPlan;
   settings: Record<string, SettingValue>;
   workflows: Record<string, boolean>;
+  devboxes?: string[];
   overrides?: { config?: ConfigEntry[]; skills?: string[] };
 };
 
@@ -122,3 +127,28 @@ export type Profile = ProfileFile & { dir: string; aboutMe?: string };
 export type SetupProgress = { done: string[]; draft?: Partial<ProfileFile> };
 
 export type MachineFile = { schema: 1; role: MachineRole; profileDir?: string; setup?: SetupProgress };
+
+export type DesiredFile = { target: string; conflict?: string } & ({ source: string } | { content: string });
+
+export type Owned<T> = T & { pack: string };
+
+export type ResolvedPack = { name: string; source: string; ref: string; available: boolean; reason?: string };
+
+export type Plan = {
+  machine: MachineFile;
+  os: Os;
+  ai: AiPlan;
+  packs: ResolvedPack[];
+  workflows: Array<{ id: string; pack: string; active: boolean; reason?: string }>;
+  files: DesiredFile[];
+  config: Array<Owned<ConfigEntry>>;
+  owners: Record<string, string>;
+  jobs: Array<Owned<PackJob>>;
+  human: Array<Owned<HumanStep>>;
+  steps: Array<Owned<PackStep>>;
+  checks: Array<Owned<PackCheck>>;
+  commands: Record<string, { pack: string; path: string }>;
+  settings: Record<string, SettingValue>;
+  unanswered: PackSetting[];
+  dropped: Array<{ pack: string; item: string; reason: string }>;
+};

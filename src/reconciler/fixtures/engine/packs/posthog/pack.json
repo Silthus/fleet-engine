@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "name": "posthog",
+  "summary": "PostHog repo prep and devboxes.",
+  "audience": "posthog",
+  "settings": [{ "key": "posthog.region", "question": "Where should your devbox run?", "type": "choice", "choices": [{ "value": "us", "label": "US" }, { "value": "eu", "label": "EU" }], "default": "us", "ask": "setup" }],
+  "human": [{ "id": "coder", "say": "Sign in to Coder.", "command": "coder login", "probe": ["coder", "whoami"], "on": ["darwin"] }]
+}

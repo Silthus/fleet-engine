@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "base",
+  "summary": "Safety rules every agent follows.",
+  "instructions": "AGENTS.md",
+  "guides": [{ "guide": "coding-standards", "path": "coding-standards.md" }],
+  "settings": [{ "key": "base.heavySlots", "question": "How many heavy commands may run at once?", "type": "number", "default": 2 }],
+  "workflows": [{ "id": "prune", "name": "Worktree prune", "sentence": "Old worktrees are removed each night.", "default": true }],
+  "jobs": [{ "id": "prune", "command": ["fleet", "prune"], "schedule": { "every": "1d", "at": "03:17" }, "workflow": "prune" }],
+  "config": [{ "provider": "claude", "key": "permissions.defaultMode", "value": "acceptEdits" }]
+}
