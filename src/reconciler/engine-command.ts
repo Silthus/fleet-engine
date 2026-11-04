@@ -8,5 +8,5 @@ export function engineCommand(command: string[], engineRoot: string | undefined)
 
 /** The same for a shell command line, such as a human step's command. */
 export function engineShellCommand(command: string, engineRoot: string | undefined): string {
-  return engineRoot ? command.replace(/^fleet(?=\s|$)/, `/bin/sh ${quote(join(engineRoot, "fleet"))}`) : command;
+  return engineRoot ? command.replace(/^fleet(?=\s|$)/, () => `/bin/sh ${quote(join(engineRoot, "fleet"))}`) : command;
 }
