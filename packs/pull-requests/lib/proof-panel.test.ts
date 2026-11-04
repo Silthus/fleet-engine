@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture } from "./proof-testing.ts";
+import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
 
 afterEach(cleanFixtures);
@@ -215,4 +216,27 @@ test("only entries inside a lens's FINDINGS block need answers, not its summary"
   const gate = await pr.fleet("gate");
   expect(gate.output).not.toContain("unanswered findings");
   expect(gate.code).toBe(0);
+});
+
+test("a heading inside a lens's FINDINGS block hides none of its findings", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "greet the new member\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", "FINDINGS:\n## High severity\n- feature.txt:1 | high | the greeting names no member\n- feature.txt:1 | high | the greeting skips the team\nCOVERED: feature.txt\n");
+  await pr.fleet("review", "--lens", "correctness");
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  fakeModel(pr, "JUDGE", verdict());
+  const gate = await pr.fleet("gate");
+  expect(gate.output).toContain("review: round 1 has unanswered findings 1, 2;");
+  expect(gate.code).toBe(1);
+});
+
+test("a reviewer stops when fleet cannot record it in its slot", async () => {
+  let reviewer = 0;
+  const started = async (pid: number) => { reviewer = pid; throw new Error("cannot write the slot"); };
+  const env = { FLEET_PROOF_REVIEWER: "cat >/dev/null; exec tail -f /dev/null", PATH: process.env.PATH };
+  const answer = await askModel("reviewer", { role: "lookup", work: "Find files", provider: "claude", model: "lookup-model", effort: "medium" }, { prompt: "Review this.", cwd: fixture("fleet-reviewer-"), started }, env, 60_000);
+  expect(answer).toMatchObject({ ok: false, cause: expect.stringContaining("cannot write the slot") });
+  expect(reviewer).toBeGreaterThan(0);
+  expect(() => process.kill(reviewer, 0)).toThrow();
 });

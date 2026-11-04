@@ -409,8 +409,8 @@ function reviewedLines(findings: string) {
   let inside = !lensAnswer;
   return lines.flatMap((line) => {
     if (findingsBlock.test(line)) { inside = true; return [line.replace(findingsBlock, "")]; }
-    if (/^#/.test(line)) inside = !lensAnswer;
     if (/^COVERED\b/.test(line)) inside = false;
+    else if (!lensAnswer && /^#/.test(line)) inside = true;
     return inside ? [line] : [];
   }).filter((line) => line.trim());
 }
