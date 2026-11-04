@@ -32,6 +32,7 @@ function plan(config: Array<ConfigEntry & { pack?: string }> = []): Plan {
     settings: {},
     unanswered: [],
     dropped: [],
+    models: [],
   };
 }
 
