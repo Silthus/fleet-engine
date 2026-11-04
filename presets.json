@@ -1,0 +1,23 @@
+[
+  {
+    "id": "starter",
+    "name": "Starter",
+    "blurb": "Safe agent rules, tuned T3 defaults, and draft pull requests. A calm first step.",
+    "packs": ["pull-requests"],
+    "workflows": {}
+  },
+  {
+    "id": "everyday",
+    "name": "Everyday",
+    "blurb": "Starter, plus maps of tickets, side threads, and agents that write in your voice.",
+    "packs": ["pull-requests", "orchestration", "communication"],
+    "workflows": {}
+  },
+  {
+    "id": "michael",
+    "name": "Michael's",
+    "blurb": "Everything the author runs: shared memory and the nightly loops on an always-on devbox.",
+    "packs": ["pull-requests", "orchestration", "communication", "memory"],
+    "workflows": { "quality-loop": true, "signal-loop": true, "pr-digest": true }
+  }
+]

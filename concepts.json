@@ -1,0 +1,20 @@
+[
+  { "word": "agent", "note": "An AI coding assistant, such as Claude Code or Codex, that reads, writes, and runs code for you." },
+  { "word": "skill", "note": "A folder of instructions an agent loads when a task needs it, such as how to open a pull request." },
+  { "word": "model table", "note": "Which model and effort agents use for each kind of work, such as a fast model for lookups and a strong one for reviews." },
+  { "word": "T3 Code", "note": "An app that runs agent threads on your machines and shows them on every device." },
+  { "word": "thread", "note": "One agent conversation in T3 Code, with its own task and its own checkout of the repo." },
+  { "word": "worktree", "note": "A separate checkout of the same repo, so several threads can change code at once without touching each other." },
+  { "word": "devbox", "note": "A Linux machine, local or in the cloud, where agents and threads run." },
+  { "word": "always-on devbox", "note": "A devbox that stays on overnight, so scheduled agent work can run while you sleep." },
+  { "word": "map", "note": "A plan for big work: one issue that lists tickets, each small enough for one pull request." },
+  { "word": "conductor", "note": "The thread that works through a map. It starts one worker thread for each ticket that is ready." },
+  { "word": "draft pull request", "note": "A pull request that is not yet ready for review. Agents open drafts, and you decide when one is ready." },
+  { "word": "proof", "note": "Evidence beside each behavior a pull request changes: a test that failed before and passes after, or output from the real system." },
+  { "word": "full send", "note": "Your words for: take this pull request to merged and rolled out without asking again." },
+  { "word": "stamp it", "note": "Your words for: get this pull request an approving review, then merge it." },
+  { "word": "Coder", "note": "A platform for cloud development machines. Fleet uses its private port links for previews." },
+  { "word": "hogli", "note": "PostHog's developer CLI, which sets up and runs a PostHog devbox.", "audience": "posthog" },
+  { "word": "StampHog", "note": "PostHog's bot that approves low-risk pull requests on request.", "audience": "posthog" },
+  { "word": "ReviewHog", "note": "PostHog's AI review bot for pull requests.", "audience": "posthog" }
+]
