@@ -16,7 +16,7 @@ const region: PackSetting = {
   ask: "setup",
 };
 
-async function ask(timeZone: string, args: string[] = []) {
+async function ask(timeZone: string | undefined, args: string[] = []) {
   const lines: string[] = [];
   const draft: Draft = {};
   const terminal = { print: (line: string) => void lines.push(line), ask: async () => "" };
@@ -42,7 +42,15 @@ describe("a setting's time-zone default", () => {
     expect(result.settings).toEqual({ "team.region": "us" });
   });
 
-  test("is saved without a person, so apply uses it too", async () => {
-    expect((await ask("Europe/Berlin", ["--non-interactive"])).settings).toEqual({ "team.region": "eu" });
+  test("only preselects for a person: without one, setup saves nothing, so an existing profile's answer stays", async () => {
+    const result = await ask("Europe/Berlin", ["--non-interactive"]);
+    expect(result.settings).toBeUndefined();
+    expect(result.output).toContain("✓ US");
+  });
+
+  test("treats a machine without a time zone as one the map does not name", async () => {
+    const result = await ask(undefined);
+    expect(result.output).toContain("  1) US (default)");
+    expect(result.settings).toEqual({ "team.region": "us" });
   });
 });
