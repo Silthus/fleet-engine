@@ -6,10 +6,11 @@ import { loadMachine, loadProfile, saveMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
-import { packList, packsStep, picksFrom, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
+import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { devboxQuestion, devboxSteps, profileForBox, type DevboxContext } from "./devbox.ts";
+import { doneScreen, finalCheck, repoName, runsByItself } from "./done.ts";
 import { profileStep } from "./profile.ts";
 import { runSteps, type Step } from "./runner.ts";
 import { chatgptSignIn, claudeSignIn, githubSignIn, memberSources } from "./signins.ts";
@@ -24,10 +25,14 @@ export type SetupOptions = {
   fetchSource?: (ref: SourceRef, cacheRoot: string) => Promise<FetchedSource>;
   /** Runs fleet apply with this profile and prints its report. */
   apply?: (profileDir: string) => Promise<number>;
+  /** Runs fleet doctor with this profile and prints its report. */
+  doctor?: (profileDir: string) => Promise<number>;
+  /** The environment the standalone check reads. */
+  env?: Record<string, string | undefined>;
 };
 
-/** Steps that run again when the command changes an answer: the profile saves it, and apply puts it on this machine. */
-const answersChanged = ["profile", "apply"];
+/** Steps that run again when the command changes an answer: the profile saves it, apply puts it on this machine, and the check confirms it. */
+const answersChanged = ["profile", "apply", "check"];
 
 export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
 
@@ -58,7 +63,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       ...(flags.plan && flags.plan !== saved.plan ? ["plans"] : []),
     ];
     if (reopened.length || Object.entries(fromFlags).some(([key, value]) => saved.settings?.[key] !== value)) reopened.push(...answersChanged);
-    progress.done = progress.done.filter((id) => !reopened.includes(id));
+    progress.done = progress.done.filter((id) => !reopened.some((step) => id === step || id.startsWith(`${step}:`)));
     if (Object.keys(fromFlags).length) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
       await remember();
@@ -130,7 +135,16 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     question,
     steps: (host, plan) => devboxSteps(host, { terminal, machine: box, nonInteractive: flags.nonInteractive, plan: plan.ai, models: plan.models, profile: () => profileForBox(box, machine.profileDir) }),
   };
-  const steps = () => setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox);
+  const check = () =>
+    finalCheck({
+      terminal,
+      machine: box,
+      home: options.home,
+      env: options.env ?? process.env,
+      devboxes: machine.devboxes ?? [],
+      doctor: () => (machine.profileDir && options.doctor ? options.doctor(machine.profileDir) : Promise.resolve(1)),
+    });
+  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox), check()];
   try {
     const result = await runSteps(steps, {
       terminal,
@@ -141,8 +155,19 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       },
     });
     if (result.unanswered.length) return printNeeds(terminal, steps(), result.unanswered), 2;
-    terminal.print("");
-    terminal.print(`This machine is set up${machine.devboxes?.length ? `, and so is ${machine.devboxes.join(" and ")}` : ""}. The final check comes in a later version of Fleet.`);
+    const { plan } = planFor(context, machine);
+    const summary = {
+      role: machine.role,
+      packs: plan.packs.filter((pack) => pack.available && pack.name !== "base").map((pack) => title(pack.name)),
+      devboxes: machine.devboxes ?? [],
+      profileRepo: repoName((await profileForBox(box, machine.profileDir)).url),
+      runsByItself: runsByItself(
+        plan,
+        catalog.packs.map((pack) => pack.manifest),
+        (machine.devboxes ?? []).map((host) => ({ host, plan: planFor(context, { ...machine, role: "devbox" }).plan })),
+      ),
+    };
+    for (const line of doneScreen(summary)) terminal.print(line);
     return 0;
   } catch (error) {
     if (!(error instanceof Stopped)) throw error;
@@ -155,11 +180,15 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
 
 type Devbox = { question: Step; steps(host: string, plan: { ai: DevboxContext["plan"]; models: DevboxContext["models"] }): Step[] };
 
-function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>, machineSteps: Step[], devbox: Devbox): Step[] {
+function planFor(context: QuestionContext, machine: MachineFile) {
   const draft = context.draft.packs ? context.draft : { ...context.draft, ...picksFrom(context.flags, context.catalog) };
   const profile = draftProfile(draft);
   const fetched = new Set(context.catalog.sources.map((source) => source.ref.name));
-  const plan = resolve(profile, machine, [...context.catalog.sources, ...profile.sources.filter((ref) => !fetched.has(ref.name)).map(notFetched)]);
+  return { profile, plan: resolve(profile, machine, [...context.catalog.sources, ...profile.sources.filter((ref) => !fetched.has(ref.name)).map(notFetched)]) };
+}
+
+function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>, machineSteps: Step[], devbox: Devbox): Step[] {
+  const { profile, plan } = planFor(context, machine);
   const box = human.machine;
   const sshDevbox = !profile.packs.includes("posthog") && (machine.role === "mac" || machine.role === "linux");
   return [

@@ -18,7 +18,7 @@ import { setCommand, settingsCommand } from "./commands/settings.ts";
 import { devboxCommand } from "./commands/devbox.ts";
 import { realMachine } from "./setup/commands.ts";
 
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource"> };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env"> };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -51,7 +51,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
     if (command === "update") return await runUpdate(options);
     if (command in changes) return await change(command as keyof typeof changes, rest, options);
     if (command === "devbox") return await devbox(rest, options);
-    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), ...options.setup });
+    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
     return await runPackCommand(command, rest, options);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
