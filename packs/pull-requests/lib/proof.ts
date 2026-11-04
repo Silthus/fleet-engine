@@ -276,11 +276,18 @@ async function chooseAnswer(home: string, candidates: HeardAnswer[], check: (ans
   throw refusals[0];
 }
 
+function claimedOn(text: string) {
+  try {
+    const claim = JSON.parse(text) as Claim;
+    return `${claim.repository}#${claim.pr}`;
+  } catch { return "a PR"; }
+}
+
 const usedOn = (where: string) => `This answer is already used on ${where}. One answer counts once. Ask the user again`;
 
 async function usedAnswer(home: string, answer: HeardAnswer) {
-  const claim = await readJson<Claim | undefined>(claimPath(home, answer), undefined);
-  if (claim) return usedOn(`${claim.repository}#${claim.pr}`);
+  const claim = await readFile(claimPath(home, answer), "utf8").catch(() => undefined);
+  if (claim !== undefined) return usedOn(claimedOn(claim));
   const recorded = (await recordedAnswers(home)).find((entry) => entry.message === messageOf(answer));
   return recorded && usedOn(recorded.where);
 }

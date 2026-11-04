@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startT3Stub } from "../../base/lib/t3/testing.ts";
@@ -359,4 +360,15 @@ test("a later identical choice for another PR does not hide the user's unused an
   pr.choose("Run one more round", "Run one more review round? example/product#43: The arbiter escalates.");
   expect((await pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).code).toBe(0);
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8")).answer).toMatchObject({ message: "request-1:0" });
+});
+
+test("a claim that another start is still writing counts as used", async () => {
+  const pr = checkout();
+  const third = await twoRounds(pr);
+  pr.env.FLEET_REVIEW_ARBITER = escalate;
+  pr.choose("Run one more round", "Run one more review round? example/product#42: The arbiter escalates.");
+  const claims = join(pr.home, ".local/state/fleet/proof/claims");
+  mkdirSync(claims, { recursive: true });
+  writeFileSync(join(claims, `${createHash("sha256").update("mcp:thread-1/request-1:0").digest("hex")}.json`), "");
+  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("This answer is already used on a PR. One answer counts once. Ask the user again");
 });
