@@ -22,6 +22,7 @@ describe("the Pull-requests pack", () => {
     expect(result.files.map((file) => file.target)).toEqual(expect.arrayContaining([".agents/guides/pull-requests.md", ".agents/guides/standing-rules.md"]));
     expect(result.unanswered).toEqual([]);
     expect(fileContent(result, ".agents/guides/skill-settings.md")).toContain("- `pull-requests.mergeCommand`: `gh pr merge --merge`. Which command merges a pull request when the repo names none?");
+    expect(result.settings).toMatchObject({ "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 6, "pull-requests.reviewTimeoutMinutes": 20, "pull-requests.panelSlots": 3 });
   });
 
   test("links each pull-request skill from agent-skills for Claude and for other agents", () => {

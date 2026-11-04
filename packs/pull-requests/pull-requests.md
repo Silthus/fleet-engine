@@ -7,7 +7,7 @@ The workflow that `full-stop`, `full-send`, and `stamp-pr` follow.
 1. Build it test-first with the `tdd` skill. Pick the test seams yourself and name them in the pull request description. Before the pull request opens, run the design pass in `PANEL.md` of the `qa-swarm` skill and fix what holds.
 2. Open the pull request as a draft, record the proofs it owes per `PROOF.md` of `qa-swarm` with `fleet proof require`, run them, and write the description with the `pr-description` skill, proof included.
 3. Get at least one **review**, cast from the model table in `~/.agents/AGENTS.md`. Run it with `fleet proof review`, which runs that reviewer and records its findings. Answer them with `fleet proof respond`, and give later fixes a final read with `fleet proof review --scope final`. Check each finding against the code, fix what holds, and push.
-4. Check every comment that other reviewers leave, bot or person, against the code. Fix what holds, or reply with the reason it does not. Resolve each bot thread you answered. When the same finding comes back after its fix, or after the number of review rounds in `skill-settings.md`, ask me.
+4. Check every comment that other reviewers leave, bot or person, against the code. Fix what holds, or reply with the reason it does not. Resolve each bot thread you answered. When the same finding comes back after its fix, or after `pull-requests.reviewCeiling` review rounds, ask me.
 
 Run `qa-swarm` in place of step 3 when I ask for it, when I ask for `full-send`, or when the diff touches a danger area of the `merge-risk` skill.
 
