@@ -96,8 +96,14 @@ describe("fleet update", () => {
   });
 
   test("follows the profile's engine repository", async () => {
-    const engineDir = engineCheckout(engineRemote(["v0.1.0"]), "v0.1.0");
-    const moved = engineRemote(["v0.1.0", "v0.2.0"]);
+    const original = engineRemote(["v0.1.0"]);
+    const engineDir = engineCheckout(original, "v0.1.0");
+    // A moved engine is a fork or mirror, so its tags point at the same commits.
+    const moved = temp.make("engine-moved-");
+    git(moved, "clone", "-q", original, ".");
+    writeFileSync(join(moved, "VERSION"), "v0.2.0");
+    git(moved, "commit", "-q", "-am", "v0.2.0");
+    git(moved, "tag", "v0.2.0");
     const result = await run(engineDir, { repo: moved, ref: "v0.1.0", channel: "release" });
     expect(result.output).toContain(`The engine now comes from ${moved}.`);
     expect(await result.version).toBe("v0.2.0");
