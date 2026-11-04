@@ -343,6 +343,19 @@ describe("guards", () => {
     expect(readdirSync(home)).toEqual([]);
   });
 
+  test("still leaves the GitHub account alone when a test points HOME at a temporary folder", async () => {
+    const home = temp.make("home-");
+    const saved = { HOME: process.env.HOME, PATH: process.env.PATH };
+    Object.assign(process.env, { HOME: home, PATH: "" });
+    try {
+      const report = await apply(plan("linux"), { home, adapters: [identityAdapter({ engineRoot: engine })] });
+      expect(report).toMatchObject({ actions: [], findings: [] });
+      expect(readdirSync(home)).toEqual([]);
+    } finally {
+      Object.assign(process.env, saved);
+    }
+  });
+
   test("no name or email is written into the engine", async () => {
     const root = resolve(import.meta.dir, "../../..");
     const tracked = Bun.spawnSync(["git", "ls-files", "src", "scripts", "packs", "fleet", "get.sh"], { cwd: root }).stdout.toString().trim().split("\n");
