@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "name": "memory",
+  "summary": "Agents on all your machines share what they learn through your own private memory repo.",
+  "day": "A trap one agent hits on your laptop is a note the next agent reads on your devbox, minutes later.",
+  "cost": "A small private GitHub repo, and a sync every five minutes.",
+  "risk": "Agents write notes about you and your work into the memory repo. Keep it private.",
+  "instructions": "AGENTS.md",
+  "guides": [
+    {
+      "guide": "memory",
+      "path": "memory.md"
+    }
+  ],
+  "settings": [
+    {
+      "key": "memory.repo",
+      "question": "Which private GitHub repo holds your agent memory, such as you/agent-notes?",
+      "type": "string",
+      "ask": "setup"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "shared-memory",
+      "name": "Shared memory",
+      "default": true,
+      "needs": [
+        "gh"
+      ],
+      "settings": [
+        "memory.repo"
+      ],
+      "sentence": "Agents on every machine read and write one private memory repo, which syncs every five minutes.",
+      "moment": {
+        "time": "10:30",
+        "title": "It remembers",
+        "body": "An agent on your devbox already knows the trap another agent hit on your laptop this morning, because both read the same memory.",
+        "words": [
+          "agent",
+          "devbox"
+        ]
+      }
+    }
+  ],
+  "config": [
+    {
+      "provider": "claude",
+      "key": "autoMemoryDirectory",
+      "value": "~/.agents/memory",
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "shared-memory"
+    }
+  ],
+  "files": [
+    {
+      "path": "hooks/memory-cap.ts",
+      "target": ".config/fleet/hooks/PreToolUse/memory-cap.ts",
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "shared-memory"
+    }
+  ],
+  "jobs": [
+    {
+      "id": "memory-sync",
+      "command": [
+        "fleet",
+        "memory-sync"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "workflow": "shared-memory"
+    }
+  ]
+}
