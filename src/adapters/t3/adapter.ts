@@ -10,7 +10,7 @@ import type { T3Rpc, T3Server } from "./port.ts";
 import { reconcileService } from "./service.ts";
 import { localT3Server } from "./session.ts";
 import { desktopTarget, reconcileSettings, settingsFields, settingsTarget } from "./settings.ts";
-import { activeProjects, t3Tasks } from "./tasks.ts";
+import { activeProjects, expandHome, t3Tasks } from "./tasks.ts";
 
 export { desktopTarget, recordTarget, settingsTarget } from "./settings.ts";
 
@@ -50,7 +50,7 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
         try {
           await server.session(home, async (rpc) => {
             merge(result, await reconcileSettings(plan, home, { ...settings, rpc }));
-            await reconcileProjects(rpc, plan, run, dryRun, result);
+            await reconcileProjects(rpc, plan, home, run, dryRun, result);
             await checkLinks(rpc, result);
           });
           live = { home, plan };
@@ -74,16 +74,16 @@ function taskProjects(plan: Plan) {
   return [...new Set(plan.jobs.flatMap((job) => (job.runner === "t3" && job.task?.project ? [job.task.project] : [])))];
 }
 
-async function reconcileProjects(rpc: T3Rpc, plan: Plan, run: CommandRunner, dryRun: boolean, result: AdapterResult) {
+async function reconcileProjects(rpc: T3Rpc, plan: Plan, home: string, run: CommandRunner, dryRun: boolean, result: AdapterResult) {
   const wanted = taskProjects(plan);
   if (!wanted.length) return;
   const listed = new Set((await activeProjects(rpc)).map((project) => resolve(project.workspaceRoot)));
-  for (const path of wanted.filter((item) => !listed.has(resolve(item)))) {
+  for (const path of wanted.filter((item) => !listed.has(resolve(expandHome(home, item))))) {
     if (dryRun) {
       result.findings.push(finding(`project:${path}`, `T3 Code needs the project ${path}.`, "apply"));
       continue;
     }
-    const added = await run(["t3", "project", "add", path]);
+    const added = await run(["t3", "project", "add", expandHome(home, path)]);
     if (added.code === 0) result.actions.push({ target: `t3 project ${path}`, operation: "create" });
     else if (added.code === 127) result.findings.push(finding(`project:${path}`, `Fleet cannot run t3 to add the project ${path}. Add the folder as a project in T3 Code, then run fleet apply.`, "human"));
     else result.findings.push(finding(`project:${path}`, `T3 Code did not add the project ${path} (exit ${added.code}). Check that the folder exists, then run fleet apply.`, "apply"));

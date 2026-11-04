@@ -1,7 +1,7 @@
 import type { Finding, Plan } from "../../pack/types.ts";
 import type { AdapterResult } from "../../reconciler/apply.ts";
 import { readFieldRecord, type FieldRecord } from "../provider-config/adapter.ts";
-import { checkPath, json, type Document, type Field } from "../provider-config/fields.ts";
+import { checkPath, json, samePath, type Document, type Field } from "../provider-config/fields.ts";
 import { readState, writeWithBackups, type Write } from "../provider-config/store.ts";
 import { holds, reconcileKeys, type Reconciled } from "./keys.ts";
 import type { T3Rpc } from "./port.ts";
@@ -47,13 +47,19 @@ export async function reconcileSettings(plan: Plan, home: string, options: Optio
       result.findings.push(finding(`kept:${target}`, `Kept ${target} as it is: Fleet cannot read it (${(error as Error).message}). Fix the file, then run fleet apply.`, "human"));
       continue;
     }
-    const merged = reconcileKeys(current, old, fields, { adopt: options.adopt.includes(target) || (target === desktopTarget && current.updateChannelConfiguredByUser !== true), outage: options.outage });
-    if (merged.record.length) next[target] = merged.record;
-    if (merged.kept.length) result.findings.push(finding(`kept:${target}`, `Kept your ${merged.kept.join(", ")} in ${target}. Run fleet apply --adopt ${target} to take Fleet's value.`));
-    if (target === settingsTarget && options.rpc) {
-      await throughServer(options.rpc, merged, options.dryRun, result);
+    if (target === desktopTarget && current.updateChannelConfiguredByUser === true && current.updateChannel === undefined && !options.adopt.includes(target)) {
+      if (old.length) next[target] = old;
       continue;
     }
+    const merged = reconcileKeys(current, old, fields, { adopt: options.adopt.includes(target) || (target === desktopTarget && current.updateChannelConfiguredByUser !== true), outage: options.outage });
+    if (merged.kept.length) result.findings.push(finding(`kept:${target}`, `Kept your ${merged.kept.join(", ")} in ${target}. Run fleet apply --adopt ${target} to take Fleet's value.`));
+    if (target === settingsTarget && options.rpc) {
+      const refused = await throughServer(options.rpc, merged, options.dryRun, result);
+      const record = merged.record.flatMap((field) => (refused.includes(field) ? old.filter((item) => samePath(item.path, field.path)) : [field]));
+      if (record.length) next[target] = record;
+      continue;
+    }
+    if (merged.record.length) next[target] = merged.record;
     const reason = [merged.changed.length ? `set ${merged.changed.join(", ")}` : "", merged.removed.length ? `remove ${merged.removed.join(", ")}` : ""].filter(Boolean).join("; ");
     if (reason) writes.push({ target, before, after: json.encode(merged.document), reason });
   }
@@ -69,17 +75,18 @@ export async function reconcileSettings(plan: Plan, home: string, options: Optio
   return result;
 }
 
-async function throughServer(rpc: T3Rpc, merged: Reconciled, dryRun: boolean, result: AdapterResult) {
+async function throughServer(rpc: T3Rpc, merged: Reconciled, dryRun: boolean, result: AdapterResult): Promise<Field[]> {
   if (merged.removed.length) result.findings.push(finding("t3:dropped", `Fleet no longer sets ${merged.removed.join(", ")} in T3 Code. T3 Code keeps the current value; change it in T3 Code's settings if you like.`));
   const effective = await readT3Settings(rpc);
   const key = (field: Field) => field.path[0]!;
   const changed = merged.applied.filter((field) => !holds(effective[key(field)], field.value));
-  if (!changed.length) return;
-  if (dryRun) return void result.findings.push(finding("t3:settings", `T3 Code needs these settings: ${changed.map(key).join(", ")}.`, "apply"));
+  if (!changed.length) return [];
+  if (dryRun) return result.findings.push(finding("t3:settings", `T3 Code needs these settings: ${changed.map(key).join(", ")}.`, "apply")), [];
   await rpc.call("server.updateSettings", { patch: Object.fromEntries(changed.map((field) => [key(field), field.value])) });
   const after = await readT3Settings(rpc);
   const missing = changed.filter((field) => !holds(after[key(field)], field.value));
   const taken = changed.filter((field) => !missing.includes(field));
   if (taken.length) result.actions.push({ target: "t3 settings", operation: "replace", reason: `set ${taken.map(key).join(", ")}` });
   if (missing.length) result.findings.push(finding("t3:settings", `T3 Code did not take ${missing.map(key).join(", ")}. Run fleet apply again; if it stays, set it in T3 Code's settings.`, "apply"));
+  return missing;
 }

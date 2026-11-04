@@ -3,6 +3,7 @@ import { get, isDocument, remove, same, samePath, set, type Document, type Field
 export type Reconciled = { document: Document; record: Field[]; applied: Field[]; kept: string[]; changed: string[]; removed: string[] };
 
 const name = (field: Field) => field.path.join(".");
+const matches = (actual: unknown, wanted: unknown) => same(actual, wanted) || (isDocument(actual) && isDocument(wanted) && holds(wanted, actual));
 
 export function reconcileKeys(current: Document, previous: Field[], wanted: Field[], options: { adopt: boolean; outage: boolean }): Reconciled {
   const document = structuredClone(current);
@@ -10,12 +11,12 @@ export function reconcileKeys(current: Document, previous: Field[], wanted: Fiel
   for (const field of wanted) {
     const value = get(document, field.path);
     const old = previous.find((item) => samePath(item.path, field.path));
-    if (value !== undefined && !same(value, field.value) && !(old && same(value, old.value)) && !options.adopt) {
+    if (value !== undefined && !matches(value, field.value) && !(old && matches(value, old.value)) && !options.adopt) {
       result.kept.push(name(field));
       if (old) result.record.push(old);
       continue;
     }
-    if (!same(value, field.value)) {
+    if (!matches(value, field.value)) {
       set(document, field.path, field.value);
       result.changed.push(name(field));
     }
@@ -25,7 +26,7 @@ export function reconcileKeys(current: Document, previous: Field[], wanted: Fiel
   for (const field of previous) {
     if (wanted.some((item) => samePath(item.path, field.path))) continue;
     const value = get(document, field.path);
-    if (options.outage || (value !== undefined && !same(value, field.value))) {
+    if (options.outage || (value !== undefined && !matches(value, field.value))) {
       result.record.push(field);
       continue;
     }

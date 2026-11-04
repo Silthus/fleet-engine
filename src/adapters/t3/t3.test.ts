@@ -86,6 +86,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
     projects: (options.projects ?? []).map((root, index) => ({ id: `project-${index}`, title: root, workspaceRoot: root, deletedAt: null as string | null })),
     tasks: new Map<string, StoredTask>(),
     links: options.links ?? [],
+    ignorePatch: options.ignorePatch ?? false,
   };
   const calls: Array<{ tag: string; payload: unknown }> = [];
   const rpc: T3Rpc = {
@@ -93,7 +94,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
       calls.push({ tag, payload });
       if (tag === "server.getConfig") return { settings: structuredClone(state.settings) } as T;
       if (tag === "server.updateSettings") {
-        if (!options.ignorePatch) Object.assign(state.settings, (payload as { patch: Record<string, unknown> }).patch);
+        if (!state.ignorePatch) Object.assign(state.settings, (payload as { patch: Record<string, unknown> }).patch);
         return structuredClone(state.settings) as T;
       }
       if (tag === "peerLinks.list") return { links: state.links } as T;
@@ -126,7 +127,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
   return { state, calls, tags, server };
 }
 
-type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | "" };
+type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; originHead?: string; refs?: string[] };
 
 function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
   const calls: string[] = [];
@@ -149,7 +150,9 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
       server.state.projects.push({ id: `project-${server.state.projects.length}`, title: command[3]!, workspaceRoot: command[3]!, deletedAt: null });
       return { code: 0, stdout: `Added project at ${command[3]}.\n` };
     }
-    if (command[0] === "git" && command.includes("symbolic-ref")) return { code: 0, stdout: "origin/main\n" };
+    const originHead = "originHead" in machine ? machine.originHead : "origin/main";
+    if (command[0] === "git" && command.includes("symbolic-ref")) return originHead ? { code: 0, stdout: `${originHead}\n` } : { code: 128, stdout: "", stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref" };
+    if (command[0] === "git" && command.includes("rev-parse")) return (machine.refs ?? ["refs/remotes/origin/main"]).includes(command.at(-1)!.replace(/\^\{commit\}$/, "")) ? { code: 0, stdout: "abc\n" } : { code: 1, stdout: "" };
     return { code: 127, stdout: "" };
   };
   return { calls, state, run };
@@ -238,6 +241,25 @@ describe("seedT3", () => {
     expect(result.findings).toEqual([{ id: `kept:${desktopFile}`, pack: "engine", say: `Kept your updateChannel in ${desktopFile}. Run fleet apply --adopt ${desktopFile} to take Fleet's value.` }]);
   });
 
+  test("keeps a channel the user picked when T3 leaves the build's default channel out", async () => {
+    const home = temp.make("home-");
+    write(home, desktopFile, { updateChannelConfiguredByUser: true });
+    const result = await seedT3(plan("darwin", []), home);
+    expect(read(home, desktopFile)).toEqual({ updateChannelConfiguredByUser: true });
+    expect(result.actions).toEqual([]);
+  });
+
+  test("treats T3's sparse copy of an owned setting as unchanged", async () => {
+    const home = temp.make("home-");
+    const cleanup = (logsAfterDays: number) => entry("storageCleanup", { logsAfterDays, browserArtifactsAfterDays: null });
+    await seedT3(plan("linux", [cleanup(14)]), home);
+    write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
+    const result = await seedT3(plan("linux", [cleanup(7)]), home);
+    expect(read(home, settingsFile).storageCleanup).toEqual({ logsAfterDays: 7, browserArtifactsAfterDays: null });
+    expect(result.findings).toEqual([]);
+    expect(await seedT3(plan("linux", [cleanup(7)]), home)).toEqual({ actions: [], findings: [] });
+  });
+
   test("writes no T3 setting through the Provider config record", async () => {
     const home = temp.make("home-");
     await seedT3(plan("linux", base), home);
@@ -260,11 +282,34 @@ describe("T3 adapter with a running server", () => {
     expect(again.actions).toEqual([]);
   });
 
+  test("retries a value T3 did not take on the next apply", async () => {
+    const home = temp.make("home-");
+    await seedT3(plan("linux", [entry("sidebarAutoSettleAfterDays", 3)]), home);
+    const { server, adapter } = setup({ settings: { sidebarAutoSettleAfterDays: 3 }, ignorePatch: true });
+    const refused = await apply(plan("linux", [entry("sidebarAutoSettleAfterDays", 5)]), { home, adapters: [adapter] });
+    expect(refused.findings.map((finding) => finding.id)).toContain("t3:settings");
+    server.state.ignorePatch = false;
+    const retried = await apply(plan("linux", [entry("sidebarAutoSettleAfterDays", 5)]), { home, adapters: [adapter] });
+    expect(server.calls.filter((call) => call.tag === "server.updateSettings")).toHaveLength(2);
+    expect(server.state.settings.sidebarAutoSettleAfterDays).toBe(5);
+    expect(retried.findings).toEqual([]);
+  });
+
   test("reports a key T3 did not take", async () => {
     const home = temp.make("home-");
     const { adapter } = setup({ ignorePatch: true });
     const report = await apply(plan("linux", base.slice(0, 1)), { home, adapters: [adapter] });
     expect(report.findings).toContainEqual({ id: "t3:settings", pack: "engine", say: "T3 Code did not take defaultThreadEnvMode. Run fleet apply again; if it stays, set it in T3 Code's settings.", repair: "apply" });
+  });
+
+  test("adds a ~/ project once, under the user's home", async () => {
+    const home = temp.make("home-");
+    const { commands, adapter } = setup();
+    const job = { ...loop, task: { ...loop.task!, project: "~/code" } };
+    await apply(plan("linux", [], [job]), { home, adapters: [adapter] });
+    const again = await apply(plan("linux", [], [job]), { home, adapters: [adapter] });
+    expect(commands.calls.filter((line) => line.startsWith("t3 project add"))).toEqual([`t3 project add ${home}/code`]);
+    expect(again.actions).toEqual([]);
   });
 
   test("adds each task project once with t3 project add", async () => {
@@ -345,6 +390,46 @@ describe("T3 tasks client", () => {
     const stored = server.state.tasks.get("fleet:quality-loop")!;
     server.state.tasks.set(stored.id, { ...stored, modelSelection: { instanceId: "claude", model: "big" } });
     expect((await client.list())[0]).not.toEqual(wantedTask);
+  });
+
+  test("lists a task whose worktree base drifted as different", async () => {
+    const home = temp.make("home-");
+    const server = fakeServer({ projects: [project] });
+    const { run } = runner(server);
+    const client = t3Tasks(server.server, home, { plan: plan("linux", [], [loop]), run });
+    await client.upsert(wantedTask);
+    const stored = server.state.tasks.get("fleet:quality-loop")!;
+    expect(stored.workspaceStrategy).toEqual({ type: "worktree", baseRef: "origin/main", startFromOrigin: true });
+    server.state.tasks.set(stored.id, { ...stored, workspaceStrategy: { type: "worktree", baseRef: "feature/old", startFromOrigin: false } });
+    expect((await client.list())[0]).not.toEqual(wantedTask);
+  });
+
+  test("finds a project given as ~/ under the user's home", async () => {
+    const home = temp.make("home-");
+    const server = fakeServer({ projects: [join(home, "code")] });
+    const { run } = runner(server);
+    const job = { ...loop, task: { ...loop.task!, project: "~/code" } };
+    const client = t3Tasks(server.server, home, { plan: plan("linux", [], [job]), run });
+    await client.upsert({ ...wantedTask, project: "~/code" });
+    expect(await client.list()).toEqual([{ ...wantedTask, project: "~/code" }]);
+  });
+
+  test("bases a worktree on the remote branch that exists when origin/HEAD is missing", async () => {
+    const home = temp.make("home-");
+    const server = fakeServer({ projects: [project] });
+    const { run } = runner(server, { originHead: undefined, refs: ["refs/remotes/origin/master"] });
+    const client = t3Tasks(server.server, home, { plan: plan("linux", [], [loop]), run });
+    await client.upsert(wantedTask);
+    expect(server.state.tasks.get("fleet:quality-loop")?.workspaceStrategy).toEqual({ type: "worktree", baseRef: "origin/master", startFromOrigin: true });
+  });
+
+  test("refuses a task whose project has no main or master branch", async () => {
+    const home = temp.make("home-");
+    const server = fakeServer({ projects: [project] });
+    const { run } = runner(server, { originHead: undefined, refs: [] });
+    const client = t3Tasks(server.server, home, { plan: plan("linux", [], [loop]), run });
+    expect(client.upsert(wantedTask)).rejects.toThrow(`${project} has no main or master branch to start worktrees from`);
+    expect(server.state.tasks.size).toBe(0);
   });
 
   test.each([

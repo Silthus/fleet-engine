@@ -1,5 +1,5 @@
-import { resolve } from "node:path";
-import type { ModelRow, Plan } from "../../pack/types.ts";
+import { join, resolve } from "node:path";
+import type { ModelRow, PackJob, Plan } from "../../pack/types.ts";
 import { taskPrefix, type FleetTask, type T3Tasks } from "../jobs/adapter.ts";
 import { same } from "../provider-config/fields.ts";
 import type { CommandRunner } from "../run.ts";
@@ -14,6 +14,7 @@ export function modelSelection(models: ModelRow[], role: string): ModelSelection
   const instance = instances[row.provider];
   return { instanceId: instance.instanceId, model: row.model, options: [{ id: instance.effort, value: row.effort }] };
 }
+
 export type ShellProject = { id: string; workspaceRoot: string; deletedAt?: string | null };
 
 type ScheduledTask = {
@@ -23,7 +24,7 @@ type ScheduledTask = {
   enabled: boolean;
   schedule: FleetTask["schedule"];
   projectId: string;
-  workspaceStrategy: { type: string };
+  workspaceStrategy: { type: string; baseRef?: string; startFromOrigin?: boolean };
   modelSelection: ModelSelection;
   runtimeMode: FleetTask["runtimeMode"];
 };
@@ -33,36 +34,49 @@ export async function activeProjects(rpc: T3Rpc): Promise<ShellProject[]> {
   return shell.projects.filter((project) => !project.deletedAt);
 }
 
+export const expandHome = (home: string, path: string) => (path === "~" || path.startsWith("~/") ? join(home, path.slice(1)) : path);
+
 export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; run: CommandRunner }): T3Tasks {
-  const roles = new Map<string, string>(options.plan.jobs.flatMap((job) => (job.task ? [[`${taskPrefix}${job.id}`, job.task.modelRole]] : [])));
+  const jobs = new Map<string, NonNullable<PackJob["task"]>>(options.plan.jobs.flatMap((job) => (job.task ? [[`${taskPrefix}${job.id}`, job.task]] : [])));
   const fallback = async (rpc: T3Rpc) => (await readT3Settings(rpc)).defaultModelSelection as ModelSelection | undefined;
   const planned = (role: string) => modelSelection(options.plan.models, role);
   const modelOf = async (rpc: T3Rpc, role: string) => planned(role) ?? (await fallback(rpc));
+  const local = (path: string) => resolve(expandHome(home, path));
+  const strategy = async (root: string) => {
+    const base = await baseRef(options.run, root);
+    if (!base) throw new Error(`${root} has no main or master branch to start worktrees from. Push one, then run fleet apply.`);
+    return { type: "worktree", baseRef: base, startFromOrigin: true };
+  };
   return {
     list: () =>
       server.session(home, async (rpc) => {
         const { tasks } = await rpc.first<{ tasks: ScheduledTask[] }>("scheduledTasks.subscribe", {});
         const roots = new Map((await activeProjects(rpc)).map((project) => [project.id, project.workspaceRoot]));
-        const usual = tasks.some((task) => roles.has(task.id)) ? await fallback(rpc) : undefined;
-        return tasks.map((task) => {
-          const role = roles.get(task.id);
-          const expected = role === undefined ? undefined : (planned(role) ?? usual);
-          return {
-            id: task.id,
-            title: task.title,
-            prompt: task.prompt,
-            enabled: task.enabled,
-            schedule: task.schedule,
-            project: roots.get(task.projectId) ?? task.projectId,
-            modelRole: role !== undefined && same(task.modelSelection, expected) ? role : `model:${task.modelSelection.instanceId}/${task.modelSelection.model}`,
-            workspaceStrategy: task.workspaceStrategy.type as FleetTask["workspaceStrategy"],
-            runtimeMode: task.runtimeMode,
-          };
-        });
+        const usual = tasks.some((task) => jobs.has(task.id)) ? await fallback(rpc) : undefined;
+        return Promise.all(
+          tasks.map(async (task) => {
+            const job = jobs.get(task.id);
+            const root = roots.get(task.projectId);
+            const expected = job === undefined ? undefined : (planned(job.modelRole) ?? usual);
+            const project = job?.project !== undefined && root !== undefined && local(job.project) === resolve(root) ? job.project : (root ?? task.projectId);
+            const wantedStrategy = job === undefined || root === undefined ? undefined : await strategy(root).catch(() => undefined);
+            return {
+              id: task.id,
+              title: task.title,
+              prompt: task.prompt,
+              enabled: task.enabled,
+              schedule: task.schedule,
+              project,
+              modelRole: job !== undefined && same(task.modelSelection, expected) ? job.modelRole : `model:${task.modelSelection.instanceId}/${task.modelSelection.model}`,
+              workspaceStrategy: (same(task.workspaceStrategy, wantedStrategy) ? task.workspaceStrategy.type : JSON.stringify(task.workspaceStrategy)) as FleetTask["workspaceStrategy"],
+              runtimeMode: task.runtimeMode,
+            };
+          }),
+        );
       }),
     upsert: (task) =>
       server.session(home, async (rpc) => {
-        const project = (await activeProjects(rpc)).find((item) => resolve(item.workspaceRoot) === resolve(task.project));
+        const project = (await activeProjects(rpc)).find((item) => resolve(item.workspaceRoot) === local(task.project));
         if (!project) throw new Error(`T3 Code has no project at ${task.project}, so Fleet cannot add the ${task.id} task. Run fleet apply again once T3 Code lists the project.`);
         const modelSelection = await modelOf(rpc, task.modelRole);
         if (!modelSelection) throw new Error(`T3 Code has no default model, so Fleet cannot add the ${task.id} task. Pick a model in T3 Code, then run fleet apply.`);
@@ -73,7 +87,7 @@ export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; r
           enabled: task.enabled,
           schedule: task.schedule,
           projectId: project.id,
-          workspaceStrategy: { type: "worktree", baseRef: await baseRef(options.run, task.project), startFromOrigin: true },
+          workspaceStrategy: await strategy(project.workspaceRoot),
           modelSelection,
           runtimeMode: task.runtimeMode,
           interactionMode: "default",
@@ -83,7 +97,11 @@ export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; r
   };
 }
 
-async function baseRef(run: CommandRunner, project: string) {
-  const head = await run(["git", "-C", project, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
-  return head.code === 0 && head.stdout.trim() ? head.stdout.trim() : "main";
+async function baseRef(run: CommandRunner, root: string) {
+  const exists = async (ref: string) => (await run(["git", "-C", root, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).code === 0;
+  const head = await run(["git", "-C", root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  const remoteDefault = head.code === 0 ? head.stdout.trim().replace(/^origin\//, "") : "";
+  for (const branch of [...(remoteDefault ? [remoteDefault] : []), "main", "master"]) if (await exists(`refs/remotes/origin/${branch}`)) return `origin/${branch}`;
+  for (const branch of ["main", "master"]) if (await exists(`refs/heads/${branch}`)) return branch;
+  return undefined;
 }

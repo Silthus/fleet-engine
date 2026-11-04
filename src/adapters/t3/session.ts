@@ -64,7 +64,7 @@ function issueSession(cli: Cli) {
   return { sessionId: session.sessionId, token: session.token };
 }
 
-async function connect(origin: string, token: string) {
+export async function connect(origin: string, token: string) {
   const url = new URL(origin);
   const headers = { authorization: `Bearer ${token}`, "x-t3-orchestration-protocol": protocol };
   const Socket = WebSocket as unknown as new (url: string, options: { headers: Record<string, string> }) => WebSocket;
@@ -75,9 +75,15 @@ async function connect(origin: string, token: string) {
     pending.clear();
   };
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`T3 Code did not answer at ${origin}`)), timeoutMs);
+    const fail = () => {
+      clearTimeout(timer);
+      socket.onopen = null;
+      socket.close();
+      reject(new Error(`T3 Code did not answer at ${origin}`));
+    };
+    const timer = setTimeout(fail, timeoutMs);
     socket.onopen = () => (clearTimeout(timer), resolve());
-    socket.onerror = () => (clearTimeout(timer), reject(new Error(`T3 Code did not answer at ${origin}`)));
+    socket.onerror = fail;
   });
   socket.onerror = () => failAll("T3 Code connection failed");
   socket.onclose = () => failAll("T3 Code closed the connection");
