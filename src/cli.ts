@@ -18,7 +18,7 @@ import { setCommand, settingsCommand } from "./commands/settings.ts";
 import { devboxCommand } from "./commands/devbox.ts";
 import { realMachine } from "./setup/commands.ts";
 
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor"> };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env"> };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 

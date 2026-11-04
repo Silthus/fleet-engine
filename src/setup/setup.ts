@@ -27,6 +27,8 @@ export type SetupOptions = {
   apply?: (profileDir: string) => Promise<number>;
   /** Runs fleet doctor with this profile and prints its report. */
   doctor?: (profileDir: string) => Promise<number>;
+  /** The environment the standalone check reads. */
+  env?: Record<string, string | undefined>;
 };
 
 /** Steps that run again when the command changes an answer: the profile saves it, apply puts it on this machine, and the check confirms it. */
@@ -61,7 +63,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       ...(flags.plan && flags.plan !== saved.plan ? ["plans"] : []),
     ];
     if (reopened.length || Object.entries(fromFlags).some(([key, value]) => saved.settings?.[key] !== value)) reopened.push(...answersChanged);
-    progress.done = progress.done.filter((id) => !reopened.includes(id));
+    progress.done = progress.done.filter((id) => !reopened.some((step) => id === step || id.startsWith(`${step}:`)));
     if (Object.keys(fromFlags).length) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
       await remember();
@@ -138,6 +140,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       terminal,
       machine: box,
       home: options.home,
+      env: options.env ?? process.env,
       devboxes: machine.devboxes ?? [],
       doctor: () => (machine.profileDir && options.doctor ? options.doctor(machine.profileDir) : Promise.resolve(1)),
     });
@@ -158,7 +161,11 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       packs: plan.packs.filter((pack) => pack.available && pack.name !== "base").map((pack) => title(pack.name)),
       devboxes: machine.devboxes ?? [],
       profileRepo: repoName((await profileForBox(box, machine.profileDir)).url),
-      runsByItself: runsByItself(plan, catalog.packs.map((pack) => pack.manifest)),
+      runsByItself: runsByItself(
+        plan,
+        catalog.packs.map((pack) => pack.manifest),
+        (machine.devboxes ?? []).map((host) => ({ host, plan: planFor(context, { ...machine, role: "devbox" }).plan })),
+      ),
     };
     for (const line of doneScreen(summary)) terminal.print(line);
     return 0;

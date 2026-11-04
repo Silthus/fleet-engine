@@ -52,7 +52,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * devbox whose sign-ins work the same way; Claude there signs in when its
  * foreground sign-in runs.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string> } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number }> = [];
@@ -74,6 +74,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line === "gh auth setup-git") return result(true);
     if (line === "claude auth status") return result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
+    if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
     if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: passes("box:t3"), linked: passes("box:t3"), relayUrl: passes("box:t3") ? "https://box-1.relay.example/" : null }));
     return t3(line, "BOXCODE") ?? result(false, `unexpected on the box: ${line}`);
   };
@@ -135,7 +136,7 @@ export async function fleetSetup(home: string, args: string[], replies: string[]
   const doctored: string[] = [];
   const apply = async (dir: string) => (applied.push(dir), 0);
   const doctor = async (dir: string) => (doctored.push(dir), doctorCode);
-  const code = await main(["setup", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, doctor, ...(fetchSource ? { fetchSource } : {}) } });
+  const code = await main(["setup", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, doctor, env: {}, ...(fetchSource ? { fetchSource } : {}) } });
   return { code, prompts: io.prompts, output: io.output(), applied, doctored };
 }
 
