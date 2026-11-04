@@ -36,6 +36,8 @@ function sandbox(os: "Linux" | "Darwin") {
   };
   stub("uname", `case "$1" in -s) echo ${os} ;; -m) echo x86_64 ;; esac`);
   stub("xcode-select", "exit 0");
+  stub("claude", "exit 0");
+  stub("codex", "exit 0");
   const t3Installer = `printf '#!/bin/sh\\necho "t3 $*" >> "${log}"\\n' > "$HOME/.local/bin/t3"; chmod +x "$HOME/.local/bin/t3"; echo "t3 installer channel=$T3CODE_CHANNEL" >> "${log}"`;
   const brewInstaller = `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
   const ghTar = buildGhTarball(root);
@@ -87,7 +89,7 @@ describe("get.sh", () => {
   test("on Linux installs gh and T3 Code, fetches the engine at its pin, and applies the profile", () => {
     const box = sandbox("Linux");
     const result = getSh(box, ["--ref", "v0.1.0", "--profile", profile()]);
-    expect(result.output).toContain("Applied 4 changes.");
+    expect(result.output).toContain("Applied 11 changes.");
     expect(result.code).toBe(0);
     expect(existsSync(join(box.home, ".local/bin/gh"))).toBe(true);
     expect(result.calls).toContain("t3 installer channel=nightly");
@@ -105,7 +107,7 @@ describe("get.sh", () => {
     expect(calls).toContain("brew install --cask t3-code");
     expect(calls).not.toContain("brew install bun");
     expect(result.calls).toContain("t3 installer channel=nightly");
-    expect(result.output).toContain("Applied 4 changes.");
+    expect(result.output).toContain("Applied 11 changes.");
   });
 
   test("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {

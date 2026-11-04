@@ -1,0 +1,110 @@
+export type Provider = "claude" | "codex";
+export type HookEvent =
+  | { hook_event_name: "UserPromptSubmit"; prompt: string }
+  | { hook_event_name: "PostToolUse"; tool_response: unknown };
+export type HookDecision = {
+  decision?: "block";
+  reason?: string;
+  hookSpecificOutput?:
+    | { hookEventName: "UserPromptSubmit"; suppressOriginalPrompt: true }
+    | { hookEventName: "PostToolUse"; updatedToolOutput: unknown; additionalContext: string };
+};
+
+const start = String.raw`(?:(?<![A-Za-z0-9])|(?<=\x1b\[[0-9;]*m))`;
+const lineBreak = String.raw`(?:\s|\\[rn])`;
+const lineEnd = String.raw`(?:\r?\n|(?:\\r)?\\n)`;
+const shapes: Array<{ kind: string; pattern: RegExp }> = [
+  { kind: "PostHog personal API key", pattern: new RegExp(`${start}phx_[A-Za-z0-9]{30,}`, "g") },
+  { kind: "PostHog secret API key", pattern: new RegExp(`${start}phs_[A-Za-z0-9]{30,}`, "g") },
+  { kind: "PostHog OAuth token", pattern: new RegExp(`${start}ph[ar]_[A-Za-z0-9]{30,}`, "g") },
+  { kind: "GitHub token", pattern: new RegExp(`${start}(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})`, "g") },
+  { kind: "OpenAI or Anthropic API key", pattern: new RegExp(`${start}sk-(?:(?:proj|svcacct|admin|ant|or)-(?=[A-Za-z0-9_-]{0,200}[0-9])[A-Za-z0-9_-]{32,}|(?=[A-Za-z0-9]*[0-9])[A-Za-z0-9]{32,})`, "g") },
+  { kind: "Slack token", pattern: new RegExp(`${start}x(?:ox[abposre]|app)-[0-9]+-[A-Za-z0-9-]{10,}`, "g") },
+  { kind: "Slack webhook URL", pattern: /hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]{20,}/g },
+  { kind: "Convex deploy key", pattern: new RegExp(`(?<![A-Za-z0-9_-])(?:prod|dev|preview|project):[A-Za-z0-9:_-]{1,120}\\|[A-Za-z0-9+/=_-]{30,}`, "g") },
+  { kind: "private key", pattern: new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----(?:${lineBreak}*[A-Za-z-]+:[^\\r\\n\\\\]*${lineEnd})*${lineBreak}*[A-Za-z0-9+/=]{20,}(?:[A-Za-z0-9+/=\\s]|\\\\[rn])*(?:-----END [A-Z ]*PRIVATE KEY-----)?`, "g") },
+];
+
+function mapStrings(value: unknown, change: (text: string) => string): unknown {
+  if (typeof value === "string") return change(value);
+  if (Array.isArray(value)) return value.map((entry) => mapStrings(entry, change));
+  if (value && typeof value === "object") return mapProperties(value, change);
+  return value;
+}
+
+function mapProperties(value: object, change: (text: string) => string) {
+  const unusedName = uniqueNames();
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [unusedName(change(key)), mapStrings(entry, change)]));
+}
+
+function uniqueNames() {
+  const taken = new Set<string>();
+  const lastCopy = new Map<string, number>();
+  return (name: string) => {
+    let copy = lastCopy.get(name) ?? 1;
+    let candidate = name;
+    while (taken.has(candidate)) candidate = `${name} ${++copy}`;
+    lastCopy.set(name, copy);
+    taken.add(candidate);
+    return candidate;
+  };
+}
+
+export function secretKinds(value: unknown): string[] {
+  const kinds = new Set<string>();
+  mapStrings(value, (text) => {
+    for (const { kind, pattern } of shapes) if (text.match(pattern)) kinds.add(kind);
+    return text;
+  });
+  return [...kinds];
+}
+
+/** Replaces every secret-shaped value in a text with its kind. */
+export const redactSecrets = (text: string) => shapes.reduce((result, { kind, pattern }) => result.replace(pattern, `[redacted ${kind}]`), text);
+
+const redact = (value: unknown) =>
+  mapStrings(value, (text) => shapes.reduce((result, { kind, pattern }) => result.replace(pattern, `[redacted ${kind}]`), text));
+
+function promptReason(kinds: string[]) {
+  return `Fleet held this message back: it looks like it carries a ${kinds.join(", ")}. Send it again without the value. `
+    + "To give the agent a secret, save it in a file or an environment variable yourself and tell the agent its name. "
+    + "T3's `request_secret` tool takes a secret only for T3 tools that accept a secretRef. "
+    + "If the value is real, rotate it: the app may have saved the message.";
+}
+
+function toolOutputReason(kinds: string[], action: string) {
+  return `Fleet ${action} this tool output: it carries a ${kinds.join(", ")}. Never print a secret or repeat it in chat, commands, or files. `
+    + "Rerun the command so its output leaves the value out, for example by reading it into an environment variable. "
+    + "When you need a secret from the user, ask them to save it in a file or an environment variable and give you its name. "
+    + "Use T3's `request_secret` tool only for T3 tools that accept a secretRef.";
+}
+
+function promptDecision(provider: Provider, kinds: string[]): HookDecision {
+  const decision: HookDecision = { decision: "block", reason: promptReason(kinds) };
+  if (provider === "claude") decision.hookSpecificOutput = { hookEventName: "UserPromptSubmit", suppressOriginalPrompt: true };
+  return decision;
+}
+
+function toolOutputDecision(provider: Provider, kinds: string[], output: unknown): HookDecision {
+  if (provider === "codex") return { decision: "block", reason: toolOutputReason(kinds, "withheld") };
+  return { hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: redact(output), additionalContext: toolOutputReason(kinds, "redacted") } };
+}
+
+export function guard(provider: Provider, event: HookEvent): HookDecision | undefined {
+  if (event.hook_event_name === "UserPromptSubmit") {
+    const kinds = secretKinds(event.prompt);
+    return kinds.length ? promptDecision(provider, kinds) : undefined;
+  }
+  const kinds = secretKinds(event.tool_response);
+  return kinds.length ? toolOutputDecision(provider, kinds, event.tool_response) : undefined;
+}
+
+if (import.meta.main) {
+  const provider = process.argv[2];
+  if (provider !== "claude" && provider !== "codex") {
+    process.stderr.write("Usage: secret-guard.ts claude|codex\n");
+    process.exit(1);
+  }
+  const decision = guard(provider, JSON.parse(await Bun.stdin.text()) as HookEvent);
+  if (decision) process.stdout.write(`${JSON.stringify(decision)}\n`);
+}
