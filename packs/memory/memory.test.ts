@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { git, gitEnv, tempDirs } from "../../src/testing/git.ts";
@@ -86,11 +86,21 @@ describe("the memory sync", () => {
     git(dir, "push", "-q", "origin", branch);
   }
 
+  let template: { empty: string; seeded: string };
+  beforeAll(() => {
+    const empty = syncTemp.make("memory-empty-");
+    git(empty, "init", "-q", "--bare", "-b", "main", join(empty, "remote.git"));
+    const seeded = syncTemp.make("memory-seeded-");
+    cpSync(empty, seeded, { recursive: true });
+    seed(seeded, join(seeded, "remote.git"));
+    template = { empty, seeded };
+  });
+
   function setup(seeded = true) {
     const root = syncTemp.make("memory-sync-");
+    cpSync(seeded ? template.seeded : template.empty, root, { recursive: true });
     const remote = join(root, "remote.git");
-    git(root, "init", "-q", "--bare", "-b", "main", remote);
-    if (seeded) seed(root, remote);
+    if (seeded) git(join(root, "seed-main"), "remote", "set-url", "origin", remote);
     return { root, remote };
   }
 
@@ -151,12 +161,16 @@ describe("the memory sync", () => {
 
   async function crashMidRebase() {
     const { root, remote } = setup();
+    const other = join(root, "seed-main");
+    writeFileSync(join(other, "kept.md"), "a tracked note\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "kept");
+    git(other, "push", "-q", "origin", "main");
     const laptop = await sync(root, remote, "laptop");
-    writeFileSync(join(laptop.checkout, "kept.md"), "a tracked note\n");
-    expect((await sync(root, remote, "laptop")).code).toBe(0);
-    const box = await sync(root, remote, "box");
-    writeFileSync(join(box.checkout, "notes.md"), "box version\n");
-    expect((await sync(root, remote, "box")).code).toBe(0);
+    writeFileSync(join(other, "notes.md"), "box version\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "box");
+    git(other, "push", "-q", "origin", "main");
     writeFileSync(join(laptop.checkout, "notes.md"), "laptop version\n");
     git(laptop.checkout, "add", "-A");
     git(laptop.checkout, "commit", "-q", "-m", "local");
