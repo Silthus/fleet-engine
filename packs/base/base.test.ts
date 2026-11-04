@@ -62,6 +62,17 @@ describe("the Base pack", () => {
     expect(result.ask.filter((setting) => setting.key === "identity.signer")).toEqual([]);
   });
 
+  test("keeps Base's signer when a pack's override sits in a workflow that is off", () => {
+    const signer = { key: "identity.signer", question: "Which key signs?", type: "choice" as const, choices: [{ value: "1password", label: "1Password" }], default: "1password", ask: "never" as const };
+    const workflows = [{ id: "team-signing", name: "Team signing", sentence: "Signs with 1Password.", default: false, settings: ["identity.signer"] }];
+    const team: AvailableSource = { ref: { name: "team", repo: "team/packs", ref: "main" }, dir: "/team", packs: [{ manifest: { schema: 1, name: "team", summary: "Team rules.", settings: [signer], workflows }, dir: "/team/packs/team" }] };
+    const coder: MachineFile = { schema: 1, role: "devbox", coder: true };
+    expect(plan("both", coder, {}, [engine, team]).settings["identity.signer"]).toBe("coder");
+    expect(plan("both", coder, { "identity.signer": "ssh" }, [engine, team]).settings["identity.signer"]).toBe("ssh");
+    const on = resolve({ schema: 1, dir: "/profile", engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [], packs: ["team"], plan: "both", settings: {}, workflows: { "team-signing": true } }, coder, [engine, team]);
+    expect(on.settings["identity.signer"]).toBe("1password");
+  });
+
   test("installs Codex hooks, Codex config, and the Codex CLI only when the plan has Codex", () => {
     const codex = (result: Plan) => result.config.filter((entry) => entry.provider === "codex").map((entry) => entry.key);
     expect(codex(plan("claude"))).toEqual([]);

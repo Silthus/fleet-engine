@@ -9,6 +9,7 @@ import type {
   ModelRow,
   Need,
   Os,
+  PackManifest,
   PackSetting,
   Plan,
   Profile,
@@ -17,6 +18,7 @@ import type {
   SettingValue,
 } from "../pack/types.ts";
 import { signerSetting } from "../adapters/identity/signers.ts";
+import { engineSettings } from "../pack/manifest.ts";
 
 export class ResolveError extends Error {}
 
@@ -204,9 +206,13 @@ function activeSettings(order: Candidate[], active: Set<string>): Array<PackSett
   const workflows = order.flatMap(({ manifest }) => manifest.workflows ?? []);
   const listed = new Set(workflows.flatMap((workflow) => workflow.settings ?? []));
   const wanted = new Set(workflows.filter((workflow) => active.has(workflow.id)).flatMap((workflow) => workflow.settings ?? []));
-  return order.flatMap(({ manifest }) =>
-    (manifest.settings ?? []).filter((setting) => !listed.has(setting.key) || wanted.has(setting.key)).map((setting) => ({ ...setting, pack: manifest.name })),
-  );
+  const ownListing = (manifest: PackManifest, key: string) => (manifest.workflows ?? []).filter((workflow) => workflow.settings?.includes(key));
+  const keeps = (manifest: PackManifest, key: string) => {
+    if (!engineSettings.includes(key)) return !listed.has(key) || wanted.has(key);
+    const listing = ownListing(manifest, key);
+    return !listing.length || listing.some((workflow) => active.has(workflow.id));
+  };
+  return order.flatMap(({ manifest }) => (manifest.settings ?? []).filter((setting) => keeps(manifest, setting.key)).map((setting) => ({ ...setting, pack: manifest.name })));
 }
 
 /** Keeps the last declaration of a setting, so a later pack sets the default of one the engine reads. Base's signer default is coder in a Coder workspace. */
