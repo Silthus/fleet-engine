@@ -11,7 +11,7 @@ export const githubScopes = ["repo", "read:org", "admin:public_key", "admin:ssh_
 export const teamSources: Array<{ org: string; source: SourceRef }> = [{ org: "PostHog", source: { name: "posthog", repo: "PostHog/fleet-posthog", ref: "main" } }];
 
 export async function githubScopesMissing(machine: Machine): Promise<string[] | undefined> {
-  const status = await machine.exec(["gh", "auth", "status", "--hostname", "github.com"]);
+  const status = await machine.exec(["gh", "auth", "status", "--active", "--hostname", "github.com"]);
   if (status.code !== 0) return undefined;
   const line = status.output.split("\n").find((text) => text.includes("Token scopes:")) ?? "";
   const granted = [...line.matchAll(/'([^']+)'/g)].map((match) => match[1]);
@@ -35,7 +35,11 @@ export function githubSignIn(machine: Machine, signedIn: () => Promise<void>): S
       refresh = missing !== undefined;
       return missing?.length === 0;
     },
-    after: signedIn,
+    async after() {
+      const git = await machine.exec(["gh", "auth", "setup-git"]);
+      if (git.code !== 0) throw new Error(`gh auth setup-git failed: ${git.output.trim().split("\n").at(-1) ?? ""}`);
+      await signedIn();
+    },
   };
 }
 

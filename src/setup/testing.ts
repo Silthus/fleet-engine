@@ -30,7 +30,7 @@ const scopes = "  - Token scopes: 'admin:public_key', 'admin:ssh_signing_key', '
  * A machine whose sign-ins pass after a number of 2 s polls: 0 means already
  * signed in, and a sign-in that is never started never passes.
  */
-export function fakeMachine(polls: Partial<Record<"github" | "claude" | "chatgpt" | "coder", number>> = {}, options: { org?: boolean; scopes?: string } = {}) {
+export function fakeMachine(polls: Partial<Record<"github" | "claude" | "chatgpt" | "coder", number>> = {}, options: { org?: boolean; scopes?: string; exits?: Partial<Record<"github" | "claude" | "chatgpt" | "coder", number>> } = {}) {
   const left = { github: 0, claude: 0, chatgpt: 0, coder: 0, ...polls };
   const started = new Set<keyof typeof left>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number }> = [];
@@ -45,6 +45,7 @@ export function fakeMachine(polls: Partial<Record<"github" | "claude" | "chatgpt
       calls.push({ command, ...run });
       const line = command.join(" ");
       if (line.startsWith("gh auth status")) return passes("github") ? result(true, `github.com\n${started.has("github") ? scopes : (options.scopes ?? scopes)}\n`) : result(false, "You are not logged in");
+      if (line === "gh auth setup-git") return result(true);
       if (line.startsWith("gh api user/memberships/orgs/")) return options.org ? result(true, "active\n") : result(false, "Not Found");
       if (line === "claude auth status") return result(passes("claude"), JSON.stringify({ loggedIn: passes("claude") }));
       if (line.startsWith("codex exec")) return result(passes("chatgpt"), "ok");
@@ -57,7 +58,8 @@ export function fakeMachine(polls: Partial<Record<"github" | "claude" | "chatgpt
       starts.push(command);
       const name = command[0] === "gh" ? "github" : command[0] === "claude" ? "claude" : command[0] === "codex" ? "chatgpt" : "coder";
       started.add(name);
-      return { stop: () => {} };
+      const exit = options.exits?.[name];
+      return { stop: () => {}, exited: exit === undefined ? new Promise<number>(() => {}) : Promise.resolve(exit) };
     },
     async sleep(ms) {
       sleeps.push(ms);

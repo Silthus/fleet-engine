@@ -123,6 +123,25 @@ describe("apply", () => {
     expect(ran).toEqual(["coder", "devbox-status", "devbox-start"]);
   });
 
+  test("a sign-in is probed when its first waiting step comes up, after the steps before it ran", async () => {
+    const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"], pack: "team" }];
+    const steps = [
+      { id: "install-coder", run: ["install-coder"], check: ["coder-installed"], pack: "team" },
+      { id: "devbox", run: ["devbox-start"], after: "coder", pack: "team" },
+    ];
+    let installed = false;
+    const ran: string[] = [];
+    const run = async (command: string[]) => {
+      ran.push(command[0]!);
+      if (command[0] === "install-coder") installed = true;
+      if (command[0] === "coder-installed") return installed ? 0 : 1;
+      if (command[0] === "coder") return installed ? 0 : 127;
+      return 0;
+    };
+    await apply(plan({ human, steps }), { home: temp.make("home-"), run });
+    expect(ran).toEqual(["coder-installed", "install-coder", "coder", "devbox-start"]);
+  });
+
   test("runs steps with the plan's home directory as HOME", async () => {
     const home = temp.make("home-");
     const steps = [{ id: "mark", run: ["sh", "-c", 'touch "$HOME/marked"'], check: ["sh", "-c", 'test -f "$HOME/marked"'], pack: "base" }];

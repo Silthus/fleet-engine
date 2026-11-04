@@ -84,7 +84,7 @@ describe("fleet setup questions", () => {
     expect(missing.output).toContain("  --set orchestration.qualityArea=<value>");
     expect(missing.output).toContain("  --set orchestration.ledgerRepo=<value>");
     expect(missing.output).not.toContain("memory.repo");
-    expect(machine(home).setup.done).toEqual(["bootstrap", "github", "packs", "plans", "setting:orchestration.criticalPaths", "claude", "chatgpt"]);
+    expect(machine(home).setup.done).toEqual(["bootstrap", "github", "packs", "plans", "setting:orchestration.criticalPaths"]);
 
     const sets = ["--set", "orchestration.loopProject=~/code/app", "--set", "orchestration.qualityArea=src/api", "--set", "orchestration.ledgerRepo=me/ledger"];
     const answered = await fleetSetup(home, ["--non-interactive", "--preset", "michael", ...sets]);
