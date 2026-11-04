@@ -132,8 +132,6 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
   }
   const all = [...wanted, ...trust];
   for (const field of previous) {
-    const narrowed = all.some((item) => item.path.length > field.path.length && overlaps(item.path, field.path)) && !all.some((item) => item.path.length <= field.path.length && overlaps(item.path, field.path));
-    if (narrowed && edited.includes(field)) record.push(field);
     if (all.some((item) => overlaps(item.path, field.path))) continue;
     if (options.outage || keepsEdit(field)) record.push(field);
     else if (get(current, field.path) !== undefined) {
