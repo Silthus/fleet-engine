@@ -7,6 +7,7 @@ import type { AvailableSource, FetchedSource, MachineFile, Plan, Report } from "
 import { loadMachine, loadProfile, saveMachine } from "./profile/profile.ts";
 import { apply, check } from "./reconciler/apply.ts";
 import { engineCommands, resolve } from "./reconciler/resolve.ts";
+import { readNotice, update } from "./update.ts";
 
 export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void };
 
@@ -16,9 +17,10 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
                      Put your profile's packs onto this machine
   fleet doctor [--profile <dir>]
                      Check this machine against your profile without changing it
+  fleet update       Move the engine and your profile forward, then apply
   fleet <command>    Run a command that one of your packs ships`;
 
-const later = new Set(engineCommands.filter((name) => !["apply", "doctor"].includes(name)));
+const later = new Set(engineCommands.filter((name) => !["apply", "doctor", "update"].includes(name)));
 
 export async function main(argv: string[], options: CliOptions): Promise<number> {
   const [command, ...rest] = argv;
@@ -26,6 +28,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
   if (later.has(command)) return options.print(`fleet ${command} is not available in this version yet.`), 2;
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
+    if (command === "update") return await runUpdate(options);
     return await runPackCommand(command, rest, options);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -40,8 +43,24 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const preview = doctor || flags.dryRun;
   const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview });
   const report = doctor ? await check(plan, { home: options.home }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun });
+  const notice = doctor ? await readNotice(options.home) : undefined;
+  if (notice) report.findings.push({ id: "update:major", pack: "engine", say: notice });
   printReport(report, command, options.print, flags.dryRun);
   return report.ok ? 0 : 1;
+}
+
+async function runUpdate(options: CliOptions) {
+  const machine = await loadMachine(options.home);
+  if (!machine?.profileDir) throw new Error("no profile on this machine. Run get.sh, or fleet apply --profile <dir>.");
+  const profile = await loadProfile(machine.profileDir);
+  return update({
+    home: options.home,
+    engineDir: options.engineRoot,
+    profileDir: machine.profileDir,
+    engine: profile.engine,
+    print: options.print,
+    runApply: () => Bun.spawn(["sh", join(options.engineRoot, "fleet"), "apply"], { stdio: ["inherit", "inherit", "inherit"], env: { ...Bun.env, HOME: options.home } }).exited,
+  });
 }
 
 async function runPackCommand(name: string, args: string[], options: CliOptions) {
