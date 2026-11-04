@@ -17,7 +17,7 @@ fi
 
 failed=0
 
-if ! gitleaks git --log-opts="$base..HEAD" --redact --no-banner --log-level warn .; then
+if ! gitleaks git --log-opts="$base..HEAD" --redact --verbose --no-banner .; then
   echo "privacy: gitleaks found a secret in $base..HEAD." >&2
   failed=1
 fi
