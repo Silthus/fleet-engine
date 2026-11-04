@@ -3,9 +3,9 @@ import { get, isDocument, remove, same, samePath, set, type Document, type Field
 export type Reconciled = { document: Document; record: Field[]; applied: Field[]; kept: string[]; changed: string[]; removed: string[] };
 
 const name = (field: Field) => field.path.join(".");
-const matches = (actual: unknown, wanted: unknown) => same(actual, wanted) || (isDocument(actual) && isDocument(wanted) && holds(wanted, actual));
 
-export function reconcileKeys(current: Document, previous: Field[], wanted: Field[], options: { adopt: boolean; outage: boolean }): Reconciled {
+export function reconcileKeys(current: Document, previous: Field[], wanted: Field[], options: { adopt: boolean; outage: boolean; matches?: (actual: unknown, wanted: unknown) => boolean }): Reconciled {
+  const matches = options.matches ?? same;
   const document = structuredClone(current);
   const result: Reconciled = { document, record: [], applied: [], kept: [], changed: [], removed: [] };
   for (const field of wanted) {

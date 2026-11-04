@@ -5,7 +5,7 @@ import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { sourceOutage } from "../provider-config/adapter.ts";
 import { inside } from "../../files/install.ts";
 import { linkOnPath, readState, withLock, writeWithBackups, type Write } from "../provider-config/store.ts";
-import { isAccountHome, spawnRunner, type CommandRunner } from "../run.ts";
+import { skipOtherHome, spawnRunner, type CommandRunner } from "../run.ts";
 import { cronLine, cronSafe, reconcileCrontab } from "./cron.ts";
 import { labelPrefix, plist } from "./launchd.ts";
 import { agentCopyTarget, jobsFolder, launcherScript, launcherTarget, logTarget } from "./launcher.ts";
@@ -25,7 +25,7 @@ export type FleetTask = {
 
 export type T3Tasks = { list(): Promise<FleetTask[]>; upsert(task: FleetTask): Promise<void>; setEnabled(id: string, enabled: boolean): Promise<void> };
 
-export type JobsOptions = { run?: CommandRunner; engineRoot?: string; uid?: number; t3?: () => Promise<T3Tasks | undefined> };
+export type JobsOptions = { run?: CommandRunner; accountHome?: () => string | undefined; engineRoot?: string; uid?: number; t3?: () => Promise<T3Tasks | undefined> };
 
 export const taskPrefix = "fleet:";
 const notFound = 113;
@@ -43,7 +43,8 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       const result: AdapterResult = { actions: [], findings: [] };
       const osJobs = plan.jobs.filter((job) => job.runner !== "t3");
       for (const job of plan.jobs) if (!jobId.test(job.id)) throw new Error(`job id ${job.id} of the ${job.pack} pack may hold only letters, digits, dots, dashes, and underscores`);
-      if (!options.run && !isAccountHome(home)) return result;
+      const skipped = skipOtherHome("jobs", "your scheduled jobs", home, options);
+      if (skipped) return skipped;
       const command = (job: PackJob) => (job.command[0] === "fleet" ? ["/bin/sh", join(engineRoot, "fleet"), ...job.command.slice(1)] : job.command);
       const context = { home, dryRun, run, result, outage: sourceOutage(plan) };
       const reconcile = async () => {

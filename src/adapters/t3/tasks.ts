@@ -68,7 +68,7 @@ export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; r
               schedule: task.schedule,
               project,
               modelRole: job !== undefined && same(task.modelSelection, expected) ? job.modelRole : `model:${task.modelSelection.instanceId}/${task.modelSelection.model}`,
-              workspaceStrategy: (same(task.workspaceStrategy, wantedStrategy) ? task.workspaceStrategy.type : JSON.stringify(task.workspaceStrategy)) as FleetTask["workspaceStrategy"],
+              workspaceStrategy: (wantedStrategy === undefined || same(task.workspaceStrategy, wantedStrategy) ? task.workspaceStrategy.type : JSON.stringify(task.workspaceStrategy)) as FleetTask["workspaceStrategy"],
               runtimeMode: task.runtimeMode,
             };
           }),
@@ -98,10 +98,16 @@ export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; r
 }
 
 async function baseRef(run: CommandRunner, root: string) {
-  const exists = async (ref: string) => (await run(["git", "-C", root, "rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).code === 0;
-  const head = await run(["git", "-C", root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
-  const remoteDefault = head.code === 0 ? head.stdout.trim().replace(/^origin\//, "") : "";
-  for (const branch of [...(remoteDefault ? [remoteDefault] : []), "main", "master"]) if (await exists(`refs/remotes/origin/${branch}`)) return `origin/${branch}`;
+  const git = (...args: string[]) => run(["git", "-C", root, ...args]);
+  const exists = async (ref: string) => (await git("rev-parse", "--verify", "--quiet", `${ref}^{commit}`)).code === 0;
+  const remotes = await git("remote");
+  const names = remotes.code === 0 ? remotes.stdout.split("\n").map((name) => name.trim()).filter(Boolean) : [];
+  const remote = names.includes("origin") ? "origin" : names[0];
+  if (remote) {
+    const head = await git("symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`);
+    const remoteDefault = head.code === 0 && head.stdout.trim().startsWith(`${remote}/`) ? head.stdout.trim().slice(remote.length + 1) : "";
+    for (const branch of [...(remoteDefault ? [remoteDefault] : []), "main", "master"]) if (await exists(`refs/remotes/${remote}/${branch}`)) return `${remote}/${branch}`;
+  }
   for (const branch of ["main", "master"]) if (await exists(`refs/heads/${branch}`)) return branch;
   return undefined;
 }

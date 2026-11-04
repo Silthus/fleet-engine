@@ -127,7 +127,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
   return { state, calls, tags, server };
 }
 
-type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; originHead?: string; refs?: string[] };
+type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean };
 
 function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
   const calls: string[] = [];
@@ -151,7 +151,9 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
       return { code: 0, stdout: `Added project at ${command[3]}.\n` };
     }
     const originHead = "originHead" in machine ? machine.originHead : "origin/main";
-    if (command[0] === "git" && command.includes("symbolic-ref")) return originHead ? { code: 0, stdout: `${originHead}\n` } : { code: 128, stdout: "", stderr: "fatal: ref refs/remotes/origin/HEAD is not a symbolic ref" };
+    if (command[0] === "git" && machine.gitBroken) return { code: 128, stdout: "", stderr: "fatal: not a git repository" };
+    if (command[0] === "git" && command.at(-1) === "remote") return { code: 0, stdout: (machine.remotes ?? ["origin"]).map((remote) => `${remote}\n`).join("") };
+    if (command[0] === "git" && command.includes("symbolic-ref")) return originHead && command.at(-1) === `refs/remotes/${originHead.split("/")[0]}/HEAD` ? { code: 0, stdout: `${originHead}\n` } : { code: 128, stdout: "", stderr: `fatal: ref ${command.at(-1)} is not a symbolic ref` };
     if (command[0] === "git" && command.includes("rev-parse")) return (machine.refs ?? ["refs/remotes/origin/main"]).includes(command.at(-1)!.replace(/\^\{commit\}$/, "")) ? { code: 0, stdout: "abc\n" } : { code: 1, stdout: "" };
     return { code: 127, stdout: "" };
   };
@@ -249,15 +251,22 @@ describe("seedT3", () => {
     expect(result.actions).toEqual([]);
   });
 
-  test("treats T3's sparse copy of an owned setting as unchanged", async () => {
+  test("keeps T3's sparse copy of an owned setting while T3 is stopped, since a reset and a stripped default look the same", async () => {
     const home = temp.make("home-");
     const cleanup = (logsAfterDays: number) => entry("storageCleanup", { logsAfterDays, browserArtifactsAfterDays: null });
     await seedT3(plan("linux", [cleanup(14)]), home);
     write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
     const result = await seedT3(plan("linux", [cleanup(7)]), home);
-    expect(read(home, settingsFile).storageCleanup).toEqual({ logsAfterDays: 7, browserArtifactsAfterDays: null });
-    expect(result.findings).toEqual([]);
-    expect(await seedT3(plan("linux", [cleanup(7)]), home)).toEqual({ actions: [], findings: [] });
+    expect(read(home, settingsFile).storageCleanup).toEqual({ logsAfterDays: 14 });
+    expect(result.findings).toEqual([{ id: `kept:${settingsFile}`, pack: "engine", say: `Kept your storageCleanup in ${settingsFile}. Run fleet apply --adopt ${settingsFile} to take Fleet's value.` }]);
+  });
+
+  test("adds a nested setting that the file lacks while T3 is stopped", async () => {
+    const home = temp.make("home-");
+    await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14 })]), home);
+    const result = await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: true })]), home);
+    expect(read(home, settingsFile).storageCleanup).toEqual({ logsAfterDays: 14, worktreeOnMerge: true });
+    expect(result.actions).toEqual([{ target: settingsFile, operation: "replace", reason: "set storageCleanup" }]);
   });
 
   test("writes no T3 setting through the Provider config record", async () => {
@@ -293,6 +302,52 @@ describe("T3 adapter with a running server", () => {
     expect(server.calls.filter((call) => call.tag === "server.updateSettings")).toHaveLength(2);
     expect(server.state.settings.sidebarAutoSettleAfterDays).toBe(5);
     expect(retried.findings).toEqual([]);
+  });
+
+  test("retries a refused first adoption on the next plain apply", async () => {
+    const home = temp.make("home-");
+    write(home, settingsFile, { sidebarAutoSettleAfterDays: 3 });
+    const { server, adapter } = setup({ settings: { sidebarAutoSettleAfterDays: 3 }, ignorePatch: true });
+    const wanted = plan("linux", [entry("sidebarAutoSettleAfterDays", 5)]);
+    const refused = await apply(wanted, { home, adapters: [adapter], adopt: [settingsFile] });
+    expect(refused.findings.map((finding) => finding.id)).toContain("t3:settings");
+    server.state.ignorePatch = false;
+    const retried = await apply(wanted, { home, adapters: [adapter] });
+    expect(server.state.settings.sidebarAutoSettleAfterDays).toBe(5);
+    expect(retried.findings).toEqual([]);
+  });
+
+  test("keeps a nested setting the user reset to T3's default, though T3 left it out of the file", async () => {
+    const home = temp.make("home-");
+    await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: true })]), home);
+    write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
+    const { server, adapter } = setup({ settings: { storageCleanup: { worktreeOnMerge: false, logsAfterDays: 14, browserArtifactsAfterDays: 7 } } });
+    const report = await apply(plan("linux", [entry("storageCleanup", { logsAfterDays: 7, worktreeOnMerge: true })]), { home, adapters: [adapter] });
+    expect(server.tags()).not.toContain("server.updateSettings");
+    expect(report.findings).toContainEqual({ id: `kept:${settingsFile}`, pack: "engine", say: `Kept your storageCleanup in ${settingsFile}. Run fleet apply --adopt ${settingsFile} to take Fleet's value.` });
+  });
+
+  test("treats a default T3 left out of the file as unchanged, and updates the setting", async () => {
+    const home = temp.make("home-");
+    await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: false })]), home);
+    write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
+    const { server, adapter } = setup({ settings: { storageCleanup: { worktreeOnMerge: false, logsAfterDays: 14, browserArtifactsAfterDays: 7 } } });
+    const wanted = plan("linux", [entry("storageCleanup", { logsAfterDays: 7, worktreeOnMerge: false })]);
+    const report = await apply(wanted, { home, adapters: [adapter] });
+    expect(report.findings).toEqual([]);
+    expect(server.state.settings.storageCleanup).toEqual({ logsAfterDays: 7, worktreeOnMerge: false });
+    const again = await apply(wanted, { home, adapters: [adapter] });
+    expect(again).toMatchObject({ actions: [], findings: [] });
+    expect(server.tags().filter((tag) => tag === "server.updateSettings")).toHaveLength(1);
+  });
+
+  test("patches a nested setting T3 does not hold yet", async () => {
+    const home = temp.make("home-");
+    await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14 })]), home);
+    write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
+    const { server, adapter } = setup({ settings: { storageCleanup: { worktreeOnMerge: false, logsAfterDays: 14, browserArtifactsAfterDays: 7 } } });
+    await apply(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: true })]), { home, adapters: [adapter] });
+    expect(server.calls.find((call) => call.tag === "server.updateSettings")?.payload).toEqual({ patch: { storageCleanup: { logsAfterDays: 14, worktreeOnMerge: true } } });
   });
 
   test("reports a key T3 did not take", async () => {
@@ -423,6 +478,27 @@ describe("T3 tasks client", () => {
     expect(server.state.tasks.get("fleet:quality-loop")?.workspaceStrategy).toEqual({ type: "worktree", baseRef: "origin/master", startFromOrigin: true });
   });
 
+  test("bases a worktree on the primary remote's default branch when there is no origin", async () => {
+    const home = temp.make("home-");
+    const server = fakeServer({ projects: [project] });
+    const { run } = runner(server, { remotes: ["mirror", "backup"], originHead: "mirror/develop", refs: ["refs/remotes/mirror/develop", "refs/heads/main"] });
+    const client = t3Tasks(server.server, home, { plan: plan("linux", [], [loop]), run });
+    await client.upsert(wantedTask);
+    expect(server.state.tasks.get("fleet:quality-loop")?.workspaceStrategy).toEqual({ type: "worktree", baseRef: "mirror/develop", startFromOrigin: true });
+    expect(await client.list()).toEqual([wantedTask]);
+  });
+
+  test("lists an unchanged task as unchanged when git cannot read its project", async () => {
+    const home = temp.make("home-");
+    const server = fakeServer({ projects: [project] });
+    const machine: Machine = {};
+    const { run } = runner(server, machine);
+    const client = t3Tasks(server.server, home, { plan: plan("linux", [], [loop]), run });
+    await client.upsert(wantedTask);
+    machine.gitBroken = true;
+    expect(await client.list()).toEqual([wantedTask]);
+  });
+
   test("refuses a task whose project has no main or master branch", async () => {
     const home = temp.make("home-");
     const server = fakeServer({ projects: [project] });
@@ -505,21 +581,6 @@ describe("T3 adapter guards", () => {
     expect(report.findings).toEqual([]);
     expect(server.calls).toEqual([]);
     expect(existsSync(join(home, ".t3"))).toBe(false);
-  });
-
-  test("still does nothing when a test points HOME at a temporary folder", async () => {
-    const home = temp.make("home-");
-    const server = fakeServer();
-    const saved = { HOME: process.env.HOME, PATH: process.env.PATH };
-    Object.assign(process.env, { HOME: home, PATH: "" });
-    try {
-      const report = await apply(plan("linux", base, [loop]), { home, adapters: [t3Adapter({ server: server.server })] });
-      expect(report).toMatchObject({ actions: [], findings: [] });
-      expect(server.calls).toEqual([]);
-      expect(existsSync(join(home, ".t3"))).toBe(false);
-    } finally {
-      Object.assign(process.env, saved);
-    }
   });
 
   test("doctor reports each missing piece and writes nothing", async () => {

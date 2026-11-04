@@ -1,7 +1,7 @@
 import type { Finding, Plan } from "../../pack/types.ts";
 import type { AdapterResult } from "../../reconciler/apply.ts";
 import { readFieldRecord, type FieldRecord } from "../provider-config/adapter.ts";
-import { checkPath, json, samePath, type Document, type Field } from "../provider-config/fields.ts";
+import { checkPath, json, type Document, type Field } from "../provider-config/fields.ts";
 import { readState, writeWithBackups, type Write } from "../provider-config/store.ts";
 import { holds, reconcileKeys, type Reconciled } from "./keys.ts";
 import type { T3Rpc } from "./port.ts";
@@ -51,14 +51,18 @@ export async function reconcileSettings(plan: Plan, home: string, options: Optio
       if (old.length) next[target] = old;
       continue;
     }
-    const merged = reconcileKeys(current, old, fields, { adopt: options.adopt.includes(target) || (target === desktopTarget && current.updateChannelConfiguredByUser !== true), outage: options.outage });
-    if (merged.kept.length) result.findings.push(finding(`kept:${target}`, `Kept your ${merged.kept.join(", ")} in ${target}. Run fleet apply --adopt ${target} to take Fleet's value.`));
+    const adopt = options.adopt.includes(target) || (target === desktopTarget && current.updateChannelConfiguredByUser !== true);
     if (target === settingsTarget && options.rpc) {
-      const refused = await throughServer(options.rpc, merged, options.dryRun, result);
-      const record = merged.record.flatMap((field) => (refused.includes(field) ? old.filter((item) => samePath(item.path, field.path)) : [field]));
+      const effective = await readT3Settings(options.rpc);
+      const merged = reconcileKeys(effectiveView(current, old, effective), old, fields, { adopt, outage: options.outage, matches: holds });
+      keptFinding(target, merged, result);
+      const refused = await throughServer(options.rpc, merged, effective, options.dryRun, result);
+      const record = merged.record.flatMap((field) => (refused.includes(field) ? heldBefore(field, effective) : [field]));
       if (record.length) next[target] = record;
       continue;
     }
+    const merged = reconcileKeys(current, old, fields, { adopt, outage: options.outage });
+    keptFinding(target, merged, result);
     if (merged.record.length) next[target] = merged.record;
     const reason = [merged.changed.length ? `set ${merged.changed.join(", ")}` : "", merged.removed.length ? `remove ${merged.removed.join(", ")}` : ""].filter(Boolean).join("; ");
     if (reason) writes.push({ target, before, after: json.encode(merged.document), reason });
@@ -75,9 +79,22 @@ export async function reconcileSettings(plan: Plan, home: string, options: Optio
   return result;
 }
 
-async function throughServer(rpc: T3Rpc, merged: Reconciled, dryRun: boolean, result: AdapterResult): Promise<Field[]> {
+function effectiveView(file: Document, old: Field[], effective: Document): Document {
+  const keys = new Set([...Object.keys(file), ...old.map((field) => field.path[0]!)]);
+  return Object.fromEntries([...keys].map((key) => [key, key in effective ? effective[key] : file[key]]).filter(([, value]) => value !== undefined));
+}
+
+function heldBefore(field: Field, effective: Document): Field[] {
+  const value = effective[field.path[0]!];
+  return value === undefined ? [] : [{ ...field, value }];
+}
+
+function keptFinding(target: string, merged: Reconciled, result: AdapterResult) {
+  if (merged.kept.length) result.findings.push(finding(`kept:${target}`, `Kept your ${merged.kept.join(", ")} in ${target}. Run fleet apply --adopt ${target} to take Fleet's value.`));
+}
+
+async function throughServer(rpc: T3Rpc, merged: Reconciled, effective: Document, dryRun: boolean, result: AdapterResult): Promise<Field[]> {
   if (merged.removed.length) result.findings.push(finding("t3:dropped", `Fleet no longer sets ${merged.removed.join(", ")} in T3 Code. T3 Code keeps the current value; change it in T3 Code's settings if you like.`));
-  const effective = await readT3Settings(rpc);
   const key = (field: Field) => field.path[0]!;
   const changed = merged.applied.filter((field) => !holds(effective[key(field)], field.value));
   if (!changed.length) return [];
