@@ -172,7 +172,7 @@
       "id": "t3-tuned",
       "name": "T3 Code tuned",
       "default": true,
-      "sentence": "Each thread gets its own worktree, finished worktrees get cleaned up, and threads that hit a usage limit resume by themselves.",
+      "sentence": "Each thread gets its own worktree, and threads that hit a usage limit resume by themselves. A worktree without uncommitted changes is removed when its thread settles or after five days.",
       "moment": {
         "time": "11:30",
         "title": "A thread picks up after its limit",
@@ -556,9 +556,9 @@
     {
       "id": "claude-cli",
       "run": [
-        "sh",
+        "bash",
         "-c",
-        "curl -fsSL https://claude.ai/install.sh | bash"
+        "set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash"
       ],
       "check": [
         "claude",
