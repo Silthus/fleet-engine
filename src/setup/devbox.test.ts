@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
-import { overSsh, pairing, sshHosts } from "./devbox.ts";
+import { overSsh, pairing, profileForBox, sshHosts } from "./devbox.ts";
 import { engineRoot, fakeMachine, fleetSetup, machineFile, onBox, scripted } from "./testing.ts";
 
 isolateGit();
@@ -51,19 +51,33 @@ describe("the devbox over SSH", () => {
     expect(machineFile(home).devboxes).toEqual(["box-1"]);
 
     const onTheBox = remote(box);
-    expect(onTheBox).toContainEqual(expect.stringMatching(/get\.sh \| sh -s -- --ref main --install-only/));
+    expect(onTheBox).toContainEqual(expect.stringMatching(/curl -fsSL \S+\/get\.sh -o "\$installer" && sh "\$installer" --ref main --install-only/));
     expect(onTheBox).toContain("gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,admin:public_key,admin:ssh_signing_key");
     expect(onTheBox).toContain("gh auth setup-git");
     expect(onTheBox).toContainEqual(expect.stringContaining(`gh repo clone https://github.com/nora/fleet-profile.git "$HOME/.local/share/fleet/profile" -- -q && sh "$HOME/.local/share/fleet/engine/get.sh" --ref main --profile "$HOME/.local/share/fleet/profile"`));
     expect(onTheBox).toContain("codex login --device-auth");
-    expect(onTheBox).toContain("t3 connect link --headless");
-    expect(box.runs).toContainEqual({ command: ["ssh", "-t", "box-1", expect.stringContaining("claude auth login")], input: true });
+    expect(onTheBox).toContain("t3 up --connect --yes --headless");
+    expect(box.runs).toContainEqual({ command: ["ssh", "-t", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "box-1", expect.stringContaining("claude auth login")], input: true });
     expect(box.opened).toEqual(["https://github.com/login/device"]);
-    expect(onTheBox).toContain(`t3 pair --ttl 5m --label ${hostname()}`);
-    expect(onTheBox).toContain("t3 environment link http://here.example:3773 --pairing-code HERECODE --access full-access");
     const here = box.calls.map((call) => call.command.join(" "));
-    expect(here).toContain("t3 environment link https://box.example --pairing-code BOXCODE --access full-access");
-    expect(here).toContain("t3 pair --ttl 5m --label box-1");
+    expect(here).toContain("t3 environment link https://box-1.relay.example --pairing-code BOXCODE --access full-access");
+    expect(onTheBox).toContain(`t3 pair --ttl 5m --label ${hostname()}`);
+    expect(onTheBox).not.toContainEqual(expect.stringContaining("t3 environment link"));
+    expect(here).not.toContain("t3 pair --ttl 5m --label box-1");
+    expect(result.output).toContain("  · box-1 does not link back to this machine, because T3 Connect is off here. Turn it on with t3 up --connect, and T3 Code on box-1 can pair with this machine.");
+  });
+
+  test("links back from the devbox when T3 Connect is on here, and installs the engine of a tracking profile from main", async () => {
+    const home = homeWithHosts();
+    const box = fakeMachine(home, {}, { connectHere: true });
+    const result = await fleetSetup(home, ["--preset", "starter", "--devbox", "box-1"], ["", "", ""], box);
+    expect(result.code).toBe(0);
+    expect(remote(box)).toContain("t3 environment link https://here.relay.example --pairing-code HERECODE --access full-access");
+
+    const dir = join(home, ".local/share/fleet/profile");
+    const file = JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8"));
+    writeFileSync(join(dir, "fleet.json"), JSON.stringify({ ...file, engine: { ...file.engine, ref: "v0.1.0", channel: "track" } }));
+    expect((await profileForBox(box.machine, dir)).engineRef).toBe("main");
   });
 
   test("a skip, or no host in ~/.ssh/config, leaves a plan for this machine only", async () => {

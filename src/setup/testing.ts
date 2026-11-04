@@ -52,7 +52,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * devbox whose sign-ins work the same way; Claude there signs in when its
  * foreground sign-in runs.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>> } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number }> = [];
@@ -64,8 +64,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const passes = (name: SignInName) => left[name] === 0;
   const result = (ok: boolean, output = ""): ExecResult => ({ code: ok ? 0 : 1, output });
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
-  const t3 = (line: string, pairing: string) => {
-    if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: ${pairing}/pair#token=x\nToken: ${pairing.includes("box") ? "BOXCODE" : "HERECODE"}\n`);
+  const t3 = (line: string, token: string) => {
+    if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
     if (line.startsWith("t3 environment link ")) return result(true, "linked");
     return undefined;
   };
@@ -74,8 +74,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line === "gh auth setup-git") return result(true);
     if (line === "claude auth status") return result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
-    if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: passes("box:t3"), linked: passes("box:t3") }));
-    return t3(line, "https://box.example") ?? result(false, `unexpected on the box: ${line}`);
+    if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: passes("box:t3"), linked: passes("box:t3"), relayUrl: passes("box:t3") ? "https://box-1.relay.example/" : null }));
+    return t3(line, "BOXCODE") ?? result(false, `unexpected on the box: ${line}`);
   };
   const machine: Machine = {
     async exec(command, run = {}) {
@@ -99,7 +99,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
         return realGit(home, ["init", "-q", "--bare", "-b", "main", bare]);
       }
       if (command[0] === "git") return realGit(home, command.slice(1), run.cwd);
-      return t3(line, "http://here.example:3773") ?? result(false, `unexpected ${line}`);
+      if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: Boolean(options.connectHere), linked: Boolean(options.connectHere), relayUrl: options.connectHere ? "https://here.relay.example/" : null }));
+      return t3(line, "HERECODE") ?? result(false, `unexpected ${line}`);
     },
     start(command) {
       starts.push(command);

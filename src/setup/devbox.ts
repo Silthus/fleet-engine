@@ -41,10 +41,11 @@ export function overSsh(machine: Machine, host: string): Machine {
     const body = scratch ? `d=$(mktemp -d) && cd "$d" && ${words}; s=$?; cd / && rm -rf "$d"; exit $s` : words;
     return `PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"; ${body}`;
   };
+  const batch = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host];
   return {
-    exec: (command, options = {}) => machine.exec(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host, line(command, options.cwd !== undefined)], options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
-    start: (command) => machine.start(["ssh", "-T", "-o", "BatchMode=yes", host, line(command)]),
-    run: (command, options = {}) => machine.run(["ssh", options.input ? "-t" : "-T", host, line(command)], options),
+    exec: (command, options = {}) => machine.exec(["ssh", "-T", ...batch, line(command, options.cwd !== undefined)], options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+    start: (command) => machine.start(["ssh", "-T", ...batch, line(command)]),
+    run: (command, options = {}) => machine.run(["ssh", options.input ? "-t" : "-T", ...batch, line(command)], options),
     sleep: (ms) => machine.sleep(ms),
     openUrl: (url) => machine.openUrl(url),
     has: () => true,
@@ -66,7 +67,8 @@ export async function profileForBox(machine: Machine, profileDir: string | undef
   if (!profileDir) throw new Error("no profile yet");
   const origin = await machine.exec(["git", "-C", profileDir, "config", "--get", "remote.origin.url"]);
   if (origin.code !== 0) throw new Error(`${profileDir} has no origin to clone on the devbox`);
-  return { url: origin.output.trim(), engineRef: (await loadProfile(profileDir)).engine.ref };
+  const { engine } = await loadProfile(profileDir);
+  return { url: origin.output.trim(), engineRef: engine.channel === "track" ? "main" : engine.ref };
 }
 
 /** Asks which SSH host is the devbox, or takes it from --devbox. Skipping leaves a plan for this machine only. */
@@ -106,7 +108,7 @@ export function devboxSteps(host: string, context: DevboxContext): Step[] {
   const chatgpt = chatgptSignIn(box, context.models);
   return [
     auto(host, "install", `Install Fleet on ${host}`, 4, context.terminal, () => install(box, context)),
-    humanStep(on(githubSignIn(box, async () => void (await box.exec(["gh", "auth", "setup-git"])))), human),
+    humanStep(on(githubSignIn(box, async () => {})), human),
     auto(host, "profile", `Apply your profile on ${host}`, 3, context.terminal, () => applyProfile(box, context)),
     ...(context.plan === "codex" ? [] : [claudeOnBox(host, box, context)]),
     ...(context.plan === "claude" ? [] : [humanStep(on(Object.assign(Object.create(chatgpt) as SignIn, { command: ["codex", "login", "--device-auth"] })), human)]),
@@ -137,7 +139,8 @@ async function install(box: Machine, context: DevboxContext) {
   const { engineRef } = await context.profile();
   const getSh = `https://raw.githubusercontent.com/${engineRepo}/${engineRef}/get.sh`;
   const role = `mkdir -p "$HOME/.config/fleet" && { [ -f "$HOME/.config/fleet/machine.json" ] || printf '{"schema":1,"role":"devbox"}\\n' > "$HOME/.config/fleet/machine.json"; }`;
-  await shown(box, `${role} && curl -fsSL ${quote(getSh)} | sh -s -- --ref ${quote(engineRef)} --install-only`, "Fleet did not install on the devbox. Fix what it says above, then run fleet setup again.");
+  const download = `installer=$(mktemp) && { curl -fsSL ${quote(getSh)} -o "$installer" && sh "$installer" --ref ${quote(engineRef)} --install-only; s=$?; rm -f "$installer"; exit $s; }`;
+  await shown(box, `${role} && ${download}`, "Fleet did not install on the devbox. Fix what it says above, then run fleet setup again.");
 }
 
 async function applyProfile(box: Machine, context: DevboxContext) {
@@ -170,24 +173,28 @@ function claudeOnBox(host: string, box: Machine, context: DevboxContext): Step {
   };
 }
 
+/** T3 Connect on the box: t3 up signs in, installs the relay client, and restarts the service so the link takes effect. */
 function t3Connect(host: string, box: Machine): SignIn {
   return {
     id: `devbox:${host}:t3`,
     title: `Link T3 Connect on ${host}`,
     minutes: 1,
     why: "T3 Code on your other devices reaches the devbox through T3 Connect.",
-    command: ["t3", "connect", "link", "--headless"],
-    async probe() {
-      const status = await box.exec(["t3", "connect", "status", "--json"]);
-      if (status.code !== 0) return false;
-      try {
-        const state = JSON.parse(status.output) as { authenticated?: unknown; linked?: unknown };
-        return state.authenticated === true && state.linked === true;
-      } catch {
-        return false;
-      }
-    },
+    command: ["t3", "up", "--connect", "--yes", "--headless"],
+    probe: async () => (await connectAddress(box)) !== undefined,
   };
+}
+
+/** Where other machines reach this one through T3 Connect, once it is linked. */
+async function connectAddress(machine: Machine): Promise<string | undefined> {
+  const status = await machine.exec(["t3", "connect", "status", "--json"]);
+  if (status.code !== 0) return undefined;
+  try {
+    const state = JSON.parse(status.output) as { authenticated?: unknown; linked?: unknown; relayUrl?: unknown };
+    return state.authenticated === true && state.linked === true && typeof state.relayUrl === "string" ? new URL(state.relayUrl).origin : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Reads `t3 pair` output: where the environment answers, and the one-time code. */
@@ -202,15 +209,20 @@ export function pairing(output: string): { url: string; code: string } | undefin
   }
 }
 
+/** This machine links the devbox through its T3 Connect address; the devbox links back only when T3 Connect is on here too. */
 async function linkBothWays(host: string, box: Machine, context: DevboxContext) {
   const here = hostname();
-  const link = async (from: Machine, fromName: string, to: Machine, toName: string) => {
+  const link = async (from: Machine, fromName: string, address: string, to: Machine, toName: string) => {
     const paired = await from.exec(["t3", "pair", "--ttl", "5m", "--label", toName]);
     const found = paired.code === 0 ? pairing(paired.output) : undefined;
     if (!found) throw new Error(`${fromName} did not give a pairing code. Check that T3 Code runs there, then run fleet setup again.`);
-    const linked = await to.exec(["t3", "environment", "link", found.url, "--pairing-code", found.code, "--access", "full-access"]);
+    const linked = await to.exec(["t3", "environment", "link", address, "--pairing-code", found.code, "--access", "full-access"]);
     if (linked.code !== 0) throw new Error(`could not link ${fromName} from ${toName}: ${linked.output.trim().split("\n").at(-1) ?? ""}`);
   };
-  await link(box, host, context.machine, here);
-  await link(context.machine, here, box, host);
+  const boxAddress = await connectAddress(box);
+  if (!boxAddress) throw new Error(`${host} has no T3 Connect address yet. Run fleet setup again once T3 Connect is linked there.`);
+  await link(box, host, boxAddress, context.machine, here);
+  const hereAddress = await connectAddress(context.machine);
+  if (hereAddress) await link(context.machine, here, hereAddress, box, host);
+  else context.terminal.print(`  · ${host} does not link back to this machine, because T3 Connect is off here. Turn it on with t3 up --connect, and T3 Code on ${host} can pair with this machine.`);
 }
