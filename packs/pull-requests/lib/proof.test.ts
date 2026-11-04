@@ -43,8 +43,9 @@ test("fleet proof explains each command and fails closed with one line when it c
 test("fleet proof lists only the commands this version ships", async () => {
   const pr = checkout();
   const listed = (await pr.fleet("--help")).output.split("\n").flatMap((line) => /^  fleet proof (\S+)/.exec(line)?.[1] ?? []);
-  expect(listed).toEqual(["path", "save", "publish", "require", "review", "show", "respond", "standing", "gap", "gate", "review-start", "review-finish"]);
-  await expect(pr.fleet("miss")).rejects.toThrow("Unknown command miss. Run fleet proof --help");
+  expect(listed).toEqual(["path", "save", "publish", "require", "review", "show", "respond", "standing", "gap", "gate", "miss", "eval", "review-start", "review-finish"]);
+  await expect(pr.fleet("lessons")).rejects.toThrow("Unknown command lessons. Run fleet proof --help");
+  expect((await pr.fleet("require", "--help")).output).toContain("the review row of the model table for a PR that Claude wrote, and the\nreview-codex row for one that Codex wrote");
 });
 
 test("a clean merge of the base carries the review of the PR forward and records it", async () => {
