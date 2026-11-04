@@ -6,7 +6,7 @@ exports[`the Base pack gives a stable AGENTS.md for plan claude 1`] = `
 ## Always
 
 - Confirm with me before a destructive action I did not ask for, even with full access: deleting data, force-pushing a shared branch, or changing production.
-- Never print, log, or commit a secret. Read secrets from the environment or a secret store. When you need one from me, ask me to save it in a file or an environment variable and give you its name.
+- Never print, log, or commit a secret. Read secrets from the environment or a secret store. When you need one from me, ask for it with T3's \`request_secret\` tool, or ask me to save it in a file or an environment variable and give you its name.
 - Keep private data out of public repositories: customer data, usage and revenue numbers, internal metrics, private hostnames, and secrets stay out of issues, comments, pull request bodies, commits, branch names, and files. Keep that data in a private place and refer to it there.
 - Report outcomes as they are. When a test fails or a step was skipped, say so.
 - Wait in one call that blocks until the event, such as \`gh run watch <id> --exit-status\`. Never poll across turns: every turn rereads the whole context.
@@ -39,7 +39,7 @@ exports[`the Base pack gives a stable AGENTS.md for plan codex 1`] = `
 ## Always
 
 - Confirm with me before a destructive action I did not ask for, even with full access: deleting data, force-pushing a shared branch, or changing production.
-- Never print, log, or commit a secret. Read secrets from the environment or a secret store. When you need one from me, ask me to save it in a file or an environment variable and give you its name.
+- Never print, log, or commit a secret. Read secrets from the environment or a secret store. When you need one from me, ask for it with T3's \`request_secret\` tool, or ask me to save it in a file or an environment variable and give you its name.
 - Keep private data out of public repositories: customer data, usage and revenue numbers, internal metrics, private hostnames, and secrets stay out of issues, comments, pull request bodies, commits, branch names, and files. Keep that data in a private place and refer to it there.
 - Report outcomes as they are. When a test fails or a step was skipped, say so.
 - Wait in one call that blocks until the event, such as \`gh run watch <id> --exit-status\`. Never poll across turns: every turn rereads the whole context.
@@ -72,7 +72,7 @@ exports[`the Base pack gives a stable AGENTS.md for plan both 1`] = `
 ## Always
 
 - Confirm with me before a destructive action I did not ask for, even with full access: deleting data, force-pushing a shared branch, or changing production.
-- Never print, log, or commit a secret. Read secrets from the environment or a secret store. When you need one from me, ask me to save it in a file or an environment variable and give you its name.
+- Never print, log, or commit a secret. Read secrets from the environment or a secret store. When you need one from me, ask for it with T3's \`request_secret\` tool, or ask me to save it in a file or an environment variable and give you its name.
 - Keep private data out of public repositories: customer data, usage and revenue numbers, internal metrics, private hostnames, and secrets stay out of issues, comments, pull request bodies, commits, branch names, and files. Keep that data in a private place and refer to it there.
 - Report outcomes as they are. When a test fails or a step was skipped, say so.
 - Wait in one call that blocks until the event, such as \`gh run watch <id> --exit-status\`. Never poll across turns: every turn rereads the whole context.

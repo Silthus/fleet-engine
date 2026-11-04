@@ -119,6 +119,8 @@ describe("saving answers", () => {
     expect(loadProfile(profileRepo({ ...profile, workflows: { maps: "false" } }))).rejects.toThrow("workflows must map ids to true or false");
     expect(loadProfile(profileRepo({ schema: 1 }))).rejects.toThrow("engine needs a repo");
     expect(loadProfile(profileRepo({ ...profile, overrides: { models: [{ role: "review", model: "x" }] } }))).rejects.toThrow("overrides.models must list rows");
+    expect(loadProfile(profileRepo({ ...profile, overrides: { config: [{ provider: "claude", key: "model", value: "x", plans: {} }] } }))).rejects.toThrow("overrides.config[0]: plans must list claude, codex, or both");
+    expect(loadProfile(profileRepo({ ...profile, overrides: { config: [{ provider: "nope", key: "model", value: "x" }] } }))).rejects.toThrow("overrides.config[0]: needs a provider and a key");
   });
 });
 

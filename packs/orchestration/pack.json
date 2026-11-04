@@ -2,7 +2,7 @@
   "schema": 1,
   "name": "orchestration",
   "summary": "Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread.",
-  "day": "You describe a large change once. A conductor thread splits it into tickets and starts one worker thread per ticket, and the loops keep improving your repo overnight.",
+  "day": "You describe a large change once. A conductor thread splits it into tickets and starts one worker thread per ticket. Once you turn them on, the loops improve your repo overnight.",
   "cost": "The loops run on an always-on devbox and spend your AI plan's usage each night, so they start off.",
   "risk": "The loops open pull requests without you in the room. Each one stays a draft until you say otherwise.",
   "requires": [
@@ -17,12 +17,40 @@
     "agent-skills:orchestration/quality-loop",
     "agent-skills:orchestration/signal-loop",
     "agent-skills:orchestration/t3-kickoff",
-    "agent-skills:orchestration/usage-brief"
+    "agent-skills:orchestration/usage-brief",
+    "mattpocock-skills:engineering/wayfinder",
+    "mattpocock-skills:engineering/research",
+    "mattpocock-skills:engineering/prototype",
+    "mattpocock-skills:engineering/domain-modeling",
+    "mattpocock-skills:engineering/setup-matt-pocock-skills",
+    "mattpocock-skills:engineering/codebase-design",
+    "mattpocock-skills:productivity/grilling"
   ],
   "settings": [
     {
       "key": "orchestration.tracker",
       "question": "Which repo's issues hold your maps? Leave it empty to use your Fleet profile repo.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "orchestration.lessonsLog",
+      "question": "Which file holds the lessons log that maps read and write, such as a path in a private repo?",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "orchestration.goals",
+      "question": "Where do your team's goals live, so a map can name the metric its work moves?",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "orchestration.analyticsProject",
+      "question": "Which analytics project shows how people use your product?",
       "type": "string",
       "optional": true,
       "ask": "never"
@@ -34,13 +62,23 @@
     },
     {
       "key": "orchestration.qualityArea",
-      "question": "Which area of the repo should the quality loop improve, such as a directory?",
+      "question": "Which paths of the repo may the loops change, such as src/billing?",
+      "type": "string"
+    },
+    {
+      "key": "orchestration.criticalPaths",
+      "question": "Which paths need your review before a loop's pull request is ready, such as src/payments?",
       "type": "string",
       "optional": true
     },
     {
+      "key": "orchestration.ledgerRepo",
+      "question": "Which private repo holds the loops' ledger? It records production numbers, so keep it private.",
+      "type": "string"
+    },
+    {
       "key": "orchestration.signalSource",
-      "question": "Where should the signal loop read production errors and friction? Leave it empty to use the PostHog MCP when it is connected.",
+      "question": "Where should the signal loop read production errors and friction? Leave it empty to use an analytics MCP when one is connected.",
       "type": "string",
       "optional": true,
       "ask": "never"
@@ -52,7 +90,10 @@
       "name": "Planning maps",
       "default": true,
       "settings": [
-        "orchestration.tracker"
+        "orchestration.tracker",
+        "orchestration.lessonsLog",
+        "orchestration.goals",
+        "orchestration.analyticsProject"
       ],
       "sentence": "Big work becomes a map of tickets, and a conductor thread works through it with one worker thread per ticket.",
       "moment": {
@@ -70,7 +111,7 @@
       "id": "side-threads",
       "name": "Side threads",
       "default": true,
-      "sentence": "Side fixes and parallel work go to their own T3 thread, and agents wait without polling.",
+      "sentence": "When you agree to a side fix, it starts in its own T3 thread, and this thread stays on its task.",
       "moment": {
         "time": "12:00",
         "title": "A side fix gets its own thread",
@@ -89,13 +130,15 @@
       ],
       "settings": [
         "orchestration.loopProject",
-        "orchestration.qualityArea"
+        "orchestration.qualityArea",
+        "orchestration.criticalPaths",
+        "orchestration.ledgerRepo"
       ],
-      "sentence": "Each night, agents improve one area of a repo through small, self-proving pull requests.",
+      "sentence": "Each night, agents improve one area of a repo through small, proven draft pull requests that you review.",
       "moment": {
         "time": "01:00",
         "title": "The quality loop",
-        "body": "Overnight, agents add tests to one area of your repo, then prune and refactor it, one small proven pull request at a time.",
+        "body": "Overnight, agents add tests to one area of your repo, then prune and refactor it, one small proven draft pull request at a time.",
         "night": true,
         "words": [
           "always-on devbox"
@@ -112,13 +155,16 @@
       ],
       "settings": [
         "orchestration.loopProject",
+        "orchestration.qualityArea",
+        "orchestration.criticalPaths",
+        "orchestration.ledgerRepo",
         "orchestration.signalSource"
       ],
-      "sentence": "Each night, agents turn production errors and friction that nobody handles into small fix pull requests.",
+      "sentence": "Each night, agents turn production errors and friction that nobody handles into small draft fix pull requests.",
       "moment": {
         "time": "02:00",
         "title": "The signal loop",
-        "body": "Overnight, agents read the errors and slow paths your users hit, pick the ones nobody handles, and open a small proven fix for each.",
+        "body": "Overnight, agents read the errors and slow paths your users hit, pick the ones nobody handles, and open a small proven draft fix for each.",
         "night": true
       },
       "risk": "Reads production signals and spends your AI plan's usage every night."
@@ -152,12 +198,16 @@
       },
       "workflow": "quality-loop",
       "task": {
-        "prompt": "Run one round of the quality-loop skill on the area in orchestration.qualityArea, or on the repo's least-tested area when it is not set. Read the values in ~/.agents/guides/skill-settings.md.",
+        "prompt": "Run one coordinator round of the quality-loop skill. Read every value in ~/.agents/guides/skill-settings.md first. The code repo is this thread's project, the machine is this one, and the schedule is nightly. The scope is the paths in orchestration.qualityArea, the critical paths are in orchestration.criticalPaths, and the ledger is the private repo in orchestration.ledgerRepo. Every lane stops at a draft pull request: no lane runs stamp-pr or full-send, merges, or deploys, whatever the lane contract says, and each lane's prompt says so. Never ask a question, because nobody is watching: when a value the skill needs is missing, end with NEEDS_HUMAN: <the missing setting keys>.",
         "projectSetting": "orchestration.loopProject",
         "modelRole": "implementation",
         "workspaceStrategy": "worktree",
         "runtimeMode": "full-access"
-      }
+      },
+      "roles": [
+        "devbox",
+        "hub"
+      ]
     },
     {
       "id": "signal-loop",
@@ -169,12 +219,16 @@
       },
       "workflow": "signal-loop",
       "task": {
-        "prompt": "Run one round of the signal-loop skill. Read signals from the source in orchestration.signalSource, or from the PostHog MCP when it is not set and the MCP is connected. When there is no source, stop and say so. Read the values in ~/.agents/guides/skill-settings.md.",
+        "prompt": "Run one coordinator round of the signal-loop skill. Read signals from the source in orchestration.signalSource, or, when it is not set, from an analytics MCP, such as PostHog's, when one is connected. When there is no source, end with NEEDS_HUMAN: orchestration.signalSource. Read every value in ~/.agents/guides/skill-settings.md first. The code repo is this thread's project, the machine is this one, and the schedule is nightly. The scope is the paths in orchestration.qualityArea, the critical paths are in orchestration.criticalPaths, and the ledger is the private repo in orchestration.ledgerRepo. Every lane stops at a draft pull request: no lane runs stamp-pr or full-send, merges, or deploys, whatever the lane contract says, and each lane's prompt says so. Never ask a question, because nobody is watching: when a value the skill needs is missing, end with NEEDS_HUMAN: <the missing setting keys>.",
         "projectSetting": "orchestration.loopProject",
         "modelRole": "implementation",
         "workspaceStrategy": "worktree",
         "runtimeMode": "full-access"
-      }
+      },
+      "roles": [
+        "devbox",
+        "hub"
+      ]
     },
     {
       "id": "pr-digest",
@@ -186,12 +240,16 @@
       },
       "workflow": "pr-digest",
       "task": {
-        "prompt": "On a Saturday or Sunday, stop. Otherwise list my open pull requests in every repository with gh search prs --author @me --state open. For each one, read its checks, reviews, mergeable state and open threads, and give one line: its link as [#1234](url), its title, and the one thing it waits for, such as a review, a red check, a conflict, or my answer. Group them by repository, newest first. Change nothing.",
+        "prompt": "On a Saturday or Sunday, stop. Otherwise list my open pull requests in every repository with gh search prs --author @me --state open --limit 200 --json url,title,repository,updatedAt. For each one, read its checks, reviews, mergeable state, and open threads, and give one line: its link as [#1234](url), its title, and the one thing it waits for, such as a review, a red check, a conflict, or my answer. Group them by repository, most recently updated first. Change nothing.",
         "projectSetting": "orchestration.loopProject",
         "modelRole": "lookup",
         "workspaceStrategy": "worktree",
         "runtimeMode": "auto"
-      }
+      },
+      "roles": [
+        "devbox",
+        "hub"
+      ]
     }
   ]
 }

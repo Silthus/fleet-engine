@@ -49,6 +49,21 @@ const providers = ["claude", "codex", "t3"];
 const plans = ["claude", "codex", "both"];
 const efforts = ["low", "medium", "high", "xhigh", "max"];
 
+function scopeProblem(item: Record<string, unknown>) {
+  if (item.on !== undefined && !isListOf(item.on, oses)) return "on must list darwin or linux";
+  if (item.roles !== undefined && !isListOf(item.roles, roles)) return "roles must list mac, devbox, linux, or hub";
+  if (item.plans !== undefined && !isListOf(item.plans, plans)) return "plans must list claude, codex, or both";
+  if (item.workflow !== undefined && typeof item.workflow !== "string") return "workflow must be an id";
+  return undefined;
+}
+
+/** What is wrong with a config entry from a pack or a profile's overrides, or undefined when it is sound. */
+export function configEntryProblem(item: unknown) {
+  if (!isRecord(item)) return "must be an object";
+  if (!providers.includes(item.provider as string) || typeof item.key !== "string") return "needs a provider and a key";
+  return scopeProblem(item);
+}
+
 /** Checks every nested item's shape before the manifest is trusted as a PackManifest. */
 function checkShapes(raw: Record<string, unknown>, fail: (message: string) => never) {
   const need = (ok: boolean, message: string) => {
@@ -62,10 +77,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     });
   };
   const filters = (item: Record<string, unknown>, label: string) => {
-    need(item.on === undefined || isListOf(item.on, oses), `${label}: on must list darwin or linux`);
-    need(item.roles === undefined || isListOf(item.roles, roles), `${label}: roles must list mac, devbox, linux, or hub`);
-    need(item.plans === undefined || isListOf(item.plans, plans), `${label}: plans must list claude, codex, or both`);
-    need(item.workflow === undefined || typeof item.workflow === "string", `${label}: workflow must be an id`);
+    const problem = scopeProblem(item);
+    if (problem) fail(`${label}: ${problem}`);
   };
   for (const field of ["requires", "skills"]) need(raw[field] === undefined || isStrings(raw[field]), `${field} must list names`);
   need(raw.instructions === undefined || typeof raw.instructions === "string", "instructions must be a path");
@@ -75,8 +88,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(item.section === undefined || typeof item.section === "string", `${label}: section must be text`);
   });
   each("config", (item, label) => {
-    need(providers.includes(item.provider as string) && typeof item.key === "string", `${label}: needs a provider and a key`);
-    filters(item, label);
+    const problem = configEntryProblem(item);
+    if (problem) fail(`${label}: ${problem}`);
   });
   each("settings", (item, label) => {
     need(typeof item.key === "string" && typeof item.question === "string", `${label}: needs a key and a question`);
