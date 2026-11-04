@@ -1,0 +1,197 @@
+{
+  "schema": 1,
+  "name": "orchestration",
+  "summary": "Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread.",
+  "day": "You describe a large change once. A conductor thread splits it into tickets and starts one worker thread per ticket, and the loops keep improving your repo overnight.",
+  "cost": "The loops run on an always-on devbox and spend your AI plan's usage each night, so they start off.",
+  "risk": "The loops open pull requests without you in the room. Each one stays a draft until you say otherwise.",
+  "requires": [
+    "pull-requests"
+  ],
+  "instructions": "AGENTS.md",
+  "skills": [
+    "agent-skills:orchestration/architecture",
+    "agent-skills:orchestration/impact",
+    "agent-skills:orchestration/lessons",
+    "agent-skills:orchestration/orchestration-wayfinder",
+    "agent-skills:orchestration/quality-loop",
+    "agent-skills:orchestration/signal-loop",
+    "agent-skills:orchestration/t3-kickoff",
+    "agent-skills:orchestration/usage-brief"
+  ],
+  "settings": [
+    {
+      "key": "orchestration.tracker",
+      "question": "Which repo's issues hold your maps? Leave it empty to use your Fleet profile repo.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "orchestration.loopProject",
+      "question": "Which T3 project do the loops and the PR digest run in?",
+      "type": "string"
+    },
+    {
+      "key": "orchestration.qualityArea",
+      "question": "Which area of the repo should the quality loop improve, such as a directory?",
+      "type": "string",
+      "optional": true
+    },
+    {
+      "key": "orchestration.signalSource",
+      "question": "Where should the signal loop read production errors and friction? Leave it empty to use the PostHog MCP when it is connected.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "maps",
+      "name": "Planning maps",
+      "default": true,
+      "settings": [
+        "orchestration.tracker"
+      ],
+      "sentence": "Big work becomes a map of tickets, and a conductor thread works through it with one worker thread per ticket.",
+      "moment": {
+        "time": "09:30",
+        "title": "One request, many threads",
+        "body": "You describe a change that spans a week of work. The conductor charts it as a map of tickets and starts a worker thread for each ticket that is ready.",
+        "words": [
+          "map",
+          "conductor",
+          "thread"
+        ]
+      }
+    },
+    {
+      "id": "side-threads",
+      "name": "Side threads",
+      "default": true,
+      "sentence": "Side fixes and parallel work go to their own T3 thread, and agents wait without polling.",
+      "moment": {
+        "time": "12:00",
+        "title": "A side fix gets its own thread",
+        "body": "Mid-task, the agent spots an unrelated bug. You say yes, and the fix starts in its own thread while this one stays on its task.",
+        "words": [
+          "thread"
+        ]
+      }
+    },
+    {
+      "id": "quality-loop",
+      "name": "Quality loop",
+      "default": false,
+      "needs": [
+        "always-on devbox"
+      ],
+      "settings": [
+        "orchestration.loopProject",
+        "orchestration.qualityArea"
+      ],
+      "sentence": "Each night, agents improve one area of a repo through small, self-proving pull requests.",
+      "moment": {
+        "time": "01:00",
+        "title": "The quality loop",
+        "body": "Overnight, agents add tests to one area of your repo, then prune and refactor it, one small proven pull request at a time.",
+        "night": true,
+        "words": [
+          "always-on devbox"
+        ]
+      },
+      "risk": "Spends your AI plan's usage every night."
+    },
+    {
+      "id": "signal-loop",
+      "name": "Signal loop",
+      "default": false,
+      "needs": [
+        "always-on devbox"
+      ],
+      "settings": [
+        "orchestration.loopProject",
+        "orchestration.signalSource"
+      ],
+      "sentence": "Each night, agents turn production errors and friction that nobody handles into small fix pull requests.",
+      "moment": {
+        "time": "02:00",
+        "title": "The signal loop",
+        "body": "Overnight, agents read the errors and slow paths your users hit, pick the ones nobody handles, and open a small proven fix for each.",
+        "night": true
+      },
+      "risk": "Reads production signals and spends your AI plan's usage every night."
+    },
+    {
+      "id": "pr-digest",
+      "name": "PR digest",
+      "default": false,
+      "needs": [
+        "always-on devbox"
+      ],
+      "settings": [
+        "orchestration.loopProject"
+      ],
+      "sentence": "Each weekday morning, one thread lists your open pull requests and what blocks each one.",
+      "moment": {
+        "time": "08:00",
+        "title": "Your pull requests on one page",
+        "body": "Before you start, one thread lists every open pull request of yours and the one thing each one waits for."
+      }
+    }
+  ],
+  "jobs": [
+    {
+      "id": "quality-loop",
+      "command": [],
+      "runner": "t3",
+      "schedule": {
+        "every": "1d",
+        "at": "01:00"
+      },
+      "workflow": "quality-loop",
+      "task": {
+        "prompt": "Run one round of the quality-loop skill on the area in orchestration.qualityArea, or on the repo's least-tested area when it is not set. Read the values in ~/.agents/guides/skill-settings.md.",
+        "projectSetting": "orchestration.loopProject",
+        "modelRole": "implementation",
+        "workspaceStrategy": "worktree",
+        "runtimeMode": "full-access"
+      }
+    },
+    {
+      "id": "signal-loop",
+      "command": [],
+      "runner": "t3",
+      "schedule": {
+        "every": "1d",
+        "at": "02:00"
+      },
+      "workflow": "signal-loop",
+      "task": {
+        "prompt": "Run one round of the signal-loop skill. Read signals from the source in orchestration.signalSource, or from the PostHog MCP when it is not set and the MCP is connected. When there is no source, stop and say so. Read the values in ~/.agents/guides/skill-settings.md.",
+        "projectSetting": "orchestration.loopProject",
+        "modelRole": "implementation",
+        "workspaceStrategy": "worktree",
+        "runtimeMode": "full-access"
+      }
+    },
+    {
+      "id": "pr-digest",
+      "command": [],
+      "runner": "t3",
+      "schedule": {
+        "every": "1d",
+        "at": "08:00"
+      },
+      "workflow": "pr-digest",
+      "task": {
+        "prompt": "On a Saturday or Sunday, stop. Otherwise list my open pull requests in every repository with gh search prs --author @me --state open. For each one, read its checks, reviews, mergeable state and open threads, and give one line: its link as [#1234](url), its title, and the one thing it waits for, such as a review, a red check, a conflict, or my answer. Group them by repository, newest first. Change nothing.",
+        "projectSetting": "orchestration.loopProject",
+        "modelRole": "lookup",
+        "workspaceStrategy": "worktree",
+        "runtimeMode": "auto"
+      }
+    }
+  ]
+}

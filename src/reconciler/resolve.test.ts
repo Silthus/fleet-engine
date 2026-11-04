@@ -144,6 +144,23 @@ describe("resolve", () => {
     expect(plan({ workflows: { "quality-loop": true } }, devbox).unanswered.map((setting) => setting.key)).toEqual(["orchestration.loopProject"]);
   });
 
+  test("keeps a setting that two workflows share while one of them is on", () => {
+    const loops = withPack({
+      schema: 1,
+      name: "loops",
+      summary: "Loops.",
+      settings: [{ key: "loops.project", question: "Which project?", type: "string" }],
+      workflows: [
+        { id: "night", name: "Night", sentence: "Runs at night.", default: true, settings: ["loops.project"] },
+        { id: "morning", name: "Morning", sentence: "Runs in the morning.", default: false, settings: ["loops.project"] },
+      ],
+    });
+    const result = plan({ packs: ["loops"], settings: { "loops.project": "fleet" } }, mac, [engine, loops]);
+    expect(result.settings["loops.project"]).toBe("fleet");
+    expect(plan({ packs: ["loops"] }, mac, [engine, loops]).unanswered.map((setting) => setting.key)).toEqual(["loops.project"]);
+    expect(plan({ packs: ["loops"], workflows: { night: false } }, mac, [engine, loops]).unanswered).toEqual([]);
+  });
+
   test("limits items by os and role", () => {
     expect(plan({ packs: ["posthog"] }).human.map((step) => step.id)).toEqual(["coder"]);
     expect(plan({ packs: ["posthog"] }, devbox).human).toEqual([]);
