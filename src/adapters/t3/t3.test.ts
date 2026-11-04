@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ConfigEntry, ModelRow, Owned, PackJob, Plan } from "../../pack/types.ts";
+import type { ConfigEntry, ModelRow, Owned, PackJob, Plan, T3ProjectScript } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
 import { tempDirs } from "../../testing/git.ts";
 import { engineAdapters } from "../index.ts";
@@ -84,7 +84,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
   const state = {
     up: options.up ?? true,
     settings: { ...defaults, ...options.settings } as Record<string, unknown>,
-    projects: (options.projects ?? []).map((root, index) => ({ id: `project-${index}`, title: root, workspaceRoot: root, deletedAt: null as string | null })),
+    projects: (options.projects ?? []).map((root, index) => ({ id: `project-${index}`, title: root, workspaceRoot: root, deletedAt: null as string | null, scripts: [] as unknown[] })),
     tasks: new Map<string, StoredTask>(),
     links: options.links ?? [],
     ignorePatch: options.ignorePatch ?? false,
@@ -95,7 +95,13 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
       calls.push({ tag, payload });
       if (tag === "server.getConfig") return { settings: structuredClone(state.settings) } as T;
       if (tag === "server.updateSettings") {
-        if (!state.ignorePatch) Object.assign(state.settings, (payload as { patch: Record<string, unknown> }).patch);
+        const { projectSettingsOverrides: entries, ...patch } = (payload as { patch: Record<string, unknown> }).patch;
+        if (state.ignorePatch) return structuredClone(state.settings) as T;
+        Object.assign(state.settings, patch);
+        if (entries) {
+          const merged = { ...(state.settings.projectSettingsOverrides as Record<string, object>), ...(entries as Record<string, object>) };
+          state.settings.projectSettingsOverrides = Object.fromEntries(Object.entries(merged).filter(([, entry]) => Object.keys(entry).length));
+        }
         return structuredClone(state.settings) as T;
       }
       if (tag === "peerLinks.list") return { links: state.links } as T;
@@ -148,7 +154,7 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
     if (line === "systemctl --user show-environment") return machine.manager === false ? { code: 1, stdout: "", stderr: "Failed to connect to bus" } : { code: 0, stdout: "HOME=/home/octo\n" };
     if (line === "loginctl show-user octo --property=Linger --value") return { code: 0, stdout: `${machine.linger ?? "yes"}\n` };
     if (command[0] === "t3" && command[1] === "project" && command[2] === "add") {
-      server.state.projects.push({ id: `project-${server.state.projects.length}`, title: command[3]!, workspaceRoot: command[3]!, deletedAt: null });
+      server.state.projects.push({ id: `project-${server.state.projects.length}`, title: command[3]!, workspaceRoot: command[3]!, deletedAt: null, scripts: [] });
       return { code: 0, stdout: `Added project at ${command[3]}.\n` };
     }
     const originHead = "originHead" in machine ? machine.originHead : "origin/main";
@@ -284,7 +290,7 @@ describe("T3 adapter with a running server", () => {
     const report = await apply(plan("linux", base), { home, adapters: [adapter] });
     const patch = server.calls.find((call) => call.tag === "server.updateSettings")?.payload;
     expect(patch).toEqual({ patch: { defaultThreadEnvMode: "worktree", storageCleanup: { worktreeOnMerge: true, logsAfterDays: 14 } } });
-    expect(server.tags().filter((tag) => tag === "server.getConfig")).toHaveLength(2);
+    expect(server.tags().slice(0, 3)).toEqual(["server.getConfig", "server.updateSettings", "server.getConfig"]);
     expect(existsSync(join(home, settingsFile))).toBe(false);
     expect(report.actions).toContainEqual({ target: "t3 settings", operation: "replace", reason: "set defaultThreadEnvMode, storageCleanup" });
     const again = await apply(plan("linux", base), { home, adapters: [adapter] });
@@ -409,6 +415,81 @@ describe("T3 adapter with a running server", () => {
       { id: "t3:link:env-2", pack: "engine", say: "The link to devbox-2 has expired. Link it again in T3 Code: Settings, Environments, Link environment.", repair: "human" },
       { id: "t3:link:env-3", pack: "engine", say: "T3 Code cannot reach devbox-3 (connect timeout). Check that it is on and online. If it stays unreachable, link it again in T3 Code." },
     ]);
+  });
+});
+
+describe("T3 project scripts", () => {
+  const prepare: Owned<T3ProjectScript> = { id: "prepare", name: "Prepare worktree", command: "fleet prepare --fast", projects: ["/work/app"], pack: "team" };
+  const lint = { id: "lint", name: "Lint", command: "pnpm lint", icon: "lint", runOnWorktreeCreate: false };
+  const userSetup = { id: "setup", name: "Setup", command: "pnpm install", icon: "configure", runOnWorktreeCreate: true };
+  const ours = { id: "fleet-team-prepare", name: "Prepare worktree", icon: "configure", command: "/bin/sh '/opt/fleet-engine/fleet' prepare --fast", runOnWorktreeCreate: true, async: false };
+  const withScripts = (scripts: Array<Owned<T3ProjectScript>>, base = plan("linux", [])): Plan => ({ ...base, engineRoot: engine, t3ProjectScripts: scripts });
+  const updates = (server: ReturnType<typeof fakeServer>) => server.tags().filter((tag) => tag === "server.updateSettings").length;
+
+  test("puts a pack's script first on each matching project only, and removing the pack restores what the project inherited", async () => {
+    const home = temp.make("home-");
+    const { server, adapter } = setup({ projects: ["/work/app", "/work/other"], settings: { projectSettingsFolded: true, defaultProjectScripts: [lint], projectSettingsOverrides: { "project-0": { defaultAutoPull: true } } } });
+
+    const added = await apply(withScripts([prepare]), { home, adapters: [adapter] });
+    expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultAutoPull: true, defaultProjectScripts: [ours, lint] } });
+    expect(added.actions).toContainEqual({ target: "t3 project /work/app", operation: "replace", reason: "add script fleet-team-prepare" });
+
+    await apply(withScripts([prepare]), { home, adapters: [adapter] });
+    expect(updates(server)).toBe(1);
+
+    const removed = await apply(withScripts([]), { home, adapters: [adapter] });
+    expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultAutoPull: true } });
+    expect(removed.actions).toContainEqual({ target: "t3 project /work/app", operation: "replace", reason: "remove script fleet-team-prepare" });
+  });
+
+  test("chains the project's own worktree script after Fleet's, because T3 Code runs only the first, and leaves it in place", async () => {
+    const home = temp.make("home-");
+    const { server, adapter } = setup({ projects: ["/work/app"], settings: { projectSettingsOverrides: {} } });
+    server.state.projects[0]!.scripts = [userSetup, lint];
+
+    await apply(withScripts([prepare]), { home, adapters: [adapter] });
+    expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [{ ...ours, command: `${ours.command} && (\npnpm install\n)` }, userSetup, lint] } });
+
+    await apply(withScripts([]), { home, adapters: [adapter] });
+    expect(server.state.settings.projectSettingsOverrides).toEqual({});
+  });
+
+  test("matches ~/ and * patterns under the user's home, and skips a deleted project", async () => {
+    const home = temp.make("home-");
+    const { server, adapter } = setup({ projects: [join(home, "dev/posthog"), join(home, "posthog-old"), join(home, "src/posthog")], settings: { projectSettingsOverrides: {} } });
+    server.state.projects[2]!.deletedAt = "2026-11-01T00:00:00.000Z";
+    await apply(withScripts([{ ...prepare, projects: ["~/*/posthog"] }]), { home, adapters: [adapter] });
+    expect(Object.keys(server.state.settings.projectSettingsOverrides as object)).toEqual(["project-0"]);
+  });
+
+  test("keeps Fleet's script while a pack source cannot be fetched", async () => {
+    const home = temp.make("home-");
+    const { server, adapter } = setup({ projects: ["/work/app"], settings: { projectSettingsOverrides: {} } });
+    await apply(withScripts([prepare]), { home, adapters: [adapter] });
+    const outage = withScripts([]);
+    outage.packs = [{ name: "team", source: "team", ref: "main", available: false, reason: "not found; unreachable source team" }];
+    await apply(outage, { home, adapters: [adapter] });
+    expect(updates(server)).toBe(1);
+  });
+
+  test("waits while T3 Code is not running, and doctor names the missing script without writing", async () => {
+    const home = temp.make("home-");
+    const stopped = await apply(withScripts([prepare]), { home, adapters: [setup({ up: false }).adapter] });
+    expect(stopped.findings).toContainEqual({ id: "t3:scripts", pack: "engine", say: "T3 Code is not running, so the worktree script fleet-team-prepare waits. The next fleet apply after T3 Code starts adds it.", repair: "apply" });
+
+    const { server, adapter } = setup({ projects: ["/work/app"], settings: { projectSettingsOverrides: {} } });
+    const report = await check(withScripts([prepare]), { home, adapters: [adapter], run: async () => 0 });
+    expect(report.findings).toContainEqual({ id: "t3:script:/work/app", pack: "engine", say: "T3 Code needs the worktree script fleet-team-prepare on /work/app.", repair: "apply" });
+    expect(updates(server)).toBe(0);
+  });
+
+  test("asks for a newer T3 Code when the server keeps no project settings, and reports a script T3 did not take", async () => {
+    const home = temp.make("home-");
+    const old = await apply(withScripts([prepare]), { home, adapters: [setup({ projects: ["/work/app"] }).adapter] });
+    expect(old.findings).toContainEqual({ id: "t3:scripts", pack: "engine", say: "This T3 Code keeps no project settings, so Fleet cannot add the worktree script fleet-team-prepare. Update T3 Code, then run fleet apply.", repair: "human" });
+
+    const refused = await apply(withScripts([prepare]), { home, adapters: [setup({ projects: ["/work/app"], settings: { projectSettingsOverrides: {} }, ignorePatch: true }).adapter] });
+    expect(refused.findings).toContainEqual({ id: "t3:script:/work/app", pack: "engine", say: "T3 Code did not take the worktree scripts for /work/app. Run fleet apply again.", repair: "apply" });
   });
 });
 

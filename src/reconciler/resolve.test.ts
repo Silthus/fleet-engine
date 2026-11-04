@@ -278,6 +278,13 @@ describe("resolve guards", () => {
     expect(() => plan({ packs: ["prune"] }, mac, [engine, prune])).toThrow("job prune is declared by both base and prune");
   });
 
+  test("plans T3 project scripts by scope, owned by their pack", () => {
+    const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: ["~/app"] };
+    const team = withPack(pack("team", { t3ProjectScripts: [{ ...script, roles: ["devbox"] }, { ...script, id: "mac-only", on: ["darwin"] }] }));
+    expect(plan({ packs: ["team"] }, devbox, [engine, team]).t3ProjectScripts).toEqual([{ ...script, roles: ["devbox"], pack: "team" }]);
+    expect(plan({ packs: ["team"] }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, id: "mac-only", on: ["darwin"], pack: "team" }]);
+  });
+
   test("keeps the AI plan and resolves a T3 job's project", () => {
     expect(plan({ plan: "claude" }).ai).toBe("claude");
     const result = plan({ workflows: { "quality-loop": true }, settings: { "orchestration.tracker": "me/maps", "orchestration.loopProject": "chosen-project" } }, devbox);

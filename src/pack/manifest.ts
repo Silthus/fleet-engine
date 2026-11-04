@@ -34,7 +34,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
   if (raw.schema !== 1) return fail(`unknown schema ${String(raw.schema)}`);
   if (typeof raw.name !== "string" || !packName.test(raw.name)) return fail("name must be lowercase words joined by dashes");
   if (typeof raw.summary !== "string" || raw.summary === "") return fail("summary must be one plain sentence");
-  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files"]) {
+  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "t3ProjectScripts"]) {
     if (raw[field] !== undefined && !Array.isArray(raw[field])) fail(`${field} must be a list`);
   }
   checkShapes(raw, fail);
@@ -149,6 +149,12 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     }
     filters(item, label);
   });
+  each("t3ProjectScripts", (item, label) => {
+    need(typeof item.id === "string" && typeof item.name === "string" && typeof item.command === "string" && isStrings(item.projects) && item.projects.length > 0, `${label}: needs an id, a name, a command, and a projects list`);
+    need(packName.test(item.id as string), `${label}: id must be lowercase words joined by dashes`);
+    need((item.projects as string[]).every((path) => path.startsWith("/") || path.startsWith("~/")), `${label}: each project must be an absolute path or start with ~/`);
+    filters(item, label);
+  });
   each("checks", (item, label) => {
     need(typeof item.id === "string" && isStrings(item.run) && typeof item.say === "string", `${label}: needs an id, a run list, and a say`);
     filters(item, label);
@@ -192,7 +198,7 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
       if (!(needValues as readonly string[]).includes(need)) fail(`workflow ${workflow.id} has unknown need ${need}`);
     }
   }
-  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files };
+  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, t3ProjectScripts: manifest.t3ProjectScripts };
   for (const [field, items] of Object.entries(tied)) {
     for (const item of items ?? []) {
       const label = "id" in item ? item.id : "key" in item ? item.key : item.target;

@@ -8,6 +8,7 @@ import { withLock } from "../provider-config/store.ts";
 import { skipOtherHome, spawnRunner, type CommandRunner } from "../run.ts";
 import type { T3Rpc, T3Server } from "./port.ts";
 import { reconcileService } from "./service.ts";
+import { reconcileScripts, waitingScripts } from "./scripts.ts";
 import { localT3Server } from "./session.ts";
 import { desktopTarget, reconcileSettings, settingsFields, settingsTarget } from "./settings.ts";
 import { activeProjects, expandHome, t3Tasks } from "./tasks.ts";
@@ -46,12 +47,14 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
           merge(result, await reconcileSettings(plan, home, settings));
           const waiting = taskProjects(plan);
           if (waiting.length) result.findings.push(finding("projects", `T3 Code is not running, so ${waiting.join(", ")} ${waiting.length === 1 ? "waits to be added as a project" : "wait to be added as projects"}. The next fleet apply after T3 Code starts adds ${waiting.length === 1 ? "it" : "them"}.`, "apply"));
+          result.findings.push(...waitingScripts(plan));
           return result;
         }
         try {
           await server.session(home, async (rpc) => {
             merge(result, await reconcileSettings(plan, home, { ...settings, rpc }));
             await reconcileProjects(rpc, plan, home, run, dryRun, result);
+            await reconcileScripts(rpc, plan, home, dryRun, result);
             await checkLinks(rpc, result);
           });
           live = { home, plan };

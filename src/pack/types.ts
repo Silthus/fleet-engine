@@ -77,6 +77,14 @@ export type PackStep = Scope & {
   after?: string;
 };
 
+/**
+ * A T3 Code project script that runs when T3 makes a worktree of a project
+ * whose folder matches one of projects: an absolute path or one under ~/,
+ * where * stands for one folder name. The T3 adapter owns it as
+ * fleet-<pack>-<id>.
+ */
+export type T3ProjectScript = Scope & { id: string; name: string; command: string; projects: string[] };
+
 export type Provider = "claude" | "codex" | "t3";
 export type ConfigEntry = Scope & { provider: Provider; key: string; value: unknown };
 
@@ -110,6 +118,7 @@ export type PackManifest = {
   steps?: PackStep[];
   checks?: PackCheck[];
   files?: PackFile[];
+  t3ProjectScripts?: T3ProjectScript[];
   models?: Partial<Record<AiPlan, ModelRow[]>>;
 };
 
@@ -165,6 +174,7 @@ export type Plan = {
   human: Array<Owned<HumanStep>>;
   steps: Array<Owned<PackStep>>;
   checks: Array<Owned<PackCheck>>;
+  t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
   commands: Record<string, { pack: string; path: string }>;
   models: ModelRow[];
   settings: Record<string, SettingValue>;
