@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import type { ConfigEntry, Plan } from "../../pack/types.ts";
@@ -444,6 +444,56 @@ describe("Claude MCP servers", () => {
     expect(read(home, claudeJson)).toEqual({ mcpServers: { "team.metabase": metabase } });
     expect(read(home, claude)).toEqual({ enabledPlugins: { "context7@claude-plugins-official": true } });
     expect(cli.calls).toContainEqual(["claude", "plugin", "install", "context7@claude-plugins-official", "--scope", "user"]);
+  });
+
+  test("wait for the lock Claude Code takes to save ~/.claude.json, and write only while holding it", async () => {
+    const home = temp.make("home-");
+    write(home, claudeJson, claudeState);
+    const lock = join(home, `${claudeJson}.lock`);
+    mkdirSync(lock);
+    const waits: number[] = [];
+    const claudeSaves = async (ms: number) => {
+      waits.push(ms);
+      write(home, claudeJson, { ...claudeState, numStartups: 42 });
+      rmSync(lock, { recursive: true });
+    };
+    await expect(apply(plan([server]), { home, adapters: [filesAdapter, providerConfigAdapter({ run: claudeCli().run, wait: claudeSaves })] })).rejects.toThrow(`${claudeJson} changed while Fleet was applying. Run fleet apply again.`);
+    expect(waits).toEqual([50]);
+    expect(read(home, claudeJson)).toEqual({ ...claudeState, numStartups: 42 });
+    expect(existsSync(lock)).toBe(false);
+
+    await apply(plan([server]), { home, adapters: [filesAdapter, providerConfigAdapter({ run: claudeCli().run, wait: claudeSaves })] });
+    expect(read(home, claudeJson)).toEqual({ ...claudeState, numStartups: 42, mcpServers: { ...claudeState.mcpServers, metabase } });
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  test("stop while Claude Code keeps its lock, and take over a lock left by a crash", async () => {
+    const home = temp.make("home-");
+    write(home, claudeJson, claudeState);
+    const lock = join(home, `${claudeJson}.lock`);
+    mkdirSync(lock);
+    const waits: number[] = [];
+    const adapter = providerConfigAdapter({ run: claudeCli().run, wait: async (ms) => void waits.push(ms) });
+    await expect(apply(plan([server]), { home, adapters: [filesAdapter, adapter] })).rejects.toThrow(`${claudeJson} stays locked by another program, such as Claude Code saving it. Run fleet apply again.`);
+    expect(waits).toHaveLength(40);
+    expect(read(home, claudeJson)).toEqual(claudeState);
+    expect(existsSync(lock)).toBe(true);
+
+    const minuteAgo = new Date(Date.now() - 60_000);
+    utimesSync(lock, minuteAgo, minuteAgo);
+    await apply(plan([server]), { home, adapters: [filesAdapter, adapter] });
+    expect(read(home, claudeJson).mcpServers.metabase).toEqual(metabase);
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  test("leave Claude's own keys in ~/.claude.json alone, even an old Hub proxy address", async () => {
+    const home = temp.make("home-");
+    const state = { ...claudeState, env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317", ANTHROPIC_AUTH_TOKEN: "proxy-key" } };
+    write(home, claudeJson, state);
+    await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claudeJson)).toEqual(state);
+    await apply(plan([server]), { home, adapters: adapters() });
+    expect(read(home, claudeJson)).toEqual({ ...state, mcpServers: { ...state.mcpServers, metabase } });
   });
 
   test("leave ~/.claude.json as it is while it is a link", async () => {
