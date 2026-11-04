@@ -78,3 +78,17 @@ test("without a replacement command, the eval judge runs the lookup row of the m
   expect(claude.prompt()).toContain("<known-problem>\nThe greeting names no member\n</known-problem>");
   expect(JSON.parse(readFileSync(join(pr.home, ".local/state/fleet/proof/evals.jsonl"), "utf8"))).toMatchObject({ judge: "lookup-model" });
 });
+
+test("a miss keeps the range the review read when it was reserved, after the base moves", async () => {
+  const pr = checkout();
+  const base = pr.git("rev-parse", "origin/main");
+  const first = pr.commit("feature.txt", "greet\n");
+  pr.commit("feature.txt", "greet the new member\n");
+  const head = await reviewHead(pr);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"))).toMatchObject({ scope: "full", from: base });
+
+  pr.git("update-ref", "refs/remotes/origin/main", first);
+  pr.git("update-ref", "refs/heads/main", first);
+  expect((await pr.fleet("miss", "--source", "human", "--finding", "The greeting names no member")).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.home, ".local/state/fleet/proof/misses.jsonl"), "utf8").trim())).toMatchObject({ base, head, scope: "full" });
+});

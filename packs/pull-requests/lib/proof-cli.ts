@@ -267,7 +267,7 @@ JSON line in ${missesPath("~")}. fleet proof eval reruns the reviewer on every c
       const head = identity();
       const review = await reviewOfCommit(home, head);
       if (!review) throw new Error(`No finished review of ${head.repository}#${head.pr} read ${short(head.commit)}, so no reviewer missed it there. Pass --commit with the reviewed commit that held the problem`);
-      const base = review.base ?? mergeBase(head, run);
+      const base = review.from ?? mergeBase(head, run);
       if (base === head.commit) throw new Error(`Cannot rebuild the diff the review read: the base of ${head.repository}#${head.pr} already contains ${short(head.commit)}`);
       const pr = pullRequestDetails(head, run);
       const miss = await recordMiss(home, {
@@ -313,7 +313,8 @@ ${overrideHelp}`,
     run: async ({ options }, identity, context) => {
       const head = identity();
       const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-      context.print(JSON.stringify(await startReview(context.home, head, { scope: options.get("--scope") ?? "full", base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
+      const scope = options.get("--scope") ?? "full";
+      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
       return 0;
     },
   },
@@ -344,9 +345,9 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const pending = await unfinishedFleetReview(home, head);
   if (pending && await readPlan(pending.directory)) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
   const reserved = pending
-    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base }
+    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
     : await reserveFleetReview(options, head, context);
-  const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
+  const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const rules = reviewRules(changedFilesOf(from, head.commit, run), baseTip(head, run), run);
   const diff = diffOf(from, head.commit, run);
@@ -369,9 +370,12 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   const scope = options.get("--scope") ?? "full";
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-  const reserved = await startReview(context.home, head, { scope, base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
-  return { ...reserved, scope, base };
+  const from = rangeStart(scope, base, head, context.run);
+  const reserved = await startReview(context.home, head, { scope, base, from, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
+  return { ...reserved, scope, from };
 }
+
+const rangeStart = (scope: string, base: string | undefined, head: ProofIdentity, run: Run) => scope === "full" ? mergeBase(head, run) : base;
 
 const waitPolls = 108;
 const pollInterval = 5_000;
@@ -418,7 +422,7 @@ async function reservePanel(options: Map<string, string>, head: ProofIdentity, l
   const { home, cwd, env, run } = context;
   const rubric = await readRubric(home);
   const reserved = await reserveFleetReview(options, head, context);
-  const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
+  const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const owed = await readOwed(home, head);
   const settled = (await reviewRecords(home, head)).filter((review) => review.responses).map((review) => `${review.label}:\n${review.responses!.trim()}`).join("\n\n");
