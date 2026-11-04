@@ -1,12 +1,16 @@
 import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
+import { cachedSource, fetchSource } from "../pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SourceRef } from "../pack/types.ts";
 import { loadMachine, saveMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import { FlagError, parseSetupFlags, type SetupFlags } from "./flags.ts";
-import { packsStep, picksFrom, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
+import { packList, packsStep, picksFrom, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
+import { realMachine, type Machine } from "./commands.ts";
+import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { runSteps, type Step } from "./runner.ts";
+import { chatgptSignIn, claudeSignIn, githubSignIn, memberSources } from "./signins.ts";
 import { Stopped, type Terminal } from "./terminal.ts";
 
 export type SetupOptions = {
@@ -14,15 +18,18 @@ export type SetupOptions = {
   engineRoot: string;
   platform: NodeJS.Platform;
   terminal: Terminal;
-  has?: (tool: string) => boolean;
+  machine?: Partial<Machine>;
+  fetchSource?: (ref: SourceRef, cacheRoot: string) => Promise<FetchedSource>;
 };
+
+export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
 
 export async function setup(args: string[], options: SetupOptions): Promise<number> {
   const { terminal } = options;
   let flags: SetupFlags;
-  const catalog = await loadCatalog(options.engineRoot);
   const machine: MachineFile = (await loadMachine(options.home)) ?? { schema: 1, role: options.platform === "darwin" ? "mac" : "linux" };
   const progress = { done: machine.setup?.done ?? [], draft: { ...machine.setup?.draft } as Draft };
+  const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
   const remember = () => saveMachine(options.home, { ...machine, setup: { done: progress.done, draft: progress.draft } });
   try {
     flags = parseSetupFlags(args);
@@ -47,7 +54,22 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       await remember();
     },
   };
-  const steps = () => setupSteps(context, machine, options);
+  const box: Machine = { ...realMachine, ...options.machine };
+  const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive };
+  const addTeamSources = async () => {
+    for (const ref of await memberSources(box)) {
+      if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
+      const fetched = await (options.fetchSource ?? fetchSource)(ref, sourceCache(options.home));
+      if ("error" in fetched) {
+        terminal.print(`  · You are in the ${ref.repo.split("/")[0]} org, but its pack could not be fetched (${fetched.error}). Setup goes on without it.`);
+        continue;
+      }
+      catalog.add(fetched);
+      await context.answer({ sources: [...(progress.draft.sources ?? defaultSources), ref] });
+      terminal.print(`  ✓ You are in the ${ref.repo.split("/")[0]} org, so the ${packList(fetched.packs.map((pack) => pack.manifest.name), catalog)} pack is ticked`);
+    }
+  };
+  const steps = () => setupSteps(context, machine, options, human, addTeamSources);
   try {
     const result = await runSteps(steps, {
       terminal,
@@ -70,14 +92,30 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
 }
 
-function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions): Step[] {
+function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>): Step[] {
   const draft = context.draft.packs ? context.draft : { ...context.draft, ...picksFrom(context.flags, context.catalog) };
   const profile = draftProfile(draft);
-  const plan = resolve(profile, machine, [engineSource(context.catalog, options.engineRoot), ...profile.sources.map(notFetched)]);
-  return [bootstrapStep(context.terminal, options.has ?? ((tool) => Bun.which(tool) !== null)), packsStep(context), plansStep(context), ...settingSteps(context, plan.ask)];
+  const fetched = new Set(context.catalog.sources.map((source) => source.ref.name));
+  const plan = resolve(profile, machine, [...context.catalog.sources, ...profile.sources.filter((ref) => !fetched.has(ref.name)).map(notFetched)]);
+  const box = human.machine;
+  return [
+    bootstrapStep(context.terminal, box.has),
+    humanStep(githubSignIn(box, signedIn), human),
+    packsStep(context),
+    plansStep(context),
+    ...settingSteps(context, plan.ask),
+    ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human), human)),
+    ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),
+    ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)]),
+  ];
 }
 
-function bootstrapStep(terminal: Terminal, has: (tool: string) => boolean): Step {
+function teamRefs(draft: Draft) {
+  const skills = new Set(defaultSources.map((source) => source.name));
+  return (draft.sources ?? []).filter((source) => !skills.has(source.name));
+}
+
+function bootstrapStep(terminal: Terminal, has: Machine["has"]): Step {
   return {
     id: "bootstrap",
     title: "Install the basics",
@@ -108,20 +146,33 @@ function notFetched(ref: SourceRef): FetchedSource {
   return { ref, error: "not fetched during the questions" };
 }
 
-function engineSource(catalog: Catalog, engineRoot: string): AvailableSource {
-  return { ref: { name: "engine", repo: engineRepo, ref: "main" }, dir: engineRoot, packs: catalog.packs };
-}
-
-export async function loadCatalog(engineRoot: string): Promise<Catalog> {
+/** The engine's packs plus each team source this machine has fetched, such as an org's private pack. */
+export async function loadCatalog(engineRoot: string, team: SourceRef[], home: string): Promise<Catalog> {
   const presets = (await Bun.file(join(engineRoot, "presets.json")).json()) as Preset[];
-  return { packs: await loadPacks(engineRoot), presets };
+  const engine: AvailableSource = { ref: { name: "engine", repo: engineRepo, ref: "main" }, dir: engineRoot, packs: await loadPacks(engineRoot) };
+  const catalog: Catalog = {
+    presets,
+    sources: [engine],
+    packs: [...engine.packs],
+    teamPacks: [],
+    add(source) {
+      catalog.sources.push(source);
+      catalog.packs.push(...source.packs);
+      catalog.teamPacks.push(...source.packs.map((pack) => pack.manifest.name));
+    },
+  };
+  for (const ref of team) {
+    const cached = await cachedSource(ref, sourceCache(home));
+    if (!("error" in cached)) catalog.add(cached);
+  }
+  return catalog;
 }
 
 function printNeeds(terminal: Terminal, steps: Step[], open: string[]) {
   terminal.print("");
-  terminal.print("fleet setup --non-interactive needs these answers. Add them to the command and run it again:");
+  terminal.print("fleet setup --non-interactive needs these answers and sign-ins. Add the answers to the command and run it again:");
   for (const step of steps.filter((item) => open.includes(item.id))) {
-    const key = step.id.replace(/^setting:/, "");
-    terminal.print(`  --set ${key}=<value>   ${step.title}`);
+    if (step.kind === "question") terminal.print(`  --set ${step.id.replace(/^setting:/, "")}=<value>   ${step.title}`);
+    else terminal.print(`  ${step.title}: do it once in a terminal, then run fleet setup again`);
   }
 }

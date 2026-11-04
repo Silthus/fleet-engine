@@ -130,6 +130,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("steps", (item, label) => {
     need(typeof item.id === "string" && isStrings(item.run), `${label}: needs an id and a run list`);
     need(item.check === undefined || isStrings(item.check), `${label}: check must be a command list`);
+    const human = Array.isArray(raw.human) ? raw.human.map((step) => (step as { id?: unknown }).id) : [];
+    need(item.after === undefined || (typeof item.after === "string" && human.includes(item.after)), `${label}: after must name a human step of this pack`);
     filters(item, label);
   });
   each("checks", (item, label) => {

@@ -25,8 +25,8 @@ export type RunResult = { finished: boolean; unanswered: string[] };
 /**
  * Runs the first step that is not done, again and again, rebuilding the list
  * each time because answers add and remove steps. A question that a run
- * without a person cannot answer is left open, and the run stops before the
- * first step that is not a question.
+ * without a person cannot answer, or a sign-in it cannot wait for, is left
+ * open, and the run stops before the next step that changes the machine.
  */
 export async function runSteps(steps: () => Step[], options: RunOptions): Promise<RunResult> {
   const done = new Set(options.done);
@@ -39,7 +39,7 @@ export async function runSteps(steps: () => Step[], options: RunOptions): Promis
     const list = steps();
     const step = list.find((item) => !done.has(item.id) && !open.has(item.id));
     if (!step) return { finished: open.size === 0, unanswered: [...open] };
-    if (open.size && step.kind !== "question") return { finished: false, unanswered: [...open] };
+    if (open.size && step.kind === "auto") return { finished: false, unanswered: [...open] };
     options.terminal.print("");
     options.terminal.print(header(list, done));
     if ((await step.run()) === "unanswered") {

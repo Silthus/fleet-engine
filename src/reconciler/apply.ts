@@ -70,8 +70,9 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
   if (context.dryRun) return report;
   const run = options.run ?? spawnRunner(options.home);
   const failed = new Set<string>();
+  const waiting = await waitingSteps(plan, run);
   for (const step of plan.steps) {
-    if (failed.has(step.pack)) continue;
+    if (failed.has(step.pack) || waiting.has(step)) continue;
     if (step.check && (await run(step.check)) === 0) continue;
     if ((await run(step.run)) === 0) continue;
     failed.add(step.pack);
@@ -87,7 +88,9 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
   for (const item of plan.checks) {
     if ((await run(item.run)) !== 0) report.findings.push({ id: `check:${item.id}`, pack: item.pack, say: item.say, repair: "apply" });
   }
+  const waiting = await waitingSteps(plan, run);
   for (const step of plan.steps) {
+    if (waiting.has(step)) continue;
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
   }
   for (const step of plan.human) {
@@ -97,6 +100,20 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
   }
   if (report.findings.some((finding) => finding.repair || finding.id.startsWith("kept:"))) report.ok = false;
   return report;
+}
+
+/** Pack steps whose human step has not passed yet: they wait for the person instead of failing. */
+async function waitingSteps(plan: Plan, run: Runner) {
+  const passed = new Map<string, boolean>();
+  const waiting = new Set<Plan["steps"][number]>();
+  for (const step of plan.steps) {
+    if (!step.after) continue;
+    const human = plan.human.find((item) => item.pack === step.pack && item.id === step.after);
+    const key = `${step.pack}:${step.after}`;
+    if (!passed.has(key)) passed.set(key, human ? (await run(human.probe)) === 0 : false);
+    if (!passed.get(key)) waiting.add(step);
+  }
+  return waiting;
 }
 
 /** The sources whose packs or skills this plan lacks because they could not be fetched. */

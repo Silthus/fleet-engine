@@ -69,6 +69,8 @@ export type PackStep = Scope & {
   id: string;
   run: string[];
   check?: string[];
+  /** The id of a human step of the same pack that must pass before this step runs. */
+  after?: string;
 };
 
 export type Provider = "claude" | "codex" | "t3";

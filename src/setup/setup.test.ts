@@ -1,53 +1,27 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { main } from "../cli.ts";
 import { tempDirs } from "../testing/git.ts";
-import { Stopped, type Terminal } from "./terminal.ts";
+import { fleetSetup, machineFile } from "./testing.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
-const engineRoot = join(import.meta.dir, "../..");
-
-/** Types each reply in turn; when the replies run out it acts like Ctrl-C. */
-function scripted(replies: string[]) {
-  const lines: string[] = [];
-  const prompts: string[] = [];
-  const terminal: Terminal = {
-    print: (line) => void lines.push(line),
-    async ask(prompt) {
-      prompts.push(prompt);
-      const reply = replies.shift();
-      if (reply === undefined) throw new Stopped();
-      lines.push(`${prompt}${reply}`);
-      return reply;
-    },
-  };
-  return { terminal, lines, prompts, output: () => lines.join("\n") };
-}
-
-async function fleetSetup(home: string, args: string[], replies: string[] = []) {
-  const io = scripted(replies);
-  const code = await main(["setup", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, setup: { has: () => true } });
-  return { code, prompts: io.prompts, output: io.output() };
-}
-
-const machine = (home: string) => JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"));
+const machine = machineFile;
 
 describe("fleet setup questions", () => {
   test("asks packs and plans with defaults, shows progress, and saves the answers as a draft", async () => {
     const home = temp.make("home-");
     const result = await fleetSetup(home, [], ["", ""]);
     expect(result.code).toBe(0);
-    expect(result.output).toContain("Fleet setup · 1 of 3 · about 6 min left");
-    expect(result.output).toContain("Fleet setup · 3 of 3 · about 1 min left");
+    expect(result.output).toContain("Fleet setup · 1 of 6 · about 9 min left");
+    expect(result.output).toContain("Fleet setup · 4 of 6 · about 3 min left");
     expect(result.output).toContain("  1) Everyday  Pull-requests, Orchestration, Communication (default)");
     expect(result.output).toContain("  ✓ Claude and ChatGPT");
     expect(machine(home)).toEqual({
       schema: 1,
       role: "linux",
-      setup: { done: ["bootstrap", "packs", "plans"], draft: { packs: ["pull-requests", "orchestration", "communication"], workflows: {}, plan: "both" } },
+      setup: { done: ["bootstrap", "github", "packs", "plans", "claude", "chatgpt"], draft: { packs: ["pull-requests", "orchestration", "communication"], workflows: {}, plan: "both" } },
     });
   });
 
@@ -56,13 +30,13 @@ describe("fleet setup questions", () => {
     const stopped = await fleetSetup(home, [], ["2"]);
     expect(stopped.code).toBe(130);
     expect(stopped.output).toEndWith("Stopped. Run fleet setup again to pick up at Your AI plans.");
-    expect(machine(home).setup).toEqual({ done: ["bootstrap", "packs"], draft: { packs: ["pull-requests"], workflows: {} } });
+    expect(machine(home).setup).toEqual({ done: ["bootstrap", "github", "packs"], draft: { packs: ["pull-requests"], workflows: {} } });
 
     const resumed = await fleetSetup(home, [], ["3"]);
     expect(resumed.code).toBe(0);
-    expect(resumed.output).toContain("Welcome back. 2 of 3 done, picking up at Your AI plans.");
+    expect(resumed.output).toContain("Welcome back. 3 of 6 done, picking up at Your AI plans.");
     expect(resumed.prompts).toHaveLength(1);
-    expect(machine(home).setup).toEqual({ done: ["bootstrap", "packs", "plans"], draft: { packs: ["pull-requests"], workflows: {}, plan: "codex" } });
+    expect(machine(home).setup).toEqual({ done: ["bootstrap", "github", "packs", "plans", "chatgpt"], draft: { packs: ["pull-requests"], workflows: {}, plan: "codex" } });
   });
 
   test("keeps picks carried from the page with one key, or changes them with e", async () => {
@@ -100,12 +74,12 @@ describe("fleet setup questions", () => {
     const missing = await fleetSetup(home, ["--non-interactive", "--preset", "michael"]);
     expect(missing.code).toBe(2);
     expect(missing.prompts).toEqual([]);
-    expect(missing.output).toContain("fleet setup --non-interactive needs these answers. Add them to the command and run it again:");
+    expect(missing.output).toContain("fleet setup --non-interactive needs these answers and sign-ins. Add the answers to the command and run it again:");
     expect(missing.output).toContain("  --set orchestration.loopProject=<value>");
     expect(missing.output).toContain("  --set orchestration.qualityArea=<value>");
     expect(missing.output).toContain("  --set orchestration.ledgerRepo=<value>");
     expect(missing.output).not.toContain("memory.repo");
-    expect(machine(home).setup.done).toEqual(["bootstrap", "packs", "plans", "setting:orchestration.criticalPaths"]);
+    expect(machine(home).setup.done).toEqual(["bootstrap", "github", "packs", "plans", "setting:orchestration.criticalPaths", "claude", "chatgpt"]);
 
     const sets = ["--set", "orchestration.loopProject=~/code/app", "--set", "orchestration.qualityArea=src/api", "--set", "orchestration.ledgerRepo=me/ledger"];
     const answered = await fleetSetup(home, ["--non-interactive", "--preset", "michael", ...sets]);
