@@ -1,10 +1,596 @@
 {
   "schema": 1,
   "name": "base",
-  "summary": "Safety rules every agent follows.",
+  "summary": "Safety rules, the model table, T3 Code defaults, and the jobs that keep every machine current.",
+  "day": "Agents ask before they break things, pick the right model for each task, and every machine is up to date when you start.",
+  "cost": "Nothing to set up: every Fleet machine gets it.",
+  "risk": "Fleet owns its hooks in Claude Code and Codex. A hook you wrote yourself on the same event is kept until you adopt Fleet's.",
   "instructions": "AGENTS.md",
+  "guides": [
+    {
+      "guide": "coding-standards",
+      "path": "coding-standards.md"
+    },
+    {
+      "guide": "t3",
+      "path": "t3.md"
+    }
+  ],
+  "models": {
+    "claude": [
+      {
+        "role": "lookup",
+        "work": "Lookups: find files, take an inventory, extract from logs",
+        "provider": "claude",
+        "model": "claude-haiku-5-5",
+        "effort": "medium"
+      },
+      {
+        "role": "survey",
+        "work": "Surveys: read docs, the web, or one area of the code and summarize",
+        "provider": "claude",
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      {
+        "role": "research",
+        "work": "Deep research on how code behaves, where a wrong answer misleads a decision",
+        "provider": "claude",
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      },
+      {
+        "role": "implementation",
+        "work": "Implementation, tests, fixes, and UI work",
+        "provider": "claude",
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      },
+      {
+        "role": "review",
+        "work": "Review, in a fresh session that did not write the code",
+        "provider": "claude",
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      }
+    ],
+    "codex": [
+      {
+        "role": "lookup",
+        "work": "Lookups: find files, take an inventory, extract from logs",
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "low"
+      },
+      {
+        "role": "survey",
+        "work": "Surveys: read docs, the web, or one area of the code and summarize",
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
+      },
+      {
+        "role": "research",
+        "work": "Deep research on how code behaves, where a wrong answer misleads a decision",
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "role": "implementation",
+        "work": "Implementation, tests, fixes, and UI work",
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "role": "review",
+        "work": "Review, in a fresh session that did not write the code",
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      }
+    ],
+    "both": [
+      {
+        "role": "lookup",
+        "work": "Lookups: find files, take an inventory, extract from logs",
+        "provider": "claude",
+        "model": "claude-haiku-5-5",
+        "effort": "medium"
+      },
+      {
+        "role": "survey",
+        "work": "Surveys: read docs, the web, or one area of the code and summarize",
+        "provider": "claude",
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      {
+        "role": "research",
+        "work": "Deep research on how code behaves, where a wrong answer misleads a decision",
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "role": "implementation",
+        "work": "Implementation, tests, fixes, and UI work",
+        "provider": "claude",
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      },
+      {
+        "role": "review",
+        "work": "Review of code Claude wrote",
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "effort": "high"
+      },
+      {
+        "role": "review-codex",
+        "work": "Review of code Codex wrote, and of skills and agent documents",
+        "provider": "claude",
+        "model": "claude-opus-5-5",
+        "effort": "high"
+      }
+    ]
+  },
   "settings": [
-    { "key": "base.heavySlots", "question": "How many heavy commands may run at once?", "type": "number", "default": 2, "ask": "never" },
-    { "key": "base.diskFloorGigabytes", "question": "Below how many free gigabytes should Fleet refuse new worktrees and heavy jobs?", "type": "number", "default": 10, "ask": "never" }
+    {
+      "key": "base.heavySlots",
+      "question": "How many heavy commands may run at once?",
+      "type": "number",
+      "default": 2,
+      "ask": "never"
+    },
+    {
+      "key": "base.diskFloorGigabytes",
+      "question": "Below how many free gigabytes should Fleet refuse new worktrees and heavy jobs?",
+      "type": "number",
+      "default": 10,
+      "ask": "never"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "agent-rules",
+      "name": "Agent rules",
+      "default": true,
+      "sentence": "Agents confirm destructive actions, keep private data out of public repos, and pick the right model for each task.",
+      "moment": {
+        "time": "09:10",
+        "title": "An agent stops before it deletes",
+        "body": "You asked for a cleanup. The agent lists the branches it would delete and waits for your yes. It never pastes a key into a chat or a pull request.",
+        "words": [
+          "agent",
+          "model table"
+        ]
+      }
+    },
+    {
+      "id": "t3-tuned",
+      "name": "T3 Code tuned",
+      "default": true,
+      "sentence": "Each thread gets its own worktree, and threads that hit a usage limit resume by themselves. A worktree without uncommitted changes is removed when its thread settles or after five days.",
+      "moment": {
+        "time": "11:30",
+        "title": "A thread picks up after its limit",
+        "body": "A long thread hit your plan's usage limit before lunch. When the limit resets, it carries on where it stopped, in its own worktree.",
+        "words": [
+          "T3 Code",
+          "worktree"
+        ]
+      }
+    },
+    {
+      "id": "nightly-updates",
+      "name": "Nightly updates",
+      "default": true,
+      "sentence": "Fleet, your profile, Claude Code, and Codex update themselves every night.",
+      "moment": {
+        "time": "03:17",
+        "title": "Everything updates while you sleep",
+        "body": "Fleet moves to its newest release, pulls your profile, applies it, and updates the agent CLIs. In the morning every machine matches.",
+        "night": true
+      }
+    },
+    {
+      "id": "linked-machines",
+      "name": "Linked machines",
+      "default": true,
+      "needs": [
+        "devbox"
+      ],
+      "sentence": "Your Mac and your devboxes see each other's threads.",
+      "moment": {
+        "time": "08:45",
+        "title": "Your devbox's threads on your Mac",
+        "body": "You open T3 Code on your Mac and see the threads that ran overnight on your devbox, next to your own.",
+        "words": [
+          "devbox"
+        ]
+      }
+    },
+    {
+      "id": "worktree-cleanup",
+      "name": "Worktree cleanup",
+      "default": true,
+      "sentence": "Idle worktrees whose work has merged are removed every few minutes.",
+      "moment": {
+        "time": "16:00",
+        "title": "Merged work cleans itself up",
+        "body": "Your pull request merged an hour ago. Its worktree is gone, so your disk holds only work in progress.",
+        "words": [
+          "worktree"
+        ]
+      }
+    },
+    {
+      "id": "disk-guard",
+      "name": "Disk guard",
+      "default": true,
+      "needs": [
+        "devbox"
+      ],
+      "sentence": "Agents check free disk before big jobs and run builds and tests in a capped slot, so one job cannot fill or freeze a devbox.",
+      "moment": {
+        "time": "14:20",
+        "title": "Two test suites, one calm devbox",
+        "body": "Two threads start full test runs at once. Each runs in a capped slot, so your devbox stays responsive and neither fills the disk.",
+        "words": [
+          "devbox"
+        ]
+      }
+    }
+  ],
+  "config": [
+    {
+      "provider": "claude",
+      "key": "hooks.UserPromptSubmit",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude UserPromptSubmit",
+              "timeout": 30
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "claude",
+      "key": "hooks.PreToolUse",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude PreToolUse",
+              "timeout": 30
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "claude",
+      "key": "hooks.PostToolUse",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude PostToolUse",
+              "timeout": 30
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "hooks.UserPromptSubmit",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex UserPromptSubmit",
+              "timeout": 30
+            }
+          ]
+        }
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "hooks.PostToolUse",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex PostToolUse",
+              "timeout": 30
+            }
+          ]
+        }
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "model",
+      "value": "gpt-6.1-sol",
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "model_reasoning_effort",
+      "value": "medium",
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "t3",
+      "key": "defaultThreadEnvMode",
+      "value": "worktree",
+      "workflow": "t3-tuned"
+    },
+    {
+      "provider": "t3",
+      "key": "storageCleanup",
+      "workflow": "t3-tuned",
+      "value": {
+        "worktreeKeepWhen": "uncommitted-changes",
+        "worktreeAfterDays": 5,
+        "worktreeSettledAfterDays": 0,
+        "worktreeOnMerge": true,
+        "worktreeOnDelete": false,
+        "worktreeUnchanged": true,
+        "browserArtifactsAfterDays": 5,
+        "logsAfterDays": 5
+      }
+    },
+    {
+      "provider": "t3",
+      "key": "autoResumeLimitedThreads",
+      "value": true,
+      "workflow": "t3-tuned"
+    },
+    {
+      "provider": "t3",
+      "key": "snoozeLimitedThreads",
+      "value": true,
+      "workflow": "t3-tuned"
+    },
+    {
+      "provider": "t3",
+      "key": "continueThreadsAfterServerUpdate",
+      "value": true,
+      "workflow": "t3-tuned"
+    },
+    {
+      "provider": "t3",
+      "key": "sidebarAutoSettleAfterDays",
+      "value": 7,
+      "workflow": "t3-tuned"
+    },
+    {
+      "provider": "t3",
+      "key": "sidebarAutoSettleOnMerge",
+      "value": true,
+      "workflow": "t3-tuned"
+    },
+    {
+      "provider": "t3",
+      "key": "sidebarAutoSettleKeepPullRequests",
+      "value": true,
+      "workflow": "t3-tuned"
+    },
+    {
+      "provider": "t3",
+      "key": "defaultModelSelection",
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "value": {
+        "instanceId": "claudeAgent",
+        "model": "claude-opus-5-5",
+        "options": [
+          {
+            "id": "effort",
+            "value": "high"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "t3",
+      "key": "defaultModelSelection",
+      "plans": [
+        "codex"
+      ],
+      "value": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "high"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "t3",
+      "key": "textGenerationModelSelection",
+      "plans": [
+        "claude"
+      ],
+      "value": {
+        "instanceId": "claudeAgent",
+        "model": "claude-haiku-5-5",
+        "options": [
+          {
+            "id": "effort",
+            "value": "low"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "t3",
+      "key": "textGenerationModelSelection",
+      "plans": [
+        "codex",
+        "both"
+      ],
+      "value": {
+        "instanceId": "codex",
+        "model": "gpt-6.1-sol",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "low"
+          }
+        ]
+      }
+    },
+    {
+      "provider": "t3",
+      "key": "linkedEnvironmentsEnabled",
+      "value": true,
+      "workflow": "linked-machines"
+    }
+  ],
+  "files": [
+    {
+      "path": "hooks/run.sh",
+      "target": ".config/fleet/hooks/run.sh"
+    },
+    {
+      "path": "hooks/run.ts",
+      "target": ".config/fleet/hooks/run.ts"
+    },
+    {
+      "path": "hooks/secret-guard.ts",
+      "target": ".config/fleet/hooks/UserPromptSubmit/secret-guard.ts"
+    },
+    {
+      "path": "hooks/secret-guard.ts",
+      "target": ".config/fleet/hooks/PostToolUse/secret-guard.ts"
+    },
+    {
+      "path": "hooks/name-a-model.ts",
+      "target": ".config/fleet/hooks/PreToolUse/name-a-model.ts",
+      "plans": [
+        "claude",
+        "both"
+      ]
+    },
+    {
+      "path": "fleet-heavy.slice",
+      "target": ".config/systemd/user/fleet-heavy.slice",
+      "on": [
+        "linux"
+      ],
+      "workflow": "disk-guard"
+    }
+  ],
+  "jobs": [
+    {
+      "id": "fleet-update",
+      "command": [
+        "fleet",
+        "update"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "03:17"
+      },
+      "workflow": "nightly-updates"
+    },
+    {
+      "id": "agent-update",
+      "command": [
+        "fleet",
+        "agent-update"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "03:47"
+      },
+      "workflow": "nightly-updates"
+    },
+    {
+      "id": "worktree-prune",
+      "command": [
+        "fleet",
+        "prune",
+        "--auto"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "workflow": "worktree-cleanup"
+    }
+  ],
+  "steps": [
+    {
+      "id": "claude-cli",
+      "run": [
+        "bash",
+        "-c",
+        "set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash"
+      ],
+      "check": [
+        "claude",
+        "--version"
+      ],
+      "on": [
+        "linux"
+      ],
+      "plans": [
+        "claude",
+        "both"
+      ]
+    },
+    {
+      "id": "codex-cli",
+      "run": [
+        "bun",
+        "add",
+        "-g",
+        "@openai/codex"
+      ],
+      "check": [
+        "codex",
+        "--version"
+      ],
+      "on": [
+        "linux"
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ]
+    }
   ]
 }

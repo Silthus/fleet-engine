@@ -95,6 +95,25 @@ describe("apply", () => {
     expect(report.ok).toBe(true);
     expect(report.findings).toEqual([{ id: "step:a", pack: "hub", say: "Step a of the hub pack failed.", repair: "apply" }]);
   });
+
+  test("skips a step whose check already passes", async () => {
+    const steps = [
+      { id: "cli", run: ["install-cli"], check: ["cli-version"], pack: "base" },
+      { id: "fresh", run: ["install-fresh"], check: ["fresh-version"], pack: "base" },
+    ];
+    const ran: string[] = [];
+    const run = async (command: string[]) => (ran.push(command[0]!), command[0] === "fresh-version" ? 1 : 0);
+    await apply(plan({ steps }), { home: temp.make("home-"), run });
+    expect(ran).toEqual(["cli-version", "fresh-version", "install-fresh"]);
+  });
+
+  test("runs steps with the plan's home directory as HOME", async () => {
+    const home = temp.make("home-");
+    const steps = [{ id: "mark", run: ["sh", "-c", 'touch "$HOME/marked"'], check: ["sh", "-c", 'test -f "$HOME/marked"'], pack: "base" }];
+    const report = await apply(plan({ steps }), { home });
+    expect(report.findings).toEqual([]);
+    expect(existsSync(join(home, "marked"))).toBe(true);
+  });
 });
 
 describe("check", () => {
