@@ -71,17 +71,23 @@ async function modelCommand(row: ModelRow, request: ModelRequest, scratch: strin
 type Spawned = { stdout: string; cause?: undefined } | { stdout?: undefined; cause: string };
 
 async function spawnWithLimit(command: string[], request: ModelRequest, env: Record<string, string | undefined>, timeout: number): Promise<Spawned> {
+  let child: Bun.Subprocess<Blob, "pipe", "pipe"> | undefined;
+  let stop: ReturnType<typeof setTimeout> | undefined;
   try {
-    const child = Bun.spawn(command, { cwd: request.cwd, env: env as Record<string, string>, stdin: new Blob([request.prompt]), stdout: "pipe", stderr: "pipe", detached: true });
-    const stop = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, timeout);
+    const running = child = Bun.spawn(command, { cwd: request.cwd, env: env as Record<string, string>, stdin: new Blob([request.prompt]), stdout: "pipe", stderr: "pipe", detached: true });
+    stop = setTimeout(() => stopGroup(running.pid), timeout);
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited, request.started?.(child.pid)]);
-    clearTimeout(stop);
     if (child.signalCode) return { cause: `stopped by ${child.signalCode} at the ${Math.round(timeout / 1000)} s limit` };
     if (code !== 0) return { cause: `exit ${code}${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)!.slice(0, 200)}` : ""}` };
     return { stdout };
   } catch (error) {
+    if (child) { stopGroup(child.pid); await child.exited; }
     return { cause: (error as Error).message };
-  }
+  } finally { clearTimeout(stop); }
+}
+
+function stopGroup(group: number) {
+  try { process.kill(-group, "SIGKILL"); } catch {}
 }
 
 export async function readRubric(home: string) {
