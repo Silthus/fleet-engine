@@ -110,6 +110,24 @@ describe("cron jobs on Linux", () => {
     expect(existsSync(join(home, ".local/state/fleet/jobs/prune.sh"))).toBe(false);
   });
 
+  test("a duplicate marked line goes, and the launcher of the line that stays is kept", async () => {
+    const home = temp.make("home-");
+    const cron = crontab("");
+    await apply(plan("linux", [pull]), { home, adapters: [cron.adapter] });
+    const line = cron.state.text!;
+    cron.state.text = line + line;
+
+    await apply(plan("linux", [pull]), { home, adapters: [cron.adapter] });
+    expect(cron.state.text).toBe(line);
+    expect(existsSync(join(home, ".local/state/fleet/jobs/skills-pull.sh"))).toBe(true);
+
+    cron.state.text = line + line;
+    const offline = { ...plan("linux", []), packs: [{ name: "base", source: "engine", ref: "main", available: true }, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] };
+    await apply(offline, { home, adapters: [cron.adapter] });
+    expect(cron.state.text).toBe(line);
+    expect(existsSync(join(home, ".local/state/fleet/jobs/skills-pull.sh"))).toBe(true);
+  });
+
   test("starts a crontab when the user has none, with no T3 precondition", async () => {
     const home = temp.make("home-");
     const cron = crontab(undefined);
@@ -152,18 +170,19 @@ describe("launchd jobs on a Mac", () => {
   function launchctl(stuck = false) {
     const calls: string[][] = [];
     const loaded = new Set<string>();
+    const mode = { stuck, printFails: false };
     const run: CommandRunner = async (command) => {
       calls.push(command);
       const [, verb, target] = command;
-      if (verb === "print") return { code: loaded.has(target!) ? 0 : 113, stdout: "" };
+      if (verb === "print") return mode.printFails ? { code: 127, stdout: "" } : { code: loaded.has(target!) ? 0 : 113, stdout: "" };
       if (verb === "bootstrap") loaded.add(`gui/501/${command[3]!.split("/").at(-1)!.replace(/\.plist$/, "")}`);
       if (verb === "bootout") {
-        if (stuck) return { code: 5, stdout: "" };
+        if (mode.stuck) return { code: 5, stdout: "" };
         loaded.delete(target!);
       }
       return { code: 0, stdout: "" };
     };
-    return { calls, loaded, adapter: jobsAdapter({ run, engineRoot: engine, uid: 501 }) };
+    return { calls, loaded, mode, adapter: jobsAdapter({ run, engineRoot: engine, uid: 501 }) };
   }
 
   test("writes a dev.fleet plist that runs the launcher script, and loads it", async () => {
@@ -211,6 +230,48 @@ describe("launchd jobs on a Mac", () => {
 
     expect(existsSync(join(home, "Library/LaunchAgents/dev.fleet.prune.plist"))).toBe(true);
     expect(report.findings).toContainEqual({ id: "job:prune", pack: "engine", say: "launchd did not stop the prune job, so Fleet left its agent as it is.", repair: "apply" });
+  });
+
+  test("keeps an agent and its launcher when launchd cannot say whether the agent stopped", async () => {
+    const home = temp.make("home-");
+    const mac = launchctl();
+    await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+    mac.mode.stuck = true;
+    mac.mode.printFails = true;
+
+    const report = await apply(plan("darwin", []), { home, adapters: [mac.adapter] });
+
+    expect(existsSync(join(home, "Library/LaunchAgents/dev.fleet.prune.plist"))).toBe(true);
+    expect(existsSync(join(home, ".local/state/fleet/jobs/prune.sh"))).toBe(true);
+    expect(report.actions).toEqual([]);
+    expect(report.findings).toContainEqual({ id: "job:prune", pack: "engine", say: "Could not check that launchd stopped the prune job (launchctl print exit 127), so Fleet left its agent as it is.", repair: "apply" });
+  });
+
+  test("keeps the old launcher when launchd does not stop the agent it would update", async () => {
+    const home = temp.make("home-");
+    const mac = launchctl();
+    await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+    const launcher = readFileSync(join(home, ".local/state/fleet/jobs/prune.sh"), "utf8");
+    mac.mode.stuck = true;
+
+    const report = await apply(plan("darwin", [{ ...prune, command: ["fleet", "prune"], schedule: { every: "5m" } }]), { home, adapters: [mac.adapter] });
+
+    expect(readFileSync(join(home, ".local/state/fleet/jobs/prune.sh"), "utf8")).toBe(launcher);
+    expect(report.findings.map((finding) => finding.say)).toContain("launchd did not stop the prune job, so Fleet left its agent as it is.");
+  });
+
+  test("reads the Label of the plist itself, not one nested inside it", async () => {
+    const home = temp.make("home-");
+    const agents = join(home, "Library/LaunchAgents");
+    mkdirSync(agents, { recursive: true });
+    const theirs = "<plist><dict><key>EnvironmentVariables</key><dict><key>Label</key><string>dev.fleet.prune</string></dict><key>Label</key><string>com.example.backup</string></dict></plist>";
+    writeFileSync(join(agents, "dev.fleet.prune.plist"), theirs);
+    const mac = launchctl();
+
+    const report = await apply(plan("darwin", []), { home, adapters: [mac.adapter] });
+
+    expect(readFileSync(join(agents, "dev.fleet.prune.plist"), "utf8")).toBe(theirs);
+    expect(report.findings.map((finding) => finding.say)).toContain("Left Library/LaunchAgents/dev.fleet.prune.plist alone: its Label is com.example.backup, not dev.fleet.prune.");
   });
 
   test("leaves a dev.fleet plist with another Label alone", async () => {
