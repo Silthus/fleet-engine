@@ -115,6 +115,10 @@ describe("fleet setup questions", () => {
     const changed = await fleetSetup(home, ["--non-interactive", "--preset", "everyday", "--plan", "claude"]);
     expect(changed.code).toBe(0);
     expect(machine(home).setup.draft).toMatchObject({ packs: ["pull-requests", "orchestration", "communication"], plan: "claude" });
+
+    const same = await fleetSetup(home, ["--non-interactive", "--preset", "everyday", "--plan", "claude"]);
+    expect(same.code).toBe(0);
+    expect(same.output).not.toContain("Fleet setup ·");
   });
 
   test("refuses a pick that leaves a pack without a pack it needs", async () => {
