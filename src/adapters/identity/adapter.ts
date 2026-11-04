@@ -43,6 +43,10 @@ export function identityAdapter(options: IdentityOptions = {}): Adapter {
 
 async function reconcileIdentity(plan: Plan, signer: Signer, context: Context) {
   const { home, dryRun, run, result } = context;
+  for (const target of [fleetGitconfig, allowedSigners, signer.publicKey, ...(signer.name === "ssh" ? [sshKeyTarget] : [])]) {
+    const link = await linkOnPath(home, target);
+    if (link) return void result.findings.push(finding("link", `Left your Git identity alone: ${link} is a link. Fleet writes keys and Git settings only through plain folders.`, "human"));
+  }
   const identity = await githubIdentity(run);
   if ("error" in identity) return void result.findings.push(finding("github", `Your Git identity waits for the GitHub sign-in (${identity.error}). Run gh auth login, then fleet apply.`, "human"));
   const key = await signingKey(signer, context);
@@ -102,6 +106,8 @@ async function signingKey(signer: Signer, { home, dryRun, run, result, engineRoo
   if (text !== undefined) {
     const fields = keyFields(text);
     if (!fields) return result.findings.push(finding("key", `~/${signer.publicKey} is not an SSH public key. Move it away, then run fleet apply to make a new Fleet key.`, "human")), null;
+    const derived = await run(["ssh-keygen", "-y", "-P", "", "-f", inside(home, sshKeyTarget)]);
+    if (derived.code !== 0 || keyFields(derived.stdout.split("\n")[0]) !== fields) return result.findings.push(finding("key", `~/${sshKeyTarget} cannot sign for ~/${signer.publicKey}: the private key is missing, locked, or belongs to another key. Move both files away, then run fleet apply to make a new Fleet key.`, "human")), null;
     return { fields };
   }
   if (existsSync(inside(home, sshKeyTarget))) return result.findings.push(finding("key", `~/${sshKeyTarget} has no public key next to it. Run ssh-keygen -y -f ~/${sshKeyTarget} > ~/${signer.publicKey}, then fleet apply.`, "human")), null;

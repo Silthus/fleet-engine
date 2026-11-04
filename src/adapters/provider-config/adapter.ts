@@ -66,7 +66,7 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
       continue;
     }
     if (merged.record.length) next[target.path] = merged.record;
-    if (target.provider === "claude") result.plugins = acceptedPlugins(merged.document);
+    if (target.provider === "claude" && !link) result.plugins = acceptedPlugins(merged.document);
     if (merged.kept.length) result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept your ${merged.kept.join(", ")} in ${target.path}. Run fleet apply --adopt ${target.path} to take Fleet's value.` });
     if (merged.after !== undefined) writes.push({ target: target.path, before, after: merged.after, action: { target: target.path, operation: before === undefined ? "create" : "replace", reason: merged.reason } });
   }
@@ -132,6 +132,8 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
   }
   const all = [...wanted, ...trust];
   for (const field of previous) {
+    const narrowed = all.some((item) => item.path.length > field.path.length && overlaps(item.path, field.path)) && !all.some((item) => item.path.length <= field.path.length && overlaps(item.path, field.path));
+    if (narrowed && edited.includes(field)) record.push(field);
     if (all.some((item) => overlaps(item.path, field.path))) continue;
     if (options.outage || keepsEdit(field)) record.push(field);
     else if (get(current, field.path) !== undefined) {

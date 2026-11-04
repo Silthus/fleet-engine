@@ -32,6 +32,7 @@ function plan(config: Array<ConfigEntry & { pack?: string }> = []): Plan {
     settings: {},
     unanswered: [],
     dropped: [],
+    models: [],
   };
 }
 
@@ -266,6 +267,24 @@ describe("provider config", () => {
     expect(read(home, claude)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://localhost:8317" } });
   });
 
+  test("keeps a proxy URL the user changed when a pack now owns only a field beside it", async () => {
+    const home = temp.make("home-");
+    await apply(plan([{ provider: "claude", key: "env", value: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" }, pack: "hub" }]), { home, adapters: adapters() });
+    write(home, claude, { env: { ANTHROPIC_BASE_URL: "http://localhost:8317" } });
+    const narrowed = plan([{ provider: "claude", key: "env.MY_FLAG", value: "1" }]);
+    await apply(narrowed, { home, adapters: adapters() });
+    await apply(narrowed, { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://localhost:8317", MY_FLAG: "1" } });
+  });
+
+  test("releases an unedited parent when a pack narrows to a new field, and keeps it when that field leaves", async () => {
+    const home = temp.make("home-");
+    await apply(plan([{ provider: "claude", key: "env", value: { A: "1", B: "2" } }]), { home, adapters: adapters() });
+    await apply(plan([{ provider: "claude", key: "env.C", value: "3" }]), { home, adapters: adapters() });
+    await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual({ env: { A: "1", B: "2" } });
+  });
+
   test("removes the token that went with a recorded proxy URL", async () => {
     const home = temp.make("home-");
     await apply(plan([{ provider: "claude", key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", pack: "hub" }]), { home, adapters: adapters() });
@@ -428,6 +447,17 @@ describe("Claude plugins", () => {
     write(dotfiles, "settings.json", {});
     mkdirSync(join(home, ".claude"));
     symlinkSync(join(dotfiles, "settings.json"), join(home, claude));
+    const cli = claudeCli();
+    const report = await apply(plan([enabled]), { home, adapters: [cli.adapter] });
+    expect(cli.calls).toEqual([]);
+    expect(report.findings.map((finding) => finding.id)).toContain("plugins:claude");
+  });
+
+  test("installs nothing while the settings folder is a link, even when the settings already match", async () => {
+    const home = temp.make("home-");
+    const dotfiles = temp.make("dotfiles-");
+    write(dotfiles, "settings.json", { enabledPlugins: { [enabled.key.slice("enabledPlugins.".length)]: true } });
+    symlinkSync(dotfiles, join(home, ".claude"));
     const cli = claudeCli();
     const report = await apply(plan([enabled]), { home, adapters: [cli.adapter] });
     expect(cli.calls).toEqual([]);

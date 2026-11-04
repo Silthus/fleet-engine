@@ -30,6 +30,7 @@ export type T3Tasks = { list(): Promise<FleetTask[]>; upsert(task: FleetTask): P
 export type JobsOptions = { run?: CommandRunner; engineRoot?: string; uid?: number; t3?: () => Promise<T3Tasks | undefined> };
 
 export const taskPrefix = "fleet:";
+const notFound = 113;
 const jobId = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export function jobsAdapter(options: JobsOptions = {}): Adapter {
@@ -113,7 +114,8 @@ async function reconcileCron(jobs: Array<Owned<PackJob>>, scripts: Scripts, { ho
   if (!changes.added.length && !changes.changed.length && !changes.removed.length) return;
   const written = await run(["crontab", "-"], { input: changes.text });
   if (written.code !== 0) return void result.findings.push({ id: "jobs:cron", pack: "engine", say: `Could not write your crontab (exit ${written.code}).`, repair: "apply" });
-  for (const id of changes.removed) await removeLauncher(home, id);
+  const kept = new Set([...changes.text.matchAll(/# fleet:([A-Za-z0-9._-]+)$/gm)].map((match) => match[1]!));
+  for (const id of new Set(changes.removed)) if (!kept.has(id)) await removeLauncher(home, id);
   result.actions.push({ target: "crontab", operation: "replace", reason: all.map((finding) => finding.say).join(" ") });
 }
 
@@ -121,7 +123,10 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   const agents = join(home, "Library/LaunchAgents");
   const domain = `gui/${uid}`;
   const present = (await readdir(agents).catch(() => [] as string[])).filter((name) => name.startsWith(labelPrefix) && name.endsWith(".plist"));
-  const loaded = async (label: string) => (await run(["launchctl", "print", `${domain}/${label}`])).code === 0;
+  const state = async (label: string) => {
+    const { code } = await run(["launchctl", "print", `${domain}/${label}`]);
+    return code === 0 ? "loaded" : code === notFound ? "absent" : `launchctl print exit ${code}`;
+  };
   const foreign = (name: string, label: string, text: string | undefined, pack = "engine") => {
     const found = text === undefined ? undefined : labelOf(text);
     if (text === undefined || found === label) return false;
@@ -130,9 +135,11 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   };
   const stop = async (job: { id: string; pack: string } | string, label: string) => {
     await run(["launchctl", "bootout", `${domain}/${label}`]);
-    if (!(await loaded(label))) return true;
+    const after = await state(label);
+    if (after === "absent") return true;
     const id = typeof job === "string" ? job : job.id;
-    result.findings.push({ id: `job:${id}`, pack: typeof job === "string" ? "engine" : job.pack, say: `launchd did not stop the ${id} job, so Fleet left its agent as it is.`, repair: "apply" });
+    const say = after === "loaded" ? `launchd did not stop the ${id} job, so Fleet left its agent as it is.` : `Could not check that launchd stopped the ${id} job (${after}), so Fleet left its agent as it is.`;
+    result.findings.push({ id: `job:${id}`, pack: typeof job === "string" ? "engine" : job.pack, say, repair: "apply" });
     return false;
   };
   for (const job of jobs) {
@@ -143,15 +150,15 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     const content = plist(job.id, inside(home, script.target), launchdTimer(job.schedule), inside(home, logTarget(job.id)));
     const current = await readFile(file, "utf8").catch(() => undefined);
     if (foreign(name, label, current, job.pack)) continue;
-    const reload = current !== content || !(await loaded(label));
+    const reload = current !== content || (await state(label)) !== "loaded";
     if (!reload && !stale(script)) continue;
     if (dryRun) {
       result.findings.push(needs(job, current === undefined ? "added" : current === content && !stale(script) ? "loaded" : "updated"));
       continue;
     }
+    if (reload && current !== undefined && !(await stop(job, label))) continue;
     await writeLaunchers(home, stale(script) ? [script] : [], result);
     if (!reload) continue;
-    if (current !== undefined && !(await stop(job, label))) continue;
     await mkdir(agents, { recursive: true });
     await writeFile(file, content);
     if ((await run(["launchctl", "bootstrap", domain, file])).code !== 0) result.findings.push({ id: `job:${job.id}`, pack: job.pack, say: `launchd did not load the ${job.id} job.`, repair: "apply" });
