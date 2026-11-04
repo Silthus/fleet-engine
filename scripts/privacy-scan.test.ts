@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,11 +47,13 @@ function commit(dir: string, file: string, content: string, message = "Change") 
   git(dir, "commit", "-q", "-m", message);
 }
 
-function scan(dir: string, base: string, list: string | null = denylist) {
+function scan(dir: string, base: string, list: string | null = denylist, stdin?: string) {
   const env: Record<string, string | undefined> = { ...gitEnv(), FLEET_PRIVACY_DENYLIST: list ?? undefined };
   if (list === null) delete env.FLEET_PRIVACY_DENYLIST;
-  const result = Bun.spawnSync(["sh", script, base], { cwd: dir, env });
-  return { code: result.exitCode, output: result.stdout.toString() + result.stderr.toString() };
+  const result = Bun.spawnSync(["sh", script, base], { cwd: dir, env, stdin: stdin === undefined ? "ignore" : Buffer.from(stdin) });
+  const output = result.stdout.toString() + result.stderr.toString();
+  expect(output.toLowerCase()).not.toContain(plantedTerm);
+  return { code: result.exitCode, output };
 }
 
 function fakeGitHubToken() {
@@ -76,13 +78,86 @@ describe("privacy scan", () => {
     }
   });
 
+  test("fails closed on an invalid pattern, even after a valid one", () => {
+    const { dir, base } = repoWithBase();
+    commit(dir, "notes.md", `ssh ${plantedTerm}\n`);
+    const result = scan(dir, base, `${plantedTerm}\n[\n`);
+    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("invalid pattern") });
+  });
+
+  test("fails on a term that a later commit deletes or cleans", () => {
+    const { dir, base } = repoWithBase();
+    commit(dir, "gone.md", `ssh ${plantedTerm}\n`);
+    commit(dir, "cleaned.md", `scp ${plantedTerm}\n`);
+    unlinkSync(join(dir, "gone.md"));
+    commit(dir, "cleaned.md", "clean\n");
+    const result = scan(dir, base);
+    expect(result.code).toBe(1);
+    expect(result.output.match(/matches a deny-list term/g)?.length).toBe(2);
+  });
+
+  test("fails on a secret that only a merge resolution adds", () => {
+    const { dir, base } = repoWithBase();
+    git(dir, "checkout", "-q", "-b", "side");
+    commit(dir, "config.ts", "export const token = 'side';\n");
+    git(dir, "checkout", "-q", "main");
+    commit(dir, "config.ts", "export const token = 'main';\n");
+    Bun.spawnSync(["git", "merge", "-q", "side"], { cwd: dir, env: gitEnv() });
+    const token = fakeGitHubToken();
+    commit(dir, "config.ts", `export const token = "${token}";\n`, "Merge side");
+    const result = scan(dir, base);
+    expect(git(dir, "rev-list", "--merges", "--count", "HEAD")).toBe("1");
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("gitleaks rule");
+    expect(result.output).not.toContain(token);
+  });
+
+  test("fails on a path that names a term, without printing the path", () => {
+    const { dir, base } = repoWithBase();
+    commit(dir, `${plantedTerm}.md`, "clean\n");
+    const result = scan(dir, base);
+    expect(result).toMatchObject({ code: 1, output: expect.stringContaining("1 changed path(s)") });
+  });
+
+  test("reads binary files and symlink targets from Git", () => {
+    const { dir, base } = repoWithBase();
+    const token = fakeGitHubToken();
+    commit(dir, "data.bin", `\0\0ssh ${plantedTerm}\0 "${token}"\n`);
+    symlinkSync(`/srv/${plantedTerm}/x`, join(dir, "link"));
+    commit(dir, "README.md", "# Example\n");
+    const result = scan(dir, base);
+    expect(result.code).toBe(1);
+    expect(result.output.match(/matches a deny-list term/g)?.length).toBe(2);
+    expect(result.output).toContain("gitleaks rule");
+    expect(result.output).not.toContain(token);
+  });
+
+  test("--all scans the root commit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "privacy-scan-"));
+    repos.push(dir);
+    git(dir, "init", "-q", "-b", "main");
+    const token = fakeGitHubToken();
+    commit(dir, "notes.md", `ssh ${plantedTerm}\n"${token}"\n`);
+    const result = scan(dir, "--all");
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("matches a deny-list term");
+    expect(result.output).toContain("gitleaks rule");
+  });
+
+  test("--text scans a pull request title and body", () => {
+    const { dir } = repoWithBase();
+    expect(scan(dir, "--text", denylist, "Clean title\nClean body\n").code).toBe(0);
+    expect(scan(dir, "--text", denylist, `Title\nSee ${plantedTerm.toUpperCase()}\n`)).toMatchObject({ code: 1, output: expect.stringContaining("the pull request title or body, line 2") });
+  });
+
   test("fails on a planted deny-list term without printing the term", () => {
     const { dir, base } = repoWithBase();
     commit(dir, "notes.md", `line one\nssh ${plantedTerm.toUpperCase()}\n`);
     const result = scan(dir, base);
     expect(result.code).not.toBe(0);
-    expect(result.output).toContain("notes.md:2");
-    expect(result.output.toLowerCase()).not.toContain(plantedTerm);
+    expect(result.output).toContain(`blob ${git(dir, "rev-parse", "HEAD:notes.md")}`);
+    expect(result.output).toContain("line 2");
+    expect(result.output).not.toContain("notes.md");
   });
 
   test("fails on a deny-list term in a commit message", () => {
@@ -90,7 +165,7 @@ describe("privacy scan", () => {
     commit(dir, "notes.md", "Nothing private here.\n", `Move ${plantedTerm}`);
     const result = scan(dir, base);
     expect(result.code).not.toBe(0);
-    expect(result.output).toContain("commit message");
+    expect(result.output).toContain("message of commit");
   });
 
   test("fails on a planted fake secret without printing it", () => {

@@ -3,6 +3,7 @@ on:
   push:
     branches: [main, "probe/**"]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 permissions:
   contents: read
 jobs:
@@ -33,10 +34,17 @@ jobs:
         run: |
           base=${PR_BASE:-$PUSH_BEFORE}
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
-            base=$(git rev-list --max-parents=0 HEAD | tail -n 1)
+            base=--all
           fi
           echo "BASE=$base" >> "$GITHUB_ENV"
       - name: Scan for secrets and private terms
         env:
           FLEET_PRIVACY_DENYLIST: ${{ secrets.FLEET_PRIVACY_DENYLIST }}
         run: sh scripts/privacy-scan.sh "$BASE"
+      - name: Scan the pull request title and body
+        if: github.event_name == 'pull_request'
+        env:
+          FLEET_PRIVACY_DENYLIST: ${{ secrets.FLEET_PRIVACY_DENYLIST }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" | sh scripts/privacy-scan.sh --text
