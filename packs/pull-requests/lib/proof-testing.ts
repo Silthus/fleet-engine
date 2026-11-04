@@ -2,6 +2,7 @@ import { expect } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gitEnv } from "../../../src/testing/git.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
 
@@ -53,8 +54,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   writeFileSync(join(home, ".agents/skills/qa-swarm/PANEL.md"), panelGuide);
   const clock = { now: new Date("2026-10-25T12:00:00Z") };
   const env: Record<string, string | undefined> = {
-    ...process.env, PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
-    GIT_AUTHOR_NAME: "Fleet", GIT_AUTHOR_EMAIL: "fleet@example.com", GIT_COMMITTER_NAME: "Fleet", GIT_COMMITTER_EMAIL: "fleet@example.com",
+    ...gitEnv, PATH: `${bin}:${process.env.PATH}`,
     CLAUDE_CODE_SESSION_ID: "session-under-test", CODEX_THREAD_ID: undefined, FLEET_SETTINGS: JSON.stringify(settings), FLEET_MODELS: JSON.stringify(models),
     FLEET_PROOF_JUDGE: `cat >/dev/null; echo '${verdict()}'`, FLEET_PROOF_JUDGE_MODEL: "judge-under-test",
   };
