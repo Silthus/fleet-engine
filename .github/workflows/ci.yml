@@ -1,0 +1,52 @@
+name: CI
+on:
+  push:
+    branches: [main, "probe/**"]
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: sh scripts/install-gitleaks.sh "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: bun install --frozen-lockfile
+      - run: bun run test
+      - run: bun run typecheck
+  privacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: sh scripts/install-gitleaks.sh "$HOME/.local/bin" && echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Pick the base commit
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          base=${PR_BASE:-$PUSH_BEFORE}
+          if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=--all
+          fi
+          echo "BASE=$base" >> "$GITHUB_ENV"
+      - name: Scan for secrets and private terms
+        env:
+          FLEET_PRIVACY_DENYLIST: ${{ secrets.FLEET_PRIVACY_DENYLIST }}
+        run: sh scripts/privacy-scan.sh "$BASE"
+      - name: Scan the pull request title and body
+        if: github.event_name == 'pull_request'
+        env:
+          FLEET_PRIVACY_DENYLIST: ${{ secrets.FLEET_PRIVACY_DENYLIST }}
+        # Read from the event file, not step env: the runner prints step env values in the log.
+        run: |
+          jq -r '.pull_request.title, (.pull_request.body // "")' "$GITHUB_EVENT_PATH" >"$RUNNER_TEMP/pr-text" 2>/dev/null ||
+            { echo "privacy: could not read the pull request text; failing closed." >&2; exit 2; }
+          sh scripts/privacy-scan.sh --text <"$RUNNER_TEMP/pr-text"
