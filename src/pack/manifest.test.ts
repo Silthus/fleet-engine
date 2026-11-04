@@ -52,6 +52,15 @@ describe("loadPacks", () => {
     expect(packs.map((pack) => pack.manifest.settings?.[0]?.key)).toEqual(["base.heavySlots", "identity.signer"]);
   });
 
+  test("rejects a time-zone default that does not fit the setting", async () => {
+    const settings = [{ ...base.settings[0], ask: "setup", defaultByTimeZone: { "Europe/": "two" } }];
+    expect(loadPacks(sourceWith({ base: { ...base, settings } }))).rejects.toThrow("settings base.heavySlots: defaultByTimeZone must map time-zone prefixes to values that fit type number");
+    const unasked = [{ ...base.settings[0], defaultByTimeZone: { "Europe/": 3 } }];
+    expect(loadPacks(sourceWith({ base: { ...base, settings: unasked } }))).rejects.toThrow("settings base.heavySlots: defaultByTimeZone needs ask setup, because only setup reads it");
+    const sound = [{ ...base.settings[0], ask: "setup", defaultByTimeZone: { "Europe/": 3 } }];
+    expect((await loadPacks(sourceWith({ base: { ...base, settings: sound } })))[0]?.manifest.settings?.[0]?.defaultByTimeZone).toEqual({ "Europe/": 3 });
+  });
+
   test("rejects a workflow need outside the closed set", async () => {
     const workflows = [{ ...base.workflows[0], needs: ["laptop"] }];
     expect(loadPacks(sourceWith({ base: { ...base, workflows } }))).rejects.toThrow("workflow heavy has unknown need laptop");

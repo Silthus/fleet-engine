@@ -100,6 +100,9 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(choices === undefined || (Array.isArray(choices) && choices.every((choice) => isRecord(choice) && isValue(choice.value) && typeof choice.label === "string")), `${label}: choices must list a value and a label each`);
     const fits = (value: unknown) => (item.type === "choice" ? ((choices as Array<{ value: unknown }> | undefined) ?? []).some((choice) => choice.value === value) : typeof value === item.type);
     need(item.default === undefined || fits(item.default), `${label}: default does not fit type ${String(item.type)}`);
+    const zones = item.defaultByTimeZone;
+    need(zones === undefined || (isRecord(zones) && Object.values(zones).every(fits)), `${label}: defaultByTimeZone must map time-zone prefixes to values that fit type ${String(item.type)}`);
+    need(zones === undefined || item.ask === "setup", `${label}: defaultByTimeZone needs ask setup, because only setup reads it`);
   });
   each("workflows", (item, label) => {
     need(typeof item.name === "string" && typeof item.sentence === "string", `${label}: needs a name and a sentence`);

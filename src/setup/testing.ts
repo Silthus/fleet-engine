@@ -136,7 +136,7 @@ export async function fleetSetup(home: string, args: string[], replies: string[]
   const doctored: string[] = [];
   const apply = async (dir: string) => (applied.push(dir), 0);
   const doctor = async (dir: string) => (doctored.push(dir), doctorCode);
-  const code = await main(["setup", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, doctor, env: {}, ...(fetchSource ? { fetchSource } : {}) } });
+  const code = await main(["setup", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, doctor, env: {}, timeZone: "UTC", ...(fetchSource ? { fetchSource } : {}) } });
   return { code, prompts: io.prompts, output: io.output(), applied, doctored };
 }
 
