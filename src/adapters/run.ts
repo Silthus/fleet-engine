@@ -33,8 +33,9 @@ export function directoryHome(text: string) {
   return home?.startsWith("/") ? home : undefined;
 }
 
+export type AccountSources = { platform: NodeJS.Platform; exists: (path: string) => boolean; file: (path: string) => string; output: (command: string[]) => string };
+
 function output(command: string[]) {
-  if (!existsSync(command[0]!)) return "";
   try {
     const child = Bun.spawnSync(command, { env: {}, stdin: "ignore" });
     return child.exitCode === 0 ? child.stdout.toString() : "";
@@ -43,19 +44,25 @@ function output(command: string[]) {
   }
 }
 
-function passwdFile() {
+function file(path: string) {
   try {
-    return readFileSync("/etc/passwd", "utf8");
+    return readFileSync(path, "utf8");
   } catch {
     return "";
   }
 }
 
-export function accountHome(uid = process.getuid?.()) {
+const system: AccountSources = { platform: process.platform, exists: existsSync, file, output };
+
+export function accountHome(uid = process.getuid?.(), sources = system) {
   if (uid === undefined) return undefined;
-  if (process.platform === "darwin") return directoryHome(output(["/usr/bin/dscacheutil", "-q", "user", "-a", "uid", String(uid)])) ?? passwdHome(passwdFile(), uid);
-  const getent = ["/usr/bin/getent", "/bin/getent"].find((path) => existsSync(path));
-  return (getent ? passwdHome(output([getent, "passwd", String(uid)]), uid) : undefined) ?? passwdHome(passwdFile(), uid);
+  const fromPasswd = () => passwdHome(sources.file("/etc/passwd"), uid);
+  if (sources.platform === "darwin") {
+    const dscacheutil = "/usr/bin/dscacheutil";
+    return (sources.exists(dscacheutil) ? directoryHome(sources.output([dscacheutil, "-q", "user", "-a", "uid", String(uid)])) : undefined) ?? fromPasswd();
+  }
+  const getent = ["/usr/bin/getent", "/bin/getent"].find((path) => sources.exists(path));
+  return (getent ? passwdHome(sources.output([getent, "passwd", String(uid)]), uid) : undefined) ?? fromPasswd();
 }
 
 export type HomeGuard = { run?: CommandRunner; accountHome?: () => string | undefined };

@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Plan } from "../pack/types.ts";
 import { apply } from "../reconciler/apply.ts";
 import { tempDirs } from "../testing/git.ts";
 import { identityAdapter } from "./identity/adapter.ts";
 import { jobsAdapter } from "./jobs/adapter.ts";
-import { directoryHome, passwdHome, type CommandRunner } from "./run.ts";
+import { accountHome, directoryHome, passwdHome, type CommandRunner } from "./run.ts";
 import { t3Adapter } from "./t3/adapter.ts";
 
 const temp = tempDirs();
@@ -33,15 +33,31 @@ describe("account home lookup", () => {
     expect(directoryHome("dir: Users/octo\n")).toBeUndefined();
   });
 
-  test("finds the real account home even when HOME and PATH point elsewhere", () => {
+  test("asks getent for the uid's line and reads a backslash login's home from it", () => {
+    const asked: string[][] = [];
+    const sources = { platform: "linux" as const, exists: (path: string) => path === "/usr/bin/getent", file: () => "", output: (command: string[]) => (asked.push(command), passwd.split("\n")[1]!) };
+    expect(accountHome(1000, sources)).toBe("/home/DOMAIN\\octo");
+    expect(asked).toEqual([["/usr/bin/getent", "passwd", "1000"]]);
+  });
+
+  test("falls back to /etc/passwd when getent is missing", () => {
+    const sources = { platform: "linux" as const, exists: () => false, file: (path: string) => (path === "/etc/passwd" ? passwd : ""), output: () => "" };
+    expect(accountHome(1000, sources)).toBe("/home/DOMAIN\\octo");
+    expect(accountHome(4242, sources)).toBeUndefined();
+  });
+
+  test("asks the Mac directory service for the uid", () => {
+    const sources = { platform: "darwin" as const, exists: () => true, file: () => "", output: (command: string[]) => (command.join(" ") === "/usr/bin/dscacheutil -q user -a uid 501" ? "name: octo\ndir: /Users/octo\n" : "") };
+    expect(accountHome(501, sources)).toBe("/Users/octo");
+  });
+
+  test.if(process.platform === "linux")("finds the exact account home even when HOME and PATH point elsewhere", () => {
+    const uid = process.getuid!();
+    const expected = readFileSync("/etc/passwd", "utf8").split("\n").map((line) => line.split(":")).find((fields) => fields[2] === String(uid))?.[5] ?? Bun.spawnSync(["getent", "passwd", String(uid)]).stdout.toString().split(":")[5];
     const home = temp.make("home-");
     const script = `import { accountHome } from ${JSON.stringify(join(import.meta.dir, "run.ts"))}; console.log(JSON.stringify(accountHome() ?? null));`;
     const child = Bun.spawnSync([process.execPath, "--eval", script], { env: { HOME: home, PATH: "" } });
-    const found = JSON.parse(child.stdout.toString()) as string | null;
-    expect(found).not.toBeNull();
-    expect(found).not.toBe(home);
-    expect(found!.startsWith("/")).toBe(true);
-    expect(existsSync(found!)).toBe(true);
+    expect(JSON.parse(child.stdout.toString())).toBe(expected!);
   });
 });
 
