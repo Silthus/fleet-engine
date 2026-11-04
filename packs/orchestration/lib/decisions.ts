@@ -1,6 +1,6 @@
 import {
   descendants, fetchDiscussionFromGitHub, fetchIssueFromGitHub, issueLink, mapRef, proseLines, splitRepository, tableCell, ticketType,
-  type FetchDiscussion, type FetchIssue, type MapIo, type MapRef, type Ticket,
+  type Comment, type FetchDiscussion, type FetchIssue, type MapIo, type MapRef, type Ticket,
 } from "./wayfinder.ts";
 
 const usage = "Usage: fleet decisions <map URL | owner/repo#number | number>";
@@ -13,11 +13,15 @@ type Resolution = { type?: string; rounds: number; decisions: Decision[] };
 
 export async function readDecisions(ref: MapRef, fetchIssue: FetchIssue, fetchDiscussion: FetchDiscussion): Promise<string> {
   const map = await fetchIssue(ref.owner, ref.repo, ref.number);
-  const mapBody = (await fetchDiscussion(ref.owner, ref.repo, ref.number)).body;
+  const mapDiscussion = await fetchDiscussion(ref.owner, ref.repo, ref.number);
   const closed = (await descendants(map, fetchIssue)).filter((ticket) => ticket.state !== "OPEN");
   const resolutions: Resolution[] = [];
   for (const ticket of closed) resolutions.push(await resolution(ticket, fetchDiscussion));
-  const decisions = [...decisionsIn(mapBody, `[map #${ref.number}](${issueLink(ref)})`, ""), ...resolutions.flatMap((item) => item.decisions)];
+  const decisions = [
+    ...decisionsIn(mapDiscussion.body, `[map #${ref.number}](${issueLink(ref)})`, ""),
+    ...decisionsInComments(mapDiscussion.comments, "map"),
+    ...resolutions.flatMap((item) => item.decisions),
+  ];
   return [...table(byWho(newestPerQuestion(decisions))), "", involvement(resolutions)].join("\n");
 }
 
@@ -25,8 +29,11 @@ async function resolution(ticket: Ticket, fetchDiscussion: FetchDiscussion): Pro
   const [owner, repo] = splitRepository(ticket.repository);
   const { comments } = await fetchDiscussion(owner, repo, ticket.number);
   const rounds = comments.filter((comment) => ticket.assignees.includes(comment.author)).length;
-  const decisions = comments.flatMap((comment) => decisionsIn(comment.body, `[#${ticket.number}](${comment.url})`, comment.updatedAt ?? comment.createdAt));
-  return { type: ticketType(ticket), rounds, decisions };
+  return { type: ticketType(ticket), rounds, decisions: decisionsInComments(comments, `#${ticket.number}`) };
+}
+
+function decisionsInComments(comments: Comment[], label: string): Decision[] {
+  return comments.flatMap((comment) => decisionsIn(comment.body, `[${label}](${comment.url})`, comment.updatedAt ?? comment.createdAt));
 }
 
 function decisionsIn(text: string, where: string, at: string): Decision[] {

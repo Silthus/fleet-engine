@@ -99,6 +99,34 @@ test("fleet decisions takes the newest answer by edit time, so an edited comment
   expect(discussionQueries.every((query) => /comments\(.*nodes \{.*\bupdatedAt\b/.test(query))).toBe(true);
 });
 
+test("fleet decisions counts answers in the map's comments next to its body and its closed tickets", async () => {
+  const commented: GitHubFixture = {
+    issues: [issueNode(repository, 1, { children: [issueNode(repository, 2, { state: "CLOSED" })] })],
+    discussions: {
+      "acme/maps#1": {
+        body: "- 👤 **Which store?** Postgres",
+        comments: [
+          { author: "ada", body: "- 🤖 **Which queue?** SQS", url: url(1, "c1"), createdAt: "2026-11-01T09:00:00Z", updatedAt: "2026-11-01T09:00:00Z" },
+          { author: "bo", body: "- 👤 **Which store?** CockroachDB", url: url(1, "c2"), createdAt: "2026-11-05T09:00:00Z", updatedAt: "2026-11-05T09:00:00Z" },
+        ],
+      },
+      "acme/maps#2": { body: "", comments: [{ author: "ada", body: "- 👤 **Which store?** SQLite", url: url(2, "c3"), createdAt: "2026-11-03T09:00:00Z", updatedAt: "2026-11-03T09:00:00Z" }] },
+    },
+  };
+  const lines: string[] = [];
+
+  await runDecisions(["acme/maps#1"], { ...fixtureFetchers(commented), tracker: () => "", print: (line) => lines.push(line) });
+
+  expect(lines.join("\n")).toBe([
+    "| Question | Answer | Who | Where |",
+    "| --- | --- | --- | --- |",
+    `| Which store? | CockroachDB | 👤 Human | [map](${url(1, "c2")}) |`,
+    `| Which queue? | SQS | 🤖 Agent | [map](${url(1, "c1")}) |`,
+    "",
+    "Involvement: no human-in-the-loop tickets.",
+  ].join("\n"));
+});
+
 test("fleet decisions refuses a bad map", async () => {
   const io = { ...fixtureFetchers({ issues: [] }), tracker: () => "", print: () => {} };
   const usage = "Usage: fleet decisions <map URL | owner/repo#number | number>";
