@@ -7,8 +7,7 @@
     "noEmit": true,
     "types": ["bun"],
     "skipLibCheck": true,
-    "allowImportingTsExtensions": true,
-    "noUncheckedIndexedAccess": true
+    "allowImportingTsExtensions": true
   },
   "include": ["src/**/*.ts", "scripts/**/*.ts", "packs/**/*.ts"]
 }

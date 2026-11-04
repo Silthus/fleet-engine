@@ -1,0 +1,6 @@
+{
+  "schema": 1,
+  "name": "base",
+  "summary": "Safety rules every agent follows.",
+  "instructions": "AGENTS.md"
+}
