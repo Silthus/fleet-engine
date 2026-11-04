@@ -4,7 +4,7 @@ import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, Sour
 import { loadMachine, saveMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
-import { FlagError, parseSetupFlags, type SetupFlags } from "./flags.ts";
+import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
 import { packsStep, picksFrom, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { runSteps, type Step } from "./runner.ts";
 import { Stopped, type Terminal } from "./terminal.ts";
@@ -27,6 +27,8 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   try {
     flags = parseSetupFlags(args);
     picksFrom(flags, catalog);
+    const reopened = [...(hasPicks(flags) ? ["packs"] : []), ...(flags.plan ? ["plans"] : [])];
+    progress.done = progress.done.filter((id) => !reopened.includes(id));
     const fromFlags = settingsFrom(flags, catalog);
     if (Object.keys(fromFlags).length) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
 import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
@@ -63,7 +63,9 @@ export async function loadMachine(home: string): Promise<MachineFile | undefined
 export async function saveMachine(home: string, machine: MachineFile) {
   const path = machinePath(home);
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(machine, null, 2) + "\n");
+  const partial = `${path}.${process.pid}.partial`;
+  await writeFile(partial, JSON.stringify(machine, null, 2) + "\n");
+  await rename(partial, path);
 }
 
 async function readJson(path: string): Promise<Record<string, unknown> | undefined> {
