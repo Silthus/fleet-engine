@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
@@ -20,10 +20,10 @@ const teamPack = {
   steps: [{ id: "devbox-start", run: ["hogli", "devbox:start"], check: ["hogli", "devbox:status"], after: "coder" }],
 };
 
-function teamSource(): (ref: SourceRef) => Promise<FetchedSource> {
+function teamSource(coder: { interactive?: true } = {}): (ref: SourceRef) => Promise<FetchedSource> {
   const dir = temp.make("team-");
   mkdirSync(join(dir, "packs/posthog"), { recursive: true });
-  writeFileSync(join(dir, "packs/posthog/pack.json"), JSON.stringify(teamPack));
+  writeFileSync(join(dir, "packs/posthog/pack.json"), JSON.stringify({ ...teamPack, human: [{ ...teamPack.human[0], ...coder }] }));
   return async (ref) => ({ ref, dir, packs: await loadPacks(dir) });
 }
 
@@ -66,8 +66,29 @@ describe("fleet setup sign-ins", () => {
     expect(savedAnswers(home).packs).toEqual(["pull-requests", "orchestration", "communication", "posthog"]);
     expect(savedAnswers(home).sources.map((source: SourceRef) => source.name)).toEqual(["agent-skills", "mattpocock-skills", "posthog"]);
     expect(box.starts).toContainEqual(["sh", "-c", "coder login"]);
+    expect(box.runs).toEqual([]);
+    expect(box.sleeps).toEqual([2000]);
     expect(box.calls.map((call) => call.command.join(" "))).toContain("hogli devbox:start");
     expect(machineFile(home).setup.done).toContain("human:posthog:coder");
+  });
+
+  test("an interactive pack sign-in runs in the foreground with the keyboard, then its probe decides, with no polling", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, { coder: 50 }, { org: true });
+    const result = await fleetSetup(home, ["--plan", "claude"], ["", "", ""], box, teamSource({ interactive: true }));
+    expect(result.code).toBe(0);
+    expect(box.runs).toEqual([{ command: ["sh", "-c", "coder login"], input: true }]);
+    expect(box.starts.some((command) => command.join(" ").includes("coder login"))).toBe(false);
+    expect(box.sleeps).toEqual([]);
+    expect(result.output).toContain("  It needs your keyboard. Setup goes on when it ends.");
+    expect(box.calls.map((call) => call.command.join(" "))).toContain("hogli devbox:start");
+
+    const failedHome = temp.make("home-");
+    const failed = fakeMachine(failedHome, { coder: 50 }, { org: true, failRun: true });
+    const stopped = await fleetSetup(failedHome, ["--plan", "claude"], ["", "", ""], failed, teamSource({ interactive: true }));
+    expect(stopped.code).toBe(1);
+    expect(stopped.output).toContain("fleet: sh -c coder login ended with code 1, but Sign in to Coder still does not pass its check.");
+    expect(failed.calls.map((call) => call.command.join(" "))).not.toContain("hogli devbox:start");
   });
 
   test("a sign-in command that fails, or is missing, stops setup with what to do instead of waiting", async () => {
@@ -170,5 +191,23 @@ describe("a pack's sign-in", () => {
     machine.exec = async (command: string[]) => (command.at(-1) === "start" && (started = true), run(command));
     await signIn.after!();
     expect(calls).toEqual(["/bin/sh /engine/fleet whoami", "/bin/sh /engine/fleet status", "/bin/sh /engine/fleet start", "/bin/sh /engine/fleet status"]);
+  });
+
+  test("an interactive one reads the keyboard through a pseudo-terminal while setup's own input is not the terminal", async () => {
+    const dir = temp.make("tty-");
+    const token = join(dir, "token");
+    let screen = "";
+    const harness = join(import.meta.dir, "fixtures/interactive-step.ts");
+    const child = Bun.spawn(["sh", "-c", 'exec "$0" "$1" "$2" </dev/null', process.execPath, harness, token], { terminal: { cols: 100, rows: 30, data: (_, bytes) => void (screen += new TextDecoder().decode(bytes)) } });
+    try {
+      child.terminal!.write("s3cret\n");
+      expect(await child.exited).toBe(0);
+    } finally {
+      child.kill();
+      child.terminal!.close();
+    }
+    expect(readFileSync(token, "utf8")).toBe("s3cret");
+    expect(screen).toContain("✓ Sign in to the team service: done");
+    expect(screen).toContain("sleeps=0");
   });
 });
