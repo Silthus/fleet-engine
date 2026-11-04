@@ -385,6 +385,40 @@ describe("T3 scheduled tasks", () => {
     expect(t3.calls).toEqual(["enable fleet:quality-loop false"]);
   });
 
+  test("reports a task T3 refuses and still reconciles the others", async () => {
+    const home = temp.make("home-");
+    const other = { ...loop, id: "digest", workflow: "digest" };
+    const dropped = { ...wanted, id: "fleet:old" };
+    const t3 = server([dropped]);
+    const refusing = jobsAdapter({
+      run: async () => ({ code: 0, stdout: "" }),
+      engineRoot: engine,
+      t3: async () => ({
+        list: async () => [...t3.tasks.values()],
+        upsert: async (task) => {
+          if (task.id === "fleet:quality-loop") throw new Error("T3 Code has no project at /home/u/app");
+          t3.calls.push(`upsert ${task.id}`);
+          t3.tasks.set(task.id, task);
+        },
+        setEnabled: async (id, enabled) => void (t3.calls.push(`enable ${id} ${enabled}`), t3.tasks.set(id, { ...t3.tasks.get(id)!, enabled })),
+      }),
+    });
+    const report = await apply(plan("linux", [loop, other]), { home, adapters: [refusing] });
+    expect(report.findings).toContainEqual({ id: "task:quality-loop", pack: "base", say: "Could not add the quality-loop task to T3 Code: T3 Code has no project at /home/u/app", repair: "apply" });
+    expect(t3.calls).toEqual(["upsert fleet:digest", "enable fleet:old false"]);
+  });
+
+  test("reports a T3 server that cannot list its tasks without failing the apply", async () => {
+    const home = temp.make("home-");
+    const adapter = jobsAdapter({
+      run: async () => ({ code: 0, stdout: "" }),
+      engineRoot: engine,
+      t3: async () => ({ list: async () => Promise.reject(new Error("T3 Code closed the connection")), upsert: async () => {}, setEnabled: async () => {} }),
+    });
+    const report = await apply(plan("linux", [loop]), { home, adapters: [adapter] });
+    expect(report.findings).toContainEqual({ id: "tasks:t3", pack: "engine", say: "Could not read T3 Code's scheduled tasks: T3 Code closed the connection. Run fleet apply again.", repair: "apply" });
+  });
+
   test("reports tasks as pending when no T3 server answers", async () => {
     const home = temp.make("home-");
     const adapter = jobsAdapter({ run: async () => ({ code: 0, stdout: "" }), engineRoot: engine, t3: async () => undefined });
