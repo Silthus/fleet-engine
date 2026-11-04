@@ -11,8 +11,14 @@ function timer(value: LaunchdTimer) {
   return [`  <key>StartCalendarInterval</key>`, `  <dict>`, ...entries, `  </dict>`];
 }
 
+const nested = /<(dict|array)>(?:(?!<\/?(?:dict|array)>)[\s\S])*<\/\1>|<(?:dict|array)\/>/g;
+
 export function labelOf(text: string) {
-  return text.match(/<key>Label<\/key>\s*<string>([^<]*)<\/string>/)?.[1];
+  const body = text.replace(/<!--[\s\S]*?-->/g, "").match(/<dict>([\s\S]*)<\/dict>/)?.[1];
+  if (body === undefined) return undefined;
+  let top = body;
+  for (let previous = ""; previous !== top; ) [previous, top] = [top, top.replace(nested, "")];
+  return top.match(/<key>Label<\/key>\s*<string>([^<]*)<\/string>/)?.[1];
 }
 
 export function plist(id: string, script: string, schedule: LaunchdTimer, log: string) {
