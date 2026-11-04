@@ -5,7 +5,7 @@ import type { Gh } from "./gh.ts";
 export type BlockerOptions = { repo: string; pr: number; record: boolean };
 export type BlockerReport = { output: string; exitCode: 0 | 1 | 2 | 3 };
 
-type Check = { __typename: string; name?: string; context?: string; status?: string; conclusion?: string | null; state?: string };
+type Check = { __typename: string; name?: string; workflowName?: string; context?: string; status?: string; conclusion?: string | null; state?: string; startedAt?: string };
 type PullRequest = { headRefOid: string; isDraft: boolean; mergeable: string; mergeStateStatus: string; reviewDecision: string | null; statusCheckRollup: Check[] | null };
 type Blockers = { head: string; failing: string[]; pending: string[]; conflict: boolean; behind: boolean; unknown: boolean; people: string[] };
 type Sighting = { head: string; signature: string; at: string };
@@ -48,7 +48,7 @@ export async function prBlockers(options: BlockerOptions, gh: Gh, ledger: string
 }
 
 function blockersOf(pr: PullRequest): Blockers {
-  const checks = latestPerName(pr.statusCheckRollup ?? []);
+  const checks = latestPerCheck(pr.statusCheckRollup ?? []);
   const people = [
     ...pr.reviewDecision === "CHANGES_REQUESTED" ? ["changes requested"] : [],
     ...pr.reviewDecision === "REVIEW_REQUIRED" && !pr.isDraft ? ["review required"] : [],
@@ -65,11 +65,16 @@ function blockersOf(pr: PullRequest): Blockers {
   };
 }
 
-function latestPerName(checks: Check[]) {
-  return [...new Map(checks.map((check) => [nameOf(check), check])).values()];
+function latestPerCheck(checks: Check[]) {
+  const latest = new Map<string, Check>();
+  for (const check of checks) {
+    const seen = latest.get(nameOf(check));
+    if (!seen || (check.startedAt ?? "") >= (seen.startedAt ?? "")) latest.set(nameOf(check), check);
+  }
+  return [...latest.values()];
 }
 
-const nameOf = (check: Check) => check.name ?? check.context ?? "unnamed check";
+const nameOf = (check: Check) => [check.workflowName, check.name ?? check.context ?? "unnamed check"].filter(Boolean).join(" / ");
 const isFailing = (check: Check) => failedConclusions.has(check.conclusion ?? "") || failedStates.has(check.state ?? "");
 const isPending = (check: Check) => check.__typename === "StatusContext" ? pendingStates.has(check.state ?? "") : check.status !== "COMPLETED";
 

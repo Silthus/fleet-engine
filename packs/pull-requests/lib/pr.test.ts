@@ -22,9 +22,12 @@ function sandbox() {
   writeFileSync(join(bin, "gh"), `#!/bin/sh
 printf '%s\\n' "$*" | tr '\\n' ' ' >> "${log}"
 echo >> "${log}"
+after=$(printf '%s\n' "$@" | sed -n 's/^after=//p')
+id=$(printf '%s\n' "$@" | sed -n 's/^id=//p')
 case "$*" in
   *resolveReviewThread*) reply=resolve ;;
-  "api graphql"*) reply=threads ;;
+  *PullRequestReviewThread*) reply="comments-$id-\${after:-first}" ;;
+  "api graphql"*) reply="threads\${after:+-$after}" ;;
   "pr view"*) reply=pr ;;
   *) echo "unexpected gh call" >&2; exit 9 ;;
 esac
@@ -44,8 +47,11 @@ cat "${replies}/$reply.json"
 const user = (login: string) => ({ __typename: "User", login });
 const bot = (login: string) => ({ __typename: "Bot", login });
 const comment = (author: unknown, url: string) => ({ author, url });
-const thread = (id: string, path: string, line: number | null, comments: unknown[], isResolved = false) => ({ id, isResolved, path, line, originalLine: line ?? 7, comments: { nodes: comments } });
-const threads = (viewer: string, nodes: unknown[]) => ({ data: { viewer: { login: viewer }, repository: { pullRequest: { reviewThreads: { nodes } } } } });
+const page = (nodes: unknown[], next?: string) => ({ nodes, pageInfo: { hasNextPage: Boolean(next), endCursor: next ?? null } });
+const thread = (id: string, path: string, line: number | null, comments: unknown[], isResolved = false, moreComments?: string) =>
+  ({ id, isResolved, path, line, originalLine: line ?? 7, comments: page(comments, moreComments) });
+const threads = (viewer: string, nodes: unknown[], next?: string) => ({ data: { viewer: { login: viewer }, repository: { pullRequest: { reviewThreads: page(nodes, next) } } } });
+const comments = (nodes: unknown[], next?: string) => ({ data: { node: { comments: page(nodes, next) } } });
 
 const reviewThreads = threads("me", [
   thread("T1", "src/a.ts", 3, [comment(bot("coderabbitai"), "https://example.test/1")]),
@@ -88,6 +94,31 @@ test("bot-threads --resolve resolves only the answered bot threads", () => {
   const resolves = box.calls().filter((call) => call.includes("resolveReviewThread"));
   expect(resolves).toHaveLength(1);
   expect(resolves[0]).toContain("id=T2");
+});
+
+test("bot-threads --resolve never resolves a thread a person opened, even when only bots answered it", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [
+    thread("T6", "src/f.ts", 5, [comment(user("me"), "https://example.test/6"), comment(bot("coderabbitai"), "https://example.test/6b"), comment(user("me"), "https://example.test/6r")]),
+    thread("T7", "src/g.ts", 6, [comment(bot("coderabbitai"), "https://example.test/7")]),
+  ]));
+  box.reply("resolve", { data: {} });
+  const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12", "--resolve");
+  expect(result.out).toBe(["human answered src/f.ts:5 https://example.test/6", "bot unanswered src/g.ts:6 https://example.test/7", "1 unanswered bot thread remains."].join("\n"));
+  expect(box.calls().filter((call) => call.includes("resolveReviewThread"))).toEqual([]);
+});
+
+test("bot-threads reads every page of threads and of each thread's comments", () => {
+  const box = sandbox();
+  const resolved = Array.from({ length: 100 }, (_, index) => thread(`R${index}`, "src/old.ts", index, [comment(bot("codecov"), `https://example.test/r${index}`)], true));
+  box.reply("threads", threads("me", resolved, "page2"));
+  box.reply("threads-page2", threads("me", [thread("T8", "src/h.ts", 8, [comment(bot("greptile-apps"), "https://example.test/8"), comment(user("me"), "https://example.test/8r")], false, "c2")]));
+  box.reply("comments-T8-c2", comments([comment(bot("greptile-apps"), "https://example.test/8f")]));
+  box.reply("resolve", { data: {} });
+  const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12", "--resolve");
+  expect(result.out).toBe(["bot unanswered src/h.ts:8 https://example.test/8", "1 unanswered bot thread remains."].join("\n"));
+  expect(result.code).toBe(1);
+  expect(box.calls().filter((call) => call.includes("resolveReviewThread"))).toEqual([]);
 });
 
 test("bot-threads says so when no thread is open", () => {
@@ -135,6 +166,15 @@ test("blockers passes when only people and a moved base hold the PR", () => {
     "Nothing an agent can fix blocks the PR.",
   ].join("\n"));
   expect(result.code).toBe(0);
+});
+
+test("blockers keeps a failing check that shares its name with a passing check of another workflow, and takes the latest retry", () => {
+  const box = sandbox();
+  const job = (workflowName: string, conclusion: string, startedAt: string) => ({ ...run("test", "COMPLETED", conclusion), workflowName, startedAt });
+  box.reply("pr", pr(head1, { statusCheckRollup: [job("unit", "FAILURE", "2026-11-04T10:00:00Z"), job("e2e", "SUCCESS", "2026-11-04T10:00:00Z"), job("e2e", "FAILURE", "2026-11-04T09:00:00Z")] }));
+  const result = box.run("blockers", "--repo", "acme/widgets", "--pr", "12");
+  expect(result.out).toBe(["head: aaaaaaaaaaaa", "failing: unit / test", "signature: failing:unit / test"].join("\n"));
+  expect(result.code).toBe(1);
 });
 
 test("blockers lists failing checks and a conflict with their signature", () => {

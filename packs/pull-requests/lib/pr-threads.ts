@@ -4,22 +4,23 @@ export type BotThreadOptions = { repo: string; pr: number; resolve?: boolean };
 export type ThreadReport = { output: string; exitCode: 0 | 1 };
 
 type Author = { __typename: string; login: string } | null;
-type GraphThread = {
-  id: string; isResolved: boolean; path: string; line: number | null; originalLine: number | null;
-  comments: { nodes: { author: Author; url: string }[] };
-};
+type Page<T> = { nodes: T[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+type Comment = { author: Author; url: string };
+type GraphThread = { id: string; isResolved: boolean; path: string; line: number | null; originalLine: number | null; comments: Page<Comment> };
 type Thread = { id: string; kind: "bot" | "human"; answered: boolean; location: string; url: string };
 
 const usage = "Usage: fleet pr bot-threads|blockers --repo <owner/repo> --pr <number> [--resolve | --record]";
 const knownBots = new Set(["coderabbitai", "greptile-apps", "posthog-bot", "trunk-io", "github-actions", "dependabot", "renovate", "vercel", "codecov"]);
 
-const threadsQuery = `query($owner: String!, $repo: String!, $number: Int!) {
+const commentFields = "pageInfo { hasNextPage endCursor } nodes { url author { __typename login } }";
+const threadsQuery = `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
   viewer { login }
-  repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes {
-    id isResolved path line originalLine
-    comments(first: 100) { nodes { url author { __typename login } } }
-  } } } }
+  repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { id isResolved path line originalLine comments(first: 100) { ${commentFields} } }
+  } } }
 }`;
+const commentsQuery = `query($id: ID!, $after: String) { node(id: $id) { ... on PullRequestReviewThread { comments(first: 100, after: $after) { ${commentFields} } } } }`;
 const resolveMutation = "mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id } } }";
 
 export function parsePrArgs(args: string[]): BotThreadOptions {
@@ -51,10 +52,34 @@ export async function botThreads(options: BotThreadOptions, gh: Gh): Promise<Thr
 
 async function fetchThreads(options: BotThreadOptions, gh: Gh): Promise<{ viewer: string; threads: GraphThread[] }> {
   const [owner, repo] = options.repo.split("/") as [string, string];
-  const response = JSON.parse(await gh(["api", "graphql", "-f", `query=${threadsQuery}`, "-f", `owner=${owner}`, "-f", `repo=${repo}`, "-F", `number=${options.pr}`]));
-  const pullRequest = response.data?.repository?.pullRequest;
-  if (!pullRequest) throw new Error(`No pull request ${options.repo}#${options.pr}`);
-  return { viewer: response.data.viewer.login, threads: pullRequest.reviewThreads.nodes };
+  const threads: GraphThread[] = [];
+  let viewer = "";
+  let after: string | null = null;
+  do {
+    const response = await graphql(gh, threadsQuery, ["-f", `owner=${owner}`, "-f", `repo=${repo}`, "-F", `number=${options.pr}`], after);
+    const page: Page<GraphThread> | undefined = response.data?.repository?.pullRequest?.reviewThreads;
+    if (!page) throw new Error(`No pull request ${options.repo}#${options.pr}`);
+    viewer = response.data.viewer.login;
+    threads.push(...page.nodes);
+    after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  } while (after);
+  for (const thread of threads) thread.comments.nodes.push(...await remainingComments(thread, gh));
+  return { viewer, threads };
+}
+
+async function remainingComments(thread: GraphThread, gh: Gh): Promise<Comment[]> {
+  const comments: Comment[] = [];
+  let after = thread.comments.pageInfo.hasNextPage ? thread.comments.pageInfo.endCursor : null;
+  while (after) {
+    const page: Page<Comment> = (await graphql(gh, commentsQuery, ["-f", `id=${thread.id}`], after)).data.node.comments;
+    comments.push(...page.nodes);
+    after = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+  }
+  return comments;
+}
+
+async function graphql(gh: Gh, query: string, variables: string[], after: string | null) {
+  return JSON.parse(await gh(["api", "graphql", "-f", `query=${query}`, ...variables, ...(after ? ["-f", `after=${after}`] : [])]));
 }
 
 function classify(thread: GraphThread, viewer: string): Thread {
@@ -63,7 +88,7 @@ function classify(thread: GraphThread, viewer: string): Thread {
   const line = thread.line ?? thread.originalLine;
   return {
     id: thread.id,
-    kind: others.length && others.every((comment) => isBot(comment.author)) ? "bot" : "human",
+    kind: isBot(comments[0]?.author ?? null) && others.every((comment) => isBot(comment.author)) ? "bot" : "human",
     answered: comments.at(-1)?.author?.login === viewer,
     location: line === null ? thread.path : `${thread.path}:${line}`,
     url: comments[0]?.url ?? "",

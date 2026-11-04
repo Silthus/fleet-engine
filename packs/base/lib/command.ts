@@ -1,8 +1,8 @@
-export async function runCommand(command: () => number | Promise<number>): Promise<never> {
+export async function runCommand(command: () => number | Promise<number>, label = "fleet"): Promise<never> {
   try {
     process.exit(await command());
   } catch (error) {
-    console.error(`fleet: ${(error as Error).message}`);
+    console.error(`${label}: ${(error as Error).message}`);
     process.exit(1);
   }
 }
