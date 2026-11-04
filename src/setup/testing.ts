@@ -126,12 +126,14 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   return { machine, calls, starts, runs, sleeps, opened };
 }
 
-export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>) {
+export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>, doctorCode = 0) {
   const io = scripted(replies);
   const applied: string[] = [];
+  const doctored: string[] = [];
   const apply = async (dir: string) => (applied.push(dir), 0);
-  const code = await main(["setup", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, ...(fetchSource ? { fetchSource } : {}) } });
-  return { code, prompts: io.prompts, output: io.output(), applied };
+  const doctor = async (dir: string) => (doctored.push(dir), doctorCode);
+  const code = await main(["setup", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, doctor, ...(fetchSource ? { fetchSource } : {}) } });
+  return { code, prompts: io.prompts, output: io.output(), applied, doctored };
 }
 
 export const machineFile = (home: string) => JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"));

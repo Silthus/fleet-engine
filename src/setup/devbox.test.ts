@@ -47,7 +47,8 @@ describe("the devbox over SSH", () => {
     expect(result.code).toBe(0);
     expect(result.output).toContain("? Which SSH host is your devbox?");
     expect(result.output).toContain("  1) box-1");
-    expect(result.output).toEndWith("This machine is set up, and so is box-1. The final check comes in a later version of Fleet.");
+    expect(result.output).toContain("  Devbox          box-1: the same profile, signed in, linked with T3 Code here, and it makes signed commits.");
+    expect(result.output).toContain("  ✓ box-1 makes signed commits");
     expect(machineFile(home).devboxes).toEqual(["box-1"]);
 
     const onTheBox = remote(box);
