@@ -33,6 +33,7 @@ function plan(os: "darwin" | "linux", settings: Record<string, SettingValue> = {
     settings,
     unanswered: [],
     dropped: [],
+    models: [],
   };
 }
 
