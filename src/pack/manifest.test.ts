@@ -82,6 +82,13 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "github" }] } }))).rejects.toThrow("steps start: after must name a human step of this pack");
   });
 
+  test("accepts an interactive human step only with a command", async () => {
+    const coder = { id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"] };
+    expect(loadPacks(sourceWith({ base: { ...base, human: [{ ...coder, command: "coder login", interactive: true }] } }))).resolves.toHaveLength(1);
+    expect(loadPacks(sourceWith({ base: { ...base, human: [{ ...coder, interactive: true }] } }))).rejects.toThrow("human coder: interactive needs a command to run");
+    expect(loadPacks(sourceWith({ base: { ...base, human: [{ ...coder, command: "coder login", interactive: "yes" }] } }))).rejects.toThrow("human coder: interactive must be true when set");
+  });
+
   test("rejects a step that runs on machines its human step does not", async () => {
     const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"], on: ["darwin"] }];
     expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder", on: ["darwin"] }] } }))).resolves.toHaveLength(1);

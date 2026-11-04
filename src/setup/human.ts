@@ -23,6 +23,8 @@ export type SignIn = {
   probe(): Promise<boolean>;
   /** The command that starts the sign-in, shown and run in the background. */
   command?: string[];
+  /** The command reads the keyboard: it runs in the foreground instead, and the probe runs once it ends. */
+  interactive?: true;
   url?: string;
   /** Runs once the probe passes, before the step counts as done. */
   after?(): Promise<void>;
@@ -47,6 +49,7 @@ async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive
   if (nonInteractive) return "unanswered";
   terminal.print(`▶ ${signIn.title}  (step needs you, about ${signIn.minutes} min)`);
   terminal.print(`  ${signIn.why}`);
+  if (signIn.interactive && signIn.command) return withKeyboard(signIn, { terminal, machine, nonInteractive });
   const started = signIn.command && (terminal.print(`  $ ${signIn.command.join(" ")}`), machine.start(signIn.command));
   if (signIn.url) {
     await machine.openUrl(signIn.url);
@@ -69,6 +72,16 @@ async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive
   return signIn.after?.();
 }
 
+async function withKeyboard(signIn: SignIn, { terminal, machine }: HumanContext): Promise<StepOutcome> {
+  terminal.print(`  $ ${signIn.command!.join(" ")}`);
+  terminal.print("  It needs your keyboard. Setup goes on when it ends.");
+  terminal.release?.();
+  const code = await machine.run(signIn.command!, { input: true });
+  if (!(await signIn.probe())) throw new Error(ended(signIn, code));
+  terminal.print(`  ✓ ${signIn.title}: done`);
+  return signIn.after?.();
+}
+
 /** A pack's human step, followed by the pack steps that wait for it. A leading fleet in their commands runs the engine at engineRoot. */
 export function packSignIn(step: Owned<HumanStep>, steps: Array<Owned<PackStep>>, context: HumanContext, engineRoot: string | undefined): SignIn {
   const { machine, terminal } = context;
@@ -81,6 +94,7 @@ export function packSignIn(step: Owned<HumanStep>, steps: Array<Owned<PackStep>>
     why: `The ${step.pack} pack needs this.`,
     probe: () => passes(step.probe),
     ...(step.command ? { command: ["sh", "-c", engineShellCommand(step.command, engineRoot)] } : {}),
+    ...(step.interactive ? { interactive: true as const } : {}),
     async after() {
       for (const next of steps.filter((item) => item.pack === step.pack && item.after === step.id)) {
         if (next.check && (await passes(next.check))) continue;

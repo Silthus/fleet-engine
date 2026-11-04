@@ -131,6 +131,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("human", (item, label) => {
     need(typeof item.id === "string" && typeof item.say === "string" && isStrings(item.probe), `${label}: needs an id, a say, and a probe list`);
     need(item.command === undefined || typeof item.command === "string", `${label}: command must be text`);
+    need(item.interactive === undefined || item.interactive === true, `${label}: interactive must be true when set`);
+    need(item.interactive === undefined || item.command !== undefined, `${label}: interactive needs a command to run`);
     filters(item, label);
   });
   each("steps", (item, label) => {

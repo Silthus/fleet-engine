@@ -116,7 +116,9 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     async run(command, run = {}) {
       runs.push({ command, input: run.input ?? false });
       if (onBox(command) === "claude auth login") left["box:claude"] = 0;
-      return options.failRun ? 1 : 0;
+      if (options.failRun) return 1;
+      if (command.join(" ") === "sh -c coder login") left.coder = 0;
+      return 0;
     },
     async sleep(ms) {
       sleeps.push(ms);

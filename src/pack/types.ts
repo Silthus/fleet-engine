@@ -65,6 +65,8 @@ export type HumanStep = Scope & {
   say: string;
   command?: string;
   probe: string[];
+  /** The command reads the keyboard, such as a sign-in that asks to paste a code: it runs in the foreground with the terminal, and the probe runs once it ends. */
+  interactive?: true;
 };
 
 export type PackStep = Scope & {
