@@ -34,7 +34,8 @@ type Subcommand = {
 const answerHelp = `--thread names the T3 thread where the user gave the answer; a conductor may pass its own thread id. fleet
 reads that thread, and the quoted words must be the user's whole answer to the question tool in the T3 app, given to
 the question that fleet printed for this PR. A message they typed, or an answer sent through MCP, does not count. The
-ledger keeps the thread, the message, the user's words, and the question they answered. Each answer counts once.`;
+ledger keeps the thread, the message, the user's words, and the question they answered. When the user gave the same
+words more than once, fleet takes their newest answer that fits this question and is unused. Each answer counts once.`;
 
 const overrideHelp = `--override takes the user's answer to the question that review-start prints when the arbiter escalates, gives no
 verdict, or the ceiling stops the loop. Ask it with your question tool, with the options "Run one more round" and "Stop
@@ -198,9 +199,10 @@ list the standing rules.`,
     summary: `Record why an owed proof could not run, or the user's acceptance of that gap. --reason prints a question
 that names the gap kind and the PR, with the options "Accept the gap" and "Keep the gap open". Ask it with your
 question tool. --accept takes their choice of "Accept the gap" there, with their words in quotes. A typed message, a
-refusal, an answer to another question, a quote of the user's instructions, or an answer already recorded elsewhere
-does not count. A standing rule (fleet proof standing) covers a kind without asking. Their acceptance settles the
-kind: the gate then ignores that kind's evidence, and the judge does not see it. Kind ci records that CI cannot run on HEAD, such as on a fork PR.
+refusal, an answer to another question, a quote of the user's instructions, or an answer already used does not count.
+A gap recorded again, such as with another reason, needs a new answer. A standing rule (fleet proof standing) covers
+a kind without asking. Their acceptance settles the kind: the gate then ignores that kind's evidence, and the judge
+does not see it. Kind ci records that CI cannot run on HEAD, such as on a fork PR.
 ${answerHelp}`,
     examples: ["fleet proof gap --kind prod-shape --reason 'No production read access'", `fleet proof gap --kind prod-shape --accept '2026-10-25 "Accept the gap"' --thread mcp:1a2b`],
     options: ["--kind", "--reason", "--accept", "--thread"],

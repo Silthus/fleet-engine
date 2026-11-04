@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startT3Stub } from "../../base/lib/t3/testing.ts";
@@ -336,4 +337,38 @@ test("a finding that quotes the anchor heading hides no later finding from the r
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in the next commit.\n");
   await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 2");
   expect((await pr.fleet("gate")).output).toContain("unanswered findings 1, 2");
+});
+
+test("an answer accepts one gap once: a gap recorded again with another reason needs a new answer", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "new\n");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
+  pr.chooseGap("prod-shape", "No sandbox");
+  const accept = () => pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
+  expect((await accept()).code).toBe(0);
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "The sandbox has no production data");
+  await expect(accept()).rejects.toThrow("Ask the user again");
+  pr.chooseGap("prod-shape", "The sandbox has no production data");
+  expect((await accept()).code).toBe(0);
+});
+
+test("a later identical choice for another PR does not hide the user's unused answer for this PR", async () => {
+  const pr = checkout();
+  const third = await twoRounds(pr);
+  pr.env.FLEET_REVIEW_ARBITER = escalate;
+  pr.choose("Run one more round", "Run one more review round? example/product#42: The arbiter escalates.");
+  pr.choose("Run one more round", "Run one more review round? example/product#43: The arbiter escalates.");
+  expect((await pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8")).answer).toMatchObject({ message: "request-1:0" });
+});
+
+test("a claim that another start is still writing counts as used", async () => {
+  const pr = checkout();
+  const third = await twoRounds(pr);
+  pr.env.FLEET_REVIEW_ARBITER = escalate;
+  pr.choose("Run one more round", "Run one more review round? example/product#42: The arbiter escalates.");
+  const claims = join(pr.home, ".local/state/fleet/proof/claims");
+  mkdirSync(claims, { recursive: true });
+  writeFileSync(join(claims, `${createHash("sha256").update("mcp:thread-1/request-1:0").digest("hex")}.json`), "");
+  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("This answer is already used on a PR. One answer counts once. Ask the user again");
 });
