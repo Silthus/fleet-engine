@@ -37,15 +37,22 @@ export function linkedTools(threads: LinkedThreadFixture[]): ToolHandler {
     }
     if (name === "t3_thread_read") {
       const thread = threads.find((candidate) => candidate.threadId === args.threadId);
-      if (!thread) throw new ToolRefusal("not_found", `No thread ${args.threadId}`);
+      if (!thread) throw new ToolRefusal("thread_not_found", "The thread was not found.");
       const items = (thread.items ?? []).map((item, position) => ({ ...item, position }));
       const after = typeof args.afterPosition === "number" ? args.afterPosition : -1;
       const view = args.view === "activity" ? items : items.filter((item) => ["user_message", "assistant_message"].includes(item.type));
-      const page = view.filter((item) => item.position > after).slice(0, Number(args.limit ?? 50));
+      const page = args.itemId === undefined ? view.filter((item) => item.position > after).slice(0, Number(args.limit ?? 50)) : items.filter((item) => item.itemId === args.itemId);
+      const maxChars = Math.min(Number(args.maxCharsPerItem ?? 20_000), 50_000);
+      const offset = Number(args.textOffset ?? 0);
+      const shown = page.map((item) => {
+        const text = item.text ?? "";
+        const end = offset + maxChars;
+        return { ...item, text: item.text === null ? null : text.slice(offset, end), textTruncated: end < text.length, nextTextOffset: end < text.length ? end : null };
+      });
       const { archived, pendingRequestCount, branch, items: _, ...detail } = thread;
       return {
         thread: { ...detail, itemCount: items.length, archived: Boolean(archived), pendingRequestCount: pendingRequestCount ?? 0, branch: branch ?? null, worktreePath: null },
-        recentRuns: [], items: page, nextPosition: page.at(-1)?.position ?? null, hasMore: view.some((item) => item.position > (page.at(-1)?.position ?? after)),
+        recentRuns: [], items: shown, nextPosition: page.at(-1)?.position ?? null, hasMore: args.itemId === undefined && view.some((item) => item.position > (page.at(-1)?.position ?? after)),
       };
     }
   };

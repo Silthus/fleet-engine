@@ -1,6 +1,6 @@
 import {
-  lastActivityAt, listLinkedThreads, matchThread, readLinkedThread, readSnapshots, readTurnItems, withT3Session,
-  type LinkedReadQuery, type LinkedThread, type LinkedThreadDetail, type ShellThread, type T3HttpClient, type T3SessionOptions,
+  lastActivityAt, listLinkedThreads, matchThread, readLinkedItemText, readLinkedThread, readSnapshots, readTurnItems, T3ToolError, withT3Session,
+  type LinkedReadQuery, type LinkedTimelineItem, type LinkedThread, type LinkedThreadDetail, type ShellThread, type T3HttpClient, type T3SessionOptions,
 } from "../../base/lib/t3/index.ts";
 import { liveStatuses, readEachMachine, readMachines } from "./machines.ts";
 import {
@@ -42,7 +42,7 @@ export async function readLaneThreads(client: T3HttpClient, threadIds: string[])
       id, status: lane.activityRunStatus ?? lane.status, live: live.length > 0,
       updatedAt: [...members.map(lastActivityAt), ...turnDates].sort().at(-1) ?? "", gone: Boolean(lane.archivedAt),
       waitingIn: members.find((thread) => thread.pendingRuntimeRequest)?.id ?? null,
-      needsHuman: live.length ? null : needsHuman(lastAssistantText((await visibleTurnItems(client, lane.id)).map(({ item }) => item))),
+      needsHuman: live.length ? null : needsHuman(finalAssistantMessage((await visibleTurnItems(client, lane.id)).map(({ item }) => item))?.text ?? ""),
     };
   }));
 }
@@ -55,7 +55,7 @@ export async function readLinkedLaneThreads(client: T3HttpClient, environmentId:
   const detail = async (threadId: string) => (await read({ threadId, view: "activity", limit: 1 })).thread;
   const lanes = await Promise.all(threadIds.map(async (id): Promise<LaneThread | undefined> => {
     const listed = matchThread(threads, id, (thread) => thread.threadId);
-    const lane = await detail(listed?.threadId ?? id).catch(() => undefined);
+    const lane = await detail(listed?.threadId ?? id).catch(unlessNotFound);
     if (!lane) return undefined;
     const members = listed ? family(listed) : [lane];
     const live = lane.archived ? [] : members.filter((thread) => liveStatuses.includes(thread.status));
@@ -64,14 +64,24 @@ export async function readLinkedLaneThreads(client: T3HttpClient, environmentId:
       id, status: lane.status, live: live.length > 0,
       updatedAt: [lane.updatedAt, ...members.map((thread) => thread.updatedAt)].sort().at(-1) ?? "", gone: lane.archived,
       waitingIn: [lane, ...waitingChildren].find((thread) => thread.pendingRequestCount > 0)?.threadId ?? null,
-      needsHuman: live.length || lane.archived ? null : needsHuman(lastAssistantText(await linkedTail(read, lane))),
+      needsHuman: live.length || lane.archived ? null : needsHuman(await linkedFinalText(client, environmentId, read, lane)),
     };
   }));
   return lanes.filter((lane): lane is LaneThread => Boolean(lane));
 }
 
-async function linkedTail(read: (query: LinkedReadQuery) => Promise<{ items: TurnMessage[] }>, lane: LinkedThreadDetail): Promise<TurnMessage[]> {
-  return (await read({ threadId: lane.threadId, view: "activity", afterPosition: Math.max(-1, lane.itemCount - tailItems - 1), limit: tailItems, maxCharsPerItem: 50_000 })).items;
+function unlessNotFound(error: unknown): undefined {
+  if (error instanceof T3ToolError && error.code === "thread_not_found") return undefined;
+  throw error;
+}
+
+async function linkedFinalText(
+  client: T3HttpClient, environmentId: string, read: (query: LinkedReadQuery) => Promise<{ items: LinkedTimelineItem[] }>, lane: LinkedThreadDetail,
+): Promise<string> {
+  const afterPosition = lane.itemCount - tailItems - 1;
+  const tail = await read({ threadId: lane.threadId, view: "activity", ...(afterPosition >= 0 ? { afterPosition } : {}), limit: tailItems, maxCharsPerItem: 50_000 });
+  const final = finalAssistantMessage(tail.items);
+  return final ? await readLinkedItemText(client, environmentId, lane.threadId, final) ?? "" : "";
 }
 
 async function lastTurnItemAt(client: T3HttpClient, threadId: string): Promise<string> {
@@ -80,10 +90,9 @@ async function lastTurnItemAt(client: T3HttpClient, threadId: string): Promise<s
     .filter((date): date is string => Boolean(date)).sort().at(-1) ?? "";
 }
 
-function lastAssistantText(items: TurnMessage[]): string {
-  const messages = items.filter((item) => item.type === "user_message" || (item.type === "assistant_message" && item.text));
-  const last = messages.at(-1);
-  return last?.type === "assistant_message" ? last.text ?? "" : "";
+function finalAssistantMessage<T extends TurnMessage>(items: T[]): T | undefined {
+  const last = items.filter((item) => item.type === "user_message" || (item.type === "assistant_message" && item.text)).at(-1);
+  return last?.type === "assistant_message" ? last : undefined;
 }
 
 function visibleTurnItems(client: T3HttpClient, threadId: string) {
