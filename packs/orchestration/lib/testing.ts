@@ -1,5 +1,8 @@
 import type { LinkedEnvironment, LinkedThread, LinkedTimelineItem, ShellThread } from "../../base/lib/t3/index.ts";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { ToolRefusal, type ToolHandler } from "../../base/lib/t3/testing.ts";
+import type { Discussion, FetchDiscussion, FetchIssue, IssueNode } from "./wayfinder.ts";
 
 export const now = new Date("2026-11-04T12:00:00Z");
 export const minutesAgo = (minutes: number) => new Date(now.getTime() - minutes * 60_000).toISOString();
@@ -49,4 +52,59 @@ export function linkedTools(threads: LinkedThreadFixture[]): ToolHandler {
       };
     }
   };
+}
+
+export type GitHubFixture = { issues: IssueNode[]; discussions?: Record<string, Discussion> };
+export type CommandResult = { stdout: string; stderr: string; code: number };
+
+export function issueNode(repository: string, number: number, fields: Partial<IssueNode> = {}): IssueNode {
+  return { number, title: `Ticket ${number}`, state: "OPEN", repository, assignees: [], labels: ["wayfinder:task"], blockedBy: [], childCount: fields.children?.length ?? 0, children: [], ...fields };
+}
+
+export function fixtureFetchers(fixture: GitHubFixture): { fetchIssue: FetchIssue; fetchDiscussion: FetchDiscussion } {
+  const issue = (owner: string, repo: string, number: number) => fixture.issues.find((node) => node.repository === `${owner}/${repo}` && node.number === number);
+  return {
+    fetchIssue: async (owner, repo, number) => issue(owner, repo, number) ?? Promise.reject(new Error(`No issue ${owner}/${repo}#${number}`)),
+    fetchDiscussion: async (owner, repo, number) => fixture.discussions?.[`${owner}/${repo}#${number}`] ?? { body: "", comments: [] },
+  };
+}
+
+export async function fakeGitHub(home: string, fixture: GitHubFixture): Promise<string> {
+  const bin = join(home, "bin");
+  await mkdir(bin, { recursive: true });
+  const name = (repository: string, number: number) => `${repository.replace("/", "-")}-${number}.json`;
+  const graph = (value: unknown) => JSON.stringify({ data: { repository: { issue: value } } });
+  for (const node of fixture.issues) await writeFile(join(bin, `issue-${name(node.repository, node.number)}`), graph(graphIssue(node)));
+  for (const [key, value] of Object.entries(fixture.discussions ?? {})) {
+    const [repository, number] = key.split("#") as [string, string];
+    await writeFile(join(bin, `discussion-${name(repository, Number(number))}`), graph(graphDiscussion(value)));
+  }
+  await writeFile(join(bin, "gh"), `#!/bin/sh
+for arg; do case "$arg" in owner=*) owner=\${arg#owner=} ;; repo=*) repo=\${arg#repo=} ;; number=*) number=\${arg#number=} ;; *subIssues*) kind=issue ;; esac; done
+echo "$owner/$repo#$number" >> "$(dirname "$0")/calls.log"
+file="$(dirname "$0")/\${kind:-discussion}-$owner-$repo-$number.json"
+[ -f "$file" ] || { [ "\${kind:-}" = issue ] && { echo "no issue $owner/$repo#$number" >&2; exit 1; }; echo '{"data":{"repository":{"issue":{"body":"","comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'; exit 0; }
+cat "$file"
+`);
+  await chmod(join(bin, "gh"), 0o755);
+  return bin;
+}
+
+export async function runPackCommand(command: string, args: string[], env: Record<string, string>): Promise<CommandResult> {
+  const child = Bun.spawn(["bun", join(import.meta.dir, "..", "commands", `${command}.ts`), ...args], { env: { ...Bun.env, ...env }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { stdout, stderr, code };
+}
+
+function graphIssue(node: IssueNode): Record<string, unknown> {
+  return {
+    number: node.number, title: node.title, state: node.state, repository: { nameWithOwner: node.repository },
+    assignees: { nodes: node.assignees.map((login) => ({ login })) }, labels: { nodes: node.labels.map((name) => ({ name })) },
+    blockedBy: { nodes: node.blockedBy.map(({ repository, ...blocker }) => ({ ...blocker, repository: { nameWithOwner: repository } })) },
+    subIssuesSummary: { total: node.childCount }, subIssues: { nodes: node.children.map(graphIssue) },
+  };
+}
+
+function graphDiscussion(value: Discussion): Record<string, unknown> {
+  return { body: value.body, comments: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: value.comments.map(({ author, ...rest }) => ({ author: { login: author }, ...rest })) } };
 }

@@ -10,12 +10,42 @@ export type Discussion = { body: string; comments: Comment[] };
 export type FetchIssue = (owner: string, repo: string, number: number) => Promise<IssueNode>;
 export type FetchDiscussion = (owner: string, repo: string, number: number) => Promise<Discussion>;
 
-export const parked = "wayfinder:awaiting-human";
+export type Tracker = () => string;
+export type MapIo = { print(line: string): void; tracker: Tracker; fetchIssue?: FetchIssue; fetchDiscussion?: FetchDiscussion };
 
-export function mapRef(value: string, usage: string): MapRef {
+export const parked = "wayfinder:awaiting-human";
+export const trackerSetting = "orchestration.mapTracker";
+const fence = /^\s*(```|~~~)/;
+
+export function mapRef(value: string, usage: string, tracker: Tracker = () => ""): MapRef {
+  const bare = value.match(/^#?(\d+)$/);
+  if (bare) return { ...trackerRepository(tracker()), number: Number(bare[1]) };
   const match = value.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/) ?? value.match(/^([^/\s]+)\/([^#\s]+)#(\d+)$/);
   if (!match) throw new Error(usage);
   return { owner: match[1]!, repo: match[2]!, number: Number(match[3]) };
+}
+
+function trackerRepository(tracker: string): { owner: string; repo: string } {
+  if (!tracker) throw new Error(`Set ${trackerSetting} to the owner/repo that holds your maps, or name the map as owner/repo#number.`);
+  const match = tracker.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (!match) throw new Error(`${trackerSetting} is ${tracker}, not an owner/repo.`);
+  return { owner: match[1]!, repo: match[2]! };
+}
+
+export function proseLines(text: string): string[] {
+  let inFence = false;
+  return text.split("\n").filter((line) => {
+    if (fence.test(line)) inFence = !inFence;
+    return !inFence && !fence.test(line);
+  });
+}
+
+export function tableCell(text: string): string {
+  return text.replace(/(?<!\\)\|/g, "\\|");
+}
+
+export function issueLink({ owner, repo, number }: MapRef): string {
+  return `https://github.com/${owner}/${repo}/issues/${number}`;
 }
 
 export async function descendants(issue: IssueNode, fetchIssue: FetchIssue, parent?: number): Promise<Ticket[]> {
