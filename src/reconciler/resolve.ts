@@ -198,10 +198,12 @@ function activateWorkflows(profile: Profile, machine: MachineFile, order: Candid
 }
 
 function activeSettings(order: Candidate[], active: Set<string>): Array<PackSetting & { pack: string }> {
-  return order.flatMap(({ manifest }) => {
-    const inactive = new Set((manifest.workflows ?? []).filter((workflow) => !active.has(workflow.id)).flatMap((workflow) => workflow.settings ?? []));
-    return (manifest.settings ?? []).filter((setting) => !inactive.has(setting.key)).map((setting) => ({ ...setting, pack: manifest.name }));
-  });
+  const workflows = order.flatMap(({ manifest }) => manifest.workflows ?? []);
+  const listed = new Set(workflows.flatMap((workflow) => workflow.settings ?? []));
+  const wanted = new Set(workflows.filter((workflow) => active.has(workflow.id)).flatMap((workflow) => workflow.settings ?? []));
+  return order.flatMap(({ manifest }) =>
+    (manifest.settings ?? []).filter((setting) => !listed.has(setting.key) || wanted.has(setting.key)).map((setting) => ({ ...setting, pack: manifest.name })),
+  );
 }
 
 function settingValues(settings: PackSetting[], answers: Record<string, SettingValue>) {
