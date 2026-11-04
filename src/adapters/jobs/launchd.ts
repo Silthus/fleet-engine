@@ -11,7 +11,11 @@ function timer(value: LaunchdTimer) {
   return [`  <key>StartCalendarInterval</key>`, `  <dict>`, ...entries, `  </dict>`];
 }
 
-export function plist(id: string, command: string[], schedule: LaunchdTimer, path: string, log: string) {
+export function labelOf(text: string) {
+  return text.match(/<key>Label<\/key>\s*<string>([^<]*)<\/string>/)?.[1];
+}
+
+export function plist(id: string, script: string, schedule: LaunchdTimer, log: string) {
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
@@ -21,13 +25,9 @@ export function plist(id: string, command: string[], schedule: LaunchdTimer, pat
     `  ${string(`${labelPrefix}${id}`)}`,
     `  <key>ProgramArguments</key>`,
     `  <array>`,
-    ...command.map((arg) => `    ${string(arg)}`),
+    `    ${string("/bin/sh")}`,
+    `    ${string(script)}`,
     `  </array>`,
-    `  <key>EnvironmentVariables</key>`,
-    `  <dict>`,
-    `    <key>PATH</key>`,
-    `    ${string(path)}`,
-    `  </dict>`,
     ...timer(schedule),
     `  <key>StandardOutPath</key>`,
     `  ${string(log)}`,

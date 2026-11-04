@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Owned, PackJob, Plan } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
@@ -51,20 +51,49 @@ function crontab(initial: string | undefined) {
 }
 
 describe("cron jobs on Linux", () => {
-  test("adds marked lines, keeps foreign lines, and creates the log directory", async () => {
+  test("adds marked lines that run launcher scripts, and keeps foreign lines", async () => {
     const home = temp.make("home-");
     const foreign = "MAILTO=me\n0 * * * * /usr/bin/backup # nightly backup\n";
     const cron = crontab(foreign);
 
     await apply(plan("linux", [prune, pull]), { home, adapters: [cron.adapter] });
 
-    const path = `${home}/.local/bin:${home}/.bun/bin:/usr/local/bin:/usr/bin:/bin`;
-    expect(cron.state.text).toBe(
-      foreign +
-        `17 3 * * * PATH=${path} /bin/sh ${engine}/fleet prune --auto >>${home}/.local/state/fleet/jobs/prune.log 2>&1 # fleet:prune\n` +
-        `*/5 * * * * PATH=${path} git -C /home/u/skills pull >>${home}/.local/state/fleet/jobs/skills-pull.log 2>&1 # fleet:skills-pull\n`,
+    const jobs = `${home}/.local/state/fleet/jobs`;
+    expect(cron.state.text).toBe(foreign + `17 3 * * * /bin/sh '${jobs}/prune.sh' # fleet:prune\n` + `*/5 * * * * /bin/sh '${jobs}/skills-pull.sh' # fleet:skills-pull\n`);
+    expect(readFileSync(join(jobs, "prune.sh"), "utf8")).toBe(
+      `#!/bin/sh\nPATH='${home}/.local/bin:${home}/.bun/bin:/usr/local/bin:/usr/bin:/bin'\nexport PATH\nexec '/bin/sh' '${engine}/fleet' 'prune' '--auto' >>'${jobs}/prune.log' 2>&1\n`,
     );
-    expect(existsSync(join(home, ".local/state/fleet/jobs"))).toBe(true);
+  });
+
+  test("a launcher finds tools on Fleet's PATH and passes odd arguments through unchanged", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".local/bin"), { recursive: true });
+    writeFileSync(join(home, ".local/bin/echo-args"), '#!/bin/sh\nprintf "%s|" "$@"\n');
+    chmodSync(join(home, ".local/bin/echo-args"), 0o755);
+    const odd: PackJob = { id: "odd", command: ["echo-args", "50%", "a\\%b", "two\nlines", "it's"], schedule: { every: "15m" } };
+    const cron = crontab("");
+
+    await apply(plan("linux", [odd]), { home, adapters: [cron.adapter] });
+
+    expect(cron.state.text).toBe(`*/15 * * * * /bin/sh '${home}/.local/state/fleet/jobs/odd.sh' # fleet:odd\n`);
+    const ran = Bun.spawnSync(["/bin/sh", join(home, ".local/state/fleet/jobs/odd.sh")], { env: { PATH: "/nonexistent" } });
+    expect(ran.exitCode).toBe(0);
+    expect(readFileSync(join(home, ".local/state/fleet/jobs/odd.log"), "utf8")).toBe("50%|a\\%b|two\nlines|it's|");
+  });
+
+  test("puts back a missing launcher folder, and doctor sees it first", async () => {
+    const home = temp.make("home-");
+    const cron = crontab("");
+    await apply(plan("linux", [pull]), { home, adapters: [cron.adapter] });
+    rmSync(join(home, ".local/state/fleet/jobs"), { recursive: true });
+
+    const report = await check(plan("linux", [pull]), { home, adapters: [cron.adapter] });
+    expect(report.findings).toContainEqual({ id: "job:skills-pull", pack: "base", say: "The skills-pull job needs to be updated.", repair: "apply" });
+
+    await apply(plan("linux", [pull]), { home, adapters: [cron.adapter] });
+    expect(existsSync(join(home, ".local/state/fleet/jobs/skills-pull.sh"))).toBe(true);
+    expect(cron.state.writes).toBe(1);
+    expect((await check(plan("linux", [pull]), { home, adapters: [cron.adapter] })).ok).toBe(true);
   });
 
   test("a rerun changes nothing, and a dropped job loses only its own line", async () => {
@@ -78,6 +107,7 @@ describe("cron jobs on Linux", () => {
 
     expect(cron.state.text).toStartWith("0 * * * * /usr/bin/backup\n*/5 * * * * ");
     expect(cron.state.text).not.toContain("fleet:prune");
+    expect(existsSync(join(home, ".local/state/fleet/jobs/prune.sh"))).toBe(false);
   });
 
   test("starts a crontab when the user has none, with no T3 precondition", async () => {
@@ -119,7 +149,7 @@ describe("a pack source that cannot be fetched", () => {
 });
 
 describe("launchd jobs on a Mac", () => {
-  function launchctl() {
+  function launchctl(stuck = false) {
     const calls: string[][] = [];
     const loaded = new Set<string>();
     const run: CommandRunner = async (command) => {
@@ -127,13 +157,16 @@ describe("launchd jobs on a Mac", () => {
       const [, verb, target] = command;
       if (verb === "print") return { code: loaded.has(target!) ? 0 : 113, stdout: "" };
       if (verb === "bootstrap") loaded.add(`gui/501/${command[3]!.split("/").at(-1)!.replace(/\.plist$/, "")}`);
-      if (verb === "bootout") loaded.delete(target!);
+      if (verb === "bootout") {
+        if (stuck) return { code: 5, stdout: "" };
+        loaded.delete(target!);
+      }
       return { code: 0, stdout: "" };
     };
     return { calls, loaded, adapter: jobsAdapter({ run, engineRoot: engine, uid: 501 }) };
   }
 
-  test("writes a dev.fleet plist and loads it", async () => {
+  test("writes a dev.fleet plist that runs the launcher script, and loads it", async () => {
     const home = temp.make("home-");
     const mac = launchctl();
 
@@ -149,15 +182,8 @@ describe("launchd jobs on a Mac", () => {
   <key>ProgramArguments</key>
   <array>
     <string>/bin/sh</string>
-    <string>${engine}/fleet</string>
-    <string>prune</string>
-    <string>--auto</string>
+    <string>${home}/.local/state/fleet/jobs/prune.sh</string>
   </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>${home}/.local/bin:${home}/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-  </dict>
   <key>StartCalendarInterval</key>
   <dict>
     <key>Hour</key>
@@ -173,6 +199,36 @@ describe("launchd jobs on a Mac", () => {
 </plist>
 `);
     expect(mac.loaded.has("gui/501/dev.fleet.prune")).toBe(true);
+    expect(readFileSync(join(home, ".local/state/fleet/jobs/prune.sh"), "utf8")).toContain(`PATH='${home}/.local/bin:${home}/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'`);
+  });
+
+  test("keeps an agent that launchd does not stop", async () => {
+    const home = temp.make("home-");
+    const mac = launchctl(true);
+    await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+
+    const report = await apply(plan("darwin", []), { home, adapters: [mac.adapter] });
+
+    expect(existsSync(join(home, "Library/LaunchAgents/dev.fleet.prune.plist"))).toBe(true);
+    expect(report.findings).toContainEqual({ id: "job:prune", pack: "engine", say: "launchd did not stop the prune job, so Fleet left its agent as it is.", repair: "apply" });
+  });
+
+  test("leaves a dev.fleet plist with another Label alone", async () => {
+    const home = temp.make("home-");
+    const agents = join(home, "Library/LaunchAgents");
+    mkdirSync(agents, { recursive: true });
+    const theirs = "<plist><dict><key>Label</key><string>com.example.prune</string></dict></plist>";
+    writeFileSync(join(agents, "dev.fleet.prune.plist"), theirs);
+    const mac = launchctl();
+
+    const kept = await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+    const left = await apply(plan("darwin", []), { home, adapters: [mac.adapter] });
+
+    expect(readFileSync(join(agents, "dev.fleet.prune.plist"), "utf8")).toBe(theirs);
+    expect(mac.calls.filter((call) => call[1] !== "print")).toEqual([]);
+    const say = "Left Library/LaunchAgents/dev.fleet.prune.plist alone: its Label is com.example.prune, not dev.fleet.prune.";
+    expect(kept.findings).toContainEqual({ id: "job:prune", pack: "base", say, repair: "human" });
+    expect(left.findings).toContainEqual({ id: "job:prune", pack: "engine", say, repair: "human" });
   });
 
   test("uses an interval for frequent jobs, reruns without reloading, and removes only its own agents", async () => {

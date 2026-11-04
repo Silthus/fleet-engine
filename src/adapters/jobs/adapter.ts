@@ -4,10 +4,12 @@ import { join, resolve } from "node:path";
 import type { Finding, Owned, PackJob, Plan } from "../../pack/types.ts";
 import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { sourceOutage } from "../provider-config/adapter.ts";
-import { withLock } from "../provider-config/store.ts";
+import { inside } from "../../files/install.ts";
+import { linkOnPath, readState, withLock, writeWithBackups, type Write } from "../provider-config/store.ts";
 import { spawnRunner, type CommandRunner } from "../run.ts";
-import { cronLine, reconcileCrontab } from "./cron.ts";
-import { labelPrefix, plist } from "./launchd.ts";
+import { cronLine, cronSafe, reconcileCrontab } from "./cron.ts";
+import { labelOf, labelPrefix, plist } from "./launchd.ts";
+import { launcherScript, launcherTarget, logTarget } from "./launcher.ts";
 import { cronExpression, launchdTimer, t3Schedule, type T3Schedule } from "./schedule.ts";
 
 export type FleetTask = {
@@ -42,17 +44,17 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       const result: AdapterResult = { actions: [], findings: [] };
       const osJobs = plan.jobs.filter((job) => job.runner !== "t3");
       for (const job of plan.jobs) if (!jobId.test(job.id)) throw new Error(`job id ${job.id} of the ${job.pack} pack may hold only letters, digits, dots, dashes, and underscores`);
-      const logs = join(home, ".local/state/fleet/jobs");
-      const command = (job: PackJob) => (job.command[0] === "fleet" ? ["/bin/sh", join(engineRoot, "fleet"), ...job.command.slice(1)] : job.command);
       if (!options.run && resolve(home) !== resolve(userInfo().homedir)) {
         if (osJobs.length) result.findings.push({ id: "jobs:home", pack: "engine", say: `Left jobs alone: ${home} is not your home directory, and cron and launchd belong to your user.` });
         return result;
       }
-      const outage = sourceOutage(plan);
-      const context = { home, dryRun, run, logs, command, result, outage };
+      const command = (job: PackJob) => (job.command[0] === "fleet" ? ["/bin/sh", join(engineRoot, "fleet"), ...job.command.slice(1)] : job.command);
+      const context = { home, dryRun, run, result, outage: sourceOutage(plan) };
       const reconcile = async () => {
-        if (plan.os === "linux") await reconcileCron(osJobs, context);
-        else await reconcileLaunchd(osJobs, { ...context, uid });
+        const path = [`${home}/.local/bin`, `${home}/.bun/bin`, ...(plan.os === "darwin" ? ["/opt/homebrew/bin"] : []), "/usr/local/bin", "/usr/bin", "/bin"].join(":");
+        const scripts = await launchers(home, osJobs, (job) => launcherScript(command(job), path, inside(home, logTarget(job.id))));
+        if (plan.os === "linux") await reconcileCron(osJobs, scripts, context);
+        else await reconcileLaunchd(osJobs, scripts, { ...context, uid });
         await reconcileTasks(plan, await t3(), context);
         return result;
       };
@@ -61,14 +63,33 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
   };
 }
 
-type Context = { home: string; dryRun: boolean; run: CommandRunner; logs: string; command(job: PackJob): string[]; result: AdapterResult; outage: boolean };
+type Context = { home: string; dryRun: boolean; run: CommandRunner; result: AdapterResult; outage: boolean };
+type Scripts = Map<string, Write>;
 
 function needs(job: { id: string; pack: string } | string, what: string, kind = "job"): Finding {
   const id = typeof job === "string" ? job : job.id;
   return { id: `${kind}:${id}`, pack: typeof job === "string" ? "engine" : job.pack, say: `The ${id} ${kind} needs to be ${what}.`, repair: "apply" };
 }
 
-async function reconcileCron(jobs: Array<Owned<PackJob>>, { home, dryRun, run, logs, command, result, outage }: Context) {
+async function launchers(home: string, jobs: Array<Owned<PackJob>>, script: (job: PackJob) => string): Promise<Scripts> {
+  const scripts: Scripts = new Map();
+  for (const job of jobs) scripts.set(job.id, { target: launcherTarget(job.id), before: await readState(home, launcherTarget(job.id)), after: script(job) });
+  return scripts;
+}
+
+const stale = (script: Write | undefined) => script !== undefined && script.before !== script.after;
+
+async function writeLaunchers(home: string, writes: Write[], result: AdapterResult) {
+  if (!writes.length) return;
+  await writeWithBackups(home, writes);
+  result.actions.push(...writes.map((write) => ({ target: write.target, operation: write.before === undefined ? ("create" as const) : ("replace" as const) })));
+}
+
+async function removeLauncher(home: string, id: string) {
+  if (!(await linkOnPath(home, launcherTarget(id)))) await rm(inside(home, launcherTarget(id)), { force: true });
+}
+
+async function reconcileCron(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, outage }: Context) {
   const listed = await run(["crontab", "-l"]);
   const empty = listed.code !== 0 && /no crontab/i.test(listed.stderr ?? "");
   if (listed.code !== 0 && !empty) {
@@ -77,51 +98,77 @@ async function reconcileCron(jobs: Array<Owned<PackJob>>, { home, dryRun, run, l
     result.findings.push({ id: "jobs:cron", pack: "engine", say: `Could not read your crontab (${reason}), so jobs were not changed.`, repair: "human" });
     return;
   }
-  const path = `${home}/.local/bin:${home}/.bun/bin:/usr/local/bin:/usr/bin:/bin`;
-  const wanted = new Map(jobs.map((job) => [job.id, cronLine(job.id, cronExpression(job.schedule), command(job), path, join(logs, `${job.id}.log`))]));
+  if (jobs.length && !cronSafe(home)) {
+    result.findings.push({ id: "jobs:cron", pack: "engine", say: `Left jobs alone: cron cannot run scripts from ${JSON.stringify(home)}, which holds a percent sign or a line break.`, repair: "human" });
+    return;
+  }
+  const wanted = new Map(jobs.map((job) => [job.id, cronLine(job.id, cronExpression(job.schedule), inside(home, launcherTarget(job.id)))]));
   const changes = reconcileCrontab(empty ? "" : listed.stdout, wanted, outage);
   const owner = (id: string) => jobs.find((job) => job.id === id) ?? id;
-  const all = [...changes.added.map((id) => needs(owner(id), "added")), ...changes.changed.map((id) => needs(owner(id), "updated")), ...changes.removed.map((id) => needs(id, "removed"))];
+  const rewritten = jobs.filter((job) => stale(scripts.get(job.id)) && !changes.added.includes(job.id) && !changes.changed.includes(job.id)).map((job) => job.id);
+  const all = [...changes.added.map((id) => needs(owner(id), "added")), ...[...changes.changed, ...rewritten].map((id) => needs(owner(id), "updated")), ...changes.removed.map((id) => needs(id, "removed"))];
   if (!all.length) return;
   if (dryRun) return void result.findings.push(...all);
-  await mkdir(logs, { recursive: true, mode: 0o700 });
+  await writeLaunchers(home, [...scripts.values()].filter(stale), result);
+  if (!changes.added.length && !changes.changed.length && !changes.removed.length) return;
   const written = await run(["crontab", "-"], { input: changes.text });
   if (written.code !== 0) return void result.findings.push({ id: "jobs:cron", pack: "engine", say: `Could not write your crontab (exit ${written.code}).`, repair: "apply" });
+  for (const id of changes.removed) await removeLauncher(home, id);
   result.actions.push({ target: "crontab", operation: "replace", reason: all.map((finding) => finding.say).join(" ") });
 }
 
-async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, { home, dryRun, run, logs, command, result, uid, outage }: Context & { uid: number }) {
+async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, uid, outage }: Context & { uid: number }) {
   const agents = join(home, "Library/LaunchAgents");
   const domain = `gui/${uid}`;
-  const path = `${home}/.local/bin:${home}/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`;
   const present = (await readdir(agents).catch(() => [] as string[])).filter((name) => name.startsWith(labelPrefix) && name.endsWith(".plist"));
   const loaded = async (label: string) => (await run(["launchctl", "print", `${domain}/${label}`])).code === 0;
+  const foreign = (name: string, label: string, text: string | undefined, pack = "engine") => {
+    const found = text === undefined ? undefined : labelOf(text);
+    if (text === undefined || found === label) return false;
+    result.findings.push({ id: `job:${label.slice(labelPrefix.length)}`, pack, say: `Left Library/LaunchAgents/${name} alone: its Label is ${found ?? "missing"}, not ${label}.`, repair: "human" });
+    return true;
+  };
+  const stop = async (job: { id: string; pack: string } | string, label: string) => {
+    await run(["launchctl", "bootout", `${domain}/${label}`]);
+    if (!(await loaded(label))) return true;
+    const id = typeof job === "string" ? job : job.id;
+    result.findings.push({ id: `job:${id}`, pack: typeof job === "string" ? "engine" : job.pack, say: `launchd did not stop the ${id} job, so Fleet left its agent as it is.`, repair: "apply" });
+    return false;
+  };
   for (const job of jobs) {
     const label = `${labelPrefix}${job.id}`;
-    const file = join(agents, `${label}.plist`);
-    const content = plist(job.id, command(job), launchdTimer(job.schedule), path, join(logs, `${job.id}.log`));
+    const name = `${label}.plist`;
+    const file = join(agents, name);
+    const script = scripts.get(job.id)!;
+    const content = plist(job.id, inside(home, script.target), launchdTimer(job.schedule), inside(home, logTarget(job.id)));
     const current = await readFile(file, "utf8").catch(() => undefined);
-    if (current === content && (await loaded(label))) continue;
+    if (foreign(name, label, current, job.pack)) continue;
+    const reload = current !== content || !(await loaded(label));
+    if (!reload && !stale(script)) continue;
     if (dryRun) {
-      result.findings.push(needs(job, current === undefined ? "added" : current === content ? "loaded" : "updated"));
+      result.findings.push(needs(job, current === undefined ? "added" : current === content && !stale(script) ? "loaded" : "updated"));
       continue;
     }
+    await writeLaunchers(home, stale(script) ? [script] : [], result);
+    if (!reload) continue;
+    if (current !== undefined && !(await stop(job, label))) continue;
     await mkdir(agents, { recursive: true });
-    await mkdir(logs, { recursive: true, mode: 0o700 });
-    await run(["launchctl", "bootout", `${domain}/${label}`]);
     await writeFile(file, content);
     if ((await run(["launchctl", "bootstrap", domain, file])).code !== 0) result.findings.push({ id: `job:${job.id}`, pack: job.pack, say: `launchd did not load the ${job.id} job.`, repair: "apply" });
-    result.actions.push({ target: `Library/LaunchAgents/${label}.plist`, operation: current === undefined ? "create" : "replace" });
+    result.actions.push({ target: `Library/LaunchAgents/${name}`, operation: current === undefined ? "create" : "replace" });
   }
   for (const name of present) {
     const label = name.slice(0, -".plist".length);
+    const id = label.slice(labelPrefix.length);
     if (outage || jobs.some((job) => `${labelPrefix}${job.id}` === label)) continue;
+    if (foreign(name, label, await readFile(join(agents, name), "utf8").catch(() => undefined))) continue;
     if (dryRun) {
-      result.findings.push(needs(label.slice(labelPrefix.length), "removed"));
+      result.findings.push(needs(id, "removed"));
       continue;
     }
-    await run(["launchctl", "bootout", `${domain}/${label}`]);
+    if (!(await stop(id, label))) continue;
     await rm(join(agents, name), { force: true });
+    if (jobId.test(id)) await removeLauncher(home, id);
     result.actions.push({ target: `Library/LaunchAgents/${name}`, operation: "remove" });
   }
 }

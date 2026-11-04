@@ -1,13 +1,13 @@
+import { quote } from "./launcher.ts";
+
 export const marker = (id: string) => `# fleet:${id}`;
 const markedLine = /\s# fleet:([A-Za-z0-9._-]+)$/;
 
-export function shellQuote(value: string) {
-  return /^[A-Za-z0-9_./:=@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
-}
+export const cronSafe = (path: string) => !/[%\n\r]/.test(path);
 
-export function cronLine(id: string, expression: string, command: string[], path: string, log: string) {
-  const text = [`PATH=${shellQuote(path)}`, ...command.map(shellQuote), `>>${shellQuote(log)}`, "2>&1"].join(" ");
-  return `${expression} ${text.replaceAll("%", "\\%")} ${marker(id)}`;
+export function cronLine(id: string, expression: string, script: string) {
+  if (!cronSafe(script)) throw new Error(`cron cannot run ${script}: the path holds a percent sign or a line break`);
+  return `${expression} /bin/sh ${quote(script)} ${marker(id)}`;
 }
 
 export type CronChanges = { text: string; added: string[]; changed: string[]; removed: string[] };
