@@ -471,8 +471,8 @@ test("an answer recorded on one round or PR cannot be reused on another", async 
   writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
   await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md");
   pr.commit("feature.txt", "fixed\n");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", answer, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42 round 1");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", `2026-10-25 "Run one more round" for round 2`, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42 round 1");
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", answer, "--thread", "thread-1")).rejects.toThrow("already used on example/product#42. One answer counts once. Ask the user again");
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", `2026-10-25 "Run one more round" for round 2`, "--thread", "thread-1")).rejects.toThrow("already used on example/product#42. One answer counts once. Ask the user again");
 
   const accept = `2026-10-25 "Accept the gap"`;
   for (const kind of ["prod-shape", "cross-version"]) {
@@ -994,4 +994,27 @@ test("a finding that quotes the anchor heading hides no later finding from the r
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in the next commit.\n");
   await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 2");
   expect((await pr.fleet("gate")).output).toContain("unanswered findings 1, 2");
+});
+
+test("an answer accepts one gap once: a gap recorded again with another reason needs a new answer", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "new\n");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
+  pr.chooseGap("prod-shape", "No sandbox");
+  const accept = () => pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
+  expect((await accept()).code).toBe(0);
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "The sandbox has no production data");
+  await expect(accept()).rejects.toThrow("Ask the user again");
+  pr.chooseGap("prod-shape", "The sandbox has no production data");
+  expect((await accept()).code).toBe(0);
+});
+
+test("a later identical choice for another PR does not hide the user's unused answer for this PR", async () => {
+  const pr = checkout();
+  const third = await twoRounds(pr);
+  pr.env.FLEET_REVIEW_ARBITER = escalate;
+  pr.choose("Run one more round", "Run one more review round? example/product#42: The arbiter escalates.");
+  pr.choose("Run one more round", "Run one more review round? example/product#43: The arbiter escalates.");
+  expect((await pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8")).answer).toMatchObject({ message: "request-1:0" });
 });
