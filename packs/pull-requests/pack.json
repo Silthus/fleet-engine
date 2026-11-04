@@ -31,7 +31,8 @@
     "agent-skills:pull-requests/audit-prs",
     "agent-skills:pull-requests/review-lens",
     "agent-skills:pull-requests/rollout",
-    "agent-skills:pull-requests/slack-pr-update"
+    "agent-skills:pull-requests/slack-pr-update",
+    "mattpocock-skills:engineering/tdd"
   ],
   "settings": [
     {
