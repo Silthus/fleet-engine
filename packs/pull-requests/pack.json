@@ -1,0 +1,168 @@
+{
+  "schema": 1,
+  "name": "pull-requests",
+  "summary": "Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged.",
+  "day": "You ask for a fix, and later find a draft pull request with its tests, its proof, and a review from a second model.",
+  "cost": "Needs GitHub, which setup signs in to. Each pull request spends extra usage on reviews: at least one round, often two, plus short final reads.",
+  "risk": "Ship words merge without asking again. Say them only for work you would merge yourself.",
+  "instructions": "AGENTS.md",
+  "guides": [
+    {
+      "guide": "pull-requests",
+      "path": "pull-requests.md"
+    },
+    {
+      "guide": "standing-rules",
+      "path": "standing-rules.md"
+    }
+  ],
+  "skills": [
+    "agent-skills:pull-requests/full-stop",
+    "agent-skills:pull-requests/full-send",
+    "agent-skills:pull-requests/stamp-pr",
+    "agent-skills:pull-requests/pr-description",
+    "agent-skills:pull-requests/qa-swarm",
+    "agent-skills:pull-requests/merge-risk",
+    "agent-skills:pull-requests/babysit-pr",
+    "agent-skills:pull-requests/review-pr",
+    "agent-skills:pull-requests/review-pr-setup",
+    "agent-skills:pull-requests/leaving-pr-comments",
+    "agent-skills:pull-requests/modernize-pr",
+    "agent-skills:pull-requests/audit-prs",
+    "agent-skills:pull-requests/review-lens",
+    "agent-skills:pull-requests/rollout",
+    "agent-skills:pull-requests/slack-pr-update",
+    "mattpocock-skills:engineering/tdd"
+  ],
+  "settings": [
+    {
+      "key": "pull-requests.commentApproval",
+      "question": "Which comments should agents show you before they post them?",
+      "type": "choice",
+      "default": "people",
+      "ask": "never",
+      "choices": [
+        {
+          "value": "people",
+          "label": "Comments a person reads"
+        },
+        {
+          "value": "all",
+          "label": "Every comment"
+        },
+        {
+          "value": "none",
+          "label": "None"
+        }
+      ]
+    },
+    {
+      "key": "pull-requests.mergeCommand",
+      "question": "Which command merges a pull request when the repo names no merge method? Leave it empty to merge as the rollout skill says.",
+      "type": "string",
+      "ask": "never",
+      "optional": true
+    },
+    {
+      "key": "pull-requests.freeReviews",
+      "question": "How many review rounds may run before the review arbiter decides whether another round is worth it?",
+      "type": "number",
+      "default": 2,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.reviewCeiling",
+      "question": "After how many review rounds does review stop for good?",
+      "type": "number",
+      "default": 6,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.reviewTimeoutMinutes",
+      "question": "How many minutes may one review run before it counts as failed?",
+      "type": "number",
+      "default": 20,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.panelSlots",
+      "question": "How many reviewers may run at once in a review panel?",
+      "type": "number",
+      "default": 3,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.approvalBot",
+      "question": "Which bot or reviewer should approve a pull request when you say \"stamp it\"?",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "draft-prs",
+      "name": "Draft PR flow",
+      "default": true,
+      "needs": [
+        "gh"
+      ],
+      "settings": [
+        "pull-requests.freeReviews",
+        "pull-requests.reviewCeiling",
+        "pull-requests.reviewTimeoutMinutes",
+        "pull-requests.panelSlots"
+      ],
+      "sentence": "Every fix or feature ends as a proven, reviewed draft pull request that you mark ready yourself.",
+      "moment": {
+        "time": "10:30",
+        "title": "A draft pull request, already reviewed",
+        "body": "The fix you asked for at breakfast is a draft pull request: tests first, proof attached, and a second model's review answered.",
+        "words": [
+          "draft pull request",
+          "proof"
+        ]
+      }
+    },
+    {
+      "id": "pr-care",
+      "name": "PR care",
+      "default": true,
+      "needs": [
+        "gh"
+      ],
+      "settings": [
+        "pull-requests.commentApproval"
+      ],
+      "sentence": "When you ask, an agent watches a pull request, fixes CI, and answers review comments, and it can refresh a stale one.",
+      "moment": {
+        "time": "13:15",
+        "title": "CI went red, and it is already fixed",
+        "body": "You asked the agent to watch your pull request. A check failed over lunch, and by the time you are back it has found the cause, pushed a fix, and answered the reviewer."
+      }
+    },
+    {
+      "id": "ship-words",
+      "name": "Ship words",
+      "default": true,
+      "needs": [
+        "gh"
+      ],
+      "settings": [
+        "pull-requests.mergeCommand",
+        "pull-requests.approvalBot"
+      ],
+      "sentence": "Say \"full send\" or \"stamp it\", and the agent takes a pull request to merged and rolled out.",
+      "moment": {
+        "time": "17:00",
+        "title": "\"full send\"",
+        "body": "You read the draft, like it, and type two words. The agent marks it ready, waits for approval and green checks, merges, and watches the rollout.",
+        "words": [
+          "full send",
+          "stamp it"
+        ]
+      },
+      "risk": "The agent merges without asking again once you say the words."
+    }
+  ]
+}
