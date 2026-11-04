@@ -1,13 +1,13 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { readMisses } from "../../pull-requests/lib/proof-misses.ts";
+import { missesPath, missSources, type Miss } from "../../pull-requests/lib/proof-misses.ts";
 import { ledgerRoot } from "../../pull-requests/lib/proof.ts";
 import {
   descendants, fetchDiscussionFromGitHub, fetchIssueFromGitHub, issueLink, mapRef, proseLines, splitRepository, tableCell,
   type Comment, type FetchDiscussion, type FetchIssue, type MapIo, type MapRef,
 } from "./wayfinder.ts";
 
-export type LessonsIo = MapIo & { home: string; host: string; rolloutLog(): string };
+export type LessonsIo = MapIo & { home: string; host: string; rolloutLog(): string; warn(line: string): void };
 export type PullRequest = { repo: string; pr: number };
 export type PrReview = { pr: string; rounds: number; escalations: string[]; misses: string[] };
 export type Signals = { review(pr: PullRequest): PrReview; rollouts(pr: PullRequest): string[]; sources: string[] };
@@ -19,6 +19,18 @@ const pullRequestKey = /\b([\w.-]+\/[\w.-]+)#(\d+)\b/g;
 const settledRollouts = new Set(["rolled-back", "holding"]);
 
 type Failure = { tried: string; happened: string; where: string };
+type Rollout = { repo: string; pr: number; stage: string; state: string; note: string };
+type Warn = (line: string) => void;
+type Shape<T> = { [K in keyof Required<T>]: (value: unknown) => boolean };
+
+const text = (value: unknown) => typeof value === "string";
+const integer = (value: unknown) => Number.isInteger(value);
+const optional = (check: (value: unknown) => boolean) => (value: unknown) => value === undefined || check(value);
+const rolloutShape: Shape<Rollout> = { repo: text, pr: integer, stage: text, state: text, note: text };
+const missShape: Shape<Miss> = {
+  id: text, at: text, repo: text, pr: integer, commit: text, source: (value) => (missSources as readonly unknown[]).includes(value), finding: text,
+  file: optional(text), line: optional(integer), url: optional(text), base: text, head: text, scope: text, round: text, reviewer: optional(text), title: text, body: text,
+};
 
 export async function readLessons(ref: MapRef, fetchIssue: FetchIssue, fetchDiscussion: FetchDiscussion, signals: (pullRequests: PullRequest[]) => Promise<Signals>): Promise<string> {
   const map = await fetchDiscussion(ref.owner, ref.repo, ref.number);
@@ -73,8 +85,8 @@ function signalLines(pullRequests: PullRequest[], signals: Signals): string[] {
   ];
 }
 
-export async function localReview(home: string, pullRequests: PullRequest[]): Promise<PrReview[]> {
-  const misses = await readMisses(home);
+export function localReview(home: string, pullRequests: PullRequest[], warn: Warn): PrReview[] {
+  const misses = validLines(missesPath(home), missShape, warn);
   return pullRequests.map(({ repo, pr }) => {
     const reviews = join(ledgerRoot(home), repo, String(pr), "reviews");
     const finished = existsSync(reviews) ? readdirSync(reviews).filter((name) => existsSync(join(reviews, name, "findings.md"))) : [];
@@ -89,8 +101,8 @@ export async function localReview(home: string, pullRequests: PullRequest[]): Pr
   });
 }
 
-function rolloutTrouble(rolloutLog: string): (pr: PullRequest) => string[] {
-  const rollouts = rolloutLog ? jsonLines<{ repo: string; pr: number; stage: string; state: string; note: string }>(rolloutLog) : [];
+function rolloutTrouble(rolloutLog: string, warn: Warn): (pr: PullRequest) => string[] {
+  const rollouts = rolloutLog ? validLines(rolloutLog, rolloutShape, warn) : [];
   return ({ repo, pr }) => rollouts
     .filter((entry) => entry.repo === repo && entry.pr === pr && settledRollouts.has(entry.state))
     .map((entry) => `rollout ${entry.state} at ${entry.stage}: ${entry.note}`);
@@ -103,11 +115,24 @@ function rolloutSource(rolloutLog: string): string {
 
 const key = ({ repo, pr }: PullRequest) => `${repo}#${pr}`;
 
-function jsonLines<T>(path: string): T[] {
+function validLines<T>(path: string, shape: Shape<T>, warn: Warn): T[] {
   if (!existsSync(path)) return [];
-  return readFileSync(path, "utf8").split("\n").filter(Boolean).flatMap((line) => {
-    try { return [JSON.parse(line) as T]; } catch { return []; }
+  return readFileSync(path, "utf8").split("\n").flatMap((line, index) => {
+    if (!line.trim()) return [];
+    const skip = (reason: string) => {
+      warn(`Skipped line ${index + 1} of ${path}: ${reason}.`);
+      return [];
+    };
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { return skip("not valid JSON"); }
+    return matches(value, shape) ? [value as T] : skip("missing or mistyped fields");
   });
+}
+
+function matches<T>(value: unknown, shape: Shape<T>): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return Object.entries<(field: unknown) => boolean>(shape).every(([field, check]) => check(record[field]));
 }
 
 function jsonFile<T>(path: string): T | undefined {
@@ -124,10 +149,10 @@ export async function runLessons(args: string[], io: LessonsIo): Promise<number>
   const ref = mapRef(map, usage, io.tracker);
   const rolloutLog = expandHome(file ?? io.rolloutLog(), io.home);
   const signals = async (pullRequests: PullRequest[]): Promise<Signals> => {
-    const reviews = new Map((await localReview(io.home, pullRequests)).map((review) => [review.pr, review]));
+    const reviews = new Map(localReview(io.home, pullRequests, io.warn).map((review) => [review.pr, review]));
     return {
       review: (pr) => reviews.get(key(pr))!,
-      rollouts: rolloutTrouble(rolloutLog),
+      rollouts: rolloutTrouble(rolloutLog, io.warn),
       sources: [`the proof ledger on ${io.host}`, rolloutSource(rolloutLog)],
     };
   };

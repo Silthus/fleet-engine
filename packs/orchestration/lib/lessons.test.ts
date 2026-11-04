@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { runLessons, type LessonsIo } from "./lessons.ts";
-import { missesPath } from "../../pull-requests/lib/proof-misses.ts";
+import { missesPath, type Miss } from "../../pull-requests/lib/proof-misses.ts";
 import { ledgerRoot } from "../../pull-requests/lib/proof.ts";
 import { fakeGitHub, fixtureFetchers, issueNode, runPackCommand, type GitHubFixture } from "./testing.ts";
 
@@ -45,6 +45,13 @@ const failures = [
   `| Use a \\| pipe | It split | [#3](https://github.com/${repository}/issues/3#c2) |`,
 ];
 
+function miss(fields: Partial<Miss>): string {
+  return JSON.stringify({
+    id: "case-1", at: "2026-11-03T00:00:00Z", repo: "acme/app", pr: 11, commit: "abc123", source: "human", finding: "Null check",
+    base: "base123", head: "head123", scope: "diff", round: "1", title: "Add the cache", body: "Adds a cache.", ...fields,
+  });
+}
+
 async function writeLedger(home: string): Promise<string> {
   const reviews = (pr: number) => join(ledgerRoot(home), "acme/app", String(pr), "reviews");
   for (const [pr, round] of [[10, "1"], [10, "2"], [10, "3"], [11, "1"]] as const) {
@@ -54,8 +61,8 @@ async function writeLedger(home: string): Promise<string> {
   await mkdir(join(reviews(10), "4"), { recursive: true });
   await writeFile(join(reviews(10), "3", "round.json"), JSON.stringify({ arbiter: { verdict: "escalate", reason: "scope grew" } }));
   await writeFile(missesPath(home), [
-    JSON.stringify({ repo: "acme/app", pr: 11, finding: "Null check", source: "human" }),
-    JSON.stringify({ repo: "acme/app", pr: 99, finding: "Elsewhere", source: "human" }),
+    miss({}),
+    miss({ id: "case-2", pr: 99, finding: "Elsewhere" }),
   ].join("\n"));
   const log = join(home, "rollouts.jsonl");
   await writeFile(log, [
@@ -72,8 +79,8 @@ const signals = (host: string, log: string) => [
   "- No proof ledger on this machine has acme/app#12.",
 ];
 
-function io(home: string, lines: string[], rolloutLog = ""): LessonsIo {
-  return { ...fixtureFetchers(fixture), home, host: "this-box", tracker: () => "", rolloutLog: () => rolloutLog, print: (line) => lines.push(line) };
+function io(home: string, lines: string[], rolloutLog = "", warnings: string[] = []): LessonsIo {
+  return { ...fixtureFetchers(fixture), home, host: "this-box", tracker: () => "", rolloutLog: () => rolloutLog, print: (line) => lines.push(line), warn: (line) => warnings.push(line) };
 }
 
 test("fleet lessons tables the map's ❌ lines and its stack PRs' review and rollout trouble", async () => {
@@ -133,6 +140,61 @@ test("fleet lessons runs as a pack command with the tracker and rollout log from
   const result = await runPackCommand("lessons", ["#1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(settings) });
 
   expect(result).toEqual({ stdout: `${[...failures, "", ...signals(hostname(), log)].join("\n")}\n`, stderr: "", code: 0 });
+});
+
+test("fleet lessons skips malformed rollout rows with a warning that names the file and line, and still reports", async () => {
+  const home = await temporaryHome();
+  const log = await writeLedger(home);
+  await writeFile(log, [
+    JSON.stringify({ repo: "acme/app", pr: 11, stage: "10%", state: "rolled-back", note: "errors rose" }),
+    '{"repo":"acme/app","pr":10,"stage":"50%","state":"rolled-ba',
+    "null",
+    "",
+    JSON.stringify({ repo: "acme/app", pr: "10", stage: "50%", state: "holding", note: "slow" }),
+    JSON.stringify({ repo: "acme/app", pr: 10, stage: "50%", state: "holding" }),
+    "[]",
+  ].join("\n"));
+  const lines: string[] = [];
+  const warnings: string[] = [];
+
+  const code = await runLessons(["acme/maps#1"], io(home, lines, log, warnings));
+
+  expect(lines.join("\n")).toBe([...failures, "", ...signals("this-box", log)].join("\n"));
+  expect(warnings).toEqual([
+    `Skipped line 2 of ${log}: not valid JSON.`,
+    `Skipped line 3 of ${log}: missing or mistyped fields.`,
+    `Skipped line 5 of ${log}: missing or mistyped fields.`,
+    `Skipped line 6 of ${log}: missing or mistyped fields.`,
+    `Skipped line 7 of ${log}: missing or mistyped fields.`,
+  ]);
+  expect(code).toBe(0);
+
+  const bin = await fakeGitHub(home, fixture);
+  const settings = { "orchestration.tracker": repository, "orchestration.rolloutLog": log };
+  const command = await runPackCommand("lessons", ["#1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(settings) });
+  expect(command).toEqual({ stdout: `${[...failures, "", ...signals(hostname(), log)].join("\n")}\n`, stderr: `${warnings.join("\n")}\n`, code: 0 });
+});
+
+test("fleet lessons skips malformed miss ledger entries with a warning, and still reports the valid ones", async () => {
+  const home = await temporaryHome();
+  const log = await writeLedger(home);
+  const ledger = missesPath(home);
+  await writeFile(ledger, [
+    "null",
+    miss({}),
+    '{"repo":"acme/app",',
+    miss({ id: "case-3", pr: "11" as unknown as number }),
+    miss({ id: "case-4", source: "gut" as Miss["source"] }),
+    miss({ id: "case-5", line: "7" as unknown as number }),
+    JSON.stringify({ repo: "acme/app", pr: 11, finding: "Partial", source: "human" }),
+  ].join("\n"));
+  const lines: string[] = [];
+  const warnings: string[] = [];
+
+  await runLessons(["acme/maps#1"], io(home, lines, log, warnings));
+
+  expect(lines.join("\n")).toBe([...failures, "", ...signals("this-box", log)].join("\n"));
+  expect(warnings).toEqual([1, 3, 4, 5, 6, 7].map((line) => `Skipped line ${line} of ${ledger}: ${line === 3 ? "not valid JSON" : "missing or mistyped fields"}.`));
 });
 
 test("fleet lessons refuses bad arguments", async () => {
