@@ -34,6 +34,7 @@ export type PruneOptions = {
   log: (line: string) => void;
   evict?: { targetGigabytes: number; free: () => number };
   sightingsPath: string;
+  mergedPullRequest: (branch: string, worktree: string) => boolean;
 };
 
 const busyStatuses = new Set(["running", "starting", "preparing", "queued"]);
@@ -288,10 +289,7 @@ function gather(path: string, state: T3State, managed: boolean, processes: Proce
     const cherry = git(path, "cherry", target, "HEAD");
     facts.landed = git(path, "merge-base", "--is-ancestor", "HEAD", target).ok || (cherry.ok && !cherry.out.split("\n").some((line) => line.startsWith("+")));
   }
-  if (!facts.landed && facts.branch && Bun.which("gh")) {
-    const pr = run(["gh", "pr", "list", "--head", facts.branch, "--state", "merged", "--json", "number", "--jq", "length"], path, 30_000);
-    facts.prMerged = pr.ok && Number(pr.out) > 0;
-  }
+  if (!facts.landed && facts.branch) facts.prMerged = options.mergedPullRequest(facts.branch, path);
   return facts;
 }
 
@@ -517,6 +515,12 @@ function logConsumers(home: string, log: (line: string) => void): void {
   log(`Still ${describeFree(home)}. Largest${complete ? "" : " (du did not finish or could not read everything, totals may be short)"}: ${shown.join(", ")}.`);
 }
 
+export function mergedOnGitHub(branch: string, worktree: string): boolean {
+  if (!Bun.which("gh")) return false;
+  const pr = run(["gh", "pr", "list", "--head", branch, "--state", "merged", "--json", "number", "--jq", "length"], worktree, 30_000);
+  return pr.ok && Number(pr.out) > 0;
+}
+
 export type PruneContext = { home: string; env: Record<string, string | undefined>; floorGigabytes: number };
 
 export function pruneOptions(args: string[], log: (line: string) => void, { home, env, floorGigabytes }: PruneContext): { options: PruneOptions; auto: AutoOptions | null } {
@@ -524,7 +528,7 @@ export function pruneOptions(args: string[], log: (line: string) => void, { home
   const options: PruneOptions = {
     worktreeRoot: join(home, ".t3/worktrees"), statePath: t3StatePath(join(home, ".t3/userdata")), now: Date.now(),
     repos: [], minIdleHours: 6, unownedIdleHours: 24, agentIdleHours: 24, dryRun: false, fetch: true, log,
-    sightingsPath: join(state, "worktree-sightings.json"),
+    sightingsPath: join(state, "worktree-sightings.json"), mergedPullRequest: mergedOnGitHub,
   };
   let auto: AutoOptions | null = null;
   while (args.length) {
