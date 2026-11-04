@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "name": "orchestration",
+  "summary": "Planning maps and side threads.",
+  "requires": ["pull-requests"],
+  "settings": [
+    { "key": "orchestration.tracker", "question": "Which repo holds your maps?", "type": "string" },
+    { "key": "orchestration.loopProject", "question": "Which T3 project runs the loops?", "type": "string" }
+  ],
+  "workflows": [
+    { "id": "maps", "name": "Planning maps", "sentence": "Big work becomes a map of tickets.", "default": true, "settings": ["orchestration.tracker"] },
+    { "id": "quality-loop", "name": "Quality loop", "sentence": "Small PRs improve one area of code.", "default": false, "needs": ["devbox"], "settings": ["orchestration.loopProject"] },
+    { "id": "boxes", "name": "Box pool", "sentence": "Heavy work runs on short-lived boxes.", "default": true, "needs": ["hub"] }
+  ],
+  "jobs": [
+    { "id": "quality-loop", "command": [], "schedule": { "every": "1d" }, "runner": "t3", "workflow": "quality-loop",
+      "task": { "id": "fleet:quality-loop", "prompt": "Run the quality-loop skill.", "projectSetting": "orchestration.loopProject", "modelRole": "implementation", "workspaceStrategy": "worktree", "runtimeMode": "full-access", "schedule": "0 9 * * 1-5" } },
+    { "id": "box-pool", "command": ["fleet", "box", "pool", "--hub", "hub-tunnel"], "schedule": { "every": "15m" }, "workflow": "boxes" }
+  ]
+}

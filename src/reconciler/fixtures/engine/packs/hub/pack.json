@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "name": "hub",
+  "summary": "One devbox manages the others.",
+  "settings": [{ "key": "hub.alias", "question": "What is the SSH alias of your hub?", "type": "string", "default": "hub" }],
+  "config": [{ "provider": "claude", "key": "env.ANTHROPIC_BASE_URL", "value": "http://127.0.0.1:8317" }],
+  "jobs": [{ "id": "ssh-tunnels", "command": ["fleet", "ssh-tunnels", "--proxy"], "schedule": { "every": "5m" }, "roles": ["devbox"] }],
+  "steps": [{ "id": "proxy", "run": ["fleet", "cli-proxy", "install"], "roles": ["hub"] }]
+}

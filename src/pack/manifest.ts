@@ -135,7 +135,7 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
       if (!(needValues as readonly string[]).includes(need)) fail(`workflow ${workflow.id} has unknown need ${need}`);
     }
   }
-  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, config: manifest.config };
+  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config };
   for (const [field, items] of Object.entries(tied)) {
     for (const item of items ?? []) {
       const label = "id" in item ? item.id : item.key;
