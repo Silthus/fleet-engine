@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, lstatSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import type {
   AvailableSource,
@@ -89,6 +89,9 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   const settings = activeSettings(order, active);
   plan.settings = settingValues(settings, profile.settings);
   plan.unanswered = settings.filter((setting) => plan.settings[setting.key] === undefined && !setting.optional && setting.ask !== "never");
+  for (const job of plan.models.length ? plan.jobs : []) {
+    if (job.task && !plan.models.some((row) => row.role === job.task!.modelRole)) throw new ResolveError(`job ${job.id} asks for model role ${job.task.modelRole}, which the model table lacks`);
+  }
   plan.jobs = plan.jobs.map((job) => {
     const project = job.task && plan.settings[job.task.projectSetting];
     return job.task && project !== undefined ? { ...job, task: { ...job.task, project: String(project) } } : job;
@@ -113,12 +116,15 @@ function checkUniqueIds(order: Candidate[]) {
 }
 
 /** Every target stays inside the home directory, and no two files share one. */
+const providerConfigFiles = [".claude/settings.json", ".codex/config.toml"];
+
 function checkTargets(files: DesiredFile[]) {
   const seen = new Set<string>();
   for (const { target } of files) {
     const clean = normalize(target);
     if (isAbsolute(target) || clean !== target || clean === ".." || clean.startsWith(`..${sep}`)) throw new ResolveError(`target ${target} leaves the home directory`);
     if (seen.has(target)) throw new ResolveError(`two files want ${target}`);
+    if (providerConfigFiles.includes(target)) throw new ResolveError(`${target} belongs to the provider config; set its keys with config entries`);
     seen.add(target);
   }
   return files;
@@ -329,7 +335,15 @@ function within(root: string, path: string, pack: string) {
     return !rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
   };
   if (leaves(resolvePath(root), full)) throw new ResolveError(`${pack}: path ${path} leaves its pack`);
+  if (!existsSync(full) && isLink(full)) throw new ResolveError(`${pack}: path ${path} is a broken link`);
   if (existsSync(full) && leaves(realpathSync(root), realpathSync(full))) throw new ResolveError(`${pack}: path ${path} links outside its pack`);
   return full;
 }
 
+function isLink(path: string) {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}

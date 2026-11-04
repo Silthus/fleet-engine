@@ -67,16 +67,15 @@ const redact = (value: unknown) =>
 
 function promptReason(kinds: string[]) {
   return `Fleet held this message back: it looks like it carries a ${kinds.join(", ")}. Send it again without the value. `
-    + "To give the agent a secret, save it in a file or an environment variable yourself and tell the agent its name. "
-    + "T3's `request_secret` tool takes a secret only for T3 tools that accept a secretRef. "
+    + "To give the agent a secret, let it ask with T3's `request_secret` tool, or save it in a file or an environment variable yourself and tell the agent its name. "
     + "If the value is real, rotate it: the app may have saved the message.";
 }
 
 function toolOutputReason(kinds: string[], action: string) {
   return `Fleet ${action} this tool output: it carries a ${kinds.join(", ")}. Never print a secret or repeat it in chat, commands, or files. `
     + "Rerun the command so its output leaves the value out, for example by reading it into an environment variable. "
-    + "When you need a secret from the user, ask them to save it in a file or an environment variable and give you its name. "
-    + "Use T3's `request_secret` tool only for T3 tools that accept a secretRef.";
+    + "When you need a secret from the user, call T3's `request_secret` tool: pass its secretRef to a T3 tool, or use `delivery: \"file\"` for a shell command. "
+    + "Without T3, ask the user to save it in a file or an environment variable and give you its name.";
 }
 
 function promptDecision(provider: Provider, kinds: string[]): HookDecision {

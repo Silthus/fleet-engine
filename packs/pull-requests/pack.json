@@ -3,7 +3,7 @@
   "name": "pull-requests",
   "summary": "Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged.",
   "day": "You ask for a fix, and later find a draft pull request with its tests, its proof, and a review from a second model.",
-  "cost": "Needs GitHub, which setup signs in to. Each pull request costs one extra review run.",
+  "cost": "Needs GitHub, which setup signs in to. Each pull request spends extra usage on reviews: at least one round, often two, plus short final reads.",
   "risk": "Ship words merge without asking again. Say them only for work you would merge yourself.",
   "instructions": "AGENTS.md",
   "guides": [
@@ -57,10 +57,10 @@
     },
     {
       "key": "pull-requests.mergeCommand",
-      "question": "Which command merges a pull request when the repo names none?",
+      "question": "Which command merges a pull request when the repo names no merge method? Leave it empty to merge as the rollout skill says.",
       "type": "string",
-      "default": "gh pr merge --merge",
-      "ask": "never"
+      "ask": "never",
+      "optional": true
     },
     {
       "key": "pull-requests.freeReviews",
@@ -88,6 +88,13 @@
       "question": "How many reviewers may run at once in a review panel?",
       "type": "number",
       "default": 3,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.approvalBot",
+      "question": "Which bot or reviewer should approve a pull request when you say \"stamp it\"?",
+      "type": "string",
+      "optional": true,
       "ask": "never"
     }
   ],
@@ -126,11 +133,11 @@
       "settings": [
         "pull-requests.commentApproval"
       ],
-      "sentence": "Agents watch your pull requests, fix CI, answer review comments, and refresh stale pull requests.",
+      "sentence": "When you ask, an agent watches a pull request, fixes CI, and answers review comments, and it can refresh a stale one.",
       "moment": {
         "time": "13:15",
         "title": "CI went red, and it is already fixed",
-        "body": "A check failed on your pull request over lunch. The agent watching it found the cause, pushed a fix, and answered the reviewer's comment."
+        "body": "You asked the agent to watch your pull request. A check failed over lunch, and by the time you are back it has found the cause, pushed a fix, and answered the reviewer."
       }
     },
     {
@@ -141,7 +148,8 @@
         "gh"
       ],
       "settings": [
-        "pull-requests.mergeCommand"
+        "pull-requests.mergeCommand",
+        "pull-requests.approvalBot"
       ],
       "sentence": "Say \"full send\" or \"stamp it\", and the agent takes a pull request to merged and rolled out.",
       "moment": {

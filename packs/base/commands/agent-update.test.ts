@@ -12,7 +12,7 @@ function stub(results: Record<string, { code: number; out: string }>) {
 
 test("updates the agent CLIs that Fleet installed", async () => {
   const { run, calls } = stub({
-    "claude --version": { code: 0, out: "2.1.0" },
+    'sh -c test -x "$HOME/.local/bin/claude" && echo native': { code: 0, out: "native\n" },
     "claude update": { code: 0, out: "" },
     "bun pm ls -g": { code: 0, out: "├── @openai/codex@0.9.0" },
     "bun add -g @openai/codex@latest": { code: 0, out: "" },
@@ -22,7 +22,13 @@ test("updates the agent CLIs that Fleet installed", async () => {
 });
 
 test("skips a CLI that is missing and reports a failed update", async () => {
-  const { run, calls } = stub({ "claude --version": { code: 0, out: "2.1.0" }, "claude update": { code: 1, out: "" }, "bun pm ls -g": { code: 0, out: "typescript" } });
+  const { run, calls } = stub({ 'sh -c test -x "$HOME/.local/bin/claude" && echo native': { code: 0, out: "native\n" }, "claude update": { code: 1, out: "" }, "bun pm ls -g": { code: 0, out: "typescript" } });
   expect(await updateAgents(run)).toEqual({ ok: false, lines: ["Claude Code: update failed (exit 1).", "Codex: not installed by Fleet, skipped."] });
   expect(calls).not.toContain("bun add -g @openai/codex@latest");
+});
+
+test("leaves a Claude Code that a package manager installed to that manager", async () => {
+  const { run, calls } = stub({ 'sh -c test -x "$HOME/.local/bin/claude" && echo native': { code: 1, out: "" }, "bun pm ls -g": { code: 0, out: "" } });
+  expect((await updateAgents(run)).lines).toContain("Claude Code: not installed by Fleet, skipped.");
+  expect(calls).not.toContain("claude update");
 });
