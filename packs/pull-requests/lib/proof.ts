@@ -120,7 +120,7 @@ async function arbiterPrompt(home: string, identity: ProofIdentity) {
 
 export function parseVerdict(output: string, model: string): ArbiterVerdict {
   const line = (output.split("\n").find((text) => text.trim()) ?? "").replace(/^[\s*`]+|[\s*`]+$/g, "");
-  if (/^CONTINUE\b/.test(line)) return { verdict: "continue", reason: "", model };
+  if (output.trim().replace(/^[*`]+|[*`]+$/g, "") === "CONTINUE") return { verdict: "continue", reason: "", model };
   const escalate = /^ESCALATE:\s*(\S.*)$/.exec(line);
   if (escalate) return { verdict: "escalate", reason: escalate[1]!.replace(/\.$/, ""), model };
   return { verdict: "unavailable", reason: `unparseable answer: ${line.slice(0, 200)}`, model };
@@ -130,21 +130,26 @@ export type ReviewLimits = { free: number; ceiling: number };
 
 async function permitReview(home: string, identity: ProofIdentity, due: boolean, ceiling: string | undefined, decision: Decision, { arbiter, now }: Permit) {
   if (decision && "override" in decision) return undefined;
-  if (ceiling && !decision) throw new Error(await askUser(home, now, `${ceiling} The user must decide; record their answer with --override`));
+  if (ceiling && !decision) throw new Error(await askUser(home, identity, now, ceiling));
   if (!due) return undefined;
   const verdict = await arbiter(await arbiterPrompt(home, identity));
-  if (verdict.verdict === "escalate" && !decision) throw new Error(await askUser(home, now, `Escalate to the user: ${verdict.reason}. Record their answer with --override`));
+  if (verdict.verdict !== "continue" && !decision) throw new Error(await askUser(home, identity, now, verdict.verdict === "escalate" ? `The arbiter escalates: ${verdict.reason}.` : `The arbiter gave no verdict: ${verdict.reason}.`));
   return verdict;
 }
 
-async function askUser(home: string, now: Date, question: string) {
+const roundQuestion = "Run one more review round?";
+const runOption = "Run one more round";
+const stopOption = "Stop here";
+
+async function askUser(home: string, identity: ProofIdentity, now: Date, stop: string) {
   const standing = await standingFor(home, "review", now);
-  return standing ? `${question}, or decide yourself under their standing rule with --standing '<your reason>'.` : `${question}.`;
+  const ask = `${stop} Ask the user with your question tool. Question: "${roundQuestion} ${identity.repository}#${identity.pr}: ${stop}" Options: "${runOption}", "${stopOption}". When they choose "${runOption}", run this command again with --override '<date> "${runOption}"' --thread <your T3 thread id>`;
+  return standing ? `${ask}, or decide yourself under their standing rule with --standing '<your reason>'.` : `${ask}.`;
 }
 
 export type CapturedBy = "fleet" | "author";
 export type ReviewRequest = { scope: string; base?: string; override?: string; standing?: string; hear?: Hear; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; capturedBy?: CapturedBy; now?: Date };
-type Reserved = { round: number | "final"; directory: string };
+type Reserved = { round: number | "final"; id: string; directory: string };
 type Decision = { override: string; answer: HeardAnswer } | { standing: StandingDecision } | undefined;
 type StandingDecision = { reason: string; rule: string; until: string };
 type Permit = { arbiter: Arbiter; limits: ReviewLimits; now: Date };
@@ -167,7 +172,7 @@ async function startFinalRead(home: string, identity: ProofIdentity, base: strin
     let read = 1;
     while (started.includes(finalReadPrefix + read)) read++;
     const name = finalReadPrefix + read;
-    if (await reserve(reviews, name, { ...identity, round: "final", read, scope: "final", base, phase, ...decision, arbiter: verdict, capturedBy })) return { round: "final", directory: join(reviews, name) };
+    if (await reserve(reviews, name, { ...identity, round: "final", read, scope: "final", base, phase, ...decision, arbiter: verdict, capturedBy })) return { round: "final", id: name, directory: join(reviews, name) };
   }
   throw new Error("Final read limit exceeded");
 }
@@ -186,18 +191,51 @@ export async function startReview(home: string, identity: ProofIdentity, request
   const decision = await decisionOf(home, identity, request, hear, now);
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   await mkdir(reviews, { recursive: true, mode: 0o700 });
-  if (scope === "final") return startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, capturedBy);
+  const release = decision && "override" in decision ? await claimAnswer(home, identity, decision.answer) : undefined;
+  try {
+    if (scope === "final") return await startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, capturedBy);
+    return await startRound(home, identity, reviews, { scope, base, decision, permit, cleanBaseMerge, capturedBy });
+  } catch (error) {
+    await release?.();
+    throw error;
+  }
+}
+
+type RoundStart = { scope: string; base?: string; decision: Decision; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
+
+async function startRound(home: string, identity: ProofIdentity, reviews: string, { scope, base, decision, permit, cleanBaseMerge, capturedBy }: RoundStart): Promise<Reserved> {
   for (let round = 1; round <= 100; round++) {
     const directory = join(reviews, String(round));
     try { await access(directory); continue; }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (round === 1 && scope !== "full") throw new Error("Round 1 is --scope full: it reviews the whole PR diff. Drop --base");
     if (round > 1) await checkLaterRound(reviews, round, scope, base, decision, cleanBaseMerge);
     const { free, ceiling } = permit.limits;
     const stop = round > ceiling ? `The loop did not converge: ${ceiling} panel rounds done.` : undefined;
     const verdict = await permitReview(home, identity, round > free, stop, decision, permit);
-    if (await reserve(reviews, String(round), { ...identity, round, scope, base, ...decision, arbiter: verdict, capturedBy })) return { round, directory };
+    if (await reserve(reviews, String(round), { ...identity, round, scope, base, ...decision, arbiter: verdict, capturedBy })) return { round, id: String(round), directory };
   }
   throw new Error("Review limit exceeded");
+}
+
+type Claim = { repository: string; pr: number; token: string };
+const claimPath = (home: string, answer: HeardAnswer) => join(ledgerRoot(home), "claims", `${createHash("sha256").update(`${answer.thread}/${answer.message}`).digest("hex")}.json`);
+
+async function claimAnswer(home: string, identity: ProofIdentity, answer: HeardAnswer) {
+  const path = claimPath(home, answer);
+  const claim: Claim = { repository: identity.repository, pr: identity.pr, token: crypto.randomUUID() };
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  try { await writeFile(path, JSON.stringify(claim) + "\n", { flag: "wx", mode: 0o600 }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const held = await readJson<Claim | undefined>(path, undefined);
+    if (held?.repository === identity.repository && held.pr === identity.pr) return undefined;
+    throw new Error(`This answer is already used on ${held ? `${held.repository}#${held.pr}` : "another PR"}. Each round needs the user's answer to its own question`);
+  }
+  return async () => {
+    const recorded = (await recordedAnswers(home)).some((entry) => entry.message === messageOf(answer));
+    if (!recorded && (await readJson<Claim | undefined>(path, undefined))?.token === claim.token) await rm(path, { force: true });
+  };
 }
 
 async function checkLaterRound(reviews: string, round: number, scope: string, base: string | undefined, decision: Decision, cleanBaseMerge: CleanBaseMerge) {
@@ -220,14 +258,32 @@ async function decisionOf(home: string, identity: ProofIdentity, { override, sta
 }
 
 async function heardOverride(home: string, identity: ProofIdentity, override: string, hear: Hear): Promise<Decision> {
-  if (!isDatedQuote(override)) throw new Error(`--override needs a dated quote of the user's answer to this round, such as '2026-10-24 "Run round 7."'. A general instruction does not answer a round`);
+  if (!isDatedQuote(override)) throw new Error(`--override needs a dated quote of the user's answer to this round, such as '2026-10-24 "${runOption}"'. A general instruction does not answer a round`);
   await refuseBorrowedAnswer(home, identity, override, "round");
   const answer = await hear(override);
+  refuseOtherChoice(answer);
   await refuseBorrowedMessage(home, identity, answer, "round");
   return { override, answer };
 }
 
+const questionToolAnswer = /:\d+$/;
+const runChoices = [runOption, `${runOption} (Recommended)`].map(normalized);
+
+function refuseOtherChoice(answer: HeardAnswer) {
+  if (!questionToolAnswer.test(answer.message)) throw new Error(`"${answer.words}" is a message the user typed. Only their answer to your question tool counts: ask "${roundQuestion}" with the options "${runOption}" and "${stopOption}"`);
+  if (!normalized(answer.answered).startsWith(normalized(roundQuestion))) throw new Error(`"${answer.words}" answers another question ("${answer.answered}"). Ask the question that fleet proof printed`);
+  if (!runChoices.includes(normalized(answer.words))) throw new Error(`The user chose "${answer.words}", not "${runOption}". Stop the review loop`);
+}
+
 type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; capturedBy?: CapturedBy; reviewer?: string };
+
+export type RoundId = number | `final-${number}`;
+
+export function roundId(value: string): RoundId {
+  if (/^[1-9]\d*$/.test(value)) return Number(value);
+  if (/^final-[1-9]\d*$/.test(value)) return value as RoundId;
+  throw new Error(`--round takes a round number, or the id of a final read that review-start printed, such as final-2${value === "final" ? ". Pass final-<n>" : ""}`);
+}
 
 async function latestFinalRead(reviews: string) {
   const reads = (await reviewNames(reviews)).filter((name) => name.startsWith(finalReadPrefix)).map((name) => Number(name.slice(finalReadPrefix.length)));
@@ -237,13 +293,13 @@ async function latestFinalRead(reviews: string) {
 
 const sameContent = async (path: string, bytes: Buffer) => (await readFile(path).catch(() => undefined))?.equals(bytes) ?? false;
 
-async function roundDirectory(home: string, identity: ProofIdentity, round: number | "final") {
-  if (round !== "final" && (!Number.isSafeInteger(round) || round < 1)) throw new Error("Invalid review round");
+async function roundDirectory(home: string, identity: ProofIdentity, round: RoundId | "final") {
+  if (typeof round === "number" && (!Number.isSafeInteger(round) || round < 1)) throw new Error("Invalid review round");
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   return join(reviews, round === "final" ? await latestFinalRead(reviews) : String(round));
 }
 
-export async function reviewDirectory(home: string, identity: ProofIdentity, round?: number | "final") {
+export async function reviewDirectory(home: string, identity: ProofIdentity, round?: RoundId | "final") {
   if (round !== undefined) return roundDirectory(home, identity, round);
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   const names = await reviewNames(reviews);
@@ -252,7 +308,7 @@ export async function reviewDirectory(home: string, identity: ProofIdentity, rou
   return join(reviews, String(Math.max(...names.map(Number))));
 }
 
-export async function finishReview(home: string, identity: ProofIdentity, round: number | "final", findings: string, reviewer: string) {
+export async function finishReview(home: string, identity: ProofIdentity, round: RoundId, findings: string, reviewer: string) {
   if (!reviewer.trim() || reviewer.includes("\n")) throw new Error("--reviewer needs the model that wrote the findings, such as gpt-6.1-sol");
   const bytes = await readFile(findings);
   if (!bytes.toString().trim()) throw new Error(`${findings} is empty. Save the reviewer's findings, or "No findings." when it found none`);
@@ -261,7 +317,7 @@ export async function finishReview(home: string, identity: ProofIdentity, round:
   return directory;
 }
 
-async function storeFindings(directory: string, identity: ProofIdentity, round: number | "final", bytes: Buffer, reviewer: string, capturedBy: CapturedBy) {
+async function storeFindings(directory: string, identity: ProofIdentity, round: RoundId, bytes: Buffer, reviewer: string, capturedBy: CapturedBy) {
   const reservation = await readJson<Reservation | undefined>(join(directory, "round.json"), undefined);
   if (!reservation) throw new Error(`Review round ${round} is not reserved. Reserve it with review-start first`);
   if (reservation.commit !== identity.commit) throw new Error(`Round ${round} reviews ${reservation.commit}. Pass --commit ${short(reservation.commit)}, or reserve a round for this commit`);
@@ -279,16 +335,32 @@ async function storeFindings(directory: string, identity: ProofIdentity, round: 
   await writeJson(join(directory, "round.json"), { ...reservation, reviewer, capturedBy });
 }
 
-export async function respondToReview(home: string, identity: ProofIdentity, round: number | "final", responses: string) {
+export async function respondToReview(home: string, identity: ProofIdentity, round: RoundId, responses: string) {
   const bytes = await readFile(responses);
   if (!bytes.toString().trim()) throw new Error(`${responses} is empty. Answer each finding: fixed in which commit, or rejected and why`);
   const directory = await roundDirectory(home, identity, round);
-  if (!(await access(join(directory, "findings.md")).then(() => true, () => false))) throw new Error(`Review round ${round} has no findings yet`);
+  const findings = await readFile(join(directory, "findings.md"), "utf8").catch(() => undefined);
+  if (findings === undefined) throw new Error(`Review round ${round} has no findings yet`);
+  const missing = unanswered(findings, bytes.toString());
+  if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>" or "${missing[0]}. rejected: <why>"`);
   const destination = join(directory, "responses.md");
   const temporary = `${destination}.${crypto.randomUUID()}`;
   await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
   await rename(temporary, destination);
   return destination;
+}
+
+const findingItem = /^(?:[-*]|\d+[.)])\s+\S/;
+const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
+
+function findingCount(findings: string) {
+  if (/^no findings\.?$/i.test(findings.trim())) return 0;
+  return Math.max(1, findings.split("\n").filter((line) => findingItem.test(line)).length);
+}
+
+function unanswered(findings: string, responses: string) {
+  const answered = new Set([...responses.matchAll(answerItem)].map((match) => Number(match[1])));
+  return Array.from({ length: findingCount(findings) }, (_, index) => index + 1).filter((number) => !answered.has(number));
 }
 
 export const proofKinds = ["live-run", "ui-walk", "prod-shape", "cross-version", "shadow-diff", "post-deploy-watch"] as const;
@@ -411,7 +483,7 @@ async function refuseBorrowedAnswer(home: string, identity: ProofIdentity, text:
   if (instructionSentences(await agentInstructions(home)).some((sentence) => answer.includes(sentence))) {
     throw new Error("This quotes the user's instructions in ~/.agents, not their answer to this question. A standing rule there is recorded once with fleet proof standing; otherwise ask the user and record their reply");
   }
-  await refuseBorrowed(home, identity, use, (recorded) => normalized(recorded.text) === answer);
+  if (use === "gap") await refuseBorrowed(home, identity, use, (recorded) => normalized(recorded.text) === answer);
 }
 
 export async function refuseBorrowedMessage(home: string, identity: ProofIdentity, heard: HeardAnswer, use: "round" | "gap") {
@@ -577,6 +649,16 @@ async function reviewStatus(home: string, identity: ProofIdentity, cleanBaseMerg
   return { problem: "missing", line: latest ? `review: HEAD not reviewed, last review covered ${short(latest.commit)}` : "review: HEAD not reviewed" };
 }
 
+async function responseStatuses(home: string, identity: ProofIdentity): Promise<Status[]> {
+  const reviews = join(pullRequestDirectory(home, identity), "reviews");
+  const statuses = await Promise.all((await finishedReviews(home, identity)).map(async ({ name }): Promise<Status | undefined> => {
+    const findings = await readFile(join(reviews, name, "findings.md"), "utf8");
+    const missing = unanswered(findings, await readFile(join(reviews, name, "responses.md"), "utf8").catch(() => ""));
+    return missing.length ? { problem: "missing", line: `review: ${reviewLabel(name)} has unanswered findings ${missing.join(", ")}; answer each with fleet proof respond --round ${name} <responses.md>` } : undefined;
+  }));
+  return statuses.filter((status) => status !== undefined);
+}
+
 export type CiResult = { state: "green" | "red" | "pending" | "none" | "unknown"; detail: string };
 
 async function ciStatus(home: string, identity: ProofIdentity, ci: CiResult, now: Date): Promise<Status> {
@@ -588,18 +670,31 @@ async function ciStatus(home: string, identity: ProofIdentity, ci: CiResult, now
   return { problem: acceptance ? undefined : "gap", line: `${line}; gap from ${short(gap.commit)}, ${acceptance?.line ?? "not accepted"}: ${gap.reason}`, covered: "gap accepted" };
 }
 
-export type GateOptions = { ci: () => CiResult; landed?: boolean; cleanBaseMerge?: CleanBaseMerge; now?: Date };
+export type PushedHead = { commit: string } | { error: string };
 
-export async function proofGate(home: string, identity: ProofIdentity, { ci, landed = false, cleanBaseMerge = () => undefined, now = new Date() }: GateOptions) {
+function headStatus(identity: ProofIdentity, before: PushedHead, after: PushedHead): Status {
+  if ("error" in before) return { problem: "missing", line: `head: cannot read the PR head on GitHub (${before.error})` };
+  if (before.commit !== identity.commit) return { problem: "missing", line: `head: ${short(identity.commit)} is not the PR's head on GitHub (${short(before.commit) || "none"}); push it` };
+  if ("error" in after) return { problem: "missing", line: `head: cannot read the PR head on GitHub again (${after.error})` };
+  if (after.commit !== before.commit) return { problem: "missing", line: `head: the PR head moved to ${short(after.commit)} while the gate read CI; run the gate again` };
+  return { problem: undefined, line: `head: ${short(identity.commit)} is the PR's head on GitHub` };
+}
+
+export type GateOptions = { ci: () => CiResult; pushedHead: () => PushedHead; landed?: boolean; cleanBaseMerge?: CleanBaseMerge; now?: Date };
+
+export async function proofGate(home: string, identity: ProofIdentity, { ci, pushedHead, landed = false, cleanBaseMerge = () => undefined, now = new Date() }: GateOptions) {
   const owed = await readOwed(home, identity);
   const statuses: Status[] = [];
   if (!owed) statuses.push({ problem: "missing", line: "owed proofs: not recorded; run fleet proof require --kinds <kind,kind> or fleet proof require --none --reason <why>" });
   else if (!owed.kinds.length) statuses.push({ problem: undefined, line: `owed proofs: none (${owed.none?.reason ?? "no reason recorded"})` });
   const kinds = await Promise.all((owed?.kinds ?? []).map(async (kind) => ({ kind, ...await kindStatus(home, identity, kind, landed, cleanBaseMerge, now) })));
   const review = await reviewStatus(home, identity, cleanBaseMerge);
+  const responses = await responseStatuses(home, identity);
+  const before = pushedHead();
   const ciResult = ci();
+  const head = headStatus(identity, before, pushedHead());
   const checks = await ciStatus(home, identity, ciResult, now);
-  statuses.push(...kinds, review, checks);
+  statuses.push(...kinds, review, ...responses, head, checks);
   const problems = statuses.map((status) => status.problem);
   const code = problems.includes("missing") ? 1 : problems.includes("gap") ? 3 : 0;
   const summary = `kinds: ${owed?.kinds.length ? owed.kinds.join(", ") : "none"}; review: ${review.covered}; CI: ${checks.covered}`;

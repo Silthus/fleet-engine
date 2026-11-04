@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, saveProof, startReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
+import { finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, roundId, saveProof, startReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
 import { askModel, family, sessionFamily, type Family } from "./proof-models.ts";
 import { listenIn, withoutThread, type ThreadWords } from "./proof-answers.ts";
 import { modelFor } from "../../base/lib/models.ts";
@@ -20,9 +20,11 @@ reads that thread, and the quoted words must appear in a message the user typed 
 question tool in the T3 app; an answer sent through MCP does not count. The ledger keeps the thread, the message, the
 user's words, and the question they answered.`;
 
-const overrideHelp = `--override takes the user's answer to this round or finding: their words in quotes and the date they gave them,
-for example --override '2026-10-24 "Run round 7; the new findings are real."' --thread <T3 thread id>. A general
-rule, such as "ship everything autonomously", does not answer a specific round.
+const overrideHelp = `--override takes the user's answer to the question that review-start prints when the arbiter escalates, gives no
+verdict, or the ceiling stops the loop. Ask it with your question tool, with the options "Run one more round" and "Stop
+here". Only their choice of "Run one more round" there counts, quoted with the date they gave it, for example
+--override '2026-10-24 "Run one more round"' --thread <T3 thread id>. A typed message, a refusal, or a general rule,
+such as "ship everything autonomously", does not answer a round. One answer starts one round.
 ${answerHelp}
 --standing takes your own reason for a round that the arbiter escalates or the ceiling refuses, when the user's
 standing review rule (fleet proof standing --kind review) lets agents decide them. The round keeps the reason, the
@@ -73,9 +75,9 @@ family does not change.`,
     },
   },
   show: {
-    usage: "show [--round <number|final>]",
-    summary: "Print the latest review round, or --round: who reviewed it and where its findings are.",
-    examples: ["fleet proof show", "fleet proof show --round 2"],
+    usage: "show [--round <number|final|final-n>]",
+    summary: "Print the latest review round, or --round: who reviewed it and where its findings are. --round final is the latest final read.",
+    examples: ["fleet proof show", "fleet proof show --round 2", "fleet proof show --round final-1"],
     options: ["--round"],
     run: async ({ options }, identity, context) => {
       const directory = await reviewDirectory(context.home, identity(), roundOption(options));
@@ -84,15 +86,16 @@ family does not change.`,
     },
   },
   respond: {
-    usage: "respond --round <number|final> <responses.md>",
-    summary: `Save your answer to each finding of a finished review: fixed in which commit, or rejected and why. A new call
-replaces the earlier answer.`,
-    examples: ["fleet proof respond --round 1 responses.md", "fleet proof respond --round final responses.md"],
+    usage: "respond --round <number|final-n> <responses.md>",
+    summary: `Save your answer to each finding of a finished review: fixed in which commit, or rejected and why. Number the
+answers in the order of the findings, one line each, such as "1. fixed in 1a2b3c4: <how>" or "2. rejected: <why>". Each
+list item of findings.md is one finding; findings without a list are one. The gate fails while a finding has no
+answer. A new call replaces the earlier answer. A final read takes the id that review-start printed.`,
+    examples: ["fleet proof respond --round 1 responses.md", "fleet proof respond --round final-1 responses.md"],
     options: ["--round"],
     run: async ({ options, files }, identity, { print, home, cwd }) => {
       if (files.length !== 1) throw usageError("respond", "Pass one responses file");
-      const round = required(options, "--round", "respond");
-      print(await respondToReview(home, identity(), round === "final" ? "final" : Number(round), resolve(cwd, files[0]!)));
+      print(await respondToReview(home, identity(), roundId(required(options, "--round", "respond")), resolve(cwd, files[0]!)));
       return 0;
     },
   },
@@ -132,14 +135,15 @@ ${answerHelp}`,
   },
   gate: {
     usage: "gate [--landed]",
-    summary: `Check the owed proofs, the review, and the CI of the commit on GitHub. Exit 0 only on a pass: 1 means the owed
-proofs are not recorded, a proof is missing, the commit is not reviewed, or CI is red, pending, or not on the pushed
-head; 3 means only unaccepted gaps remain. The last line is the verdict and names what it covered. A clean merge of
+    summary: `Check the owed proofs, the review and the answers to its findings, and the CI of the commit on GitHub. Exit 0
+only on a pass: 1 means the owed proofs are not recorded, a proof is missing, the commit is not reviewed, a finding
+has no answer, the commit is not the PR's head on GitHub, or its checks are red or pending; 3 means only unaccepted
+gaps remain. No gap waives the head check. The last line is the verdict and names what it covered. A clean merge of
 the PR's base carries the review and the evidence of its other parent forward.`,
     examples: ["fleet proof gate", "fleet proof gate --landed"], flags: ["--landed"],
     run: async ({ flags }, identity, { print, home, run, now }) => {
       const head = identity();
-      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), ci: () => ciOf(head, run), now: now?.() });
+      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), ci: () => ciOf(head, run), pushedHead: () => pushedHeadOf(head, run), now: now?.() });
       for (const line of gate.lines) print(line);
       print(gate.code === 0 ? `gate: pass (${gate.summary})` : `gate: fail (exit ${gate.code})`);
       return gate.code;
@@ -147,8 +151,9 @@ the PR's base carries the review and the evidence of its other parent forward.`,
   },
   "review-start": {
     usage: "review-start [--scope full|fixes|final] [--base <reviewed-sha>] [--phase review|babysit] [--override <dated quote> --thread <id> | --standing <reason>]",
-    summary: `Reserve a review round before you dispatch its reviewers. Round 1 is --scope full. A later round is
---scope fixes, and a final read is --scope final; both take --base with the commit of the latest finished review.
+    summary: `Reserve a review round before you dispatch its reviewers. Round 1 is --scope full and takes no --base. A later
+round is --scope fixes, and a final read is --scope final; both take --base with the commit of the latest finished
+review. The printed id names the round for review-finish and respond.
 A later round with the user's --override, or --standing under their standing rule, may be --scope full: it reviews
 the whole PR diff at HEAD again, such as after a restack.
 ${overrideHelp}`,
@@ -162,17 +167,18 @@ ${overrideHelp}`,
     },
   },
   "review-finish": {
-    usage: "review-finish --round <number|final> --reviewer <model> <findings.md>",
-    summary: `Save the findings of a reserved round after its reviewers finish. --reviewer names the model that wrote them;
-the gate prints it. The findings file must not be empty; write "No findings." when the reviewer found none.`,
-    examples: ["fleet proof review-finish --round 1 --reviewer gpt-6.1-sol findings.md", "fleet proof review-finish --round final --reviewer claude-opus-5-5 findings.md"],
+    usage: "review-finish --round <number|final-n> --reviewer <model> <findings.md>",
+    summary: `Save the findings of a reserved round after its reviewers finish. --round takes the id that review-start
+printed. --reviewer names the model that wrote them; the gate prints it. The findings file must not be empty; write
+"No findings." when the reviewer found none.`,
+    examples: ["fleet proof review-finish --round 1 --reviewer gpt-6.1-sol findings.md", "fleet proof review-finish --round final-1 --reviewer claude-opus-5-5 findings.md"],
     options: ["--round", "--findings", "--reviewer"],
     run: async ({ options, files }, identity, { print, home, cwd }) => {
       const findings = options.has("--findings") ? [options.get("--findings")!, ...files] : files;
       if (findings.length !== 1) throw usageError("review-finish", "Pass one findings file");
-      const round = required(options, "--round", "review-finish");
+      const round = roundId(required(options, "--round", "review-finish"));
       const reviewer = required(options, "--reviewer", "review-finish");
-      print(await finishReview(home, identity(), round === "final" ? "final" : Number(round), resolve(cwd, findings[0]!), reviewer));
+      print(await finishReview(home, identity(), round, resolve(cwd, findings[0]!), reviewer));
       return 0;
     },
   },
@@ -188,7 +194,7 @@ async function roundLines(directory: string) {
 
 function roundOption(options: Map<string, string>) {
   const round = options.get("--round");
-  return round === undefined ? undefined : round === "final" ? "final" : Number(round);
+  return round === undefined ? undefined : round === "final" ? "final" : roundId(round);
 }
 
 const arbiterLimit = 180_000;
@@ -311,23 +317,45 @@ function cleanBaseMerge(identity: ProofIdentity, run: Run): CleanBaseMerge {
   };
 }
 
-type Check = { name: string; bucket: string };
+function pushedHeadOf(identity: ProofIdentity, run: Run): PushedHead {
+  const view = run(["gh", "pr", "view", String(identity.pr), "--repo", identity.repository, "--json", "headRefOid"]);
+  if (view.code !== 0) return { error: `gh failed: ${firstLine(view.stderr)}` };
+  return { commit: (JSON.parse(view.stdout) as { headRefOid?: string }).headRefOid ?? "" };
+}
+
+type Check = { name: string; bucket: "pass" | "fail" | "pending" };
+type CheckRun = { name: string; status: string; conclusion: string | null };
+type CommitStatus = { context: string; state: string };
+const passing = ["success", "neutral", "skipped"];
+
+function commitRecords<T>(identity: ProofIdentity, run: Run, path: string, jq: string): T[] | string {
+  const result = run(["gh", "api", "--paginate", `repos/${identity.repository}/commits/${identity.commit}/${path}?per_page=100`, "--jq", jq]);
+  if (result.code !== 0) return `gh api ${path} failed (${firstLine(result.stderr)})`;
+  try { return result.stdout.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as T); }
+  catch { return `gh api ${path} printed no JSON lines`; }
+}
+
+function checksOf(identity: ProofIdentity, run: Run): Check[] | string {
+  const runs = commitRecords<CheckRun>(identity, run, "check-runs", ".check_runs[] | {name, status, conclusion}");
+  const statuses = commitRecords<CommitStatus>(identity, run, "statuses", ".[] | {context, state}");
+  if (typeof runs === "string") return runs;
+  if (typeof statuses === "string") return statuses;
+  const latest = statuses.filter((status, index) => statuses.findIndex((other) => other.context === status.context) === index);
+  return [
+    ...runs.map((check): Check => ({ name: check.name, bucket: check.status !== "completed" ? "pending" : passing.includes(check.conclusion ?? "") ? "pass" : "fail" })),
+    ...latest.map((status): Check => ({ name: status.context, bucket: status.state === "success" ? "pass" : status.state === "pending" ? "pending" : "fail" })),
+  ];
+}
 
 function ciOf(identity: ProofIdentity, run: Run): CiResult {
-  const view = run(["gh", "pr", "view", String(identity.pr), "--repo", identity.repository, "--json", "headRefOid"]);
-  if (view.code !== 0) return { state: "unknown", detail: `cannot read the PR head with gh (${firstLine(view.stderr)})` };
-  const head = (JSON.parse(view.stdout) as { headRefOid?: string }).headRefOid ?? "";
-  if (head !== identity.commit) return { state: "pending", detail: `${short(identity.commit)} is not the PR's head on GitHub (${short(head) || "none"}); push it` };
-  const result = run(["gh", "pr", "checks", String(identity.pr), "--repo", identity.repository, "--json", "name,bucket"]);
-  let checks: Check[] | undefined;
-  try { checks = JSON.parse(result.stdout) as Check[]; } catch {}
-  if (!checks) return /no checks reported/i.test(result.stderr) ? { state: "none", detail: "no checks reported" } : { state: "unknown", detail: `gh pr checks failed (${firstLine(result.stderr)})` };
-  if (!checks.length) return { state: "none", detail: "no checks reported" };
-  const named = (buckets: string[]) => checks.filter((check) => buckets.includes(check.bucket)).map((check) => check.name);
-  const [failing, pending] = [named(["fail", "cancel"]), named(["pending"])];
+  const checks = checksOf(identity, run);
+  if (typeof checks === "string") return { state: "unknown", detail: checks };
+  if (!checks.length) return { state: "none", detail: `no checks reported on ${short(identity.commit)}` };
+  const named = (bucket: Check["bucket"]) => checks.filter((check) => check.bucket === bucket).map((check) => check.name);
+  const [failing, pending] = [named("fail"), named("pending")];
   if (failing.length) return { state: "red", detail: `failing: ${failing.join(", ")}` };
   if (pending.length) return { state: "pending", detail: `waiting on: ${pending.join(", ")}` };
-  return { state: "green", detail: `${checks.length} check(s)` };
+  return { state: "green", detail: `${checks.length} check(s) on ${short(identity.commit)}` };
 }
 
 const short = (commit: string) => commit.slice(0, 7);
