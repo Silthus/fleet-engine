@@ -1,5 +1,5 @@
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import type { Finding, Owned, PackJob, Plan } from "../../pack/types.ts";
 import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { sourceOutage } from "../provider-config/adapter.ts";
