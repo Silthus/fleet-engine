@@ -52,6 +52,21 @@ describe("fleet apply", () => {
     expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
   });
 
+  test("removes a stale proxy URL from Claude Code's settings, and doctor sees it first", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude/settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317", ANTHROPIC_AUTH_TOKEN: "proxy-key" }, model: "opus" }));
+    const profile = profileDir();
+    await fleet(["apply", "--profile", profile, "--dry-run"], home);
+    const doctor = await fleet(["doctor", "--profile", profile], home);
+    expect(doctor.output).toMatch(/Fix: \.claude\/settings\.json needs an update: .*remove env\.ANTHROPIC_BASE_URL, env\.ANTHROPIC_AUTH_TOKEN\./);
+    const result = await fleet(["apply", "--profile", profile], home);
+    expect(result.output).toContain("replace .claude/settings.json");
+    const settings = JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"));
+    expect(settings.env).toBeUndefined();
+    expect(settings.model).toBe("opus");
+  });
+
   test("keeps an unmanaged file and a local edit, and says so", async () => {
     const home = temp.make("home-");
     mkdirSync(join(home, ".codex"), { recursive: true });
