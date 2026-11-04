@@ -18,7 +18,7 @@ repo_name() { printf '%s\n' "$1" | sed -e 's#/*$##' -e 's#\.git$##' -e 's#^.*git
 mkdir -p "$(dirname "$checkout")"
 stale() { [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }
 reclaim() {
-  mkdir "$lock.reclaim" 2>/dev/null || { if stale "$lock.reclaim"; then rmdir "$lock.reclaim" 2>/dev/null || true; fi; return 1; }
+  mkdir "$lock.reclaim" 2>/dev/null || return 1
   removed=1
   if [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$1" ] && { [ -n "$1" ] || stale "$lock"; }; then rm -rf "$lock"; removed=0; fi
   rmdir "$lock.reclaim"
@@ -31,7 +31,10 @@ until mkdir "$lock" 2>/dev/null; do
     if reclaim "$holder"; then continue; fi
   fi
   waited=$((waited + 1))
-  [ "$waited" -le 60 ] || fail "another sync still holds $lock."
+  if [ "$waited" -gt 60 ]; then
+    [ ! -d "$lock.reclaim" ] || fail "a stopped sync left $lock.reclaim behind. Remove that folder when no sync runs; until then nothing syncs."
+    fail "another sync still holds $lock."
+  fi
   sleep 1
 done
 echo $$ > "$lock/pid"
@@ -56,7 +59,7 @@ snapshot="$gitdir/fleet-sync-files.tar"
 rebasing() { [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; }
 if rebasing && [ -f "$marker" ]; then
   conflicted=$(g diff --name-only --diff-filter=U)
-  deleted=$(g ls-files --deleted)
+  deleted=$({ g ls-files --deleted; g diff --cached --name-only --diff-filter=D; } | sort -u)
   (cd "$checkout" && tar -cf "$snapshot" --exclude=./.git .) || fail "cannot save the files before undoing an unfinished sync. Nothing changed."
   g rebase --abort
   (cd "$checkout" && tar -xf "$snapshot") || fail "undid an unfinished sync, but cannot restore the files. They are in $snapshot."
@@ -131,7 +134,7 @@ while :; do
   if remote_has_main; then
     g fetch --quiet origin main || fail "cannot fetch $url."
     if ! has_commits; then
-      if g checkout --quiet -B main origin/main 2>/dev/null; then
+      if g checkout --quiet --no-overwrite-ignore -B main origin/main 2>/dev/null; then
         echo "Memory: checked out $url."
       else
         echo "Memory: files appeared while setting up. The next sync merges them."

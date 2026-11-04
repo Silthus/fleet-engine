@@ -163,6 +163,7 @@ describe("the memory sync", () => {
     const { root, remote } = setup();
     const other = join(root, "seed-main");
     writeFileSync(join(other, "kept.md"), "a tracked note\n");
+    writeFileSync(join(other, "staged.md"), "another tracked note\n");
     git(other, "add", "-A");
     git(other, "commit", "-q", "-m", "kept");
     git(other, "push", "-q", "origin", "main");
@@ -185,13 +186,16 @@ describe("the memory sync", () => {
     const { root, remote, checkout } = await crashMidRebase();
     writeFileSync(join(checkout, "notes.md"), "resolved by an agent\n");
     rmSync(join(checkout, "kept.md"));
+    git(checkout, "rm", "-q", "staged.md");
     const result = await sync(root, remote, "laptop");
     expect([result.code, result.out]).toEqual([0, expect.stringContaining("kept every file as it was")]);
     expect(readFileSync(join(checkout, "later.md"), "utf8")).toBe("written after the crash\n");
     expect(readFileSync(join(checkout, "notes.md"), "utf8")).toBe("resolved by an agent\n");
     expect(existsSync(join(checkout, "kept.md"))).toBe(false);
     expect(git(root, "--git-dir", remote, "show", "main:notes.md")).toBe("resolved by an agent");
-    expect(git(root, "--git-dir", remote, "ls-tree", "--name-only", "main")).not.toContain("kept.md");
+    expect(existsSync(join(checkout, "staged.md"))).toBe(false);
+    expect(git(root, "--git-dir", remote, "ls-tree", "--name-only", "main").split("\n")).not.toEqual(expect.arrayContaining(["kept.md"]));
+    expect(git(root, "--git-dir", remote, "ls-tree", "--name-only", "main").split("\n")).not.toEqual(expect.arrayContaining(["staged.md"]));
   });
 
   test.concurrent("puts a file still in conflict back to this machine's version, and keeps the copy from the crash", async () => {
@@ -244,15 +248,18 @@ describe("the memory sync", () => {
     expect([result.code, result.out]).toEqual([1, expect.stringContaining("but memory.repo is")]);
   });
 
-  test.concurrent("keeps a note written while it set up a new checkout", async () => {
+  test.concurrent.each([["untracked", false], ["ignored", true]])("keeps an %s note written while it set up a new checkout", async (_, ignored) => {
     const { root, remote } = setup(false);
     const laptop = await sync(root, remote, "laptop");
+    if (ignored) writeFileSync(join(laptop.checkout, ".git/info/exclude"), "MEMORY.md\n");
     seed(root, remote);
     const bin = join(root, "bin");
     mkdirSync(bin);
     writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" fetch "*) printf -- '- written during the fetch\\n' > "${join(laptop.checkout, "MEMORY.md")}";; esac\nexec ${Bun.which("git")} "$@"\n`, { mode: 0o755 });
     const racing = await sync(root, remote, "laptop", { PATH: `${bin}:${process.env.PATH}` });
     expect([racing.code, racing.out]).toEqual([0, expect.stringContaining("files appeared while setting up")]);
+    expect(readFileSync(join(laptop.checkout, "MEMORY.md"), "utf8")).toBe("- written during the fetch\n");
+    if (ignored) return;
     expect((await sync(root, remote, "laptop")).code).toBe(0);
     expect(git(root, "--git-dir", remote, "show", "main:MEMORY.md")).toBe("# Memory\n- written during the fetch");
   });
