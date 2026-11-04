@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import { cachedSource, fetchSource } from "../pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SourceRef } from "../pack/types.ts";
-import { loadMachine, loadProfile, saveMachine } from "../profile/profile.ts";
+import { loadMachine, loadProfile, saveMachine, thisMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
@@ -27,7 +27,7 @@ export type SetupOptions = {
   apply?: (profileDir: string) => Promise<number>;
   /** Runs fleet doctor with this profile and prints its report. */
   doctor?: (profileDir: string) => Promise<number>;
-  /** The environment the standalone check reads. */
+  /** The environment the standalone check reads, and that tells a Coder workspace apart. */
   env?: Record<string, string | undefined>;
 };
 
@@ -39,7 +39,7 @@ export const sourceCache = (home: string) => join(home, ".local", "share", "flee
 export async function setup(args: string[], options: SetupOptions): Promise<number> {
   const { terminal } = options;
   let flags: SetupFlags;
-  const machine: MachineFile = (await loadMachine(options.home)) ?? { schema: 1, role: options.platform === "darwin" ? "mac" : "linux" };
+  const machine: MachineFile = thisMachine(await loadMachine(options.home), options.platform, options.env ?? process.env);
   const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
   const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
   const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, draft: progress.draft } });

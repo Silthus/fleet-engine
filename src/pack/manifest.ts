@@ -7,6 +7,9 @@ export class PackError extends Error {}
 const settingTypes = ["string", "number", "boolean", "choice"];
 const packName = /^[a-z][a-z0-9-]*$/;
 
+/** Settings the engine reads, which any pack may declare to set their default. */
+export const engineSettings = ["identity.signer"];
+
 export async function loadPacks(sourceDir: string): Promise<LoadedPack[]> {
   const root = join(sourceDir, "packs");
   const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
@@ -166,7 +169,7 @@ export function isModelRow(row: unknown): row is ModelRow {
 
 function checkSettings(manifest: PackManifest, fail: (message: string) => never) {
   for (const setting of manifest.settings ?? []) {
-    if (!setting.key?.startsWith(`${manifest.name}.`)) fail(`setting ${setting.key} must start with ${manifest.name}.`);
+    if (!setting.key?.startsWith(`${manifest.name}.`) && !engineSettings.includes(setting.key)) fail(`setting ${setting.key} must start with ${manifest.name}.`);
     if (!settingTypes.includes(setting.type)) fail(`setting ${setting.key} has unknown type ${setting.type}`);
     if (setting.type === "choice" && !setting.choices?.length) fail(`setting ${setting.key} is a choice without choices`);
   }

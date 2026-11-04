@@ -17,9 +17,9 @@ function profileDir(packs: string[] = [], aboutMe?: string) {
   return dir;
 }
 
-async function fleet(args: string[], home: string, engineRoot = repoRoot) {
+async function fleet(args: string[], home: string, engineRoot = repoRoot, env: Record<string, string> = {}) {
   const lines: string[] = [];
-  const code = await main(args, { home, engineRoot, platform: "linux", print: (line) => lines.push(line), run: async () => 0 });
+  const code = await main(args, { home, engineRoot, platform: "linux", env, print: (line) => lines.push(line), run: async () => 0 });
   return { code, output: lines.join("\n") };
 }
 
@@ -50,6 +50,49 @@ describe("fleet apply", () => {
     expect(readFileSync(join(home, ".codex/AGENTS.md"), "utf8")).toBe(readFileSync(join(home, ".agents/AGENTS.md"), "utf8"));
     expect(JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"))).toEqual({ schema: 1, role: "linux", profileDir: profile });
     expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
+  });
+
+  describe("in a Coder workspace", () => {
+    const machineFile = (home: string) => JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"));
+    const signer = (home: string) => readFileSync(join(home, ".agents/guides/skill-settings.md"), "utf8").match(/`identity\.signer`: `(\w+)`/)?.[1];
+    const slice = ".config/systemd/user/fleet-heavy.slice";
+
+    test("a fresh box gets role devbox, the coder signer, and the devbox workflows", async () => {
+      const home = temp.make("home-");
+      const profile = profileDir();
+      expect(await fleet(["apply", "--profile", profile], home, repoRoot, { CODER: "true", CODER_AGENT_URL: "https://coder.example.test/" })).toMatchObject({ code: 0 });
+      expect(machineFile(home)).toEqual({ schema: 1, role: "devbox", coder: true, profileDir: profile });
+      expect(signer(home)).toBe("coder");
+      expect(existsSync(join(home, slice))).toBe(true);
+    });
+
+    test("the box stays a Coder devbox when a later run lacks the Coder variables, as cron does", async () => {
+      const home = temp.make("home-");
+      const profile = profileDir();
+      await fleet(["apply", "--profile", profile], home, repoRoot, { CODER_AGENT_URL: "https://coder.example.test/" });
+      expect(await fleet(["apply"], home)).toMatchObject({ code: 0 });
+      expect(machineFile(home)).toMatchObject({ role: "devbox", coder: true });
+      expect(signer(home)).toBe("coder");
+    });
+
+    test("a box saved as linux before becomes a devbox", async () => {
+      const home = temp.make("home-");
+      const profile = profileDir();
+      await fleet(["apply", "--profile", profile], home);
+      expect(machineFile(home).role).toBe("linux");
+      await fleet(["apply"], home, repoRoot, { CODER: "true" });
+      expect(machineFile(home)).toMatchObject({ role: "devbox", coder: true });
+      expect(signer(home)).toBe("coder");
+    });
+
+    test("without the Coder variables, a Linux machine gets role linux and the ssh signer", async () => {
+      const home = temp.make("home-");
+      await fleet(["apply", "--profile", profileDir()], home, repoRoot, { CODER: "false" });
+      expect(machineFile(home).role).toBe("linux");
+      expect(machineFile(home).coder).toBeUndefined();
+      expect(signer(home)).toBe("ssh");
+      expect(existsSync(join(home, slice))).toBe(false);
+    });
   });
 
   test("removes a stale proxy URL from Claude Code's settings, and doctor sees it first", async () => {
