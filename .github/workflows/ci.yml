@@ -45,6 +45,5 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           FLEET_PRIVACY_DENYLIST: ${{ secrets.FLEET_PRIVACY_DENYLIST }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" | sh scripts/privacy-scan.sh --text
+        # Read from the event file, not step env: the runner prints step env values in the log.
+        run: jq -r '.pull_request.title, (.pull_request.body // "")' "$GITHUB_EVENT_PATH" | sh scripts/privacy-scan.sh --text

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,8 +47,8 @@ function commit(dir: string, file: string, content: string, message = "Change") 
   git(dir, "commit", "-q", "-m", message);
 }
 
-function scan(dir: string, base: string, list: string | null = denylist, stdin?: string) {
-  const env: Record<string, string | undefined> = { ...gitEnv(), FLEET_PRIVACY_DENYLIST: list ?? undefined };
+function scan(dir: string, base: string, list: string | null = denylist, stdin?: string, extraEnv: Record<string, string> = {}) {
+  const env: Record<string, string | undefined> = { ...gitEnv(), FLEET_PRIVACY_DENYLIST: list ?? undefined, ...extraEnv };
   if (list === null) delete env.FLEET_PRIVACY_DENYLIST;
   const result = Bun.spawnSync(["sh", script, base], { cwd: dir, env, stdin: stdin === undefined ? "ignore" : Buffer.from(stdin) });
   const output = result.stdout.toString() + result.stderr.toString();
@@ -175,5 +175,44 @@ describe("privacy scan", () => {
     const result = scan(dir, base);
     expect(result.code).not.toBe(0);
     expect(result.output).not.toContain(token);
+  });
+
+  test("finds a secret in a recognized binary file, across a 10,000-byte chunk boundary, and in a file name", () => {
+    const wrappers: Array<[string, string]> = [
+      ["doc.pdf", "%PDF-1.4\n"],
+      ["long.txt", "x".repeat(9980)],
+    ];
+    for (const [name, before] of wrappers) {
+      const { dir, base } = repoWithBase();
+      const secret = fakeGitHubToken();
+      commit(dir, name, `${before}"${secret}"\n`);
+      const result = scan(dir, base);
+      expect(result.code).toBe(1);
+      expect(result.output).toContain("gitleaks rule");
+      expect(result.output.includes(secret)).toBe(false);
+    }
+    const { dir, base } = repoWithBase();
+    const token = fakeGitHubToken();
+    commit(dir, token, "clean\n");
+    const result = scan(dir, base);
+    expect(result.code).toBe(1);
+    expect(result.output).toMatch(/gitleaks rule \S+ matched paths-[0-9a-f]{40}, line 1\./);
+    expect(result.output.includes(token)).toBe(false);
+  });
+
+  test("fails closed when reading the deny-list fails, and prints no tool errors", () => {
+    const { dir, base } = repoWithBase();
+    commit(dir, "notes.md", "other-private-repo\n");
+    const shims = mkdtempSync(join(tmpdir(), "privacy-shims-"));
+    repos.push(shims);
+    writeFileSync(join(shims, "grep"), `#!/bin/sh\nif [ "$1" = -v ]; then ${Bun.which("grep")} "$@" | head -n 1; exit 2; fi\nexec ${Bun.which("grep")} "$@"\n`);
+    chmodSync(join(shims, "grep"), 0o755);
+    const truncated = scan(dir, base, `${plantedTerm}\nother-private-repo\n`, undefined, { PATH: `${shims}:${process.env.PATH}` });
+    expect(truncated).toMatchObject({ code: 2, output: expect.stringContaining("could not read the deny-list") });
+
+    const tmp = join(shims, `tmp-${plantedTerm}`);
+    mkdirSync(tmp);
+    const invalid = scan(dir, base, "[\n", undefined, { TMPDIR: tmp });
+    expect(invalid).toMatchObject({ code: 2, output: "privacy: the deny-list holds an invalid pattern; failing closed.\n" });
   });
 });
