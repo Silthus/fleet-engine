@@ -15,7 +15,8 @@ export type MapIo = { print(line: string): void; tracker: Tracker; fetchIssue?: 
 
 export const parked = "wayfinder:awaiting-human";
 export const trackerSetting = "orchestration.tracker";
-const fence = /^\s*(```|~~~)/;
+const fenceOpener = /^\s*(`{3,}(?=[^`]*$)|~{3,})/;
+const fenceCloser = /^\s*(`{3,}|~{3,})\s*$/;
 
 export function mapRef(value: string, usage: string, tracker: Tracker = () => ""): MapRef {
   const bare = value.match(/^#?(\d+)$/);
@@ -33,11 +34,20 @@ function trackerRepository(tracker: string): { owner: string; repo: string } {
 }
 
 export function proseLines(text: string): string[] {
-  let inFence = false;
+  let opener: string | undefined;
   return text.split("\n").filter((line) => {
-    if (fence.test(line)) inFence = !inFence;
-    return !inFence && !fence.test(line);
+    if (opener) {
+      if (closesFence(line, opener)) opener = undefined;
+      return false;
+    }
+    opener = line.match(fenceOpener)?.[1];
+    return !opener;
   });
+}
+
+function closesFence(line: string, opener: string): boolean {
+  const closer = line.match(fenceCloser)?.[1];
+  return Boolean(closer && closer[0] === opener[0] && closer.length >= opener.length);
 }
 
 export function tableCell(text: string): string {

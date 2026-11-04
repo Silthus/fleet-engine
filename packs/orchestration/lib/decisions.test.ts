@@ -127,6 +127,15 @@ test("fleet decisions counts answers in the map's comments next to its body and 
   ].join("\n"));
 });
 
+test("fleet decisions ignores an example decision inside a longer fence", async () => {
+  const body = ["- 👤 **Which store?** Postgres", "````md", "Write answers like this:", "```", "- 🤖 **Which store?** An example", "```", "````"].join("\n");
+  const lines: string[] = [];
+
+  await runDecisions(["acme/maps#1"], { ...fixtureFetchers({ issues: [issueNode(repository, 1)], discussions: { "acme/maps#1": { body, comments: [] } } }), tracker: () => "", print: (line) => lines.push(line) });
+
+  expect(lines.join("\n")).toBe(["| Question | Answer | Who | Where |", "| --- | --- | --- | --- |", `| Which store? | Postgres | 👤 Human | [map #1](https://github.com/${repository}/issues/1) |`, "", "Involvement: no human-in-the-loop tickets."].join("\n"));
+});
+
 test("fleet decisions refuses a bad map", async () => {
   const io = { ...fixtureFetchers({ issues: [] }), tracker: () => "", print: () => {} };
   const usage = "Usage: fleet decisions <map URL | owner/repo#number | number>";

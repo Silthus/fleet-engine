@@ -25,6 +25,16 @@ test("prose lines skip fenced code", () => {
   expect(proseLines("a\n```\nb\n```\nc\n~~~ts\nd\n~~~")).toEqual(["a", "c"]);
 });
 
+test("a fence closes only on the same character, at least as long as its opener, with no info string", () => {
+  expect(proseLines("a\n````md\n```\n- hidden\n```\n````\nb")).toEqual(["a", "b"]);
+  expect(proseLines("a\n~~~\n```\nhidden\n~~~\nb")).toEqual(["a", "b"]);
+  expect(proseLines("a\n```\n~~~\nhidden\n```\nb")).toEqual(["a", "b"]);
+  expect(proseLines("a\n```\n```js\nhidden\n```\nb")).toEqual(["a", "b"]);
+  expect(proseLines("a\n```\nhidden\n`````  \nb")).toEqual(["a", "b"]);
+  expect(proseLines("a\n```a`b\nshown")).toEqual(["a", "```a`b", "shown"]);
+  expect(proseLines("a\n````\nhidden to the end\n```")).toEqual(["a"]);
+});
+
 test("the Orchestration pack hardcodes no repository, owner, or tracker", async () => {
   const root = join(import.meta.dir, "..");
   const files = (await readdir(root, { recursive: true })).filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts") && !path.endsWith("testing.ts"));
