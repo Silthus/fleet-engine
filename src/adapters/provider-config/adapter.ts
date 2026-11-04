@@ -7,12 +7,12 @@ import { codexHookTrust, isTrustOf } from "./codex-hooks.ts";
 import { checkPath, get, json, keyPath, overlaps, remove, same, samePath, set, toml, type Document, type Field, type Format } from "./fields.ts";
 import { reconcilePlugins } from "./plugins.ts";
 import { staleKeys } from "./stale.ts";
-import { linkOnPath, optional, readState, withLock, writeWithBackups, type Write } from "./store.ts";
+import { linkOnPath, optional, readState, withLock, writeWithBackups, type Wait, type Write } from "./store.ts";
 
 export type { CommandRunner } from "../run.ts";
 
-/** owns says which of the provider's keys live in this file. */
-type Target = { provider: Provider; path: string; format: Format; owns(path: string[]): boolean };
+/** owns says which of the provider's keys live in this file. sharedLock says its program takes <file>.lock before it writes the file. */
+type Target = { provider: Provider; path: string; format: Format; owns(path: string[]): boolean; sharedLock?: true };
 export type FieldRecord = { [target: string]: Field[] };
 type Merged = { record: Field[]; kept: string[]; reason: string; after?: string; document: Document };
 type FilesResult = AdapterResult & { plugins?: string[] };
@@ -21,24 +21,25 @@ export const recordTarget = ".config/fleet/provider-fields.json";
 const isMcpServer = (path: string[]) => path[0] === "mcpServers";
 const claudeSettings = ".claude/settings.json";
 
-/** Claude Code reads user MCP servers from ~/.claude.json, next to state it keeps itself, so Fleet owns only mcpServers.<name> there. */
+/** Claude Code reads user MCP servers from ~/.claude.json, next to state it keeps itself and writes under ~/.claude.json.lock, so Fleet owns only mcpServers.<name> there and takes the same lock. */
 export const configTargets: Target[] = [
   { provider: "claude", path: claudeSettings, format: json, owns: (path) => !isMcpServer(path) },
-  { provider: "claude", path: ".claude.json", format: json, owns: isMcpServer },
+  { provider: "claude", path: ".claude.json", format: json, owns: isMcpServer, sharedLock: true },
   { provider: "codex", path: ".codex/config.toml", format: toml, owns: () => true },
 ];
 
 const ownedBy = (target: Target) => (entry: { provider: Provider; key: string }) => entry.provider === target.provider && target.owns(keyPath(entry.key));
 
-export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Adapter {
+export function providerConfigAdapter(options: { run?: CommandRunner; wait?: Wait } = {}): Adapter {
   const run = options.run ?? spawnRunner;
+  const wait = options.wait ?? Bun.sleep;
   return {
     name: "config",
     targets: (plan) => configTargets.filter((target) => plan.config.some(ownedBy(target))).map((target) => target.path),
     async apply(plan, context) {
       const outage = sourceOutage(plan);
       const reconcile = async () => {
-        const { plugins, ...result } = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage);
+        const { plugins, ...result } = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage, wait);
         result.findings.push(...(await reconcilePlugins(plan, context.home, context.dryRun, run, { outage, accepted: plugins })));
         return result;
       };
@@ -49,7 +50,7 @@ export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Ad
   };
 }
 
-async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: string[], outage: boolean): Promise<FilesResult> {
+async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: string[], outage: boolean, wait: Wait): Promise<FilesResult> {
   const previous = await readFieldRecord(home);
   const next: FieldRecord = {};
   const writes: Array<Write & { action: Action }> = [];
@@ -76,7 +77,7 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
     if (merged.record.length) next[target.path] = merged.record;
     if (target.path === claudeSettings && !link) result.plugins = acceptedPlugins(merged.document);
     if (merged.kept.length) result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept your ${merged.kept.join(", ")} in ${target.path}. Run fleet apply --adopt ${target.path} to take Fleet's value.` });
-    if (merged.after !== undefined) writes.push({ target: target.path, before, after: merged.after, action: { target: target.path, operation: before === undefined ? "create" : "replace", reason: merged.reason } });
+    if (merged.after !== undefined) writes.push({ target: target.path, before, after: merged.after, ...(target.sharedLock && { sharedLock: wait }), action: { target: target.path, operation: before === undefined ? "create" : "replace", reason: merged.reason } });
   }
   if (dryRun) {
     for (const write of writes) result.findings.push({ id: `config:${write.target}`, pack: "engine", say: `${write.target} needs an update: ${write.action.reason}.`, repair: "apply" });
@@ -102,7 +103,7 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
   const current: Document = text === undefined ? {} : target.format.decode(text);
   const original = target.format.encode(current);
   const edited = previous.filter((field) => get(current, field.path) !== undefined && !same(get(current, field.path), field.value));
-  const stale = options.outage ? [] : staleKeys(target.provider, current, (path) => !wanted.some((field) => overlaps(field.path, path)) && !edited.some((field) => overlaps(field.path, path)));
+  const stale = options.outage ? [] : staleKeys(target.provider, current, (path) => target.owns(path) && !wanted.some((field) => overlaps(field.path, path)) && !edited.some((field) => overlaps(field.path, path)));
   const record: Field[] = [];
   const kept: string[] = [];
   const changed: string[] = [];
