@@ -199,3 +199,48 @@ test("require records the author family of the session, and refuses a family tha
   await expect(pr.fleet("require", "--kinds", "live-run", "--author", "gpt")).rejects.toThrow("written by claude");
   expect((await pr.fleet("require", "--kinds", "live-run")).code).toBe(0);
 });
+
+test("one message of the user's accepts the gaps of one PR only, however the agent words what it answers", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "new\n");
+  pr.say("Accept the gap.");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
+  expect((await pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap." for PR 42`, "--thread", "thread-1")).code).toBe(0);
+  const otherPr = ["--repo", "example/product", "--pr", "43"];
+  await pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--reason", "No sandbox");
+  await expect(pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap." for PR 43`, "--thread", "thread-1")).rejects.toThrow("already recorded on example/product#42");
+});
+
+test("a refusal never reads as an acceptance: the quote must be the user's whole message", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "new\n");
+  pr.say("Do not accept the gap.");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
+  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "accept the gap."`, "--thread", "thread-1")).rejects.toThrow("Quote their whole message");
+});
+
+test("a standing rule the user narrows keeps only the kinds and the date its current command names", async () => {
+  const pr = checkout();
+  const rule = "I accept each owed Prod shape gap and decide nothing else.";
+  const guide = (kinds: string, until: string) => writeFileSync(join(pr.home, ".agents/guides/standing-rules.md"), `- ${rule} \`fleet proof standing --kind ${kinds} --until ${until}\n  --rule "${rule}"\`\n`);
+  guide("prod-shape,review", "2026-11-26");
+  expect((await pr.fleet("standing", "--kind", "prod-shape,review", "--until", "2026-11-26", "--rule", rule)).code).toBe(0);
+  expect(await standingFor(pr.home, "review", new Date("2026-11-10T12:00:00Z"))).toMatchObject({ until: "2026-11-26" });
+
+  guide("prod-shape", "2026-11-05");
+  expect(await standingFor(pr.home, "review", new Date("2026-11-04T12:00:00Z"))).toBeUndefined();
+  expect(await standingFor(pr.home, "prod-shape", new Date("2026-11-04T12:00:00Z"))).toMatchObject({ kind: "prod-shape" });
+  expect(await standingFor(pr.home, "prod-shape", new Date("2026-11-10T12:00:00Z"))).toBeUndefined();
+});
+
+test("reuse of reused evidence points at the commit that holds the files", async () => {
+  const pr = checkout();
+  const first = pr.commit("feature.txt", "new\n");
+  writeFileSync(join(pr.repository, "run.log"), "GET /feature 200\n");
+  await pr.fleet("save", "--kind", "live-run", "run.log");
+  const second = pr.commit("feature.txt", "renamed\n");
+  await pr.fleet("save", "--kind", "live-run", "--reuse-from", first, "--reason", "a rename");
+  const third = pr.commit("feature.txt", "renamed again\n");
+  expect((await pr.fleet("save", "--kind", "live-run", "--reuse-from", second, "--reason", "another rename")).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, `reused/live-run/${third}.json`), "utf8"))).toMatchObject({ from: first });
+});

@@ -54,7 +54,7 @@ export async function reuseProof(home: string, identity: ProofIdentity, kind: st
   if (!reason.trim()) throw new Error("--reuse-from needs --reason with why the evidence of that commit still proves HEAD");
   if (from === identity.commit) throw new Error("That commit is HEAD. Save its evidence instead");
   if (!(await provedCommits(home, identity, owed)).has(from)) throw new Error(`${short(from)} has no ${owed} evidence to reuse`);
-  const reuse: Reuse = { from, reason, recordedAt: new Date().toISOString() };
+  const reuse: Reuse = { from: (await provedCommits(home, identity, owed)).get(from)?.reuse?.from ?? from, reason, recordedAt: new Date().toISOString() };
   await writeJson(reusePath(home, identity, owed), reuse);
   return reuse;
 }
@@ -142,6 +142,7 @@ export async function recordGap(home: string, identity: ProofIdentity, kind: str
   if (!gap) throw new Error(`No ${kind} gap is recorded. Record it with --reason first.`);
   await refuseBorrowedAnswer(home, identity, update.accept, "gap");
   const answer = await update.hear(update.accept);
+  await refuseBorrowedMessage(home, identity, answer, "gap");
   const accepted: Gap = { ...gap, acceptance: { instruction: update.accept, acceptedAt: new Date().toISOString(), answer } };
   await writeJson(path, accepted);
   return accepted;
@@ -158,7 +159,8 @@ function instructionSentences(instructions: string) {
   return instructions.split(/[.!?\n]+/).map((sentence) => normalized(sentence).replace(/^[^a-z0-9]+/, "")).filter((sentence) => sentence.length >= minimumRule);
 }
 
-type RecordedAnswer = { where: string; repository: string; pr: number; use: "round" | "gap"; text: string };
+type RecordedAnswer = { where: string; repository: string; pr: number; use: "round" | "gap"; text: string; message?: string };
+const messageOf = (answer: HeardAnswer | undefined) => answer && `${answer.thread}/${answer.message}`;
 
 async function recordedAnswers(home: string) {
   const answers: RecordedAnswer[] = [];
@@ -166,12 +168,12 @@ async function recordedAnswers(home: string) {
   for (const owner of await entries(root)) for (const name of await entries(join(root, owner))) for (const pr of await entries(join(root, owner, name))) {
     const [directory, repository] = [join(root, owner, name, pr), `${owner}/${name}`];
     for (const review of await reviewNames(join(directory, "reviews"))) {
-      const override = (await readJson<{ override?: string } | undefined>(join(directory, "reviews", review, "round.json"), undefined))?.override;
-      if (override) answers.push({ where: `${repository}#${pr} ${reviewLabel(review)}`, repository, pr: Number(pr), use: "round", text: override });
+      const round = await readJson<{ override?: string; answer?: HeardAnswer } | undefined>(join(directory, "reviews", review, "round.json"), undefined);
+      if (round?.override) answers.push({ where: `${repository}#${pr} ${reviewLabel(review)}`, repository, pr: Number(pr), use: "round", text: round.override, message: messageOf(round.answer) });
     }
     for (const file of (await entries(join(directory, "gaps"))).filter((entry) => entry.endsWith(".json"))) {
-      const instruction = (await readJson<Gap | undefined>(join(directory, "gaps", file), undefined))?.acceptance?.instruction;
-      if (instruction) answers.push({ where: `${repository}#${pr} ${file.slice(0, -5)} gap`, repository, pr: Number(pr), use: "gap", text: instruction });
+      const acceptance = (await readJson<Gap | undefined>(join(directory, "gaps", file), undefined))?.acceptance;
+      if (acceptance) answers.push({ where: `${repository}#${pr} ${file.slice(0, -5)} gap`, repository, pr: Number(pr), use: "gap", text: acceptance.instruction, message: messageOf(acceptance.answer) });
     }
   }
   return answers;
@@ -182,8 +184,16 @@ async function refuseBorrowedAnswer(home: string, identity: ProofIdentity, text:
   if (instructionSentences(await agentInstructions(home)).some((sentence) => answer.includes(sentence))) {
     throw new Error("This quotes the user's instructions in ~/.agents, not their answer to this question. A standing rule there is recorded once with fleet proof standing; otherwise ask the user and record their reply");
   }
+  await refuseBorrowed(home, identity, use, (recorded) => normalized(recorded.text) === answer);
+}
+
+export async function refuseBorrowedMessage(home: string, identity: ProofIdentity, heard: HeardAnswer, use: "round" | "gap") {
+  await refuseBorrowed(home, identity, use, (recorded) => recorded.message === messageOf(heard));
+}
+
+async function refuseBorrowed(home: string, identity: ProofIdentity, use: "round" | "gap", same: (recorded: RecordedAnswer) => boolean) {
   const samePrGaps = (recorded: RecordedAnswer) => use === "gap" && recorded.use === "gap" && recorded.repository === identity.repository && recorded.pr === identity.pr;
-  const borrowed = (await recordedAnswers(home)).find((recorded) => normalized(recorded.text) === answer && !samePrGaps(recorded));
+  const borrowed = (await recordedAnswers(home)).find((recorded) => same(recorded) && !samePrGaps(recorded));
   if (borrowed) throw new Error(`This answer is already recorded on ${borrowed.where}. Each round, and the gaps of each PR, need the user's answer to that question; quote it with what it answers`);
 }
 
@@ -215,8 +225,15 @@ export const listStanding = (home: string) => readJson<Standing[]>(standingPath(
 
 export async function standingFor(home: string, kind: StandingKind, now: Date) {
   const standing = (await listStanding(home)).find((record) => record.kind === kind);
-  if (!standing || now.toISOString().slice(0, 10) >= standing.until) return undefined;
-  return normalized(await agentInstructions(home)).includes(normalized(standing.rule)) ? standing : undefined;
+  if (!standing) return undefined;
+  const today = now.toISOString().slice(0, 10);
+  const current = standingCommands(await agentInstructions(home)).filter((command) => command.kinds.includes(kind) && normalized(command.rule) === normalized(standing.rule));
+  return current.some((command) => today < command.until && today < standing.until) ? standing : undefined;
+}
+
+function standingCommands(instructions: string) {
+  const commands = instructions.replace(/\s+/g, " ").matchAll(/fleet proof standing --kind ([a-z,-]+) --until (\d{4}-\d{2}-\d{2}) --rule ["“]([^"”]*)["”]/g);
+  return [...commands].map(([, kinds, until, rule]) => ({ kinds: kinds!.split(","), until: until!, rule: rule! }));
 }
 
 const short = (commit: string) => commit.slice(0, 7);
