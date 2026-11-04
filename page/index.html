@@ -343,14 +343,14 @@ function timeline() {
 }
 function workflowRows(pack) {
   return pack.workflows.map((workflow) => {
-    const missing = missingPack(data, picks, workflow);
-    const on = chosen(picks, workflow) && !missing;
-    return `<div class="wf ${on ? "" : "wf-off"}">
-        <button class="switch" role="switch" aria-label="${esc(workflow.name)}" aria-checked="${on}" data-act="wf" data-id="${workflow.id}" ${missing ? "disabled" : ""}></button>
+    const state = momentState(data, picks, workflow, pack.name);
+    const needed = !state.on && "pack" in state.fix ? packOf2(state.fix.pack) : undefined;
+    return `<div class="wf ${state.on ? "" : "wf-off"}">
+        <button class="switch" role="switch" aria-label="${esc(workflow.name)}" aria-checked="${state.on}" data-act="wf" data-id="${workflow.id}" ${needed ? "disabled" : ""}></button>
         <div class="wf-body"><div class="wf-name">${esc(workflow.name)}${workflow.default ? "" : ' <span class="badge">off by default</span>'}</div>
           <div class="wf-sentence">${fmt(workflow.sentence)}</div>
-          ${needs(workflow, missing)}
-          ${missing ? `<div class="muted" style="font-size:.85rem;margin-top:4px">Turn on the ${esc(packOf2(missing).title)} pack to use it.</div>` : ""}
+          ${needs(workflow, missingPack(data, picks, workflow))}
+          ${needed && !missingPack(data, picks, workflow) ? `<div class="muted" style="font-size:.85rem;margin-top:4px">Needs the ${esc(needed.title)} pack.</div>` : ""}
         </div></div>`;
   }).join("");
 }
@@ -377,11 +377,15 @@ function settingsBlock(pack) {
   }).join("")}</div>`;
 }
 function tune() {
-  const packs = data.packs.filter((pack) => pack.always || picks.packs.includes(pack.name));
   return `<div class="tune"><h2>Tune it</h2>
-    ${packs.map((pack) => `<details data-pack="${pack.name}" ${opened.has(pack.name) ? "open" : ""}><summary>${flag(pack.name)} ${esc(pack.title)}</summary>
-        <div class="facts"><p>${fmt(pack.day ?? pack.summary)}</p>${pack.cost ? `<p class="muted">${fmt(pack.cost)}</p>` : ""}${pack.risk ? `<div class="warnbox">${fmt(pack.risk)}</div>` : ""}</div>
-        ${workflowRows(pack)}${settingsBlock(pack)}</details>`).join("")}
+    ${data.packs.map((pack) => {
+    const on = pack.always || picks.packs.includes(pack.name);
+    const state = pack.always ? '<span class="badge">always</span>' : on ? "" : '<span class="badge">off</span>';
+    const add = on ? "" : `<div class="get"><button data-act="pack" data-id="${pack.name}">Add the ${esc(pack.title)} pack</button></div>`;
+    return `<details data-pack="${pack.name}" ${opened.has(pack.name) ? "open" : ""}><summary>${flag(pack.name)} ${esc(pack.title)} ${state}</summary>
+        <div class="facts"><p>${fmt(pack.day ?? pack.summary)}</p>${pack.cost ? `<p class="muted">${fmt(pack.cost)}</p>` : ""}${pack.risk ? `<div class="warnbox">${fmt(pack.risk)}</div>` : ""}${add}</div>
+        ${workflowRows(pack)}${on ? settingsBlock(pack) : ""}</details>`;
+  }).join("")}
     <div class="aud">${flag(data.teamPacks[0] ?? "")}<span>${esc(data.teamNote)}</span></div>
     <details data-pack="machines" ${opened.has("machines") ? "open" : ""}><summary>How the machines fit together</summary>${diagram()}</details>
   </div>`;
