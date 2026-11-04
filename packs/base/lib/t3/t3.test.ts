@@ -189,6 +189,21 @@ test("the T3 CLI runs with a time limit, and every session is revoked on its own
   expect(revokes).toEqual(["shell-session", "mcp-session"]);
 });
 
+test("a session is revoked even when the work throws before it awaits anything", async () => {
+  const t3 = await stub({ shell: { projects: [], threads: [] } });
+  const revokes: string[] = [];
+  const runCli = t3CliRunner();
+  const outcome = withT3Session(() => { throw new Error("failed at once"); }, {
+    home: t3.home,
+    runCli(server, args) {
+      if (args.includes("revoke")) revokes.push(args.at(-1)!);
+      return runCli(server, args);
+    },
+  });
+  await expect(outcome).rejects.toThrow("failed at once");
+  expect(revokes).toEqual(["shell-session"]);
+});
+
 test("a failed T3 CLI call names its exit code and what it wrote to stderr", async () => {
   const server = { origin: "http://127.0.0.1:9", wsUrl: "ws://127.0.0.1:9/ws", cli: { command: "/usr/bin/dash", args: [] } };
   const runCli = () => ({ status: 2, stdout: "", stderr: "/usr/bin/dash: 0: cannot open auth: No such file\n" });

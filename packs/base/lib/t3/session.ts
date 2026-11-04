@@ -148,7 +148,7 @@ export async function withT3Session<T>(run: (client: T3HttpClient) => Promise<T>
       return await response.json() as R;
     } finally { clear(); }
   };
-  const outcome = await run({
+  const outcome = await Promise.resolve().then(() => run({
     get,
     getShell: <R>() => get<R>("/api/orchestration/shell"),
     async call<R>(tag: string, payload: unknown, callTimeoutMs?: number) {
@@ -163,7 +163,7 @@ export async function withT3Session<T>(run: (client: T3HttpClient) => Promise<T>
       });
       return (await mcp).callTool<R>(name, args);
     },
-  }).then((value) => ({ value }), (error: unknown) => ({ error }));
+  })).then((value) => ({ value }), (error: unknown) => ({ error }));
   if (rpc) (await rpc.catch(() => undefined))?.close();
   await mcp?.catch(() => undefined);
   const revokeFailure = revokeEach(server, runCli, issued);
