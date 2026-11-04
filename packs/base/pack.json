@@ -2,5 +2,9 @@
   "schema": 1,
   "name": "base",
   "summary": "Safety rules every agent follows.",
-  "instructions": "AGENTS.md"
+  "instructions": "AGENTS.md",
+  "settings": [
+    { "key": "base.heavySlots", "question": "How many heavy commands may run at once?", "type": "number", "default": 2, "ask": "never" },
+    { "key": "base.diskFloorGigabytes", "question": "Below how many free gigabytes should Fleet refuse new worktrees and heavy jobs?", "type": "number", "default": 10, "ask": "never" }
+  ]
 }

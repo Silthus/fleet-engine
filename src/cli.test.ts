@@ -161,6 +161,24 @@ describe("fleet routing", () => {
     expect(readFileSync(join(home, "hello.txt"), "utf8")).toBe("tools a b");
   });
 
+  test("gives a pack command the resolved settings, defaults and profile answers included", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithCommands();
+    const tools = join(engine, "packs/tools");
+    const settings = [
+      { key: "tools.slots", question: "How many?", type: "number", default: 2 },
+      { key: "tools.name", question: "Which name?", type: "string", default: "plain" },
+    ];
+    writeFileSync(join(tools, "pack.json"), JSON.stringify({ schema: 1, name: "tools", summary: "tools pack.", settings }));
+    writeFileSync(join(tools, "commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", Bun.env.FLEET_SETTINGS ?? "none");\n`);
+    const profile = profileDir(["tools"]);
+    const file = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
+    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...file, settings: { "tools.name": "mine" } }));
+    expect((await fleet(["apply", "--profile", profile], home, engine)).code).toBe(0);
+    expect((await fleet(["hello"], home, engine)).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"))).toMatchObject({ "tools.slots": 2, "tools.name": "mine" });
+  });
+
   test("reports a command that two enabled packs ship", async () => {
     const home = temp.make("home-");
     const result = await fleet(["apply", "--profile", profileDir(["tools", "rival"])], home, engineWithCommands());

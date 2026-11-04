@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { needValues, type LoadedPack, type PackManifest } from "./types.ts";
+import { needValues, type LoadedPack, type ModelRow, type PackManifest } from "./types.ts";
 
 export class PackError extends Error {}
 
@@ -31,7 +31,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
   if (raw.schema !== 1) return fail(`unknown schema ${String(raw.schema)}`);
   if (typeof raw.name !== "string" || !packName.test(raw.name)) return fail("name must be lowercase words joined by dashes");
   if (typeof raw.summary !== "string" || raw.summary === "") return fail("summary must be one plain sentence");
-  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks"]) {
+  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files"]) {
     if (raw[field] !== undefined && !Array.isArray(raw[field])) fail(`${field} must be a list`);
   }
   checkShapes(raw, fail);
@@ -46,6 +46,23 @@ const roles = ["mac", "devbox", "linux", "hub"];
 const intervals = ["5m", "15m", "1h", "1d"];
 const runtimeModes = ["full-access", "auto", "approval-required"];
 const providers = ["claude", "codex", "t3"];
+const plans = ["claude", "codex", "both"];
+const efforts = ["low", "medium", "high", "xhigh", "max"];
+
+function scopeProblem(item: Record<string, unknown>) {
+  if (item.on !== undefined && !isListOf(item.on, oses)) return "on must list darwin or linux";
+  if (item.roles !== undefined && !isListOf(item.roles, roles)) return "roles must list mac, devbox, linux, or hub";
+  if (item.plans !== undefined && !isListOf(item.plans, plans)) return "plans must list claude, codex, or both";
+  if (item.workflow !== undefined && typeof item.workflow !== "string") return "workflow must be an id";
+  return undefined;
+}
+
+/** What is wrong with a config entry from a pack or a profile's overrides, or undefined when it is sound. */
+export function configEntryProblem(item: unknown) {
+  if (!isRecord(item)) return "must be an object";
+  if (!providers.includes(item.provider as string) || typeof item.key !== "string") return "needs a provider and a key";
+  return scopeProblem(item);
+}
 
 /** Checks every nested item's shape before the manifest is trusted as a PackManifest. */
 function checkShapes(raw: Record<string, unknown>, fail: (message: string) => never) {
@@ -60,9 +77,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     });
   };
   const filters = (item: Record<string, unknown>, label: string) => {
-    need(item.on === undefined || isListOf(item.on, oses), `${label}: on must list darwin or linux`);
-    need(item.roles === undefined || isListOf(item.roles, roles), `${label}: roles must list mac, devbox, linux, or hub`);
-    need(item.workflow === undefined || typeof item.workflow === "string", `${label}: workflow must be an id`);
+    const problem = scopeProblem(item);
+    if (problem) fail(`${label}: ${problem}`);
   };
   for (const field of ["requires", "skills"]) need(raw[field] === undefined || isStrings(raw[field]), `${field} must list names`);
   need(raw.instructions === undefined || typeof raw.instructions === "string", "instructions must be a path");
@@ -72,8 +88,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(item.section === undefined || typeof item.section === "string", `${label}: section must be text`);
   });
   each("config", (item, label) => {
-    need(providers.includes(item.provider as string) && typeof item.key === "string", `${label}: needs a provider and a key`);
-    filters(item, label);
+    const problem = configEntryProblem(item);
+    if (problem) fail(`${label}: ${problem}`);
   });
   each("settings", (item, label) => {
     need(typeof item.key === "string" && typeof item.question === "string", `${label}: needs a key and a question`);
@@ -101,6 +117,11 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(runtimeModes.includes(task.runtimeMode as string), `${label}: task.runtimeMode must be full-access, auto, or approval-required`);
     need(task.id === undefined && task.schedule === undefined, `${label}: the job's id and schedule are the task's; drop task.id and task.schedule`);
   });
+  each("files", (item, label) => {
+    need(typeof item.path === "string" && typeof item.target === "string", `${label}: needs a path and a target`);
+    filters(item, label);
+  });
+  checkModels(raw.models, fail);
   each("human", (item, label) => {
     need(typeof item.id === "string" && typeof item.say === "string" && isStrings(item.probe), `${label}: needs an id, a say, and a probe list`);
     need(item.command === undefined || typeof item.command === "string", `${label}: command must be text`);
@@ -115,6 +136,25 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(typeof item.id === "string" && isStrings(item.run) && typeof item.say === "string", `${label}: needs an id, a run list, and a say`);
     filters(item, label);
   });
+}
+
+function checkModels(models: unknown, fail: (message: string) => never) {
+  if (models === undefined) return;
+  if (!isRecord(models) || !Object.keys(models).every((plan) => plans.includes(plan))) fail("models must map claude, codex, or both to rows");
+  for (const [plan, rows] of Object.entries(models as Record<string, unknown>)) {
+    if (!Array.isArray(rows)) fail(`models ${plan} must list rows`);
+    const roles = new Set<string>();
+    for (const row of rows as unknown[]) {
+      if (!isModelRow(row)) fail(`models ${plan}: each row needs a role, work, a claude or codex provider, a model, and an effort`);
+      const { role } = row as ModelRow;
+      if (roles.has(role)) fail(`models ${plan}: role ${role} is listed twice`);
+      roles.add(role);
+    }
+  }
+}
+
+export function isModelRow(row: unknown): row is ModelRow {
+  return isRecord(row) && ["role", "work", "model"].every((key) => typeof row[key] === "string") && (row.provider === "claude" || row.provider === "codex") && efforts.includes(row.effort as string);
 }
 
 function checkSettings(manifest: PackManifest, fail: (message: string) => never) {
@@ -135,10 +175,10 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
       if (!(needValues as readonly string[]).includes(need)) fail(`workflow ${workflow.id} has unknown need ${need}`);
     }
   }
-  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config };
+  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files };
   for (const [field, items] of Object.entries(tied)) {
     for (const item of items ?? []) {
-      const label = "id" in item ? item.id : item.key;
+      const label = "id" in item ? item.id : "key" in item ? item.key : item.target;
       if (item.workflow !== undefined && !ids.has(item.workflow)) fail(`${field} ${label} names unknown workflow ${item.workflow}`);
     }
   }
