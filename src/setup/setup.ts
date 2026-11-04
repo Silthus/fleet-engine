@@ -26,10 +26,14 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   const remember = () => saveMachine(options.home, { ...machine, setup: { done: progress.done, draft: progress.draft } });
   try {
     flags = parseSetupFlags(args);
-    picksFrom(flags, catalog);
-    const reopened = [...(hasPicks(flags) ? ["packs"] : []), ...(flags.plan ? ["plans"] : [])];
-    progress.done = progress.done.filter((id) => !reopened.includes(id));
+    const picked = picksFrom(flags, catalog);
     const fromFlags = settingsFrom(flags, catalog);
+    const saved = progress.draft;
+    const reopened = [
+      ...(hasPicks(flags) && JSON.stringify(picked) !== JSON.stringify({ packs: saved.packs, workflows: saved.workflows ?? {} }) ? ["packs"] : []),
+      ...(flags.plan && flags.plan !== saved.plan ? ["plans"] : []),
+    ];
+    progress.done = progress.done.filter((id) => !reopened.includes(id));
     if (Object.keys(fromFlags).length) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
       await remember();
