@@ -161,6 +161,13 @@ describe("resolve", () => {
     expect(plan({ packs: ["loops"], workflows: { night: false } }, mac, [engine, loops]).unanswered).toEqual([]);
   });
 
+  test("keeps a setting that another pack's active workflow lists", () => {
+    const owner = withPack({ schema: 1, name: "owner", summary: "Owner.", settings: [{ key: "owner.project", question: "Which project?", type: "string" }], workflows: [{ id: "owned", name: "Owned", sentence: "Owned.", default: false, settings: ["owner.project"] }] });
+    const user = withPack({ schema: 1, name: "user", summary: "User.", workflows: [{ id: "borrowed", name: "Borrowed", sentence: "Borrowed.", default: true, settings: ["owner.project"] }] });
+    const result = plan({ packs: ["owner", "user"] }, mac, [engine, owner, user]);
+    expect(result.unanswered.map((setting) => setting.key)).toEqual(["owner.project"]);
+  });
+
   test("limits items by os and role", () => {
     expect(plan({ packs: ["posthog"] }).human.map((step) => step.id)).toEqual(["coder"]);
     expect(plan({ packs: ["posthog"] }, devbox).human).toEqual([]);
