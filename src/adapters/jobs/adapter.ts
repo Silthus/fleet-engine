@@ -188,7 +188,13 @@ async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun,
     for (const job of jobs) result.findings.push({ id: `task:${job.id}`, pack: job.pack, say: `The ${job.id} task waits for T3 Code to run. The next fleet apply after T3 Code starts adds it.`, repair: "apply" });
     return;
   }
-  const existing = await client.list();
+  let existing: FleetTask[];
+  try {
+    existing = await client.list();
+  } catch (error) {
+    result.findings.push({ id: "tasks:t3", pack: "engine", say: `Could not read T3 Code's scheduled tasks: ${(error as Error).message}. Run fleet apply again.`, repair: "apply" });
+    return;
+  }
   for (const job of jobs) {
     const task = job.task!;
     if (task.project === undefined) {
@@ -202,7 +208,12 @@ async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun,
       result.findings.push(needs(job, current ? "updated" : "added", "task"));
       continue;
     }
-    await client.upsert(wanted);
+    try {
+      await client.upsert(wanted);
+    } catch (error) {
+      result.findings.push({ id: `task:${job.id}`, pack: job.pack, say: `Could not add the ${job.id} task to T3 Code: ${(error as Error).message}`, repair: "apply" });
+      continue;
+    }
     result.actions.push({ target: `t3 task ${wanted.id}`, operation: current ? "replace" : "create" });
   }
   for (const task of existing) {
@@ -211,7 +222,12 @@ async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun,
       result.findings.push(needs(task.id.slice(taskPrefix.length), "turned off", "task"));
       continue;
     }
-    await client.setEnabled(task.id, false);
+    try {
+      await client.setEnabled(task.id, false);
+    } catch (error) {
+      result.findings.push({ id: `task:${task.id.slice(taskPrefix.length)}`, pack: "engine", say: `Could not turn off the ${task.id.slice(taskPrefix.length)} task in T3 Code: ${(error as Error).message}`, repair: "apply" });
+      continue;
+    }
     result.actions.push({ target: `t3 task ${task.id}`, operation: "remove", reason: "turned off" });
   }
 }
