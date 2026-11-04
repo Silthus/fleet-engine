@@ -1,7 +1,9 @@
-import { resolve } from "node:path";
-import { listStanding, proofDirectory, recordGap, recordStanding, requireNone, requireProofs, reuseProof, saveProof, type ProofIdentity } from "./proof.ts";
-import { family, sessionFamily, type Family } from "./proof-models.ts";
+import { join, resolve } from "node:path";
+import { finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, saveProof, startReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
+import { askModel, family, sessionFamily, type Family } from "./proof-models.ts";
 import { listenIn, withoutThread, type ThreadWords } from "./proof-answers.ts";
+import { modelFor } from "../../base/lib/models.ts";
+import { numberSetting } from "../../base/lib/settings.ts";
 
 export type ProofContext = { home: string; cwd: string; env: Record<string, string | undefined>; print: (text: string) => void; now?: () => Date; threadWords?: ThreadWords };
 type Result = { code: number; stdout: string; stderr: string };
@@ -17,6 +19,17 @@ const answerHelp = `--thread names the T3 thread where the user gave the answer;
 reads that thread, and the quoted words must appear in a message the user typed there or in the answer they gave to a
 question tool in the T3 app; an answer sent through MCP does not count. The ledger keeps the thread, the message, the
 user's words, and the question they answered.`;
+
+const overrideHelp = `--override takes the user's answer to this round or finding: their words in quotes and the date they gave them,
+for example --override '2026-10-24 "Run round 7; the new findings are real."' --thread <T3 thread id>. A general
+rule, such as "ship everything autonomously", does not answer a specific round.
+${answerHelp}
+--standing takes your own reason for a round that the arbiter escalates or the ceiling refuses, when the user's
+standing review rule (fleet proof standing --kind review) lets agents decide them. The round keeps the reason, the
+rule, and the arbiter's verdict.
+The settings pull-requests.freeReviews and pull-requests.reviewCeiling set how many rounds, and how many final reads
+per phase, run before the arbiter weighs one more and where the loop stops. The arbiter is the lookup model of your
+AI plan; FLEET_REVIEW_ARBITER replaces its command.`;
 
 const subcommands: Record<string, Subcommand> = {
   path: {
@@ -59,6 +72,30 @@ family does not change.`,
       return 0;
     },
   },
+  show: {
+    usage: "show [--round <number|final>]",
+    summary: "Print the latest review round, or --round: who reviewed it and where its findings are.",
+    examples: ["fleet proof show", "fleet proof show --round 2"],
+    options: ["--round"],
+    run: async ({ options }, identity, context) => {
+      const directory = await reviewDirectory(context.home, identity(), roundOption(options));
+      for (const line of await roundLines(directory)) context.print(line);
+      return 0;
+    },
+  },
+  respond: {
+    usage: "respond --round <number|final> <responses.md>",
+    summary: `Save your answer to each finding of a finished review: fixed in which commit, or rejected and why. A new call
+replaces the earlier answer.`,
+    examples: ["fleet proof respond --round 1 responses.md", "fleet proof respond --round final responses.md"],
+    options: ["--round"],
+    run: async ({ options, files }, identity, { print, home, cwd }) => {
+      if (files.length !== 1) throw usageError("respond", "Pass one responses file");
+      const round = required(options, "--round", "respond");
+      print(await respondToReview(home, identity(), round === "final" ? "final" : Number(round), resolve(cwd, files[0]!)));
+      return 0;
+    },
+  },
   standing: {
     usage: "standing [--kind <kind,kind> --until <date> --rule <rule>]",
     summary: `Record a standing rule: the user's rule in ~/.agents/guides/standing-rules.md that decides for them until a
@@ -93,7 +130,78 @@ ${answerHelp}`,
       return 0;
     },
   },
+  gate: {
+    usage: "gate [--landed]",
+    summary: `Check the owed proofs, the review, and the CI of the commit on GitHub. Exit 0 only on a pass: 1 means the owed
+proofs are not recorded, a proof is missing, the commit is not reviewed, or CI is red, pending, or not on the pushed
+head; 3 means only unaccepted gaps remain. The last line is the verdict and names what it covered. A clean merge of
+the PR's base carries the review and the evidence of its other parent forward.`,
+    examples: ["fleet proof gate", "fleet proof gate --landed"], flags: ["--landed"],
+    run: async ({ flags }, identity, { print, home, run, now }) => {
+      const head = identity();
+      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), ci: () => ciOf(head, run), now: now?.() });
+      for (const line of gate.lines) print(line);
+      print(gate.code === 0 ? `gate: pass (${gate.summary})` : `gate: fail (exit ${gate.code})`);
+      return gate.code;
+    },
+  },
+  "review-start": {
+    usage: "review-start [--scope full|fixes|final] [--base <reviewed-sha>] [--phase review|babysit] [--override <dated quote> --thread <id> | --standing <reason>]",
+    summary: `Reserve a review round before you dispatch its reviewers. Round 1 is --scope full. A later round is
+--scope fixes, and a final read is --scope final; both take --base with the commit of the latest finished review.
+A later round with the user's --override, or --standing under their standing rule, may be --scope full: it reviews
+the whole PR diff at HEAD again, such as after a restack.
+${overrideHelp}`,
+    examples: ["fleet proof review-start --scope full", "fleet proof review-start --scope fixes --base 1a2b3c4", "fleet proof review-start --scope final --base 1a2b3c4"],
+    options: ["--scope", "--base", "--phase", "--override", "--thread", "--standing"],
+    run: async ({ options }, identity, context) => {
+      const head = identity();
+      const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
+      context.print(JSON.stringify(await startReview(context.home, head, { scope: options.get("--scope") ?? "full", base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
+      return 0;
+    },
+  },
+  "review-finish": {
+    usage: "review-finish --round <number|final> --reviewer <model> <findings.md>",
+    summary: `Save the findings of a reserved round after its reviewers finish. --reviewer names the model that wrote them;
+the gate prints it. The findings file must not be empty; write "No findings." when the reviewer found none.`,
+    examples: ["fleet proof review-finish --round 1 --reviewer gpt-6.1-sol findings.md", "fleet proof review-finish --round final --reviewer claude-opus-5-5 findings.md"],
+    options: ["--round", "--findings", "--reviewer"],
+    run: async ({ options, files }, identity, { print, home, cwd }) => {
+      const findings = options.has("--findings") ? [options.get("--findings")!, ...files] : files;
+      if (findings.length !== 1) throw usageError("review-finish", "Pass one findings file");
+      const round = required(options, "--round", "review-finish");
+      const reviewer = required(options, "--reviewer", "review-finish");
+      print(await finishReview(home, identity(), round === "final" ? "final" : Number(round), resolve(cwd, findings[0]!), reviewer));
+      return 0;
+    },
+  },
 };
+
+async function roundLines(directory: string) {
+  const round = await readJson<{ round: number | "final"; commit: string; reviewer?: string; capturedBy?: string; standing?: { reason: string; until: string } } | undefined>(join(directory, "round.json"), undefined);
+  if (!round) throw new Error(`${directory} has no reservation`);
+  const finished = round.reviewer ? `finished by ${round.reviewer}, ${round.capturedBy === "fleet" ? "captured by fleet" : "saved by the author"}: ${join(directory, "findings.md")}` : "reserved, no findings yet";
+  const header = `${round.round === "final" ? "final read" : `round ${round.round}`} on ${short(round.commit)}: ${finished}`;
+  return [header, ...(round.standing ? [`accepted by the standing rule until ${round.standing.until}: ${round.standing.reason}`] : [])];
+}
+
+function roundOption(options: Map<string, string>) {
+  const round = options.get("--round");
+  return round === undefined ? undefined : round === "final" ? "final" : Number(round);
+}
+
+const arbiterLimit = 180_000;
+
+const arbiterOf = ({ env, cwd }: CommandContext): Arbiter => async (prompt) => {
+  const answer = await askModel("arbiter", modelFor("lookup", env), { prompt, cwd }, env, arbiterLimit);
+  return answer.ok ? parseVerdict(answer.text, answer.model) : { verdict: "unavailable", reason: answer.cause, model: answer.model };
+};
+
+const decisionOf = (options: Map<string, string>, context: CommandContext) => ({
+  override: options.get("--override"), standing: options.get("--standing"), hear: hearing(options, context), arbiter: arbiterOf(context), now: context.now?.(),
+  limits: { free: numberSetting("pull-requests.freeReviews", context.env), ceiling: numberSetting("pull-requests.reviewCeiling", context.env) },
+});
 
 function hearing(options: Map<string, string>, { threadWords }: CommandContext) {
   const thread = options.get("--thread");
@@ -112,7 +220,7 @@ function resolveAuthor(requested: string | undefined, env: Record<string, string
 }
 
 const identityHelp = `Every command works on the PR of the current branch and its HEAD. Pass --repo owner/name, --pr number,
-or --commit to choose others. --commit takes any commit Git resolves here, such as a short SHA.`;
+or --commit to choose others. --commit and --base take any commit Git resolves here, such as a short SHA.`;
 const kindsHelp = "Kinds: live-run, ui-walk, prod-shape, cross-version, shadow-diff, post-deploy-watch. A gap also takes ci and judge, and a standing rule also takes review.";
 
 function overview() {
@@ -177,6 +285,52 @@ function resolveIdentity(options: Map<string, string>, run: Run): ProofIdentity 
   const commit = resolveCommit(options.get("--commit") ?? "HEAD", run);
   return { ...resolvePullRequest(options.get("--repo"), options.get("--pr"), run), commit };
 }
+
+function baseRefs(identity: ProofIdentity, run: Run) {
+  const view = run(["gh", "pr", "view", String(identity.pr), "--repo", identity.repository, "--json", "baseRefName"]);
+  if (view.code !== 0) throw new Error(`Cannot read the base branch of ${identity.repository}#${identity.pr} with gh (${firstLine(view.stderr)})`);
+  const base = (JSON.parse(view.stdout) as { baseRefName: string }).baseRefName;
+  return remotesOf(identity.repository, run).map((remote) => `refs/remotes/${remote}/${base}`);
+}
+
+function remotesOf(repository: string, run: Run) {
+  const remotes = run(["git", "remote"]).stdout.split("\n").filter(Boolean);
+  return remotes.filter((remote) => new RegExp(`github\\.com[:/]${repository.replace(/\./g, "\\.")}(\\.git)?/?$`, "i").test(run(["git", "remote", "get-url", remote]).stdout.trim()));
+}
+
+function cleanBaseMerge(identity: ProofIdentity, run: Run): CleanBaseMerge {
+  let bases: string[] | undefined;
+  return (commit) => {
+    const parents = run(["git", "rev-list", "--parents", "-n", "1", commit]);
+    const [, reviewedSide, baseSide, ...more] = parents.code === 0 ? parents.stdout.trim().split(" ") : [];
+    if (!reviewedSide || !baseSide || more.length) return undefined;
+    bases ??= baseRefs(identity, run);
+    if (!bases.some((ref) => run(["git", "merge-base", "--is-ancestor", baseSide, ref]).code === 0)) return undefined;
+    const remerge = run(["git", "show", "--remerge-diff", "--format=", "--no-relative", "--no-ext-diff", "--no-textconv", commit]);
+    return remerge.code === 0 && !remerge.stdout.trim() ? reviewedSide : undefined;
+  };
+}
+
+type Check = { name: string; bucket: string };
+
+function ciOf(identity: ProofIdentity, run: Run): CiResult {
+  const view = run(["gh", "pr", "view", String(identity.pr), "--repo", identity.repository, "--json", "headRefOid"]);
+  if (view.code !== 0) return { state: "unknown", detail: `cannot read the PR head with gh (${firstLine(view.stderr)})` };
+  const head = (JSON.parse(view.stdout) as { headRefOid?: string }).headRefOid ?? "";
+  if (head !== identity.commit) return { state: "pending", detail: `${short(identity.commit)} is not the PR's head on GitHub (${short(head) || "none"}); push it` };
+  const result = run(["gh", "pr", "checks", String(identity.pr), "--repo", identity.repository, "--json", "name,bucket"]);
+  let checks: Check[] | undefined;
+  try { checks = JSON.parse(result.stdout) as Check[]; } catch {}
+  if (!checks) return /no checks reported/i.test(result.stderr) ? { state: "none", detail: "no checks reported" } : { state: "unknown", detail: `gh pr checks failed (${firstLine(result.stderr)})` };
+  if (!checks.length) return { state: "none", detail: "no checks reported" };
+  const named = (buckets: string[]) => checks.filter((check) => buckets.includes(check.bucket)).map((check) => check.name);
+  const [failing, pending] = [named(["fail", "cancel"]), named(["pending"])];
+  if (failing.length) return { state: "red", detail: `failing: ${failing.join(", ")}` };
+  if (pending.length) return { state: "pending", detail: `waiting on: ${pending.join(", ")}` };
+  return { state: "green", detail: `${checks.length} check(s)` };
+}
+
+const short = (commit: string) => commit.slice(0, 7);
 
 const runIn = (cwd: string, env: Record<string, string | undefined>): Run => (command) => {
   try {
