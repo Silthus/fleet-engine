@@ -6,14 +6,14 @@ import { inside } from "../../files/install.ts";
 import type { Finding, Plan } from "../../pack/types.ts";
 import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { linkOnPath, readState, withLock, writeWithBackups, type Write } from "../provider-config/store.ts";
-import { isAccountHome, spawnRunner, type CommandRunner } from "../run.ts";
+import { skipOtherHome, spawnRunner, type CommandRunner } from "../run.ts";
 import { allowedSigners, fleetGitconfig, gitconfig, withInclude } from "./gitconfig.ts";
 import { githubIdentity, keyFields, registeredKeys, registerKey } from "./github.ts";
 import { coderScript, signer, signerNames, signerSetting, sshKeyTarget, type Signer, type SignerName } from "./signers.ts";
 
 export { signerSetting } from "./signers.ts";
 
-export type IdentityOptions = { run?: CommandRunner; engineRoot?: string; hostname?: string };
+export type IdentityOptions = { run?: CommandRunner; accountHome?: () => string | undefined; engineRoot?: string; hostname?: string };
 
 type Context = { home: string; dryRun: boolean; run: CommandRunner; result: AdapterResult; host: string; engineRoot: string };
 
@@ -28,7 +28,8 @@ export function identityAdapter(options: IdentityOptions = {}): Adapter {
     targets: () => [],
     async apply(plan, { home, dryRun }) {
       const result: AdapterResult = { actions: [], findings: [] };
-      if (!options.run && !isAccountHome(home)) return result;
+      const skipped = skipOtherHome("identity", "your git identity", home, options);
+      if (skipped) return skipped;
       const name = String(plan.settings[signerSetting] ?? "ssh");
       if (!signerNames.includes(name as SignerName)) {
         result.findings.push(finding("signer", `${signerSetting} is ${name}. Use ${signerNames.slice(0, -1).join(", ")}, or ${signerNames.at(-1)}.`, "human"));

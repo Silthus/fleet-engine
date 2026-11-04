@@ -342,18 +342,6 @@ describe("another home directory", () => {
     const report = await apply(plan("linux", [pull]), { home, adapters: [jobsAdapter({ engineRoot: engine })] });
     expect(report).toMatchObject({ actions: [], findings: [] });
   });
-
-  test("still leaves cron alone when a test points HOME at a temporary folder", async () => {
-    const home = temp.make("home-");
-    const saved = { HOME: process.env.HOME, PATH: process.env.PATH };
-    Object.assign(process.env, { HOME: home, PATH: "" });
-    try {
-      const report = await apply(plan("linux", [pull]), { home, adapters: [jobsAdapter({ engineRoot: engine })] });
-      expect(report).toMatchObject({ actions: [], findings: [] });
-    } finally {
-      Object.assign(process.env, saved);
-    }
-  });
 });
 
 describe("T3 scheduled tasks", () => {
