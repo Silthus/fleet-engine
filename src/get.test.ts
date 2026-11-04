@@ -15,7 +15,7 @@ let engineRepo: string;
 
 beforeAll(() => {
   engineRepo = shared.make("engine-repo-");
-  for (const path of ["src", "packs", "fleet", "package.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
+  for (const path of ["src", "packs", "fleet", "package.json", "presets.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
   git(engineRepo, "init", "-q", "-b", "main");
   git(engineRepo, "add", ".");
   git(engineRepo, "commit", "-q", "-m", "engine");
@@ -36,6 +36,8 @@ function sandbox(os: "Linux" | "Darwin") {
   };
   stub("uname", `case "$1" in -s) echo ${os} ;; -m) echo x86_64 ;; esac`);
   stub("xcode-select", "exit 0");
+  stub("claude", "exit 0");
+  stub("codex", "exit 0");
   const t3Installer = `printf '#!/bin/sh\\necho "t3 $*" >> "${log}"\\n' > "$HOME/.local/bin/t3"; chmod +x "$HOME/.local/bin/t3"; echo "t3 installer channel=$T3CODE_CHANNEL" >> "${log}"`;
   const brewInstaller = `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
   const ghTar = buildGhTarball(root);
@@ -87,13 +89,22 @@ describe("get.sh", () => {
   test("on Linux installs gh and T3 Code, fetches the engine at its pin, and applies the profile", () => {
     const box = sandbox("Linux");
     const result = getSh(box, ["--ref", "v0.1.0", "--profile", profile()]);
-    expect(result.output).toContain("Applied 4 changes.");
+    expect(result.output).toContain("Applied 13 changes.");
     expect(result.code).toBe(0);
     expect(existsSync(join(box.home, ".local/bin/gh"))).toBe(true);
     expect(result.calls).toContain("t3 installer channel=nightly");
     expect(result.calls).not.toContain("brew");
     expect(git(join(box.home, ".local/share/fleet/engine"), "describe", "--tags")).toBe("v0.1.0");
     expect(readFileSync(join(box.home, ".agents/AGENTS.md"), "utf8")).toStartWith("# Agent rules\n");
+  });
+
+  test("--install-only installs the tools and the engine, then stops before setup", () => {
+    const box = sandbox("Linux");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    expect(result.output).toEndWith("Fleet: Engine ready at v0.1.0 in " + join(box.home, ".local/share/fleet/engine") + ".\n");
+    expect(existsSync(join(box.home, ".local/bin/gh"))).toBe(true);
+    expect(existsSync(join(box.home, ".config/fleet/machine.json"))).toBe(false);
   });
 
   test("on macOS installs Homebrew, gh, and the T3 Code app, then applies the profile", () => {
@@ -105,7 +116,7 @@ describe("get.sh", () => {
     expect(calls).toContain("brew install --cask t3-code");
     expect(calls).not.toContain("brew install bun");
     expect(result.calls).toContain("t3 installer channel=nightly");
-    expect(result.output).toContain("Applied 4 changes.");
+    expect(result.output).toContain("Applied 13 changes.");
   });
 
   test("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {
@@ -129,8 +140,8 @@ describe("get.sh", () => {
   test("passes flags after -- to fleet and rejects others", () => {
     const box = sandbox("Linux");
     expect(getSh(box, ["--preset", "everyday"])).toMatchObject({ code: 1, output: expect.stringContaining("unknown option --preset. Put flags for fleet after --.") });
-    const result = getSh(box, ["--ref", "v0.1.0", "--", "--preset", "everyday"]);
-    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("fleet setup is not available in this version yet.") });
+    const result = getSh(box, ["--ref", "v0.1.0", "--", "--preset", "nope"]);
+    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("fleet setup: --preset nope: choose starter, everyday, michael") });
   });
 });
 

@@ -6,6 +6,7 @@ import { basename, join } from "node:path";
 import { type AutoOptions, type CacheHost, cwdsFromLsof, decide, evictable, onlyDisposable, prune, pruneOptions, readSightings, readState, reclaimCaches, reclaimT3Versions, recordSightings, removeTreeCommand, t3StatePath, type Facts } from "./prune.ts";
 
 const onLinux = test.skipIf(process.platform !== "linux");
+const noMergedPullRequests = () => false;
 
 const temporary: string[] = [];
 afterEach(async () => {
@@ -106,7 +107,7 @@ onLinux("a prune pass removes a settled worktree that has only tool changes and 
 
   const verdicts = prune({
     worktreeRoot: root, statePath, now: Date.now() + 48 * 3600_000, repos: [], minIdleHours: 6, unownedIdleHours: 24, agentIdleHours: 24,
-    dryRun: false, fetch: false, log: () => {}, sightingsPath: join(base, "sightings.json"),
+    dryRun: false, fetch: false, log: () => {}, sightingsPath: join(base, "sightings.json"), mergedPullRequest: noMergedPullRequests,
   });
 
   expect(verdicts.find((verdict) => verdict.path === tooled)?.remove).toBe(true);
@@ -162,12 +163,30 @@ onLinux("under disk pressure, a prune pass evicts an idle worktree and keeps one
   const verdicts = prune({
     worktreeRoot: root, statePath: t3State(join(base, "statev2.sqlite"), [{ worktreePath: used }, { worktreePath: unused }]), now: later, repos: [],
     minIdleHours: 1, unownedIdleHours: 6, agentIdleHours: 6, dryRun: false, fetch: false, log: () => {}, sightingsPath,
-    evict: { targetGigabytes: 1, free: () => 0 },
+    evict: { targetGigabytes: 1, free: () => 0 }, mergedPullRequest: noMergedPullRequests,
   });
 
   expect(verdicts.find((verdict) => verdict.path === used)).toMatchObject({ remove: false, reason: "active 0.5h ago" });
   expect(verdicts.find((verdict) => verdict.path === unused)?.remove).toBe(true);
   expect(await readdir(join(root, "repo"))).toEqual(["used"]);
+});
+
+onLinux("removes a worktree whose branch has a merged pull request, asking the lookup it was given", async () => {
+  const { base, repo, root } = await repository();
+  const merged = join(root, "repo/merged");
+  sh(repo, "git", "worktree", "add", "-q", "-b", "merged", merged);
+  await writeFile(join(merged, "app.ts"), "squashed\n");
+  commit(merged, "work");
+  const asked: string[] = [];
+
+  const verdicts = prune({
+    worktreeRoot: root, statePath: join(base, "missing.sqlite"), now: Date.now() + 72 * 3600_000, repos: [],
+    minIdleHours: 6, unownedIdleHours: 24, agentIdleHours: 24, dryRun: true, fetch: false, log: () => {}, sightingsPath: join(base, "sightings.json"),
+    mergedPullRequest: (branch) => (asked.push(branch), branch === "merged"),
+  });
+
+  expect(asked).toEqual(["merged"]);
+  expect(verdicts.find((verdict) => verdict.path === merged)).toMatchObject({ remove: true, reason: "pull request for merged is merged" });
 });
 
 onLinux("keeps a worktree whose Git metadata is gone, with its uncommitted work", async () => {
@@ -179,7 +198,7 @@ onLinux("keeps a worktree whose Git metadata is gone, with its uncommitted work"
 
   const verdicts = prune({
     worktreeRoot: root, statePath: join(base, "missing.sqlite"), now: Date.now() + 72 * 3600_000, repos: [],
-    minIdleHours: 6, unownedIdleHours: 24, agentIdleHours: 24, dryRun: false, fetch: false, log: () => {}, sightingsPath: join(base, "sightings.json"),
+    minIdleHours: 6, unownedIdleHours: 24, agentIdleHours: 24, dryRun: false, fetch: false, log: () => {}, sightingsPath: join(base, "sightings.json"), mergedPullRequest: noMergedPullRequests,
   });
 
   expect(verdicts.find((verdict) => verdict.path === broken)).toMatchObject({ remove: false, reason: "Git cannot read its worktree metadata" });

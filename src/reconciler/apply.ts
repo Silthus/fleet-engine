@@ -68,10 +68,12 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.findings.push(...result.findings);
   }
   if (context.dryRun) return report;
-  const run = options.run ?? spawnRunner;
+  const run = options.run ?? spawnRunner(options.home);
   const failed = new Set<string>();
+  const waits = waiter(plan, run);
   for (const step of plan.steps) {
-    if (failed.has(step.pack)) continue;
+    if (failed.has(step.pack) || (await waits(step))) continue;
+    if (step.check && (await run(step.check)) === 0) continue;
     if ((await run(step.run)) === 0) continue;
     failed.add(step.pack);
     report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack failed.`, repair: "apply" });
@@ -81,12 +83,14 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
 }
 
 export async function check(plan: Plan, options: { home: string; adapters?: Adapter[]; run?: Runner }): Promise<Report> {
-  const run = options.run ?? spawnRunner;
+  const run = options.run ?? spawnRunner(options.home);
   const report = await apply(plan, { ...options, dryRun: true });
   for (const item of plan.checks) {
     if ((await run(item.run)) !== 0) report.findings.push({ id: `check:${item.id}`, pack: item.pack, say: item.say, repair: "apply" });
   }
+  const waits = waiter(plan, run);
   for (const step of plan.steps) {
+    if (await waits(step)) continue;
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
   }
   for (const step of plan.human) {
@@ -96,6 +100,20 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
   }
   if (report.findings.some((finding) => finding.repair || finding.id.startsWith("kept:"))) report.ok = false;
   return report;
+}
+
+/** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */
+function waiter(plan: Plan, run: Runner) {
+  const passed = new Map<string, boolean>();
+  return async (step: Plan["steps"][number]) => {
+    if (!step.after) return false;
+    const key = `${step.pack}:${step.after}`;
+    if (!passed.has(key)) {
+      const human = plan.human.find((item) => item.pack === step.pack && item.id === step.after);
+      passed.set(key, human ? (await run(human.probe)) === 0 : false);
+    }
+    return !passed.get(key);
+  };
 }
 
 /** The sources whose packs or skills this plan lacks because they could not be fetched. */
@@ -111,10 +129,13 @@ function packFindings(plan: Plan): Finding[] {
     .map((pack) => ({ id: `pack:${pack.name}`, pack: pack.name, say: pack.available ? `The ${pack.name} pack uses its last fetched files: ${pack.reason}` : `The ${pack.name} pack is not applied: ${pack.reason}` }));
 }
 
-async function spawnRunner(command: string[]) {
-  try {
-    return await Bun.spawn(command, { stdout: "ignore", stderr: "ignore" }).exited;
-  } catch {
-    return 127;
-  }
+/** Runs commands with the plan's home directory as HOME, so a step installs into the home it applies to. */
+function spawnRunner(home: string): Runner {
+  return async (command) => {
+    try {
+      return await Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home } }).exited;
+    } catch {
+      return 127;
+    }
+  };
 }

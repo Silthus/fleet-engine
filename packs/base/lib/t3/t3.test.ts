@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverT3Server, listLinkedEnvironments, listLinkedThreads, readLinkedThread, readT3Settings, readThreadWords, withT3Session, type LinkedEnvironment } from "./index.ts";
+import { discoverT3Server, listLinkedEnvironments, listLinkedThreads, readLinkedThread, readT3Settings, readThreadWords, t3CliRunner, T3ToolError, withT3Session, type LinkedEnvironment, type T3Deadline } from "./index.ts";
 import { startT3Stub, ToolRefusal, writeT3EventStore, type Resolution, type T3Stub } from "./testing.ts";
 
 const cleanups: (() => unknown)[] = [];
@@ -78,23 +78,23 @@ test("linked environments are listed by the local server, and their threads are 
     tools(name, args) {
       if (args.environmentId !== "env-linked") throw new ToolRefusal("invalid_request", "unknown environment");
       if (name === "t3_thread_list") return args.cursor ? { projectId: null, currentThreadId: null, threads: [{ threadId: "b" }], nextCursor: null, total: 2 } : { projectId: null, currentThreadId: null, threads: [{ threadId: "a" }], nextCursor: 1, total: 2 };
-      if (name === "t3_thread_read") throw new ToolRefusal("not_found", `No thread ${args.threadId}`);
+      if (name === "t3_thread_read") throw new ToolRefusal("thread_not_found", "The thread was not found.");
     },
   });
 
   const result = await withT3Session(async (client) => {
     const environments = await listLinkedEnvironments(client);
     const threads = await listLinkedThreads(client, "env-linked", { allProjects: true });
-    const refusal = await readLinkedThread(client, "env-linked", { threadId: "gone" }).catch((error: Error) => error.message);
+    const refusal = await readLinkedThread(client, "env-linked", { threadId: "gone" }).catch((error: T3ToolError) => [error.code, error.message]);
     return { environments, threads: threads.map((thread) => thread.threadId), refusal };
   }, { home: t3.home });
 
-  expect(result).toEqual({ environments: [linked], threads: ["a", "b"], refusal: "No thread gone" });
+  expect(result).toEqual({ environments: [linked], threads: ["a", "b"], refusal: ["thread_not_found", "The thread was not found."] });
   expect(t3.rpcTags).toEqual(["peerLinks.list"]);
   expect(t3.toolCalls.map(({ name, args }) => [name, args.cursor ?? null])).toEqual([["t3_thread_list", null], ["t3_thread_list", 1], ["t3_thread_read", null]]);
   const cli = await t3.cliCalls();
-  expect(cli[0]).toStartWith("auth session issue --json --ttl 5m");
-  expect(cli[1]).toContain("--subject mcp-client --scope orchestration:read");
+  expect(cli[0]).toBe("auth session issue --json --ttl 5m --label fleet --subject fleet --scope orchestration:read --scope access:read");
+  expect(cli[1]).toBe("auth session issue --json --ttl 5m --label fleet --subject mcp-client --scope orchestration:read");
   expect(cli.slice(2).sort()).toEqual(["auth session revoke mcp-session", "auth session revoke shell-session"]);
 });
 
@@ -110,16 +110,108 @@ test("without a T3 server that answers, a session fails at once with plain words
   cleanups.push(() => silent.stop(true));
   const origin = `http://127.0.0.1:${silent.port}`;
   const revoked: string[] = [];
-  const session = withT3Session((client) => client.call("peerLinks.list", {}, 1), {
+  const deadlines: string[] = [];
+  const expireCalls: T3Deadline = (what, ms, expire) => {
+    deadlines.push(`${what} ${ms}`);
+    if (what === "peerLinks.list") queueMicrotask(expire);
+    return () => {};
+  };
+  const session = withT3Session((client) => client.call("peerLinks.list", {}), {
     server: { origin, wsUrl: origin.replace("http:", "ws:") + "/ws", cli: { command: "running-t3", args: [] } },
+    deadline: expireCalls,
     runCli(_server, args) {
       if (args.includes("revoke")) revoked.push(args.at(-1)!);
       return { status: 0, stdout: JSON.stringify({ sessionId: "s", token: "t" }) };
     },
   });
-  await expect(session).rejects.toThrow("T3 did not answer peerLinks.list");
-  await session.catch(() => undefined);
+  await expect(session).rejects.toThrow("T3 did not answer peerLinks.list within 30000 ms");
+  expect(deadlines).toEqual([`connecting to ${origin} 30000`, "peerLinks.list 30000"]);
   expect(revoked).toEqual(["s"]);
+});
+
+test("the stub refuses tool calls that break T3's argument contract", async () => {
+  const t3 = await stub({ shell: { projects: [], threads: [] }, tools: () => ({ thread: {}, items: [], nextPosition: null, hasMore: false }) });
+  const refusals = await withT3Session(async (client) => Promise.all([
+    readLinkedThread(client, "env-linked", { threadId: "a", afterPosition: -1 }).catch((error: Error) => error.message),
+    client.callTool("t3_thread_list", { limit: 101 }).catch((error: Error) => error.message),
+    client.callTool("t3_thread_read", {}).catch((error: Error) => error.message),
+    client.callTool("t3_thread_read", { threadId: "a", since: "now" }).catch((error: Error) => error.message),
+  ]), { home: t3.home });
+  expect(refusals).toEqual([
+    "Invalid t3_thread_read arguments: afterPosition -1",
+    "Invalid t3_thread_list arguments: limit 101",
+    "Invalid t3_thread_read arguments: threadId is required",
+    "Invalid t3_thread_read arguments: unknown since",
+  ]);
+});
+
+test("linked thread lists page to the end, and a cursor that never moves fails loudly instead of dropping threads", async () => {
+  const t3 = await stub({
+    shell: { projects: [], threads: [] },
+    tools(_name, args) {
+      const cursor = Number(args.cursor ?? 0);
+      if (args.environmentId === "env-stuck") return { projectId: null, currentThreadId: null, threads: [{ threadId: `t${cursor}` }], nextCursor: 3, total: 999 };
+      return { projectId: null, currentThreadId: null, threads: [{ threadId: `t${cursor}` }], nextCursor: cursor < 24 ? cursor + 1 : null, total: 25 };
+    },
+  });
+  const result = await withT3Session(async (client) => ({
+    all: (await listLinkedThreads(client, "env-linked", { allProjects: true })).map((thread) => thread.threadId),
+    stuck: await listLinkedThreads(client, "env-stuck", {}).catch((error: Error) => error.message),
+  }), { home: t3.home });
+  expect(result.all).toEqual(Array.from({ length: 25 }, (_, index) => `t${index}`));
+  expect(result.stuck).toBe("T3 answered t3_thread_list with cursor 3 again; stopped instead of dropping the rest of the list");
+});
+
+test("the T3 CLI runs with a time limit, and every session is revoked on its own even when one revoke hangs", async () => {
+  const spawned: { timeout?: number }[] = [];
+  const hung = t3CliRunner({ timeoutMs: 10_000, spawn: (_command, _args, options) => {
+    spawned.push(options);
+    return { status: null, stdout: "", stderr: "", error: Object.assign(new Error("spawnSync running-t3 ETIMEDOUT"), { code: "ETIMEDOUT" }) };
+  } });
+  const server = { origin: "http://127.0.0.1:9", wsUrl: "ws://127.0.0.1:9/ws", cli: { command: "running-t3", args: [] } };
+  expect(hung(server, ["auth", "session", "revoke", "s"])).toEqual({ status: null, stdout: "", error: "timed out after 10000 ms" });
+  expect(spawned[0]?.timeout).toBe(10_000);
+  await expect(withT3Session(async () => "never", { server, runCli: hung })).rejects.toThrow("T3 auth session issue failed: timed out after 10000 ms");
+
+  const t3 = await stub({ shell: { projects: [], threads: [] }, tools: () => ({ projects: [], nextCursor: null }) });
+  const revokes: string[] = [];
+  const runCli = t3CliRunner();
+  const outcome = withT3Session(async (client) => client.callTool("t3_project_list", {}), {
+    home: t3.home,
+    runCli(server, args) {
+      if (!args.includes("revoke")) return runCli(server, args);
+      revokes.push(args.at(-1)!);
+      return args.at(-1) === "shell-session" ? { status: null, stdout: "", error: "timed out after 10000 ms" } : { status: 0, stdout: "" };
+    },
+  });
+  await expect(outcome).rejects.toThrow("T3 auth session revoke failed: shell-session timed out after 10000 ms");
+  expect(revokes).toEqual(["shell-session", "mcp-session"]);
+});
+
+test("a session is revoked even when the work throws before it awaits anything", async () => {
+  const t3 = await stub({ shell: { projects: [], threads: [] } });
+  const revokes: string[] = [];
+  const runCli = t3CliRunner();
+  const outcome = withT3Session(() => { throw new Error("failed at once"); }, {
+    home: t3.home,
+    runCli(server, args) {
+      if (args.includes("revoke")) revokes.push(args.at(-1)!);
+      return runCli(server, args);
+    },
+  });
+  await expect(outcome).rejects.toThrow("failed at once");
+  expect(revokes).toEqual(["shell-session"]);
+});
+
+test("a failed T3 CLI call names its exit code and what it wrote to stderr", async () => {
+  const server = { origin: "http://127.0.0.1:9", wsUrl: "ws://127.0.0.1:9/ws", cli: { command: "/usr/bin/dash", args: [] } };
+  const runCli = () => ({ status: 2, stdout: "", stderr: "/usr/bin/dash: 0: cannot open auth: No such file\n" });
+  await expect(withT3Session(async () => "never", { server, runCli })).rejects.toThrow("T3 auth session issue failed: exit 2: /usr/bin/dash: 0: cannot open auth: No such file");
+});
+
+test("the stub publishes its server only once the server runs, so discovery always finds the CLI script", async () => {
+  const started = await Promise.all(Array.from({ length: 8 }, () => stub({ shell: { projects: [], threads: [] } })));
+  for (const t3 of started) expect(discoverT3Server(t3.home).cli.args).toEqual([join(t3.home, "t3-server.js")]);
 });
 
 function t3EventStore(resolutions: Resolution[]) {

@@ -37,7 +37,7 @@ async function run(engineDir: string, engine: ProfileFile["engine"], profileDir 
   const lines: string[] = [];
   let applied = 0;
   const code = await update({ home, engineDir, profileDir, engine, print: (line) => lines.push(line), runApply: async () => (applied++, 0) });
-  return { code, home, applied, output: lines.join("\n"), version: Bun.file(join(engineDir, "VERSION")).text() };
+  return { code, home, applied, output: lines.join("\n"), version: await Bun.file(join(engineDir, "VERSION")).text() };
 }
 
 describe("fleet update", () => {
@@ -45,7 +45,7 @@ describe("fleet update", () => {
     const remote = engineRemote(["v0.1.0", "v0.1.1", "v0.2.0", "v1.0.0"]);
     const result = await run(engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 0, applied: 1 });
-    expect(await result.version).toBe("v0.2.0");
+    expect(result.version).toBe("v0.2.0");
     expect(result.output).toContain("Fleet v1.0.0 is out. It is a new major version, so this update stays on v0.");
     expect(await readNotice(result.home)).toStartWith("Fleet v1.0.0 is out.");
   });
@@ -53,14 +53,14 @@ describe("fleet update", () => {
   test("clears the notice when no new major exists", async () => {
     const remote = engineRemote(["v0.1.0", "v0.1.1"]);
     const result = await run(engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" });
-    expect(await result.version).toBe("v0.1.1");
+    expect(result.version).toBe("v0.1.1");
     expect(existsSync(noticePath(result.home))).toBe(false);
   });
 
   test("moves the track channel to main", async () => {
     const remote = engineRemote(["v0.1.0", "v1.0.0"]);
     const result = await run(engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "main", channel: "track" });
-    expect(await result.version).toBe("main");
+    expect(result.version).toBe("main");
     expect(result.applied).toBe(1);
   });
 
@@ -92,7 +92,7 @@ describe("fleet update", () => {
     writeFileSync(join(engineDir, "VERSION"), "patched");
     const result = await run(engineDir, { repo: "unused", ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 1, applied: 0, output: expect.stringContaining("has local changes") });
-    expect(await result.version).toBe("patched");
+    expect(result.version).toBe("patched");
   });
 
   test("follows the profile's engine repository", async () => {
@@ -106,14 +106,14 @@ describe("fleet update", () => {
     git(moved, "tag", "v0.2.0");
     const result = await run(engineDir, { repo: moved, ref: "v0.1.0", channel: "release" });
     expect(result.output).toContain(`The engine now comes from ${moved}.`);
-    expect(await result.version).toBe("v0.2.0");
+    expect(result.version).toBe("v0.2.0");
   });
 
   test("never moves an engine that is not on a release back to one", async () => {
     const remote = engineRemote(["v0.1.0"]);
     const result = await run(engineCheckout(remote, "main"), { repo: remote, ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 0, applied: 1, output: expect.stringContaining("is not a release, so fleet update does not move it back") });
-    expect(await result.version).toBe("main");
+    expect(result.version).toBe("main");
   });
 
   test("stops before apply when the track checkout fails", async () => {
@@ -122,6 +122,6 @@ describe("fleet update", () => {
     writeFileSync(join(engineDir, ".git", "index.lock"), "");
     const result = await run(engineDir, { repo: remote, ref: "main", channel: "track" });
     expect(result).toMatchObject({ code: 1, applied: 0, output: expect.stringContaining("could not check out main") });
-    expect(await result.version).toBe("v0.1.0");
+    expect(result.version).toBe("v0.1.0");
   });
 });
