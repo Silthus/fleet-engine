@@ -32,6 +32,10 @@ _Avoid_: Feature, capability
 A named choice of packs and workflows, such as Starter or Everyday, that setup and the page offer.
 _Avoid_: Template, bundle
 
+**Model table**:
+The model and effort agents use for each kind of work, one table for each AI plan. The Base pack declares it, and a profile can replace any row.
+_Avoid_: Model policy, casting
+
 ## Applying
 
 **Plan**:

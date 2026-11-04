@@ -23,6 +23,7 @@ function plan(overrides: Partial<Plan> = {}): Plan {
     steps: [],
     checks: [],
     commands: {},
+    models: [],
     settings: {},
     unanswered: [],
     dropped: [],
