@@ -318,8 +318,19 @@ describe("another home directory", () => {
   test("leaves the user's cron alone when HOME is not their home and no runner is given", async () => {
     const home = temp.make("home-");
     const report = await apply(plan("linux", [pull]), { home, adapters: [jobsAdapter({ engineRoot: engine })] });
-    expect(report.findings).toContainEqual({ id: "jobs:home", pack: "engine", say: `Left jobs alone: ${home} is not your home directory, and cron and launchd belong to your user.` });
-    expect(report.actions).toEqual([]);
+    expect(report).toMatchObject({ actions: [], findings: [] });
+  });
+
+  test("still leaves cron alone when a test points HOME at a temporary folder", async () => {
+    const home = temp.make("home-");
+    const saved = { HOME: process.env.HOME, PATH: process.env.PATH };
+    Object.assign(process.env, { HOME: home, PATH: "" });
+    try {
+      const report = await apply(plan("linux", [pull]), { home, adapters: [jobsAdapter({ engineRoot: engine })] });
+      expect(report).toMatchObject({ actions: [], findings: [] });
+    } finally {
+      Object.assign(process.env, saved);
+    }
   });
 });
 
