@@ -1,12 +1,19 @@
 import { resolve } from "node:path";
-import type { Plan } from "../../pack/types.ts";
+import type { ModelRow, Plan } from "../../pack/types.ts";
 import { taskPrefix, type FleetTask, type T3Tasks } from "../jobs/adapter.ts";
 import { same } from "../provider-config/fields.ts";
 import type { CommandRunner } from "../run.ts";
 import type { ModelSelection, T3Rpc, T3Server } from "./port.ts";
 import { readT3Settings } from "./settings.ts";
 
-export type Models = (role: string) => ModelSelection | undefined;
+const instances = { claude: { instanceId: "claudeAgent", effort: "effort" }, codex: { instanceId: "codex", effort: "reasoningEffort" } } as const;
+
+export function modelSelection(models: ModelRow[], role: string): ModelSelection | undefined {
+  const row = models.find((item) => item.role === role);
+  if (!row) return undefined;
+  const instance = instances[row.provider];
+  return { instanceId: instance.instanceId, model: row.model, options: [{ id: instance.effort, value: row.effort }] };
+}
 export type ShellProject = { id: string; workspaceRoot: string; deletedAt?: string | null };
 
 type ScheduledTask = {
@@ -26,11 +33,11 @@ export async function activeProjects(rpc: T3Rpc): Promise<ShellProject[]> {
   return shell.projects.filter((project) => !project.deletedAt);
 }
 
-/** The T3Tasks client the Jobs adapter expects, over the server's scheduledTasks RPCs. Each call opens its own short session. */
-export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; run: CommandRunner; models?: Models }): T3Tasks {
+export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; run: CommandRunner }): T3Tasks {
   const roles = new Map<string, string>(options.plan.jobs.flatMap((job) => (job.task ? [[`${taskPrefix}${job.id}`, job.task.modelRole]] : [])));
   const fallback = async (rpc: T3Rpc) => (await readT3Settings(rpc)).defaultModelSelection as ModelSelection | undefined;
-  const modelOf = async (rpc: T3Rpc, role: string) => options.models?.(role) ?? (await fallback(rpc));
+  const planned = (role: string) => modelSelection(options.plan.models, role);
+  const modelOf = async (rpc: T3Rpc, role: string) => planned(role) ?? (await fallback(rpc));
   return {
     list: () =>
       server.session(home, async (rpc) => {
@@ -39,7 +46,7 @@ export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; r
         const usual = tasks.some((task) => roles.has(task.id)) ? await fallback(rpc) : undefined;
         return tasks.map((task) => {
           const role = roles.get(task.id);
-          const expected = role === undefined ? undefined : (options.models?.(role) ?? usual);
+          const expected = role === undefined ? undefined : (planned(role) ?? usual);
           return {
             id: task.id,
             title: task.title,

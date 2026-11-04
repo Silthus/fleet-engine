@@ -119,7 +119,6 @@ async function connect(origin: string, token: string) {
   return { request, close: () => (failAll("T3 Code connection closed"), socket.close()) };
 }
 
-/** The T3 server on this machine, found through server-runtime.json and a live pid. Each session is issued by the server's own CLI and revoked afterwards. */
 export const localT3Server: T3Server = {
   answering: async (home) => runtimeOf(home) !== undefined,
   async session(home, work) {

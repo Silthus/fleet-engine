@@ -10,18 +10,17 @@ import type { T3Rpc, T3Server } from "./port.ts";
 import { reconcileService } from "./service.ts";
 import { localT3Server } from "./session.ts";
 import { desktopTarget, reconcileSettings, settingsFields, settingsTarget } from "./settings.ts";
-import { activeProjects, t3Tasks, type Models } from "./tasks.ts";
+import { activeProjects, t3Tasks } from "./tasks.ts";
 
 export { desktopTarget, recordTarget, settingsTarget } from "./settings.ts";
 
-export type T3Options = { run?: CommandRunner; server?: T3Server; user?: string; models?: Models };
+export type T3Options = { run?: CommandRunner; server?: T3Server; user?: string };
 export type T3Adapter = Adapter & { tasks(): Promise<T3Tasks | undefined> };
 
 type Link = { environmentId: string; label: string; status: "reachable" | "unreachable" | "expired"; lastError: string | null };
 
 const finding = (id: string, say: string, repair?: Finding["repair"]): Finding => ({ id: `t3:${id}`, pack: "engine", say, ...(repair ? { repair } : {}) });
 
-/** Merges the packs' T3 settings into T3's files before T3 first starts. The first-run "Set up this Mac" step calls it. */
 export async function seedT3(plan: Plan, home: string, options: { adopt?: string[]; dryRun?: boolean } = {}): Promise<AdapterResult> {
   const settings = { adopt: options.adopt ?? [], dryRun: options.dryRun ?? false, outage: sourceOutage(plan) };
   return settings.dryRun ? reconcileSettings(plan, home, settings) : withLock(home, () => reconcileSettings(plan, home, settings));
@@ -62,7 +61,7 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
       };
       return dryRun ? reconcile() : withLock(home, reconcile);
     },
-    tasks: async () => (live ? t3Tasks(server, live.home, { plan: live.plan, run, models: options.models }) : undefined),
+    tasks: async () => (live ? t3Tasks(server, live.home, { plan: live.plan, run }) : undefined),
   };
 }
 

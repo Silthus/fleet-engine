@@ -18,7 +18,6 @@ export function settingsFields(plan: Plan): Field[] {
   return plan.config.filter((entry) => entry.provider === "t3").map((entry) => ({ path: checkPath([entry.key], `t3 key ${entry.key}`), value: entry.value, pack: entry.pack }));
 }
 
-/** T3 writes its default channel into desktop-settings.json itself, so Fleet keeps the channel only when the user picked it. */
 export function desktopFields(plan: Plan): Field[] {
   if (plan.os !== "darwin") return [];
   return [
@@ -31,7 +30,6 @@ export async function readT3Settings(rpc: T3Rpc): Promise<Document> {
   return (await rpc.call<{ settings: Document }>("server.getConfig", {})).settings;
 }
 
-/** Merges the owned keys into T3's files. With a running server, settings.json belongs to T3, so its keys go through server.updateSettings instead. */
 export async function reconcileSettings(plan: Plan, home: string, options: Options): Promise<AdapterResult> {
   const result: AdapterResult = { actions: [], findings: [] };
   const previous = await readFieldRecord(home, recordTarget);

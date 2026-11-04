@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ConfigEntry, Owned, PackJob, Plan } from "../../pack/types.ts";
+import type { ConfigEntry, ModelRow, Owned, PackJob, Plan } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
 import { tempDirs } from "../../testing/git.ts";
 import { engineAdapters } from "../index.ts";
@@ -44,7 +44,7 @@ const wantedTask: FleetTask = {
   runtimeMode: "full-access",
 };
 
-function plan(os: "darwin" | "linux", config: Array<Owned<ConfigEntry>>, jobs: Array<Owned<PackJob>> = []): Plan {
+function plan(os: "darwin" | "linux", config: Array<Owned<ConfigEntry>>, jobs: Array<Owned<PackJob>> = [], models: ModelRow[] = []): Plan {
   return {
     machine: { schema: 1, role: os === "darwin" ? "mac" : "devbox" },
     os,
@@ -62,6 +62,7 @@ function plan(os: "darwin" | "linux", config: Array<Owned<ConfigEntry>>, jobs: A
     settings: {},
     unanswered: [],
     dropped: [],
+    models,
   };
 }
 
@@ -346,14 +347,20 @@ describe("T3 tasks client", () => {
     expect((await client.list())[0]).not.toEqual(wantedTask);
   });
 
-  test("uses the model a role maps to when one is given", async () => {
+  test.each([
+    ["claude", { instanceId: "claudeAgent", model: "claude-opus-5-5", options: [{ id: "effort", value: "high" }] }],
+    ["codex", { instanceId: "codex", model: "claude-opus-5-5", options: [{ id: "reasoningEffort", value: "high" }] }],
+  ] as const)("runs a task on the %s model and effort the plan's model table gives its role", async (provider, selection) => {
     const home = temp.make("home-");
     const server = fakeServer({ projects: [project] });
     const { run } = runner(server);
-    const model = { instanceId: "claude", model: "opus" };
-    const client = t3Tasks(server.server, home, { plan: plan("linux", [], [loop]), run, models: (role) => (role === "implementation" ? model : undefined) });
+    const models: ModelRow[] = [
+      { role: "review", work: "Review", provider: "codex", model: "other", effort: "low" },
+      { role: "implementation", work: "Implementation", provider, model: "claude-opus-5-5", effort: "high" },
+    ];
+    const client = t3Tasks(server.server, home, { plan: plan("linux", [], [loop], models), run });
     await client.upsert(wantedTask);
-    expect(server.state.tasks.get("fleet:quality-loop")?.modelSelection).toEqual(model);
+    expect(server.state.tasks.get("fleet:quality-loop")?.modelSelection).toEqual(selection);
     expect(await client.list()).toEqual([wantedTask]);
   });
 });

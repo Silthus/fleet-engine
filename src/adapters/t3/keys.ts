@@ -36,7 +36,6 @@ export function reconcileKeys(current: Document, previous: Field[], wanted: Fiel
   return result;
 }
 
-/** True when actual holds every part of wanted: objects match key by key, so keys T3 adds itself do not count. */
 export function holds(actual: unknown, wanted: unknown): boolean {
   if (!isDocument(wanted) || !isDocument(actual)) return same(actual, wanted);
   return Object.entries(wanted).every(([key, value]) => holds(actual[key], value));

@@ -6,7 +6,6 @@ export const installT3 = ["/bin/sh", "-c", 'installer=$(mktemp) && curl -fsSL ht
 
 const finding = (id: string, say: string, repair: Finding["repair"]): Finding => ({ id: `t3:${id}`, pack: "engine", say, repair });
 
-/** Installs the nightly t3 CLI and its systemd user service on Linux, the way get.sh installs T3. */
 export async function reconcileService(run: CommandRunner, user: string, dryRun: boolean, result: AdapterResult) {
   const present = async () => (await run(["t3", "--version"])).code === 0;
   let cli = await present();
