@@ -6,12 +6,14 @@ import type {
   FetchedSource,
   LoadedPack,
   MachineFile,
+  ModelRow,
   Need,
   Os,
   PackSetting,
   Plan,
   Profile,
   ResolvedPack,
+  Scope,
   SettingValue,
 } from "../pack/types.ts";
 
@@ -23,7 +25,6 @@ export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "s
 const engineGuides = ["skill-settings"];
 
 type Candidate = LoadedPack & { source: AvailableSource };
-type Scoped = { on?: Os[]; roles?: MachineFile["role"][]; workflow?: string };
 
 export function resolve(profile: Profile, machine: MachineFile, sources: FetchedSource[]): Plan {
   const os: Os = machine.role === "mac" ? "darwin" : "linux";
@@ -43,20 +44,28 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
     steps: [],
     checks: [],
     commands: {},
+    models: modelTable(order, profile),
     settings: {},
     unanswered: [],
     dropped: [],
   };
   const names = new Set(order.map((pack) => pack.manifest.name));
   const active = activateWorkflows(profile, machine, order, names, plan);
-  const fits = (pack: string, item: Scoped, label: string) => {
-    const reason = item.on && !item.on.includes(os) ? `not on ${os}` : item.roles && !item.roles.includes(machine.role) ? `not on a ${machine.role}` : item.workflow && !active.has(item.workflow) ? `workflow ${item.workflow} is off` : undefined;
+  const fits = (pack: string, item: Scope, label: string) => {
+    const reason =
+      item.on && !item.on.includes(os) ? `not on ${os}`
+      : item.roles && !item.roles.includes(machine.role) ? `not on a ${machine.role}`
+      : item.plans && !item.plans.includes(profile.plan) ? `not for plan ${profile.plan}`
+      : item.workflow && !active.has(item.workflow) ? `workflow ${item.workflow} is off`
+      : undefined;
     if (reason) plan.dropped.push({ pack, item: label, reason });
     return !reason;
   };
 
-  for (const { manifest } of order) {
+  const packFiles: DesiredFile[] = [];
+  for (const { manifest, dir } of order) {
     const pack = manifest.name;
+    for (const entry of manifest.files ?? []) if (fits(pack, entry, `file ${entry.target}`)) packFiles.push({ target: entry.target, source: within(dir, entry.path, pack) });
     for (const job of manifest.jobs ?? []) if (fits(pack, job, `job ${job.id}`)) plan.jobs.push({ ...job, pack });
     for (const step of manifest.human ?? []) if (fits(pack, step, `human ${step.id}`)) plan.human.push({ ...step, pack });
     for (const step of manifest.steps ?? []) if (fits(pack, step, `step ${step.id}`)) plan.steps.push({ ...step, pack });
@@ -84,7 +93,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
     const project = job.task && plan.settings[job.task.projectSetting];
     return job.task && project !== undefined ? { ...job, task: { ...job.task, project: String(project) } } : job;
   });
-  plan.files = checkTargets([...instructionFiles(order, profile), ...guideFiles(order, settings, plan.settings), ...skillFiles(order, profile, sources, plan)]);
+  plan.files = checkTargets([...instructionFiles(order, profile, plan.models), ...packFiles, ...guideFiles(order, settings, plan.settings), ...skillFiles(order, profile, sources, plan)]);
   plan.commands = packCommands(order);
   return plan;
 }
@@ -198,8 +207,29 @@ function settingValues(settings: PackSetting[], answers: Record<string, SettingV
   return values;
 }
 
-function instructionFiles(order: Candidate[], profile: Profile): DesiredFile[] {
-  const fragments = order.flatMap(({ manifest, dir }) => (manifest.instructions ? [read(dir, manifest.instructions, manifest.name)] : []));
+/** The rows of the profile's plan from the one pack that declares a model table, with the profile's rows replacing those of the same role. */
+function modelTable(order: Candidate[], profile: Profile): ModelRow[] {
+  const owners = order.filter(({ manifest }) => manifest.models);
+  if (owners.length > 1) throw new ResolveError(`the model table is declared by both ${owners[0]!.manifest.name} and ${owners[1]!.manifest.name}`);
+  const rows = [...(owners[0]?.manifest.models?.[profile.plan] ?? [])];
+  for (const row of profile.overrides?.models ?? []) {
+    const index = rows.findIndex((item) => item.role === row.role);
+    if (index < 0) rows.push(row);
+    else rows[index] = row;
+  }
+  return rows;
+}
+
+function renderModels(rows: ModelRow[]) {
+  const lines = rows.map((row) => `| ${row.work} | \`${row.model}\` | ${row.effort} |`);
+  return ["## Model selection", "", "| Work | Model | Effort |", "| --- | --- | --- |", ...lines].join("\n");
+}
+
+function instructionFiles(order: Candidate[], profile: Profile, models: ModelRow[]): DesiredFile[] {
+  const fragments = order.flatMap(({ manifest, dir }) => [
+    ...(manifest.instructions ? [read(dir, manifest.instructions, manifest.name)] : []),
+    ...(manifest.models && models.length ? [renderModels(models)] : []),
+  ]);
   if (profile.aboutMe?.trim()) fragments.push(`## About me\n\n${profile.aboutMe.trim()}\n`);
   const content = fragments.map((fragment) => fragment.trim()).join("\n\n") + "\n";
   return [".agents/AGENTS.md", ".codex/AGENTS.md", ".claude/rules/fleet.md"].map((target) => ({ target, content }));

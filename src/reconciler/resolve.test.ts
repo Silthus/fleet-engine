@@ -256,3 +256,80 @@ describe("resolve guards", () => {
     expect(result.dropped).toContainEqual({ pack: "profile", item: "config claude:model", reason: "workflow prune is off" });
   });
 });
+
+describe("resolve per AI plan", () => {
+  const rows = (model: string) => [
+    { role: "implementation", work: "Implementation and tests", provider: "claude" as const, model, effort: "high" as const },
+    { role: "review", work: "Review", provider: "codex" as const, model: "gpt-review", effort: "high" as const },
+  ];
+  const tables = withPack(
+    {
+      schema: 1,
+      name: "models",
+      summary: "Models.",
+      instructions: "AGENTS.md",
+      models: { claude: rows("claude-only"), both: rows("claude-both") },
+      config: [
+        { provider: "t3", key: "defaultModel", value: "claude-only", plans: ["claude"] },
+        { provider: "t3", key: "defaultModel", value: "claude-both", plans: ["both"] },
+      ],
+      steps: [{ id: "codex-cli", run: ["install", "codex"], plans: ["codex", "both"], on: ["linux"] }],
+      files: [
+        { path: "hooks/guard.ts", target: ".config/fleet/hooks/guard.ts" },
+        { path: "heavy.slice", target: ".config/systemd/user/fleet-heavy.slice", on: ["linux"] },
+      ],
+    },
+    { "AGENTS.md": "# Models fragment\n", "hooks/guard.ts": "export {};\n", "heavy.slice": "[Slice]\n" },
+  );
+  const withTables = (overrides: Partial<Profile> = {}, machine = mac) => plan({ packs: ["pull-requests", "orchestration", "models"], ...overrides }, machine, [engine, agentSkills, tables]);
+
+  test("keeps only the items whose plans hold and records why the others dropped", () => {
+    const claude = withTables({ plan: "claude" }, devbox);
+    expect(claude.config.filter((entry) => entry.key === "defaultModel").map((entry) => entry.value)).toEqual(["claude-only"]);
+    expect(claude.steps.map((step) => step.id)).toEqual([]);
+    expect(claude.dropped).toContainEqual({ pack: "models", item: "step codex-cli", reason: "not for plan claude" });
+    expect(withTables({ plan: "both" }, devbox).steps.map((step) => step.id)).toEqual(["codex-cli"]);
+  });
+
+  test("fills the plan's model table and renders it after the owning pack's fragment", () => {
+    const result = withTables({ plan: "both" });
+    expect(result.models.map((row) => row.model)).toEqual(["claude-both", "gpt-review"]);
+    const agents = file(result, ".agents/AGENTS.md");
+    expect(agents).toContain("# Models fragment\n\n## Model selection\n\n| Work | Model | Effort |\n| --- | --- | --- |\n| Implementation and tests | `claude-both` | high |\n| Review | `gpt-review` | high |\n");
+    expect(agents.indexOf("## Model selection")).toBeLessThan(agents.indexOf("## About me") < 0 ? Infinity : agents.indexOf("## About me"));
+  });
+
+  test("has no model table for a plan the pack leaves out", () => {
+    const result = withTables({ plan: "codex" });
+    expect(result.models).toEqual([]);
+    expect(file(result, ".agents/AGENTS.md")).not.toContain("## Model selection");
+  });
+
+  test("lets the profile replace a row by role or add one", () => {
+    const extra = { role: "lookup", work: "Lookups", provider: "claude" as const, model: "small", effort: "medium" as const };
+    const replaced = { ...rows("mine")[0]! };
+    const result = withTables({ plan: "both", overrides: { models: [replaced, extra] } });
+    expect(result.models.map((row) => `${row.role}=${row.model}`)).toEqual(["implementation=mine", "review=gpt-review", "lookup=small"]);
+  });
+
+  test("throws when two packs declare a model table", () => {
+    const rival = withPack({ schema: 1, name: "rival", summary: "Rival.", models: { claude: rows("rival") } });
+    expect(() => plan({ packs: ["models", "rival"] }, mac, [engine, agentSkills, tables, rival])).toThrow("the model table is declared by both models and rival");
+  });
+
+  test("links pack files into the home directory, limited by os", () => {
+    const links = (result: Plan) => result.files.filter((item) => "source" in item && item.target.startsWith(".config/"));
+    expect(links(withTables({}, devbox))).toEqual([
+      { target: ".config/fleet/hooks/guard.ts", source: join(tables.dir, "packs/models/hooks/guard.ts") },
+      { target: ".config/systemd/user/fleet-heavy.slice", source: join(tables.dir, "packs/models/heavy.slice") },
+    ]);
+    expect(links(withTables()).map((item) => item.target)).toEqual([".config/fleet/hooks/guard.ts"]);
+  });
+
+  test("refuses a pack file that leaves its pack or the home directory", () => {
+    const outside = withPack({ schema: 1, name: "rival", summary: "Rival.", files: [{ path: "../x", target: ".x" }] });
+    expect(() => plan({ packs: ["rival"] }, mac, [engine, outside])).toThrow("rival: path ../x leaves its pack");
+    const away = withPack({ schema: 1, name: "rival", summary: "Rival.", files: [{ path: "x", target: "../x" }] }, { x: "x" });
+    expect(() => plan({ packs: ["rival"] }, mac, [engine, away])).toThrow("target ../x leaves the home directory");
+  });
+});

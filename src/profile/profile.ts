@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
+import { isModelRow } from "../pack/manifest.ts";
 
 export class ProfileError extends Error {}
 
@@ -96,6 +97,8 @@ function checkProfile(file: Record<string, unknown>, path: string): ProfileFile 
   if (!isRecord(file.settings) || !Object.values(file.settings).every((value) => ["string", "number", "boolean"].includes(typeof value))) fail("settings must map keys to text, numbers, or true and false");
   if (!isRecord(file.workflows) || !Object.values(file.workflows).every((value) => typeof value === "boolean")) fail("workflows must map ids to true or false");
   if (file.overrides !== undefined && !isRecord(file.overrides)) fail("overrides must be an object");
+  const models = isRecord(file.overrides) ? file.overrides.models : undefined;
+  if (models !== undefined && !(Array.isArray(models) && models.every(isModelRow))) fail("overrides.models must list rows with a role, work, a claude or codex provider, a model, and an effort");
   return file as ProfileFile;
 }
 

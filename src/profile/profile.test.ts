@@ -118,6 +118,7 @@ describe("saving answers", () => {
   test("rejects a profile with invalid fields", async () => {
     expect(loadProfile(profileRepo({ ...profile, workflows: { maps: "false" } }))).rejects.toThrow("workflows must map ids to true or false");
     expect(loadProfile(profileRepo({ schema: 1 }))).rejects.toThrow("engine needs a repo");
+    expect(loadProfile(profileRepo({ ...profile, overrides: { models: [{ role: "review", model: "x" }] } }))).rejects.toThrow("overrides.models must list rows");
   });
 });
 
