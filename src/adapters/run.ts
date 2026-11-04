@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 export type RunOptions = { input?: string; home?: string };
 export type CommandRunner = (command: string[], options?: RunOptions) => Promise<{ code: number; stdout: string; stderr?: string }>;
 
@@ -15,3 +17,14 @@ export const spawnRunner: CommandRunner = async (command, options = {}) => {
     return { code: 127, stdout: "" };
   }
 };
+
+export function accountHome() {
+  const printed = Bun.spawnSync(["/bin/sh", "-c", 'eval "printf %s ~$(/usr/bin/id -un)"'], { env: {} });
+  const home = printed.stdout.toString();
+  return printed.exitCode === 0 && home.startsWith("/") ? home : undefined;
+}
+
+export function isAccountHome(home: string) {
+  const account = accountHome();
+  return account !== undefined && resolve(account) === resolve(home);
+}

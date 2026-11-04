@@ -1,12 +1,12 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { hostname, userInfo } from "node:os";
-import { join, resolve } from "node:path";
+import { hostname } from "node:os";
+import { join } from "node:path";
 import { inside } from "../../files/install.ts";
 import type { Finding, Plan } from "../../pack/types.ts";
 import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { linkOnPath, readState, withLock, writeWithBackups, type Write } from "../provider-config/store.ts";
-import { spawnRunner, type CommandRunner } from "../run.ts";
+import { isAccountHome, spawnRunner, type CommandRunner } from "../run.ts";
 import { allowedSigners, fleetGitconfig, gitconfig, withInclude } from "./gitconfig.ts";
 import { githubIdentity, keyFields, registeredKeys, registerKey } from "./github.ts";
 import { coderScript, signer, signerNames, signerSetting, sshKeyTarget, type Signer, type SignerName } from "./signers.ts";
@@ -28,7 +28,7 @@ export function identityAdapter(options: IdentityOptions = {}): Adapter {
     targets: () => [],
     async apply(plan, { home, dryRun }) {
       const result: AdapterResult = { actions: [], findings: [] };
-      if (!options.run && resolve(home) !== resolve(userInfo().homedir)) return result;
+      if (!options.run && !isAccountHome(home)) return result;
       const name = String(plan.settings[signerSetting] ?? "ssh");
       if (!signerNames.includes(name as SignerName)) {
         result.findings.push(finding("signer", `${signerSetting} is ${name}. Use ${signerNames.slice(0, -1).join(", ")}, or ${signerNames.at(-1)}.`, "human"));
