@@ -11,7 +11,7 @@ test("a map is a URL, an owner/repo#number, or a number on the tracker", () => {
   expect(mapRef("globex/plans#5", usage, tracker)).toEqual({ owner: "globex", repo: "plans", number: 5 });
   expect(mapRef("#6", usage, tracker)).toEqual({ owner: "acme", repo: "maps", number: 6 });
   expect(mapRef("7", usage, tracker)).toEqual({ owner: "acme", repo: "maps", number: 7 });
-  expect(() => mapRef("7", usage)).toThrow("Set orchestration.mapTracker");
+  expect(() => mapRef("7", usage)).toThrow("Set orchestration.tracker");
   expect(() => mapRef("maps", usage, tracker)).toThrow(usage);
 });
 

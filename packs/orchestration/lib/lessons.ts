@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { missesPath, proofLedgerRoot } from "./proof-ledger.ts";
+import { readMisses } from "../../pull-requests/lib/proof-misses.ts";
+import { ledgerRoot } from "../../pull-requests/lib/proof.ts";
 import {
   descendants, fetchDiscussionFromGitHub, fetchIssueFromGitHub, issueLink, mapRef, proseLines, splitRepository, tableCell,
   type Comment, type FetchDiscussion, type FetchIssue, type MapIo, type MapRef,
@@ -19,7 +20,7 @@ const settledRollouts = new Set(["rolled-back", "holding"]);
 
 type Failure = { tried: string; happened: string; where: string };
 
-export async function readLessons(ref: MapRef, fetchIssue: FetchIssue, fetchDiscussion: FetchDiscussion, signals: (pullRequests: PullRequest[]) => Signals): Promise<string> {
+export async function readLessons(ref: MapRef, fetchIssue: FetchIssue, fetchDiscussion: FetchDiscussion, signals: (pullRequests: PullRequest[]) => Promise<Signals>): Promise<string> {
   const map = await fetchDiscussion(ref.owner, ref.repo, ref.number);
   const failures = [...failuresIn(map.body, `[map #${ref.number}](${issueLink(ref)})`), ...failuresInComments(map.comments, "map")];
   for (const ticket of await descendants(await fetchIssue(ref.owner, ref.repo, ref.number), fetchIssue)) {
@@ -27,7 +28,7 @@ export async function readLessons(ref: MapRef, fetchIssue: FetchIssue, fetchDisc
     failures.push(...failuresInComments((await fetchDiscussion(owner, repo, ticket.number)).comments, `#${ticket.number}`));
   }
   const pullRequests = stackPullRequests(map.body);
-  return [...failureTable(failures), "", ...signalLines(pullRequests, signals(pullRequests))].join("\n");
+  return [...failureTable(failures), "", ...signalLines(pullRequests, await signals(pullRequests))].join("\n");
 }
 
 function failuresInComments(comments: Comment[], label: string): Failure[] {
@@ -72,10 +73,10 @@ function signalLines(pullRequests: PullRequest[], signals: Signals): string[] {
   ];
 }
 
-export function localReview(home: string, pullRequests: PullRequest[]): PrReview[] {
-  const misses = jsonLines<{ repo: string; pr: number; finding: string; source: string }>(missesPath(home));
+export async function localReview(home: string, pullRequests: PullRequest[]): Promise<PrReview[]> {
+  const misses = await readMisses(home);
   return pullRequests.map(({ repo, pr }) => {
-    const reviews = join(proofLedgerRoot(home), repo, String(pr), "reviews");
+    const reviews = join(ledgerRoot(home), repo, String(pr), "reviews");
     const finished = existsSync(reviews) ? readdirSync(reviews).filter((name) => existsSync(join(reviews, name, "findings.md"))) : [];
     const escalations = finished.flatMap((name) => {
       const round = jsonFile<{ arbiter?: { verdict: string; reason: string } }>(join(reviews, name, "round.json"));
@@ -122,8 +123,8 @@ export async function runLessons(args: string[], io: LessonsIo): Promise<number>
   if (!map || rest.length || (flag && (flag !== "--rollouts" || !file))) throw new Error(usage);
   const ref = mapRef(map, usage, io.tracker);
   const rolloutLog = expandHome(file ?? io.rolloutLog(), io.home);
-  const signals = (pullRequests: PullRequest[]): Signals => {
-    const reviews = new Map(localReview(io.home, pullRequests).map((review) => [review.pr, review]));
+  const signals = async (pullRequests: PullRequest[]): Promise<Signals> => {
+    const reviews = new Map((await localReview(io.home, pullRequests)).map((review) => [review.pr, review]));
     return {
       review: (pr) => reviews.get(key(pr))!,
       rollouts: rolloutTrouble(rolloutLog),

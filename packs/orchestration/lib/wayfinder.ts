@@ -14,7 +14,7 @@ export type Tracker = () => string;
 export type MapIo = { print(line: string): void; tracker: Tracker; fetchIssue?: FetchIssue; fetchDiscussion?: FetchDiscussion };
 
 export const parked = "wayfinder:awaiting-human";
-export const trackerSetting = "orchestration.mapTracker";
+export const trackerSetting = "orchestration.tracker";
 const fence = /^\s*(```|~~~)/;
 
 export function mapRef(value: string, usage: string, tracker: Tracker = () => ""): MapRef {

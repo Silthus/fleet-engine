@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { runLessons, type LessonsIo } from "./lessons.ts";
-import { missesPath, proofLedgerRoot } from "./proof-ledger.ts";
+import { missesPath } from "../../pull-requests/lib/proof-misses.ts";
+import { ledgerRoot } from "../../pull-requests/lib/proof.ts";
 import { fakeGitHub, fixtureFetchers, issueNode, runPackCommand, type GitHubFixture } from "./testing.ts";
 
 const cleanups: string[] = [];
@@ -45,7 +46,7 @@ const failures = [
 ];
 
 async function writeLedger(home: string): Promise<string> {
-  const reviews = (pr: number) => join(proofLedgerRoot(home), "acme/app", String(pr), "reviews");
+  const reviews = (pr: number) => join(ledgerRoot(home), "acme/app", String(pr), "reviews");
   for (const [pr, round] of [[10, "1"], [10, "2"], [10, "3"], [11, "1"]] as const) {
     await mkdir(join(reviews(pr), round), { recursive: true });
     await writeFile(join(reviews(pr), round, "findings.md"), "Findings.");
@@ -54,7 +55,6 @@ async function writeLedger(home: string): Promise<string> {
   await writeFile(join(reviews(10), "3", "round.json"), JSON.stringify({ arbiter: { verdict: "escalate", reason: "scope grew" } }));
   await writeFile(missesPath(home), [
     JSON.stringify({ repo: "acme/app", pr: 11, finding: "Null check", source: "human" }),
-    "not json",
     JSON.stringify({ repo: "acme/app", pr: 99, finding: "Elsewhere", source: "human" }),
   ].join("\n"));
   const log = join(home, "rollouts.jsonl");
@@ -103,8 +103,8 @@ test("fleet lessons takes the rollout log from --rollouts, and says when the log
 
 test("fleet lessons says when nothing went wrong and when the map has no stack PRs", async () => {
   const home = await temporaryHome();
-  await mkdir(join(proofLedgerRoot(home), "acme/app/10/reviews/1"), { recursive: true });
-  await writeFile(join(proofLedgerRoot(home), "acme/app/10/reviews/1/findings.md"), "Findings.");
+  await mkdir(join(ledgerRoot(home), "acme/app/10/reviews/1"), { recursive: true });
+  await writeFile(join(ledgerRoot(home), "acme/app/10/reviews/1/findings.md"), "Findings.");
   const quiet = (body: string): LessonsIo => ({
     ...io(home, []),
     ...fixtureFetchers({ issues: [issueNode(repository, 1)], discussions: { "acme/maps#1": { body, comments: [] } } }),
@@ -128,7 +128,7 @@ test("fleet lessons runs as a pack command with the tracker and rollout log from
   const home = await temporaryHome();
   const log = await writeLedger(home);
   const bin = await fakeGitHub(home, fixture);
-  const settings = { "orchestration.mapTracker": repository, "orchestration.rolloutLog": "~/rollouts.jsonl" };
+  const settings = { "orchestration.tracker": repository, "orchestration.rolloutLog": "~/rollouts.jsonl" };
 
   const result = await runPackCommand("lessons", ["#1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(settings) });
 

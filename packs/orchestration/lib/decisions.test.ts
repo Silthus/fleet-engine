@@ -71,7 +71,7 @@ test("fleet decisions runs as a pack command against the tracker from the settin
   cleanups.push(home);
   const bin = await fakeGitHub(home, fixture);
 
-  const result = await runPackCommand("decisions", ["1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify({ "orchestration.mapTracker": repository }) });
+  const result = await runPackCommand("decisions", ["1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify({ "orchestration.tracker": repository }) });
 
   expect(result).toEqual({ stdout: `${expected}\n`, stderr: "", code: 0 });
 });

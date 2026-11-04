@@ -2,6 +2,8 @@ import type { LinkedEnvironment, LinkedThread, LinkedTimelineItem, ShellThread }
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ToolRefusal, type ToolHandler } from "../../base/lib/t3/testing.ts";
+import { git } from "../../../src/testing/git.ts";
+import { engineSource, skillSources } from "../../../src/testing/packs.ts";
 import type { Discussion, FetchDiscussion, FetchIssue, IssueNode } from "./wayfinder.ts";
 
 export const now = new Date("2026-11-04T12:00:00Z");
@@ -92,6 +94,27 @@ cat "$file"
 
 export async function runPackCommand(command: string, args: string[], env: Record<string, string>): Promise<CommandResult> {
   const child = Bun.spawn(["bun", join(import.meta.dir, "..", "commands", `${command}.ts`), ...args], { env: { ...Bun.env, ...env }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { stdout, stderr, code };
+}
+
+export async function fleetMachine(home: string, settings: Record<string, unknown>, origin?: string): Promise<string> {
+  const profile = join(home, "profile");
+  const sources = skillSources(join(home, ".local/share/fleet/sources"), await engineSource());
+  for (const source of sources) await mkdir(join(source.dir, ".git"), { recursive: true });
+  await mkdir(profile, { recursive: true });
+  const engine = { repo: "acme/fleet-engine", ref: "main", channel: "track" };
+  await writeFile(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine, sources: sources.map((source) => source.ref), packs: ["pull-requests", "orchestration"], plan: "both", settings, workflows: {} }));
+  git(profile, "init", "-q");
+  if (origin) git(profile, "remote", "add", "origin", origin);
+  await mkdir(join(home, ".config/fleet"), { recursive: true });
+  await writeFile(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "linux", profileDir: profile }));
+  return profile;
+}
+
+export async function runFleet(args: string[], env: Record<string, string>): Promise<CommandResult> {
+  const { FLEET_SETTINGS, FLEET_PROFILE_DIR, ...inherited } = Bun.env;
+  const child = Bun.spawn(["sh", join(import.meta.dir, "../../../fleet"), ...args], { env: { ...inherited, ...env }, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { stdout, stderr, code };
 }

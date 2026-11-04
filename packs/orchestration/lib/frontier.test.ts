@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFrontier } from "./frontier.ts";
-import { fakeGitHub, fixtureFetchers, issueNode, runPackCommand, type GitHubFixture } from "./testing.ts";
+import { fakeGitHub, fixtureFetchers, fleetMachine, issueNode, runFleet, runPackCommand, type GitHubFixture } from "./testing.ts";
 import type { IssueNode } from "./wayfinder.ts";
 
 const cleanups: string[] = [];
@@ -17,7 +17,7 @@ async function temporaryHome(): Promise<string> {
   return home;
 }
 
-function mapFixture(repository: string): GitHubFixture {
+function mapFixture(repository: string, number = 1): GitHubFixture {
   const epic = issueNode(repository, 6, { title: "Epic", children: [issueNode(repository, 7, { title: "Draft schema" })] });
   const children: IssueNode[] = [
     issueNode(repository, 2, { title: "Pick a store", labels: ["wayfinder:grilling"] }),
@@ -30,11 +30,11 @@ function mapFixture(repository: string): GitHubFixture {
     { ...epic, children: [] },
     issueNode(repository, 8, { title: "Spike", state: "CLOSED" }),
   ];
-  return { issues: [issueNode(repository, 1, { title: "Ship the maps", labels: ["wayfinder:map"], children }), epic] };
+  return { issues: [issueNode(repository, number, { title: "Ship the maps", labels: ["wayfinder:map"], children }), epic] };
 }
 
-const expected = (repository: string) => [
-  `Map ${repository}#1: Ship the maps (6 open, 1 closed)`,
+const expected = (repository: string, number = 1) => [
+  `Map ${repository}#${number}: Ship the maps (6 open, 1 closed)`,
   "",
   "Frontier, open, unblocked, and unclaimed, in map order:",
   "  #2 grilling: Pick a store",
@@ -75,7 +75,7 @@ test("fleet frontier runs as a pack command and finds a bare map number on the t
     const home = await temporaryHome();
     const bin = await fakeGitHub(home, mapFixture(tracker));
 
-    const result = await runPackCommand("frontier", ["#1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify({ "orchestration.mapTracker": tracker }) });
+    const result = await runPackCommand("frontier", ["#1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify({ "orchestration.tracker": tracker }) });
 
     expect(result).toEqual({ stdout: `${expected(tracker)}\n`, stderr: "", code: 0 });
     expect((await readFile(join(bin, "calls.log"), "utf8")).split("\n").filter(Boolean)).toEqual([`${tracker}#1`, `${tracker}#6`]);
@@ -88,10 +88,40 @@ test("fleet frontier refuses a bad map, and a bare number when no tracker is set
   await expect(runFrontier([], io)).rejects.toThrow(usage);
   await expect(runFrontier(["acme/maps#1", "extra"], io)).rejects.toThrow(usage);
   await expect(runFrontier(["not a map"], io)).rejects.toThrow(usage);
-  await expect(runFrontier(["12"], io)).rejects.toThrow("Set orchestration.mapTracker to the owner/repo that holds your maps, or name the map as owner/repo#number.");
-  await expect(runFrontier(["#12"], { ...io, tracker: () => "maps" })).rejects.toThrow("orchestration.mapTracker is maps, not an owner/repo.");
+  await expect(runFrontier(["12"], io)).rejects.toThrow("Set orchestration.tracker to the owner/repo that holds your maps, or name the map as owner/repo#number.");
+  await expect(runFrontier(["#12"], { ...io, tracker: () => "maps" })).rejects.toThrow("orchestration.tracker is maps, not an owner/repo.");
 
   const home = await temporaryHome();
-  const result = await runPackCommand("frontier", ["#1"], { HOME: home, FLEET_SETTINGS: JSON.stringify({ "orchestration.mapTracker": "" }) });
-  expect(result).toEqual({ stdout: "", stderr: "fleet: Set orchestration.mapTracker to the owner/repo that holds your maps, or name the map as owner/repo#number.\n", code: 1 });
+  const result = await runPackCommand("frontier", ["#1"], { HOME: home, FLEET_SETTINGS: JSON.stringify({ "orchestration.tracker": "" }) });
+  expect(result).toEqual({ stdout: "", stderr: "fleet: Set orchestration.tracker to the owner/repo that holds your maps, or name the map as owner/repo#number.\n", code: 1 });
+});
+
+test("fleet frontier 12 runs through fleet with the tracker that the profile sets", async () => {
+  const home = await temporaryHome();
+  await fleetMachine(home, { "orchestration.tracker": "acme/maps" });
+  const bin = await fakeGitHub(home, mapFixture("acme/maps", 12));
+
+  const result = await runFleet(["frontier", "12"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}` });
+
+  expect(result).toEqual({ stdout: `${expected("acme/maps", 12)}\n`, stderr: "", code: 0 });
+  expect((await readFile(join(bin, "calls.log"), "utf8")).split("\n")[0]).toBe("acme/maps#12");
+});
+
+test("fleet frontier 12 finds the map on the profile repo's GitHub origin when no tracker is set", async () => {
+  const home = await temporaryHome();
+  await fleetMachine(home, {}, "git@github.com:globex/fleet-profile.git");
+  const bin = await fakeGitHub(home, mapFixture("globex/fleet-profile", 12));
+
+  const result = await runFleet(["frontier", "12"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}` });
+
+  expect(result).toEqual({ stdout: `${expected("globex/fleet-profile", 12)}\n`, stderr: "", code: 0 });
+});
+
+test("fleet frontier 12 asks for the tracker when the profile repo has no GitHub origin", async () => {
+  const home = await temporaryHome();
+  await fleetMachine(home, {}, "https://git.example.test/acme/fleet-profile.git");
+
+  const result = await runFleet(["frontier", "12"], { HOME: home });
+
+  expect(result).toEqual({ stdout: "", stderr: "fleet: Set orchestration.tracker to the owner/repo that holds your maps, or name the map as owner/repo#number.\n", code: 1 });
 });

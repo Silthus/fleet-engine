@@ -8,6 +8,10 @@ export function stringSetting(key: string, env: Env = Bun.env): string {
   return typed(key, "string", env) as string;
 }
 
+export function optionalStringSetting(key: string, env: Env = Bun.env): string | undefined {
+  return resolvedSettings(env)[key] === undefined ? undefined : stringSetting(key, env);
+}
+
 export function booleanSetting(key: string, env: Env = Bun.env): boolean {
   return typed(key, "boolean", env) as boolean;
 }
