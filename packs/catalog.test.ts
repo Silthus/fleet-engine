@@ -66,4 +66,12 @@ describe("the catalog", () => {
       expect([preset.id, Object.keys(preset.workflows).filter((id) => preset.workflows[id] && !on.has(id))]).toEqual([preset.id, []]);
     }
   });
+
+  test("turns on each preset's default workflows, and names the need that holds one back", () => {
+    const everyday = presets.find((preset) => preset.id === "everyday")!;
+    const plan = resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs: everyday.packs, workflows: everyday.workflows }, devbox);
+    const state = (id: string) => plan.workflows.find((workflow) => workflow.id === id);
+    expect(["maps", "side-threads", "voice", "updates"].map((id) => state(id)?.active)).toEqual([true, true, true, true]);
+    expect(state("previews")).toMatchObject({ active: false, reason: "needs coder" });
+  });
 });

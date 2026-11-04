@@ -4,6 +4,7 @@
   "summary": "Agents write in your voice, give short updates, and share plans and previews as links.",
   "day": "Agents draft messages, pull request descriptions, and docs the way you write them. Plans and running apps reach other people as links.",
   "cost": "No extra usage beyond the drafts you ask for.",
+  "risk": "Shared plans are secret gists: anyone with the link can read them.",
   "instructions": "AGENTS.md",
   "skills": [
     "skills/writing-voice",
@@ -28,11 +29,11 @@
       "id": "updates",
       "name": "Updates and shared plans",
       "default": true,
-      "sentence": "Agents give updates with the outcome first, and share plans and reports as one link.",
+      "sentence": "Agents give updates with the outcome first, and share plans and reports as one link. Type /explain-diff to have a change explained.",
       "moment": {
         "time": "16:30",
         "title": "One link for the team",
-        "body": "You ask for the plan as a page. The agent publishes it to a private link that you paste into the team channel.",
+        "body": "You ask for the plan as a page. The agent publishes it to an unlisted link that you paste into the team channel.",
         "words": ["agent"]
       }
     },

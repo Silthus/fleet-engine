@@ -5,7 +5,9 @@ description: The user's writing voice. Use when drafting anything the user sends
 
 # Writing voice
 
-This is Fleet's neutral starting voice. To make it yours, copy this directory into your profile repo, such as `skills/writing-voice/`, edit the rules and add examples of your own writing, and list it in `fleet.json` under `overrides.skills`. Your copy then replaces this one.
+This is Fleet's neutral starting voice.
+
+**For the user, not the agent:** To make this voice yours, copy this folder to `overrides/skills/writing-voice/` in your profile repo. Keep the folder name. Add `"overrides": { "skills": ["overrides/skills/writing-voice"] }` to `fleet.json` and run `fleet apply`. Your copy then replaces this one. In your copy, delete this paragraph, edit the rules, and add examples of your writing under `## Examples`.
 
 ## Rules
 
@@ -19,5 +21,8 @@ This is Fleet's neutral starting voice. To make it yours, copy this directory in
 ## By medium
 
 - **Chat and comments:** two to five sentences. Put lists in bullets. Link things instead of pasting them.
-- **Pull request descriptions and docs:** a heading for each part. Start with the problem, then the change, then the proof.
+- **Pull request descriptions:** follow the `pr-description` skill when it is installed. Otherwise, start with the problem, then the change, then the proof.
+- **Docs:** a heading for each part.
 - **Email:** a one-line greeting, the point in the first paragraph, and a short thanks at the end.
+
+## Examples

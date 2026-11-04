@@ -2,7 +2,7 @@
 # Keeps the memory checkout in step with the user's private memory repo on every machine.
 # Each run commits this machine's changes, rebases them onto main, and pushes.
 # MEMORY.md merges by union. When two machines change the same lines of another file, this machine's
-# version wins and the other stays in history. A conflict marker or a secret stops the push.
+# version wins and the other stays in history. A conflict marker or a secret in any outgoing commit stops the push.
 # Every state that stops the sync exits 1, so the job log and fleet doctor see it.
 set -eu
 
@@ -10,28 +10,51 @@ url=${FLEET_MEMORY_URL:?FLEET_MEMORY_URL is not set}
 checkout=${FLEET_MEMORY_DIR:-$HOME/.agents/memory}
 machine=${CODER_WORKSPACE_NAME:-$(hostname -s)}
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+lock="$checkout.sync-lock"
 g() { git -C "$checkout" "$@"; }
 fail() { echo "Memory: $*" >&2; exit 1; }
+repo_name() { printf '%s\n' "$1" | sed -e 's#/*$##' -e 's#\.git$##' -e 's#^.*github\.com[:/]##'; }
 
-if [ ! -e "$checkout" ]; then
-  mkdir -p "$(dirname "$checkout")"
-  git clone --quiet "$url" "$checkout" || fail "cannot clone $url."
+mkdir -p "$(dirname "$checkout")"
+waited=0
+until mkdir "$lock" 2>/dev/null; do
+  holder=$(cat "$lock/pid" 2>/dev/null || true)
+  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$lock"; continue; fi
+  if [ -z "$holder" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rm -rf "$lock"; continue; fi
+  waited=$((waited + 1))
+  [ "$waited" -le 60 ] || fail "another sync still holds $lock."
+  sleep 1
+done
+echo $$ > "$lock/pid"
+trap 'rm -rf "$lock"' EXIT
+
+if [ ! -e "$checkout/.git" ]; then
+  mkdir -p "$checkout"
+  g init --quiet
+  g symbolic-ref HEAD refs/heads/main
+  g remote add origin "$url"
   g config commit.gpgsign false
-  echo "Memory: cloned into $checkout."
+  echo "Memory: set up $checkout for $url."
 fi
+origin=$(g remote get-url origin 2>/dev/null || true)
+[ "$(repo_name "$origin")" = "$(repo_name "$url")" ] || fail "$checkout syncs with ${origin:-no repo}, but memory.repo is $url. Move that folder aside; the next sync sets up a fresh one."
 
 gitdir=$(g rev-parse --absolute-git-dir)
 grep -qx 'MEMORY.md merge=union' "$gitdir/info/attributes" 2>/dev/null || { mkdir -p "$gitdir/info"; echo 'MEMORY.md merge=union' >> "$gitdir/info/attributes"; }
 
-if [ -z "${FLEET_MEMORY_LOCKED:-}" ] && command -v flock >/dev/null 2>&1; then
-  FLEET_MEMORY_LOCKED=1 exec flock -w 60 "$gitdir/fleet-sync.lock" sh "$0" "$@"
-fi
-
 marker="$gitdir/fleet-sync-rebase"
+snapshot="$gitdir/fleet-sync-files.tar"
 rebasing() { [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; }
 if rebasing && [ -f "$marker" ]; then
+  conflicted=$(g diff --name-only --diff-filter=U)
+  (cd "$checkout" && tar -cf "$snapshot" --exclude=./.git .) || fail "cannot save the files before undoing an unfinished sync. Nothing changed."
   g rebase --abort
-  echo "Memory: undid an unfinished sync rebase."
+  (cd "$checkout" && tar -xf "$snapshot") || fail "undid an unfinished sync, but cannot restore the files. They are in $snapshot."
+  printf '%s\n' "$conflicted" | while IFS= read -r path; do
+    [ -z "$path" ] || g checkout --quiet HEAD -- "$path" 2>/dev/null || rm -f "$checkout/$path"
+  done
+  rm -f "$snapshot"
+  echo "Memory: undid an unfinished sync rebase and kept every file as it was."
 fi
 rm -f "$marker"
 if rebasing || [ -f "$gitdir/MERGE_HEAD" ]; then
@@ -72,12 +95,39 @@ rebase() {
   rm -f "$marker"
 }
 
+remote_has_main() {
+  status=0
+  g ls-remote --exit-code --heads origin main >/dev/null 2>&1 || status=$?
+  [ "$status" -ne 0 ] || return 0
+  [ "$status" -eq 2 ] || fail "cannot reach $url."
+  return 1
+}
+has_commits() { g rev-parse --quiet --verify HEAD >/dev/null; }
+
 attempt=1
 while :; do
-  g fetch --quiet origin main || fail "cannot fetch $url."
-  rebase || fail "cannot rebase $checkout onto origin/main. Not synced."
-  [ "$(g rev-list --count origin/main..HEAD)" -gt 0 ] || exit 0
-  g diff origin/main...HEAD | bun "$here/secret-scan.ts" || fail "outgoing memory holds a secret. Remove it and amend the commit; until then nothing syncs."
+  if remote_has_main; then
+    g fetch --quiet origin main || fail "cannot fetch $url."
+    if ! has_commits; then
+      g reset --quiet --hard origin/main
+      echo "Memory: checked out $url."
+      exit 0
+    fi
+    rebase || fail "cannot rebase $checkout onto origin/main. Not synced."
+    base=origin/main
+  else
+    has_commits || { echo "Memory: $url is empty, and this machine has nothing to share yet."; exit 0; }
+    base=
+  fi
+  range=${base:+$base..}HEAD
+  [ "$(g rev-list --count "$range")" -gt 0 ] || exit 0
+  scan=0
+  bun "$here/secret-scan.ts" "$checkout" "$range" || scan=$?
+  if [ "$scan" -eq 1 ]; then
+    if [ -n "$base" ]; then g reset --quiet "$base"; else g update-ref -d HEAD && g read-tree --empty; fi
+    fail "an unpushed memory change holds a secret. The sync took its commits back and left the files as they are. Remove the secret; until then nothing syncs."
+  fi
+  [ "$scan" -eq 0 ] || fail "cannot scan the outgoing memory for secrets. Nothing was pushed."
   if g push --quiet origin HEAD:main 2>/dev/null; then
     echo "Memory: pushed from $machine."
     exit 0
