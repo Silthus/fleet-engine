@@ -5,8 +5,8 @@ import type { Terminal } from "./terminal.ts";
 
 export const pollMs = 2000;
 
-/** Polls left once the sign-in command finished well, for the probe to see the new sign-in. */
-const graceAfterExit = 3;
+/** Polls left once the sign-in command finished well, for the probe to see the new sign-in, such as a T3 Connect tunnel after its restart. */
+const graceAfterExit = 15;
 
 function ended(signIn: SignIn, code: number) {
   const name = signIn.command![0];

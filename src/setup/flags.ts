@@ -7,6 +7,8 @@ export type SetupFlags = {
   workflows: Record<string, boolean>;
   set: Record<string, string>;
   plan?: AiPlan;
+  /** An SSH host for the devbox, or "skip". */
+  devbox?: string;
   nonInteractive: boolean;
 };
 
@@ -35,7 +37,11 @@ export function parseSetupFlags(args: string[]): SetupFlags {
       const plan = value();
       if (!plans.includes(plan as AiPlan)) throw new FlagError(`--plan takes claude, codex, or both`);
       flags.plan = plan as AiPlan;
-    } else if (arg === "--non-interactive") flags.nonInteractive = true;
+    } else if (arg === "--devbox") {
+      flags.devbox = value();
+      if (!/^[\w][\w.@-]*$/.test(flags.devbox)) throw new FlagError(`--devbox takes an SSH host from ~/.ssh/config, or skip`);
+    }
+    else if (arg === "--non-interactive") flags.nonInteractive = true;
     else throw new FlagError(`unknown option ${arg}`);
   }
   return flags;

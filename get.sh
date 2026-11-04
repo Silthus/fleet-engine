@@ -3,7 +3,7 @@
 # ref, then runs fleet setup, or fleet apply when --profile names a profile.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh
-#   sh get.sh [--ref <ref>] [--profile <dir>] [-- <flags for fleet>]
+#   sh get.sh [--ref <ref>] [--profile <dir> | --install-only] [-- <flags for fleet>]
 #
 # Running it again picks up where it stopped: every step skips what is done.
 set -eu
@@ -12,6 +12,7 @@ engine_repo=${FLEET_ENGINE_REPO:-https://github.com/Silthus/fleet-engine.git}
 engine_dir=${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}
 ref=${FLEET_ENGINE_REF:-main}
 profile=
+install_only=
 bun_version=1.4.2
 
 say() { printf 'Fleet: %s\n' "$*" >&2; }
@@ -22,6 +23,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --ref) [ $# -ge 2 ] || fail "--ref needs a value."; ref=$2; shift 2 ;;
     --profile) [ $# -ge 2 ] || fail "--profile needs a directory."; profile=$2; shift 2 ;;
+    --install-only) install_only=1; shift ;;
     --) shift; break ;;
     *) fail "unknown option $1. Put flags for fleet after --." ;;
   esac
@@ -128,6 +130,8 @@ t3_cli
 has git || fail "git is missing."
 fetch_engine
 say "Engine ready at $ref in $engine_dir."
+
+[ -z "$install_only" ] || exit 0
 
 if [ -n "$profile" ]; then
   exec sh "$engine_dir/fleet" apply --profile "$profile" "$@"

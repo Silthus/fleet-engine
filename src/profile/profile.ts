@@ -117,6 +117,7 @@ function checkMachine(file: Record<string, unknown>, path: string): MachineFile 
   if (file.schema !== 1) fail(`unknown schema ${String(file.schema)}`);
   if (!roles.includes(file.role as string)) fail("role must be mac, devbox, linux, or hub");
   if (file.profileDir !== undefined && typeof file.profileDir !== "string") fail("profileDir must be a path");
+  if (file.devboxes !== undefined && !(Array.isArray(file.devboxes) && file.devboxes.every((host) => typeof host === "string"))) fail("devboxes must list SSH hosts");
   const setup = file.setup;
   if (setup !== undefined && (!isRecord(setup) || !Array.isArray(setup.done) || !setup.done.every((step) => typeof step === "string") || (setup.draft !== undefined && !isRecord(setup.draft)))) {
     fail("setup needs a done list and an optional draft object");

@@ -83,7 +83,7 @@ describe("fleet setup sign-ins", () => {
     const box = fakeMachine(quietHome, { claude: 50 }, { exits: { claude: 0 } });
     const quiet = await fleetSetup(quietHome, starter, ["", ""], box);
     expect(quiet.output).toContain("fleet: claude auth login ended, but Sign in to Claude still does not pass its check.");
-    expect(box.sleeps).toHaveLength(4);
+    expect(box.sleeps).toHaveLength(16);
   });
 
   test("GitHub sets up Git's credentials before a team pack is fetched, and checks the active account", async () => {
