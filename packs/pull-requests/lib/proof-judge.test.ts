@@ -145,3 +145,21 @@ test("without a replacement command, the judge runs the reviewer's row of the mo
   expect(claude.calls()).toEqual([expect.stringMatching(/^-p --model solo-model --effort high /)]);
   expect(claude.prompt()).toContain("You judge it in a fresh session, apart from the session that wrote it");
 });
+
+test("after the free judge failures, only an exact CONTINUE from the arbiter keeps the agent trying; no verdict goes to the user", async () => {
+  for (const arbiter of ["cat >/dev/null; exit 97", "cat >/dev/null; echo 'CONTINUE is unsafe; ESCALATE instead.'"]) {
+    const pr = checkout();
+    pr.commit("feature.txt", "greet new members\n");
+    await reviewHead(pr);
+    await pr.fleet("require", "--none", "--reason", "Docs only");
+    fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: [] } }));
+    pr.env.FLEET_REVIEW_ARBITER = arbiter;
+    for (const reason of ["first", "second", "third"]) {
+      writeFileSync(join(pr.repository, "responses.md"), `The ${reason} answer.\n`);
+      await pr.fleet("respond", "--round", "1", "responses.md");
+      const gate = await pr.fleet("gate");
+      expect(gate.output.includes("escalate to the user")).toBe(reason === "third");
+      if (reason === "third") expect(gate.output).toContain("judge: escalate to the user: the arbiter gave no verdict");
+    }
+  }
+});

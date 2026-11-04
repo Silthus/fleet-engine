@@ -355,16 +355,19 @@ async function reservePanel(options: Map<string, string>, head: ProofIdentity, l
   const pr = pullRequestDetails(head, run);
   const owed = await readOwed(home, head);
   const settled = (await reviewRecords(home, head)).filter((review) => review.responses).map((review) => `${review.label}:\n${review.responses!.trim()}`).join("\n\n");
+  const diff = diffOf(from, head.commit, run);
+  const diffFile = join(reserved.directory, "diff.patch");
+  await writeFile(diffFile, diff, { mode: 0o600 });
   const input = {
-    title: pr.title, body: pr.body, base: pr.baseRefName, from, commit: head.commit, diff: diffOf(from, head.commit, run), settled,
+    title: pr.title, body: pr.body, base: pr.baseRefName, from, commit: head.commit, diff, diffFile, settled,
     owed: owed?.none ? `none (${owed.none.reason})` : owed?.kinds.join(", ") || "none recorded", rubric,
   };
   const changedFiles = changedFilesOf(from, head.commit, run);
-  const rules = reviewRules(changedFiles, mergeBase(head, run), run);
+  const rules = reviewRules(changedFiles, baseTip(head, run), run);
   const briefed = lenses.map((lens) => ({ ...lens, knowledge: [rules, lens.knowledge].filter(Boolean).join("\n\n") }));
   const plan = {
     lenses: lenses.map((lens) => ({ name: lens.name, title: lens.title, ...castOf(lens, env) })),
-    changedFiles, from, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills")],
+    changedFiles, from, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory],
   };
   await planPanel(reserved.directory, plan, new Map(briefed.map((lens) => [lens.name, lensBrief(guide, lens, input)])));
   for (const lens of lenses) await startLens(reserved.directory, lens.name, context);

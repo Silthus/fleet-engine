@@ -184,7 +184,8 @@ async function askJudge(prompt: string, images: string[], readable: string[], cw
   if (earlier.length < freeJudgeFails) return record;
   const history = [...earlier, record].map((failed, index) => `## Run ${index + 1}, ${failed.commit}\n\n${failureReasons(failed.verdict).join("\n")}`);
   const decision = await deps.arbiter([arbiterInstructions, ...history].join("\n\n"));
-  return decision.verdict === "escalate" ? { ...record, escalation: decision.reason } : record;
+  if (decision.verdict === "continue") return record;
+  return { ...record, escalation: decision.verdict === "escalate" ? decision.reason : `the arbiter gave no verdict (${decision.reason})` };
 }
 
 async function failedRecords(directory: string) {

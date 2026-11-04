@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel } from "./proof-testing.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -104,4 +104,28 @@ test("a lens waits for a free panel slot of the machine, and --wait restarts a l
   expect((await pr.fleet("review", "--wait")).code).toBe(0);
   expect(whileQueued).toEqual([expect.stringContaining("correctness: queued by gpt")]);
   expect(readdirSync(slots)).toEqual([]);
+});
+
+test("a lens reads the whole diff from the round directory and REVIEW.md from the tip of the base branch, and its findings need answers, not its COVERED list", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "greet the new member\n");
+  pr.advanceBase("REVIEW.md", "Flag every unchecked webhook signature.\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const claude = recordingModel(pr, "claude", "FINDINGS:\n- feature.txt:1 | high | the greeting names no member\nCOVERED: feature.txt");
+
+  await pr.fleet("review", "--lens", "fresh-eyes");
+  const round = join(pr.pullRequest, "reviews/1");
+  expect(readFileSync(join(round, "diff.patch"), "utf8")).toContain("+greet the new member");
+  expect(claude.prompt()).toContain(`is in ${join(round, "diff.patch")}`);
+  expect(claude.prompt()).toContain("Flag every unchecked webhook signature.");
+  expect(claude.calls()[0]).toContain(`--add-dir ${round}`);
+
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  fakeModel(pr, "JUDGE", verdict());
+  const unanswered = await pr.fleet("gate");
+  expect(unanswered.code).toBe(1);
+  expect(unanswered.output).toContain("review: round 1 has unanswered findings 1;");
+  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in this commit: the greeting names the member.\n");
+  await pr.fleet("respond", "--round", "1", "responses.md");
+  expect((await pr.fleet("gate")).code).toBe(0);
 });
