@@ -21,8 +21,13 @@ function stubs(os = "Linux") {
 }
 
 async function heavy(bin: string, settings: Record<string, unknown>, ...args: string[]) {
+  return heavyWith({}, bin, settings, ...args);
+}
+
+async function heavyWith(extra: Record<string, string>, bin: string, settings: Record<string, unknown>, ...args: string[]) {
   const home = temp.make("home-");
-  const env = { ...Bun.env, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(settings) };
+  const { FLEET_HEAVY_SLOTS: _, ...inherited } = Bun.env;
+  const env = { ...inherited, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(settings), ...extra };
   const child = Bun.spawn(["bun", join(import.meta.dir, "../commands/heavy.ts"), ...args], { env, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
@@ -55,4 +60,28 @@ onLinux("stops a named unit, and refuses a unit name that is not plain", async (
   expect(calls()).toBe("systemctl --user stop preview-a\n");
   expect(await heavy(bin, roomy, "--unit", "a;b", "--", "true")).toMatchObject({ code: 2, stderr: "Fleet heavy: invalid unit name 'a;b'.\n" });
   expect(await heavy(bin, roomy)).toMatchObject({ code: 2, stderr: expect.stringMatching(/^Usage: fleet heavy/) });
+});
+
+onLinux("takes the slot count from FLEET_HEAVY_SLOTS over the setting", async () => {
+  const { bin } = stubs();
+  const held = temp.make("locks-");
+  const env = { XDG_RUNTIME_DIR: held, FLEET_HEAVY_SLOTS: "1" };
+  const busy = Bun.spawn(["sh", "-c", `mkdir -p ${held}/fleet-heavy; exec 9>${held}/fleet-heavy/slot-1; flock 9; echo locked; exec tail -f /dev/null`], { stdout: "pipe" });
+  const reader = busy.stdout.getReader();
+  await reader.read();
+  const sleeper = join(bin, "sleep");
+  writeFileSync(sleeper, "#!/bin/sh\nexit 9\n");
+  chmodSync(sleeper, 0o755);
+  const result = await heavyWith(env, bin, roomy, "--", "true");
+  busy.kill();
+  expect(result.stderr).toContain("Fleet heavy: 1 heavy jobs run already");
+});
+
+onLinux("refuses a slot count that is not a whole number above 0", async () => {
+  const { bin, calls } = stubs();
+  for (const slots of [0, -1, 1.5]) {
+    const result = await heavy(bin, { ...roomy, "base.heavySlots": slots }, "--", "true");
+    expect(result).toMatchObject({ code: 2, stderr: `Fleet heavy: base.heavySlots must be a whole number above 0, not '${slots}'.\n` });
+  }
+  expect(calls()).toBe("uname -s\nuname -s\nuname -s\n");
 });

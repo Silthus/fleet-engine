@@ -36,6 +36,7 @@ test("keeps work that is active, dirty, unmerged, or held only by the worktree",
     [{ landed: false }, "unmerged work"],
     [{ kind: "orphan", thread }, "Git does not track it, but its T3 thread is open"],
     [{ kind: "orphan", lastActivity: now - 12 * 3600_000 }, "Git does not track it; active 12.0h ago"],
+    [{ kind: "broken", dirty: false }, "Git cannot read its worktree metadata"],
   ];
   for (const [change, reason] of cases) expect(decide({ ...idle, ...change }, limits)).toEqual({ path: idle.path, remove: false, reason });
 });
@@ -169,6 +170,22 @@ onLinux("under disk pressure, a prune pass evicts an idle worktree and keeps one
   expect(await readdir(join(root, "repo"))).toEqual(["used"]);
 });
 
+onLinux("keeps a worktree whose Git metadata is gone, with its uncommitted work", async () => {
+  const { base, repo, root } = await repository();
+  const broken = join(root, "repo/broken");
+  sh(repo, "git", "worktree", "add", "-q", "-b", "broken", broken);
+  await writeFile(join(broken, "notes.md"), "not committed\n");
+  await rm(join(repo, ".git/worktrees/broken"), { recursive: true, force: true });
+
+  const verdicts = prune({
+    worktreeRoot: root, statePath: join(base, "missing.sqlite"), now: Date.now() + 72 * 3600_000, repos: [],
+    minIdleHours: 6, unownedIdleHours: 24, agentIdleHours: 24, dryRun: false, fetch: false, log: () => {}, sightingsPath: join(base, "sightings.json"),
+  });
+
+  expect(verdicts.find((verdict) => verdict.path === broken)).toMatchObject({ remove: false, reason: "Git cannot read its worktree metadata" });
+  expect(await readdir(broken)).toContain("notes.md");
+});
+
 test("records where processes run and forgets sightings older than two days", async () => {
   const base = await mkdtemp(join(tmpdir(), "fleet-sightings-"));
   temporary.push(base);
@@ -268,9 +285,10 @@ const cacheAuto: AutoOptions = {
 };
 
 /** Fake host: sizes come from `caches` (bytes), and `busy` lists the process patterns that pgrep finds. */
-function fakeHost(caches: Record<string, number>, busy: string[] = []) {
+function fakeHost(caches: Record<string, number>, busy: string[] = [], platform = "linux") {
   const ran: string[] = [];
   const host: CacheHost = {
+    platform,
     has: () => true,
     run: (command) => {
       ran.push(command.join(" "));
@@ -329,6 +347,16 @@ test("takes the disk floor from settings and keeps the low and target marks abov
 
 test("on a Mac, reads the working directories of processes from lsof", () => {
   expect(cwdsFromLsof("p1\nfcwd\nn/Users/me/.t3/worktrees/app/a\np2\nfcwd\nn/\n")).toEqual(["/Users/me/.t3/worktrees/app/a", "/"]);
+});
+
+test("on a Mac, stops when lsof lists no process, since prune itself always runs", () => {
+  expect(() => cwdsFromLsof("")).toThrow("lsof listed no running processes");
+});
+
+test("on a Mac, clears a cache with the rm flag macOS knows", () => {
+  const { host, ran } = fakeHost({ [uvCache]: gigabytes }, [], "darwin");
+  reclaimCaches(home, "critical", cacheAuto, () => {}, host);
+  expect(ran).toContain(`rm -rfx ${uvCache}`);
 });
 
 test("removes a tree without leaving its filesystem, with the flag each platform's rm knows", () => {

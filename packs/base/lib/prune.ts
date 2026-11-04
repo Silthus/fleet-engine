@@ -6,7 +6,7 @@ import { freeBytes } from "./disk.ts";
 
 export type Facts = {
   path: string;
-  kind: "worktree" | "orphan" | "main";
+  kind: "worktree" | "orphan" | "broken" | "main";
   dirty: boolean;
   disposable: boolean;
   branch: string | null;
@@ -51,6 +51,7 @@ export function decide(facts: Facts, options: IdleLimits & Pick<PruneOptions, "a
   const idle = (options.now - facts.lastActivity) / hour;
   const closed = facts.thread && closedAs(facts.thread);
   if (facts.kind === "main") return keep("primary checkout");
+  if (facts.kind === "broken") return keep("Git cannot read its worktree metadata");
   if (facts.inUse) return keep("a process runs inside it");
   if (facts.stateUnknown) return keep("T3 state is unreadable");
   if (facts.thread?.status && busyStatuses.has(facts.thread.status)) return keep(`T3 session is ${facts.thread.status}`);
@@ -175,7 +176,7 @@ export function readState(statePath: string): T3State {
 }
 
 function processDirectories(): string[] {
-  if (process.platform === "darwin") return cwdsFromLsof(run(["lsof", "-a", "-d", "cwd", "-u", String(process.getuid?.() ?? ""), "-Fn", "-w"]).out);
+  if (process.platform === "darwin") return cwdsFromLsof(run(["/usr/sbin/lsof", "-a", "-d", "cwd", "-u", String(process.getuid?.() ?? ""), "-Fn", "-w"]).out);
   const directories: string[] = [];
   for (const pid of readdirSync("/proc")) {
     if (!/^\d+$/.test(pid)) continue;
@@ -185,7 +186,9 @@ function processDirectories(): string[] {
 }
 
 export function cwdsFromLsof(output: string): string[] {
-  return output.split("\n").filter((line) => line.startsWith("n")).map((line) => line.slice(1));
+  const directories = output.split("\n").filter((line) => line.startsWith("n")).map((line) => line.slice(1));
+  if (!directories.length) throw new Error("lsof listed no running processes, so prune cannot tell which worktrees are in use");
+  return directories;
 }
 
 export function removeTreeCommand(path: string, platform: string = process.platform): string[] {
@@ -263,7 +266,8 @@ function gather(path: string, state: T3State, managed: boolean, processes: Proce
   };
   const gitDir = git(path, "rev-parse", "--path-format=absolute", "--git-dir");
   const commonDir = git(path, "rev-parse", "--path-format=absolute", "--git-common-dir");
-  if (!existsSync(join(path, ".git")) || !gitDir.ok || !commonDir.ok || !resolve(gitDir.out).startsWith(resolve(commonDir.out))) return base;
+  if (!existsSync(join(path, ".git"))) return base;
+  if (!gitDir.ok || !commonDir.ok || !resolve(gitDir.out).startsWith(resolve(commonDir.out))) return { ...base, kind: "broken" };
   if (resolve(gitDir.out) === resolve(commonDir.out)) return { ...base, kind: "main" };
   const common = dirname(commonDir.out);
   const lastActivity = Math.max(base.lastActivity, mtime(join(gitDir.out, "HEAD")), mtime(join(gitDir.out, "logs/HEAD")));
@@ -361,6 +365,7 @@ export function prune(options: PruneOptions): Verdict[] {
 }
 
 export type CacheHost = {
+  platform: string;
   has: (command: string) => boolean;
   run: (command: string[], timeout?: number) => { ok: boolean; out: string };
   isDirectory: (path: string) => boolean;
@@ -368,6 +373,7 @@ export type CacheHost = {
 };
 
 const systemHost: CacheHost = {
+  platform: process.platform,
   has: (command) => Boolean(Bun.which(command)),
   run: (command, timeout) => run(command, undefined, timeout),
   isDirectory,
@@ -402,7 +408,7 @@ function clearCache(host: CacheHost, log: (line: string) => void, home: string, 
   const shown = `${(size / gigabyte).toFixed(1)}G`;
   const running = host.run(["pgrep", "-u", String(process.getuid?.() ?? ""), "-x", cache.processes]).out;
   if (running) { log(`kept: ${cache.path} (${shown}; ${cache.busy})`); return; }
-  host.run(removeTreeCommand(cache.path), 1_800_000);
+  host.run(removeTreeCommand(cache.path, host.platform), 1_800_000);
   log(`removed: ${cache.path} (${shown} of ${cache.what}). ${host.free(home)}`);
 }
 

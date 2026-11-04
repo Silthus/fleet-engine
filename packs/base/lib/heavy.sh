@@ -37,6 +37,9 @@ if [ -n "$service" ]; then
 fi
 
 slots=${FLEET_HEAVY_SLOTS:?}
+case "$slots" in
+  ''|*[!0-9]*|0*) echo "Fleet heavy: base.heavySlots must be a whole number above 0, not '$slots'." >&2; exit 2 ;;
+esac
 locks="${XDG_RUNTIME_DIR:-/tmp}/fleet-heavy"
 mkdir -p "$locks"
 
