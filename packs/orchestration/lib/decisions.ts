@@ -25,7 +25,7 @@ async function resolution(ticket: Ticket, fetchDiscussion: FetchDiscussion): Pro
   const [owner, repo] = splitRepository(ticket.repository);
   const { comments } = await fetchDiscussion(owner, repo, ticket.number);
   const rounds = comments.filter((comment) => ticket.assignees.includes(comment.author)).length;
-  const decisions = comments.flatMap((comment) => decisionsIn(comment.body, `[#${ticket.number}](${comment.url})`, comment.createdAt));
+  const decisions = comments.flatMap((comment) => decisionsIn(comment.body, `[#${ticket.number}](${comment.url})`, comment.updatedAt ?? comment.createdAt));
   return { type: ticketType(ticket), rounds, decisions };
 }
 

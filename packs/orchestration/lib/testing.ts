@@ -82,7 +82,7 @@ export async function fakeGitHub(home: string, fixture: GitHubFixture): Promise<
     await writeFile(join(bin, `discussion-${name(repository, Number(number))}`), graph(graphDiscussion(value)));
   }
   await writeFile(join(bin, "gh"), `#!/bin/sh
-for arg; do case "$arg" in owner=*) owner=\${arg#owner=} ;; repo=*) repo=\${arg#repo=} ;; number=*) number=\${arg#number=} ;; *subIssues*) kind=issue ;; esac; done
+for arg; do case "$arg" in owner=*) owner=\${arg#owner=} ;; repo=*) repo=\${arg#repo=} ;; number=*) number=\${arg#number=} ;; query=*) printf '%s\\n' "\${arg#query=}" >> "$(dirname "$0")/queries.log"; case "$arg" in *subIssues*) kind=issue ;; esac ;; esac; done
 echo "$owner/$repo#$number" >> "$(dirname "$0")/calls.log"
 file="$(dirname "$0")/\${kind:-discussion}-$owner-$repo-$number.json"
 [ -f "$file" ] || { [ "\${kind:-}" = issue ] && { echo "no issue $owner/$repo#$number" >&2; exit 1; }; echo '{"data":{"repository":{"issue":{"body":"","comments":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'; exit 0; }

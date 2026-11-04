@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runDecisions } from "./decisions.ts";
@@ -74,6 +74,29 @@ test("fleet decisions runs as a pack command against the tracker from the settin
   const result = await runPackCommand("decisions", ["1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify({ "orchestration.tracker": repository }) });
 
   expect(result).toEqual({ stdout: `${expected}\n`, stderr: "", code: 0 });
+});
+
+test("fleet decisions takes the newest answer by edit time, so an edited comment counts from its edit", async () => {
+  const edited: GitHubFixture = {
+    issues: [issueNode(repository, 1, { children: [issueNode(repository, 2, { state: "CLOSED" }), issueNode(repository, 3, { state: "CLOSED" })] })],
+    discussions: {
+      "acme/maps#2": { body: "", comments: [{ author: "ada", body: "- 👤 **Which db?** Postgres", url: url(2, "monday"), createdAt: "2026-11-02T09:00:00Z", updatedAt: "2026-11-04T09:00:00Z" }] },
+      "acme/maps#3": { body: "", comments: [{ author: "bo", body: "- 👤 **Which db?** MySQL", url: url(3, "tuesday"), createdAt: "2026-11-03T09:00:00Z", updatedAt: "2026-11-03T09:00:00Z" }] },
+    },
+  };
+  const want = ["| Question | Answer | Who | Where |", "| --- | --- | --- | --- |", `| Which db? | Postgres | 👤 Human | [#2](${url(2, "monday")}) |`, "", "Involvement: no human-in-the-loop tickets."].join("\n");
+  const lines: string[] = [];
+
+  await runDecisions(["acme/maps#1"], { ...fixtureFetchers(edited), tracker: () => "", print: (line) => lines.push(line) });
+
+  expect(lines.join("\n")).toBe(want);
+  const home = await mkdtemp(join(tmpdir(), "fleet-decisions-"));
+  cleanups.push(home);
+  const bin = await fakeGitHub(home, edited);
+  expect(await runPackCommand("decisions", ["acme/maps#1"], { HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: "{}" })).toEqual({ stdout: `${want}\n`, stderr: "", code: 0 });
+  const discussionQueries = (await readFile(join(bin, "queries.log"), "utf8")).split("\n").filter((query) => query.includes("comments("));
+  expect(discussionQueries.length).toBeGreaterThan(0);
+  expect(discussionQueries.every((query) => /comments\(.*nodes \{.*\bupdatedAt\b/.test(query))).toBe(true);
 });
 
 test("fleet decisions refuses a bad map", async () => {

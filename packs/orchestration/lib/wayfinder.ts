@@ -5,7 +5,7 @@ export type IssueNode = {
 };
 export type Ticket = IssueNode & { parent?: number };
 export type MapRef = { owner: string; repo: string; number: number };
-export type Comment = { author: string; body: string; url: string; createdAt: string };
+export type Comment = { author: string; body: string; url: string; createdAt: string; updatedAt?: string };
 export type Discussion = { body: string; comments: Comment[] };
 export type FetchIssue = (owner: string, repo: string, number: number) => Promise<IssueNode>;
 export type FetchDiscussion = (owner: string, repo: string, number: number) => Promise<Discussion>;
@@ -69,7 +69,7 @@ export function splitRepository(repository: string): [string, string] {
 
 const fields = "number title state repository { nameWithOwner } assignees(first: 10) { nodes { login } } labels(first: 20) { nodes { name } } blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }";
 const issueQuery = `query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { issue(number: $number) { ${fields} subIssues(first: 100) { nodes { ${fields} subIssuesSummary { total } } } } } }`;
-const discussionQuery = "query($owner: String!, $repo: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $repo) { issue(number: $number) { body comments(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { author { login } body url createdAt } } } } }";
+const discussionQuery = "query($owner: String!, $repo: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $repo) { issue(number: $number) { body comments(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { author { login } body url createdAt updatedAt } } } } }";
 
 type GraphIssue = {
   number: number; title: string; state: string; repository: { nameWithOwner: string };
@@ -79,7 +79,7 @@ type GraphIssue = {
 };
 type GraphDiscussion = {
   body: string;
-  comments: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { author: { login: string } | null; body: string; url: string; createdAt: string }[] };
+  comments: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { author: { login: string } | null; body: string; url: string; createdAt: string; updatedAt: string }[] };
 };
 
 function issueNode(issue: GraphIssue): IssueNode {
@@ -95,7 +95,7 @@ function issueNode(issue: GraphIssue): IssueNode {
 function discussion(pages: GraphDiscussion[]): Discussion {
   return {
     body: pages[0]?.body ?? "",
-    comments: pages.flatMap((page) => page.comments.nodes).map((node) => ({ author: node.author?.login ?? "", body: node.body, url: node.url, createdAt: node.createdAt })),
+    comments: pages.flatMap((page) => page.comments.nodes).map((node) => ({ author: node.author?.login ?? "", body: node.body, url: node.url, createdAt: node.createdAt, updatedAt: node.updatedAt })),
   };
 }
 
