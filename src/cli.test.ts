@@ -180,6 +180,15 @@ describe("fleet routing", () => {
     expect(JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"))).toMatchObject({ "tools.slots": 2, "tools.name": "mine" });
   });
 
+  test("gives a pack command the model table of the user's AI plan", async () => {
+    const { home, engine } = await machineWith(["tools"]);
+    writeFileSync(join(engine, "packs/tools/commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", Bun.env.FLEET_MODELS ?? "none");\n`);
+    expect((await fleet(["hello"], home, engine)).code).toBe(0);
+    const models = JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"));
+    expect(models.map((row: { role: string }) => row.role)).toEqual(["lookup", "survey", "research", "implementation", "review", "review-codex"]);
+    expect(models.find((row: { role: string }) => row.role === "review")).toMatchObject({ provider: "codex" });
+  });
+
   test("reports a command that two enabled packs ship", async () => {
     const home = temp.make("home-");
     const result = await fleet(["apply", "--profile", profileDir(["tools", "rival"])], home, engineWithCommands());
