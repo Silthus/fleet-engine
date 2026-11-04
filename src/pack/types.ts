@@ -29,14 +29,17 @@ export type Workflow = {
   risk?: string;
 };
 
+/**
+ * The payload of T3's scheduledTasks.upsert. The enclosing PackJob's id and
+ * schedule are the task's: the Jobs adapter owns the task as fleet:<job id>
+ * and maps { every, at } to T3's interval or fixed_time trigger.
+ */
 export type T3Task = {
-  id: string;
   prompt: string;
   projectSetting: string;
   modelRole: string;
   workspaceStrategy: "worktree";
   runtimeMode: "full-access" | "auto" | "approval-required";
-  schedule: string;
 };
 
 export type PackJob = {

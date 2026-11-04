@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
 import { fetchSource } from "./sources.ts";
@@ -47,6 +47,39 @@ describe("fetchSource", () => {
 
   test("reports an error for an unreachable source never fetched before", async () => {
     const fetched = await fetchSource({ name: "team", repo: join(temp.make(), "missing"), ref: "v1" }, temp.make("cache-"));
+    expect(fetched).toMatchObject({ error: expect.stringContaining("could not fetch v1") });
+  });
+
+  test("rejects a source name that leaves the cache", async () => {
+    const root = temp.make("root-");
+    const victim = join(root, "victim");
+    mkdirSync(victim);
+    writeFileSync(join(victim, "work.txt"), "unsaved\n");
+    const fetched = await fetchSource({ name: "../victim", repo: packRepo("Team rules v1."), ref: "v1" }, join(root, "cache"));
+    expect(fetched).toMatchObject({ error: expect.stringContaining("must be lowercase words") });
+    expect(existsSync(join(victim, "work.txt"))).toBe(true);
+    expect(existsSync(join(victim, ".git"))).toBe(false);
+  });
+
+  test("keeps the last good packs when a fetched ref does not load", async () => {
+    const repo = packRepo("Team rules v1.");
+    const cache = temp.make("cache-");
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    writeFileSync(join(repo, "packs", "team", "pack.json"), JSON.stringify({ schema: 2, name: "team", summary: "Broken." }));
+    git(repo, "commit", "-q", "-am", "v2");
+    git(repo, "tag", "v2");
+    for (const _ of [1, 2]) {
+      const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+      if ("error" in fetched) throw new Error(fetched.error);
+      expect(fetched.packs[0]?.manifest.summary).toBe("Team rules v1.");
+      expect(fetched.stale).toContain("does not load");
+    }
+  });
+
+  test("never falls back to a cache of another repository", async () => {
+    const cache = temp.make("cache-");
+    await fetchSource({ name: "team", repo: packRepo("Old repo."), ref: "v1" }, cache);
+    const fetched = await fetchSource({ name: "team", repo: join(temp.make(), "moved"), ref: "v1" }, cache);
     expect(fetched).toMatchObject({ error: expect.stringContaining("could not fetch v1") });
   });
 });

@@ -60,4 +60,22 @@ describe("loadPacks", () => {
     const jobs = [{ ...base.jobs[0], runner: "t3" }];
     expect(loadPacks(sourceWith({ base: { ...base, jobs } }))).rejects.toThrow("job prune runs on t3 but has no task");
   });
+
+  test("rejects malformed nested items with a clear error", async () => {
+    const setting = base.settings[0];
+    const task = { prompt: "Run the loop.", projectSetting: "base.project", modelRole: "worker", workspaceStrategy: "worktree", runtimeMode: "auto" };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ settings: [{ ...setting, default: "two" }] }, "settings base.heavySlots: default does not fit type number"],
+      [{ settings: [{ ...setting, type: "choice", choices: "a,b" }] }, "choices must list a value and a label each"],
+      [{ jobs: [{ ...base.jobs[0], runner: "t3", task: {} }] }, "task needs a prompt, a projectSetting, and a modelRole"],
+      [{ jobs: [{ ...base.jobs[0], runner: "t3", task: { ...task, schedule: "daily" } }] }, "drop task.id and task.schedule"],
+      [{ steps: [null] }, "steps[0] must be an object"],
+      [{ guides: [{ guide: "../../escape", path: "g.md" }] }, "guide must be lowercase words joined by dashes"],
+    ];
+    for (const [fields, message] of cases) {
+      expect(loadPacks(sourceWith({ base: { ...base, ...fields } }))).rejects.toThrow(message);
+    }
+    const jobs = [{ ...base.jobs[0], runner: "t3", task }];
+    expect((await loadPacks(sourceWith({ base: { ...base, jobs } })))[0]?.manifest.jobs?.[0]?.task?.prompt).toBe("Run the loop.");
+  });
 });

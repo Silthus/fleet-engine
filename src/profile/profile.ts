@@ -8,21 +8,30 @@ export async function loadProfile(dir: string): Promise<Profile> {
   const path = join(dir, "fleet.json");
   const file = await readJson(path);
   if (!file) throw new ProfileError(`${path}: missing`);
-  if (file.schema !== 1) throw new ProfileError(`${path}: unknown schema ${String(file.schema)}`);
-  const loaded = file as Partial<ProfileFile>;
-  const profile = { ...loaded, workflows: loaded.workflows ?? {}, settings: loaded.settings ?? {}, sources: loaded.sources ?? [] } as ProfileFile;
+  const profile = checkProfile({ ...file, workflows: file.workflows ?? {}, settings: file.settings ?? {}, sources: file.sources ?? [] }, path);
   const aboutMe = Bun.file(join(dir, "about-me.md"));
   return { ...profile, dir, ...((await aboutMe.exists()) ? { aboutMe: await aboutMe.text() } : {}) };
 }
 
+/**
+ * Saves answers to fleet.json and commits only that file. Settings merge key by
+ * key; every other field, workflows included, replaces the saved one, so a
+ * caller removes a workflow override by saving the full override set.
+ */
 export async function saveAnswers(dir: string, answers: Partial<ProfileFile>, options: { push?: boolean } = {}) {
   const path = join(dir, "fleet.json");
-  const current = (await readJson(path)) ?? {};
-  await writeFile(path, JSON.stringify({ ...current, ...answers, schema: 1 }, null, 2) + "\n");
-  await run(dir, "git", "add", "fleet.json");
-  if ((await run(dir, "git", "diff", "--cached", "--quiet")).ok) return;
-  const committed = await run(dir, "git", "commit", "-q", "-m", "Save Fleet answers");
-  if (!committed.ok) throw new ProfileError(`${dir}: could not commit answers: ${committed.stderr}`);
+  const current = (await readJson(path)) ?? { schema: 1 };
+  if (current.schema !== 1) throw new ProfileError(`${path}: unknown schema ${String(current.schema)}`);
+  const settings = { ...(current.settings as Record<string, unknown> | undefined), ...answers.settings };
+  await writeFile(path, JSON.stringify({ ...current, ...answers, settings, schema: 1 }, null, 2) + "\n");
+  const added = await run(dir, "git", "add", "--", "fleet.json");
+  if (!added.ok) throw new ProfileError(`${dir}: could not stage fleet.json: ${added.stderr}`);
+  const changed = await run(dir, "git", "diff", "--cached", "--quiet", "--", "fleet.json");
+  if (changed.code !== 0 && changed.code !== 1) throw new ProfileError(`${dir}: could not compare fleet.json: ${changed.stderr}`);
+  if (changed.code === 1) {
+    const committed = await run(dir, "git", "commit", "-q", "-m", "Save Fleet answers", "--", "fleet.json");
+    if (!committed.ok) throw new ProfileError(`${dir}: could not commit answers: ${committed.stderr}`);
+  }
   if (options.push && !(await run(dir, "git", "push", "-q")).ok) throw new ProfileError(`${dir}: could not push answers`);
 }
 
@@ -47,8 +56,7 @@ export async function loadMachine(home: string): Promise<MachineFile | undefined
   const path = machinePath(home);
   const file = await readJson(path);
   if (!file) return undefined;
-  if (file.schema !== 1) throw new ProfileError(`${path}: unknown schema ${String(file.schema)}`);
-  return file as MachineFile;
+  return checkMachine(file, path);
 }
 
 export async function saveMachine(home: string, machine: MachineFile) {
@@ -63,7 +71,48 @@ async function readJson(path: string): Promise<Record<string, unknown> | undefin
 }
 
 async function run(cwd: string, ...command: string[]) {
-  const process = Bun.spawn(command, { cwd, stdout: "ignore", stderr: "pipe" });
-  const [code, stderr] = await Promise.all([process.exited, new Response(process.stderr).text()]);
-  return { ok: code === 0, stderr: stderr.trim() };
+  const process = Bun.spawn(command, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+  return { ok: code === 0, code, stdout: stdout.trim(), stderr: stderr.trim() };
+}
+
+const aiPlans = ["claude", "codex", "both"];
+const roles = ["mac", "devbox", "linux", "hub"];
+
+function checkProfile(file: Record<string, unknown>, path: string): ProfileFile {
+  const fail = (message: string): never => {
+    throw new ProfileError(`${path}: ${message}`);
+  };
+  if (file.schema !== 1) fail(`unknown schema ${String(file.schema)}`);
+  const engine = file.engine;
+  if (!isRecord(engine) || typeof engine.repo !== "string" || typeof engine.ref !== "string" || (engine.channel !== "release" && engine.channel !== "track")) {
+    fail("engine needs a repo, a ref, and a release or track channel");
+  }
+  if (!Array.isArray(file.packs) || !file.packs.every((pack) => typeof pack === "string")) fail("packs must list pack names");
+  if (!aiPlans.includes(file.plan as string)) fail("plan must be claude, codex, or both");
+  if (!Array.isArray(file.sources) || !file.sources.every((source) => isRecord(source) && ["name", "repo", "ref"].every((key) => typeof source[key] === "string"))) {
+    fail("each source needs a name, a repo, and a ref");
+  }
+  if (!isRecord(file.settings) || !Object.values(file.settings).every((value) => ["string", "number", "boolean"].includes(typeof value))) fail("settings must map keys to text, numbers, or true and false");
+  if (!isRecord(file.workflows) || !Object.values(file.workflows).every((value) => typeof value === "boolean")) fail("workflows must map ids to true or false");
+  if (file.overrides !== undefined && !isRecord(file.overrides)) fail("overrides must be an object");
+  return file as ProfileFile;
+}
+
+function checkMachine(file: Record<string, unknown>, path: string): MachineFile {
+  const fail = (message: string): never => {
+    throw new ProfileError(`${path}: ${message}`);
+  };
+  if (file.schema !== 1) fail(`unknown schema ${String(file.schema)}`);
+  if (!roles.includes(file.role as string)) fail("role must be mac, devbox, linux, or hub");
+  if (file.profileDir !== undefined && typeof file.profileDir !== "string") fail("profileDir must be a path");
+  const setup = file.setup;
+  if (setup !== undefined && (!isRecord(setup) || !Array.isArray(setup.done) || !setup.done.every((step) => typeof step === "string") || (setup.draft !== undefined && !isRecord(setup.draft)))) {
+    fail("setup needs a done list and an optional draft object");
+  }
+  return file as MachineFile;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
