@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import { authorOf, finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewRecords, roundId, saveProof, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
+import { askGap, authorOf, finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewRecords, roundId, saveProof, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
 import { askModel, family, familyOf, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { anchorCheck } from "./finding-anchors.ts";
@@ -20,15 +20,16 @@ type Subcommand = {
 };
 
 const answerHelp = `--thread names the T3 thread where the user gave the answer; a conductor may pass its own thread id. fleet
-reads that thread, and the quoted words must appear in a message the user typed there or in the answer they gave to a
-question tool in the T3 app; an answer sent through MCP does not count. The ledger keeps the thread, the message, the
-user's words, and the question they answered.`;
+reads that thread, and the quoted words must be the user's whole answer to the question tool in the T3 app, given to
+the question that fleet printed for this PR. A message they typed, or an answer sent through MCP, does not count. The
+ledger keeps the thread, the message, the user's words, and the question they answered. Each answer counts once.`;
 
 const overrideHelp = `--override takes the user's answer to the question that review-start prints when the arbiter escalates, gives no
 verdict, or the ceiling stops the loop. Ask it with your question tool, with the options "Run one more round" and "Stop
 here". Only their choice of "Run one more round" there counts, quoted with the date they gave it, for example
 --override '2026-10-24 "Run one more round"' --thread <T3 thread id>. A typed message, a refusal, or a general rule,
-such as "ship everything autonomously", does not answer a round. One answer starts one round.
+such as "ship everything autonomously", does not answer a round. The question names the PR, and an answer to the
+question of another PR does not count. One answer starts one round.
 ${answerHelp}
 --standing takes your own reason for a round that the arbiter escalates or the ceiling refuses, when the user's
 standing review rule (fleet proof standing --kind review) lets agents decide them. The round keeps the reason, the
@@ -137,10 +138,12 @@ list the standing rules.`,
   },
   gap: {
     usage: "gap --kind <kind> (--reason <why it could not run> | --accept <the user's words> --thread <id>)",
-    summary: `Record why an owed proof could not run, or the user's acceptance of that gap. --accept takes their answer to
-this gap, with their words in quotes. It refuses a quote of the user's instructions, which a standing rule covers, and
-an answer already recorded on another PR or round. Their acceptance settles the kind: the gate then ignores that
-kind's evidence. Kind ci records that CI cannot run on HEAD, such as on a fork PR.
+    summary: `Record why an owed proof could not run, or the user's acceptance of that gap. --reason prints a question
+that names the gap kind and the PR, with the options "Accept the gap" and "Keep the gap open". Ask it with your
+question tool. --accept takes their choice of "Accept the gap" there, with their words in quotes. A typed message, a
+refusal, an answer to another question, a quote of the user's instructions, or an answer already recorded elsewhere
+does not count. A standing rule (fleet proof standing) covers a kind without asking. Their acceptance settles the
+kind: the gate then ignores that kind's evidence. Kind ci records that CI cannot run on HEAD, such as on a fork PR.
 ${answerHelp}`,
     examples: ["fleet proof gap --kind prod-shape --reason 'No production read access'", `fleet proof gap --kind prod-shape --accept '2026-10-25 "Accept the gap"' --thread mcp:1a2b`],
     options: ["--kind", "--reason", "--accept", "--thread"],
@@ -149,7 +152,9 @@ ${answerHelp}`,
       const [reason, accept] = [options.get("--reason"), options.get("--accept")];
       if ((reason === undefined) === (accept === undefined)) throw usageError("gap", "Pass either --reason or --accept");
       const update = reason === undefined ? { accept: accept!, hear: hearing(options, context) } : { reason };
-      context.print(JSON.stringify(await recordGap(context.home, identity(), kind, update)));
+      const gap = await recordGap(context.home, identity(), kind, update);
+      context.print(JSON.stringify(gap));
+      if (reason !== undefined) context.print(askGap(identity(), kind, reason));
       return 0;
     },
   },
