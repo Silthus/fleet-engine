@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { Plan, SettingValue } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
@@ -36,7 +36,7 @@ function plan(os: "darwin" | "linux", settings: Record<string, SettingValue> = {
   };
 }
 
-type Account = { user?: { login: string; id: number; name: string | null; email: string | null }; emails?: Array<{ email: string; primary: boolean; verified: boolean; visibility: string | null }>; scopes?: boolean };
+type Account = { user?: { login: string; id: number; name: string | null; email: string | null }; emails?: Array<{ email: string; primary: boolean; verified: boolean; visibility: string | null }>; scopes?: boolean; otherKeys?: string[] };
 
 function github(home: string, account: Account) {
   const keys = { authentication: [] as string[], signing: [] as string[] };
@@ -47,14 +47,18 @@ function github(home: string, account: Account) {
     if (tool === "gh" && verb === "api") {
       if (path === "user") return account.user ? { code: 0, stdout: JSON.stringify(account.user) } : { code: 1, stdout: "", stderr: "gh: not logged in" };
       if (path === "user/emails") return account.emails ? { code: 0, stdout: JSON.stringify(account.emails) } : { code: 1, stdout: "", stderr: "HTTP 404" };
-      if (path === "user/keys") return { code: 0, stdout: JSON.stringify(keys.authentication.map((key) => ({ key }))) };
-      if (path === "user/ssh_signing_keys") return { code: 0, stdout: JSON.stringify(keys.signing.map((key) => ({ key }))) };
+      const list = { "user/keys": keys.authentication, "user/ssh_signing_keys": keys.signing }[command.at(-1)!];
+      if (list && command.includes("--paginate") && command.join(" ").includes("--jq .[].key")) return { code: 0, stdout: [...(account.otherKeys ?? []), ...list].map((key) => `${key}\n`).join("") };
     }
     if (tool === "gh" && verb === "ssh-key" && command[2] === "add") {
       if (account.scopes === false) return { code: 1, stdout: "", stderr: "HTTP 404: needs the admin:ssh_signing_key scope" };
       const type = command[command.indexOf("--type") + 1] as "authentication" | "signing";
       keys[type].push(readFileSync(command[3]!, "utf8").trim().split(" ").slice(0, 2).join(" "));
       return { code: 0, stdout: "" };
+    }
+    if (tool === "ssh-keygen" && command.includes("-y")) {
+      const file = command[command.indexOf("-f") + 1]!;
+      return existsSync(file) && readFileSync(file, "utf8") === "PRIVATE\n" ? { code: 0, stdout: `${sshKey} fleet\n` } : { code: 255, stdout: "", stderr: `Load key "${file}": invalid format` };
     }
     if (tool === "ssh-keygen") {
       const file = command[command.indexOf("-f") + 1]!;
@@ -93,6 +97,7 @@ describe("the ssh signer", () => {
 \tformat = ssh
 [gpg "ssh"]
 \tallowedSignersFile = "${home}/.ssh/fleet-allowed-signers"
+\tprogram = "ssh-keygen"
 [core]
 \tsshCommand = "ssh -i '${home}/.ssh/fleet_ed25519'"
 [commit]
@@ -117,7 +122,7 @@ describe("the ssh signer", () => {
     const report = await apply(plan("linux"), { home, adapters: [gh.adapter] });
 
     expect(report.actions).toEqual([]);
-    expect(gh.calls.slice(before).filter((call) => call[1] === "ssh-key" || call[0] === "ssh-keygen")).toEqual([]);
+    expect(gh.calls.slice(before).filter((call) => call[1] === "ssh-key" || (call[0] === "ssh-keygen" && !call.includes("-y")))).toEqual([]);
     expect((await check(plan("linux"), { home, adapters: [gh.adapter] })).ok).toBe(true);
   });
 
@@ -143,6 +148,51 @@ describe("the ssh signer", () => {
     expect(read(home, ".gitconfig")).toBe("[alias]\n\tst = status\n[include]\n\tpath = ~/.config/fleet/gitconfig\n");
     const backups = join(home, ".local/state/fleet/backups");
     expect(readdirSync(backups).map((run) => read(home, `.local/state/fleet/backups/${run}/.gitconfig`))).toEqual(["[alias]\n\tst = status"]);
+  });
+
+  test("turns on no signing when the private key is missing or does not match", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".ssh"));
+    writeFileSync(join(home, ".ssh/fleet_ed25519.pub"), `${sshKey} fleet\n`);
+    const gh = github(home, octo);
+
+    const missing = await check(plan("linux"), { home, adapters: [gh.adapter] });
+    writeFileSync(join(home, ".ssh/fleet_ed25519"), "SOMEONE ELSE\n");
+    const mismatched = await apply(plan("linux"), { home, adapters: [gh.adapter] });
+
+    const say = "~/.ssh/fleet_ed25519 cannot sign for ~/.ssh/fleet_ed25519.pub: the private key is missing, locked, or belongs to another key. Move both files away, then run fleet apply to make a new Fleet key.";
+    expect(missing.findings).toContainEqual({ id: "identity:key", pack: "engine", say, repair: "human" });
+    expect(mismatched.findings).toContainEqual({ id: "identity:key", pack: "engine", say, repair: "human" });
+    expect(existsSync(join(home, ".config/fleet/gitconfig"))).toBe(false);
+  });
+
+  test("finds Fleet's key on a later page of the GitHub key lists", async () => {
+    const home = temp.make("home-");
+    const others = Array.from({ length: 40 }, (_, index) => `ssh-ed25519 AAAA${String(index).padStart(4, "0")}`);
+    const gh = github(home, { ...octo, otherKeys: others });
+    await apply(plan("linux"), { home, adapters: [gh.adapter] });
+    expect((await check(plan("linux"), { home, adapters: [gh.adapter] })).ok).toBe(true);
+    expect(gh.calls.filter((call) => call[1] === "api" && call.at(-1) === "user/keys")).toContainEqual(["gh", "api", "--paginate", "--jq", ".[].key", "user/keys"]);
+  });
+
+  test("moves only Fleet's path and keeps another include in the same section", async () => {
+    const home = temp.make("home-");
+    writeFileSync(join(home, ".gitconfig"), "[alias]\n\tst = status\n[include]\n\tpath = ~/.config/fleet/gitconfig\n\tpath = ~/.gitconfig.local\n[user]\n\tname = Workspace\n");
+    await apply(plan("linux"), { home, adapters: [github(home, octo).adapter] });
+    expect(read(home, ".gitconfig")).toBe("[alias]\n\tst = status\n[include]\n\tpath = ~/.gitconfig.local\n[user]\n\tname = Workspace\n[include]\n\tpath = ~/.config/fleet/gitconfig\n");
+  });
+
+  test("leaves the identity alone with a step when ~/.ssh is a link", async () => {
+    const home = temp.make("home-");
+    const dotfiles = temp.make("dotfiles-");
+    symlinkSync(dotfiles, join(home, ".ssh"));
+    const gh = github(home, octo);
+    const say = `Left your Git identity alone: ${join(home, ".ssh")} is a link. Fleet writes keys and Git settings only through plain folders.`;
+    for (const report of [await check(plan("linux"), { home, adapters: [gh.adapter] }), await apply(plan("linux"), { home, adapters: [gh.adapter] })]) {
+      expect(report.findings).toContainEqual({ id: "identity:link", pack: "engine", say, repair: "human" });
+    }
+    expect(readdirSync(dotfiles)).toEqual([]);
+    expect(gh.calls.filter((call) => call[1] === "ssh-key" || (call[0] === "ssh-keygen" && !call.includes("-y")))).toEqual([]);
   });
 
   test("doctor lists what is missing without writing or registering", async () => {
@@ -172,6 +222,12 @@ describe("the email", () => {
     const home = temp.make("home-");
     const gh = github(home, { ...octo, emails: [{ email: "octo@example.com", primary: true, verified: true, visibility: "private" }] });
     await apply(plan("linux"), { home, adapters: [gh.adapter] });
+    expect(read(home, ".config/fleet/gitconfig")).toContain('email = "42+octo@users.noreply.github.com"');
+  });
+
+  test("is the noreply address when the primary email has no visibility", async () => {
+    const home = temp.make("home-");
+    await apply(plan("linux"), { home, adapters: [github(home, { ...octo, emails: [{ email: "octo@example.com", primary: true, verified: true, visibility: null }] }).adapter] });
     expect(read(home, ".config/fleet/gitconfig")).toContain('email = "42+octo@users.noreply.github.com"');
   });
 

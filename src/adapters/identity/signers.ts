@@ -26,5 +26,5 @@ export const coderScript = (engineRoot: string) => join(engineRoot, "scripts/cod
 export function signer(name: SignerName, home: string, os: Os, engineRoot: string): Signer {
   if (name === "coder") return { name, publicKey: coderKeyTarget, register: ["signing"], program: coderScript(engineRoot), sshCommand: `${quote(coderScript(engineRoot))} ssh` };
   if (name === "1password") return { name, publicKey: onePasswordKeyTarget, register: ["authentication", "signing"], program: onePasswordPrograms[os] };
-  return { name, publicKey: `${sshKeyTarget}.pub`, register: ["authentication", "signing"], sshCommand: `ssh -i ${quote(join(home, sshKeyTarget))}` };
+  return { name, publicKey: `${sshKeyTarget}.pub`, register: ["authentication", "signing"], program: "ssh-keygen", sshCommand: `ssh -i ${quote(join(home, sshKeyTarget))}` };
 }

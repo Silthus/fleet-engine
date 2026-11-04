@@ -24,14 +24,12 @@ const isUser = (value: unknown) => typeof (value as User)?.login === "string" &&
 
 const failure = (result: { code: number; stderr?: string }) => (result.code === 127 ? "the GitHub CLI is not installed" : (result.stderr ?? "").trim() || `exit ${result.code}`);
 
-/** The type and key fields of one SSH public key, or undefined for anything else. */
 export function keyFields(text: string | undefined) {
   const line = text?.trim();
   if (!line || !publicKeyLine.test(line)) return undefined;
   return line.split(" ").slice(0, 2).join(" ");
 }
 
-/** The name and email for Git: the primary verified email, or the noreply address when GitHub keeps it private. */
 export async function githubIdentity(run: CommandRunner): Promise<Identity | { error: string }> {
   const result = await run(["gh", "api", "user"]);
   if (result.code !== 0) return { error: failure(result) };
@@ -41,16 +39,14 @@ export async function githubIdentity(run: CommandRunner): Promise<Identity | { e
   const listed = await run(["gh", "api", "user/emails"]);
   const emails = listed.code === 0 ? parse<Email[]>(listed.stdout, Array.isArray) : undefined;
   const primary = emails?.find((item) => item?.primary && item.verified && typeof item.email === "string");
-  const email = primary ? (primary.visibility === "private" ? noreply : primary.email) : user.email || noreply;
+  const email = primary?.visibility === "public" ? primary.email : emails ? noreply : user.email || noreply;
   return { login: user.login, name: user.name?.trim() || user.login, email };
 }
 
 export async function registeredKeys(run: CommandRunner, type: KeyType): Promise<string[] | { error: string }> {
-  const result = await run(["gh", "api", keyLists[type]]);
+  const result = await run(["gh", "api", "--paginate", "--jq", ".[].key", keyLists[type]]);
   if (result.code !== 0) return { error: failure(result) };
-  const keys = parse<Array<{ key?: unknown }>>(result.stdout, Array.isArray);
-  if (!keys) return { error: unreadable };
-  return keys.flatMap((item) => (typeof item?.key === "string" ? (keyFields(item.key) ?? []) : []));
+  return result.stdout.split("\n").flatMap((line) => keyFields(line) ?? []);
 }
 
 export async function registerKey(run: CommandRunner, file: string, type: KeyType, title: string) {
