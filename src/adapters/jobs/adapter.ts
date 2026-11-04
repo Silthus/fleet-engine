@@ -8,7 +8,7 @@ import { linkOnPath, readState, withLock, writeWithBackups, type Write } from ".
 import { isAccountHome, spawnRunner, type CommandRunner } from "../run.ts";
 import { cronLine, cronSafe, reconcileCrontab } from "./cron.ts";
 import { labelPrefix, plist } from "./launchd.ts";
-import { agentCopyTarget, launcherScript, launcherTarget, logTarget } from "./launcher.ts";
+import { agentCopyTarget, jobsFolder, launcherScript, launcherTarget, logTarget } from "./launcher.ts";
 import { cronExpression, launchdTimer, t3Schedule, type T3Schedule } from "./schedule.ts";
 
 export type FleetTask = {
@@ -128,6 +128,9 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     result.findings.push({ id: `job:${id}`, pack, say: `Left Library/LaunchAgents/${name} alone: Fleet did not write it, or it changed since. Move it away, then run fleet apply.`, repair: "human" });
     return true;
   };
+  const removeCopy = async (id: string) => {
+    if (!(await linkOnPath(home, agentCopyTarget(id)))) await rm(inside(home, agentCopyTarget(id)), { force: true });
+  };
   const keepCopy = async (id: string, content: string) => {
     if (await linkOnPath(home, agentCopyTarget(id))) return;
     await mkdir(dirname(inside(home, agentCopyTarget(id))), { recursive: true });
@@ -151,6 +154,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     const current = await readFile(file, "utf8").catch(() => undefined);
     if (await foreign(name, job.id, current, content, job.pack)) continue;
     const reload = current !== content || (await state(label)) !== "loaded";
+    if (!dryRun && current === content && (await written(job.id)) !== content) await keepCopy(job.id, content);
     if (!reload && !stale(script)) continue;
     if (dryRun) {
       result.findings.push(needs(job, current === undefined ? "added" : current === content && !stale(script) ? "loaded" : "updated"));
@@ -176,9 +180,15 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     }
     if (!(await stop(id, label))) continue;
     await rm(join(agents, name), { force: true });
-    if (jobId.test(id)) await removeLauncher(home, id);
-    if (jobId.test(id) && !(await linkOnPath(home, agentCopyTarget(id)))) await rm(inside(home, agentCopyTarget(id)), { force: true });
+    if (jobId.test(id)) await Promise.all([removeLauncher(home, id), removeCopy(id)]);
     result.actions.push({ target: `Library/LaunchAgents/${name}`, operation: "remove" });
+  }
+  if (outage || dryRun || (await linkOnPath(home, jobsFolder))) return;
+  const copies = (await readdir(inside(home, jobsFolder)).catch(() => [] as string[])).filter((name) => name.endsWith(".plist")).map((name) => name.slice(0, -".plist".length));
+  for (const id of copies) {
+    if (!jobId.test(id) || jobs.some((job) => job.id === id) || present.includes(`${labelPrefix}${id}.plist`)) continue;
+    await removeLauncher(home, id);
+    await removeCopy(id);
   }
 }
 

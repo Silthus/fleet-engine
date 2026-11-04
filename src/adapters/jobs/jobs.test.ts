@@ -295,6 +295,28 @@ describe("launchd jobs on a Mac", () => {
     expect(report.findings.map((finding) => finding.id)).toContain("job:prune");
   });
 
+  test("saves its copy of an agent that already matches, so a later change still applies", async () => {
+    const home = temp.make("home-");
+    const mac = launchctl();
+    await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+    rmSync(join(home, ".local/state/fleet/jobs/prune.plist"));
+    await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+    expect(existsSync(join(home, ".local/state/fleet/jobs/prune.plist"))).toBe(true);
+    const changed = await apply(plan("darwin", [{ ...prune, schedule: { every: "5m" } }]), { home, adapters: [mac.adapter] });
+    expect(changed.findings).toEqual([]);
+    expect(readFileSync(join(home, "Library/LaunchAgents/dev.fleet.prune.plist"), "utf8")).toContain("<key>StartInterval</key>");
+  });
+
+  test("removes the copy and launcher of a dropped job whose agent is already gone", async () => {
+    const home = temp.make("home-");
+    const mac = launchctl();
+    await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+    rmSync(join(home, "Library/LaunchAgents/dev.fleet.prune.plist"));
+    await apply(plan("darwin", []), { home, adapters: [mac.adapter] });
+    expect(existsSync(join(home, ".local/state/fleet/jobs/prune.plist"))).toBe(false);
+    expect(existsSync(join(home, ".local/state/fleet/jobs/prune.sh"))).toBe(false);
+  });
+
   test("uses an interval for frequent jobs, reruns without reloading, and removes only its own agents", async () => {
     const home = temp.make("home-");
     const agents = join(home, "Library/LaunchAgents");
