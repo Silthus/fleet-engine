@@ -39,3 +39,4 @@ Memory holds what recurs. A preference or decision for one pull request, ticket,
 - When two machines change the same lines of a file, the machine that syncs last wins. The other version stays in the history.
 - After a merge, `MEMORY.md` can hold both versions of a line. Keep one.
 - A file with conflict markers stops the sync until you fix it.
+- The sync uses the `main` branch of the memory repo. An empty repo is fine; the first sync starts `main`.

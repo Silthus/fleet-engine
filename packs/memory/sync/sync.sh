@@ -16,17 +16,26 @@ fail() { echo "Memory: $*" >&2; exit 1; }
 repo_name() { printf '%s\n' "$1" | sed -e 's#/*$##' -e 's#\.git$##' -e 's#^.*github\.com[:/]##'; }
 
 mkdir -p "$(dirname "$checkout")"
+stale() { [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }
+reclaim() {
+  mkdir "$lock.reclaim" 2>/dev/null || { if stale "$lock.reclaim"; then rmdir "$lock.reclaim" 2>/dev/null || true; fi; return 1; }
+  removed=1
+  if [ "$(cat "$lock/pid" 2>/dev/null || true)" = "$1" ] && { [ -n "$1" ] || stale "$lock"; }; then rm -rf "$lock"; removed=0; fi
+  rmdir "$lock.reclaim"
+  return "$removed"
+}
 waited=0
 until mkdir "$lock" 2>/dev/null; do
   holder=$(cat "$lock/pid" 2>/dev/null || true)
-  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$lock"; continue; fi
-  if [ -z "$holder" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rm -rf "$lock"; continue; fi
+  if { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; } || { [ -z "$holder" ] && stale "$lock"; }; then
+    if reclaim "$holder"; then continue; fi
+  fi
   waited=$((waited + 1))
   [ "$waited" -le 60 ] || fail "another sync still holds $lock."
   sleep 1
 done
 echo $$ > "$lock/pid"
-trap 'rm -rf "$lock"' EXIT
+trap 'if [ "$(cat "$lock/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$lock"; fi' EXIT
 
 if [ ! -e "$checkout/.git" ]; then
   mkdir -p "$checkout"
@@ -47,14 +56,26 @@ snapshot="$gitdir/fleet-sync-files.tar"
 rebasing() { [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; }
 if rebasing && [ -f "$marker" ]; then
   conflicted=$(g diff --name-only --diff-filter=U)
+  deleted=$(g ls-files --deleted)
   (cd "$checkout" && tar -cf "$snapshot" --exclude=./.git .) || fail "cannot save the files before undoing an unfinished sync. Nothing changed."
   g rebase --abort
   (cd "$checkout" && tar -xf "$snapshot") || fail "undid an unfinished sync, but cannot restore the files. They are in $snapshot."
-  printf '%s\n' "$conflicted" | while IFS= read -r path; do
-    [ -z "$path" ] || g checkout --quiet HEAD -- "$path" 2>/dev/null || rm -f "$checkout/$path"
+  printf '%s\n' "$deleted" | while IFS= read -r path; do
+    [ -z "$path" ] || rm -f "$checkout/$path"
   done
-  rm -f "$snapshot"
-  echo "Memory: undid an unfinished sync rebase and kept every file as it was."
+  marked=$(printf '%s\n' "$conflicted" | while IFS= read -r path; do
+    if [ -n "$path" ] && grep -q '^\(<<<<<<<\|>>>>>>>\) ' "$checkout/$path" 2>/dev/null; then
+      g checkout --quiet HEAD -- "$path" 2>/dev/null || rm -f "$checkout/$path"
+      echo "$path"
+    fi
+  done)
+  if [ -n "$marked" ]; then
+    echo "Memory: undid an unfinished sync rebase. Files that still held its conflict markers went back to this machine's version; the copies from the crash are in $snapshot:"
+    printf '%s\n' "$marked" | sed 's/^/  /'
+  else
+    rm -f "$snapshot"
+    echo "Memory: undid an unfinished sync rebase and kept every file as it was."
+  fi
 fi
 rm -f "$marker"
 if rebasing || [ -f "$gitdir/MERGE_HEAD" ]; then
@@ -100,6 +121,7 @@ remote_has_main() {
   g ls-remote --exit-code --heads origin main >/dev/null 2>&1 || status=$?
   [ "$status" -ne 0 ] || return 0
   [ "$status" -eq 2 ] || fail "cannot reach $url."
+  [ -z "$(g ls-remote --heads origin)" ] || fail "$url has no main branch. Rename its default branch to main; until then nothing syncs."
   return 1
 }
 has_commits() { g rev-parse --quiet --verify HEAD >/dev/null; }
@@ -109,8 +131,11 @@ while :; do
   if remote_has_main; then
     g fetch --quiet origin main || fail "cannot fetch $url."
     if ! has_commits; then
-      g reset --quiet --hard origin/main
-      echo "Memory: checked out $url."
+      if g checkout --quiet -B main origin/main 2>/dev/null; then
+        echo "Memory: checked out $url."
+      else
+        echo "Memory: files appeared while setting up. The next sync merges them."
+      fi
       exit 0
     fi
     rebase || fail "cannot rebase $checkout onto origin/main. Not synced."
@@ -128,7 +153,7 @@ while :; do
     fail "an unpushed memory change holds a secret. The sync took its commits back and left the files as they are. Remove the secret; until then nothing syncs."
   fi
   [ "$scan" -eq 0 ] || fail "cannot scan the outgoing memory for secrets. Nothing was pushed."
-  if g push --quiet origin HEAD:main 2>/dev/null; then
+  if g push --quiet "$url" HEAD:main 2>/dev/null; then
     echo "Memory: pushed from $machine."
     exit 0
   fi

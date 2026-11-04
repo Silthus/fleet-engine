@@ -76,26 +76,29 @@ describe("the memory sync", () => {
   const syncTemp = tempDirs();
   afterAll(() => syncTemp.cleanup());
 
+  function seed(root: string, remote: string, branch = "main") {
+    const dir = join(root, `seed-${branch}`);
+    git(root, "clone", "-q", remote, dir);
+    git(dir, "checkout", "-q", "-b", branch);
+    writeFileSync(join(dir, "MEMORY.md"), "# Memory\n");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-q", "-m", "seed");
+    git(dir, "push", "-q", "origin", branch);
+  }
+
   function setup(seeded = true) {
     const root = syncTemp.make("memory-sync-");
     const remote = join(root, "remote.git");
     git(root, "init", "-q", "--bare", "-b", "main", remote);
-    if (!seeded) return { root, remote };
-    const seed = join(root, "seed");
-    git(root, "clone", "-q", remote, seed);
-    git(seed, "checkout", "-q", "-b", "main");
-    writeFileSync(join(seed, "MEMORY.md"), "# Memory\n");
-    git(seed, "add", "-A");
-    git(seed, "commit", "-q", "-m", "seed");
-    git(seed, "push", "-q", "origin", "main");
+    if (seeded) seed(root, remote);
     return { root, remote };
   }
 
-  async function sync(root: string, remote: string, machine: string) {
+  async function sync(root: string, remote: string, machine: string, env: Record<string, string> = {}) {
     const home = join(root, `home-${machine}`);
     mkdirSync(home, { recursive: true });
     const child = Bun.spawn(["sh", join(import.meta.dir, "sync/sync.sh")], {
-      env: { ...gitEnv, HOME: home, FLEET_MEMORY_URL: remote, CODER_WORKSPACE_NAME: machine },
+      env: { ...gitEnv, HOME: home, FLEET_MEMORY_URL: remote, CODER_WORKSPACE_NAME: machine, ...env },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -146,9 +149,11 @@ describe("the memory sync", () => {
     expect(remoteHistory(root, remote)).not.toContain("memory: laptop");
   });
 
-  test.concurrent("keeps the files agents wrote after a sync stopped in the middle of a rebase", async () => {
+  async function crashMidRebase() {
     const { root, remote } = setup();
     const laptop = await sync(root, remote, "laptop");
+    writeFileSync(join(laptop.checkout, "kept.md"), "a tracked note\n");
+    expect((await sync(root, remote, "laptop")).code).toBe(0);
     const box = await sync(root, remote, "box");
     writeFileSync(join(box.checkout, "notes.md"), "box version\n");
     expect((await sync(root, remote, "box")).code).toBe(0);
@@ -157,14 +162,31 @@ describe("the memory sync", () => {
     git(laptop.checkout, "commit", "-q", "-m", "local");
     git(laptop.checkout, "fetch", "-q", "origin", "main");
     expect(() => git(laptop.checkout, "rebase", "origin/main")).toThrow();
-    const gitdir = join(laptop.checkout, ".git");
-    writeFileSync(join(gitdir, "fleet-sync-rebase"), "");
+    writeFileSync(join(laptop.checkout, ".git/fleet-sync-rebase"), "");
     writeFileSync(join(laptop.checkout, "later.md"), "written after the crash\n");
+    return { root, remote, checkout: laptop.checkout };
+  }
+
+  test.concurrent("keeps the files agents wrote, resolved, or deleted after a sync stopped in the middle of a rebase", async () => {
+    const { root, remote, checkout } = await crashMidRebase();
+    writeFileSync(join(checkout, "notes.md"), "resolved by an agent\n");
+    rmSync(join(checkout, "kept.md"));
     const result = await sync(root, remote, "laptop");
     expect([result.code, result.out]).toEqual([0, expect.stringContaining("kept every file as it was")]);
-    expect(readFileSync(join(laptop.checkout, "later.md"), "utf8")).toBe("written after the crash\n");
-    expect(readFileSync(join(laptop.checkout, "notes.md"), "utf8")).toBe("laptop version\n");
-    expect(git(root, "--git-dir", remote, "show", "main:later.md")).toBe("written after the crash");
+    expect(readFileSync(join(checkout, "later.md"), "utf8")).toBe("written after the crash\n");
+    expect(readFileSync(join(checkout, "notes.md"), "utf8")).toBe("resolved by an agent\n");
+    expect(existsSync(join(checkout, "kept.md"))).toBe(false);
+    expect(git(root, "--git-dir", remote, "show", "main:notes.md")).toBe("resolved by an agent");
+    expect(git(root, "--git-dir", remote, "ls-tree", "--name-only", "main")).not.toContain("kept.md");
+  });
+
+  test.concurrent("puts a file still in conflict back to this machine's version, and keeps the copy from the crash", async () => {
+    const { root, remote, checkout } = await crashMidRebase();
+    const result = await sync(root, remote, "laptop");
+    expect([result.code, result.out]).toEqual([0, expect.stringContaining("the copies from the crash are in")]);
+    expect(readFileSync(join(checkout, "notes.md"), "utf8")).toBe("laptop version\n");
+    expect(readFileSync(join(checkout, "later.md"), "utf8")).toBe("written after the crash\n");
+    expect(existsSync(join(checkout, ".git/fleet-sync-files.tar"))).toBe(true);
   });
 
   test.concurrent("takes over a lock that a stopped sync left behind", async () => {
@@ -206,6 +228,38 @@ describe("the memory sync", () => {
     git(root, "init", "-q", "--bare", "-b", "main", other);
     const result = await sync(root, other, "laptop");
     expect([result.code, result.out]).toEqual([1, expect.stringContaining("but memory.repo is")]);
+  });
+
+  test.concurrent("keeps a note written while it set up a new checkout", async () => {
+    const { root, remote } = setup(false);
+    const laptop = await sync(root, remote, "laptop");
+    seed(root, remote);
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase " $* " in *" fetch "*) printf -- '- written during the fetch\\n' > "${join(laptop.checkout, "MEMORY.md")}";; esac\nexec ${Bun.which("git")} "$@"\n`, { mode: 0o755 });
+    const racing = await sync(root, remote, "laptop", { PATH: `${bin}:${process.env.PATH}` });
+    expect([racing.code, racing.out]).toEqual([0, expect.stringContaining("files appeared while setting up")]);
+    expect((await sync(root, remote, "laptop")).code).toBe(0);
+    expect(git(root, "--git-dir", remote, "show", "main:MEMORY.md")).toBe("# Memory\n- written during the fetch");
+  });
+
+  test.concurrent("pushes to the repo in memory.repo, whatever push URL the checkout has", async () => {
+    const { root, remote } = setup();
+    const laptop = await sync(root, remote, "laptop");
+    const other = join(root, "other.git");
+    git(root, "init", "-q", "--bare", "-b", "main", other);
+    git(laptop.checkout, "config", "remote.origin.pushurl", other);
+    writeFileSync(join(laptop.checkout, "note.md"), "a note\n");
+    expect((await sync(root, remote, "laptop")).code).toBe(0);
+    expect(git(root, "--git-dir", remote, "show", "main:note.md")).toBe("a note");
+    expect(git(root, "--git-dir", other, "for-each-ref")).toBe("");
+  });
+
+  test.concurrent("refuses a repo whose notes live on a branch other than main", async () => {
+    const { root, remote } = setup(false);
+    seed(root, remote, "master");
+    const result = await sync(root, remote, "laptop");
+    expect([result.code, result.out]).toEqual([1, expect.stringContaining("has no main branch")]);
   });
 
   test.concurrent("refuses to commit conflict markers", async () => {
