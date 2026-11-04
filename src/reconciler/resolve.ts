@@ -274,14 +274,15 @@ function skillSettings(settings: Array<PackSetting & { pack: string }>, values: 
 }
 
 function skillFiles(order: Candidate[], profile: Profile, sources: FetchedSource[], plan: Plan): DesiredFile[] {
-  const links = new Map<string, { pack: string; dir: string }>();
+  const links = new Map<string, { pack: string; dir: string; path: string }>();
   const add = (pack: string, packDir: string, path: string) => {
     const dir = skillDir(pack, packDir, path, sources);
     if (!dir) return plan.dropped.push({ pack, item: `skill ${path}`, reason: "its source is unreachable" });
     const name = basename(dir);
     const other = links.get(name);
-    if (other) throw new ResolveError(`skill ${name} comes from both ${other.pack} and ${pack}`);
-    links.set(name, { pack, dir });
+    if (other && (pack !== "profile" || other.pack === "profile")) throw new ResolveError(`skill ${name} comes from both ${other.pack} and ${pack}`);
+    if (other) plan.dropped.push({ pack: other.pack, item: `skill ${other.path}`, reason: "your profile replaces it" });
+    links.set(name, { pack, dir, path });
   };
   for (const { manifest, dir } of order) for (const path of manifest.skills ?? []) add(manifest.name, dir, path);
   for (const path of profile.overrides?.skills ?? []) add("profile", profile.dir, path);

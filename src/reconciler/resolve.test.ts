@@ -91,6 +91,17 @@ describe("resolve", () => {
     ]);
   });
 
+  test("lets a profile skill replace a pack skill of the same name", () => {
+    const dir = temp.make("profile-");
+    mkdirSync(join(dir, "skills/writing-voice"), { recursive: true });
+    const result = plan({ dir, overrides: { skills: ["skills/writing-voice"] } });
+    expect(result.files.filter((item) => item.target.endsWith("/writing-voice"))).toEqual([
+      { target: ".agents/skills/writing-voice", source: join(dir, "skills/writing-voice") },
+      { target: ".claude/skills/writing-voice", source: join(dir, "skills/writing-voice") },
+    ]);
+    expect(result.dropped).toContainEqual({ pack: "pull-requests", item: "skill agent-skills:communication/writing-voice", reason: "your profile replaces it" });
+  });
+
   test("drops skills of an unreachable source with a reason", () => {
     const result = plan({}, mac, [engine, { ref: agentSkills.ref, error: "offline" }]);
     expect(result.files.some((item) => item.target.endsWith("writing-voice"))).toBe(false);
