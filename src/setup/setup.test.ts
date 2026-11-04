@@ -16,15 +16,16 @@ describe("fleet setup questions", () => {
     const home = temp.make("home-");
     const result = await fleetSetup(home, [], ["", "", ""]);
     expect(result.code).toBe(0);
-    expect(result.output).toContain("Fleet setup · 1 of 8 · about 13 min left");
-    expect(result.output).toContain("Fleet setup · 4 of 8 · about 7 min left");
+    expect(result.output).toContain("Fleet setup · 1 of 9 · about 14 min left");
+    expect(result.output).toContain("Fleet setup · 4 of 9 · about 8 min left");
     expect(result.output).toContain("  1) Everyday  Pull-requests, Orchestration, Communication (default)");
     expect(result.output).toContain("  ✓ Claude and ChatGPT");
     expect(machine(home)).toEqual({
       schema: 1,
       role: "linux",
       profileDir: profilePath(home),
-      setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "claude", "chatgpt"] },
+      devboxes: [],
+      setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "chatgpt"] },
     });
     expect(savedAnswers(home)).toMatchObject({ packs: ["pull-requests", "orchestration", "communication"], workflows: {}, plan: "both" });
     expect(result.applied).toEqual([profilePath(home)]);
@@ -39,9 +40,9 @@ describe("fleet setup questions", () => {
 
     const resumed = await fleetSetup(home, [], ["3", ""]);
     expect(resumed.code).toBe(0);
-    expect(resumed.output).toContain("Welcome back. 3 of 8 done, picking up at Your AI plans.");
+    expect(resumed.output).toContain("Welcome back. 3 of 9 done, picking up at Your AI plans.");
     expect(resumed.prompts).toHaveLength(2);
-    expect(machine(home).setup).toEqual({ done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "chatgpt"] });
+    expect(machine(home).setup).toEqual({ done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "chatgpt"] });
     expect(savedAnswers(home)).toMatchObject({ packs: ["pull-requests"], workflows: {}, plan: "codex" });
   });
 

@@ -7,7 +7,7 @@ const usage = "fleet packs [--add <pack>]... [--remove <pack>]... [--workflows <
 /** Lists the packs, or turns packs and workflows on and off. */
 export async function packsCommand(args: string[], context: ChangeContext): Promise<number> {
   const flags = parseSetupFlags(args);
-  if (flags.preset !== undefined || flags.plan !== undefined || flags.nonInteractive || Object.keys(flags.set).length) throw new FlagError(`usage: ${usage}`);
+  if (flags.preset !== undefined || flags.plan !== undefined || flags.devbox !== undefined || flags.nonInteractive || Object.keys(flags.set).length) throw new FlagError(`usage: ${usage}`);
   if (!flags.add.length && !flags.remove.length && !Object.keys(flags.workflows).length) return listPacks(context), 0;
 
   const known = manifests(context);

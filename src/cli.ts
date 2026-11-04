@@ -7,7 +7,7 @@ import type { AvailableSource, FetchedSource, MachineFile, Plan, Report } from "
 import { loadMachine, loadProfile, saveMachine } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
 import { apply, check, type Runner } from "./reconciler/apply.ts";
-import { engineCommands, resolve } from "./reconciler/resolve.ts";
+import { resolve } from "./reconciler/resolve.ts";
 import { readNotice, update } from "./update.ts";
 import { setup, type SetupOptions } from "./setup/setup.ts";
 import { ttyTerminal, type Terminal } from "./setup/terminal.ts";
@@ -15,6 +15,8 @@ import { FlagError } from "./setup/flags.ts";
 import type { ChangeContext } from "./commands/change.ts";
 import { packsCommand } from "./commands/packs.ts";
 import { setCommand, settingsCommand } from "./commands/settings.ts";
+import { devboxCommand } from "./commands/devbox.ts";
+import { realMachine } from "./setup/commands.ts";
 
 export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource"> };
 
@@ -34,20 +36,21 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet settings     List the settings of your packs
   fleet set <pack.key=value>...
                      Change settings
+  fleet devbox [add <ssh host>]
+                     List your devboxes, or make an SSH host one
   fleet <command>    Run a command that one of your packs ships`;
 
 const changes = { packs: packsCommand, settings: settingsCommand, set: setCommand };
 
-const later = new Set(engineCommands.filter((name) => !["setup", "apply", "doctor", "update", ...Object.keys(changes)].includes(name)));
 
 export async function main(argv: string[], options: CliOptions): Promise<number> {
   const [command, ...rest] = argv;
   if (!command || command === "help" || command === "--help") return options.print(usage), 0;
-  if (later.has(command)) return options.print(`fleet ${command} is not available in this version yet.`), 2;
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
     if (command in changes) return await change(command as keyof typeof changes, rest, options);
+    if (command === "devbox") return await devbox(rest, options);
     if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), ...options.setup });
     return await runPackCommand(command, rest, options);
   } catch (error) {
@@ -68,6 +71,18 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   if (notice) report.findings.push({ id: "update:major", pack: "engine", say: notice });
   printReport(report, command, options.print, flags.dryRun);
   return report.ok ? 0 : 1;
+}
+
+async function devbox(args: string[], options: CliOptions) {
+  const { plan } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const terminal = options.terminal ?? { ...ttyTerminal(), print: options.print };
+  try {
+    return await devboxCommand(args, { home: options.home, terminal, machine: { ...realMachine, ...options.setup?.machine }, machineFile: plan.machine, plan });
+  } catch (error) {
+    if (!(error instanceof FlagError)) throw error;
+    options.print(`fleet devbox: ${error.message}`);
+    return 2;
+  }
 }
 
 function applyProfile(dir: string, options: CliOptions) {

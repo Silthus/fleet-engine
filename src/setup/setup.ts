@@ -9,6 +9,7 @@ import { FlagError, parseSetupFlags, type SetupFlags } from "./flags.ts";
 import { packList, packsStep, picksFrom, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
+import { devboxQuestion, devboxSteps, profileForBox, type DevboxContext } from "./devbox.ts";
 import { profileStep } from "./profile.ts";
 import { runSteps, type Step } from "./runner.ts";
 import { chatgptSignIn, claudeSignIn, githubSignIn, memberSources } from "./signins.ts";
@@ -97,7 +98,21 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       if ((await options.apply(machine.profileDir)) !== 0) throw new Error("fleet apply could not set up this machine. Fix what it says above, then run fleet setup again.");
     },
   };
-  const steps = () => setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep]);
+  const question = devboxQuestion({
+    terminal,
+    home: options.home,
+    flag: flags.devbox,
+    nonInteractive: flags.nonInteractive,
+    async answer(host) {
+      machine.devboxes = host ? [host] : [];
+      await remember();
+    },
+  });
+  const devbox: Devbox = {
+    question,
+    steps: (host, plan) => devboxSteps(host, { terminal, machine: box, nonInteractive: flags.nonInteractive, plan: plan.ai, models: plan.models, profile: () => profileForBox(box, machine.profileDir) }),
+  };
+  const steps = () => setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox);
   try {
     const result = await runSteps(steps, {
       terminal,
@@ -109,7 +124,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     });
     if (result.unanswered.length) return printNeeds(terminal, steps(), result.unanswered), 2;
     terminal.print("");
-    terminal.print("This machine is set up. The devbox and the final check come in a later version of Fleet.");
+    terminal.print(`This machine is set up${machine.devboxes?.length ? `, and so is ${machine.devboxes.join(" and ")}` : ""}. The final check comes in a later version of Fleet.`);
     return 0;
   } catch (error) {
     if (!(error instanceof Stopped)) throw error;
@@ -120,12 +135,15 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
 }
 
-function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>, machineSteps: Step[]): Step[] {
+type Devbox = { question: Step; steps(host: string, plan: { ai: DevboxContext["plan"]; models: DevboxContext["models"] }): Step[] };
+
+function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>, machineSteps: Step[], devbox: Devbox): Step[] {
   const draft = context.draft.packs ? context.draft : { ...context.draft, ...picksFrom(context.flags, context.catalog) };
   const profile = draftProfile(draft);
   const fetched = new Set(context.catalog.sources.map((source) => source.ref.name));
   const plan = resolve(profile, machine, [...context.catalog.sources, ...profile.sources.filter((ref) => !fetched.has(ref.name)).map(notFetched)]);
   const box = human.machine;
+  const sshDevbox = !profile.packs.includes("posthog") && (machine.role === "mac" || machine.role === "linux");
   return [
     bootstrapStep(context.terminal, box.has),
     humanStep(githubSignIn(box, signedIn), human),
@@ -134,8 +152,10 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     ...settingSteps(context, plan.ask),
     ...machineSteps,
     ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human), human)),
+    ...(sshDevbox ? [devbox.question] : []),
     ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),
     ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)]),
+    ...(sshDevbox ? (machine.devboxes ?? []).flatMap((host) => devbox.steps(host, plan)) : []),
   ];
 }
 

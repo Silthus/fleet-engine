@@ -9,6 +9,8 @@ export type Machine = {
   exec: Exec;
   /** Starts a sign-in command in the background, its output shown in the terminal. */
   start(command: string[]): Started;
+  /** Runs a command in the foreground with its output in the terminal, and the keyboard too when it needs input. */
+  run(command: string[], options?: { input?: boolean }): Promise<number>;
   sleep(ms: number): Promise<void>;
   openUrl(url: string): Promise<void>;
   has(tool: string): boolean;
@@ -30,6 +32,13 @@ export const realMachine: Machine = {
       return { stop: () => child.kill() };
     } catch {
       return { stop: () => {} };
+    }
+  },
+  async run(command, options = {}) {
+    try {
+      return await Bun.spawn(command, { stdin: options.input ? "inherit" : "ignore", stdout: "inherit", stderr: "inherit" }).exited;
+    } catch {
+      return 127;
     }
   },
   sleep: (ms) => Bun.sleep(ms),

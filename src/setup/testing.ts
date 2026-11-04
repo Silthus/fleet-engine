@@ -39,27 +39,51 @@ function realGit(home: string, args: string[], cwd?: string): ExecResult {
   return { code: child.exitCode ?? 1, output: `${child.stdout.toString()}${child.stderr.toString()}` };
 }
 
+type SignInName = "github" | "claude" | "chatgpt" | "coder" | "box:github" | "box:claude" | "box:chatgpt" | "box:t3";
+
+/** The command an SSH call runs on the box, without the PATH prefix. */
+export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-1)!.replace(/^PATH=[^;]*; /, "") : undefined);
+
 /**
  * A machine signed in to GitHub as nora, whose sign-ins pass after a number
  * of 2 s polls: 0 means already signed in, and a sign-in that is never
  * started never passes. Its gh makes repos as bare repos under the home, and
- * git runs for real with github.com rewritten to them.
+ * git runs for real with github.com rewritten to them. Its ssh reaches a fake
+ * devbox whose sign-ins work the same way; Claude there signs in when its
+ * foreground sign-in runs.
  */
-export function fakeMachine(home: string, polls: Partial<Record<"github" | "claude" | "chatgpt" | "coder", number>> = {}, options: { org?: boolean; scopes?: string; failApply?: boolean } = {}) {
-  const left = { github: 0, claude: 0, chatgpt: 0, coder: 0, ...polls };
-  const started = new Set<keyof typeof left>();
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean } = {}) {
+  const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, ...polls };
+  const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number }> = [];
   const starts: string[][] = [];
+  const runs: Array<{ command: string[]; input: boolean }> = [];
   const sleeps: number[] = [];
   const opened: string[] = [];
   let devbox = false;
-  const passes = (name: keyof typeof left) => left[name] === 0;
+  const passes = (name: SignInName) => left[name] === 0;
   const result = (ok: boolean, output = ""): ExecResult => ({ code: ok ? 0 : 1, output });
+  const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
+  const t3 = (line: string, pairing: string) => {
+    if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: ${pairing}/pair#token=x\nToken: ${pairing.includes("box") ? "BOXCODE" : "HERECODE"}\n`);
+    if (line.startsWith("t3 environment link ")) return result(true, "linked");
+    return undefined;
+  };
+  const box = (line: string): ExecResult => {
+    if (line.startsWith("gh auth status")) return ghStatus("box:github", scopes);
+    if (line === "gh auth setup-git") return result(true);
+    if (line === "claude auth status") return result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
+    if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
+    if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: passes("box:t3"), linked: passes("box:t3") }));
+    return t3(line, "https://box.example") ?? result(false, `unexpected on the box: ${line}`);
+  };
   const machine: Machine = {
     async exec(command, run = {}) {
       calls.push({ command, ...run });
+      const remote = onBox(command);
+      if (remote !== undefined) return box(remote);
       const line = command.join(" ");
-      if (line.startsWith("gh auth status")) return passes("github") ? result(true, `github.com\n${started.has("github") ? scopes : (options.scopes ?? scopes)}\n`) : result(false, "You are not logged in");
+      if (line.startsWith("gh auth status")) return ghStatus("github", started.has("github") ? scopes : (options.scopes ?? scopes));
       if (line.startsWith("gh api user/memberships/orgs/")) return options.org ? result(true, "active\n") : result(false, "Not Found");
       if (line === "claude auth status") return result(passes("claude"), JSON.stringify({ loggedIn: passes("claude") }));
       if (line.startsWith("codex exec")) return result(passes("chatgpt"), "ok");
@@ -75,13 +99,20 @@ export function fakeMachine(home: string, polls: Partial<Record<"github" | "clau
         return realGit(home, ["init", "-q", "--bare", "-b", "main", bare]);
       }
       if (command[0] === "git") return realGit(home, command.slice(1), run.cwd);
-      return result(false, `unexpected ${line}`);
+      return t3(line, "http://here.example:3773") ?? result(false, `unexpected ${line}`);
     },
     start(command) {
       starts.push(command);
-      const name = command[0] === "gh" ? "github" : command[0] === "claude" ? "claude" : command[0] === "codex" ? "chatgpt" : "coder";
-      started.add(name);
+      const remote = onBox(command);
+      const word = (remote ?? command.join(" ")).split(" ")[0];
+      const name = word === "gh" ? "github" : word === "claude" ? "claude" : word === "codex" ? "chatgpt" : word === "t3" ? "t3" : "coder";
+      started.add((remote === undefined ? name : `box:${name}`) as SignInName);
       return { stop: () => {} };
+    },
+    async run(command, run = {}) {
+      runs.push({ command, input: run.input ?? false });
+      if (onBox(command) === "claude auth login") left["box:claude"] = 0;
+      return options.failRun ? 1 : 0;
     },
     async sleep(ms) {
       sleeps.push(ms);
@@ -92,7 +123,7 @@ export function fakeMachine(home: string, polls: Partial<Record<"github" | "clau
     },
     has: () => true,
   };
-  return { machine, calls, starts, sleeps, opened };
+  return { machine, calls, starts, runs, sleeps, opened };
 }
 
 export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>) {

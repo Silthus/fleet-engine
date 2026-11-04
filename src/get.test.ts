@@ -98,6 +98,15 @@ describe("get.sh", () => {
     expect(readFileSync(join(box.home, ".agents/AGENTS.md"), "utf8")).toStartWith("# Agent rules\n");
   });
 
+  test("--install-only installs the tools and the engine, then stops before setup", () => {
+    const box = sandbox("Linux");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    expect(result.output).toEndWith("Fleet: Engine ready at v0.1.0 in " + join(box.home, ".local/share/fleet/engine") + ".\n");
+    expect(existsSync(join(box.home, ".local/bin/gh"))).toBe(true);
+    expect(existsSync(join(box.home, ".config/fleet/machine.json"))).toBe(false);
+  });
+
   test("on macOS installs Homebrew, gh, and the T3 Code app, then applies the profile", () => {
     const box = sandbox("Darwin");
     const result = getSh(box, ["--ref", "v0.1.0", "--profile", profile()]);
