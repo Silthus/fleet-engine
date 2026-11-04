@@ -199,8 +199,13 @@ describe("a pack's sign-in", () => {
     let screen = "";
     const harness = join(import.meta.dir, "fixtures/interactive-step.ts");
     const child = Bun.spawn(["sh", "-c", 'exec "$0" "$1" "$2" </dev/null', process.execPath, harness, token], { terminal: { cols: 100, rows: 30, data: (_, bytes) => void (screen += new TextDecoder().decode(bytes)) } });
-    child.terminal!.write("s3cret\n");
-    expect(await child.exited).toBe(0);
+    try {
+      child.terminal!.write("s3cret\n");
+      expect(await child.exited).toBe(0);
+    } finally {
+      child.kill();
+      child.terminal!.close();
+    }
     expect(readFileSync(token, "utf8")).toBe("s3cret");
     expect(screen).toContain("✓ Sign in to the team service: done");
     expect(screen).toContain("sleeps=0");
