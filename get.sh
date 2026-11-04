@@ -46,7 +46,12 @@ mac_tools() {
   if ! has brew; then
     say "Installing Homebrew. It asks for your Mac password once."
     installer=$(download https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
-    /bin/bash "$installer" || fail "Homebrew did not install."
+    # Under curl | sh, stdin is the script, so Homebrew could not ask for the password.
+    if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
+      /bin/bash "$installer" </dev/tty || fail "Homebrew did not install."
+    else
+      /bin/bash "$installer" || fail "Homebrew did not install."
+    fi
     has brew || fail "Homebrew installed, but brew is not on PATH."
   fi
   has gh || brew install gh
@@ -95,10 +100,18 @@ t3_cli() {
 }
 
 fetch_engine() {
+  if [ -d "$engine_dir" ] && [ ! -d "$engine_dir/.git" ] && [ -n "$(ls -A "$engine_dir")" ]; then
+    fail "$engine_dir holds files that are not a Fleet engine. Move them away, or set FLEET_ENGINE_DIR."
+  fi
   mkdir -p "$engine_dir"
   [ -d "$engine_dir/.git" ] || git -C "$engine_dir" init -q
-  git -C "$engine_dir" remote remove origin 2>/dev/null || true
-  git -C "$engine_dir" remote add origin "$engine_repo"
+  [ -z "$(git -C "$engine_dir" status --porcelain)" ] || fail "$engine_dir has local changes. Save them elsewhere and remove them, then run this again."
+  if ! origin=$(git -C "$engine_dir" remote get-url origin 2>/dev/null); then
+    git -C "$engine_dir" remote add origin "$engine_repo"
+  elif [ "$origin" != "$engine_repo" ]; then
+    say "The engine now comes from $engine_repo instead of $origin."
+    git -C "$engine_dir" remote set-url origin "$engine_repo"
+  fi
   git -C "$engine_dir" fetch -q --depth 1 --tags origin "$ref" || fail "could not fetch the engine at $ref from $engine_repo."
   git -C "$engine_dir" checkout -q --force --detach FETCH_HEAD
 }

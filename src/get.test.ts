@@ -37,7 +37,7 @@ function sandbox(os: "Linux" | "Darwin") {
   stub("uname", `case "$1" in -s) echo ${os} ;; -m) echo x86_64 ;; esac`);
   stub("xcode-select", "exit 0");
   const t3Installer = `printf '#!/bin/sh\\necho "t3 $*" >> "${log}"\\n' > "$HOME/.local/bin/t3"; chmod +x "$HOME/.local/bin/t3"; echo "t3 installer channel=$T3CODE_CHANNEL" >> "${log}"`;
-  const brewInstaller = `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"`;
+  const brewInstaller = `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
   const ghTar = buildGhTarball(root);
   stub("curl", `
 out=; url=; effective=
@@ -108,6 +108,15 @@ describe("get.sh", () => {
     expect(result.output).toContain("Applied 4 changes.");
   });
 
+  test("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {
+    const box = sandbox("Darwin");
+    const command = `printf 'piped script\\n' | sh ${join(repoRoot, "get.sh")} --ref v0.1.0 --profile ${profile()}`;
+    const env = { PATH: box.bin, HOME: box.home, SHELL: "/bin/sh", FLEET_ENGINE_REPO: engineRepo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    const result = Bun.spawnSync([Bun.which("script") ?? "script", "-qec", command, "/dev/null"], { env, stdin: "ignore" });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(box.log, "utf8")).toContain("brew installer stdin=tty");
+  });
+
   test("a second run changes nothing", () => {
     const box = sandbox("Linux");
     const dir = profile();
@@ -125,16 +134,51 @@ describe("get.sh", () => {
   });
 });
 
-describe("profile install.sh shim", () => {
-  test("runs get.sh from the profile's engine pin with the profile directory", () => {
+describe("get.sh with an existing engine directory", () => {
+  test("refuses a directory that is not an engine, and an engine with local changes", () => {
     const box = sandbox("Linux");
-    const dir = profile();
+    const engineDir = join(box.home, ".local/share/fleet/engine");
+    mkdirSync(engineDir, { recursive: true });
+    writeFileSync(join(engineDir, "notes.txt"), "mine\n");
+    expect(getSh(box, ["--ref", "v0.1.0", "--profile", profile()])).toMatchObject({ code: 1, output: expect.stringContaining("holds files that are not a Fleet engine") });
+    expect(readFileSync(join(engineDir, "notes.txt"), "utf8")).toBe("mine\n");
+
+    const fresh = sandbox("Linux");
+    expect(getSh(fresh, ["--ref", "v0.1.0", "--profile", profile()]).code).toBe(0);
+    const installed = join(fresh.home, ".local/share/fleet/engine");
+    writeFileSync(join(installed, "fleet"), "# my patch\n");
+    expect(getSh(fresh, ["--ref", "v0.1.0", "--profile", profile()])).toMatchObject({ code: 1, output: expect.stringContaining("has local changes") });
+    expect(readFileSync(join(installed, "fleet"), "utf8")).toBe("# my patch\n");
+  });
+});
+
+describe("profile install.sh shim", () => {
+  function shim(fleetJson: string, curl: string) {
+    const box = sandbox("Linux");
+    const dir = temp.make("profile-");
+    writeFileSync(join(dir, "fleet.json"), fleetJson);
     cpSync(join(repoRoot, "templates/profile/install.sh"), join(dir, "install.sh"));
-    writeFileSync(join(box.bin, "curl"), `#!/bin/sh\necho "curl $*" >> "${box.log}"\necho 'echo "get.sh $*" >> "${box.log}"'\n`);
+    writeFileSync(join(box.bin, "curl"), `#!/bin/sh\necho "curl $*" >> "${box.log}"\n${curl}\n`);
+    const result = Bun.spawnSync(["sh", join(dir, "install.sh")], { cwd: box.home, env: { PATH: box.bin, HOME: box.home } });
+    return { dir, code: result.exitCode, output: result.stderr.toString(), calls: existsSync(box.log) ? readFileSync(box.log, "utf8") : "" };
+  }
+  test("runs get.sh from the engine pin of compact JSON with the profile directory", () => {
+    const json = '{"engine":{"repo":"Silthus/fleet-engine","ref":"v0.1.0","channel":"release"},"sources":[{"name":"team","repo":"me/team","ref":"v9.0.0"}]}';
+    const box = sandbox("Linux");
+    const dir = temp.make("profile-");
+    writeFileSync(join(dir, "fleet.json"), json);
+    cpSync(join(repoRoot, "templates/profile/install.sh"), join(dir, "install.sh"));
+    writeFileSync(join(box.bin, "curl"), `#!/bin/sh\necho "curl $*" >> "${box.log}"\nwhile [ $# -gt 1 ]; do [ "$1" = -o ] && out=$2; shift; done\necho 'echo "get.sh $*" >> "${box.log}"' > "$out"\n`);
     const result = Bun.spawnSync(["sh", join(dir, "install.sh")], { cwd: box.home, env: { PATH: box.bin, HOME: box.home } });
     expect(result.exitCode).toBe(0);
     const calls = readFileSync(box.log, "utf8");
-    expect(calls).toContain("curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/v0.1.0/get.sh");
+    expect(calls).toContain("curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/v0.1.0/get.sh -o ");
     expect(calls).toContain(`get.sh --ref v0.1.0 --profile ${dir}`);
+  });
+
+  test("fails when the download fails or the pin is missing", () => {
+    const failed = shim('{"engine":{"ref":"v0.1.0"}}', "exit 22");
+    expect(failed).toMatchObject({ code: 1, output: expect.stringContaining("could not download") });
+    expect(shim('{"engine":{"repo":"x"}}', "exit 0")).toMatchObject({ code: 1, output: expect.stringContaining("needs an engine ref") });
   });
 });

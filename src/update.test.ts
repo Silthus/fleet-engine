@@ -86,4 +86,36 @@ describe("fleet update", () => {
     expect(result).toMatchObject({ code: 1, applied: 0 });
     expect(result.output).toContain("could not fetch the engine");
   });
+
+  test("refuses an engine checkout with local changes", async () => {
+    const engineDir = engineCheckout(engineRemote(["v0.1.0", "v0.1.1"]), "v0.1.0");
+    writeFileSync(join(engineDir, "VERSION"), "patched");
+    const result = await run(engineDir, { repo: "unused", ref: "v0.1.0", channel: "release" });
+    expect(result).toMatchObject({ code: 1, applied: 0, output: expect.stringContaining("has local changes") });
+    expect(await result.version).toBe("patched");
+  });
+
+  test("follows the profile's engine repository", async () => {
+    const engineDir = engineCheckout(engineRemote(["v0.1.0"]), "v0.1.0");
+    const moved = engineRemote(["v0.1.0", "v0.2.0"]);
+    const result = await run(engineDir, { repo: moved, ref: "v0.1.0", channel: "release" });
+    expect(result.output).toContain(`The engine now comes from ${moved}.`);
+    expect(await result.version).toBe("v0.2.0");
+  });
+
+  test("never moves an engine that is not on a release back to one", async () => {
+    const remote = engineRemote(["v0.1.0"]);
+    const result = await run(engineCheckout(remote, "main"), { repo: remote, ref: "v0.1.0", channel: "release" });
+    expect(result).toMatchObject({ code: 0, applied: 1, output: expect.stringContaining("is not a release, so fleet update does not move it back") });
+    expect(await result.version).toBe("main");
+  });
+
+  test("stops before apply when the track checkout fails", async () => {
+    const remote = engineRemote(["v0.1.0"]);
+    const engineDir = engineCheckout(remote, "v0.1.0");
+    writeFileSync(join(engineDir, ".git", "index.lock"), "");
+    const result = await run(engineDir, { repo: remote, ref: "main", channel: "track" });
+    expect(result).toMatchObject({ code: 1, applied: 0, output: expect.stringContaining("could not check out main") });
+    expect(await result.version).toBe("v0.1.0");
+  });
 });

@@ -1,5 +1,6 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { repoUrl } from "./pack/sources.ts";
 import type { ProfileFile } from "./pack/types.ts";
 
 export type UpdateOptions = {
@@ -25,6 +26,7 @@ export async function readNotice(home: string): Promise<string | undefined> {
 }
 
 export async function update(options: UpdateOptions): Promise<number> {
+  if (!(await ready(options))) return 1;
   const moved = options.engine.channel === "track" ? await trackMain(options) : await followRelease(options);
   if (!moved) return 1;
   const profile = await git(options.profileDir, "remote");
@@ -35,10 +37,25 @@ export async function update(options: UpdateOptions): Promise<number> {
   return options.runApply();
 }
 
+/** The engine checkout must be clean, and its origin must be the profile's engine repository. */
+async function ready(options: UpdateOptions) {
+  const status = await git(options.engineDir, "status", "--porcelain");
+  if (!status.ok) return options.print(`fleet update: ${options.engineDir} is not an engine checkout: ${status.err}`), false;
+  if (status.out) return options.print(`fleet update: ${options.engineDir} has local changes. Save them elsewhere and remove them, then run fleet update again.`), false;
+  const wanted = repoUrl(options.engine.repo);
+  const origin = await git(options.engineDir, "remote", "get-url", "origin");
+  if (origin.ok && origin.out === wanted) return true;
+  const changed = await git(options.engineDir, "remote", origin.ok ? "set-url" : "add", "origin", wanted);
+  if (!changed.ok) return options.print(`fleet update: could not point the engine at ${wanted}: ${changed.err}`), false;
+  options.print(`The engine now comes from ${options.engine.repo}.`);
+  return true;
+}
+
 async function trackMain(options: UpdateOptions) {
   const fetched = await git(options.engineDir, "fetch", "-q", "--depth", "1", "origin", "main");
   if (!fetched.ok) return options.print(`fleet update: could not fetch the engine: ${fetched.err}`), false;
-  await git(options.engineDir, "checkout", "-q", "--force", "--detach", "FETCH_HEAD");
+  const checkedOut = await git(options.engineDir, "checkout", "-q", "--detach", "FETCH_HEAD");
+  if (!checkedOut.ok) return options.print(`fleet update: could not check out main: ${checkedOut.err}`), false;
   options.print(`Engine follows main at ${(await git(options.engineDir, "rev-parse", "--short", "HEAD")).out}.`);
   return true;
 }
@@ -54,7 +71,14 @@ async function followRelease(options: UpdateOptions) {
   const newer = versions.filter((version) => version.parts[0] > pin.parts[0]).sort(compare).at(-1);
   await saveNotice(options.home, newer?.tag);
   if (newer) options.print(`Fleet ${newer.tag} is out. It is a new major version, so this update stays on v${pin.parts[0]}.`);
-  const checkedOut = await git(options.engineDir, "checkout", "-q", "--force", "--detach", `refs/tags/${target.tag}`);
+  const installed = (await git(options.engineDir, "tag", "--points-at", "HEAD")).out.split("\n").flatMap((tag) => parse(tag) ?? []).sort(compare).at(-1);
+  if (!installed) {
+    const head = (await git(options.engineDir, "rev-parse", "--short", "HEAD")).out;
+    options.print(`Engine stays at ${head}, which is not a release, so fleet update does not move it back. Set engine.channel to track to follow main, or run get.sh --ref ${target.tag}.`);
+    return true;
+  }
+  if (compare(installed, target) >= 0) return options.print(`Engine is at ${installed.tag}.`), true;
+  const checkedOut = await git(options.engineDir, "checkout", "-q", "--detach", `refs/tags/${target.tag}`);
   if (!checkedOut.ok) return options.print(`fleet update: could not check out ${target.tag}: ${checkedOut.err}`), false;
   options.print(`Engine is at ${target.tag}.`);
   return true;
@@ -77,7 +101,8 @@ function compare(a: Version, b: Version) {
 }
 
 async function git(dir: string, ...args: string[]) {
-  const child = Bun.spawn(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe", env: { ...Bun.env, GIT_TERMINAL_PROMPT: "0" } });
+  const env = { ...Bun.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "true", SSH_ASKPASS: "true", GIT_SSH_COMMAND: "ssh -o BatchMode=yes" };
+  const child = Bun.spawn(["git", "-C", dir, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env, timeout: 120_000 });
   const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   return { ok: code === 0, out: out.trim(), err: err.trim().split("\n").at(-1) ?? "" };
 }
