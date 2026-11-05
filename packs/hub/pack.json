@@ -318,6 +318,23 @@
         "hub"
       ],
       "workflow": "boxes"
+    },
+    {
+      "id": "peers-renew",
+      "command": [
+        "fleet",
+        "peers",
+        "renew"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "03:07"
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
     }
   ],
   "human": [
@@ -355,6 +372,58 @@
         "hub"
       ],
       "workflow": "mcp-gateway"
+    },
+    {
+      "id": "hub-https",
+      "run": [
+        "fleet",
+        "hub-https",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "hub-https",
+        "doctor"
+      ],
+      "roles": [
+        "hub"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "ssh-tunnels",
+      "run": [
+        "fleet",
+        "ssh-tunnels",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "ssh-tunnels",
+        "doctor"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "hub-tunnel",
+      "run": [
+        "fleet",
+        "hub-tunnel",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "hub-tunnel",
+        "doctor"
+      ],
+      "roles": [
+        "mac"
+      ],
+      "workflow": "linked-hub"
     }
   ],
   "checks": [

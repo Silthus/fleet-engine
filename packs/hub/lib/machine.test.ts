@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { hubCommand, markHub, peersOf, readBoxSettings, readRole, requireHub, thisMachine } from "./machine.ts";
+import { hubCommand, markHub, peerMachine, peersOf, readBoxSettings, readRole, requireHub, thisMachine } from "./machine.ts";
 import { boxSettings } from "./testing.ts";
 
 const temp = tempDirs();
@@ -65,4 +65,14 @@ test("peers and nightly grants cover the devboxes in the profile and those fleet
   expect(machine.peers).toEqual(["my-hub", "devbox-2", "devbox-3"]);
   const withoutProfile = thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings) }, home);
   expect(withoutProfile.devboxes).toEqual(["devbox-3", "devbox-2"]);
+});
+
+test("the peer list needs only hub.alias, so Hub links works without the Boxes settings", () => {
+  const home = homeWithMachine({ schema: 1, role: "devbox", devboxes: ["devbox-3", "devbox-2"] });
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ devboxes: ["devbox-2", "devbox-4"] }));
+  const here = peerMachine({ FLEET_SETTINGS: JSON.stringify({ "hub.alias": "my-hub" }), FLEET_PROFILE_DIR: profile }, home, "devbox-4");
+  expect(here.devboxes).toEqual(["devbox-2", "devbox-4", "devbox-3"]);
+  expect(here.peers).toEqual(["my-hub", "devbox-2", "devbox-3"]);
+  expect(here.self).toBe("devbox-4");
 });

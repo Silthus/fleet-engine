@@ -11,15 +11,11 @@ export type BoxSettings = {
   idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; warmCommand?: string;
 };
 
-export type Machine = Clock & {
+export type PeerMachine = Clock & {
   home: string;
   self: string;
-  workspace: string;
-  isHub: boolean;
   peers: string[];
   devboxes: string[];
-  codex: boolean;
-  settings: BoxSettings;
   onPeer(alias: string, command: string, stdin?: string): Result;
   run(argv: string[], stdin?: string): Result;
   freePort(): number;
@@ -27,6 +23,8 @@ export type Machine = Clock & {
   print(line: string): void;
   say(line: string): void;
 };
+
+export type Machine = PeerMachine & { workspace: string; isHub: boolean; codex: boolean; settings: BoxSettings };
 
 export const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 export const remoteFleet = (args: string) => `sh "$HOME/.local/share/fleet/engine/fleet" ${args}`;
@@ -119,20 +117,13 @@ function savedDevboxes(home: string): string[] {
   return Array.isArray(saved) ? saved.filter((host): host is string => typeof host === "string") : [];
 }
 
-export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
-  const settings = readBoxSettings(env);
-  const profile = readProfile(env);
-  const devboxes = [...new Set([...profile.devboxes, ...savedDevboxes(home)])];
-  const self = hostname();
+export function peerMachine(env: Env = Bun.env, home = homedir(), self = hostname(), label = "Fleet box"): PeerMachine {
+  const devboxes = [...new Set([...readProfile(env).devboxes, ...savedDevboxes(home)])];
   return {
     home,
     self,
-    workspace: env.CODER_WORKSPACE_NAME ?? self,
-    isHub: readRole(home) === "hub",
-    peers: peersOf(settings.alias, devboxes, self),
+    peers: peersOf(stringSetting("hub.alias", env), devboxes, self),
     devboxes,
-    codex: profile.plan === "codex" || profile.plan === "both",
-    settings,
     onPeer: (alias, command, stdin) => capture(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`], stdin === undefined ? {} : { stdin }),
     run: (argv, stdin) => capture(argv, stdin === undefined ? {} : { stdin }),
     now: Date.now,
@@ -140,6 +131,13 @@ export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
     freePort,
     environmentId,
     print: (line) => console.log(line),
-    say: (line) => console.error(`Fleet box: ${line}`),
+    say: (line) => console.error(`${label}: ${line}`),
   };
+}
+
+export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
+  const settings = readBoxSettings(env);
+  const here = peerMachine(env, home);
+  const plan = readProfile(env).plan;
+  return { ...here, workspace: env.CODER_WORKSPACE_NAME ?? here.self, isHub: readRole(home) === "hub", codex: plan === "codex" || plan === "both", settings };
 }

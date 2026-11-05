@@ -120,7 +120,7 @@ describe("the Hub pack", () => {
     const hub: MachineFile = { schema: 1, role: "hub" };
     const items = (machine: MachineFile, fields: Partial<Profile> = {}) => {
       const result = withBoxes(fields, machine);
-      return { jobs: result.jobs.filter((job) => job.pack === "hub").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub").map((step) => step.id) };
+      return { jobs: result.jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub").map((step) => step.id) };
     };
     expect(items(hub)).toEqual({
       jobs: ["box-sweep: fleet box sweep every 15m", "box-nightly: fleet box nightly every 1d at 02:47", "box-restore: fleet box restore every 5m"],
@@ -129,7 +129,7 @@ describe("the Hub pack", () => {
     expect(items(devbox)).toEqual({ jobs: ["box-restore: fleet box restore every 5m"], human: ["box-claude-token"] });
     expect(items(mac)).toEqual({ jobs: [], human: [] });
     expect(items(hub, { workflows: { boxes: false } })).toEqual({ jobs: [], human: [] });
-    expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub")).toEqual([]);
+    expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes")).toEqual([]);
   });
 
   test("the Boxes workflow's settings reach its commands, the relay port for a box's hub forward included", () => {

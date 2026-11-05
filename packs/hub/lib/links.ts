@@ -1,20 +1,22 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { boxPrefix, slugFor, type Coder } from "./coder.ts";
-import { quote, type Machine } from "./machine.ts";
+import { quote, type Machine, type PeerMachine } from "./machine.ts";
 
 export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshLater" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
 type Link = { environmentId: string; port: number };
+export type Linker = Pick<PeerMachine, "home" | "self" | "run" | "now" | "sleep" | "freePort" | "environmentId" | "say">;
+type Target = { name: string; record: string; unit: string; forward(port: number): void; onTarget(command: string): { stdout: string } };
 
 export const t3Port = 3773;
 const answerLimitMs = 60_000;
 export const claudeTokenPath = ".config/fleet/box-claude-token";
 const handedOver = [".config/fleet/mcphub.client.json", claudeTokenPath];
 
-const t3Of = (here: Machine) => join(here.home, ".local/bin/t3");
-export const linkFile = (here: Machine, box: string) => join(here.home, ".config/fleet/boxes", `${box}.json`);
+export const t3Of = (here: Pick<Machine, "home">) => join(here.home, ".local/bin/t3");
+export const linkFile = (here: Pick<Machine, "home">, box: string) => join(here.home, ".config/fleet/boxes", `${box}.json`);
 export const unitOf = (box: string, purpose: "hub" | "t3") => `fleet-box-${box}-${purpose}`;
-export const pairCommand = (here: Machine) => `~/.local/bin/t3 pair --ttl 5m --label ${here.self} | sed -n 's/^Token: //p'`;
+export const pairCommand = (here: Pick<Machine, "self">) => `~/.local/bin/t3 pair --ttl 5m --label ${here.self} | sed -n 's/^Token: //p'`;
 
 export const boxNameFor = (name: string) => `${boxPrefix}${slugFor(name.startsWith(boxPrefix) ? name.slice(boxPrefix.length) : name)}`;
 
@@ -42,7 +44,7 @@ export function handOver(coder: Pick<Coder, "ssh">, here: Machine, box: string):
   if (login.code !== 0) throw new Error(`Cannot log in the GitHub CLI on ${box}: ${login.stderr.trim()}`);
 }
 
-function writeSession(here: Machine, env: Coder["env"]): string {
+function writeSession(here: Pick<Machine, "home">, env: Coder["env"]): string {
   const path = join(here.home, ".config/fleet/box-coder.env");
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const partial = `${path}.${crypto.randomUUID()}.partial`;
@@ -59,14 +61,14 @@ export function startUnit(coder: Pick<Coder, "binary" | "env">, here: Machine, u
   if (started.code !== 0) throw new Error(`Cannot start ${unit}: ${started.stderr.trim()}`);
 }
 
-export function stopUnit(here: Machine, unit: string): void {
+export function stopUnit(here: Pick<Machine, "run">, unit: string): void {
   here.run(["systemctl", "--user", "stop", `${unit}.service`]);
 }
 
 export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", "-R", `${here.settings.relayPort}:127.0.0.1:${here.settings.relayPort}`, box, "--", "sleep infinity"];
 const t3Forward = (box: string, port: number) => ["port-forward", "--disable-autostart", box, "--tcp", `${port}:${t3Port}`];
 
-async function environmentAt(here: Machine, url: string): Promise<string> {
+async function environmentAt(here: Linker, url: string): Promise<string> {
   const deadline = here.now() + answerLimitMs;
   while (here.now() < deadline) {
     const environmentId = await here.environmentId(url, deadline - here.now());
@@ -76,9 +78,12 @@ async function environmentAt(here: Machine, url: string): Promise<string> {
   throw new Error(`T3 did not answer at ${url} within a minute.`);
 }
 
-export function unlink(here: Machine, box: string): boolean {
+export function unlink(here: Linker, box: string): boolean {
   assertBox(box);
-  const record = linkFile(here, box);
+  return forget(here, linkFile(here, box), unitOf(box, "t3"));
+}
+
+export function forget(here: Linker, record: string, unit: string): boolean {
   if (existsSync(record)) {
     const { environmentId } = JSON.parse(readFileSync(record, "utf8")) as Link;
     const unlinked = here.run([t3Of(here), "environment", "unlink", environmentId]);
@@ -88,29 +93,32 @@ export function unlink(here: Machine, box: string): boolean {
     }
     rmSync(record);
   }
-  stopUnit(here, unitOf(box, "t3"));
+  stopUnit(here, unit);
   return true;
 }
 
 export async function link(coder: Pick<Coder, "binary" | "env" | "ssh">, here: Machine, box: string): Promise<string> {
   if (!unlink(here, box)) throw new Error(`Unlink the earlier link to ${box} first.`);
   const unit = unitOf(box, "t3");
+  return linkTarget(here, { name: box, record: linkFile(here, box), unit, forward: (port) => startUnit(coder, here, unit, t3Forward(box, port)), onTarget: (command) => coder.ssh(box, command) });
+}
+
+export async function linkTarget(here: Linker, target: Target): Promise<string> {
   const port = here.freePort();
-  startUnit(coder, here, unit, t3Forward(box, port));
+  target.forward(port);
   try {
     const url = `http://127.0.0.1:${port}`;
     const environmentId = await environmentAt(here, url);
-    const code = coder.ssh(box, pairCommand(here)).stdout.trim();
-    if (!code) throw new Error(`${box} did not issue a pairing code.`);
+    const code = target.onTarget(pairCommand(here)).stdout.trim();
+    if (!code) throw new Error(`${target.name} did not issue a pairing code.`);
     const linked = here.run([t3Of(here), "environment", "link", url, "--pairing-code", code, "--access", "full-access"]);
-    if (linked.code !== 0) throw new Error(`Cannot link ${box}: ${(linked.stderr || linked.stdout).trim()}`);
-    const record = linkFile(here, box);
-    mkdirSync(dirname(record), { recursive: true });
-    writeFileSync(record, `${JSON.stringify({ environmentId, port } satisfies Link)}\n`, { mode: 0o600 });
-    here.say(`linked ${box} as T3 environment ${environmentId} at ${url}`);
+    if (linked.code !== 0) throw new Error(`Cannot link ${target.name}: ${(linked.stderr || linked.stdout).trim()}`);
+    mkdirSync(dirname(target.record), { recursive: true });
+    writeFileSync(target.record, `${JSON.stringify({ environmentId, port } satisfies Link)}\n`, { mode: 0o600 });
+    here.say(`linked ${target.name} as T3 environment ${environmentId} at ${url}`);
     return environmentId;
   } catch (error) {
-    stopUnit(here, unit);
+    stopUnit(here, target.unit);
     throw error;
   }
 }
@@ -120,17 +128,20 @@ export function recordedEnvironment(here: Machine, box: string): string {
 }
 
 export function restoreForwards(coder: Pick<Coder, "binary" | "env">, here: Machine): number {
-  const directory = join(here.home, ".config/fleet/boxes");
+  return restoreRecorded(here, join(here.home, ".config/fleet/boxes"), (box) => unitOf(box, "t3"), (box, unit, port) => startUnit(coder, here, unit, t3Forward(box, port)));
+}
+
+export function restoreRecorded(here: Pick<Machine, "run" | "say">, directory: string, unitFor: (name: string) => string, forward: (name: string, unit: string, port: number) => void): number {
   const recorded = existsSync(directory) ? readdirSync(directory).filter((file) => file.endsWith(".json")).sort() : [];
   let failed = 0;
   for (const file of recorded) {
-    const box = file.slice(0, -".json".length);
-    const unit = unitOf(box, "t3");
+    const name = file.slice(0, -".json".length);
+    const unit = unitFor(name);
     if (here.run(["systemctl", "--user", "is-active", "--quiet", `${unit}.service`]).code === 0) continue;
     try {
       const { port } = JSON.parse(readFileSync(join(directory, file), "utf8")) as Link;
-      startUnit(coder, here, unit, t3Forward(box, port));
-      here.say(`restored the T3 forward to ${box} on port ${port}`);
+      forward(name, unit, port);
+      here.say(`restored the T3 forward to ${name} on port ${port}`);
     } catch (error) {
       failed = 1;
       here.say((error as Error).message);
