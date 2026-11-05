@@ -22,7 +22,7 @@ export type EvalIO = {
   runIn: (cwd: string) => Run;
   crossFamily: (miss: Miss) => Promise<boolean>;
   review: (miss: Miss, prompt: string, cwd: string, readable: string, slot: Slot) => Promise<ModelAnswer>;
-  judge: (prompt: string) => Promise<ModelAnswer>;
+  judge: (prompt: string, slot: Slot) => Promise<ModelAnswer>;
   slot: <T>(work: (slot: Slot) => Promise<T>) => Promise<T>;
   rubric: string; references: string[];
 };
@@ -53,7 +53,7 @@ async function scoreCase(miss: Miss, io: EvalIO): Promise<CaseResult> {
         return io.review(miss, prompt, tree, dirname(tree), slot);
       });
       if (!findings.ok) return result("failed", `the reviewer ${findings.model} gave no findings (${findings.cause})`, findings);
-      const judged = await io.judge(judgePrompt(miss, findings.text));
+      const judged = await io.judge(judgePrompt(miss, findings.text), slot);
       const verdict = judged.ok ? parseJudgement(judged.text) : undefined;
       if (!verdict) return result("failed", `the judge ${judged.model} gave no verdict (${judged.ok ? `unparseable: ${firstLine(judged.text).slice(0, 200)}` : judged.cause})`, findings);
       return result(verdict.outcome, verdict.reason, findings);
