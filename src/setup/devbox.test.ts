@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { overSsh, pairing, profileForBox, sshHosts } from "./devbox.ts";
-import { engineRoot, fakeMachine, fleetSetup, machineFile, onBox, pushedAnswers, scripted } from "./testing.ts";
+import { engineRoot, fakeMachine, fleetSetup, githubRepo, machineFile, onBox, pushedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -120,6 +120,23 @@ describe("the devbox over SSH", () => {
     const waiting = await fleetSetup(later, ["--non-interactive", ...args, "--devbox", "box-9"], [], fakeMachine(later));
     expect(waiting.code).toBe(2);
     expect(waiting.output).toContain("  --set orchestration.loopProject=<value>   Which T3 project do the loops and the PR digest run in?");
+  });
+
+  test("a devbox setting whose push failed is pushed on the next run before the box is installed", async () => {
+    const args = ["--preset", "everyday", "--plan", "claude", "--workflows", "pr-digest=on", "--devbox", "box-1"];
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, args, ["", ""], fakeMachine(home))).code).toBe(130);
+    const rejecting = join(githubRepo(home, "nora/fleet-profile"), "hooks/pre-receive");
+    writeFileSync(rejecting, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    expect((await fleetSetup(home, args, ["~/code/app"], fakeMachine(home))).output).toContain("could not push answers");
+
+    const blocked = await fleetSetup(home, ["--non-interactive", ...args], [], fakeMachine(home));
+    expect(blocked.output).toContain("could not push answers");
+    expect(blocked.output).not.toContain("▶ Install Fleet on box-1");
+
+    rmSync(rejecting);
+    expect((await fleetSetup(home, ["--non-interactive", ...args], [], fakeMachine(home))).code).toBe(0);
+    expect(pushedAnswers(home).settings["orchestration.loopProject"]).toBe("~/code/app");
   });
 
   test("fleet devbox add makes a host a devbox later, and a failed install stops with what to do", async () => {

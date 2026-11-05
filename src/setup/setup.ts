@@ -141,13 +141,14 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   });
   const devbox: Devbox = {
     question,
-    answers: {
-      ...context,
-      async answer(fields) {
-        await context.answer(fields);
-        if (machine.profileDir) await saveAnswers(machine.profileDir, fields, { push: true });
+    pushed: (step) => ({
+      ...step,
+      async run() {
+        const outcome = await step.run();
+        if (outcome !== "unanswered" && machine.profileDir) await saveAnswers(machine.profileDir, { settings: progress.draft.settings ?? {} }, { push: true });
+        return outcome;
       },
-    },
+    }),
     steps: (host, plan) => devboxSteps(host, { terminal, machine: box, nonInteractive: flags.nonInteractive, plan: plan.ai, models: plan.models, profile: () => profileForBox(box, machine.profileDir) }),
   };
   const check = () =>
@@ -197,7 +198,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
 }
 
-type Devbox = { question: Step; answers: QuestionContext; steps(host: string, plan: { ai: DevboxContext["plan"]; models: DevboxContext["models"] }): Step[] };
+type Devbox = { question: Step; pushed(step: Step): Step; steps(host: string, plan: { ai: DevboxContext["plan"]; models: DevboxContext["models"] }): Step[] };
 
 function planFor(context: QuestionContext, machine: MachineFile) {
   const draft = context.draft.packs ? context.draft : { ...context.draft, ...picksFrom(context.flags, context.catalog) };
@@ -220,7 +221,7 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     ...machineSteps,
     ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human)),
     ...(sshDevbox ? [devbox.question] : []),
-    ...settingSteps(devbox.answers, devboxAsk),
+    ...settingSteps(context, devboxAsk).map(devbox.pushed),
     ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),
     ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)]),
     ...(sshDevbox ? (machine.devboxes ?? []).flatMap((host) => devbox.steps(host, plan)) : []),
