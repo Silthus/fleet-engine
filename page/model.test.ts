@@ -5,7 +5,7 @@ import { parseSetupFlags } from "../src/setup/flags.ts";
 import { filledBySetup, picksFrom, settingsFrom } from "../src/setup/questions.ts";
 import { loadCatalog } from "../src/setup/setup.ts";
 import { tempDirs } from "../src/testing/git.ts";
-import { devbox, engineSource, resolveEngine, skillSources } from "../src/testing/packs.ts";
+import { mac, engineSource, resolveEngine, skillSources } from "../src/testing/packs.ts";
 import { pageData } from "../scripts/build-page.ts";
 import {
   activePreset,
@@ -126,21 +126,23 @@ describe("the picks", () => {
 });
 
 describe("the questions setup still asks", () => {
-  test("match the engine's own list for each preset, less what the command answers", () => {
+  test("match the engine's own list on the Mac that runs the command, for each preset", () => {
     const skills = skillSources(temp.make("skills-"), engine);
     for (const preset of data.presets) {
       const picks = presetPicks(data, preset.id);
       const file = profileFile(data, picks);
-      const plan = resolveEngine([engine, ...skills], { packs: file.packs, workflows: file.workflows }, devbox);
+      const plan = resolveEngine([engine, ...skills], { packs: file.packs, workflows: file.workflows }, mac);
       const engineAsks = plan.ask.map((setting) => setting.key).filter((key) => !filledBySetup.has(key));
       expect([preset.id, questions(data, picks).settings.map((setting) => setting.key).toSorted()]).toEqual([preset.id, engineAsks.toSorted()]);
     }
   });
 
-  test("count the AI plans question, and drop a setting the command answers", () => {
+  test("count the AI plans question, and keep the settings only a devbox asks apart until the command answers them", () => {
     const michael = presetPicks(data, "michael");
     const before = questions(data, michael);
     expect(before.count).toBe(before.settings.length + 1);
-    expect(questions(data, setSetting(data, michael, "orchestration.loopProject", "app")).count).toBe(before.count - 1);
+    expect(before.devbox.map((setting) => setting.key)).toEqual(["orchestration.loopProject", "orchestration.qualityArea", "orchestration.criticalPaths", "orchestration.ledgerRepo"]);
+    const after = questions(data, setSetting(data, michael, "orchestration.loopProject", "app"));
+    expect([after.count, after.devbox.map((setting) => setting.key)]).toEqual([before.count, ["orchestration.qualityArea", "orchestration.criticalPaths", "orchestration.ledgerRepo"]]);
   });
 });

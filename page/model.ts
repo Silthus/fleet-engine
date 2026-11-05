@@ -115,11 +115,16 @@ export function activePreset(data: PageData, picks: Picks) {
   return matches(own) ? own : data.presets.find(matches);
 }
 
+const devboxNeeds: Need[] = ["devbox", "always-on devbox"];
+
+/** Setup on the Mac plans before it asks about a devbox, so a workflow that needs one is off while it asks. */
+const onForMacSetup = (data: PageData, picks: Picks, workflow: PageWorkflow) => momentState(data, picks, workflow).on && !workflow.needs.some((need) => devboxNeeds.includes(need));
+
 /** The settings of the picked packs that apply: each one no workflow lists, or one an active workflow lists. */
-export function activeSettings(data: PageData, picks: Picks, pack: PagePack) {
+export function activeSettings(data: PageData, picks: Picks, pack: PagePack, active = (workflow: PageWorkflow) => momentState(data, picks, workflow).on) {
   const workflows = picked(data, picks).flatMap((item) => item.workflows);
   const listed = new Set(workflows.flatMap((workflow) => workflow.settings));
-  const wanted = new Set(workflows.filter((workflow) => momentState(data, picks, workflow).on).flatMap((workflow) => workflow.settings));
+  const wanted = new Set(workflows.filter(active).flatMap((workflow) => workflow.settings));
   return pack.settings.filter((setting) => !listed.has(setting.key) || wanted.has(setting.key));
 }
 
@@ -133,13 +138,14 @@ function answered(data: PageData, picks: Picks) {
   });
 }
 
-/** The questions setup still asks after it reads the command: the AI plans, then each setting the command leaves open. */
+/** The questions setup on the Mac still asks after it reads the command: the AI plans, then each setting the command leaves open. Settings of workflows that need a devbox are asked there instead. */
 export function questions(data: PageData, picks: Picks) {
   const set = new Set(answered(data, picks).map((setting) => setting.key));
-  const settings = picked(data, picks)
-    .flatMap((pack) => activeSettings(data, picks, pack))
-    .filter((setting) => asked(setting) && !data.filledBySetup.includes(setting.key) && !set.has(setting.key));
-  return { settings, count: settings.length + 1 };
+  const open = (setting: PackSetting) => asked(setting) && !data.filledBySetup.includes(setting.key) && !set.has(setting.key);
+  const settings = picked(data, picks).flatMap((pack) => activeSettings(data, picks, pack, (workflow) => onForMacSetup(data, picks, workflow))).filter(open);
+  const keys = new Set(settings.map((setting) => setting.key));
+  const devbox = picked(data, picks).flatMap((pack) => activeSettings(data, picks, pack)).filter((setting) => open(setting) && !keys.has(setting.key));
+  return { settings, devbox, count: settings.length + 1 };
 }
 
 export function commandFlags(data: PageData, picks: Picks): string[] {
