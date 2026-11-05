@@ -1,0 +1,14 @@
+{
+  "name": "fleet-mcphub-sdk",
+  "private": true,
+  "packageManager": "pnpm@10.12.4",
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.2.0",
+    "@modelcontextprotocol/core": "2.2.0",
+    "@modelcontextprotocol/node": "2.1.0",
+    "@modelcontextprotocol/server": "2.2.0",
+    "@modelcontextprotocol/server-legacy": "2.2.0",
+    "express": "4.22.0",
+    "hono": "4.13.7"
+  }
+}

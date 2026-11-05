@@ -16,6 +16,7 @@ import {
   profileFile,
   questions,
   setSetting,
+  setupAsks,
   togglePack,
   toggleWorkflow,
   type PageData,
@@ -134,7 +135,16 @@ describe("the questions setup still asks", () => {
       const plan = resolveEngine([engine, ...skills], { packs: file.packs, workflows: file.workflows }, mac);
       const engineAsks = plan.ask.map((setting) => setting.key).filter((key) => !filledBySetup.has(key));
       expect([preset.id, questions(data, picks).settings.map((setting) => setting.key).toSorted()]).toEqual([preset.id, engineAsks.toSorted()]);
+      const devboxAsks = resolveEngine([engine, ...skills], { packs: file.packs, workflows: file.workflows }, { ...mac, role: "devbox" }).ask.map((setting) => setting.key).filter((key) => !filledBySetup.has(key) && !engineAsks.includes(key));
+      expect([preset.id, questions(data, picks).devbox.map((setting) => setting.key).toSorted()]).toEqual([preset.id, devboxAsks.toSorted()]);
     }
+  });
+
+  test("say setup asks the settings only a devbox needs when you add one", () => {
+    const michael = presetPicks(data, "michael");
+    expect(setupAsks(data, michael)).toBe("asks 1 more question, plus 4 when you add a devbox");
+    expect(setupAsks(data, setSetting(data, michael, "orchestration.loopProject", "app"))).toBe("asks 1 more question, plus 3 when you add a devbox");
+    expect(setupAsks(data, presetPicks(data, "starter"))).toBe("asks 1 more question");
   });
 
   test("count the AI plans question, and keep the settings only a devbox asks apart until the command answers them", () => {

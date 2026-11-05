@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { missesPath, readMisses } from "./proof-misses.ts";
-import { checkout, cleanFixtures, fakeModel, recordingModel, reviewHead } from "./proof-testing.ts";
+import { checkout, cleanFixtures, fakeModel, recordingModel, reviewHead, settings } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -61,6 +61,58 @@ test("fleet proof eval reruns the reviewer on each miss at its commit, scores it
   const runs = readFileSync(join(pr.home, ".local/state/fleet/proof/evals.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
   expect(runs).toHaveLength(2);
   expect(runs[1]).toMatchObject({ reviewer: expect.stringContaining("command:"), promptHash: runs[0].promptHash, cases: [{ id: bot!.id, outcome: "caught", findings: expect.stringContaining("names no member") }] });
+});
+
+test("an eval records each reviewer in its panel slot, so reclaiming the slot of a dead eval stops its reviewer", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "greet the new member\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  await reviewHead(pr);
+  await pr.fleet("miss", "--source", "human", "--finding", "The greeting names no member");
+  await pr.fleet("miss", "--source", "bot", "--finding", "The greeting skips the welcome email");
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "pull-requests.panelSlots": 1 });
+  pr.panel.onPause = () => new Promise((done) => setImmediate(done));
+  const slot = join(pr.home, ".local/state/fleet/proof/.panel-slots/0");
+  const [first, seen, block] = ["first", "seen", "block"].map((name) => join(pr.home, name));
+  Bun.spawnSync(["mkfifo", block]);
+  const dead = Bun.spawnSync(["true"]).pid;
+  pr.env.FLEET_PROOF_REVIEWER = `cat >/dev/null; if mkdir "${first}" 2>/dev/null; then
+until grep -qs '"reviewer":'$$ "${slot}"; do :; done; cp "${slot}" "${seen}"
+sed 's/"pid":[0-9]*/"pid":${dead}/' "${seen}" > "${slot}.dead"; mv "${slot}.dead" "${slot}"; exec cat "${block}"
+else echo "No findings."; fi`;
+  pr.env.FLEET_PROOF_REVIEWER_MODEL = "stub-reviewer";
+  pr.env.FLEET_PROOF_EVAL_JUDGE = "echo 'NOT NAMED: the review has no findings'";
+
+  const scored = await pr.fleet("eval");
+  expect(JSON.parse(readFileSync(seen, "utf8"))).toMatchObject({ pid: process.pid, reviewer: expect.any(Number) });
+  expect(scored.output).toContain(": failed: the reviewer stub-reviewer gave no findings (stopped by SIGKILL");
+  expect(scored.output).toContain(": missed: the review has no findings");
+});
+
+test("an eval records its judge in its panel slot, so reclaiming the slot of a dead eval stops its judge", async () => {
+  const pr = checkout();
+  pr.commit("feature.txt", "greet the new member\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  await reviewHead(pr);
+  await pr.fleet("miss", "--source", "human", "--finding", "The greeting names no member");
+  await pr.fleet("miss", "--source", "bot", "--finding", "The greeting skips the welcome email");
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "pull-requests.panelSlots": 1 });
+  pr.panel.onPause = () => new Promise((done) => setImmediate(done));
+  const slot = join(pr.home, ".local/state/fleet/proof/.panel-slots/0");
+  const [first, seen, block] = ["first", "seen", "block"].map((name) => join(pr.home, name));
+  Bun.spawnSync(["mkfifo", block]);
+  const dead = Bun.spawnSync(["true"]).pid;
+  pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo 'feature.txt:1: the greeting names no member'";
+  pr.env.FLEET_PROOF_EVAL_JUDGE = `cat >/dev/null; if mkdir "${first}" 2>/dev/null; then
+until grep -qs '"reviewer":'$$'}' "${slot}"; do :; done; cp "${slot}" "${seen}"
+sed 's/"pid":[0-9]*/"pid":${dead}/' "${seen}" > "${slot}.dead"; mv "${slot}.dead" "${slot}"; exec cat "${block}"
+else echo 'NOT NAMED: no finding is about email'; fi`;
+  pr.env.FLEET_PROOF_EVAL_JUDGE_MODEL = "stub-judge";
+
+  const scored = await pr.fleet("eval");
+  expect(JSON.parse(readFileSync(seen, "utf8"))).toMatchObject({ pid: process.pid, reviewer: expect.any(Number) });
+  expect(scored.output).toContain(": failed: the judge stub-judge gave no verdict (stopped by SIGKILL");
+  expect(scored.output).toContain(": missed: no finding is about email");
 });
 
 test("without a replacement command, the eval judge runs the lookup row of the model table", async () => {

@@ -1,0 +1,165 @@
+diff --git a/src/clients/legacyMcpClient.ts b/src/clients/legacyMcpClient.ts
+index 023064d..838f025 100644
+--- a/src/clients/legacyMcpClient.ts
++++ b/src/clients/legacyMcpClient.ts
+@@ -1,9 +1,22 @@
+ import { invalidateListFreshness, recordListFreshness } from '../utils/listFreshness.js';
+-import { Client, type Tool } from '@modelcontextprotocol/client';
++import { Client, type Tool, type ElicitRequest, type ElicitResult, type RequestOptions, type Notification } from '@modelcontextprotocol/client';
+ import { LEGACY_PROTOCOL_VERSIONS } from '../utils/mcpProtocol.js';
+ 
++type ElicitationForwarder = {
++  signal: AbortSignal;
++  notify(notification: Notification): Promise<void>;
++  send(request: ElicitRequest, options?: RequestOptions): Promise<ElicitResult>;
++};
++type ForwardingOptions = NonNullable<Parameters<Client['callTool']>[1]> & {
++  fleetElicitation?: ElicitationForwarder;
++};
++
+ /** Keep v1's single-page discovery and output validation while using SDK v2. */
+ export class LegacyMcpClient extends Client {
++  fleetRetiredConnection = false;
++  private toolQueue: Promise<void> = Promise.resolve();
++  private readonly urlElicitations = new Map<string, ElicitationForwarder>();
++  private elicitationForwarder?: ElicitationForwarder;
+   private readonly listVersions = new Map<string, number>();
+   private readonly listSnapshots = new Map<string, object>();
+   private readonly listedTools = new Map<string, Tool>();
+@@ -11,10 +24,34 @@ export class LegacyMcpClient extends Client {
+   constructor(...[info, options]: ConstructorParameters<typeof Client>) {
+     super(info, {
+       ...options,
++      capabilities: { ...options?.capabilities, elicitation: { form: {}, url: {} } },
+       versionNegotiation: { mode: 'legacy' },
+       supportedProtocolVersions: LEGACY_PROTOCOL_VERSIONS,
+       enforceStrictCapabilities: true,
+     });
++    this.setRequestHandler('elicitation/create', async (request, context) => {
++      const forwarder = this.elicitationForwarder;
++      if (!forwarder) throw new Error('Upstream elicitation has no active downstream caller');
++      const id = request.params.mode === 'url' ? request.params.elicitationId : undefined;
++      if (id) {
++        if (this.urlElicitations.has(id) || this.urlElicitations.size >= 128) throw new Error('Cannot safely correlate this URL elicitation');
++        this.urlElicitations.set(id, forwarder);
++      }
++      try {
++        const result = await forwarder.send(request, { signal: AbortSignal.any([forwarder.signal, context.mcpReq.signal]) });
++        if (id && result.action !== 'accept') this.urlElicitations.delete(id);
++        return result;
++      } catch (error) {
++        if (id) this.urlElicitations.delete(id);
++        throw error;
++      }
++    });
++    this.setNotificationHandler('notifications/elicitation/complete', async (notification) => {
++      const id = notification.params.elicitationId;
++      const forwarder = this.urlElicitations.get(id);
++      this.urlElicitations.delete(id);
++      if (forwarder && !forwarder.signal.aborted) await forwarder.notify(notification);
++    });
+   }
+ 
+   private async freshList<T extends { ttlMs?: number; nextCursor?: string }>(
+@@ -80,10 +117,37 @@ export class LegacyMcpClient extends Client {
+     );
+   }
+ 
+-  override callTool(...[params, options]: Parameters<Client['callTool']>) {
+-    return super.callTool(params, {
+-      ...options,
+-      toolDefinition: options?.toolDefinition ?? this.listedTools.get(params.name),
+-    });
++  async retireFleetConnection() {
++    if (this.fleetRetiredConnection) return;
++    this.urlElicitations.clear();
++    this.fleetRetiredConnection = true;
++    this.onclose?.();
++    await this.close().catch(() => {});
++  }
++
++  override async callTool(params: Parameters<Client['callTool']>[0], options?: ForwardingOptions) {
++    const previous = this.toolQueue;
++    let release!: () => void;
++    this.toolQueue = new Promise<void>((resolve) => { release = resolve; });
++    await previous;
++    try {
++      const { fleetElicitation, ...callOptions } = options ?? {};
++      if (this.fleetRetiredConnection) throw Object.assign(new Error('Fleet upstream connection retired'), { code: 'FLEET_RETIRED_CONNECTION' });
++      fleetElicitation?.signal.throwIfAborted();
++      this.elicitationForwarder = fleetElicitation;
++      return await super.callTool(params, {
++        ...callOptions,
++        ...(fleetElicitation ? { signal: callOptions.signal
++          ? AbortSignal.any([callOptions.signal, fleetElicitation.signal])
++          : fleetElicitation.signal } : {}),
++        toolDefinition: callOptions.toolDefinition ?? this.listedTools.get(params.name),
++      });
++    } catch (error) {
++      await this.retireFleetConnection();
++      throw error;
++    } finally {
++      this.elicitationForwarder = undefined;
++      release();
++    }
+   }
+ }
+diff --git a/src/services/mcpService.ts b/src/services/mcpService.ts
+index 3cdeb83..f8b77c3 100644
+--- a/src/services/mcpService.ts
++++ b/src/services/mcpService.ts
+@@ -1091,7 +1091,7 @@ const createUpstreamMcpClient = (
+   name: string,
+   getServerInfo: () => ServerInfo | undefined,
+ ): Client => {
+-  return new LegacyMcpClient(
++  const client = new LegacyMcpClient(
+     {
+       name: `mcp-client-${name}`,
+       version: '1.0.0',
+@@ -1148,6 +1148,11 @@ const createUpstreamMcpClient = (
+       },
+     },
+   );
++  client.onclose = () => {
++    const serverInfo = serverInfos.find((info) => info.client === client) ?? getServerInfo();
++    if (serverInfo?.client === client) serverInfo.status = 'disconnected';
++  };
++  return client;
+ };
+ 
+ export interface ServerConnectionStats {
+@@ -1774,6 +1779,15 @@ const callToolWithReconnect = async (
+       checkAuthError(result);
+       return result;
+     } catch (error: any) {
++      if (!isolated && attempt < maxRetries && client instanceof LegacyMcpClient && !options?.fleetElicitation?.signal.aborted && (error?.code === 'FLEET_RETIRED_CONNECTION' || isRecoverableHttp4xxError(error))) {
++        await client.retireFleetConnection();
++        if (serverInfo.client === client) serverInfo.status = 'disconnected';
++        await ensureServerReady(serverInfo);
++        client = serverInfo.client!;
++        transport = serverInfo.transport;
++        continue;
++      }
++      if (client instanceof LegacyMcpClient && client.fleetRetiredConnection) throw error;
+       const isHttp40xError = isRecoverableHttp4xxError(error);
+       // Only retry for StreamableHTTPClientTransport and SSE transports
+       const isStreamableHttp = transport instanceof StreamableHTTPClientTransport;
+@@ -4196,7 +4210,7 @@ const handleCallToolRequestImpl = async (request: any, extra: any) => {
+           name: cleanToolName,
+           arguments: finalArgs,
+         },
+-        targetServerInfo.options || {},
++        { ...targetServerInfo.options, fleetElicitation: extra.mcpReq },
+         1,
+         isolatedCtx,
+       );
+@@ -4400,7 +4414,7 @@ const handleCallToolRequestImpl = async (request: any, extra: any) => {
+     const result = await callToolWithReconnect(
+       serverInfo,
+       { ...request.params, name: cleanToolName },
+-      serverInfo.options || {},
++      { ...serverInfo.options, fleetElicitation: extra.mcpReq },
+       1,
+       isolatedCtx,
+     );

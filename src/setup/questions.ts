@@ -1,4 +1,4 @@
-import type { AiPlan, AvailableSource, LoadedPack, PackSetting, Preset, ProfileFile, SettingValue } from "../pack/types.ts";
+import type { AiPlan, AvailableSource, LoadedPack, PackManifest, PackSetting, Preset, ProfileFile, SettingValue } from "../pack/types.ts";
 import { workflowDefaults, workflowOverrides } from "../profile/profile.ts";
 import { FlagError, hasPicks, parseSettingValue, type SetupFlags } from "./flags.ts";
 import type { Step, StepOutcome } from "./runner.ts";
@@ -101,7 +101,7 @@ export function picksFrom(flags: SetupFlags, catalog: Catalog): Required<Pick<Dr
   }
   const packs = [...new Set([...presetPacks(preset, catalog), ...flags.add])].filter((name) => !flags.remove.includes(name));
   const [unmet] = unmetNeeds(packs, catalog);
-  if (unmet) throw new FlagError(`${title(unmet.pack)} needs ${unmet.needs.map(title).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
+  if (unmet) throw new FlagError(`${title(unmet.pack, catalog.packs)} needs ${unmet.needs.map((name) => title(name, catalog.packs)).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const manifests = catalog.packs.map((pack) => pack.manifest);
   const known = workflowDefaults(manifests);
   for (const id of Object.keys(flags.workflows)) if (!Object.hasOwn(known, id) && !laterWorkflow(catalog)) throw new FlagError(`--workflows: no workflow named ${id}`);
@@ -158,11 +158,11 @@ async function oneByOne(terminal: Terminal, catalog: Catalog, current: string[])
   const packs: string[] = [];
   for (const manifest of choosablePacks(catalog)) {
     const on = current.includes(manifest.name);
-    terminal.print(`  ${title(manifest.name)}: ${manifest.summary}`);
+    terminal.print(`  ${packTitle(manifest)}: ${manifest.summary}`);
     if (await yesNo(terminal, "  Turn it on?", on)) packs.push(manifest.name);
   }
   for (const unmet of unmetNeeds(packs, catalog)) {
-    terminal.print(`  ${title(unmet.pack)} needs ${unmet.needs.map(title).join(", ")}, so ${unmet.needs.length === 1 ? "it is" : "they are"} on too.`);
+    terminal.print(`  ${title(unmet.pack, catalog.packs)} needs ${unmet.needs.map((name) => title(name, catalog.packs)).join(", ")}, so ${unmet.needs.length === 1 ? "it is" : "they are"} on too.`);
     packs.push(...unmet.needs.filter((name) => !packs.includes(name)));
   }
   return { packs, workflows: {} };
@@ -252,9 +252,13 @@ function label(setting: PackSetting, value: SettingValue) {
 
 export function packList(names: string[], catalog: Catalog) {
   const known = new Set(catalog.packs.map((pack) => pack.manifest.name));
-  return names.length ? names.map((name) => (known.has(name) ? title(name) : name)).join(", ") : "Base only";
+  return names.length ? names.map((name) => (known.has(name) ? title(name, catalog.packs) : name)).join(", ") : "Base only";
 }
 
-export function title(name: string) {
-  return name.charAt(0).toUpperCase() + name.slice(1);
+export function packTitle(manifest: Pick<PackManifest, "name" | "title">) {
+  return manifest.title ?? manifest.name.charAt(0).toUpperCase() + manifest.name.slice(1);
+}
+
+export function title(name: string, packs: Array<Pick<LoadedPack, "manifest">>) {
+  return packTitle(packs.find((pack) => pack.manifest.name === name)?.manifest ?? { name });
 }
