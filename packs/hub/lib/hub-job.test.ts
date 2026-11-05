@@ -22,9 +22,9 @@ test("a thread starts with the T3 provider and the model of its FLEET_MODELS row
   const dir = temp.make("thread-");
   stubT3(dir);
   const choice = threadModel("implementation", "fallback-model", { FLEET_MODELS: row("codex", "gpt-model") });
-  const run = Bun.spawnSync(["sh", "-c", threadScript(dir, "Slack C1 1.2", choice)], { stdin: Buffer.from("the task"), env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir } });
+  const run = Bun.spawnSync(["sh", "-c", threadScript(dir, "Disk alert box-1", choice)], { stdin: Buffer.from("the task"), env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir } });
   expect(run.exitCode).toBe(0);
-  expect(readFileSync(join(dir, "argv"), "utf8").split("\n")).toEqual(["thread", "start", "--title", "Slack C1 1.2", "--provider", "codex", "--model", "gpt-model", dir, "-", ""]);
+  expect(readFileSync(join(dir, "argv"), "utf8").split("\n")).toEqual(["thread", "start", "--title", "Disk alert box-1", "--provider", "codex", "--model", "gpt-model", dir, "-", ""]);
   expect(readFileSync(join(dir, "stdin"), "utf8")).toBe("the task");
   expect(threadModel("implementation", "fallback-model", { FLEET_MODELS: row("claude", "big-model") })).toEqual({ provider: "claudeAgent", model: "big-model" });
   expect(threadModel("implementation", "fallback-model", {})).toEqual({ provider: "claudeAgent", model: "fallback-model" });
@@ -33,11 +33,11 @@ test("a thread starts with the T3 provider and the model of its FLEET_MODELS row
 test("the folder is registered as a project first, and a thread start that creates the thread but exits 1 is never tried again", () => {
   const dir = temp.make("thread-");
   stubT3(dir, 1);
-  const run = Bun.spawnSync(["sh", "-c", threadScript(dir, "Slack C1 1.2", { provider: "claudeAgent", model: "big-model" })], { stdin: Buffer.from("the task"), env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir } });
+  const run = Bun.spawnSync(["sh", "-c", threadScript(dir, "Disk alert box-1", { provider: "claudeAgent", model: "big-model" })], { stdin: Buffer.from("the task"), env: { PATH: `${dir}:/usr/bin:/bin`, HOME: dir } });
   expect(run.exitCode).toBe(1);
   expect(readFileSync(join(dir, "calls"), "utf8").trim().split("\n")).toEqual([
     `project add ${dir}`,
-    `thread start --title Slack C1 1.2 --provider claudeAgent --model big-model ${dir} -`,
+    `thread start --title Disk alert box-1 --provider claudeAgent --model big-model ${dir} -`,
   ]);
 });
 

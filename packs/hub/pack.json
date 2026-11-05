@@ -78,20 +78,6 @@
       "ask": "never"
     },
     {
-      "key": "hub.slackUserId",
-      "question": "What is your Slack member ID, so only your own messages start threads? In Slack, open your profile, then More, then Copy member ID. Leave it empty to use the member ID a team pack has.",
-      "type": "string",
-      "optional": true,
-      "ask": "never"
-    },
-    {
-      "key": "hub.slackTriggerEmoji",
-      "question": "Which emoji on your Slack message starts a thread, without the colons?",
-      "type": "string",
-      "default": "t3code",
-      "ask": "never"
-    },
-    {
       "key": "hub.httpsHost",
       "question": "Which private host name do your devboxes use to reach the hub over HTTPS, such as hub.internal.example.com? Leave it empty to reach it over SSH tunnels only.",
       "type": "string",
@@ -106,15 +92,8 @@
       "ask": "never"
     },
     {
-      "key": "hub.slackServer",
-      "question": "What is the name of your Slack MCP server in the hub's MCPHub, so the Slack trigger can read Slack through it?",
-      "type": "string",
-      "default": "slack",
-      "ask": "never"
-    },
-    {
       "key": "hub.threadFolder",
-      "question": "Which folder do the hub's threads start in, such as ~/notes? The hub starts its disk alerts there, and a devbox starts its Slack threads there. Fleet adds it as a T3 Code project when T3 does not know it yet.",
+      "question": "Which folder do the hub's threads start in, such as ~/notes? The hub starts its disk alerts there. Fleet adds it as a T3 Code project when T3 does not know it yet.",
       "type": "string",
       "default": "~",
       "ask": "never"
@@ -228,33 +207,6 @@
           "T3 Code"
         ]
       }
-    },
-    {
-      "id": "slack-trigger",
-      "name": "Slack trigger",
-      "default": false,
-      "needs": [
-        "hub"
-      ],
-      "settings": [
-        "hub.slackUserId",
-        "hub.slackTriggerEmoji",
-        "hub.slackServer",
-        "hub.threadFolder",
-        "hub.httpsHost",
-        "hub.relayPort"
-      ],
-      "sentence": "An emoji on your Slack message, or your reaction to someone else's message from the last 30 days, starts a T3 thread about it.",
-      "moment": {
-        "time": "13:40",
-        "title": "A thread from a Slack emoji",
-        "body": "A teammate reports a bug in Slack. You react with one emoji, and a thread starts on a devbox to find the cause.",
-        "words": [
-          "hub",
-          "thread"
-        ]
-      },
-      "risk": "Your Slack messages and the threads they belong to become agent prompts. Only your own messages and reactions start a thread."
     }
   ],
   "config": [
@@ -353,20 +305,6 @@
         "hub"
       ],
       "workflow": "disk-watch"
-    },
-    {
-      "id": "slack-trigger",
-      "command": [
-        "fleet",
-        "slack-trigger"
-      ],
-      "schedule": {
-        "every": "5m"
-      },
-      "roles": [
-        "hub"
-      ],
-      "workflow": "slack-trigger"
     }
   ],
   "human": [
@@ -415,19 +353,6 @@
       ],
       "say": "This machine cannot reach the MCP gateway. Run fleet mcphub check here to see why; on the hub, fleet mcphub grant <this machine's SSH name> gives it a key.",
       "workflow": "mcp-gateway"
-    },
-    {
-      "id": "slack-trigger",
-      "run": [
-        "fleet",
-        "slack-trigger",
-        "check"
-      ],
-      "say": "The Slack trigger cannot read Slack. Run fleet slack-trigger check here to see why: set your member ID with fleet set hub.slackUserId <id>, or name your Slack MCP server with fleet set hub.slackServer <name>.",
-      "roles": [
-        "hub"
-      ],
-      "workflow": "slack-trigger"
     }
   ]
 }
