@@ -60,10 +60,10 @@ export function secretReader(input: Keyboard = process.stdin, output: NodeJS.Wri
     read: (prompt) =>
       new Promise<string>((resolve, reject) => {
         if (!input.listeners("data").includes(onData)) input.on("data", onData).on("end", onEnd);
-        output.write(prompt);
-        waiting = (line) => (line instanceof Error ? reject(line) : resolve(line));
         setRaw(true);
         input.resume();
+        output.write(prompt);
+        waiting = (line) => (line instanceof Error ? reject(line) : resolve(line));
         settle();
       }),
     close() {

@@ -196,8 +196,11 @@ describe("the secret reader", () => {
     let interrupted = 0;
     let stopped = () => {};
     const ctrlC = new Promise<void>((resolve) => (stopped = resolve));
-    const reader = secretReader(stream as unknown as NodeJS.ReadStream, new PassThrough(), () => (interrupted++, stopped()));
-    return { stream, modes, reader, ctrlC, interrupted: () => interrupted };
+    const shown: string[] = [];
+    const screen = new PassThrough();
+    screen.on("data", (chunk) => shown.push(`${modes.at(-1) ? "raw" : "echo"}:${chunk}`));
+    const reader = secretReader(stream as unknown as NodeJS.ReadStream, screen, () => (interrupted++, stopped()));
+    return { stream, modes, reader, ctrlC, shown, interrupted: () => interrupted };
   }
 
   test("drops erased keys, splits lines, and stops on Ctrl-C or the end of input", async () => {
@@ -234,11 +237,12 @@ describe("the secret reader", () => {
     await ctrlC;
     expect(interrupted()).toBe(1);
     expect(modes).toEqual([true, false]);
-    const { stream: again, modes: kept, reader: second } = keyboard(true);
+    const { stream: again, modes: kept, reader: second, shown } = keyboard(true);
     again.write("xapp-1\nxoxp-2\n");
     await second.read("first: ");
     await second.read("second: ");
     expect(kept).toEqual([true]);
+    expect(shown.filter((text) => text.includes(": "))).toEqual(["raw:first: ", "raw:second: "]);
     second.close();
     expect(kept).toEqual([true, false]);
   });
