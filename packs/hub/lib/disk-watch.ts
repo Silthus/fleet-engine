@@ -4,7 +4,7 @@ import { freeBytes } from "../../base/lib/disk.ts";
 import { numberSetting, stringSetting } from "../../base/lib/settings.ts";
 import type { Env } from "./coder.ts";
 import { threadModel, requireHubRole, spawnText, sshArgv, stateDir, threadScript, underLock, writeStateFile, type JobContext } from "./hub-job.ts";
-import { devboxesOf, remoteFleet } from "./machine.ts";
+import { devboxesOf, quote, remoteFleet } from "./machine.ts";
 
 const gigabyte = 1024 ** 3;
 const hour = 3600_000;
@@ -83,6 +83,7 @@ export type DiskWatchContext = JobContext & { localFree?: () => number };
 function hubDisks(context: DiskWatchContext, local: string, sweepBelowGigabytes: number, alertBelowGigabytes: number) {
   const { env } = context;
   const onBox = (box: string, command: string) => (box === local ? ["sh", "-c", command] : sshArgv(box, command));
+  const inLoginShell = (command: string) => `bash -lc ${quote(command)}`;
   const localFleet = join(env.FLEET_ENGINE_DIR ?? join(context.home, ".local/share/fleet/engine"), "fleet");
   const read = async (box: string) => {
     if (box === local) return (context.localFree ?? (() => freeBytes(context.home)))();
@@ -92,7 +93,7 @@ function hubDisks(context: DiskWatchContext, local: string, sweepBelowGigabytes:
   };
   const sweep = async (box: string) => {
     const floors = ["--floor", String(sweepBelowGigabytes), "--alert-floor", String(alertBelowGigabytes)];
-    const argv = box === local ? ["sh", localFleet, "disk-sweep", ...floors] : sshArgv(box, `${remoteFleet(["disk-sweep", ...floors].join(" "))} 2>&1`);
+    const argv = box === local ? ["sh", localFleet, "disk-sweep", ...floors] : sshArgv(box, `${inLoginShell(remoteFleet(["disk-sweep", ...floors].join(" ")))} 2>&1`);
     const swept = await spawnText(argv, env, { timeoutMs: sweepMinutes * 60_000 });
     const output = `${swept.stdout}${swept.stderr}`.trim();
     return swept.code === 0 ? output : `The sweep failed with exit ${swept.code === 124 ? "timeout" : swept.code}.\n${output}`;
@@ -105,7 +106,7 @@ The sweep ran fleet prune, trimmed the T3 boot log, and ran the pnpm, uv and Go 
 
 ${report}
 
-Check what is left, read-only: run \`${box === local ? look : `ssh ${box} '${look}'`}\`.
+Check what is left, read-only: run \`${box === local ? look : `ssh ${box} ${quote(inLoginShell(look))}`}\`.
 Delete nothing and start no lanes. Reply in at most 10 lines: the free space, the largest folders the report names, and what your user must decide to free it.`;
     const script = threadScript(stringSetting("hub.threadFolder", env), `${box}: ${shownFree} free`, threadModel("lookup", alertModel, env));
     return (await spawnText(onBox(local, script), env, { stdin: prompt, timeoutMs: 600_000 })).code === 0;

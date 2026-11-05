@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { diskWatchCommand, diskWatchTargets, watchDisks, type DiskWatchOptions } from "./disk-watch.ts";
 import { underLock } from "./hub-job.ts";
+import { quote, remoteFleet } from "./machine.ts";
 import { writeHome } from "./testing.ts";
 
 const temp = tempDirs();
@@ -153,14 +154,34 @@ test("on the hub, fleet disk-watch reads each devbox over SSH, sweeps it with th
   const hub = await hubHere({ "box-1": [12, 30], "box-2": [12, 4] });
   expect(await diskWatchCommand([], hub.context)).toBe(0);
   const calls = hub.calls();
-  expect(calls).toContain(`ssh -o BatchMode=yes -o ConnectTimeout=10 box-1 sh "$HOME/.local/share/fleet/engine/fleet" disk-sweep --floor 15 --alert-floor 10 2>&1`);
+  expect(calls).toContain(`ssh -o BatchMode=yes -o ConnectTimeout=10 box-1 bash -lc ${quote(remoteFleet("disk-sweep --floor 15 --alert-floor 10"))} 2>&1`);
   expect(calls.filter((call) => call.startsWith("t3 "))).toEqual([`t3 project add ${join(hub.home, "notes")}`, "t3 thread start --title box-2: 4.0G free --provider claudeAgent --model small-model /tmp/notes -".replace("/tmp/notes", join(hub.home, "notes"))]);
   const prompt = readFileSync(join(hub.bin, "prompt.txt"), "utf8");
   expect(prompt).toContain("box-2 has 4.0G free, below 10G");
   expect(prompt).toContain("swept box-2\n30.0G /home/box-2/.cache");
   expect(prompt).toContain("the largest folders the report names");
-  expect(prompt).toContain(`ssh box-2 'df -h ~; sh "$HOME/.local/share/fleet/engine/fleet" prune --dry-run --no-fetch --min-idle-hours 1'`);
+  expect(prompt).toContain(`ssh box-2 ${quote(`bash -lc ${quote(`df -h ~; ${remoteFleet("prune --dry-run --no-fetch --min-idle-hours 1")}`)}`)}`);
   expect(calls.some((call) => call.startsWith("local"))).toBe(false);
+});
+
+test("a devbox sweep runs in a login shell, so the engine launcher finds the Bun that only the login profile puts on PATH", async () => {
+  const hub = await hubHere({ "box-1": [12, 30] });
+  const remote = temp.make("disk-remote-");
+  writeHome(remote, {
+    ".profile": 'PATH="$HOME/.bun/bin:$PATH"\n',
+    ".bun/bin/bun": `echo "bun $*" >> "${hub.bin}/calls.log"`,
+    ".local/share/fleet/engine/fleet": readFileSync(join(import.meta.dir, "../../../fleet"), "utf8"),
+  });
+  chmodSync(join(remote, ".bun/bin/bun"), 0o755);
+  writeFileSync(join(hub.bin, "ssh"), `#!/bin/sh
+case "$6" in
+  *"df -Pk"*) printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/root 100 50 %s 50%% /\\n' "$(cat "${hub.bin}/free-$5")" ;;
+  *) env -i HOME="${remote}" PATH=/usr/bin:/bin /bin/sh -c "$6"; code=$?; cp "${hub.bin}/after-$5" "${hub.bin}/free-$5"; exit $code ;;
+esac
+`);
+  expect(await diskWatchCommand([], hub.context)).toBe(0);
+  expect(hub.calls()).toEqual([`bun ${join(remote, ".local/share/fleet/engine/src/cli.ts")} disk-sweep --floor 15 --alert-floor 10`]);
+  expect(hub.lines.join("\n")).not.toContain("failed");
 });
 
 test("the hub sweeps its own disk with its own launcher, without SSH", async () => {
