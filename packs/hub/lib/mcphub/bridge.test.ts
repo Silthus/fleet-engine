@@ -394,3 +394,40 @@ test("stops with one plain line, without the key, when the gateway is unreachabl
   expect(client.errors).toEqual(["Cannot reach the MCP gateway at http://127.0.0.1:3317/mcphub. On the hub, run: fleet mcphub doctor"]);
   expect(client.errors.join("\n")).not.toContain(token);
 });
+
+test("drops an answer to a question the old session asked, so it never reaches the new session", async () => {
+  const gateway = fakeGateway({ "tools/list": (message) => Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }) });
+  const { client, done } = await connected(gateway);
+  client.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "send", arguments: {} } });
+  await client.next((message) => message.id === "ask-1");
+  gateway.restart();
+  client.send({ jsonrpc: "2.0", id: "ask-1", result: { action: "accept" } });
+  client.send({ jsonrpc: "2.0", id: 9, method: "tools/list" });
+  await client.next((message) => message.id === 9);
+  expect(gateway.seen.filter((item) => item.session === "session-2").map((item) => item.method)).not.toContain("response");
+  client.close();
+  expect(await done).toBe(0);
+  expect(client.errors).toEqual([]);
+});
+
+test("a failing stream of the old session does not stop the new one", async () => {
+  let failOld!: () => void;
+  let gets = 0;
+  const gateway = fakeGateway({ "tools/list": (message) => Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }) });
+  const fetcher = Object.assign(async (input: string | URL | Request, init: RequestInit = {}) => {
+    if (init.method !== "GET" || ++gets > 1) return fetch(input, init);
+    return new Promise<Response>((_, reject) => { failOld = () => reject(new TypeError("connection reset")); });
+  }, { preconnect: fetch.preconnect }) as typeof fetch;
+  const { client, done } = await connected(gateway, fetcher);
+  await gateway.saw("notifications/initialized");
+  gateway.restart();
+  client.send({ jsonrpc: "2.0", id: 9, method: "tools/list" });
+  await client.next((message) => message.id === 9);
+  failOld();
+  for (let tick = 0; tick < 20; tick++) await new Promise((resolve) => setImmediate(resolve));
+  client.send({ jsonrpc: "2.0", id: 11, method: "tools/list" });
+  expect(await client.next((message) => message.id === 11)).toEqual({ jsonrpc: "2.0", id: 11, result: { tools: [] } });
+  client.close();
+  expect(await done).toBe(0);
+  expect(client.errors).toEqual([]);
+});

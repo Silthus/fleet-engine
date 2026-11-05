@@ -28,6 +28,8 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
   let handshake: string[] = [];
   let ready: Promise<unknown> = Promise.resolve();
   let renewing: Promise<boolean> = Promise.resolve(true);
+  let listening: AbortController | undefined;
+  const askedBy = new Map<Id, string | undefined>();
   let stop!: (line: string) => void;
   const stopped = new Promise<number>((resolve) => {
     stop = (line) => {
@@ -47,10 +49,13 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     ...(protocol && !initializing ? { "mcp-protocol-version": protocol } : {}),
   });
 
-  async function call(method: "POST" | "GET", body?: string, initializing = false) {
+  async function call(method: "POST" | "GET", body?: string, initializing = false, signal = closing.signal) {
     let response: Response;
-    try { response = await fetch(endpoint, { method, headers: headers(body !== undefined, initializing), body, signal: closing.signal }); }
-    catch { return stop(`Cannot reach the MCP gateway at ${client.baseUrl}. On the hub, run: fleet mcphub doctor`), undefined; }
+    try { response = await fetch(endpoint, { method, headers: headers(body !== undefined, initializing), body, signal }); }
+    catch {
+      if (signal.aborted) return undefined;
+      return stop(`Cannot reach the MCP gateway at ${client.baseUrl}. On the hub, run: fleet mcphub doctor`), undefined;
+    }
     if (response.status === 401 || response.status === 403) return stop(`The MCP gateway refused this machine's key. ${grantHint}`), undefined;
     return response;
   }
@@ -60,29 +65,34 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     for (const id of waiting) await write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: reason } }));
   }
 
-  async function deliver(text: string, waiting: Set<Id>) {
+  async function deliver(text: string, waiting: Set<Id>, from: string | undefined) {
     let parsed: Message | Message[];
     try { parsed = JSON.parse(text); } catch { return; }
     for (const message of [parsed].flat()) {
       if (typeof message.result?.protocolVersion === "string" && !protocol) protocol = message.result.protocolVersion;
+      if (message.method !== undefined && message.id !== undefined && message.id !== null) askedBy.set(message.id, from);
       if (message.method === undefined && message.id !== undefined && message.id !== null) waiting.delete(message.id);
       await write(JSON.stringify(message));
     }
   }
 
-  async function relay(response: Response, waiting: Set<Id>) {
+  async function relay(response: Response, waiting: Set<Id>, from: string | undefined) {
     const type = response.headers.get("content-type") ?? "";
     try {
-      if (type.includes("text/event-stream")) { for await (const data of events(response.body!)) await deliver(data, waiting); }
-      else if (type.includes("application/json")) await deliver(await response.text(), waiting);
+      if (type.includes("text/event-stream")) { for await (const data of events(response.body!)) await deliver(data, waiting, from); }
+      else if (type.includes("application/json")) await deliver(await response.text(), waiting, from);
       else await response.body?.cancel();
     } catch {}
     await answerLeft(waiting, endedEarly);
   }
 
   async function listen() {
-    const response = await call("GET");
-    if (response?.ok) await relay(response, new Set());
+    listening?.abort();
+    const own = new AbortController();
+    listening = own;
+    const from = session;
+    const response = await call("GET", undefined, false, AbortSignal.any([closing.signal, own.signal]));
+    if (response?.ok) await relay(response, new Set(), from);
     else await response?.body?.cancel();
   }
 
@@ -110,17 +120,23 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     return renewing;
   }
 
-  async function post(line: string, messages: Message[], retried = false): Promise<void> {
+  const answersRetired = (message: Message) => message.method === undefined && message.id !== undefined && message.id !== null && askedBy.has(message.id) && askedBy.get(message.id) !== session;
+
+  async function post(given: Message[], batch: boolean, retried = false): Promise<void> {
     if (!(await renewing)) return;
+    const messages = given.filter((message) => !answersRetired(message));
+    if (!messages.length) return;
+    const line = JSON.stringify(batch ? messages : messages[0]);
     const sentWith = session;
     const initializing = messages.some((message) => message.method === "initialize");
     const response = await call("POST", line, initializing);
     if (!response) return;
     if (response.status === 404 && sentWith && !retried && !initializing) {
       await response.body?.cancel();
-      if (await renew(sentWith)) return post(line, messages, true);
+      if (await renew(sentWith)) return post(messages, batch, true);
       return;
     }
+    for (const message of messages) if (message.method === undefined && message.id !== undefined && message.id !== null) askedBy.delete(message.id);
     const waiting = new Set(requestIds(messages));
     if (!response.ok) {
       await response.body?.cancel();
@@ -128,7 +144,7 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     }
     if (initializing) session = response.headers.get("mcp-session-id") ?? undefined, handshake = [line];
     if (messages.some((message) => message.method === "notifications/initialized")) handshake.push(line), background(listen());
-    background(relay(response, waiting));
+    background(relay(response, waiting, session));
   }
 
   function dispatch(line: string) {
@@ -136,7 +152,7 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     try { parsed = JSON.parse(line); }
     catch { return background(Promise.resolve(write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })))); }
     const messages = [parsed].flat() as Message[];
-    const sent = ready.then(() => post(line, messages));
+    const sent = ready.then(() => post(messages, Array.isArray(parsed)));
     background(sent);
     if (messages.some((message) => message.method === "initialize" || message.method === "notifications/initialized")) ready = sent.catch(() => {});
   }
