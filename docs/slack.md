@@ -17,7 +17,11 @@ reaction from anyone else starts nothing.
 service `fleet-slack-trigger` on Linux, or the launchd agent
 `dev.fleet.slack-trigger` on a Mac. It runs on your hub when the Hub pack is
 on. Without the Hub pack, it runs on your only machine, when your profile lists
-no devboxes. It holds a Socket Mode connection to your own Slack app, so Slack
+no devboxes and the machine is not a devbox. A profile that two machines share
+without a hub, such as two Macs, runs it on both, and each starts a thread for
+the same message. Turn on the Hub pack in that case.
+
+The trigger holds a Socket Mode connection to your own Slack app, so Slack
 sends each event within a second, and no address is public.
 
 1. Slack sends every message and reaction in your channels. The trigger keeps
