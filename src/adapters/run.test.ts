@@ -66,6 +66,18 @@ describe("account home lookup", () => {
     expect(accountHome(501, sources)).toBe("/Users/octo");
   });
 
+  test("on a Mac, falls back to /etc/passwd when dscacheutil is missing or knows no home, and never asks getent", () => {
+    const macPasswd = "_spotlight:*:89:89:Spotlight:/var/empty:/usr/bin/false\nocto:*:501:20:Octo Cat:/Users/octo:/bin/zsh\n";
+    const asked: string[][] = [];
+    const missing = { platform: "darwin" as const, exists: () => false, file: (path: string) => (path === "/etc/passwd" ? macPasswd : ""), output: (command: string[]) => (asked.push(command), "") };
+    expect(accountHome(501, missing)).toBe("/Users/octo");
+    expect(asked).toEqual([]);
+    const silent = { ...missing, exists: (path: string) => path === "/usr/bin/dscacheutil" || path === "/usr/bin/getent" };
+    expect(accountHome(501, silent)).toBe("/Users/octo");
+    expect(asked).toEqual([["/usr/bin/dscacheutil", "-q", "user", "-a", "uid", "501"]]);
+    expect(accountHome(4242, silent)).toBeUndefined();
+  });
+
   test.if(process.platform === "linux")("finds the exact account home even when HOME and PATH point elsewhere", () => {
     const uid = process.getuid!();
     const expected = readFileSync("/etc/passwd", "utf8").split("\n").map((line) => line.split(":")).find((fields) => fields[2] === String(uid))?.[5] ?? Bun.spawnSync(["getent", "passwd", String(uid)]).stdout.toString().split(":")[5];

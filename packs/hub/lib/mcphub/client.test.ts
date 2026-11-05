@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../../src/testing/git.ts";
-import { checkGateway, clientPath, browserGatewayUrl, localGatewayUrl, readGatewayClient, saveGatewayClient } from "./client.ts";
+import { browserGatewayUrl, checkGateway, clientPath, localGatewayUrl, readGatewayClient, saveGatewayClient, writePrivateFile } from "./client.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -101,4 +101,11 @@ test("a key from an older grant that names the HTTPS address still reads, and wh
   const down = async () => { throw new TypeError("unable to verify the first certificate"); };
   const result = await checkGateway(home({ baseUrl: "https://hub.internal.example.com:60001/mcphub", token }), secure, down);
   expect(result).toEqual({ ok: false, line: `The MCP gateway at https://hub.internal.example.com:60001/mcphub does not answer. A devbox reaches it at ${localGatewayUrl} through its tunnel. On the hub, run: fleet mcphub grant <this machine's SSH name>` });
+});
+
+test("leaves no temporary file behind when writing a private file fails", async () => {
+  const dir = temp.make("private-");
+  const unwritable = { toString: () => { throw new Error("cannot write"); } } as unknown as string;
+  await expect(writePrivateFile(join(dir, "key.json"), unwritable)).rejects.toThrow();
+  expect(readdirSync(dir)).toEqual([]);
 });

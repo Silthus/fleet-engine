@@ -2,9 +2,9 @@ import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { changedFiles, ownedBy, readIfThere, requireInstalled, writeFiles } from "./managed.ts";
 import { peersOf, readRole } from "./machine.ts";
-import { refuseLinks } from "./mcphub/client.ts";
+import { gatewayPort, refuseLinks } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
-import { gatewayPort, hostPattern, must, relayPortOf, sshName } from "./run.ts";
+import { hostPattern, must, relayPortOf, sshName } from "./run.ts";
 
 export type TunnelMode = "plan" | "install" | "doctor";
 export type TunnelMachine = { home: string; devboxes: string[]; relayPort: number; httpsHost?: string; hosts: string; run: Run; print(line: string): void };

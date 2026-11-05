@@ -125,6 +125,7 @@
         "hub.boxReapDays",
         "hub.boxKeepDirs",
         "hub.boxWarmCommand",
+        "hub.httpsHost",
         "hub.relayPort"
       ],
       "sentence": "An agent borrows a short-lived devbox from a warm pool for a big job, links it to T3 Code, and gives it back when the job ends.",
@@ -356,7 +357,7 @@
   "human": [
     {
       "id": "box-claude-token",
-      "say": "Make a long-lived Claude token for your boxes, then paste the token it prints into fleet box token.",
+      "say": "Make a long-lived Claude token for your boxes, then paste the token it prints into fleet box token. The hub hands it to each new box.",
       "command": "claude setup-token",
       "interactive": true,
       "probe": [
@@ -365,8 +366,7 @@
         "test \"$(stat -c %a \"$HOME/.config/fleet/box-claude-token\" 2>/dev/null)\" = 600"
       ],
       "roles": [
-        "hub",
-        "devbox"
+        "hub"
       ],
       "workflow": "boxes"
     },

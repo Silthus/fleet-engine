@@ -1,15 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
-import { rename, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { withT3Session } from "../../base/lib/t3/index.ts";
-import { capture, type Env, type Result } from "./coder.ts";
+import { capture, type Capture, type Env, type Result } from "./coder.ts";
+import { writePrivateFile } from "./mcphub/client.ts";
 import type { Clock } from "./pool.ts";
 
 export type BoxSettings = {
   alias: string; coderUrl: string; template: string; diskGigabytes: number; poolSize: number;
-  idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; warmCommand?: string;
+  idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; httpsHost?: string; warmCommand?: string;
 };
 
 export type PeerLinkInput = { url: string; alternateUrls: string[]; pairingCode: string; access: "full-access" };
@@ -19,8 +19,8 @@ export type PeerMachine = Clock & {
   self: string;
   peers: string[];
   devboxes: string[];
-  onPeer(alias: string, command: string, stdin?: string, timeoutMs?: number): Result;
-  run(argv: string[], stdin?: string): Result;
+  onPeer(alias: string, command: string, stdin?: string): Promise<Result>;
+  run(argv: string[], stdin?: string): Promise<Result>;
   freePort(): number;
   environmentId(url: string, timeoutMs: number): Promise<string | undefined>;
   linkEnvironment(input: PeerLinkInput): Promise<void>;
@@ -28,8 +28,10 @@ export type PeerMachine = Clock & {
   say(line: string): void;
 };
 
-export type Machine = PeerMachine & { workspace: string; isHub: boolean; codex: boolean; settings: BoxSettings };
+export type Machine = PeerMachine & { workspace: string; isHub: boolean; codex: boolean; settings: BoxSettings; toHub(args: string[]): Promise<number> };
 
+export const shellLimitMs = 5 * 60_000;
+export const hubCallLimitMs = 3 * 3_600_000;
 export const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 export const peerSsh = (alias: string, command: string) => ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`];
 export const remoteFleet = (args: string) => `sh "$HOME/.local/share/fleet/engine/fleet" ${args}`;
@@ -37,6 +39,7 @@ const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
 
 export function readBoxSettings(env: Env): BoxSettings {
   const warmCommand = optionalStringSetting("hub.boxWarmCommand", env);
+  const httpsHost = optionalStringSetting("hub.httpsHost", env);
   return {
     alias: stringSetting("hub.alias", env),
     coderUrl: stringSetting("hub.coderUrl", env),
@@ -47,6 +50,7 @@ export function readBoxSettings(env: Env): BoxSettings {
     reapDays: numberSetting("hub.boxReapDays", env),
     keepDirs: stringSetting("hub.boxKeepDirs", env).split(/\s+/).filter(Boolean),
     relayPort: numberSetting("hub.relayPort", env),
+    ...(httpsHost ? { httpsHost } : {}),
     ...(warmCommand ? { warmCommand } : {}),
   };
 }
@@ -68,9 +72,7 @@ export function readRole(home: string): string | undefined {
 export async function markHub(home: string): Promise<void> {
   const machine = readMachineFile(home);
   if (!machine) throw new Error(`${machinePath(home)} does not exist. Run fleet setup on this machine first.`);
-  const partial = `${machinePath(home)}.${process.pid}.partial`;
-  await writeFile(partial, JSON.stringify({ ...machine, role: "hub" }, null, 2) + "\n");
-  await rename(partial, machinePath(home));
+  await writePrivateFile(machinePath(home), JSON.stringify({ ...machine, role: "hub" }, null, 2) + "\n");
 }
 
 export function requireHub(home: string, command: string): void {
@@ -127,17 +129,27 @@ function namesOfThisMachine(home: string, hub: string): string[] {
   return [...(machine?.role === "hub" ? [hub] : []), ...(typeof machine?.name === "string" ? [machine.name] : [])];
 }
 
+export function shellsWith(run: Capture, hub: string): Pick<Machine, "onPeer" | "toHub" | "run"> {
+  const input = (stdin?: string) => (stdin === undefined ? {} : { stdin });
+  return {
+    onPeer: (alias, command, stdin) => run(peerSsh(alias, command), { ...input(stdin), timeoutMs: shellLimitMs }),
+    toHub: async (args) => (await run(peerSsh(hub, remoteFleet(args.map(quote).join(" "))), { timeoutMs: hubCallLimitMs, inherit: true })).code,
+    run: (argv, stdin) => run(argv, { ...input(stdin), timeoutMs: shellLimitMs }),
+  };
+}
+
 export function peerMachine(env: Env = Bun.env, home = homedir(), self = hostname(), label = "Fleet box"): PeerMachine {
   const devboxes = [...new Set([...readProfile(env).devboxes, ...savedDevboxes(home)])];
   const hub = stringSetting("hub.alias", env);
   const ownNames = namesOfThisMachine(home, hub);
+  const { onPeer, run } = shellsWith(capture, hub);
   return {
     home,
     self,
     peers: peersOf(hub, devboxes, self).filter((alias) => !ownNames.includes(alias)),
     devboxes,
-    onPeer: (alias, command, stdin, timeoutMs) => capture(peerSsh(alias, command), { ...(stdin === undefined ? {} : { stdin }), ...(timeoutMs === undefined ? {} : { timeoutMs }) }),
-    run: (argv, stdin) => capture(argv, stdin === undefined ? {} : { stdin }),
+    onPeer,
+    run,
     now: Date.now,
     sleep: (ms) => Bun.sleep(ms),
     freePort,
@@ -152,5 +164,6 @@ export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
   const settings = readBoxSettings(env);
   const here = peerMachine(env, home);
   const plan = readProfile(env).plan;
-  return { ...here, workspace: env.CODER_WORKSPACE_NAME ?? here.self, isHub: readRole(home) === "hub", codex: plan === "codex" || plan === "both", settings };
+  const { toHub } = shellsWith(capture, settings.alias);
+  return { ...here, workspace: env.CODER_WORKSPACE_NAME ?? here.self, isHub: readRole(home) === "hub", codex: plan === "codex" || plan === "both", settings, toHub };
 }

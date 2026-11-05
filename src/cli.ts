@@ -129,7 +129,7 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   const command = plan.commands[name];
   if (!command) {
     const owner = sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => existsSync(join(pack.dir, "commands", `${name}.ts`)));
-    options.print(owner ? `fleet ${name} comes from the ${owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
+    options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }
   const child = Bun.spawn(["bun", command.path, ...args], {

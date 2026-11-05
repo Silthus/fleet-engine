@@ -105,7 +105,19 @@ describe("apply", () => {
     const ran: string[] = [];
     const run = async (command: string[]) => (ran.push(command[0]!), command[0] === "fresh-version" ? 1 : 0);
     await apply(plan({ steps }), { home: temp.make("home-"), run });
-    expect(ran).toEqual(["cli-version", "fresh-version", "install-fresh"]);
+    expect(ran).toEqual(["cli-version", "fresh-version", "install-fresh", "fresh-version"]);
+  });
+
+  test("reports a step whose run exits 0 but whose check still fails, and fails the apply", async () => {
+    const steps = [
+      { id: "codex-cli", run: ["install-codex"], check: ["codex", "--version"], pack: "base" },
+      { id: "after", run: ["install-after"], pack: "base" },
+    ];
+    const ran: string[] = [];
+    const report = await apply(plan({ steps }), { home: temp.make("home-"), run: async (command) => (ran.push(command[0]!), command[0] === "codex" ? 127 : 0) });
+    expect(ran).toEqual(["codex", "install-codex", "codex"]);
+    expect(report.ok).toBe(false);
+    expect(report.findings).toEqual([{ id: "step:codex-cli", pack: "base", say: "Step codex-cli of the base pack ran, but does not pass its check.", repair: "apply" }]);
   });
 
   test("a step that waits for a sign-in runs only once its probe passes, and doctor does not report it", async () => {
@@ -120,7 +132,7 @@ describe("apply", () => {
     expect(doctor.findings.map((finding) => finding.id).filter((id) => !id.startsWith("files:"))).toEqual(["human:coder"]);
     ran.length = 0;
     await apply(plan({ human, steps }), { home: temp.make("home-"), run: async (command) => (ran.push(command[0]!), command[0] === "devbox-status" ? 1 : 0) });
-    expect(ran).toEqual(["coder", "devbox-status", "devbox-start"]);
+    expect(ran).toEqual(["coder", "devbox-status", "devbox-start", "devbox-status"]);
   });
 
   test("a sign-in is probed when its first waiting step comes up, after the steps before it ran", async () => {
@@ -139,7 +151,7 @@ describe("apply", () => {
       return 0;
     };
     await apply(plan({ human, steps }), { home: temp.make("home-"), run });
-    expect(ran).toEqual(["coder-installed", "install-coder", "coder", "devbox-start"]);
+    expect(ran).toEqual(["coder-installed", "install-coder", "coder-installed", "coder", "devbox-start"]);
   });
 
   test("runs steps with the plan's home directory as HOME", async () => {
@@ -199,7 +211,7 @@ describe("a leading fleet in a pack's commands", () => {
   test("runs this engine's launcher in apply", async () => {
     const { calls, run } = recorder({ "/bin/sh /engine/fleet status": 1 });
     await apply(plan(team), { home: temp.make("home-"), run });
-    expect(calls).toEqual([[...launcher, "whoami"], [...launcher, "status"], [...launcher, "start"]].map((command) => command.join(" ")));
+    expect(calls).toEqual([[...launcher, "whoami"], [...launcher, "status"], [...launcher, "start"], [...launcher, "status"]].map((command) => command.join(" ")));
   });
 
   test("runs this engine's launcher in check", async () => {

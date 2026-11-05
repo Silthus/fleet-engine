@@ -24,7 +24,7 @@ test("unlinking a peer forgets only that peer's link and forward, never a box", 
 test("linking peers never targets this machine and names each peer it could not link", async () => {
   const forwarded: string[] = [];
   const { machine, lines } = fakeMachine(temp.make("fleet-peers-"), {
-    run: (argv) => {
+    run: async (argv) => {
       if (argv[0] !== "systemd-run") return ok;
       forwarded.push(argv.find((arg) => arg.startsWith("--unit="))!);
       return { ...ok, code: 1, stderr: "no user bus" };
@@ -37,7 +37,7 @@ test("linking peers never targets this machine and names each peer it could not 
 
 test("a peer link forwards the peer's T3 over the person's own SSH config, pairs with a code made there, and records the link with mode 600", async () => {
   const home = temp.make("fleet-peers-");
-  const { machine, calls } = fakeMachine(home, { onPeer: (alias, command) => (calls.push(`peer ${alias}: ${command}`), { ...ok, stdout: "pair-code\n" }) });
+  const { machine, calls } = fakeMachine(home, { onPeer: async (alias, command) => (calls.push(`peer ${alias}: ${command}`), { ...ok, stdout: "pair-code\n" }) });
   expect(await linkPeers(machine, ["devbox-2"])).toBe(0);
   const forward = calls.find((call) => call.startsWith("run systemd-run"))!;
   expect(forward).toBe("run systemd-run --user --collect --unit=fleet-peer-devbox-2-t3 -p Restart=always -p RestartSec=30 ssh -NT -o BatchMode=yes -o ForwardAgent=no -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 127.0.0.1:21000:127.0.0.1:3773 devbox-2");
@@ -55,16 +55,16 @@ test("linking a peer that already has a working link renews it in place, and kee
   writeHome(home, { ".config/fleet/peer-links/devbox-2.json": JSON.stringify({ environmentId: "env-peer-2", port: 22000 }) });
   const listed = JSON.stringify([{ environmentId: "env-peer-2", label: "Second devbox", urls: ["http://127.0.0.1:22000"], status: "reachable", expiresAt: "2026-12-30T00:00:00Z" }]);
   const failing = fakeMachine(home, {
-    onPeer: () => ({ ...ok, stdout: "pairing-code\n" }),
-    run: (argv) => (failing.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: listed } : ok),
+    onPeer: async () => ({ ...ok, stdout: "pairing-code\n" }),
+    run: async (argv) => (failing.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: listed } : ok),
     linkEnvironment: async () => { throw new Error("T3 is busy"); },
   });
   expect(await linkPeers(failing.machine, ["devbox-2"])).toBe(1);
   expect(failing.calls.some((call) => /environment unlink|systemctl --user stop|systemd-run/.test(call))).toBe(false);
   expect(JSON.parse(readFileSync(record, "utf8"))).toEqual({ environmentId: "env-peer-2", port: 22000 });
   const working = fakeMachine(home, {
-    onPeer: () => ({ ...ok, stdout: "pairing-code\n" }),
-    run: (argv) => (working.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: listed } : ok),
+    onPeer: async () => ({ ...ok, stdout: "pairing-code\n" }),
+    run: async (argv) => (working.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: listed } : ok),
   });
   expect(await linkPeers(working.machine, ["devbox-2"])).toBe(0);
   expect(working.calls).toContain("link http://127.0.0.1:22000 with full-access access");
@@ -91,8 +91,8 @@ test("renewal keeps a peer's working address, such as a relay address, instead o
   const { machine, calls, lines } = fakeMachine(home, {
     now: () => now,
     peers: ["devbox-2"],
-    onPeer: (alias, command) => (calls.push(`peer ${alias}: ${command}`), { ...ok, stdout: "pairing-code\n" }),
-    run: (argv) => {
+    onPeer: async (alias, command) => (calls.push(`peer ${alias}: ${command}`), { ...ok, stdout: "pairing-code\n" }),
+    run: async (argv) => {
       calls.push(`run ${argv.join(" ")}`);
       return argv[1] === "environment" && argv[2] === "list" ? { ...ok, stdout: JSON.stringify([{ ...linkTo("devbox-2", "2026-11-02T00:00:00Z"), urls: ["https://devbox-2.relay.example.com", "http://127.0.0.1:21000"] }]) } : ok;
     },
@@ -110,7 +110,7 @@ test("renewal first starts the dead forwards of recorded peer links on their rec
   const { machine, lines } = fakeMachine(home, {
     now: () => now,
     peers: ["devbox-2"],
-    run: (argv) => {
+    run: async (argv) => {
       if (argv[2] === "is-active") return { ...ok, code: argv[4] === "fleet-peer-devbox-3-t3.service" ? 0 : 3 };
       if (argv[0] === "systemd-run") started.push(argv.slice(3).join(" "));
       if (argv[2] === "list") return { ...ok, stdout: JSON.stringify([linkTo("devbox-2", "2026-12-30T00:00:00Z")]) };
@@ -125,7 +125,7 @@ test("renewal first starts the dead forwards of recorded peer links on their rec
 });
 
 test("renewal fails when T3 cannot list its links", async () => {
-  const { machine } = fakeMachine(temp.make("fleet-peers-"), { run: (argv) => (argv[2] === "list" ? { ...ok, code: 1, stderr: "T3 is not running" } : ok) });
+  const { machine } = fakeMachine(temp.make("fleet-peers-"), { run: async (argv) => (argv[2] === "list" ? { ...ok, code: 1, stderr: "T3 is not running" } : ok) });
   await expect(renewPeers(machine)).rejects.toThrow("Cannot list the linked environments: T3 is not running");
 });
 
@@ -178,7 +178,7 @@ test("a pairing code never reaches argv or a log line, even when linking fails w
   const home = temp.make("fleet-peers-");
   const paired: string[] = [];
   const { machine, calls, lines } = fakeMachine(home, {
-    onPeer: () => ({ ...ok, stdout: `${code}\n` }),
+    onPeer: async () => ({ ...ok, stdout: `${code}\n` }),
     linkEnvironment: async (input) => {
       paired.push(input.pairingCode);
       throw new Error(`T3 refused pairing code ${input.pairingCode}`);
@@ -190,8 +190,8 @@ test("a pairing code never reaches argv or a log line, even when linking fails w
   const renewing = fakeMachine(home, {
     now: () => now,
     peers: ["devbox-2"],
-    onPeer: () => ({ ...ok, stdout: `${code}\n` }),
-    run: (argv) => (renewing.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: JSON.stringify([linkTo("devbox-2", "2026-11-01T00:00:00Z")]) } : ok),
+    onPeer: async () => ({ ...ok, stdout: `${code}\n` }),
+    run: async (argv) => (renewing.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: JSON.stringify([linkTo("devbox-2", "2026-11-01T00:00:00Z")]) } : ok),
     linkEnvironment: async (input) => { throw new Error(`bad ${input.pairingCode}`); },
   });
   expect(await renewPeers(renewing.machine)).toBe(1);
@@ -218,7 +218,7 @@ test("peer link state refuses a linked peer-links folder or a linked parent befo
 
 test("a peer link record is written whole through a private temporary file, and leaves no temporary file behind", async () => {
   const home = temp.make("fleet-peers-");
-  const { machine } = fakeMachine(home, { onPeer: () => ({ ...ok, stdout: "pair-code\n" }) });
+  const { machine } = fakeMachine(home, { onPeer: async () => ({ ...ok, stdout: "pair-code\n" }) });
   expect(await linkPeers(machine, ["devbox-2"])).toBe(0);
   expect(readdirSync(join(home, ".config/fleet/peer-links"))).toEqual(["devbox-2.json"]);
   expect(modeOf(statSync(join(home, ".config/fleet/peer-links")))).toBe("700");
@@ -227,14 +227,14 @@ test("a peer link record is written whole through a private temporary file, and 
 test("peers restore starts only the dead recorded forwards, does nothing when they all run, and fails when one cannot start", async () => {
   const home = temp.make("fleet-peers-");
   writeHome(home, { ".config/fleet/peer-links/devbox-2.json": JSON.stringify({ environmentId: "env-2", port: 22000 }) });
-  const running = fakeMachine(home, { run: (argv) => (running.calls.push(`run ${argv.join(" ")}`), ok) });
+  const running = fakeMachine(home, { run: async (argv) => (running.calls.push(`run ${argv.join(" ")}`), ok) });
   expect(await peersCommand(["restore"], running.machine)).toBe(0);
   expect(running.calls).toEqual(["run systemctl --user is-active --quiet fleet-peer-devbox-2-t3.service"]);
   expect(running.lines).toEqual([]);
-  const dead = fakeMachine(home, { run: (argv) => (dead.calls.push(`run ${argv.join(" ")}`), argv[2] === "is-active" ? { ...ok, code: 3 } : ok) });
+  const dead = fakeMachine(home, { run: async (argv) => (dead.calls.push(`run ${argv.join(" ")}`), argv[2] === "is-active" ? { ...ok, code: 3 } : ok) });
   expect(await peersCommand(["restore"], dead.machine)).toBe(0);
   expect(dead.calls.some((call) => call.startsWith("run systemd-run --user --collect --unit=fleet-peer-devbox-2-t3 "))).toBe(true);
-  const broken = fakeMachine(home, { run: (argv) => (argv[2] === "is-active" ? { ...ok, code: 3 } : argv[0] === "systemd-run" ? { ...ok, code: 1, stderr: "no user bus" } : ok) });
+  const broken = fakeMachine(home, { run: async (argv) => (argv[2] === "is-active" ? { ...ok, code: 3 } : argv[0] === "systemd-run" ? { ...ok, code: 1, stderr: "no user bus" } : ok) });
   expect(await peersCommand(["restore"], broken.machine)).toBe(1);
   expect(broken.lines).toContain("Cannot start fleet-peer-devbox-2-t3: no user bus");
 });
@@ -245,7 +245,7 @@ test("renewal fails, and says so in its last line, when a recorded forward canno
   const { machine, lines } = fakeMachine(home, {
     now: () => now,
     peers: ["devbox-2"],
-    run: (argv) => {
+    run: async (argv) => {
       if (argv[2] === "is-active") return { ...ok, code: 3 };
       if (argv[0] === "systemd-run") return { ...ok, code: 1, stderr: "no user bus" };
       if (argv[2] === "list") return { ...ok, stdout: JSON.stringify([linkTo("devbox-2", "2026-12-30T00:00:00Z")]) };
@@ -281,7 +281,7 @@ test("a peer link record that is a symlink or not a regular file is refused befo
     else mkdirSync(record);
     const unlinking = fakeMachine(home);
     await expect(unlinkPeer(unlinking.machine, "devbox-2")).rejects.toThrow(`Keep ${record}: it is not a regular file`);
-    const restoring = fakeMachine(home, { run: (argv) => (restoring.calls.push(`run ${argv.join(" ")}`), argv[2] === "is-active" ? { ...ok, code: 3 } : ok) });
+    const restoring = fakeMachine(home, { run: async (argv) => (restoring.calls.push(`run ${argv.join(" ")}`), argv[2] === "is-active" ? { ...ok, code: 3 } : ok) });
     expect(await restorePeers(restoring.machine)).toBe(1);
     expect(restoring.lines).toContain(`Keep ${record}: it is not a regular file`);
     for (const call of [...unlinking.calls, ...restoring.calls]) expect(call).not.toMatch(/environment unlink|systemd-run/);
@@ -304,8 +304,8 @@ test("renewal finds a recorded peer by its environment id, whatever its T3 label
   const { machine, calls, lines } = fakeMachine(home, {
     now: () => now,
     peers: ["devbox-2", "devbox-3"],
-    onPeer: () => ({ ...ok, stdout: "pairing-code\n" }),
-    run: (argv) => (calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: JSON.stringify(listed) } : ok),
+    onPeer: async () => ({ ...ok, stdout: "pairing-code\n" }),
+    run: async (argv) => (calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: JSON.stringify(listed) } : ok),
   });
   expect(await renewPeers(machine)).toBe(0);
   expect(calls.filter((call) => call.startsWith("link "))).toEqual(["link https://devbox-2.relay.example.com with full-access access"]);
@@ -320,8 +320,8 @@ test("renewal of a recorded peer that T3 no longer lists pairs first, and unlink
   const failing = fakeMachine(home, {
     now: () => now,
     peers: ["devbox-2"],
-    onPeer: () => ({ ...ok, stdout: "pairing-code\n" }),
-    run: (argv) => (failing.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: "[]" } : ok),
+    onPeer: async () => ({ ...ok, stdout: "pairing-code\n" }),
+    run: async (argv) => (failing.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: "[]" } : ok),
     linkEnvironment: async () => { throw new Error("T3 is busy"); },
   });
   expect(await renewPeers(failing.machine)).toBe(1);
@@ -330,34 +330,21 @@ test("renewal of a recorded peer that T3 no longer lists pairs first, and unlink
   const working = fakeMachine(home, {
     now: () => now,
     peers: ["devbox-2"],
-    onPeer: () => ({ ...ok, stdout: "pairing-code\n" }),
-    run: (argv) => (working.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: "[]" } : ok),
+    onPeer: async () => ({ ...ok, stdout: "pairing-code\n" }),
+    run: async (argv) => (working.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: "[]" } : ok),
   });
   expect(await renewPeers(working.machine)).toBe(0);
   expect(working.calls.some((call) => call.includes("environment unlink"))).toBe(false);
   expect(JSON.parse(readFileSync(record, "utf8"))).toEqual({ environmentId: "env-box", port: 21000 });
 });
 
-test("pairing on a peer has a finite time limit, and a peer that times out fails alone while the others still link", async () => {
+test("a peer whose pairing times out fails alone while the others still link", async () => {
   const home = temp.make("fleet-peers-");
-  const limits: Array<number | undefined> = [];
   const { machine, lines } = fakeMachine(home, {
-    onPeer: (alias, _command, _stdin, timeoutMs) => {
-      limits.push(timeoutMs);
-      return alias === "my-hub" ? { code: 124, stdout: "", stderr: `timed out after ${timeoutMs} ms` } : { ...ok, stdout: "pair-code\n" };
-    },
+    onPeer: async (alias) => (alias === "my-hub" ? { code: 124, stdout: "", stderr: "timed out after 300000 ms" } : { ...ok, stdout: "pair-code\n" }),
   });
   expect(await linkPeers(machine)).toBe(1);
-  expect(lines).toContain("my-hub: my-hub did not issue a pairing code: timed out after 60000 ms");
+  expect(lines).toContain("my-hub: my-hub did not issue a pairing code: timed out after 300000 ms");
   expect(lines).toContain("not linked: my-hub");
   expect(existsSync(join(home, ".config/fleet/peer-links/devbox-2.json"))).toBe(true);
-  const renewing = fakeMachine(home, {
-    now: () => now,
-    peers: ["devbox-2"],
-    onPeer: (_alias, _command, _stdin, timeoutMs) => (limits.push(timeoutMs), { ...ok, stdout: "pair-code\n" }),
-    run: (argv) => (argv[2] === "list" ? { ...ok, stdout: JSON.stringify([{ ...linkTo("devbox-2", "2026-11-01T00:00:00Z"), environmentId: "env-box" }]) } : ok),
-  });
-  expect(await renewPeers(renewing.machine)).toBe(0);
-  expect(limits).toHaveLength(3);
-  for (const limit of limits) expect(Number.isFinite(limit)).toBe(true);
 });

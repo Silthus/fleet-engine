@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
-import { updateAgents, type Run } from "./agent-update.ts";
+import { codexInstaller, updateAgents, type Run } from "./agent-update.ts";
+
+const fleetCodex = 'sh -c readlink "$HOME/.local/bin/codex"';
 
 function stub(results: Record<string, { code: number; out: string }>) {
   const calls: string[] = [];
@@ -17,13 +19,23 @@ test("updates the agent CLIs that Fleet installed", async () => {
     "bun pm ls -g": { code: 0, out: "├── @openai/codex@0.9.0" },
     "bun add -g @openai/codex@latest": { code: 0, out: "" },
   });
-  expect(await updateAgents(run)).toEqual({ ok: true, lines: ["Claude Code: up to date.", "Codex: up to date."] });
+  expect(await updateAgents(run)).toEqual({ ok: true, lines: ["Claude Code: up to date.", "Codex: not installed by Fleet, skipped.", "Codex from Bun: up to date."] });
   expect(calls).toContain("bun add -g @openai/codex@latest");
+});
+
+test.each([
+  ["through its current release", "/home/me/.local/share/fleet/codex/current/bin/codex\n"],
+  ["from the earlier single-folder layout", "/home/me/.local/share/fleet/codex/bin/codex\n"],
+])("updates the Codex that Fleet installed from its release package %s", async (_layout, target) => {
+  const { run, calls } = stub({ [fleetCodex]: { code: 0, out: target }, [`sh ${codexInstaller}`]: { code: 0, out: "" }, "bun pm ls -g": { code: 0, out: "" } });
+  expect((await updateAgents(run)).lines).toEqual(["Claude Code: not installed by Fleet, skipped.", "Codex: up to date.", "Codex from Bun: not installed by Fleet, skipped."]);
+  expect(calls).toContain(`sh ${codexInstaller}`);
+  expect(codexInstaller).toEndWith("packs/base/lib/install-codex.sh");
 });
 
 test("skips a CLI that is missing and reports a failed update", async () => {
   const { run, calls } = stub({ 'sh -c test -x "$HOME/.local/bin/claude" && echo native': { code: 0, out: "native\n" }, "claude update": { code: 1, out: "" }, "bun pm ls -g": { code: 0, out: "typescript" } });
-  expect(await updateAgents(run)).toEqual({ ok: false, lines: ["Claude Code: update failed (exit 1).", "Codex: not installed by Fleet, skipped."] });
+  expect(await updateAgents(run)).toEqual({ ok: false, lines: ["Claude Code: update failed (exit 1).", "Codex: not installed by Fleet, skipped.", "Codex from Bun: not installed by Fleet, skipped."] });
   expect(calls).not.toContain("bun add -g @openai/codex@latest");
 });
 

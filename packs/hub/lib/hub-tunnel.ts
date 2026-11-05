@@ -1,9 +1,9 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { changedFiles, readOwned, requireInstalled, writeFiles, type Managed } from "./managed.ts";
-import { localGatewayUrl, readGatewayClient, saveGatewayClient, type Fetch, type GatewaySettings } from "./mcphub/client.ts";
+import { gatewayPort, localGatewayUrl, readGatewayClient, saveGatewayClient, type Fetch, type GatewaySettings } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
-import { gatewayPort, relayPortOf } from "./run.ts";
+import { relayPortOf } from "./run.ts";
 
 export type MacTunnelMode = "plan" | "install" | "doctor" | "remove";
 export type MacTunnel = {

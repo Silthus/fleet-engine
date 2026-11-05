@@ -10,7 +10,6 @@ export type PeerLink = Pick<LinkedEnvironment, "environmentId" | "label" | "urls
 export type PeerHere = Linker & Pick<PeerMachine, "peers" | "onPeer" | "print">;
 
 const renewWithinMs = 7 * 86_400_000;
-export const peerPairLimitMs = 60_000;
 const marker = "# Managed by Fleet peer access.";
 const usage = "Usage: fleet peers [plan|install|doctor]  Write or check the SSH config that names every peer\n       fleet peers link [<alias>...]       Link every peer, or the named ones, to T3 here\n       fleet peers renew                   Link each missing peer, and renew each link that expires within 7 days\n       fleet peers restore                 Start each recorded peer forward that does not run";
 const peerLinks = (here: Pick<PeerHere, "home">) => join(here.home, ".config/fleet/peer-links");
@@ -18,10 +17,10 @@ const recordOf = (here: Pick<PeerHere, "home">, alias: string) => join(peerLinks
 const guardPeerLinks = (here: Pick<PeerHere, "home">) => refuseLinks(here.home, peerLinks(here), "peer link folder");
 export const peerUnitOf = (alias: string) => `fleet-peer-${alias}-t3`;
 
-function startPeerForward(here: PeerHere, unit: string, alias: string, port: number): void {
-  stopUnit(here, unit);
+async function startPeerForward(here: PeerHere, unit: string, alias: string, port: number): Promise<void> {
+  await stopUnit(here, unit);
   const forward = ["ssh", "-NT", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3", "-L", `127.0.0.1:${port}:127.0.0.1:${t3Port}`, sshName(alias)];
-  const started = here.run(["systemd-run", "--user", "--collect", `--unit=${unit}`, "-p", "Restart=always", "-p", "RestartSec=30", ...forward]);
+  const started = await here.run(["systemd-run", "--user", "--collect", `--unit=${unit}`, "-p", "Restart=always", "-p", "RestartSec=30", ...forward]);
   if (started.code !== 0) throw new Error(`Cannot start ${unit}: ${started.stderr.trim()}`);
 }
 
@@ -32,7 +31,7 @@ export async function unlinkPeer(here: PeerHere, alias: string): Promise<boolean
 
 async function linkPeer(here: PeerHere, alias: string): Promise<void> {
   const recorded = readRecord(recordOf(here, alias));
-  const urls = recorded ? (linkFor(alias, linksHere(here), recorded.environmentId)?.urls ?? []) : [];
+  const urls = recorded ? (linkFor(alias, await linksHere(here), recorded.environmentId)?.urls ?? []) : [];
   if (urls.length) return relink(here, alias, urls);
   if (!(await unlinkPeer(here, alias))) throw new Error(`Unlink the earlier link to ${alias} first.`);
   await pairPeer(here, alias);
@@ -40,7 +39,7 @@ async function linkPeer(here: PeerHere, alias: string): Promise<void> {
 
 function pairPeer(here: PeerHere, alias: string): Promise<string> {
   const unit = peerUnitOf(alias);
-  return linkTarget(here, { name: alias, record: recordOf(here, alias), unit, forward: (port) => startPeerForward(here, unit, alias, port), onTarget: (command) => here.onPeer(alias, command, undefined, peerPairLimitMs) });
+  return linkTarget(here, { name: alias, record: recordOf(here, alias), unit, forward: (port) => startPeerForward(here, unit, alias, port), onTarget: (command) => here.onPeer(alias, command) });
 }
 
 export async function linkPeers(here: PeerHere, aliases: string[] = []): Promise<number> {
@@ -67,14 +66,14 @@ export function peersToRenew(peers: string[], links: PeerLink[], now: number, re
   });
 }
 
-function linksHere(here: PeerHere): PeerLink[] {
-  const listed = here.run([t3Of(here), "environment", "list", "--json"]);
+async function linksHere(here: PeerHere): Promise<PeerLink[]> {
+  const listed = await here.run([t3Of(here), "environment", "list", "--json"]);
   if (listed.code !== 0) throw new Error(`Cannot list the linked environments: ${(listed.stderr || listed.stdout).trim()}`);
   return JSON.parse(listed.stdout) as PeerLink[];
 }
 
 async function relink(here: PeerHere, alias: string, urls: string[]): Promise<void> {
-  await pairWith(here, alias, urls, `Cannot renew the link to ${alias}`, (command) => here.onPeer(alias, command, undefined, peerPairLimitMs));
+  await pairWith(here, alias, urls, `Cannot renew the link to ${alias}`, (command) => here.onPeer(alias, command));
   here.say(`renewed the link to ${alias} at ${urls.join(", ")}`);
 }
 
@@ -85,7 +84,7 @@ export async function restorePeers(here: PeerHere): Promise<number> {
 
 export async function renewPeers(here: PeerHere): Promise<number> {
   const restoreFailed = await restorePeers(here);
-  const links = linksHere(here);
+  const links = await linksHere(here);
   const failed: string[] = [];
   const recorded: Record<string, string> = {};
   const readable = here.peers.filter((alias) => {
