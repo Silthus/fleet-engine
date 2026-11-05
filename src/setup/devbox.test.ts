@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { main } from "../cli.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { overSsh, pairing, profileForBox, sshHosts } from "./devbox.ts";
-import { engineRoot, fakeMachine, fleetSetup, machineFile, onBox, scripted } from "./testing.ts";
+import { engineRoot, fakeMachine, fleetSetup, machineFile, onBox, pushedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -100,6 +100,26 @@ describe("the devbox over SSH", () => {
     expect(result.output).toContain("  Sign in to GitHub on box-9: do it once in a terminal, then run fleet setup again");
     expect(remote(box)).toContainEqual(expect.stringContaining("--install-only"));
     expect(box.starts).toEqual([]);
+  });
+
+  test("asks the settings only a devbox needs once a devbox is added, saves them to the profile before the box applies it, and a run without a person lists them", async () => {
+    const question = "? Which T3 project do the loops and the PR digest run in?";
+    const args = ["--preset", "everyday", "--plan", "claude", "--workflows", "pr-digest=on"];
+    const alone = temp.make("home-");
+    expect((await fleetSetup(alone, [...args, "--devbox", "skip"], ["", ""], fakeMachine(alone))).output).not.toContain(question);
+
+    const home = temp.make("home-");
+    const result = await fleetSetup(home, [...args, "--devbox", "box-1"], ["", "", "~/code/app"], fakeMachine(home));
+    expect(result.code).toBe(0);
+    const output = result.output;
+    expect(output.indexOf(question)).toBeGreaterThan(output.indexOf("  ✓ box-1"));
+    expect(output.indexOf(question)).toBeLessThan(output.indexOf("▶ Install Fleet on box-1"));
+    expect(pushedAnswers(home).settings["orchestration.loopProject"]).toBe("~/code/app");
+
+    const later = temp.make("home-");
+    const waiting = await fleetSetup(later, ["--non-interactive", ...args, "--devbox", "box-9"], [], fakeMachine(later));
+    expect(waiting.code).toBe(2);
+    expect(waiting.output).toContain("  --set orchestration.loopProject=<value>   Which T3 project do the loops and the PR digest run in?");
   });
 
   test("fleet devbox add makes a host a devbox later, and a failed install stops with what to do", async () => {
