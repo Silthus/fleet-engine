@@ -13,9 +13,11 @@ import type {
   PackSetting,
   Plan,
   Profile,
+  Owned,
   ResolvedPack,
   Scope,
   SettingValue,
+  T3ProjectScript,
 } from "../pack/types.ts";
 import { signerSetting } from "../adapters/identity/signers.ts";
 import { engineSettings } from "../pack/manifest.ts";
@@ -76,6 +78,12 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
     for (const step of manifest.human ?? []) if (fits(pack, step, `human ${step.id}`)) plan.human.push({ ...step, pack });
     for (const step of manifest.steps ?? []) if (fits(pack, step, `step ${step.id}`)) plan.steps.push({ ...step, pack });
     for (const check of manifest.checks ?? []) if (fits(pack, check, `check ${check.id}`)) plan.checks.push({ ...check, pack });
+    for (const script of manifest.t3ProjectScripts ?? []) {
+      if (!fits(pack, script, `t3 project script ${script.id}`)) continue;
+      const twin = plan.t3ProjectScripts?.find((item) => `${item.pack}-${item.id}` === `${pack}-${script.id}`);
+      if (twin) throw new ResolveError(`t3 project script ${script.id} of ${pack} and ${twin.id} of ${twin.pack} both get the id fleet-${pack}-${script.id}`);
+      (plan.t3ProjectScripts ??= []).push({ ...script, pack });
+    }
     for (const entry of manifest.config ?? []) {
       if (!fits(pack, entry, `config ${entry.provider}:${entry.key}`)) continue;
       const owner = `${entry.provider}:${entry.key}`;
@@ -99,6 +107,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   for (const job of plan.models.length ? plan.jobs : []) {
     if (job.task && !plan.models.some((row) => row.role === job.task!.modelRole)) throw new ResolveError(`job ${job.id} asks for model role ${job.task.modelRole}, which the model table lacks`);
   }
+  plan.t3ProjectScripts = plan.t3ProjectScripts?.map((script) => withProjectSetting(script, plan.settings));
   plan.jobs = plan.jobs.map((job) => {
     const project = job.task && plan.settings[job.task.projectSetting];
     return job.task && project !== undefined ? { ...job, task: { ...job.task, project: String(project) } } : job;
@@ -218,6 +227,18 @@ function activeSettings(order: Candidate[], active: Set<string>): Array<PackSett
 }
 
 /** Keeps the last declaration of a setting, so a later pack sets the default of one the engine reads. Base's signer default is coder in a Coder workspace. */
+/** The project a script's setting names, when its value is an absolute path or starts with ~/. The T3 adapter reports any other value. */
+export function settingProject(script: T3ProjectScript, settings: Record<string, SettingValue>): string | undefined {
+  const value = script.projectSetting === undefined ? undefined : settings[script.projectSetting];
+  return typeof value === "string" && (value.startsWith("/") || value.startsWith("~/")) ? value : undefined;
+}
+
+function withProjectSetting(script: Owned<T3ProjectScript>, settings: Record<string, SettingValue>): Owned<T3ProjectScript> {
+  const value = settingProject(script, settings);
+  if (value === undefined) return script;
+  return script.projects.includes(value) ? script : { ...script, projects: [...script.projects, value] };
+}
+
 function machineDefaults(settings: Array<PackSetting & { pack: string }>, machine: MachineFile) {
   const last = new Map(settings.map((setting) => [setting.key, setting]));
   return settings

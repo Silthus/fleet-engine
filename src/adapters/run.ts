@@ -2,7 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { AdapterResult } from "../reconciler/apply.ts";
 
-export type RunOptions = { input?: string; home?: string };
+/** clearEnv names variables the command must not inherit. */
+export type RunOptions = { input?: string; home?: string; clearEnv?: string[] };
 export type CommandRunner = (command: string[], options?: RunOptions) => Promise<{ code: number; stdout: string; stderr?: string }>;
 
 export const spawnRunner: CommandRunner = async (command, options = {}) => {
@@ -11,7 +12,7 @@ export const spawnRunner: CommandRunner = async (command, options = {}) => {
       stdout: "pipe",
       stderr: "pipe",
       stdin: options.input === undefined ? "ignore" : new TextEncoder().encode(options.input),
-      env: options.home === undefined ? Bun.env : { ...Bun.env, HOME: options.home },
+      env: Object.fromEntries(Object.entries({ ...Bun.env, ...(options.home === undefined ? {} : { HOME: options.home }) }).filter(([name]) => !options.clearEnv?.includes(name))),
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { code, stdout, stderr };
