@@ -1,4 +1,6 @@
-import { chmod, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
@@ -68,8 +70,9 @@ async function binaryReady(machine: ProxyMachine, paths: Layout): Promise<boolea
   return `${help.stdout}${help.stderr}`.includes(`CLIProxyAPI Version: ${machine.release.version}`);
 }
 
-async function ensureBinary(machine: ProxyMachine, paths: Layout): Promise<boolean> {
-  if (await binaryReady(machine, paths)) return false;
+async function ensureBinary(machine: ProxyMachine, paths: Layout): Promise<void> {
+  if (await binaryReady(machine, paths)) return;
+  await writePrivateFile(paths.restart, "\n");
   const folder = await mkdtemp(join(tmpdir(), "fleet-cli-proxy-"));
   try {
     const archive = join(folder, "release.tar.gz");
@@ -80,7 +83,6 @@ async function ensureBinary(machine: ProxyMachine, paths: Layout): Promise<boole
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
-  return true;
 }
 
 async function refuseLinkedLayout(home: string, paths: Layout): Promise<void> {
@@ -99,7 +101,7 @@ async function install(machine: ProxyMachine, paths: Layout): Promise<void> {
     await chmod(dir, 0o700);
   }
   if (changed.length || !savedManagement) await writePrivateFile(paths.restart, "\n");
-  if (await ensureBinary(machine, paths)) await writePrivateFile(paths.restart, "\n");
+  await ensureBinary(machine, paths);
   if (!savedClient) await writePrivateFile(paths.key, `${key}\n`);
   if (!savedManagement) await writePrivateFile(paths.management, `MANAGEMENT_PASSWORD=${managementKey}\n`);
   await writeFiles(changed);
@@ -157,7 +159,7 @@ async function answered(machine: ProxyMachine, key: string): Promise<string | un
 type Settings = Record<string, unknown> & { env?: Record<string, unknown> };
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 
-async function claudeRoute(home: string, on: boolean): Promise<(() => Promise<void>) | undefined> {
+export async function claudeRoute(home: string, on: boolean): Promise<(() => Promise<void>) | undefined> {
   const path = join(home, ".claude/settings.json");
   await refuseLinks(home, path, "Claude settings path");
   const text = await readIfThere(path);
@@ -180,7 +182,14 @@ async function claudeRoute(home: string, on: boolean): Promise<(() => Promise<vo
   if (JSON.stringify(settings) === before) return async () => {};
   return async () => {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await writePrivateFile(path, `${JSON.stringify(settings, null, 2)}\n`);
+    const partial = `${path}.${randomUUID()}.partial`;
+    await writeFile(partial, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    try {
+      if ((existsSync(path) ? readFileSync(path, "utf8") : undefined) !== text) throw new Error(`${path} changed while Fleet wrote it. Run this again.`);
+      renameSync(partial, path);
+    } finally {
+      rmSync(partial, { force: true });
+    }
   };
 }
 

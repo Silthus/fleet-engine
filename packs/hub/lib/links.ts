@@ -105,7 +105,7 @@ export async function stopUnit(here: Pick<Machine, "run">, unit: string): Promis
 }
 
 const reverse = (port: number) => ["-R", `${port}:127.0.0.1:${port}`];
-export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", ...reverse(relayPortOf(here.settings.relayPort)), ...reverse(gatewayPort), ...(here.settings.proxy ? reverse(proxyPort) : []), box, "--", "sleep infinity"];
+export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", ...reverse(relayPortOf(here.settings.relayPort, here.settings.proxy)), ...reverse(gatewayPort), ...(here.settings.proxy ? reverse(proxyPort) : []), box, "--", "sleep infinity"];
 const t3Forward = (box: string, port: number) => ["port-forward", "--disable-autostart", box, "--tcp", `${port}:${t3Port}`];
 
 async function environmentAt(here: Linker, url: string): Promise<string> {

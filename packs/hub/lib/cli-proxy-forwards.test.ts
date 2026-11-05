@@ -62,8 +62,11 @@ test("a box that cannot reach the proxy yet keeps its own sign-in, and the hando
   expect(none.lines).toContain("skip ~/.config/fleet/cli-proxy.key: this machine has none");
 });
 
-test("a relay port on the proxy port is refused before any tunnel or box forward is built", () => {
-  expect(() => tunnelUnit("devbox-1", 8317, true)).toThrow("hub.relayPort must be a port from 1024 to 65535 other than");
+test("a relay port on the proxy port is refused only while the workflow is on, before any tunnel or box forward is built", () => {
+  expect(() => tunnelUnit("devbox-1", 8317, true)).toThrow("while Own-account balancing is on, hub.relayPort cannot be 8317");
   const clash = fakeMachine(temp.make("fleet-box-"), { settings: { ...balancing, relayPort: 8317 } }).machine;
-  expect(() => hubForward(clash, "box-lane")).toThrow("hub.relayPort must be a port from 1024 to 65535 other than");
+  expect(() => hubForward(clash, "box-lane")).toThrow("while Own-account balancing is on, hub.relayPort cannot be 8317");
+  expect(tunnelUnit("devbox-1", 8317)).toContain("-R 127.0.0.1:8317:127.0.0.1:8317");
+  const off = fakeMachine(temp.make("fleet-box-"), { settings: { ...readBoxSettings({ FLEET_SETTINGS: JSON.stringify(boxSettings) }), relayPort: 8317 } }).machine;
+  expect(hubForward(off, "box-lane")).toContain("8317:127.0.0.1:8317");
 });

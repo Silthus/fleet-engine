@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { cliProxy, keyHelper, proxyUrl, type ProxyMachine } from "./cli-proxy.ts";
+import { claudeRoute, cliProxy, keyHelper, proxyUrl, type ProxyMachine } from "./cli-proxy.ts";
 import { fakeRun, modeOf, roleHome } from "./run-testing.ts";
 
 const temp = tempDirs();
@@ -316,4 +316,37 @@ test("connect waits for a forward that is still coming up, and gives up after a 
   const refusedKey = client({ readStdin: async () => `${otherKey}\n` });
   await expect(cliProxy("connect", refusedKey.machine)).rejects.toThrow("refuses this machine's key");
   expect(refusedKey.requests).toHaveLength(1);
+});
+
+test("the Claude switch stops and keeps your edit when settings change between its read and its write", async () => {
+  const home = roleHome(temp.make("fleet-cli-proxy-"), "devbox");
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(settingsFile(home), JSON.stringify({ model: "opus" }));
+  const write = (await claudeRoute(home, true))!;
+  writeFileSync(settingsFile(home), JSON.stringify({ model: "opus", permissions: { deny: ["Bash(rm:*)"] } }));
+  await expect(write()).rejects.toThrow("changed while Fleet wrote it");
+  expect(readJson(settingsFile(home))).toEqual({ model: "opus", permissions: { deny: ["Bash(rm:*)"] } });
+  expect(readdirSync(join(home, ".claude"))).toEqual(["settings.json"]);
+});
+
+test("an install that stops after it replaced the binary restarts the proxy on the next run", async () => {
+  const { machine, home, calls } = hubMachine();
+  expect(await cliProxy("install", machine)).toBe(0);
+  const binary = join(dataDir(home), "cli-proxy-api");
+  machine.release = { ...release, version: "9.9.10" };
+  let crash = true;
+  const run = machine.run;
+  machine.run = async (command, options) => {
+    if (command[0] === binary) return { code: 0, stdout: `CLIProxyAPI Version: ${readFileSync(binary, "utf8")}, Commit: x\n`, stderr: "" };
+    if (command[0] === "install") {
+      writeFileSync(command.at(-1)!, "9.9.10");
+      if (crash) return (crash = false), { code: 1, stdout: "", stderr: "killed" };
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    return run(command, options);
+  };
+  await expect(cliProxy("install", machine)).rejects.toThrow();
+  calls.length = 0;
+  expect(await cliProxy("install", machine)).toBe(0);
+  expect(calls).toContain("systemctl --user restart fleet-cli-proxy.service");
 });
