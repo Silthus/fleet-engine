@@ -4,7 +4,7 @@ import { modelFor } from "../../base/lib/models.ts";
 import { optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import type { T3SessionOptions } from "../../base/lib/t3/index.ts";
 import { launchHere, launchOnBox, spawnRun, type Launch, type LaunchRequest, type Run } from "./launch.ts";
-import { manifest, manifestLink, readTokens, serve, slackApi, slackApiBase, type Sleep, type Tokens } from "./slack.ts";
+import { manifest, manifestLink, readSlackApp, readTokens, serve, slackApi, slackApiBase, type SlackApp, type Sleep, type Tokens } from "./slack.ts";
 import { Interrupted, secretReader, type ReadSecret } from "./secret.ts";
 import { handleTrigger, retryPending, triggerOf, type Owner, type TriggerDeps } from "./trigger.ts";
 
@@ -58,43 +58,49 @@ export async function slackTrigger(args: string[], deps: SlackCommandDeps): Prom
   if (mode === "setup") return setUpApp(owner, deps);
   const now = deps.now ?? Date.now;
   const log = (line: string) => deps.print(`${new Date(now()).toISOString()} ${line}`);
-  const tokens = await waitForTokens(deps, log);
-  if (!tokens) return 0;
-  const saved = readFileSync(tokensFile(deps.home), "utf8");
+  const app = await waitForTokens(deps, log);
+  if (!app) return 0;
+  const { tokens, text: saved } = app;
   const replaced = new AbortController();
-  deps.stop?.addEventListener("abort", () => replaced.abort(), { once: true });
+  const stop = deps.stop ? AbortSignal.any([deps.stop, replaced.signal]) : replaced.signal;
   const watchTokens = () => {
     const now = (() => { try { return readFileSync(tokensFile(deps.home), "utf8"); } catch { return ""; } })();
-    if (now === saved || replaced.signal.aborted) return;
+    if (now === saved || stop.aborted) return;
     log("the Slack app changed: stopping, so the service starts again with it");
     replaced.abort();
   };
   const trigger: TriggerDeps = { owner, now, log, slack: slackApi(tokens.userToken, deps.slackBase, deps.sleep), launch: launcher(deps.env, run, deps.t3), statePath: stateFile(deps.home) };
+  const active = new Set<Promise<void>>();
+  const track = (work: Promise<void>, failed: (error: unknown) => void) => {
+    const tracked = work.catch(failed).finally(() => active.delete(tracked));
+    active.add(tracked);
+  };
   const every = deps.every ?? ((work, ms) => { const timer = setInterval(work, ms); return () => clearInterval(timer); });
   const stopRetries = every(() => {
     watchTokens();
-    if (!replaced.signal.aborted) void retryPending(trigger).catch((error) => log(`retry failed: ${error}`));
+    if (!stop.aborted) track(retryPending(trigger), (error) => log(`retry failed: ${error}`));
   }, 60_000);
   try {
     await serve({
-      appToken: tokens.appToken, log, base: deps.slackBase, sleep: deps.sleep, stop: replaced.signal,
+      appToken: tokens.appToken, log, base: deps.slackBase, sleep: deps.sleep, stop,
       onEvent: (event) => {
         const found = triggerOf(event, owner);
-        if (found) void handleTrigger(found, trigger).catch((error) => log(`${found.channel}:${found.ts}: failed: ${error}`));
+        if (found) track(handleTrigger(found, trigger), (error) => log(`${found.channel}:${found.ts}: failed: ${error}`));
       },
     });
   } finally {
     stopRetries();
+    while (active.size) await Promise.all(active);
   }
   return 0;
 }
 
-async function waitForTokens(deps: SlackCommandDeps, log: (line: string) => void): Promise<Tokens | undefined> {
+async function waitForTokens(deps: SlackCommandDeps, log: (line: string) => void): Promise<SlackApp | undefined> {
   const sleep = deps.sleep ?? Bun.sleep;
   let said = "";
   while (!deps.stop?.aborted) {
     try {
-      return readTokens(tokensFile(deps.home));
+      return readSlackApp(tokensFile(deps.home));
     } catch (error) {
       const message = (error as Error).message;
       if (message !== said) log(`waiting for the Slack app: ${message}. Run fleet slack-trigger setup to set it up.`);
@@ -141,7 +147,10 @@ async function walkThrough(owner: Owner, deps: SlackCommandDeps, read: ReadSecre
 }
 
 async function ask(read: ReadSecret, prompt: string, prefix: string, verify: (token: string) => Promise<void>, say: (line: string) => void, entered: string[]): Promise<string> {
-  const redact = (text: string) => entered.reduce((clean, secret) => clean.replaceAll(secret, "…"), text);
+  const redact = (text: string) => {
+    const secrets = [...entered].sort((a, b) => b.length - a.length).map((secret) => secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    return secrets.length ? text.replace(new RegExp(secrets.join("|"), "g"), "…") : text;
+  };
   for (;;) {
     const token = await read(prompt);
     if (token) entered.push(token);

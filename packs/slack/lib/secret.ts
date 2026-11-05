@@ -29,6 +29,7 @@ export function secretReader(input: Keyboard = process.stdin, output: NodeJS.Wri
     waiting = undefined;
     if (input.isTTY) output.write("\n");
     resolve?.(line);
+    settle();
   };
   const settle = () => {
     if (swallowLineFeed && typed.length) {
@@ -36,13 +37,13 @@ export function secretReader(input: Keyboard = process.stdin, output: NodeJS.Wri
       swallowLineFeed = false;
     }
     const stop = typed.indexOf("\x03");
-    const end = typed.findIndex((key) => key === "\r" || key === "\n");
-    if (stop >= 0 && (end < 0 || stop < end)) {
+    if (stop >= 0 && !waiting) {
       typed = [];
-      if (!waiting) return restore(), interrupt();
-      return finish(new Interrupted(), 0);
+      return restore(), interrupt();
     }
     if (!waiting) return;
+    const end = typed.findIndex((key) => key === "\r" || key === "\n");
+    if (stop >= 0 && (end < 0 || stop < end)) return typed = [], finish(new Interrupted(), 0);
     if (typed[0] === "\x04") return finish(new Interrupted(), 1);
     if (end >= 0) return finish(clean(typed.slice(0, end)), end + 1);
     if (ended) finish(typed.length ? clean(typed) : new Interrupted(), typed.length);

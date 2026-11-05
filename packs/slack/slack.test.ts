@@ -215,6 +215,34 @@ describe("fleet slack-trigger run", () => {
     expect(deps.printed.join("\n")).not.toContain("xoxp-test-new-token");
   });
 
+  test("on a new Slack app, finishes the launch it already started before it ends", async () => {
+    const slack = slackStub([{ user: ownerId, ts: "300.1", text: "slow box :t3code:" }]);
+    const home = homeWithTokens();
+    let minute = () => {};
+    let boxAsked = () => {};
+    const asked = new Promise<void>((resolve) => (boxAsked = resolve));
+    let answerBox = () => {};
+    const boxAnswer = new Promise<void>((resolve) => (answerBox = resolve));
+    const fleet = processes((argv) => (argv.slice(1).join(" ") === "box spawn" ? { code: 0, stdout: "box-7 env-box-7\n" } : undefined));
+    const run: Run = async (argv, input) => {
+      if (argv.slice(1, 4).join(" ") !== "box run box-7") return fleet.run(argv, input);
+      boxAsked();
+      await boxAnswer;
+      return { code: 0, stdout: `${JSON.stringify({ threadId: "thread-on-box" })}\n`, stderr: "" };
+    };
+    const deps = commandDeps(home, { slackBase: slack.base, run, every: (work) => ((minute = work), () => {}), env: { FLEET_SETTINGS: settings({ "hub.boxTemplate": "devbox" }), FLEET_MODELS: models, FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
+    const running = slackTrigger(["run"], deps);
+    await slack.connected();
+    slack.send({ type: "message", user: ownerId, channel: "C1", ts: "300.1", text: "slow box :t3code:" });
+    await asked;
+    writeFileSync(join(home, ".config/fleet/slack-app.json"), JSON.stringify({ appToken, userToken: "xoxp-test-new-token" }), { mode: 0o600 });
+    minute();
+    answerBox();
+    expect(await running).toBe(0);
+    expect(slack.method("chat.postEphemeral").map((call) => call.args.text)).toEqual(["Started <https://app.t3.codes/threads/env-box-7/thread-on-box|Slack: slow box> on box-7."]);
+    expect(JSON.parse(readFileSync(join(home, ".local/state/fleet/slack-trigger.json"), "utf8")).pending).toEqual({});
+  });
+
   test("stops while Slack has not yet answered the connection request", async () => {
     let answer = () => {};
     let asked = () => {};

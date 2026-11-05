@@ -7,12 +7,17 @@ export type Sleep = (ms: number) => Promise<void>;
 
 export const slackApiBase = "https://slack.com/api";
 
-export function readTokens(path: string): Tokens {
+export type SlackApp = { tokens: Tokens; text: string };
+
+export function readSlackApp(path: string): SlackApp {
   if ((statSync(path).mode & 0o077) !== 0) throw new Error(`${path} must be readable only by you: chmod 600 ${path}`);
-  const tokens = JSON.parse(readFileSync(path, "utf8")) as Partial<Tokens>;
+  const text = readFileSync(path, "utf8");
+  const tokens = JSON.parse(text) as Partial<Tokens>;
   if (!tokens.appToken?.startsWith("xapp-") || !tokens.userToken?.startsWith("xoxp-")) throw new Error(`${path} needs appToken (xapp-…) and userToken (xoxp-…)`);
-  return tokens as Tokens;
+  return { tokens: tokens as Tokens, text };
 }
+
+export const readTokens = (path: string): Tokens => readSlackApp(path).tokens;
 
 export function slackApi(token: string, base = slackApiBase, sleep: Sleep = Bun.sleep): SlackApi {
   return async (method, args) => {

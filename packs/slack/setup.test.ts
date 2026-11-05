@@ -153,7 +153,7 @@ describe("fleet slack-trigger setup", () => {
     expect(existsSync(tokensPath(home))).toBe(false);
   });
 
-  test("never prints a token that Slack echoes in its error, however often, and also not the token pasted before it", async () => {
+  test("never prints a token that Slack echoes in its error, however often, also not the token pasted before it, nor the end of a token that starts with an earlier one", async () => {
     const server = Bun.serve({
       port: 0,
       async fetch(request) {
@@ -164,7 +164,7 @@ describe("fleet slack-trigger setup", () => {
       },
     });
     stops.push(() => server.stop(true));
-    const answers = [appToken, userToken];
+    const answers = [appToken, "xoxp-test-user", userToken];
     const printed: string[] = [];
     const code = await slackTrigger(["setup"], {
       env: { FLEET_SETTINGS: settings },
@@ -180,8 +180,8 @@ describe("fleet slack-trigger setup", () => {
       },
     });
     expect(code).toBe(130);
-    expect(printed.join("\n")).toContain("Slack did not accept it: auth.test: … is bad, …, and so is …");
-    for (const token of tokens) expect(printed.join("\n")).not.toContain(token);
+    expect(printed.filter((line) => line.includes("Slack did not accept it"))).toEqual(Array(2).fill("   Slack did not accept it: auth.test: … is bad, …, and so is …. Try again."));
+    for (const token of [...tokens, "-token"]) expect(printed.join("\n")).not.toContain(token);
   });
 });
 
@@ -237,6 +237,12 @@ describe("the secret reader", () => {
     await ctrlC;
     expect(interrupted()).toBe(1);
     expect(modes).toEqual([true, false]);
+    const { stream: early, reader: third, ctrlC: stoppedEarly, interrupted: earlyStops } = keyboard(true);
+    early.write("xapp-1\n");
+    await third.read("first: ");
+    early.write("xoxp-typed-ahead\nnext\x03");
+    await stoppedEarly;
+    expect(earlyStops()).toBe(1);
     const { stream: again, modes: kept, reader: second, shown } = keyboard(true);
     again.write("xapp-1\nxoxp-2\n");
     await second.read("first: ");

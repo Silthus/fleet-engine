@@ -65,9 +65,10 @@ runs the trigger:
 The terminal does not show what you paste. Fleet checks each token with Slack,
 and checks that the user token is yours. Then it writes both tokens to
 `~/.config/fleet/slack-app.json`, readable only by you. The trigger starts
-with the file within a minute: it checks the file every minute, and when the
-file changes, it stops, and the service starts it again with the new tokens. `fleet setup --non-interactive` skips this
-step and lists it as still needed.
+with the file within a minute: it checks the file every minute. When the file
+changes, it finishes the launches it already started, stops, and the service
+starts it again with the new tokens. `fleet setup --non-interactive` skips
+this step and lists it as still needed.
 
 `fleet doctor` runs `fleet slack-trigger check`, which checks that the file is
 private and that the user token is yours. `fleet slack-trigger manifest`
