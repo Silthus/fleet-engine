@@ -37,15 +37,14 @@ const containerKey = new RegExp(String.raw`${nameStart}(\\?["'])${secretName}\1\
 
 function containerEnd(text: string, start: number, quote: string): number {
   const escaped = quote.length > 1;
-  const delimiter = quote.at(-1);
   let depth = 0;
-  let inString = false;
+  let openQuote: string | undefined;
   for (let at = start; at < text.length; at++) {
     const char = escaped && text[at] === "\\" ? text[++at] : text[at];
-    if (inString) {
+    if (openQuote) {
       if (char === "\\") at += escaped && text[at + 1] === "\\" ? 2 : 1;
-      else if (char === delimiter) inString = false;
-    } else if (char === delimiter) inString = true;
+      else if (char === openQuote) openQuote = undefined;
+    } else if (char === '"' || char === "'") openQuote = char;
     else if (char === "[" || char === "{") depth++;
     else if ((char === "]" || char === "}") && --depth === 0) return at + 1;
   }

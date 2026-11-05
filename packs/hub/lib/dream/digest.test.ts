@@ -423,6 +423,23 @@ test("recheck finding 2: a number array under a secret name in a failed tool's o
   expect([pin, other].filter((secret) => prompts.join("\n").includes(secret) || stored.includes(secret))).toEqual([]);
 });
 
+test("final recheck: a string inside a secret container ends only at its own quote, so a quote of the other kind cannot end the redaction early", async () => {
+  const home = temp.make("fleet-dream-");
+  const cwd = join(home, "dev/app");
+  const pin = fake("8675", "309");
+  claudeSession(home, cwd, [
+    user(cwd, "Log in", 0),
+    assistant(cwd, [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "login" } }], 1),
+    user(cwd, [{ type: "tool_result", tool_use_id: "t1", is_error: true, content: `failed {'secret': ["]${pin}"], 'next': 1} and {"token": ['"]', '${pin}']}` }], 2),
+  ]);
+  const output = digestLines(home, "devbox-1", now - 86_400_000, now, {});
+  expect(output.includes(pin)).toBe(false);
+  expect(JSON.parse(output).entries.find((entry: { role: string }) => entry.role === "error").text)
+    .toBe(`Bash {"command":"login"} → failed {'secret': '[redacted credential]', 'next': 1} and {"token": "[redacted credential]"}`);
+  const { prompts, stored } = await collectAndAnalyze(home);
+  expect(prompts.join("\n").includes(pin) || stored.includes(pin)).toBe(false);
+});
+
 test("recheck finding 3: token counts that are not a finite, non-negative number become 0 in tokens and effort, so nothing else rides along", async () => {
   const secret = fake("fake", "Token", "88227");
   const malformed: Array<[string, string]> = [["a string", JSON.stringify(`PASSWORD=${secret}`)], ["an object", JSON.stringify({ password: secret })], ["infinity", "1e999"], ["a negative count", "-5"]];
