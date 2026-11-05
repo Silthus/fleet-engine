@@ -395,6 +395,7 @@ check_rerun() {
   expect=$5
   after="$work/$user-after"
   snapshot "$user" >"$after"
+  grep -E '^(bun|claude|codex|t3): ' "$after" | sed "s|$(home_of "$user")|~|g; s/^/   runtime: /"
   code=$(cat "$log.code")
   changes=$(grep -E '^(create|replace|remove) ' "$log" || true)
   case $expect in
