@@ -8,9 +8,9 @@ import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed }
 import { refuseLinks, writePrivateFile, type Fetch } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
 import { isBoxName } from "./names.ts";
-import { must } from "./run.ts";
+import { must, proxyPort } from "./run.ts";
 
-export { proxyUrl };
+export { proxyPort, proxyUrl };
 export type ProxyMode = "plan" | "install" | "doctor" | "connect" | "disconnect" | "check" | "route";
 export type Release = { version: string; url: string; sha256: string };
 export type ProxyMachine = {
@@ -18,7 +18,6 @@ export type ProxyMachine = {
   sleep(ms: number): Promise<void>; readStdin(): Promise<string>; randomKey(): string; print(line: string): void;
 };
 
-export const proxyPort = 8317;
 export const keyPath = (home: string) => join(home, ".config/fleet/cli-proxy.key");
 export const keyHelper = 'cat "$HOME/.config/fleet/cli-proxy.key"';
 const marker = "# Managed by Fleet CLI proxy.";
@@ -26,10 +25,11 @@ const what = "CLI proxy";
 const service = "fleet-cli-proxy.service";
 const keyPattern = /^([0-9a-f]{64})\n?$/;
 const address = `127.0.0.1:${proxyPort}`;
+const answerTries = 20;
 
 function layout(home: string) {
   const dir = proxyDir(home);
-  return { dir, binary: join(dir, "cli-proxy-api"), config: join(dir, "config.yaml"), auth: join(dir, "auth"), management: managementFile(home), unit: join(home, ".config/systemd/user", service), key: keyPath(home) };
+  return { dir, binary: join(dir, "cli-proxy-api"), config: join(dir, "config.yaml"), auth: join(dir, "auth"), management: managementFile(home), unit: join(home, ".config/systemd/user", service), key: keyPath(home), restart: join(dir, "restart-pending") };
 }
 type Layout = ReturnType<typeof layout>;
 const loginCommand = (paths: Layout) => `${paths.binary} -config ${paths.config} -claude-login -no-browser`;
@@ -83,7 +83,12 @@ async function ensureBinary(machine: ProxyMachine, paths: Layout): Promise<boole
   return true;
 }
 
+async function refuseLinkedLayout(home: string, paths: Layout): Promise<void> {
+  for (const path of [paths.auth, paths.binary, paths.config, paths.management, paths.restart, paths.unit, paths.key]) await refuseLinks(home, path, `${what} path`);
+}
+
 async function install(machine: ProxyMachine, paths: Layout): Promise<void> {
+  await refuseLinkedLayout(machine.home, paths);
   const savedClient = await readSecret(machine.home, paths.key, keyPattern);
   const savedManagement = await readSecret(machine.home, paths.management, managementPattern);
   const key = savedClient ?? machine.randomKey();
@@ -93,18 +98,21 @@ async function install(machine: ProxyMachine, paths: Layout): Promise<void> {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await chmod(dir, 0o700);
   }
-  const fresh = await ensureBinary(machine, paths);
+  if (changed.length || !savedManagement) await writePrivateFile(paths.restart, "\n");
+  if (await ensureBinary(machine, paths)) await writePrivateFile(paths.restart, "\n");
   if (!savedClient) await writePrivateFile(paths.key, `${key}\n`);
   if (!savedManagement) await writePrivateFile(paths.management, `MANAGEMENT_PASSWORD=${managementKey}\n`);
   await writeFiles(changed);
   await must(machine.run, ["sudo", "-n", "loginctl", "enable-linger", machine.user]);
   const systemctl = (...args: string[]) => must(machine.run, ["systemctl", "--user", ...args]);
   await systemctl("daemon-reload");
-  if (changed.length || fresh || !savedManagement) await systemctl("restart", service);
+  if ((await readIfThere(paths.restart)) !== undefined) await systemctl("restart", service);
+  await rm(paths.restart, { force: true });
   await systemctl("enable", "--now", service);
 }
 
 async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
+  await refuseLinkedLayout(machine.home, paths);
   const key = await readSecret(machine.home, paths.key, keyPattern);
   if (!key) throw new Error(`${paths.key} holds no proxy key. Run fleet cli-proxy install.`);
   const managementKey = await readManagementKey(machine.home);
@@ -127,12 +135,23 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
   for (const devbox of machine.devboxes.filter((name) => !isBoxName(name))) machine.print(`Connect ${devbox}: ssh ${devbox} ${quote(remoteFleet("cli-proxy connect"))} < ~/.config/fleet/cli-proxy.key`);
 }
 
+const silent = `The proxy at ${proxyUrl} does not answer.`;
+
 async function probe(fetch: Fetch, key: string): Promise<string | undefined> {
   const response = await fetch(`${proxyUrl}/v1/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000) }).catch(() => undefined);
-  if (!response) return `The proxy at ${proxyUrl} does not answer.`;
+  if (!response) return silent;
   if (!response.ok) return `The proxy at ${proxyUrl} refuses this machine's key (HTTP ${response.status}).`;
   const models = ((await response.json().catch(() => ({}))) as { data?: Array<{ id?: string }> }).data ?? [];
   return models.some((model) => model.id?.includes("claude")) ? undefined : `The proxy at ${proxyUrl} lists no Claude model. On the hub, run fleet cli-proxy doctor.`;
+}
+
+async function answered(machine: ProxyMachine, key: string): Promise<string | undefined> {
+  let reason = await probe(machine.fetch, key);
+  for (let attempt = 1; attempt < answerTries && reason === silent; attempt++) {
+    await machine.sleep(1000);
+    reason = await probe(machine.fetch, key);
+  }
+  return reason;
 }
 
 type Settings = Record<string, unknown> & { env?: Record<string, unknown> };
@@ -180,13 +199,13 @@ async function connect(machine: ProxyMachine): Promise<void> {
   if (readRole(machine.home) === "hub") throw new Error("The hub has its own key. Run fleet cli-proxy install there.");
   const key = (await machine.readStdin()).trim();
   if (!keyPattern.test(key)) throw new Error("Pass the proxy key from the hub on standard input: 64 hexadecimal characters.");
-  const write = (await claudeRoute(machine.home, true))!;
-  const reason = await probe(machine.fetch, key);
+  await claudeRoute(machine.home, true);
+  const reason = await answered(machine, key);
   if (reason) throw new Error(`${reason} Nothing changed.`);
   await refuseLinks(machine.home, keyPath(machine.home), `${what} path`);
   await mkdir(dirname(keyPath(machine.home)), { recursive: true, mode: 0o700 });
   await writePrivateFile(keyPath(machine.home), `${key}\n`);
-  await write();
+  await sendClaude(machine.home, true);
   machine.print(`Claude Code uses your own-account proxy at ${proxyUrl} now. Restart open Claude Code sessions.`);
 }
 

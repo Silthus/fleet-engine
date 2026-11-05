@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { cliProxy, keyHelper, proxyUrl, type ProxyMachine } from "./cli-proxy.ts";
@@ -250,4 +250,70 @@ test("a linked Claude settings file stops connect and the switch", async () => {
   rmSync(settingsFile(home));
   symlinkSync(real, settingsFile(home));
   await expect(cliProxy("check", machine)).rejects.toThrow("Keep linked Claude settings path");
+});
+
+test("install refuses a linked auth folder or binary before it changes modes or runs anything", async () => {
+  const auth = hubMachine();
+  const outside = temp.make("elsewhere-");
+  chmodSync(outside, 0o755);
+  mkdirSync(dataDir(auth.home), { recursive: true });
+  symlinkSync(outside, join(dataDir(auth.home), "auth"));
+  await expect(cliProxy("install", auth.machine)).rejects.toThrow("Keep linked CLI proxy path");
+  expect(modeOf(statSync(outside))).toBe("755");
+  expect(auth.calls).toEqual([]);
+
+  const binary = hubMachine();
+  mkdirSync(dataDir(binary.home), { recursive: true });
+  symlinkSync(join(outside, "tool"), join(dataDir(binary.home), "cli-proxy-api"));
+  await expect(cliProxy("install", binary.machine)).rejects.toThrow("Keep linked CLI proxy path");
+  expect(binary.calls).toEqual([]);
+});
+
+test("install that fails after it writes a new management key restarts the proxy on the next run", async () => {
+  let linger = 1;
+  const { machine, home, calls } = hubMachine();
+  const run = machine.run;
+  machine.run = async (command, options) => (command[0] === "sudo" && linger-- > 0 ? { code: 1, stdout: "", stderr: "no sudo" } : run(command, options));
+  await expect(cliProxy("install", machine)).rejects.toThrow();
+  expect(existsSync(join(dataDir(home), "management.env"))).toBe(true);
+  calls.length = 0;
+  expect(await cliProxy("install", machine)).toBe(0);
+  expect(calls).toContain("systemctl --user restart fleet-cli-proxy.service");
+  calls.length = 0;
+  expect(await cliProxy("install", machine)).toBe(0);
+  expect(calls).not.toContain("systemctl --user restart fleet-cli-proxy.service");
+});
+
+test("connect keeps Claude settings that change while it checks the proxy", async () => {
+  const { machine, home } = client();
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(settingsFile(home), JSON.stringify({ model: "opus" }));
+  const fetch = machine.fetch;
+  machine.fetch = async (input, init) => {
+    writeFileSync(settingsFile(home), JSON.stringify({ model: "opus", permissions: { deny: ["Bash(rm:*)"] }, env: { MY_FLAG: "2" } }));
+    return fetch(input, init);
+  };
+  expect(await cliProxy("connect", machine)).toBe(0);
+  expect(readJson(settingsFile(home))).toEqual({ model: "opus", permissions: { deny: ["Bash(rm:*)"] }, env: { MY_FLAG: "2", ANTHROPIC_BASE_URL: proxyUrl }, apiKeyHelper: keyHelper });
+});
+
+test("connect waits for a forward that is still coming up, and gives up after a while", async () => {
+  let refused = 3;
+  const late = client();
+  const fetch = late.machine.fetch;
+  let slept = 0;
+  late.machine.sleep = async () => void slept++;
+  late.machine.fetch = async (input, init) => (refused-- > 0 ? Promise.reject(new TypeError("connection refused")) : fetch(input, init));
+  expect(await cliProxy("connect", late.machine)).toBe(0);
+  expect(slept).toBe(3);
+  expect(readFileSync(keyFile(late.home), "utf8")).toBe(`${clientKey}\n`);
+
+  const never = client({}, { down: true });
+  await expect(cliProxy("connect", never.machine)).rejects.toThrow("Nothing changed");
+  expect(never.requests.length).toBeGreaterThan(1);
+  expect(never.requests.length).toBeLessThanOrEqual(30);
+
+  const refusedKey = client({ readStdin: async () => `${otherKey}\n` });
+  await expect(cliProxy("connect", refusedKey.machine)).rejects.toThrow("refuses this machine's key");
+  expect(refusedKey.requests).toHaveLength(1);
 });

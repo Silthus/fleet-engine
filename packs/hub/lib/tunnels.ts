@@ -1,12 +1,11 @@
 import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { proxyPort } from "./cli-proxy.ts";
 import { changedFiles, ownedBy, readIfThere, requireInstalled, writeFiles } from "./managed.ts";
 import { peersOf, readRole } from "./machine.ts";
 import { gatewayPort, refuseLinks } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
 import { isBoxName, sshName } from "./names.ts";
-import { hostPattern, must, relayPortOf } from "./run.ts";
+import { hostPattern, must, proxyPort, relayPortOf } from "./run.ts";
 
 export type TunnelMode = "plan" | "install" | "doctor";
 export type TunnelMachine = { home: string; devboxes: string[]; relayPort: number; httpsHost?: string; proxy?: boolean; hosts: string; run: Run; print(line: string): void };

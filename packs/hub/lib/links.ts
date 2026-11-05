@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tryLockBox } from "./box-lock.ts";
 import { boxPrefix, slugFor, type Coder, type Result } from "./coder.ts";
-import { proxyPort } from "./cli-proxy.ts";
+import { proxyPort, relayPortOf } from "./run.ts";
 import { quote, remoteFleet, type Machine, type PeerLinkInput, type PeerMachine } from "./machine.ts";
 import { GatewayClientError, gatewayPort, localGatewayUrl, readGatewayClient, writePrivateFile, type GatewaySettings } from "./mcphub/client.ts";
 import { isBoxName } from "./names.ts";
@@ -105,7 +105,7 @@ export async function stopUnit(here: Pick<Machine, "run">, unit: string): Promis
 }
 
 const reverse = (port: number) => ["-R", `${port}:127.0.0.1:${port}`];
-export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", ...reverse(here.settings.relayPort), ...reverse(gatewayPort), ...(here.settings.proxy ? reverse(proxyPort) : []), box, "--", "sleep infinity"];
+export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", ...reverse(relayPortOf(here.settings.relayPort)), ...reverse(gatewayPort), ...(here.settings.proxy ? reverse(proxyPort) : []), box, "--", "sleep infinity"];
 const t3Forward = (box: string, port: number) => ["port-forward", "--disable-autostart", box, "--tcp", `${port}:${t3Port}`];
 
 async function environmentAt(here: Linker, url: string): Promise<string> {

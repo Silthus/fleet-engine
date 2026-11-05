@@ -18,7 +18,9 @@ export async function must(run: Run, command: string[], input?: string): Promise
 
 export const hostPattern = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
 
+export const proxyPort = 8317;
+
 export function relayPortOf(port: number): number {
-  if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === gatewayPort) throw new Error(`hub.relayPort must be a port from 1024 to 65535 other than ${gatewayPort}, not ${port}.`);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === gatewayPort || port === proxyPort) throw new Error(`hub.relayPort must be a port from 1024 to 65535 other than ${gatewayPort} and ${proxyPort}, not ${port}.`);
   return port;
 }
