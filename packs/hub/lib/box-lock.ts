@@ -61,6 +61,15 @@ export async function lockBox(home: string, box: string, { waitMs, waiting }: Lo
   return Object.assign(() => closeSync(fd), { during: <T>(step: () => Promise<T>) => held.run([...heldLocks(), fd], step) });
 }
 
+export async function tryLockBox(home: string, box: string): Promise<HeldLock | undefined> {
+  try {
+    return await lockBox(home, box, { waitMs: 0 });
+  } catch (error) {
+    if (error instanceof BoxBusy) return undefined;
+    throw error;
+  }
+}
+
 export async function withBoxLock<T>(home: string, box: string, options: LockOptions, step: () => Promise<T>): Promise<T> {
   const unlock = await lockBox(home, box, options);
   try {

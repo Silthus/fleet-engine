@@ -2,8 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { boxNameFor, handOver, link, restoreForwards, startUnit, unlink } from "./links.ts";
-import { fakeCoder, fakeMachine, linkedHere, ok, writeHome } from "./testing.ts";
+import { boxNameFor, handOver, hubForward, link, restoreForwards, startUnit, unlink } from "./links.ts";
+import { readBoxSettings } from "./machine.ts";
+import { boxSettings, fakeCoder, fakeMachine, linkedHere, ok, writeHome } from "./testing.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -54,13 +55,13 @@ test("link gives up after a minute on the injected clock when the box's T3 never
 
 test("handing over sends the gateway client, the Claude token, and the GitHub login on stdin only, installed with umask 077", async () => {
   const home = temp.make("fleet-box-");
-  writeHome(home, { ".config/fleet/mcphub.client.json": "secret gateway\n", ".config/fleet/box-claude-token": "secret claude\n" });
+  writeHome(home, { ".config/fleet/mcphub.client.json": JSON.stringify({ baseUrl: "http://127.0.0.1:3317/mcphub", token: "secretgateway" }), ".config/fleet/box-claude-token": "secret claude\n" });
   const { machine } = fakeMachine(home, { run: async (argv) => (argv[0] === "gh" ? { ...ok, stdout: "gho_secret\n" } : ok) });
   const { coder, calls } = fakeCoder();
   await handOver(coder, machine, "box-lane");
   expect(calls.map((call) => call.command).join("\n")).not.toMatch(/secret/);
-  expect(calls.find((call) => call.stdin === "secret gateway\n")?.command).toContain("umask 077");
-  expect(calls.find((call) => call.stdin === "secret gateway\n")?.command).toContain("~/.config/fleet/mcphub.client.json");
+  expect(calls.find((call) => call.stdin?.includes("secretgateway"))?.command).toContain("umask 077");
+  expect(calls.find((call) => call.stdin?.includes("secretgateway"))?.command).toContain("~/.config/fleet/mcphub.client.json");
   expect(calls.find((call) => call.stdin === "secret claude\n")?.command).toContain("~/.config/fleet/box-claude-token");
   expect(calls.find((call) => call.stdin === "gho_secret\n")?.command).toContain("gh auth login --with-token");
 });
@@ -132,4 +133,51 @@ test("a forward service gets the Coder session the commands resolved, from the e
   const ran = Bun.spawnSync([...service.slice(service.indexOf("sh"))], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
   expect(ran.exitCode).toBe(0);
   expect(readFileSync(seen, "utf8")).toBe("env-secret https://env.example.com");
+});
+
+const withSettings = (extra: Record<string, unknown>) => readBoxSettings({ FLEET_SETTINGS: JSON.stringify({ ...boxSettings, ...extra }) });
+const gatewayRoute = "'-R' '3317:127.0.0.1:3317'";
+
+test("round 6, finding 1: the box gets the hub's gateway key at an address it reaches: the HTTPS address with hub.httpsHost, or its own loopback, which the hub forward carries to the hub's gateway", async () => {
+  for (const [extra, baseUrl, routed] of [[{ "hub.httpsHost": "hub.internal.example.com" }, "https://hub.internal.example.com:60001/mcphub", false], [{}, "http://127.0.0.1:3317/mcphub", true]] as const) {
+    const home = temp.make("fleet-box-");
+    writeHome(home, { ".config/fleet/mcphub.client.json": JSON.stringify({ baseUrl: "http://127.0.0.1:3317/mcphub", token: "hubkey" }) });
+    const { machine } = fakeMachine(home, { settings: withSettings(extra), run: async () => ({ ...ok, code: 1 }) });
+    const { coder, calls } = fakeCoder();
+    await handOver(coder, machine, "box-lane");
+    const sent = calls.find((call) => call.command.includes("~/.config/fleet/mcphub.client.json"));
+    expect(JSON.parse(sent?.stdin ?? "{}")).toEqual({ baseUrl, token: "hubkey" });
+    const forward = hubForward(machine, "box-lane").map((arg) => `'${arg}'`).join(" ");
+    expect(forward).toContain("'-R' '60001:127.0.0.1:60001'");
+    expect(forward.includes(gatewayRoute)).toBe(routed);
+  }
+});
+
+test("round 6, finding 1: the hub's restore brings back the hub forward, with its gateway route, of each box a lane holds, and never of a pooled box or on a devbox", async () => {
+  const home = temp.make("fleet-box-");
+  writeHome(home, { ".config/fleet/box-pool.json": JSON.stringify({ free: ["box-pooled"], boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1" }, "box-pooled": { id: "ws-box-pooled" } } }) });
+  for (const isHub of [true, false]) {
+    const started: string[] = [];
+    const { machine } = fakeMachine(home, {
+      isHub,
+      run: async (argv) => {
+        if (argv[2] === "is-active") return { ...ok, code: 3 };
+        if (argv[0] === "systemd-run") started.push(`${argv[3]} ${argv.at(-1)}`);
+        return ok;
+      },
+    });
+    expect(await restoreForwards({ binary: async () => "coder", env: {} }, machine)).toBe(0);
+    expect(started.map((line) => line.split(" ")[0])).toEqual(isHub ? ["--unit=fleet-box-box-lane-hub"] : []);
+    if (isHub) expect(started[0]).toContain(gatewayRoute);
+  }
+});
+
+test("round 6, finding 1: a hub gateway file that is not a key from the hub is not handed over, and the handover says why", async () => {
+  const home = temp.make("fleet-box-");
+  writeHome(home, { ".config/fleet/mcphub.client.json": JSON.stringify({ baseUrl: "http://elsewhere.example.com/mcphub", token: "hubkey" }) });
+  const { machine, lines } = fakeMachine(home, { run: async () => ({ ...ok, code: 1 }) });
+  const { coder, calls } = fakeCoder();
+  expect(await handOver(coder, machine, "box-lane")).toBe(false);
+  expect(calls.some((call) => call.command.includes("mcphub.client.json"))).toBe(false);
+  expect(lines[0]).toStartWith("skip the MCP gateway key: ~/.config/fleet/mcphub.client.json is not a key from your hub.");
 });

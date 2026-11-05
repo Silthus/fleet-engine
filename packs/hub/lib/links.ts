@@ -1,7 +1,10 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { tryLockBox } from "./box-lock.ts";
 import { boxPrefix, slugFor, type Coder } from "./coder.ts";
 import { quote, type Machine } from "./machine.ts";
+import { devboxGatewayUrl, GatewayClientError, gatewayPort, readGatewayClient, type GatewaySettings } from "./mcphub/client.ts";
+import { poolFile, recorded } from "./pool.ts";
 
 export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
 type Link = { environmentId: string; port: number };
@@ -9,7 +12,7 @@ type Link = { environmentId: string; port: number };
 export const t3Port = 3773;
 const answerLimitMs = 60_000;
 export const claudeTokenPath = ".config/fleet/box-claude-token";
-const handedOver = [".config/fleet/mcphub.client.json", claudeTokenPath];
+const gatewayClientPath = ".config/fleet/mcphub.client.json";
 
 const t3Of = (here: Machine) => join(here.home, ".local/bin/t3");
 export const linkFile = (here: Machine, box: string) => join(here.home, ".config/fleet/boxes", `${box}.json`);
@@ -28,18 +31,38 @@ export async function writeOnBox(coder: Pick<Coder, "ssh">, box: string, path: s
   if (written.code !== 0) throw new Error(`Cannot write ~/${path} on ${box}: ${written.stderr.trim()}`);
 }
 
-export async function handOver(coder: Pick<Coder, "ssh">, here: Machine, box: string): Promise<void> {
-  for (const path of handedOver) {
-    const source = join(here.home, path);
-    if (existsSync(source)) await writeOnBox(coder, box, path, readFileSync(source, "utf8"));
-    else here.say(`skip ~/${path}: this machine has none`);
+export const gatewayOf = (here: Machine): GatewaySettings => ({ relayPort: here.settings.relayPort, ...(here.settings.httpsHost ? { httpsHost: here.settings.httpsHost } : {}) });
+
+async function handOverGateway(coder: Pick<Coder, "ssh">, here: Machine, box: string): Promise<boolean> {
+  const gateway = gatewayOf(here);
+  let client;
+  try {
+    client = await readGatewayClient(here.home, gateway);
+  } catch (error) {
+    if (!(error instanceof GatewayClientError)) throw error;
+    return here.say(`skip the MCP gateway key: ${error.message}`), false;
   }
+  if (!client) return here.say(`skip ~/${gatewayClientPath}: this machine has none`), false;
+  await writeOnBox(coder, box, gatewayClientPath, `${JSON.stringify({ baseUrl: devboxGatewayUrl(gateway), token: client.token })}\n`);
+  return true;
+}
+
+async function handOverGitHub(coder: Pick<Coder, "ssh">, here: Machine, box: string): Promise<void> {
   const hosts = join(here.home, ".config/gh/hosts.yml");
   if (existsSync(hosts) && readFileSync(hosts, "utf8").includes("oauth_token:")) return await writeOnBox(coder, box, ".config/gh/hosts.yml", readFileSync(hosts, "utf8"));
   const token = await here.run(["gh", "auth", "token"]);
   if (token.code !== 0) return here.say("skip the GitHub CLI login: gh is not logged in here");
   const login = await coder.ssh(box, "gh auth login --with-token -h github.com && gh config set -h github.com git_protocol ssh", token.stdout);
   if (login.code !== 0) throw new Error(`Cannot log in the GitHub CLI on ${box}: ${login.stderr.trim()}`);
+}
+
+export async function handOver(coder: Pick<Coder, "ssh">, here: Machine, box: string): Promise<boolean> {
+  const gateway = await handOverGateway(coder, here, box);
+  const token = join(here.home, claudeTokenPath);
+  if (existsSync(token)) await writeOnBox(coder, box, claudeTokenPath, readFileSync(token, "utf8"));
+  else here.say(`skip ~/${claudeTokenPath}: this machine has none`);
+  await handOverGitHub(coder, here, box);
+  return gateway;
 }
 
 function writeSession(here: Machine, env: Coder["env"]): string {
@@ -63,7 +86,8 @@ export async function stopUnit(here: Machine, unit: string): Promise<void> {
   await here.run(["systemctl", "--user", "stop", `${unit}.service`]);
 }
 
-export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", "-R", `${here.settings.relayPort}:127.0.0.1:${here.settings.relayPort}`, box, "--", "sleep infinity"];
+const reverse = (port: number) => ["-R", `${port}:127.0.0.1:${port}`];
+export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", ...reverse(here.settings.relayPort), ...(here.settings.httpsHost ? [] : reverse(gatewayPort)), box, "--", "sleep infinity"];
 const t3Forward = (box: string, port: number) => ["port-forward", "--disable-autostart", box, "--tcp", `${port}:${t3Port}`];
 
 async function environmentAt(here: Machine, url: string): Promise<string> {
@@ -119,18 +143,55 @@ export function recordedEnvironment(here: Machine, box: string): string {
   return (JSON.parse(readFileSync(linkFile(here, box), "utf8")) as Link).environmentId;
 }
 
-export async function restoreForwards(coder: Pick<Coder, "binary" | "env">, here: Machine): Promise<number> {
+function laneHolds(here: Machine, box: string): boolean {
+  const entry = recorded(poolFile(here.home))[box];
+  return entry?.claim !== undefined && !entry.claiming && !entry.leaving;
+}
+
+async function revive(coder: Pick<Coder, "binary" | "env">, here: Machine, unit: string, forward: () => [string[], string]): Promise<boolean> {
+  if ((await here.run(["systemctl", "--user", "is-active", "--quiet", `${unit}.service`])).code === 0) return true;
+  try {
+    const [args, said] = forward();
+    await startUnit(coder, here, unit, args);
+    here.say(said);
+    return true;
+  } catch (error) {
+    here.say((error as Error).message);
+    return false;
+  }
+}
+
+export async function restoreForward(coder: Pick<Coder, "binary" | "env">, here: Machine, box: string): Promise<boolean> {
+  const record = linkFile(here, box);
+  const hub = !here.isHub || !laneHolds(here, box) || (await revive(coder, here, unitOf(box, "hub"), () => [hubForward(here, box), `restored the hub forward to ${box}`]));
+  const t3 = !existsSync(record) || (await revive(coder, here, unitOf(box, "t3"), () => {
+    const { port } = JSON.parse(readFileSync(record, "utf8")) as Link;
+    return [t3Forward(box, port), `restored the T3 forward to ${box} on port ${port}`];
+  }));
+  return hub && t3;
+}
+
+function restorable(here: Machine): string[] {
   const directory = join(here.home, ".config/fleet/boxes");
-  const recorded = existsSync(directory) ? readdirSync(directory).filter((file) => file.endsWith(".json")).sort() : [];
+  const linked = existsSync(directory) ? readdirSync(directory).filter((file) => file.endsWith(".json")).map((file) => file.slice(0, -".json".length)) : [];
+  const held = here.isHub ? Object.keys(recorded(poolFile(here.home))).filter((box) => laneHolds(here, box)) : [];
+  return [...new Set([...linked, ...held])].sort();
+}
+
+export async function restoreForwards(coder: Pick<Coder, "binary" | "env">, here: Machine): Promise<number> {
   let failed = 0;
-  for (const file of recorded) {
-    const box = file.slice(0, -".json".length);
-    const unit = unitOf(box, "t3");
-    if ((await here.run(["systemctl", "--user", "is-active", "--quiet", `${unit}.service`])).code === 0) continue;
+  for (const box of restorable(here)) {
     try {
-      const { port } = JSON.parse(readFileSync(join(directory, file), "utf8")) as Link;
-      await startUnit(coder, here, unit, t3Forward(box, port));
-      here.say(`restored the T3 forward to ${box} on port ${port}`);
+      const unlock = await tryLockBox(here.home, box);
+      if (!unlock) {
+        here.say(`${box}: another operation holds it; skipped`);
+        continue;
+      }
+      try {
+        if (!(await unlock.during(() => restoreForward(coder, here, box)))) failed = 1;
+      } finally {
+        unlock();
+      }
     } catch (error) {
       failed = 1;
       here.say((error as Error).message);

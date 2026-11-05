@@ -6,7 +6,8 @@ export type GatewayClient = { baseUrl: string; token: string };
 export type GatewaySettings = { httpsHost?: string; relayPort: number };
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-export const localGatewayUrl = "http://127.0.0.1:3317/mcphub";
+export const gatewayPort = 3317;
+export const localGatewayUrl = `http://127.0.0.1:${gatewayPort}/mcphub`;
 export const gatewayGroup = "fleet";
 export const grantHint = "On the hub, run: fleet mcphub grant <this machine's SSH name>";
 const invalidClient = `~/.config/fleet/mcphub.client.json is not a key from your hub. ${grantHint}`;

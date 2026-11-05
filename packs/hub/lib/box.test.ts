@@ -1,13 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { claimScript, isIdle, nightly, nightlySteps, recycleScript, refreshPool, release, saveToken, setUpScript, spawn, startBox, sweep, unfinishedThreads } from "./box.ts";
 import { boxCommand, type BoxDeps } from "./box-command.ts";
 import { BoxBusy, lockBox } from "./box-lock.ts";
 import type { Box } from "./coder.ts";
-import { link } from "./links.ts";
+import { link, restoreForwards } from "./links.ts";
 import type { Machine } from "./machine.ts";
 import { poolFile, pooled } from "./pool.ts";
 import { box, fakeCoder, fakeMachine, linkedHere, ok, registryOf, start, stubBin, writeHome, writePool } from "./testing.ts";
@@ -912,8 +912,9 @@ test("round 4, finding 4: there is no lease to expire, so a sweep whose idle che
 });
 
 const claimedAt = "at 2026-10-31T23:00:00.000Z";
+const readsClaim = (command: string) => command.includes("box-claim") && !command.includes("printf");
 const resumedLane = (claimOnBox: Record<string, string>, failing: Record<string, number> = {}) => async (name: string, command: string) => {
-  if (command.startsWith("cat ")) return { ...ok, code: failing[name] ?? 0, stdout: claimOnBox[name] ? `${claimOnBox[name]}\n` : "" };
+  if (readsClaim(command)) return { ...ok, code: failing[name] ?? 0, stdout: claimOnBox[name] ? `${claimOnBox[name]}\n` : "" };
   if (command.includes("box idle")) return { ...ok, code: 1, stdout: "busy\n" };
   if (command.includes("box threads")) return { ...ok, stdout: "Resumed lane (runs)\n" };
   return ok;
@@ -1039,4 +1040,193 @@ test("the sweep skips a box another operation holds, and repairs each state a cr
     "box-free: in the pool but running; stopped",
     "box-gone: the box the pool made is gone; forgot it",
   ]);
+});
+
+const hubKey = JSON.stringify({ baseUrl: "http://127.0.0.1:3317/mcphub", token: "hubkey" });
+
+test("round 6, finding 1: a spawn checks the handed-over gateway key from the box before it reports success, and a failed check is a warning, not a failed spawn", async () => {
+  for (const code of [0, 1]) {
+    const home = hubHome();
+    writeHome(home, { ".config/fleet/mcphub.client.json": hubKey });
+    const { machine, lines, calls } = onHub(home);
+    const spawned = spawnCoder(0);
+    const ssh = spawned.coder.ssh;
+    spawned.coder.ssh = async (name, command, stdin) => {
+      if (!command.includes("mcphub check")) return ssh(name, command, stdin);
+      spawned.calls.push({ box: name, command });
+      return { ...ok, code, stderr: code ? "The MCP gateway at http://127.0.0.1:3317/mcphub does not answer. On the hub, run: fleet mcphub doctor\n" : "" };
+    };
+    expect(await spawn(spawned.coder, machine, "lane")).toBe(0);
+    const commands = spawned.calls.map((call) => call.command);
+    expect(commands.findIndex((command) => command.includes("mcphub check"))).toBeGreaterThan(commands.findIndex((command) => command.includes("mcphub.client.json")));
+    expect(calls.some((call) => call.includes("'-R' '3317:127.0.0.1:3317'"))).toBe(true);
+    expect(lines.at(-1)).toBe("box-lane env-box");
+    expect(lines.filter((line) => line.includes("MCP gateway"))).toEqual(code ? ["box-lane cannot reach the hub's MCP gateway yet (The MCP gateway at http://127.0.0.1:3317/mcphub does not answer. On the hub, run: fleet mcphub doctor). Check it with fleet box run box-lane -- fleet mcphub check"] : []);
+  }
+});
+
+test("round 6, finding 1: fleet box start brings back the box's hub forward with its gateway route, and restores the T3 forward of that box only", async () => {
+  const home = hubHome();
+  writePool(home, { free: ["box-lane"], boxes: { "box-lane": { id: "ws-box-lane" } } });
+  linkedHere(home);
+  writeHome(home, { ".config/fleet/boxes/box-other.json": JSON.stringify({ environmentId: "env-2", port: 22000 }) });
+  const started: string[] = [];
+  const { machine } = onHub(home, {
+    run: async (argv) => {
+      if (argv[2] === "is-active") return { ...ok, code: 3 };
+      if (argv[0] === "systemd-run") started.push(`${argv[3]} ${argv.at(-1)}`);
+      return ok;
+    },
+  });
+  const { coder } = fakeCoder({}, [box("box-lane", "stopped"), box("box-other", "stopped")]);
+  expect(await startBox(coder, machine, "box-lane", noWait)).toBe(0);
+  expect(started.map((line) => line.split(" ")[0])).toEqual(["--unit=fleet-box-box-lane-hub", "--unit=fleet-box-box-lane-t3"]);
+  expect(started[0]).toContain("'-R' '3317:127.0.0.1:3317'");
+  expect(started[1]).toContain("'21000:3773'");
+});
+
+const onBoxShell = (homes: Record<string, string>, bin = "/nonexistent") => (name: string, command: string) => {
+  const ran = Bun.spawnSync(["sh", "-c", command], { env: { HOME: homes[name]!, PATH: `${bin}:/usr/bin:/bin` }, stdout: "pipe", stderr: "pipe" });
+  return { code: ran.exitCode, stdout: ran.stdout.toString(), stderr: ran.stderr.toString() };
+};
+
+test("round 6, finding 2: the sweep keeps a box with a stale claiming mark whose claim file it cannot read, and says why, while a box with no claim file goes back to the pool", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-locked": { id: "ws-box-locked", claim: "c-1", claiming: true }, "box-empty": { id: "ws-box-empty", claim: "c-2", claiming: true } } });
+  const homes = { "box-locked": temp.make("fleet-onbox-"), "box-empty": temp.make("fleet-onbox-") };
+  writeHome(homes["box-locked"], { ".config/fleet/box-claim": `c-1 lane by devbox-1 ${claimedAt}\n` });
+  chmodSync(join(homes["box-locked"], ".config/fleet/box-claim"), 0o000);
+  const shell = onBoxShell(homes);
+  const { machine, lines } = onHub(home);
+  const fake = fakeCoder({
+    ssh: async (name, command) => {
+      if (readsClaim(command)) return shell(name, command);
+      if (command.includes("box threads")) return { ...ok, stdout: "Running lane (runs)\n" };
+      if (command.includes("box idle")) return { ...ok, code: 1, stdout: "busy\n" };
+      return ok;
+    },
+  }, [box("box-locked"), box("box-empty")]);
+  expect(await sweep(fake.coder, machine)).toBe(0);
+  expect(fake.done).toEqual(["stop box-empty"]);
+  expect(registryOf(home)).toEqual({ free: ["box-empty"], boxes: { "box-locked": { id: "ws-box-locked", claim: "c-1", claiming: true }, "box-empty": { id: "ws-box-empty" } } });
+  const kept = lines.find((line) => line.startsWith("box-locked:"));
+  expect(kept).toStartWith("box-locked: an operation stopped half way, and the box did not show its claim (exit 1: ");
+  expect(kept).toContain("Permission denied");
+  expect(kept).toEndWith("; kept");
+});
+
+test("round 6, finding 3: fleet box start holds the box through its last forward step, so a release and a replacement spawn wait, and the link record and the forward agree", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1" } } });
+  linkedHere(home);
+  const fake = fakeCoder({ ssh: async (_name, command) => ({ ...ok, stdout: command.includes("t3 pair") ? "pair-code\n" : "" }) }, [box("box-lane", "stopped")]);
+  const meanwhile: unknown[] = [];
+  const services: string[] = [];
+  let interleaved = false;
+  const { machine } = onHub(home, {
+    peers: [],
+    freePort: () => 22000,
+    run: async (argv) => {
+      if (argv[2] === "is-active") return { ...ok, code: 3 };
+      if (argv[2] === "stop" && argv[3] === "fleet-box-box-lane-t3.service" && !interleaved) {
+        interleaved = true;
+        meanwhile.push(await release(fake.coder, machine, "box-lane", { force: true, recycle: false, waitMs: 0 }).catch((error) => error));
+        meanwhile.push(await spawn(fake.coder, machine, "lane", { reuse: false, waitMs: 0 }).catch((error) => error));
+      }
+      if (argv[0] === "systemd-run" && argv[3] === "--unit=fleet-box-box-lane-t3") services.push(argv.at(-1)!);
+      return ok;
+    },
+  });
+  expect(await startBox(fake.coder, machine, "box-lane", noWait)).toBe(0);
+  expect(meanwhile.map((outcome) => outcome instanceof BoxBusy)).toEqual([true, true]);
+  const { port } = (await Bun.file(join(home, ".config/fleet/boxes/box-lane.json")).json()) as { port: number };
+  expect(services.at(-1)).toContain(`'${port}:3773'`);
+  expect(fake.done).toEqual(["start box-lane"]);
+});
+
+test("round 6, finding 3: a standalone restore holds each box while it restores its forward and skips a box another operation holds, and fleet box link holds its box", async () => {
+  const home = hubHome();
+  linkedHere(home);
+  writeHome(home, { ".config/fleet/boxes/box-other.json": JSON.stringify({ environmentId: "env-2", port: 22000 }) });
+  const probe = () => lockBox(home, "box-lane", noWait).then((unlock) => (unlock(), "free"), (error) => (error instanceof BoxBusy ? "busy" : String(error)));
+  const during: string[] = [];
+  const { machine, lines } = onHub(home, {
+    run: async (argv) => {
+      if (argv[2] === "is-active") return { ...ok, code: 3 };
+      if (argv[0] === "systemd-run" || argv[1] === "environment") during.push(`${argv[0] === "systemd-run" ? argv[3] : argv[2]} ${await probe()}`);
+      return ok;
+    },
+  });
+  const coder = fakeCoder({ ssh: async (_name, command) => ({ ...ok, stdout: command.includes("t3 pair") ? "pair-code\n" : "" }) }).coder;
+  const unlock = await lockBox(home, "box-other", noWait);
+  expect(await restoreForwards(coder, machine)).toBe(0);
+  unlock();
+  expect(during).toEqual(["--unit=fleet-box-box-lane-t3 busy"]);
+  expect(lines).toContain("box-other: another operation holds it; skipped");
+  during.length = 0;
+  expect(await boxCommand(["link", "box-lane"], depsFor(machine, () => coder))).toBe(0);
+  expect(during).toEqual(["unlink busy", "--unit=fleet-box-box-lane-t3 busy", "link busy"]);
+});
+
+const lockedFolders = (home: string, folders: string[], mode: number) => folders.forEach((folder) => chmodSync(join(home, folder), mode));
+
+test("round 6, finding 4: recycling fails when any removal fails, even when a later one succeeds: in ~/dev, under a project, and for symlinks", () => {
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl"]);
+  const cases: { files: Record<string, string>; links: string[]; locked: string[]; left: string; gone: string }[] = [
+    { files: { "dev/a-locked/secret": "old lane", "dev/z-removable/file": "" }, links: [], locked: ["dev/a-locked"], left: "dev/a-locked/secret", gone: "dev/z-removable" },
+    { files: { ".t3/worktrees/b-project/lane/f": "" }, links: [".t3/worktrees/a-project/link"], locked: [".t3/worktrees/a-project"], left: ".t3/worktrees/a-project/link", gone: ".t3/worktrees/b-project/lane" },
+    { files: { "dev/z-removable/file": "" }, links: [".t3/worktrees/project-link"], locked: [".t3/worktrees"], left: ".t3/worktrees/project-link", gone: "dev/z-removable" },
+  ];
+  for (const { files, links, locked, left, gone } of cases) {
+    const home = temp.make("fleet-box-");
+    writeHome(home, files);
+    for (const path of links) {
+      mkdirSync(join(home, path, ".."), { recursive: true });
+      symlinkSync(home, join(home, path));
+    }
+    lockedFolders(home, locked, 0o500);
+    const run = Bun.spawnSync(["sh", "-c", recycleScript([])], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` }, stderr: "pipe" });
+    lockedFolders(home, locked, 0o700);
+    expect(run.exitCode).not.toBe(0);
+    expect(run.stderr.toString()).toContain("Permission denied");
+    expect(lstatSync(join(home, left), { throwIfNoEntry: false })).toBeDefined();
+    expect(existsSync(join(home, gone))).toBe(false);
+  }
+});
+
+test("round 6, finding 4: a spawn never hands out a pooled box whose cleaning left an old lane's file behind, and the pool refresh reports it", async () => {
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl"]);
+  const dirtyBox = () => {
+    const onBox = temp.make("fleet-onbox-");
+    writeHome(onBox, { "dev/a-locked/secret": "old lane", "dev/z-removable/file": "" });
+    lockedFolders(onBox, ["dev/a-locked"], 0o500);
+    return onBox;
+  };
+  const recycling = (onBox: string, keepDirs: string[]) => {
+    const ran = Bun.spawnSync(["sh", "-c", recycleScript(keepDirs)], { env: { HOME: onBox, PATH: `${bin}:/usr/bin:/bin` }, stderr: "pipe" });
+    return { code: ran.exitCode, stdout: "", stderr: ran.stderr.toString() };
+  };
+
+  const home = hubHome();
+  writePool(home, { free: ["box-dirty"], boxes: { "box-dirty": { id: "ws-box-dirty" } } });
+  const onBox = dirtyBox();
+  const { machine, lines } = onHub(home, { peers: [] });
+  const spawned = spawnCoder(0, [box("box-dirty", "stopped")]);
+  const ssh = spawned.coder.ssh;
+  spawned.coder.ssh = async (name, command, stdin) => (name === "box-dirty" && command.includes("fleet-heavy.slice") ? recycling(onBox, machine.settings.keepDirs) : ssh(name, command, stdin));
+  expect(await spawn(spawned.coder, machine, "lane")).toBe(0);
+  lockedFolders(onBox, ["dev/a-locked"], 0o700);
+  expect(lines.at(-1)).toBe("box-lane env-box");
+  expect(lines.find((line) => line.startsWith("box-dirty from the pool failed"))).toContain("Permission denied");
+  expect(spawned.calls.filter((call) => call.box === "box-dirty").some((call) => call.command.includes("box-claim") && call.command.includes("printf"))).toBe(false);
+  expect(spawned.done).toEqual(["start box-dirty", "create box-lane from devbox-1 with 120 GB"]);
+
+  const refreshHome = hubHome();
+  writePool(refreshHome, { free: ["box-dirty"], boxes: { "box-dirty": { id: "ws-box-dirty" } } });
+  const refreshBox = dirtyBox();
+  const refreshing = onHub(refreshHome, { peers: [] });
+  const fake = fakeCoder({ ssh: async (_name, command) => (command.includes("fleet-heavy.slice") ? recycling(refreshBox, []) : { ...ok, stdout: command.includes("t3 pair") ? "pair-code\n" : "" }) }, [box("box-dirty", "stopped")]);
+  expect(await refreshPool(fake.coder, refreshing.machine)).toBe(1);
+  lockedFolders(refreshBox, ["dev/a-locked"], 0o700);
+  expect(refreshing.lines).toContain("box-dirty: refresh failed (exit 1); kept in the pool");
 });

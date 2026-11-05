@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { BoxBusy, lockBox, userWaitMs, withBoxLock, type HeldLock, type LockOptions } from "./box-lock.ts";
-import { assertBox, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForwards, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
+import { BoxBusy, lockBox, tryLockBox, userWaitMs, withBoxLock, type HeldLock, type LockOptions } from "./box-lock.ts";
+import { assertBox, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForward, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
 import type { Box } from "./coder.ts";
 import { quote, remoteFleet, type Machine } from "./machine.ts";
 import { writePrivateFile } from "./mcphub/client.ts";
@@ -17,6 +17,8 @@ export const startLimitMs = 5 * 60_000;
 const settleLimitMs = 10 * 60_000;
 const idleCheckLimitMs = 2 * 60_000;
 const warmLimitMs = 60 * 60_000;
+const gatewayCheckLimitMs = 60_000;
+const gatewayChecks = 3;
 const activeStatuses = new Set(["pending", "starting", "running"]);
 const transitional = new Set(["pending", "starting", "stopping", "canceling", "deleting"]);
 const servingIdleAfterMs = 24 * 3_600_000;
@@ -62,14 +64,16 @@ clear_in() {
   straight "$root" "clear $root" || return 1
   [ -d "$root" ] || return 0
   real=$(cd -P -- "$root" && pwd -P) || return 1
+  cleared=0
   for entry in "$root"/* "$root"/.[!.]* "$root"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     base=\${entry##*/}
     for keep in "$@"; do [ "$base" = "$keep" ] && continue 2; done
-    if [ -L "$entry" ]; then rm -f -- "$entry"; continue; fi
+    if [ -L "$entry" ]; then rm -f -- "$entry" || cleared=1; continue; fi
     if [ "$(cd -P -- "\${entry%/*}" && pwd -P)" != "$real" ]; then echo "Fleet box: will not clear $entry: it is outside $root" >&2; return 1; fi
-    rm -rf -- "$entry"
+    rm -rf -- "$entry" || cleared=1
   done
+  return $cleared
 }`;
 
 export function recycleScript(keepDirs: string[]): string {
@@ -80,18 +84,19 @@ export function recycleScript(keepDirs: string[]): string {
     'clear_in "$HOME/.t3/scratch" || failed=1',
     'if straight "$HOME/.t3/worktrees" "clear $HOME/.t3/worktrees"; then',
     '  for project in "$HOME"/.t3/worktrees/* "$HOME"/.t3/worktrees/.[!.]* "$HOME"/.t3/worktrees/..?*; do',
-    '    if [ -L "$project" ]; then rm -f -- "$project"; elif [ -d "$project" ]; then clear_in "$project" || failed=1; fi',
+    '    if [ -L "$project" ]; then rm -f -- "$project" || failed=1; elif [ -d "$project" ]; then clear_in "$project" || failed=1; fi',
     "  done",
     "else failed=1; fi",
     `clear_in "$HOME/dev" ${keepDirs.map(quote).join(" ")} || failed=1`,
-    "rm -f ~/.config/fleet/box-claim",
+    "rm -f ~/.config/fleet/box-claim || failed=1",
     '[ "$failed" = 0 ]',
   ].join("\n");
 }
 
 const claimLine = (here: Machine, label: string, by: string, claim: string) => `${claim} ${label} by ${by} at ${new Date(here.now()).toISOString()}`;
 const readClaim = "cut -d' ' -f1 ~/.config/fleet/box-claim 2>/dev/null";
-const readClaimLine = "cat ~/.config/fleet/box-claim 2>/dev/null || true";
+const readClaimLine = 'f="$HOME/.config/fleet/box-claim" d="$HOME/.config/fleet"; if [ -e "$f" ] || [ -L "$f" ]; then cat -- "$f"; elif [ -d "$d" ] && [ ! -x "$d" ]; then echo "cannot search $d" >&2; false; fi';
+const lastLine = (result: { stdout: string; stderr: string }) => (result.stderr || result.stdout).trim().split("\n").at(-1) ?? "";
 const holderOf = (line: string) => /^(\S+) .* by (\S+) at \S+$/.exec(line.trim())?.slice(1) ?? [];
 const budget = (here: Machine, limitMs: number) => {
   const deadline = here.now() + limitMs;
@@ -106,7 +111,7 @@ const liveBox = async (coder: Pick<BoxCoder, "boxes">, box: string, timeoutMs?: 
 const statusById = async (coder: Pick<BoxCoder, "boxes">, id: string, timeoutMs?: number) => (await coder.boxes(timeoutMs)).find((candidate) => candidate.id === id)?.status ?? "gone";
 const peersFor = (here: Machine, devbox?: string) => [...new Set([...here.peers, ...(devbox ? [devbox] : [])])].filter((peer) => peer !== here.self && !(here.isHub && peer === here.settings.alias));
 
-function lockWait(here: Machine, box: string, waitMs: number): LockOptions {
+export function lockWait(here: Machine, box: string, waitMs: number): LockOptions {
   const minutes = Math.ceil(waitMs / 60_000);
   return { waitMs, waiting: () => here.say(`${box} is busy; waiting up to ${minutes} minute${minutes === 1 ? "" : "s"} for the other operation on it to end`) };
 }
@@ -161,7 +166,7 @@ async function onEvery(here: Machine, peers: string[], command: string): Promise
   const failed: string[] = [];
   for (const alias of peers) {
     const result = await here.onPeer(alias, command);
-    here.say(`${alias}: ${result.code === 0 ? "done" : `failed (${(result.stderr || result.stdout).trim().split("\n").at(-1)})`}`);
+    here.say(`${alias}: ${result.code === 0 ? "done" : `failed (${lastLine(result)})`}`);
     if (result.code !== 0) failed.push(alias);
   }
   return failed;
@@ -198,6 +203,15 @@ export function ownership(boxes: Box[], here: Machine): { owned: Box[]; skipped:
 const skippedLine = (box: string) => `${box}: skipped, not a box this pool made`;
 const otherWorkspace = (box: string) => `Coder has another workspace named ${box} now, not the one the pool made. Nothing changed.`;
 
+async function checkGatewayOn(coder: BoxCoder, here: Machine, box: string): Promise<void> {
+  let checked = await coder.ssh(box, remoteFleet("mcphub check"), undefined, gatewayCheckLimitMs);
+  for (let attempt = 1; checked.code !== 0 && attempt < gatewayChecks; attempt++) {
+    await here.sleep(5000);
+    checked = await coder.ssh(box, remoteFleet("mcphub check"), undefined, gatewayCheckLimitMs);
+  }
+  if (checked.code !== 0) here.say(`${box} cannot reach the hub's MCP gateway yet (${lastLine(checked) || `exit ${checked.code}`}). Check it with fleet box run ${box} -- fleet mcphub check`);
+}
+
 function finish(here: Machine, box: string, environmentId: string, unlinked: string[]) {
   if (unlinked.length) here.say(`not linked on ${unlinked.join(", ")}; run fleet box link ${box} there`);
   signInNotes(here, box);
@@ -225,7 +239,7 @@ async function setUpPooled(coder: BoxCoder, here: Machine, lane: Lane, box: Work
     if (cleaned.code !== 0) throw new Error(`cleaning failed: ${(cleaned.stderr || cleaned.stdout).trim()}`);
     await startUnit(coder, here, unitOf(box.name, "hub"), hubForward(here, box.name));
     await sameWorkspace(coder, box);
-    await handOver(coder, here, box.name);
+    const gateway = await handOver(coder, here, box.name);
     await sameWorkspace(coder, box);
     if ((await coder.ssh(box.name, `bash -lc ${quote(claimScript(claimLine(here, lane.label, lane.by, claim)))}`)).code !== 0) throw new Error("T3 did not answer after its restart with the new Claude token");
     watch.step("setup");
@@ -235,10 +249,11 @@ async function setUpPooled(coder: BoxCoder, here: Machine, lane: Lane, box: Work
     const t3 = `${unitOf(box.name, "t3")}.service`;
     if (fresh) {
       await here.run(["systemctl", "--user", "try-restart", t3]);
-      await restoreForwards(coder, here);
+      await restoreForward(coder, here, box.name);
     }
     const relink = `r=~/.config/fleet/boxes/${box.name}.json && if test -n "$(find "$r" -mtime -21 2>/dev/null)"; then systemctl --user try-restart ${t3}; else ${remoteFleet(`box link ${box.name}`)}; fi`;
     const unlinked = await onEvery(here, peersFor(here, lane.devbox), relink);
+    if (gateway) await checkGatewayOn(coder, here, box.name);
     watch.step("link");
     watch.done(true);
     await change(here, (pool) => registry.settle(pool, box.name, box.id));
@@ -291,12 +306,13 @@ async function spawnNew(coder: BoxCoder, here: Machine, lane: Lane, box: string)
     await sameWorkspace(coder, workspace);
     await startUnit(coder, here, unitOf(box, "hub"), hubForward(here, box));
     await sameWorkspace(coder, workspace);
-    await handOver(coder, here, box);
+    const gateway = await handOver(coder, here, box);
     await sameWorkspace(coder, workspace);
     if ((await coder.ssh(box, `bash -lc ${quote(setUpScript(claimLine(here, lane.label, lane.by, claim)))}`)).code !== 0) throw new Error(`Setting up ${box} failed: T3 did not answer after its restart.`);
     watch.step("setup");
     const environmentId = await link(coder, here, box);
     const unlinked = await onEvery(here, peersFor(here, lane.devbox), remoteFleet(`box link ${box}`));
+    if (gateway) await checkGatewayOn(coder, here, box);
     watch.step("link");
     watch.done(true);
     await change(here, (pool) => registry.settle(pool, box, id));
@@ -360,15 +376,6 @@ async function finishRelease(coder: BoxCoder, here: Machine, box: Workspace, how
 
 const busyLine = (box: string) => `${box}: another operation holds it; skipped`;
 
-async function tryLock(here: Machine, box: string): Promise<HeldLock | undefined> {
-  try {
-    return await lockBox(here.home, box, { waitMs: 0 });
-  } catch (error) {
-    if (error instanceof BoxBusy) return undefined;
-    throw error;
-  }
-}
-
 async function sweepOne(coder: BoxCoder, here: Machine, name: string, hooks: BoxHooks): Promise<void> {
   const entry = registry.recorded(poolPath(here))[name];
   if (!entry) return;
@@ -385,7 +392,7 @@ async function sweepOne(coder: BoxCoder, here: Machine, name: string, hooks: Box
   if (entry.claiming && !how) {
     if (live.status !== "running") return here.print(`${half}, and the box is stopped, so its claim cannot be read; kept until it runs`);
     const onBox = await coder.ssh(name, readClaimLine, undefined, idleCheckLimitMs);
-    if (onBox.code !== 0) return here.print(`${half}, and the box did not show its claim (exit ${onBox.code}); kept`);
+    if (onBox.code !== 0) return here.print(`${half}, and the box did not show its claim (exit ${onBox.code}${lastLine(onBox) ? `: ${lastLine(onBox)}` : ""}); kept`);
     if (holderOf(onBox.stdout)[0] !== entry.claim) how = "pool";
     else {
       await change(here, (pool) => registry.settle(pool, name, entry.id));
@@ -418,7 +425,7 @@ export async function sweep(coder: BoxCoder, here: Machine, hooks: BoxHooks = {}
   for (const box of skipped) here.print(skippedLine(box.name));
   const names = [...new Set([...owned.map((box) => box.name), ...Object.keys(registry.recorded(poolPath(here)))])];
   for (const name of names) {
-    const unlock = await tryLock(here, name);
+    const unlock = await tryLockBox(here.home, name);
     if (!unlock) {
       here.print(busyLine(name));
       continue;
@@ -447,34 +454,37 @@ async function resume(coder: BoxCoder, here: Machine, box: Workspace, claim: str
 
 export async function startBox(coder: BoxCoder, here: Machine, box: string, { devbox, waitMs = userWaitMs }: StartOptions = {}): Promise<number> {
   assertBox(box);
-  const started = await withBoxLock(here.home, box, lockWait(here, box, waitMs), async () => {
-    const live = await liveBox(coder, box);
-    if (!live) return here.say(`${box} is gone, so it cannot be started.`), false;
-    const entry = registry.recorded(poolPath(here))[box];
-    if (entry && entry.id !== live.id) return here.say(otherWorkspace(box)), false;
-    if (entry?.leaving) return here.say(`${box}: its release began and did not finish, so it is not started. The hub's sweep finishes the release; spawn another box.`), false;
-    const workspace = { name: box, id: live.id };
-    const taken = entry && !entry.claiming ? await change(here, (pool) => registry.take(pool, box)) : undefined;
-    try {
-      await coder.start(live.id, startLimitMs);
-      await waitReady(coder, here, workspace);
-      if (entry?.claiming) return await resume(coder, here, workspace, entry.claim, devbox ?? here.self);
-      if (!taken) return true;
-      await sameWorkspace(coder, workspace);
-      const recorded = await coder.ssh(box, claimRecord(claimLine(here, "fleet box start", devbox ?? here.self, taken.claim)));
-      if (recorded.code !== 0) throw new Error(`Cannot record the claim on ${box}: ${recorded.stderr.trim()}`);
-      return true;
-    } finally {
-      if (taken) await change(here, (pool) => registry.settle(pool, box, live.id));
-    }
+  return withBoxLock(here.home, box, lockWait(here, box, waitMs), async () => {
+    if (!(await bringUp(coder, here, box, devbox))) return 1;
+    const unit = `${unitOf(box, "t3")}.service`;
+    await here.run(["systemctl", "--user", "try-restart", unit]);
+    await restoreForward(coder, here, box);
+    await onEvery(here, peersFor(here, devbox), `systemctl --user try-restart ${unit}; true`);
+    here.say(`${box} is up; its T3 forwards reconnect within a minute`);
+    return 0;
   });
-  if (!started) return 1;
-  const unit = `${unitOf(box, "t3")}.service`;
-  await here.run(["systemctl", "--user", "try-restart", unit]);
-  await restoreForwards(coder, here);
-  await onEvery(here, peersFor(here, devbox), `systemctl --user try-restart ${unit}; true`);
-  here.say(`${box} is up; its T3 forwards reconnect within a minute`);
-  return 0;
+}
+
+async function bringUp(coder: BoxCoder, here: Machine, box: string, devbox: string | undefined): Promise<boolean> {
+  const live = await liveBox(coder, box);
+  if (!live) return here.say(`${box} is gone, so it cannot be started.`), false;
+  const entry = registry.recorded(poolPath(here))[box];
+  if (entry && entry.id !== live.id) return here.say(otherWorkspace(box)), false;
+  if (entry?.leaving) return here.say(`${box}: its release began and did not finish, so it is not started. The hub's sweep finishes the release; spawn another box.`), false;
+  const workspace = { name: box, id: live.id };
+  const taken = entry && !entry.claiming ? await change(here, (pool) => registry.take(pool, box)) : undefined;
+  try {
+    await coder.start(live.id, startLimitMs);
+    await waitReady(coder, here, workspace);
+    if (entry?.claiming) return await resume(coder, here, workspace, entry.claim, devbox ?? here.self);
+    if (!taken) return true;
+    await sameWorkspace(coder, workspace);
+    const recorded = await coder.ssh(box, claimRecord(claimLine(here, "fleet box start", devbox ?? here.self, taken.claim)));
+    if (recorded.code !== 0) throw new Error(`Cannot record the claim on ${box}: ${recorded.stderr.trim()}`);
+    return true;
+  } finally {
+    if (taken) await change(here, (pool) => registry.settle(pool, box, live.id));
+  }
 }
 
 export type ReleaseOptions = { force?: boolean; stillDoomed?: () => Promise<boolean>; recycle?: boolean; hooks?: BoxHooks; devbox?: string; waitMs?: number };
@@ -553,7 +563,7 @@ export async function refreshPool(coder: BoxCoder, here: Machine): Promise<numbe
   const recycle = recycleScript(here.settings.keepDirs);
   const warm = here.settings.warmCommand ? `{\n${recycle}\n} && ${here.settings.warmCommand}` : recycle;
   const results = await Promise.all(boxes.map(async (box) => {
-    const unlock = await tryLock(here, box);
+    const unlock = await tryLockBox(here.home, box);
     if (!unlock) return here.print(busyLine(box)), true;
     try {
       return await unlock.during(() => refreshOne(coder, here, box, warm));

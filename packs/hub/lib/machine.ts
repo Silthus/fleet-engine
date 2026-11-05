@@ -8,7 +8,7 @@ import type { Clock } from "./pool.ts";
 
 export type BoxSettings = {
   alias: string; coderUrl: string; template: string; diskGigabytes: number; poolSize: number;
-  idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; warmCommand?: string;
+  idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; httpsHost?: string; warmCommand?: string;
 };
 
 export type Machine = Clock & {
@@ -37,6 +37,7 @@ const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
 
 export function readBoxSettings(env: Env): BoxSettings {
   const warmCommand = optionalStringSetting("hub.boxWarmCommand", env);
+  const httpsHost = optionalStringSetting("hub.httpsHost", env);
   return {
     alias: stringSetting("hub.alias", env),
     coderUrl: stringSetting("hub.coderUrl", env),
@@ -47,6 +48,7 @@ export function readBoxSettings(env: Env): BoxSettings {
     reapDays: numberSetting("hub.boxReapDays", env),
     keepDirs: stringSetting("hub.boxKeepDirs", env).split(/\s+/).filter(Boolean),
     relayPort: numberSetting("hub.relayPort", env),
+    ...(httpsHost ? { httpsHost } : {}),
     ...(warmCommand ? { warmCommand } : {}),
   };
 }

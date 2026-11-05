@@ -1,8 +1,8 @@
 import { boxPrefix, grant, reap, type Coder } from "./coder.ts";
-import { link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
+import { assertBox, link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
 import { quote, requireHub, type Machine } from "./machine.ts";
-import { BoxBusy } from "./box-lock.ts";
-import { idle, list, nightly, nightlySteps, ownership, refreshPool, release, saveToken, spawn, startBox, sweep, threads, type BoxHooks } from "./box.ts";
+import { BoxBusy, userWaitMs, withBoxLock } from "./box-lock.ts";
+import { idle, list, lockWait, nightly, nightlySteps, ownership, refreshPool, release, saveToken, spawn, startBox, sweep, threads, type BoxHooks } from "./box.ts";
 import * as registry from "./pool.ts";
 
 export type CommandCoder = BoxCoder & Pick<Coder, "env" | "token">;
@@ -86,6 +86,7 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
   if (hubOnly.includes(command!)) requireHub(here.home, command!);
   const coder = () => deps.coder(here);
   const by = devbox ? { devbox } : {};
+  const holding = <T>(box: string, step: () => Promise<T>) => (assertBox(box), withBoxLock(here.home, box, lockWait(here, box, userWaitMs), step));
   const grantTo = (devbox: string, ifExpiring: boolean) => grant(coder(), devbox, { ifExpiring, now: here.now(), onDevbox: here.onPeer, print: here.print });
   const reapNow = async (days: number, dryRun: boolean) => {
     const pooled = new Set(registry.pooled(registry.poolFile(here.home)));
@@ -106,7 +107,7 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
     case "idle": return idle(here);
     case "threads": return threads(here);
     case "restore": return restoreForwards(coder(), here);
-    case "unlink": return (await unlink(here, name!)) ? 0 : 1;
+    case "unlink": return (await holding(name!, () => unlink(here, name!))) ? 0 : 1;
     case "list": return list(coder(), here);
     case "sweep": return sweep(coder(), here, deps.hooks);
     case "pool":
@@ -117,7 +118,7 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
     case "reap": return reapNow(Number(option(plain, "--days") ?? here.settings.reapDays), plain.includes("--dry-run"));
     case "nightly": return nightly(nightlySteps(here, { reap: () => reapNow(here.settings.reapDays, false), grant: (devbox) => grantTo(devbox, true), refresh: () => refreshPool(coder(), here) }), here);
     case "run": return coder().run(name!, `bash -lc ${quote(rest.slice(1).join(" "))}`);
-    case "link": return await link(coder(), here, name!), 0;
+    case "link": return await holding(name!, () => link(coder(), here, name!)), 0;
     case "start": return startBox(coder(), here, name!, by);
     case "spawn": return spawn(coder(), here, name === "--new" ? undefined : name, { reuse: !plain.includes("--new"), ...by });
     default: return release(coder(), here, name!, { force: rest.includes("--force"), recycle: !rest.includes("--delete"), hooks: deps.hooks, ...by });
