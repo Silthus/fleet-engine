@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ModelRow } from "../../base/lib/models.ts";
+import { modelFor, modelTable, type ModelRow } from "../../base/lib/models.ts";
 
 export const families = ["claude", "gpt"] as const;
 export type Family = (typeof families)[number];
@@ -16,11 +16,23 @@ export function sessionFamily(env: Record<string, string | undefined>): Family |
   return claude === gpt ? undefined : claude ? "claude" : "gpt";
 }
 
-export type ModelAnswer = { ok: true; text: string; model: string } | { ok: false; cause: string; model: string };
-export type ModelRequest = { prompt: string; cwd: string; readable?: string[]; images?: string[]; schema?: object };
-export type Role = "arbiter";
+export const familyOf = (row: ModelRow): Family => row.provider === "claude" ? "claude" : "gpt";
 
-const prefixes: Record<Role, string> = { arbiter: "FLEET_REVIEW_ARBITER" };
+export function reviewerRow(author: Family, env: Record<string, string | undefined>) {
+  const codexReviewer = author === "gpt" ? modelTable(env).find((row) => row.role === "review-codex") : undefined;
+  return codexReviewer ?? modelFor("review", env);
+}
+
+export function sameFamilyRow(author: Family, env: Record<string, string | undefined>) {
+  const reviewers = modelTable(env).filter((row) => ["review", "review-codex"].includes(row.role));
+  return reviewers.find((row) => familyOf(row) === author) ?? reviewerRow(author, env);
+}
+
+export type ModelAnswer = { ok: true; text: string; model: string } | { ok: false; cause: string; model: string };
+export type ModelRequest = { prompt: string; cwd: string; readable?: string[]; images?: string[]; schema?: object; started?: (pid: number) => Promise<void> };
+export type Role = "arbiter" | "reviewer" | "judge" | "eval-judge";
+
+const prefixes: Record<Role, string> = { arbiter: "FLEET_REVIEW_ARBITER", reviewer: "FLEET_PROOF_REVIEWER", judge: "FLEET_PROOF_JUDGE", "eval-judge": "FLEET_PROOF_EVAL_JUDGE" };
 const prefixOf = (role: Role) => prefixes[role];
 
 export function modelLabel(role: Role, row: ModelRow, env: Record<string, string | undefined>) {
@@ -59,15 +71,29 @@ async function modelCommand(row: ModelRow, request: ModelRequest, scratch: strin
 type Spawned = { stdout: string; cause?: undefined } | { stdout?: undefined; cause: string };
 
 async function spawnWithLimit(command: string[], request: ModelRequest, env: Record<string, string | undefined>, timeout: number): Promise<Spawned> {
+  let child: Bun.Subprocess<Blob, "pipe", "pipe"> | undefined;
+  let stop: ReturnType<typeof setTimeout> | undefined;
   try {
-    const child = Bun.spawn(command, { cwd: request.cwd, env: env as Record<string, string>, stdin: new Blob([request.prompt]), stdout: "pipe", stderr: "pipe", detached: true });
-    const stop = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} }, timeout);
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    clearTimeout(stop);
+    const running = child = Bun.spawn(command, { cwd: request.cwd, env: env as Record<string, string>, stdin: new Blob([request.prompt]), stdout: "pipe", stderr: "pipe", detached: true });
+    stop = setTimeout(() => stopGroup(running.pid), timeout);
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited, request.started?.(child.pid)]);
     if (child.signalCode) return { cause: `stopped by ${child.signalCode} at the ${Math.round(timeout / 1000)} s limit` };
     if (code !== 0) return { cause: `exit ${code}${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)!.slice(0, 200)}` : ""}` };
     return { stdout };
   } catch (error) {
+    if (child) { stopGroup(child.pid); await child.exited; }
     return { cause: (error as Error).message };
-  }
+  } finally { clearTimeout(stop); }
 }
+
+function stopGroup(group: number) {
+  try { process.kill(-group, "SIGKILL"); } catch {}
+}
+
+export async function readRubric(home: string) {
+  const standards = (await readFile(join(home, ".agents/guides/coding-standards.md"), "utf8").catch(() => "")).trim();
+  if (!standards) throw new Error("~/.agents/guides/coding-standards.md is missing or empty; it holds the coding standards to review against");
+  return standards;
+}
+
+export const skillReferences = (home: string) => ["tdd", "codebase-design"].map((skill) => join(home, ".agents/skills", skill, "SKILL.md"));
