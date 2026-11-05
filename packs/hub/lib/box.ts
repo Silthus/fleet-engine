@@ -40,6 +40,17 @@ const straight = `straight() {
     if [ -L "$path" ]; then echo "Fleet box: will not $2: $path is a symlink" >&2; return 1; fi
   done
 }`;
+const probe = `probe() {
+  path=$HOME rest=\${1#"$HOME"/}
+  while :; do
+    if [ ! -d "$path" ] || [ ! -x "$path" ]; then echo "Fleet box: cannot search $path" >&2; return 2; fi
+    [ -n "$rest" ] || break
+    path=$path/\${rest%%/*}
+    case $rest in */*) rest=\${rest#*/} ;; *) rest= ;; esac
+    if [ ! -e "$path" ] && [ ! -L "$path" ]; then return 1; fi
+  done
+  if [ ! -r "$path" ]; then echo "Fleet box: cannot list $path" >&2; return 2; fi
+}`;
 const claudeSignIn = [
   straight,
   `token="$HOME/${claudeTokenPath}" dir="$HOME/.config/systemd/user/t3code.service.d" changed=`,
@@ -59,10 +70,11 @@ export const setUpScript = (claim: string) => [claimRecord(claim), ...claudeSign
 export const claimScript = (claim: string) => [claimRecord(claim), ...claudeSignIn, 'if [ -n "$changed" ]; then', ...restartT3, "fi"].join("\n");
 
 const clearHelpers = `${straight}
+${probe}
 clear_in() {
   root=$1; shift
   straight "$root" "clear $root" || return 1
-  [ -d "$root" ] || return 0
+  probe "$root" || { [ $? = 1 ] && return 0; return 1; }
   real=$(cd -P -- "$root" && pwd -P) || return 1
   cleared=0
   for entry in "$root"/* "$root"/.[!.]* "$root"/..?*; do
@@ -82,11 +94,12 @@ export function recycleScript(keepDirs: string[]): string {
     clearHelpers,
     "failed=0",
     'clear_in "$HOME/.t3/scratch" || failed=1',
-    'if straight "$HOME/.t3/worktrees" "clear $HOME/.t3/worktrees"; then',
+    'if ! straight "$HOME/.t3/worktrees" "clear $HOME/.t3/worktrees"; then failed=1',
+    'elif probe "$HOME/.t3/worktrees"; then',
     '  for project in "$HOME"/.t3/worktrees/* "$HOME"/.t3/worktrees/.[!.]* "$HOME"/.t3/worktrees/..?*; do',
     '    if [ -L "$project" ]; then rm -f -- "$project" || failed=1; elif [ -d "$project" ]; then clear_in "$project" || failed=1; fi',
     "  done",
-    "else failed=1; fi",
+    'elif [ $? = 2 ]; then failed=1; fi',
     `clear_in "$HOME/dev" ${keepDirs.map(quote).join(" ")} || failed=1`,
     "rm -f ~/.config/fleet/box-claim || failed=1",
     '[ "$failed" = 0 ]',
@@ -95,7 +108,13 @@ export function recycleScript(keepDirs: string[]): string {
 
 const claimLine = (here: Machine, label: string, by: string, claim: string) => `${claim} ${label} by ${by} at ${new Date(here.now()).toISOString()}`;
 const readClaim = "cut -d' ' -f1 ~/.config/fleet/box-claim 2>/dev/null";
-const readClaimLine = 'f="$HOME/.config/fleet/box-claim" d="$HOME/.config/fleet"; if [ -e "$f" ] || [ -L "$f" ]; then cat -- "$f"; elif [ -d "$d" ] && [ ! -x "$d" ]; then echo "cannot search $d" >&2; false; fi';
+const readClaimLine = `${probe}
+f="$HOME/.config/fleet/box-claim"
+if probe "$HOME/.config/fleet"; then
+  if [ -e "$f" ] || [ -L "$f" ]; then cat -- "$f"; fi
+else
+  [ $? = 1 ]
+fi`;
 const lastLine = (result: { stdout: string; stderr: string }) => (result.stderr || result.stdout).trim().split("\n").at(-1) ?? "";
 const holderOf = (line: string) => /^(\S+) .* by (\S+) at \S+$/.exec(line.trim())?.slice(1) ?? [];
 const budget = (here: Machine, limitMs: number) => {

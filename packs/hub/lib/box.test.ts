@@ -1230,3 +1230,53 @@ test("round 6, finding 4: a spawn never hands out a pooled box whose cleaning le
   lockedFolders(refreshBox, ["dev/a-locked"], 0o700);
   expect(refreshing.lines).toContain("box-dirty: refresh failed (exit 1); kept in the pool");
 });
+
+test("round 7, finding 1: the sweep keeps a box with a stale claiming mark when a folder above its claim file cannot be searched", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-locked": { id: "ws-box-locked", claim: "c-1", claiming: true } } });
+  const homes = { "box-locked": temp.make("fleet-onbox-") };
+  writeHome(homes["box-locked"], { ".config/fleet/box-claim": `c-1 lane by devbox-1 ${claimedAt}\n` });
+  chmodSync(join(homes["box-locked"], ".config"), 0o000);
+  const shell = onBoxShell(homes);
+  const { machine, lines } = onHub(home);
+  const fake = fakeCoder({
+    ssh: async (name, command) => {
+      if (readsClaim(command)) return shell(name, command);
+      if (command.includes("box threads")) return { ...ok, stdout: "Running lane (runs)\n" };
+      if (command.includes("box idle")) return { ...ok, code: 1, stdout: "busy\n" };
+      return ok;
+    },
+  }, [box("box-locked")]);
+  const swept = await sweep(fake.coder, machine);
+  chmodSync(join(homes["box-locked"], ".config"), 0o700);
+  expect(swept).toBe(0);
+  expect(fake.done).toEqual([]);
+  expect(registryOf(home)).toEqual({ free: [], boxes: { "box-locked": { id: "ws-box-locked", claim: "c-1", claiming: true } } });
+  const kept = lines.find((line) => line.startsWith("box-locked:"));
+  expect(kept).toContain("cannot search");
+  expect(kept).toEndWith("; kept");
+});
+
+test("round 7, finding 2: recycling fails when a folder it cleans, or a folder above one, cannot be listed, and succeeds on a box without those folders", () => {
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl"]);
+  const recycle = (home: string) => Bun.spawnSync(["sh", "-c", recycleScript([])], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` }, stderr: "pipe" });
+  const cases: { files: Record<string, string>; locked: string; mode: number; left: string; says: string }[] = [
+    { files: { "dev/old/secret": "old lane" }, locked: "dev", mode: 0o300, left: "dev/old/secret", says: "cannot list" },
+    { files: { ".t3/worktrees/project/lane/secret": "old lane" }, locked: ".t3/worktrees", mode: 0o300, left: ".t3/worktrees/project/lane/secret", says: "cannot list" },
+    { files: { ".t3/worktrees/project/lane/secret": "old lane" }, locked: ".t3/worktrees/project", mode: 0o300, left: ".t3/worktrees/project/lane/secret", says: "cannot list" },
+    { files: { ".t3/scratch/secret": "old lane" }, locked: ".t3", mode: 0o000, left: ".t3/scratch/secret", says: "cannot search" },
+  ];
+  for (const { files, locked, mode, left, says } of cases) {
+    const home = temp.make("fleet-box-");
+    writeHome(home, files);
+    chmodSync(join(home, locked), mode);
+    const run = recycle(home);
+    chmodSync(join(home, locked), 0o700);
+    expect([locked, run.exitCode === 0]).toEqual([locked, false]);
+    expect(run.stderr.toString()).toContain(says);
+    expect(existsSync(join(home, left))).toBe(true);
+  }
+  const bare = temp.make("fleet-box-");
+  const run = recycle(bare);
+  expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
+});
