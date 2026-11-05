@@ -192,7 +192,7 @@ function output() {
 }
 
 function diagram() {
-  return `<div class="diagram" role="img" aria-label="Your Mac runs the T3 Code app and links to a devbox, where agents run threads in worktrees. An optional hub serves short-lived boxes.">
+  return `<div class="diagram" role="img" aria-label="Your Mac runs the T3 Code app and links to a devbox, where agents run threads in worktrees. An optional hub shares your MCP servers and watches disks.">
   <svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg">
     <rect class="d-node" x="10" y="30" width="200" height="130" rx="12"/>
     <text class="d-txt" x="28" y="58">Your Mac</text>
@@ -208,10 +208,10 @@ function diagram() {
     <path class="d-optlink" d="M425 182 V222"/>
     <rect class="d-opt" x="300" y="222" width="250" height="68" rx="12"/>
     <text class="d-txt" x="318" y="248">Hub (optional)</text>
-    <text class="d-small" x="318" y="268">An always-on devbox that serves</text><text class="d-small" x="318" y="283">short-lived boxes to the others.</text>
+    <text class="d-small" x="318" y="268">An always-on devbox that shares</text><text class="d-small" x="318" y="283">MCP servers with the others.</text>
     <path class="d-optlink" d="M550 256 H600"/>
-    <rect class="d-opt" x="600" y="214" width="150" height="40" rx="8"/><text class="d-mono" x="614" y="239">box · heavy tests</text>
-    <rect class="d-opt" x="600" y="260" width="150" height="34" rx="8"/><text class="d-mono" x="614" y="282">box · build</text>
+    <rect class="d-opt" x="600" y="214" width="150" height="40" rx="8"/><text class="d-mono" x="614" y="239">MCP gateway</text>
+    <rect class="d-opt" x="600" y="260" width="150" height="34" rx="8"/><text class="d-mono" x="614" y="282">disk watch</text>
     <text class="d-small" x="580" y="40">Each machine signs in</text><text class="d-small" x="580" y="56">to Claude and Codex itself.</text>
     <text class="d-small" x="580" y="72">No hub needed.</text>
   </svg></div>`;
