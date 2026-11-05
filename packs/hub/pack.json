@@ -5,6 +5,10 @@
   "day": "Every machine reaches your MCP servers through the hub, and a devbox that fills its disk is cleaned before you notice.",
   "cost": "One devbox that stays on, and some setup on it. Every other machine keeps working when the hub is down.",
   "risk": "The hub holds sign-ins for your MCP servers and reaches every devbox over SSH. Keep it as private as your laptop.",
+  "skills": [
+    "skills/dream",
+    "skills/fleet-hub"
+  ],
   "settings": [
     {
       "key": "hub.alias",
@@ -89,6 +93,13 @@
       "question": "Which port on the hub do the SSH tunnels from your devboxes use?",
       "type": "number",
       "default": 60001,
+      "ask": "never"
+    },
+    {
+      "key": "hub.dreamSessions",
+      "question": "How many sessions may one Dream run send to an analyst model? Each one spends model tokens.",
+      "type": "number",
+      "default": 150,
       "ask": "never"
     },
     {
@@ -207,6 +218,32 @@
           "T3 Code"
         ]
       }
+    },
+    {
+      "id": "dream",
+      "name": "Dream",
+      "default": false,
+      "needs": [
+        "hub",
+        "gh"
+      ],
+      "settings": [
+        "hub.alias",
+        "hub.dreamSessions"
+      ],
+      "sentence": "Each night, the hub reads the day's agent sessions from every machine and opens one draft pull request that adds to, condenses, and prunes your shared memory.",
+      "moment": {
+        "time": "04:10",
+        "title": "Memory that tidies itself",
+        "body": "Overnight, the hub reads what your agents did on every devbox. In the morning a draft pull request waits: two new rules for your call, and a few memories merged and trimmed.",
+        "night": true,
+        "words": [
+          "hub",
+          "agent",
+          "draft pull request"
+        ]
+      },
+      "risk": "Every run sends your agent sessions to an analyst model and spends your AI plan's usage, so it starts off. Your session text stays on the hub for 14 days."
     }
   ],
   "config": [
@@ -291,6 +328,22 @@
         "hub"
       ],
       "workflow": "boxes"
+    },
+    {
+      "id": "dream",
+      "command": [
+        "fleet",
+        "dream",
+        "run"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "04:10"
+      },
+      "roles": [
+        "hub"
+      ],
+      "workflow": "dream"
     },
     {
       "id": "peers-renew",

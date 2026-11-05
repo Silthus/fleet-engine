@@ -12,3 +12,4 @@ export {
   findThread, lastActivityAt, matchThread, readSnapshots, readThread, readThreadWords, readTurnItems,
   type ShellProject, type ShellPullRequest, type ShellSnapshot, type ShellThread, type ThreadWord, type TurnItem,
 } from "./threads.ts";
+export { launchScratchThread, type ThreadLaunch } from "./launch.ts";
