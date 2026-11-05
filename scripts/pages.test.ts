@@ -25,20 +25,20 @@ describe("GitHub Pages", () => {
     expect(on).toHaveProperty("workflow_dispatch");
   });
 
-  test("stages the committed page as the Pages artifact", () => {
-    const { stage } = workflow().jobs;
-    expect(actions(stage)).toEqual(["actions/checkout", "actions/upload-pages-artifact"]);
-    const upload = stage.steps.find((step) => step.uses?.startsWith("actions/upload-pages-artifact"))!;
-    expect(stage.steps.some((step) => step.run === `mkdir ${upload.with!.path} && cp page/index.html ${upload.with!.path}/index.html`)).toBe(true);
+  test("checks out, copies the committed page, then uploads that directory as the Pages artifact", () => {
+    const [checkout, copy, upload, ...rest] = workflow().jobs.stage.steps;
+    expect([checkout!.uses?.split("@")[0], upload!.uses?.split("@")[0], rest]).toEqual(["actions/checkout", "actions/upload-pages-artifact", []]);
+    expect(copy!.run).toBe(`mkdir ${upload!.with!.path} && cp page/index.html ${upload!.with!.path}/index.html`);
   });
 
   test("deploys after staging, from main only, once the repo is public, with only the Pages permissions", () => {
     const { permissions, jobs } = workflow();
     expect(permissions).toEqual({ contents: "read" });
+    expect(jobs.stage.permissions).toBeUndefined();
+    expect(jobs.deploy.permissions).toEqual({ pages: "write", "id-token": "write" });
     expect(jobs.deploy).toMatchObject({
       needs: "stage",
       if: "github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !github.event.repository.private",
-      permissions: { pages: "write", "id-token": "write" },
       environment: { name: "github-pages" },
     });
     expect(actions(jobs.deploy)).toEqual(["actions/configure-pages", "actions/deploy-pages"]);
