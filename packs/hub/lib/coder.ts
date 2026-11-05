@@ -1,6 +1,7 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
+import { heldLocks } from "./box-lock.ts";
 
 export const boxPrefix = "box-";
 const idleStopMs = 2 * 3_600_000;
@@ -41,10 +42,20 @@ const realTimer: Timer = (ms, fire) => {
   return () => clearTimeout(timeout);
 };
 
+export const orphanGraceSeconds = 10;
+
+function holdingLocks(argv: string[], locks: number[], timeoutMs: number): string[] {
+  if (!locks.length) return argv;
+  const closed = locks.map((_, index) => `${index + 3}>&-`).join(" ");
+  return ["timeout", "-s", "KILL", String(Math.ceil(timeoutMs / 1000) + orphanGraceSeconds), "/bin/sh", "-c", `exec "$@" ${closed}`, "fleet-box-lock", ...argv];
+}
+
 export function captureWith(timer: Timer): Capture {
   return async (argv, { env, stdin, timeoutMs, inherit = false }) => {
     const output = inherit ? "inherit" : "pipe";
-    const child = Bun.spawn(argv, { env: env as Record<string, string> | undefined, stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin), stdout: output, stderr: output, detached: true });
+    const locks = heldLocks();
+    const input = stdin === undefined ? "ignore" : new TextEncoder().encode(stdin);
+    const child = Bun.spawn(holdingLocks(argv, locks, timeoutMs), { env: env as Record<string, string> | undefined, stdio: [input, output, output, ...locks], detached: true });
     let expired = false;
     const cancel = timer(timeoutMs, () => {
       expired = true;

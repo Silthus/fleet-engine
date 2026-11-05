@@ -2,7 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, watch, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
+import { withBoxLock } from "./box-lock.ts";
 import { captureWith, Coder, grant, reap, type Box, type Capture, type Timer } from "./coder.ts";
+import { appeared } from "./testing.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -204,31 +206,6 @@ function handTimer() {
   return { timer, pending, fire: () => pending.splice(0).forEach((entry) => entry.fire()) };
 }
 
-function appeared(path: string): Promise<void> {
-  return new Promise((resolve) => {
-    const done = () => {
-      if (!existsSync(path)) return;
-      watcher.close();
-      resolve();
-    };
-    const watcher = watch(dirname(path), done);
-    done();
-  });
-}
-
-function stateOf(pid: number): string {
-  try {
-    return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] ?? "gone";
-  } catch {
-    return "gone";
-  }
-}
-
-async function settled(pid: number): Promise<string> {
-  for (let attempt = 0; attempt < 500 && !["Z", "X", "gone"].includes(stateOf(pid)); attempt++) await Bun.sleep(2);
-  return stateOf(pid);
-}
-
 const announce = (file: string, what = "$$") => `echo ${what} > ${file}.tmp && /bin/mv ${file}.tmp ${file}`;
 const hangs = "exec /bin/sleep 30";
 
@@ -264,17 +241,23 @@ test("downloading the coder CLI counts against the call's time limit, so a hangi
   expect(readdirSync(join(home, ".local/bin"))).toEqual([]);
 });
 
-test("a timeout kills the whole process group, including a child the shell started without exec", async () => {
-  const pidFile = join(temp.make("fleet-pid-"), "child.pid");
-  const bin = sandboxBin({ spawner: `${hangs.replace("exec ", "")} &\n${announce(pidFile, "$!")}\nwait` });
-  const clock = handTimer();
-  const result = captureWith(clock.timer)([join(bin, "spawner")], { timeoutMs: 50 });
-  await appeared(pidFile);
-  const child = Number(readFileSync(pidFile, "utf8"));
-  clock.fire();
-  expect((await result).code).toBe(124);
-  expect(["Z", "X", "gone"]).toContain(await settled(child));
-});
+for (const locked of [false, true]) {
+  test(`a timeout kills the whole process group, including a child the shell started without exec${locked ? ", also under a box lock" : ""}`, async () => {
+    const held = join(temp.make("fleet-fifo-"), "held");
+    expect(Bun.spawnSync(["mkfifo", held]).exitCode).toBe(0);
+    const bin = sandboxBin({ spawner: `sh -c 'echo up; exec tail -f /dev/null' > ${held} 2>/dev/null &\nwait` });
+    const reader = Bun.spawn(["cat", held], { stdout: "pipe" });
+    const clock = handTimer();
+    const run = () => captureWith(clock.timer)([join(bin, "spawner")], { timeoutMs: 50 });
+    const result = locked ? withBoxLock(temp.make("fleet-lock-"), "box-a", { waitMs: 0 }, run) : run();
+    const lines = reader.stdout.getReader();
+    expect(new TextDecoder().decode((await lines.read()).value)).toBe("up\n");
+    clock.fire();
+    expect((await result).code).toBe(124);
+    expect(await lines.read()).toEqual({ done: true, value: undefined });
+    expect(await reader.exited).toBe(0);
+  });
+}
 
 test("starting a box gives every Coder API request of the start one time limit", async () => {
   const signals: Array<AbortSignal | undefined> = [];

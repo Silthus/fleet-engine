@@ -1,7 +1,9 @@
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 
 export type LockOptions = { waitMs: number; waiting?(): void };
+export type HeldLock = { (): void; during<T>(step: () => Promise<T>): Promise<T> };
 
 export const userWaitMs = 2 * 60_000;
 const lockBusy = 75;
@@ -9,6 +11,9 @@ const lockBusy = 75;
 export class BoxBusy extends Error {}
 
 export const boxLocks = (home: string) => join(home, ".local/state/fleet/box-locks");
+
+const held = new AsyncLocalStorage<number[]>();
+export const heldLocks = (): number[] => held.getStore() ?? [];
 
 function refuseSymlink(path: string): void {
   if (lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error(`Will not lock a box through a symlink: ${path}`);
@@ -39,7 +44,7 @@ async function flock(fd: number, args: string[]): Promise<{ code: number; stderr
   return { code, stderr };
 }
 
-export async function lockBox(home: string, box: string, { waitMs, waiting }: LockOptions): Promise<() => void> {
+export async function lockBox(home: string, box: string, { waitMs, waiting }: LockOptions): Promise<HeldLock> {
   const fd = openLock(home, box);
   try {
     let locked = await flock(fd, ["-n"]);
@@ -53,13 +58,13 @@ export async function lockBox(home: string, box: string, { waitMs, waiting }: Lo
     closeSync(fd);
     throw error;
   }
-  return () => closeSync(fd);
+  return Object.assign(() => closeSync(fd), { during: <T>(step: () => Promise<T>) => held.run([...heldLocks(), fd], step) });
 }
 
 export async function withBoxLock<T>(home: string, box: string, options: LockOptions, step: () => Promise<T>): Promise<T> {
   const unlock = await lockBox(home, box, options);
   try {
-    return await step();
+    return await unlock.during(step);
   } finally {
     unlock();
   }

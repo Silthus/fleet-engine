@@ -599,6 +599,23 @@ test("recycling clears T3 worktrees and scratch, stops the heavy slice, keeps ex
   expect(readdirSync(join(home, "dev"))).toEqual([]);
 });
 
+test("recycling clears hidden entries too: hidden repositories in ~/dev, hidden scratch files, hidden lanes and hidden project roots", () => {
+  const home = temp.make("fleet-box-");
+  writeHome(home, {
+    "dev/.old-repo/secret": "old lane", "dev/notes/.kept-inside": "kept", "dev/.notes/x": "", "dev/..dots/y": "",
+    ".t3/scratch/.old-secret": "old lane", ".t3/scratch/..twice": "old lane",
+    ".t3/worktrees/project/.old-lane/secret": "old lane", ".t3/worktrees/.hidden-project/lane/secret": "old lane",
+  });
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl"]);
+  const run = Bun.spawnSync(["sh", "-c", recycleScript(["notes"])], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` } });
+  expect(run.exitCode).toBe(0);
+  expect(readdirSync(join(home, "dev"))).toEqual(["notes"]);
+  expect(readdirSync(join(home, "dev/notes"))).toEqual([".kept-inside"]);
+  expect(readdirSync(join(home, ".t3/scratch"))).toEqual([]);
+  expect(readdirSync(join(home, ".t3/worktrees/project"))).toEqual([]);
+  expect(readdirSync(join(home, ".t3/worktrees/.hidden-project"))).toEqual([]);
+});
+
 function treeOf(root: string): string[] {
   return readdirSync(root, { recursive: true, encoding: "utf8" }).sort();
 }
@@ -892,6 +909,90 @@ test("round 4, finding 4: there is no lease to expire, so a sweep whose idle che
   expect(during.start).toBeInstanceOf(BoxBusy);
   expect(fake.done).toEqual(["stop box-lane"]);
   expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-old" });
+});
+
+const claimedAt = "at 2026-10-31T23:00:00.000Z";
+const resumedLane = (claimOnBox: Record<string, string>, failing: Record<string, number> = {}) => async (name: string, command: string) => {
+  if (command.startsWith("cat ")) return { ...ok, code: failing[name] ?? 0, stdout: claimOnBox[name] ? `${claimOnBox[name]}\n` : "" };
+  if (command.includes("box idle")) return { ...ok, code: 1, stdout: "busy\n" };
+  if (command.includes("box threads")) return { ...ok, stdout: "Resumed lane (runs)\n" };
+  return ok;
+};
+
+test("round 5, finding 1: fleet box start refuses a box whose release began and did not finish, in one line, and the sweep then finishes that release", async () => {
+  for (const how of ["pool", "delete"] as const) {
+    const home = hubHome();
+    writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1", leaving: how } } });
+    const { machine, lines } = onHub(home);
+    const fake = fakeCoder({ ssh: resumedLane({ "box-lane": `c-1 lane by devbox-1 ${claimedAt}` }) }, [box("box-lane", "stopped")]);
+    expect(await startBox(fake.coder, machine, "box-lane", { devbox: "devbox-1", waitMs: 0 })).toBe(1);
+    expect(lines).toEqual(["box-lane: its release began and did not finish, so it is not started. The hub's sweep finishes the release; spawn another box."]);
+    expect(fake.done).toEqual([]);
+    expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-1", leaving: how });
+    expect(await sweep(fake.coder, machine)).toBe(0);
+    expect(fake.done).toEqual(how === "pool" ? [] : ["remove box-lane"]);
+    expect(registryOf(home).boxes).toEqual(how === "pool" ? { "box-lane": { id: "ws-box-lane" } } : {});
+  }
+});
+
+test("round 5, finding 1: a start after a crashed claim resumes the box only for the caller whose claim the box records, clears the mark, and the sweep keeps it up while its threads run", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1", claiming: true } } });
+  const { machine, lines } = onHub(home);
+  const fake = fakeCoder({ ssh: resumedLane({ "box-lane": `c-1 my lane by devbox-1 ${claimedAt}` }) }, [box("box-lane", "stopped")]);
+  expect(await startBox(fake.coder, machine, "box-lane", { devbox: "devbox-1", waitMs: 0 })).toBe(0);
+  expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-1" });
+  expect(lines.at(-1)).toBe("box-lane is up; its T3 forwards reconnect within a minute");
+  expect(await sweep(fake.coder, machine)).toBe(0);
+  expect(fake.done).toEqual(["start box-lane", "extend box-lane until 2026-11-01T02:00:00.000Z"]);
+  expect(registryOf(home)).toEqual({ free: [], boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1" } } });
+});
+
+test("round 5, finding 1: a start after a crashed claim refuses, in one line, a box whose recorded claim is another one or another caller's, and keeps the mark", async () => {
+  for (const [claimOnBox, caller] of [["c-old lane by devbox-1", "devbox-1"], ["c-1 lane by devbox-2", "devbox-1"], ["", "devbox-1"]] as const) {
+    const home = hubHome();
+    writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1", claiming: true } } });
+    const { machine, lines } = onHub(home);
+    const fake = fakeCoder({ ssh: resumedLane({ "box-lane": claimOnBox && `${claimOnBox} ${claimedAt}` }) }, [box("box-lane", "stopped")]);
+    expect(await startBox(fake.coder, machine, "box-lane", { devbox: caller, waitMs: 0 })).toBe(1);
+    expect(lines).toEqual(["box-lane: a claim of it stopped half way, and the box holds no claim of yours, so it is not resumed. The hub's sweep returns it to the pool, or keeps it for the lane it holds."]);
+    expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-1", claiming: true });
+    expect(fake.calls.some((call) => call.command.includes("printf"))).toBe(false);
+  }
+});
+
+test("round 5, finding 1: the sweep never pools a box with a stale claiming mark whose box records the pool's claim, or whose claim it cannot read", async () => {
+  const home = hubHome();
+  writePool(home, {
+    boxes: {
+      "box-handover": { id: "ws-box-handover", claim: "c-1", claiming: true },
+      "box-cleaned": { id: "ws-box-cleaned", claim: "c-2", claiming: true },
+      "box-asleep": { id: "ws-box-asleep", claim: "c-3", claiming: true },
+      "box-silent": { id: "ws-box-silent", claim: "c-4", claiming: true },
+    },
+  });
+  const { machine, lines } = onHub(home);
+  const listed = [box("box-handover"), box("box-cleaned"), box("box-asleep", "stopped"), box("box-silent")];
+  const fake = fakeCoder({ ssh: resumedLane({ "box-handover": `c-1 fleet box start by devbox-1 ${claimedAt}` }, { "box-silent": 255 }) }, listed);
+  expect(await sweep(fake.coder, machine)).toBe(0);
+  expect(fake.done).toEqual(["extend box-handover until 2026-11-01T02:00:00.000Z", "stop box-cleaned"]);
+  expect(registryOf(home)).toEqual({
+    free: ["box-cleaned"],
+    boxes: {
+      "box-handover": { id: "ws-box-handover", claim: "c-1" },
+      "box-cleaned": { id: "ws-box-cleaned" },
+      "box-asleep": { id: "ws-box-asleep", claim: "c-3", claiming: true },
+      "box-silent": { id: "ws-box-silent", claim: "c-4", claiming: true },
+    },
+  });
+  expect(lines.filter((line) => !/^devbox-\d: done$/.test(line))).toEqual([
+    "box-handover: an operation stopped half way after its lane claimed it; it stays the lane's",
+    "box-handover: busy, kept up for 2 hours",
+    "box-cleaned: an operation stopped half way; it goes back to the pool",
+    "returned box-cleaned to the pool and stopped it; the next spawn claims it",
+    "box-asleep: an operation stopped half way, and the box is stopped, so its claim cannot be read; kept until it runs",
+    "box-silent: an operation stopped half way, and the box did not show its claim (exit 255); kept",
+  ]);
 });
 
 test("the sweep skips a box another operation holds, and repairs each state a crashed operation leaves behind", async () => {

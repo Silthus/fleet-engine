@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { BoxBusy, lockBox, userWaitMs, withBoxLock, type LockOptions } from "./box-lock.ts";
+import { BoxBusy, lockBox, userWaitMs, withBoxLock, type HeldLock, type LockOptions } from "./box-lock.ts";
 import { assertBox, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForwards, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
 import type { Box } from "./coder.ts";
 import { quote, remoteFleet, type Machine } from "./machine.ts";
@@ -62,7 +62,7 @@ clear_in() {
   straight "$root" "clear $root" || return 1
   [ -d "$root" ] || return 0
   real=$(cd -P -- "$root" && pwd -P) || return 1
-  for entry in "$root"/*; do
+  for entry in "$root"/* "$root"/.[!.]* "$root"/..?*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     base=\${entry##*/}
     for keep in "$@"; do [ "$base" = "$keep" ] && continue 2; done
@@ -79,7 +79,7 @@ export function recycleScript(keepDirs: string[]): string {
     "failed=0",
     'clear_in "$HOME/.t3/scratch" || failed=1',
     'if straight "$HOME/.t3/worktrees" "clear $HOME/.t3/worktrees"; then',
-    '  for project in "$HOME"/.t3/worktrees/*; do',
+    '  for project in "$HOME"/.t3/worktrees/* "$HOME"/.t3/worktrees/.[!.]* "$HOME"/.t3/worktrees/..?*; do',
     '    if [ -L "$project" ]; then rm -f -- "$project"; elif [ -d "$project" ]; then clear_in "$project" || failed=1; fi',
     "  done",
     "else failed=1; fi",
@@ -91,6 +91,8 @@ export function recycleScript(keepDirs: string[]): string {
 
 const claimLine = (here: Machine, label: string, by: string, claim: string) => `${claim} ${label} by ${by} at ${new Date(here.now()).toISOString()}`;
 const readClaim = "cut -d' ' -f1 ~/.config/fleet/box-claim 2>/dev/null";
+const readClaimLine = "cat ~/.config/fleet/box-claim 2>/dev/null || true";
+const holderOf = (line: string) => /^(\S+) .* by (\S+) at \S+$/.exec(line.trim())?.slice(1) ?? [];
 const budget = (here: Machine, limitMs: number) => {
   const deadline = here.now() + limitMs;
   return { left: () => deadline - here.now() };
@@ -253,7 +255,7 @@ async function setUpPooled(coder: BoxCoder, here: Machine, lane: Lane, box: Work
 
 async function claimFromPool(coder: BoxCoder, here: Machine, lane: Lane): Promise<boolean> {
   for (const box of registry.pooled(poolPath(here))) {
-    let unlock: () => void;
+    let unlock: HeldLock;
     try {
       unlock = await lockBox(here.home, box, { waitMs: 0 });
     } catch (error) {
@@ -262,8 +264,11 @@ async function claimFromPool(coder: BoxCoder, here: Machine, lane: Lane): Promis
       continue;
     }
     try {
-      const taken = await change(here, (pool) => registry.take(pool, box));
-      if (taken && (await setUpPooled(coder, here, lane, { name: box, id: taken.id }, taken.claim))) return true;
+      const claimed = await unlock.during(async () => {
+        const taken = await change(here, (pool) => registry.take(pool, box));
+        return !!taken && (await setUpPooled(coder, here, lane, { name: box, id: taken.id }, taken.claim));
+      });
+      if (claimed) return true;
     } finally {
       unlock();
     }
@@ -355,7 +360,7 @@ async function finishRelease(coder: BoxCoder, here: Machine, box: Workspace, how
 
 const busyLine = (box: string) => `${box}: another operation holds it; skipped`;
 
-async function tryLock(here: Machine, box: string): Promise<(() => void) | undefined> {
+async function tryLock(here: Machine, box: string): Promise<HeldLock | undefined> {
   try {
     return await lockBox(here.home, box, { waitMs: 0 });
   } catch (error) {
@@ -375,9 +380,20 @@ async function sweepOne(coder: BoxCoder, here: Machine, name: string, hooks: Box
   }
   if (live.template !== here.settings.template) return;
   const box = { name, id: live.id };
-  if (entry.leaving || entry.claiming) {
-    const how = entry.leaving ?? "pool";
-    here.print(`${name}: an operation stopped half way; ${how === "pool" ? "it goes back to the pool" : "it is deleted"}`);
+  const half = `${name}: an operation stopped half way`;
+  let how = entry.leaving;
+  if (entry.claiming && !how) {
+    if (live.status !== "running") return here.print(`${half}, and the box is stopped, so its claim cannot be read; kept until it runs`);
+    const onBox = await coder.ssh(name, readClaimLine, undefined, idleCheckLimitMs);
+    if (onBox.code !== 0) return here.print(`${half}, and the box did not show its claim (exit ${onBox.code}); kept`);
+    if (holderOf(onBox.stdout)[0] !== entry.claim) how = "pool";
+    else {
+      await change(here, (pool) => registry.settle(pool, name, entry.id));
+      here.print(`${half} after its lane claimed it; it stays the lane's`);
+    }
+  }
+  if (how) {
+    here.print(`${half}; ${how === "pool" ? "it goes back to the pool" : "it is deleted"}`);
     if ((await finishRelease(coder, here, box, how, true, { stillDoomed: async () => true })) !== 0) throw new Error("finishing its release failed");
     return;
   }
@@ -408,7 +424,7 @@ export async function sweep(coder: BoxCoder, here: Machine, hooks: BoxHooks = {}
       continue;
     }
     try {
-      await sweepOne(coder, here, name, hooks);
+      await unlock.during(() => sweepOne(coder, here, name, hooks));
     } catch (error) {
       failed = 1;
       here.print(`${name}: ${(error as Error).message}`);
@@ -421,6 +437,14 @@ export async function sweep(coder: BoxCoder, here: Machine, hooks: BoxHooks = {}
 
 export type StartOptions = { devbox?: string; waitMs?: number };
 
+async function resume(coder: BoxCoder, here: Machine, box: Workspace, claim: string | undefined, caller: string): Promise<boolean> {
+  const onBox = await coder.ssh(box.name, readClaimLine);
+  const [held, by] = holderOf(onBox.stdout);
+  if (onBox.code !== 0 || held !== claim || by !== caller) return here.say(`${box.name}: a claim of it stopped half way, and the box holds no claim of yours, so it is not resumed. The hub's sweep returns it to the pool, or keeps it for the lane it holds.`), false;
+  await change(here, (pool) => registry.settle(pool, box.name, box.id));
+  return true;
+}
+
 export async function startBox(coder: BoxCoder, here: Machine, box: string, { devbox, waitMs = userWaitMs }: StartOptions = {}): Promise<number> {
   assertBox(box);
   const started = await withBoxLock(here.home, box, lockWait(here, box, waitMs), async () => {
@@ -428,11 +452,13 @@ export async function startBox(coder: BoxCoder, here: Machine, box: string, { de
     if (!live) return here.say(`${box} is gone, so it cannot be started.`), false;
     const entry = registry.recorded(poolPath(here))[box];
     if (entry && entry.id !== live.id) return here.say(otherWorkspace(box)), false;
+    if (entry?.leaving) return here.say(`${box}: its release began and did not finish, so it is not started. The hub's sweep finishes the release; spawn another box.`), false;
     const workspace = { name: box, id: live.id };
-    const taken = entry ? await change(here, (pool) => registry.take(pool, box)) : undefined;
+    const taken = entry && !entry.claiming ? await change(here, (pool) => registry.take(pool, box)) : undefined;
     try {
       await coder.start(live.id, startLimitMs);
       await waitReady(coder, here, workspace);
+      if (entry?.claiming) return await resume(coder, here, workspace, entry.claim, devbox ?? here.self);
       if (!taken) return true;
       await sameWorkspace(coder, workspace);
       const recorded = await coder.ssh(box, claimRecord(claimLine(here, "fleet box start", devbox ?? here.self, taken.claim)));
@@ -530,7 +556,7 @@ export async function refreshPool(coder: BoxCoder, here: Machine): Promise<numbe
     const unlock = await tryLock(here, box);
     if (!unlock) return here.print(busyLine(box)), true;
     try {
-      return await refreshOne(coder, here, box, warm);
+      return await unlock.during(() => refreshOne(coder, here, box, warm));
     } finally {
       unlock();
     }

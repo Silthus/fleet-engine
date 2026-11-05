@@ -1,5 +1,5 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Box, Result } from "./coder.ts";
 import type { CommandCoder } from "./box-command.ts";
 import { readBoxSettings, type Machine } from "./machine.ts";
@@ -120,4 +120,16 @@ export function stubBin(dir: string, names: string[]) {
 export function linkedHere(home: string, environmentId = "env-1") {
   writeHome(home, { ".config/fleet/boxes/box-lane.json": JSON.stringify({ environmentId, port: 21000 }) });
   return join(home, ".config/fleet/boxes/box-lane.json");
+}
+
+export function appeared(path: string): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      if (!existsSync(path)) return;
+      watcher.close();
+      resolve();
+    };
+    const watcher = watch(dirname(path), done);
+    done();
+  });
 }
