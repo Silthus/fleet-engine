@@ -138,7 +138,7 @@ function answered(data: PageData, picks: Picks) {
   });
 }
 
-/** The questions setup on the Mac still asks after it reads the command: the AI plans, then each setting the command leaves open. Settings of workflows that need a devbox are asked there instead. */
+/** The questions setup on the Mac still asks after it reads the command: the AI plans, then each setting the command leaves open. Settings only a devbox needs are asked when you add a devbox. */
 export function questions(data: PageData, picks: Picks) {
   const set = new Set(answered(data, picks).map((setting) => setting.key));
   const open = (setting: PackSetting) => asked(setting) && !data.filledBySetup.includes(setting.key) && !set.has(setting.key);
@@ -146,6 +146,11 @@ export function questions(data: PageData, picks: Picks) {
   const keys = new Set(settings.map((setting) => setting.key));
   const devbox = picked(data, picks).flatMap((pack) => activeSettings(data, picks, pack)).filter((setting) => open(setting) && !keys.has(setting.key));
   return { settings, devbox, count: settings.length + 1 };
+}
+
+export function setupAsks(data: PageData, picks: Picks) {
+  const { count, devbox } = questions(data, picks);
+  return `asks ${count} more question${count === 1 ? "" : "s"}${devbox.length ? `, plus ${devbox.length} when you add a devbox` : ""}`;
 }
 
 export function commandFlags(data: PageData, picks: Picks): string[] {

@@ -30,6 +30,10 @@ describe("the page build", () => {
     expect(await buildPage({ audience: "public" })).toBe(readFileSync(join(root, "page/index.html"), "utf8"));
   });
 
+  test("the page never says setup leaves a devbox setting unasked", async () => {
+    expect(await buildPage({ audience: "public" })).not.toMatch(/does not ask|your devbox needs it/);
+  });
+
   test("the public build names no PostHog item, Coder, or hogli anywhere", async () => {
     const html = await buildPage({ audience: "public" });
     expect(html.match(/posthog|hogli|coder|stamphog|reviewhog/gi)).toBeNull();
