@@ -136,23 +136,31 @@ describe("fleet setup sign-ins", () => {
     expect(savedAnswers(removed).packs).not.toContain("posthog");
   });
 
-  test("a first run takes --set and --workflows for a team pack that GitHub sign-in finds, and refuses them when no team has them", async () => {
+  test("a first run takes --set and --workflows for a team pack that GitHub sign-in finds, and refuses them, saving nothing, when no team has them", async () => {
     const withChoices = {
       ...teamPack,
-      workflows: [{ id: "posthog-reviews", name: "Reviews", sentence: "Pull requests get a team review.", default: true }],
-      settings: [{ key: "posthog.region", question: "Which region?", type: "choice", default: "us", ask: "setup", choices: [{ value: "us", label: "US" }, { value: "eu", label: "EU" }] }],
+      workflows: [{ id: "team-reviews", name: "Reviews", sentence: "Pull requests get a team review.", default: true }],
+      settings: [
+        { key: "posthog.region", question: "Which region?", type: "choice", default: "us", ask: "setup", choices: [{ value: "us", label: "US" }, { value: "eu", label: "EU" }] },
+        { key: "posthog.mirror", question: "Which mirror?", type: "string", default: "main", ask: "never" },
+      ],
     };
-    const args = ["--set", "posthog.region=eu", "--workflows", "posthog-reviews=off", "--plan", "claude"];
+    const args = ["--set", "posthog.region=eu", "--set", "posthog.mirror=edge", "--set", "pull-requests.freeReviews=5", "--workflows", "team-reviews=off", "--plan", "claude"];
     const home = temp.make("home-");
-    const member = await fleetSetup(home, args, ["", "", ""], fakeMachine(home, { coder: 1 }, { org: true }), teamSource({}, withChoices));
+    const member = await fleetSetup(home, args, ["", "", ""], fakeMachine(home, { coder: 1 }, { org: true }), teamSource({}, withChoices as typeof teamPack));
     expect([member.code, member.output.split("\n").filter((line) => line.startsWith("fleet setup:"))]).toEqual([0, []]);
-    expect(savedAnswers(home)).toMatchObject({ packs: expect.arrayContaining(["posthog"]), settings: { "posthog.region": "eu" }, workflows: { "posthog-reviews": false } });
+    expect(savedAnswers(home)).toMatchObject({
+      packs: expect.arrayContaining(["posthog"]),
+      settings: { "posthog.region": "eu", "posthog.mirror": "edge", "pull-requests.freeReviews": 5 },
+      workflows: { "team-reviews": false },
+    });
 
     const outside = temp.make("home-");
-    const refused = await fleetSetup(outside, args, ["", "", ""], fakeMachine(outside, {}, { org: false }), teamSource({}, withChoices));
+    const refused = await fleetSetup(outside, args, ["", "", ""], fakeMachine(outside, {}, { org: false }), teamSource({}, withChoices as typeof teamPack));
     expect(refused.code).toBe(2);
-    expect(refused.output).toContain("fleet setup: --workflows: no workflow named posthog-reviews");
+    expect(refused.output).toContain("fleet setup: --workflows: no workflow named team-reviews");
     expect(refused.prompts).toEqual([]);
+    expect(machineFile(outside).setup.draft.settings).toBeUndefined();
   });
 
   test("a run without a person changes nothing for a sign-in while answers are missing", async () => {
