@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { hubCommand, markHub, peersOf, readBoxSettings, readRole, requireHub, thisMachine } from "./machine.ts";
+import { hubCommand, markHub, peersOf, readBoxSettings, readRole, requireHub, shellLimitMs, shellsWith, thisMachine } from "./machine.ts";
+import type { Capture } from "./coder.ts";
 import { boxSettings } from "./testing.ts";
 
 const temp = tempDirs();
@@ -65,4 +66,28 @@ test("peers and nightly grants cover the devboxes in the profile and those fleet
   expect(machine.peers).toEqual(["my-hub", "devbox-2", "devbox-3"]);
   const withoutProfile = thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings) }, home);
   expect(withoutProfile.devboxes).toEqual(["devbox-3", "devbox-2"]);
+});
+
+test("fleet hub here never writes through a file planted at a temporary name", async () => {
+  const home = homeWithMachine({ schema: 1, role: "devbox" });
+  const path = join(home, ".config/fleet/machine.json");
+  writeFileSync(join(home, "victim"), "keep\n");
+  symlinkSync(join(home, "victim"), `${path}.${process.pid}.partial`);
+  await markHub(home);
+  expect(readFileSync(join(home, "victim"), "utf8")).toBe("keep\n");
+  expect(lstatSync(path).isSymbolicLink()).toBe(false);
+  expect(readRole(home)).toBe("hub");
+});
+
+test("every call to a peer over SSH and every local command gets an operation time limit, so a hanging call cannot hang a box command", async () => {
+  const asked: Array<{ argv: string[]; timeoutMs: number; stdin?: string }> = [];
+  const capture: Capture = async (argv, options) => (asked.push({ argv, timeoutMs: options.timeoutMs, ...(options.stdin === undefined ? {} : { stdin: options.stdin }) }), { code: 0, stdout: "", stderr: "" });
+  const { onPeer, run } = shellsWith(capture);
+  await onPeer("my-hub", "fleet box pool list", "input");
+  await run(["systemctl", "--user", "is-active", "unit"]);
+  expect(asked).toEqual([
+    { argv: ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "my-hub", "bash -lc 'fleet box pool list'"], timeoutMs: shellLimitMs, stdin: "input" },
+    { argv: ["systemctl", "--user", "is-active", "unit"], timeoutMs: shellLimitMs },
+  ]);
+  expect(shellLimitMs).toBeGreaterThan(0);
 });

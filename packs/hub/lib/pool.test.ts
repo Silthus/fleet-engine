@@ -21,8 +21,13 @@ const tokenOf = (held: Awaited<ReturnType<PoolClient["hold"]>>) => (held.state =
 const entries = (file: string) => (JSON.parse(readFileSync(file, "utf8")) as Pool).boxes;
 
 async function returned(pool: PoolClient, box: string) {
-  const held = await pool.hold(box, `ws-${box}`, await pool.own(box, `ws-${box}`));
-  return pool.give(box, tokenOf(held));
+  return pool.give(box, (await pool.own(box, `ws-${box}`)).token);
+}
+
+async function spawned(pool: PoolClient, box: string, id: string) {
+  const { claim, token } = await pool.own(box, id);
+  await pool.unhold(box, token);
+  return claim;
 }
 
 test("the pool never hands one box to two spawns, and takes boxes back only while it has room", async () => {
@@ -50,15 +55,16 @@ test("a lock left by a crashed run is taken over once stale, and a held lock fai
 
 test("overlapping releases cannot hand one box to two claimants: a return counts only for the box's current claim", async () => {
   const { file, pool } = poolIn();
-  const spawned = await pool.own("box-a", "ws-a");
-  const releaseA = await pool.hold("box-a", "ws-a", spawned);
+  const first = await spawned(pool, "box-a", "ws-a");
+  const releaseA = await pool.hold("box-a", "ws-a", first);
   expect(releaseA.state).toBe("held");
-  expect((await pool.hold("box-a", "ws-a", spawned)).state).toBe("busy");
+  expect((await pool.hold("box-a", "ws-a", first)).state).toBe("busy");
   expect(await pool.give("box-a", tokenOf(releaseA))).toBe(true);
   const spawnA = await pool.claim();
-  expect(spawnA).toEqual({ box: "box-a", id: "ws-a", claim: expect.any(String) });
-  expect(spawnA?.claim).not.toBe(spawned);
-  expect((await pool.hold("box-a", "ws-a", spawned)).state).toBe("stale");
+  expect(spawnA).toEqual({ box: "box-a", id: "ws-a", claim: expect.any(String), token: expect.any(String) });
+  expect(spawnA?.claim).not.toBe(first);
+  await pool.unhold("box-a", spawnA!.token);
+  expect((await pool.hold("box-a", "ws-a", first)).state).toBe("stale");
   expect(await pool.give("box-a", "a-token-from-nowhere").catch(() => "refused")).toBe("refused");
   expect(await pool.claim()).toBeUndefined();
   expect(pooled(file)).toEqual([]);
@@ -67,7 +73,7 @@ test("overlapping releases cannot hand one box to two claimants: a return counts
 test("only boxes the pool recorded can be held, and a pool file from older code hands out none of its unrecorded boxes", async () => {
   const { file, pool } = poolIn();
   await withPool(file, (state) => void state.free.push("box-personal"));
-  await pool.own("box-mine", "ws-mine");
+  await spawned(pool, "box-mine", "ws-mine");
   expect((await pool.hold("box-personal", "ws-personal")).state).toBe("unowned");
   expect((await pool.hold("box-mine", "ws-other")).state).toBe("unowned");
   expect(await pool.claim()).toBeUndefined();
@@ -75,7 +81,7 @@ test("only boxes the pool recorded can be held, and a pool file from older code 
 
 test("a hold from a release that crashed keeps others out until it expires; the takeover gets a new token and fences the crashed release out", async () => {
   const { file, clock, pool } = poolIn();
-  const lane = await pool.own("box-a", "ws-a");
+  const lane = await spawned(pool, "box-a", "ws-a");
   const crashed = tokenOf(await pool.hold("box-a", "ws-a", lane));
   expect((await pool.hold("box-a", "ws-a")).state).toBe("busy");
   await clock.sleep(holdMs - 1);
@@ -100,7 +106,7 @@ test("a hold from a release that crashed keeps others out until it expires; the 
 test("a start takes a free box out of the pool with a new claim, and a lane-held box with the claim it has", async () => {
   const { file, pool } = poolIn();
   await returned(pool, "box-free");
-  const lane = await pool.own("box-lane", "ws-box-lane");
+  const lane = await spawned(pool, "box-lane", "ws-box-lane");
   const fromPool = await pool.hold("box-free", "ws-box-free");
   expect(fromPool).toEqual({ state: "held", token: expect.any(String), claim: expect.any(String) });
   expect(pooled(file)).toEqual([]);
@@ -112,10 +118,26 @@ test("a start takes a free box out of the pool with a new claim, and a lane-held
 
 test("a box is dropped only by its current hold or claim, so a late drop cannot forget a newer box with the same name", async () => {
   const { file, pool } = poolIn();
-  const old = await pool.own("box-a", "ws-old");
-  const newer = await pool.own("box-a", "ws-new");
+  const old = await spawned(pool, "box-a", "ws-old");
+  const newer = await spawned(pool, "box-a", "ws-new");
   await pool.drop("box-a", old);
   expect(entries(file)["box-a"]).toEqual({ id: "ws-new", claim: newer });
   await pool.drop("box-a", newer);
   expect(entries(file)["box-a"]).toBeUndefined();
+});
+
+test("a spawn holds the box it claims or makes, so no other operation takes it until the spawn lets go or the hold expires", async () => {
+  const { clock, pool } = poolIn();
+  await returned(pool, "box-a");
+  const claimed = await pool.claim();
+  expect(claimed).toEqual({ box: "box-a", id: "ws-box-a", claim: expect.any(String), token: expect.any(String) });
+  expect((await pool.hold("box-a", "ws-box-a", claimed!.claim)).state).toBe("busy");
+  expect((await pool.hold("box-a", "ws-box-a")).state).toBe("busy");
+  const made = await pool.own("box-b", "ws-box-b");
+  expect((await pool.hold("box-b", "ws-box-b", made.claim)).state).toBe("busy");
+  await pool.unhold("box-b", made.token);
+  expect((await pool.hold("box-b", "ws-box-b", made.claim)).state).toBe("held");
+  await clock.sleep(holdMs);
+  expect((await pool.hold("box-a", "ws-box-a", claimed!.claim)).state).toBe("held");
+  expect(await pool.renew("box-a", claimed!.token)).toBe(false);
 });

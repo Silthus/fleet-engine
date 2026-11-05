@@ -72,10 +72,13 @@ async function poolCommand(coder: () => CommandCoder, here: Machine, [verb = "li
   const file = registry.poolFile(here.home);
   const pool = poolAt(file, here.settings.poolSize, here);
   switch (verb) {
-    case "own": return here.print(await pool.own(box, value)), 0;
+    case "own": {
+      const owned = await pool.own(box, value);
+      return here.print(`${owned.claim} ${owned.token}`), 0;
+    }
     case "claim": {
       const claimed = await pool.claim();
-      if (claimed) here.print(`${claimed.box} ${claimed.id} ${claimed.claim}`);
+      if (claimed) here.print(`${claimed.box} ${claimed.id} ${claimed.claim} ${claimed.token}`);
       return claimed ? 0 : 3;
     }
     case "hold": {
@@ -102,10 +105,10 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
   if (hubOnly.includes(command!)) requireHub(here.home, command!);
   const coder = () => deps.coder(here);
   const grantTo = (devbox: string, ifExpiring: boolean) => grant(coder(), devbox, { ifExpiring, now: here.now(), onDevbox: here.onPeer, print: here.print });
-  const reapNow = (days: number, dryRun: boolean) => {
+  const reapNow = async (days: number, dryRun: boolean) => {
     const pooled = new Set(registry.pooled(registry.poolFile(here.home)));
-    for (const box of ownership(coder().boxes(), here).skipped) here.print(`${box.name}: skipped, not a box this pool made`);
-    const unpooled = { boxes: () => ownership(coder().boxes(), here).owned.filter((box) => !pooled.has(box.name)) };
+    for (const box of ownership(await coder().boxes(), here).skipped) here.print(`${box.name}: skipped, not a box this pool made`);
+    const unpooled = { boxes: async () => ownership(await coder().boxes(), here).owned.filter((box) => !pooled.has(box.name)) };
     return reap(unpooled, { days, dryRun, now: here.now(), print: here.print }, (box, stillStale) => release(coder(), here, box, { force: true, stillDoomed: stillStale, pool: poolOn(here), hooks: deps.hooks }));
   };
   switch (command) {
@@ -113,9 +116,9 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
     case "idle": return idle(here);
     case "threads": return threads(here);
     case "restore": return restoreForwards(coder(), here);
-    case "unlink": return unlink(here, name!) ? 0 : 1;
+    case "unlink": return (await unlink(here, name!)) ? 0 : 1;
     case "list": return list(coder(), here);
-    case "sweep": return sweep(coder(), here, deps.hooks);
+    case "sweep": return sweep(coder(), here, poolOn(here), deps.hooks);
     case "pool": return poolCommand(coder, here, args.slice(1));
     case "grant": return grantTo(name!, rest.includes("--if-expiring"));
     case "reap": return reapNow(Number(option(args, "--days") ?? here.settings.reapDays), args.includes("--dry-run"));

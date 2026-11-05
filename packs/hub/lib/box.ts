@@ -1,10 +1,11 @@
 import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { chmod, mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { assertBox, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForwards, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
 import type { Box, Result } from "./coder.ts";
 import { quote, remoteFleet, type Machine } from "./machine.ts";
+import { writePrivateFile } from "./mcphub/client.ts";
 import * as registry from "./pool.ts";
 
 export type PoolClient = registry.PoolClient;
@@ -12,6 +13,8 @@ export type BoxHooks = { stopping?(box: string): void };
 
 const readyLimitMs = 15 * 60_000;
 const applyLimitMs = 15 * 60_000;
+export const startLimitMs = 5 * 60_000;
+const idleCheckLimitMs = 2 * 60_000;
 const activeStatuses = new Set(["pending", "starting", "running"]);
 const servingIdleAfterMs = 24 * 3_600_000;
 const busyLife = "2h";
@@ -85,7 +88,7 @@ export function recycleScript(keepDirs: string[]): string {
 
 const claimLine = (here: Machine, label: string, claim: string) => `${claim} ${label} by ${here.self} at ${new Date(here.now()).toISOString()}`;
 const readClaim = "cut -d' ' -f1 ~/.config/fleet/box-claim 2>/dev/null";
-const statusOf = (coder: Pick<BoxCoder, "boxes">, box: string, timeoutMs?: number) => coder.boxes(timeoutMs).find((candidate) => candidate.name === box)?.status ?? "gone";
+const statusOf = async (coder: Pick<BoxCoder, "boxes">, box: string, timeoutMs?: number) => (await coder.boxes(timeoutMs)).find((candidate) => candidate.name === box)?.status ?? "gone";
 const budget = (here: Machine, limitMs: number) => {
   const deadline = here.now() + limitMs;
   return { left: () => deadline - here.now() };
@@ -94,9 +97,9 @@ const budget = (here: Machine, limitMs: number) => {
 async function waitReady(coder: BoxCoder, here: Machine, box: string): Promise<void> {
   const { left } = budget(here, readyLimitMs);
   while (left() > 0) {
-    const status = statusOf(coder, box, left());
+    const status = await statusOf(coder, box, left());
     if (!activeStatuses.has(status)) throw new Error(`${box} is ${status}, so it will not become ready.`);
-    if (status === "running" && left() > 0 && coder.sshAfterStartup(box, "true", left()).code === 0) return;
+    if (status === "running" && left() > 0 && (await coder.sshAfterStartup(box, "true", left())).code === 0) return;
     if (left() > 0) await here.sleep(Math.min(5000, left()));
   }
   throw new Error(`${box} was not ready after ${readyLimitMs / 60_000} minutes.`);
@@ -104,7 +107,7 @@ async function waitReady(coder: BoxCoder, here: Machine, box: string): Promise<v
 
 async function waitForApply(coder: BoxCoder, here: Machine, box: string): Promise<void> {
   const { left } = budget(here, applyLimitMs);
-  while (left() <= 0 || coder.ssh(box, machineFileCheck, undefined, left()).code !== 0) {
+  while (left() <= 0 || (await coder.ssh(box, machineFileCheck, undefined, left())).code !== 0) {
     if (left() <= 0) throw new Error(`${box} did not finish fleet apply within ${applyLimitMs / 60_000} minutes: it has no ~/.config/fleet/machine.json. Read its Coder startup log.`);
     await here.sleep(Math.min(5000, left()));
   }
@@ -113,18 +116,20 @@ async function waitForApply(coder: BoxCoder, here: Machine, box: string): Promis
 async function settled(coder: BoxCoder, here: Machine, box: string): Promise<string> {
   const { left } = budget(here, readyLimitMs);
   for (;;) {
-    const status = statusOf(coder, box, Math.max(1, left()));
+    const status = await statusOf(coder, box, Math.max(1, left()));
     if (!["pending", "starting", "stopping", "canceling"].includes(status) || left() <= 0) return status;
     await here.sleep(Math.min(5000, left()));
   }
 }
 
-function onEveryPeer(here: Machine, command: string): string[] {
-  return here.peers.filter((alias) => {
-    const result = here.onPeer(alias, command);
+async function onEveryPeer(here: Machine, command: string): Promise<string[]> {
+  const failed: string[] = [];
+  for (const alias of here.peers) {
+    const result = await here.onPeer(alias, command);
     here.say(`${alias}: ${result.code === 0 ? "done" : `failed (${(result.stderr || result.stdout).trim().split("\n").at(-1)})`}`);
-    return result.code !== 0;
-  });
+    if (result.code !== 0) failed.push(alias);
+  }
+  return failed;
 }
 
 function stopwatch(here: Machine, box: string, label: string, source: "pool" | "new") {
@@ -165,37 +170,39 @@ export function poolOn(here: Machine): PoolClient {
   if (here.isHub) return poolAt(registry.poolFile(here.home), here.settings.poolSize, here);
   const ask = (verb: string, ...args: string[]) => here.onPeer(here.settings.alias, remoteFleet(["box pool", verb, ...args.map(quote)].join(" ")));
   const unanswered = (verb: string, answer: Result) => new Error(`the hub did not answer about the pool (${verb}, exit ${answer.code}: ${(answer.stderr || answer.stdout).trim()})`);
+  const yesOrNo = async (verb: string, box: string, token: string) => {
+    const answer = await ask(verb, box, token);
+    if (answer.code === 0 || answer.code === 3) return answer.code === 0;
+    throw unanswered(verb, answer);
+  };
   return {
     own: async (box, id) => {
-      const answer = ask("own", box, id);
-      if (answer.code !== 0) throw unanswered("own", answer);
-      return answer.stdout.trim();
+      const answer = await ask("own", box, id);
+      const [claim, token] = answer.stdout.trim().split(/\s+/);
+      if (answer.code !== 0 || !claim || !token) throw unanswered("own", answer);
+      return { claim, token };
     },
     claim: async () => {
-      const answer = ask("claim");
-      const [box, id, claim] = answer.code === 0 ? answer.stdout.trim().split(/\s+/) : [];
-      return box && id && claim ? { box, id, claim } : undefined;
+      const answer = await ask("claim");
+      const [box, id, claim, token] = answer.code === 0 ? answer.stdout.trim().split(/\s+/) : [];
+      return box && id && claim && token ? { box, id, claim, token } : undefined;
     },
     hold: async (box, id, claim) => {
-      const answer = ask("hold", box, id, ...(claim === undefined ? [] : [claim]));
+      const answer = await ask("hold", box, id, ...(claim === undefined ? [] : [claim]));
       const [token, fresh] = answer.stdout.trim().split(/\s+/);
       if (answer.code === 0 && token) return { state: "held", token, ...(fresh ? { claim: fresh } : {}) };
       const state = holdStates[answer.code];
       if (state && state !== "held") return { state };
       throw unanswered("hold", answer);
     },
-    renew: async (box, token) => {
-      const answer = ask("renew", box, token);
-      if (answer.code === 0 || answer.code === 3) return answer.code === 0;
-      throw unanswered("renew", answer);
-    },
-    unhold: async (box, token) => void ask("unhold", box, token),
+    renew: (box, token) => yesOrNo("renew", box, token),
+    unhold: async (box, token) => void (await ask("unhold", box, token)),
     give: async (box, token) => {
-      const answer = ask("give", box, token);
+      const answer = await ask("give", box, token);
       if (answer.code === 0 || answer.code === 3) return answer.code === 0;
       throw new Error(`the hub did not answer about the pool (exit ${answer.code}); ${box} stays stopped. Run fleet box release ${box} again later`);
     },
-    drop: async (box, key) => void ask("drop", box, key),
+    drop: async (box, key) => void (await ask("drop", box, key)),
   };
 }
 
@@ -205,46 +212,55 @@ function finish(here: Machine, box: string, environmentId: string, unlinked: str
   here.print(`${box} ${environmentId}`);
 }
 
+async function setUpPooled(coder: BoxCoder, here: Machine, label: string, claimed: registry.Claimed, holder: registry.Holder): Promise<boolean> {
+  const { box, claim } = claimed;
+  const live = (await coder.boxes()).find((candidate) => candidate.name === box);
+  if (!live) await holder.drop();
+  if (!live || live.id !== claimed.id || live.template !== here.settings.template) {
+    here.say(`${skippedLine(box)}; it leaves the pool`);
+    return false;
+  }
+  const watch = stopwatch(here, box, label, "pool");
+  try {
+    here.say(`claimed ${box} from the pool for ${label}`);
+    if ((await settled(coder, here, box)) !== "running") await coder.start(box, startLimitMs);
+    await waitReady(coder, here, box);
+    watch.step("start");
+    await holder.renew();
+    const cleaned = await coder.ssh(box, `bash -lc ${quote(recycleScript(here.settings.keepDirs))}`);
+    if (cleaned.code !== 0) throw new Error(`cleaning failed: ${(cleaned.stderr || cleaned.stdout).trim()}`);
+    await startUnit(coder, here, unitOf(box, "hub"), hubForward(here, box));
+    await handOver(coder, here, box);
+    await holder.renew();
+    if ((await coder.ssh(box, `bash -lc ${quote(claimScript(claimLine(here, label, claim)))}`)).code !== 0) throw new Error("T3 did not answer after its restart with the new Claude token");
+    watch.step("setup");
+    await holder.renew();
+    const record = linkFile(here, box);
+    const fresh = existsSync(record) && here.now() - statSync(record).mtimeMs < linkFreshMs;
+    const environmentId = fresh ? recordedEnvironment(here, box) : await link(coder, here, box);
+    const t3 = `${unitOf(box, "t3")}.service`;
+    if (fresh) {
+      await here.run(["systemctl", "--user", "try-restart", t3]);
+      await restoreForwards(coder, here);
+    }
+    const relink = `r=~/.config/fleet/boxes/${box}.json && if test -n "$(find "$r" -mtime -21 2>/dev/null)"; then systemctl --user try-restart ${t3}; else ${remoteFleet(`box link ${box}`)}; fi`;
+    const unlinked = await onEveryPeer(here, relink);
+    watch.step("link");
+    watch.done(true);
+    finish(here, box, environmentId, unlinked);
+    return true;
+  } catch (error) {
+    watch.done(false);
+    await stopUnit(here, unitOf(box, "hub"));
+    here.say(`${box} from the pool failed (${(error as Error).message}); it leaves the pool. Trying the next one.`);
+    return false;
+  }
+}
+
 async function claimFromPool(coder: BoxCoder, here: Machine, label: string, pool: PoolClient): Promise<boolean> {
   for (let claimed = await pool.claim(); claimed; claimed = await pool.claim()) {
-    const { box } = claimed;
-    const live = coder.boxes().find((candidate) => candidate.name === box);
-    if (!live) await pool.drop(box, claimed.claim);
-    if (!live || live.id !== claimed.id || live.template !== here.settings.template) {
-      here.say(`${skippedLine(box)}; it leaves the pool`);
-      continue;
-    }
-    const watch = stopwatch(here, box, label, "pool");
-    try {
-      here.say(`claimed ${box} from the pool for ${label}`);
-      if ((await settled(coder, here, box)) !== "running") await coder.start(box);
-      await waitReady(coder, here, box);
-      watch.step("start");
-      const cleaned = coder.ssh(box, `bash -lc ${quote(recycleScript(here.settings.keepDirs))}`);
-      if (cleaned.code !== 0) throw new Error(`cleaning failed: ${(cleaned.stderr || cleaned.stdout).trim()}`);
-      startUnit(coder, here, unitOf(box, "hub"), hubForward(here, box));
-      handOver(coder, here, box);
-      if (coder.ssh(box, `bash -lc ${quote(claimScript(claimLine(here, label, claimed.claim)))}`).code !== 0) throw new Error("T3 did not answer after its restart with the new Claude token");
-      watch.step("setup");
-      const record = linkFile(here, box);
-      const fresh = existsSync(record) && here.now() - statSync(record).mtimeMs < linkFreshMs;
-      const environmentId = fresh ? recordedEnvironment(here, box) : await link(coder, here, box);
-      const t3 = `${unitOf(box, "t3")}.service`;
-      if (fresh) {
-        here.run(["systemctl", "--user", "try-restart", t3]);
-        restoreForwards(coder, here);
-      }
-      const relink = `r=~/.config/fleet/boxes/${box}.json && if test -n "$(find "$r" -mtime -21 2>/dev/null)"; then systemctl --user try-restart ${t3}; else ${remoteFleet(`box link ${box}`)}; fi`;
-      const unlinked = onEveryPeer(here, relink);
-      watch.step("link");
-      watch.done(true);
-      finish(here, box, environmentId, unlinked);
-      return true;
-    } catch (error) {
-      watch.done(false);
-      stopUnit(here, unitOf(box, "hub"));
-      here.say(`${box} from the pool failed (${(error as Error).message}); it leaves the pool. Trying the next one.`);
-    }
+    const taken = claimed;
+    if (await registry.withHold(pool, taken.box, taken.token, (holder) => setUpPooled(coder, here, label, taken, holder))) return true;
   }
   return false;
 }
@@ -257,25 +273,29 @@ export async function spawn(coder: BoxCoder, here: Machine, name: string | undef
   here.say(`create ${box} with a ${here.settings.diskGigabytes} GB disk`);
   const id = await coder.create(box, here.workspace, here.settings.diskGigabytes);
   try {
-    const claim = await pool.own(box, id);
-    await waitReady(coder, here, box);
-    watch.step("create");
-    here.say(`${box} is up; wait for fleet apply on it`);
-    await waitForApply(coder, here, box);
-    watch.step("apply");
-    startUnit(coder, here, unitOf(box, "hub"), hubForward(here, box));
-    handOver(coder, here, box);
-    if (coder.ssh(box, `bash -lc ${quote(setUpScript(claimLine(here, label, claim)))}`).code !== 0) throw new Error(`Setting up ${box} failed: T3 did not answer after its restart.`);
-    watch.step("setup");
-    const environmentId = await link(coder, here, box);
-    const unlinked = onEveryPeer(here, remoteFleet(`box link ${box}`));
-    watch.step("link");
-    watch.done(true);
-    finish(here, box, environmentId, unlinked);
+    const { claim, token } = await pool.own(box, id);
+    await registry.withHold(pool, box, token, async (holder) => {
+      await waitReady(coder, here, box);
+      watch.step("create");
+      here.say(`${box} is up; wait for fleet apply on it`);
+      await waitForApply(coder, here, box);
+      watch.step("apply");
+      await startUnit(coder, here, unitOf(box, "hub"), hubForward(here, box));
+      await handOver(coder, here, box);
+      await holder.renew();
+      if ((await coder.ssh(box, `bash -lc ${quote(setUpScript(claimLine(here, label, claim)))}`)).code !== 0) throw new Error(`Setting up ${box} failed: T3 did not answer after its restart.`);
+      watch.step("setup");
+      await holder.renew();
+      const environmentId = await link(coder, here, box);
+      const unlinked = await onEveryPeer(here, remoteFleet(`box link ${box}`));
+      watch.step("link");
+      watch.done(true);
+      finish(here, box, environmentId, unlinked);
+    });
     return 0;
   } catch (error) {
     watch.done(false);
-    stopUnit(here, unitOf(box, "hub"));
+    await stopUnit(here, unitOf(box, "hub"));
     here.say(`kept ${box} without forwards to look into the failure; the hub's sweep stops it once idle. Delete it with fleet box release ${box} --delete.`);
     throw error;
   }
@@ -324,41 +344,57 @@ export function threads(here: Machine): number {
   return 0;
 }
 
-export function idle(here: Machine): number {
+export async function idle(here: Machine): Promise<number> {
   assertBox(here.workspace);
   const now = here.now();
   const bootedAt = now - Number(readFileSync("/proc/uptime", "utf8").split(" ")[0]) * 1000;
   const claim = join(here.home, ".config/fleet/box-claim");
   const claimedAt = existsSync(claim) ? statSync(claim).mtimeMs : 0;
   const t3 = t3Activity(here.home, now);
-  const heavyTasks = Number(here.run(["systemctl", "--user", "show", "fleet-heavy.slice", "-p", "TasksCurrent", "--value"]).stdout.trim());
+  const heavyTasks = Number((await here.run(["systemctl", "--user", "show", "fleet-heavy.slice", "-p", "TasksCurrent", "--value"])).stdout.trim());
   const quiet = isIdle(Math.max(bootedAt, claimedAt, t3.lastEventAt), heavyTasks > 0 || t3.turnRuns, here.settings.idleHours, now);
   here.print(quiet ? "idle" : "busy");
   return quiet ? 0 : 1;
 }
 
-function unfinishedWorkOn(coder: BoxCoder, box: string): string | undefined {
-  const status = statusOf(coder, box);
+async function unfinishedWorkOn(coder: BoxCoder, box: string): Promise<string | undefined> {
+  const status = await statusOf(coder, box);
   if (status !== "running") return `it is ${status}, so its threads cannot be checked. Start it with fleet box start ${box} first`;
-  const answer = coder.ssh(box, remoteFleet("box threads"));
+  const answer = await coder.ssh(box, remoteFleet("box threads"));
   if (answer.code !== 0) return `it did not list its threads (exit ${answer.code}: ${(answer.stderr || answer.stdout).trim()})`;
   const unfinished = answer.stdout.trim();
   if (unfinished) return `these threads still run or wait for an answer:\n${unfinished.split("\n").map((thread) => `  ${thread}`).join("\n")}\nFinish or stop them first`;
   return undefined;
 }
 
-export function sweep(coder: BoxCoder, here: Machine, hooks: BoxHooks = {}): number {
+const notHeld = (state: "busy" | "stale") => (state === "busy" ? "the pool refresh, a spawn, a start, a sweep or a release holds it" : "it was claimed again since it was read");
+
+export async function sweep(coder: BoxCoder, here: Machine, pool: PoolClient, hooks: BoxHooks = {}): Promise<number> {
   let failed = 0;
-  const { owned, skipped } = ownership(coder.boxes(), here);
+  const { owned, skipped } = ownership(await coder.boxes(), here);
   for (const box of skipped) here.print(skippedLine(box.name));
+  const recorded = registry.recorded(registry.poolFile(here.home));
   for (const box of owned.filter((candidate) => candidate.status === "running")) {
     try {
-      const answer = coder.ssh(box.name, remoteFleet("box idle"));
-      if (answer.code === 0) {
-        hooks.stopping?.(box.name);
-        coder.stop(box.name);
-      } else if (answer.code === 1) coder.extend(box.name, busyLife);
-      here.print(`${box.name}: ${answer.code === 0 ? "idle, stopped" : answer.code === 1 ? `busy, kept up for ${busyLife}` : `did not answer (exit ${answer.code}); kept`}`);
+      const claim = recorded[box.name]?.claim;
+      if (claim === undefined) {
+        here.print(`${box.name}: in the pool, which stops it; kept`);
+        continue;
+      }
+      const held = await pool.hold(box.name, box.id, claim);
+      if (held.state === "busy" || held.state === "stale") {
+        here.print(`${box.name}: ${notHeld(held.state)}; kept`);
+        continue;
+      }
+      await registry.withHold(pool, box.name, held.state === "held" ? held.token : undefined, async (holder) => {
+        const answer = await coder.ssh(box.name, remoteFleet("box idle"), undefined, idleCheckLimitMs);
+        if (answer.code === 0) {
+          await holder.renew();
+          hooks.stopping?.(box.name);
+          await coder.stop(box.name);
+        } else if (answer.code === 1) await coder.extend(box.name, busyLife);
+        here.print(`${box.name}: ${answer.code === 0 ? "idle, stopped" : answer.code === 1 ? `busy, kept up for ${busyLife}` : `did not answer (exit ${answer.code}); kept`}`);
+      });
     } catch (error) {
       failed = 1;
       here.print(`${box.name}: ${(error as Error).message}`);
@@ -369,98 +405,100 @@ export function sweep(coder: BoxCoder, here: Machine, hooks: BoxHooks = {}): num
 
 export async function startBox(coder: BoxCoder, here: Machine, box: string, pool: PoolClient): Promise<number> {
   assertBox(box);
-  const id = ownedId(coder, here, box);
+  const id = await ownedId(coder, here, box);
   const held: registry.Held = id ? await pool.hold(box, id) : { state: "unowned" };
   if (held.state === "busy" || held.state === "stale") {
-    here.say(`${box} is busy: the pool is refreshing it, or a release or another start holds it. Try again in a few minutes.`);
+    here.say(`${box} is busy: ${notHeld("busy")}. Try again in a few minutes.`);
     return 1;
   }
   try {
-    await coder.start(box);
-    await waitReady(coder, here, box);
-    if (held.state === "held" && held.claim) {
-      const recorded = coder.ssh(box, claimRecord(claimLine(here, "fleet box start", held.claim)));
+    await registry.withHold(pool, box, held.state === "held" ? held.token : undefined, async (holder) => {
+      await coder.start(box, startLimitMs);
+      await waitReady(coder, here, box);
+      if (held.state !== "held" || !held.claim) return;
+      await holder.renew();
+      const recorded = await coder.ssh(box, claimRecord(claimLine(here, "fleet box start", held.claim)));
       if (recorded.code !== 0) throw new Error(`Cannot record the claim on ${box}: ${recorded.stderr.trim()}`);
-    }
-  } finally {
-    if (held.state === "held") await pool.unhold(box, held.token);
+    });
+  } catch (error) {
+    if (!(error instanceof registry.HoldLost)) throw error;
+    here.say(error.message);
+    return 1;
   }
   const unit = `${unitOf(box, "t3")}.service`;
-  here.run(["systemctl", "--user", "try-restart", unit]);
-  restoreForwards(coder, here);
-  onEveryPeer(here, `systemctl --user try-restart ${unit}; true`);
+  await here.run(["systemctl", "--user", "try-restart", unit]);
+  await restoreForwards(coder, here);
+  await onEveryPeer(here, `systemctl --user try-restart ${unit}; true`);
   here.say(`${box} is up; its T3 forwards reconnect within a minute`);
   return 0;
 }
 
-export type ReleaseOptions = { force?: boolean; stillDoomed?: () => boolean; pool?: PoolClient; recycle?: boolean; hooks?: BoxHooks };
+export type ReleaseOptions = { force?: boolean; stillDoomed?: () => Promise<boolean>; pool?: PoolClient; recycle?: boolean; hooks?: BoxHooks };
 
-function ownedId(coder: BoxCoder, here: Machine, box: string): string | undefined {
-  const live = coder.boxes().find((candidate) => candidate.name === box);
+async function ownedId(coder: BoxCoder, here: Machine, box: string): Promise<string | undefined> {
+  const live = (await coder.boxes()).find((candidate) => candidate.name === box);
   return live?.template === here.settings.template ? live.id : undefined;
 }
 
-function claimOn(coder: BoxCoder, box: string, force: boolean): string | undefined {
-  if (statusOf(coder, box) !== "running") return undefined;
-  const claim = coder.ssh(box, readClaim).stdout.trim();
+async function claimOn(coder: BoxCoder, box: string, force: boolean): Promise<string | undefined> {
+  if ((await statusOf(coder, box)) !== "running") return undefined;
+  const claim = (await coder.ssh(box, readClaim)).stdout.trim();
   return claim || (force ? undefined : "");
 }
 
 async function holdFor(coder: BoxCoder, here: Machine, box: string, force: boolean, pool?: PoolClient): Promise<registry.Held> {
-  const id = pool && ownedId(coder, here, box);
-  return pool && id ? pool.hold(box, id, claimOn(coder, box, force)) : { state: "unowned" };
+  const id = pool && (await ownedId(coder, here, box));
+  return pool && id ? pool.hold(box, id, await claimOn(coder, box, force)) : { state: "unowned" };
 }
 
-export async function release(coder: BoxCoder, here: Machine, box: string, { force = false, stillDoomed = () => true, pool, recycle = true, hooks = {} }: ReleaseOptions = {}): Promise<number> {
+export async function release(coder: BoxCoder, here: Machine, box: string, { force = false, stillDoomed = async () => true, pool, recycle = true, hooks = {} }: ReleaseOptions = {}): Promise<number> {
   assertBox(box);
   const kept = (reason: string) => (here.say(`kept ${box}: ${reason}`), 1);
-  const status = force ? "running" : statusOf(coder, box);
+  const status = force ? "running" : await statusOf(coder, box);
   if (status !== "running") return kept(`it is ${status}, so its threads cannot be checked. Start it with fleet box start ${box} first, or release it with --force.`);
   const held = await holdFor(coder, here, box, force, pool);
   if (held.state === "stale") return kept("it was claimed again since this release read its claim. Nothing changed.");
-  if (held.state === "busy") return kept("the pool refresh, a start, or another release holds it. Try again in a few minutes.");
-  const token = held.state === "held" ? held.token : undefined;
-  let holding = !!token;
-  const ours = async () => stillDoomed() && (!pool || !token || (await pool.renew(box, token)));
+  if (held.state === "busy") return kept(`${notHeld("busy")}. Try again in a few minutes.`);
   const spare = () => kept(`it started again, or another operation took it over, while it was being released. Link it again with fleet box link ${box}.`);
   try {
-    const keep = force ? undefined : unfinishedWorkOn(coder, box);
-    if (keep) return kept(`${keep}, or release it with --force.`);
-    if (!force) hooks.stopping?.(box);
-    const hub = `${unitOf(box, "hub")}.service`;
-    if (pool && recycle && !token) here.say(`${box} is not a box this pool made, so it is deleted instead of pooled`);
-    if (pool && recycle && token) {
-      onEveryPeer(here, `systemctl --user stop ${hub} 2>/dev/null; true`);
-      stopUnit(here, unitOf(box, "hub"));
-      if (!(await ours())) return spare();
-      if (statusOf(coder, box) === "running") coder.stop(box);
-      if (!stillDoomed()) return spare();
-      if (await pool.give(box, token)) {
-        holding = false;
-        here.say(`returned ${box} to the pool and stopped it; the next spawn claims it`);
-        return 0;
+    return await registry.withHold(pool, box, held.state === "held" ? held.token : undefined, async (holder) => {
+      const keep = force ? undefined : await unfinishedWorkOn(coder, box);
+      if (keep) return kept(`${keep}, or release it with --force.`);
+      if (!force) hooks.stopping?.(box);
+      const hub = `${unitOf(box, "hub")}.service`;
+      if (pool && recycle && !holder.held) here.say(`${box} is not a box this pool made, so it is deleted instead of pooled`);
+      if (pool && recycle && holder.held) {
+        await onEveryPeer(here, `systemctl --user stop ${hub} 2>/dev/null; true`);
+        await stopUnit(here, unitOf(box, "hub"));
+        if (!(await stillDoomed())) return spare();
+        await holder.renew();
+        if ((await statusOf(coder, box)) === "running") await coder.stop(box);
+        if (!(await stillDoomed())) return spare();
+        if (await holder.give()) {
+          here.say(`returned ${box} to the pool and stopped it; the next spawn claims it`);
+          return 0;
+        }
       }
-    }
-    const linked = onEveryPeer(here, `${remoteFleet(`box unlink ${box}`)}; unlinked=$?; systemctl --user stop ${hub} 2>/dev/null; exit $unlinked`);
-    if (!unlink(here, box)) linked.push(here.self);
-    stopUnit(here, unitOf(box, "hub"));
-    if (!(await ours())) return spare();
-    coder.remove(box);
-    if (pool && token) {
-      await pool.drop(box, token);
-      holding = false;
-    }
-    here.say(`deleted ${box}`);
-    if (!linked.length) return 0;
-    here.say(`still linked on ${linked.join(", ")}; run fleet box unlink ${box} there`);
-    return 1;
-  } finally {
-    if (holding && pool && token) await pool.unhold(box, token).catch(() => undefined);
+      const linked = await onEveryPeer(here, `${remoteFleet(`box unlink ${box}`)}; unlinked=$?; systemctl --user stop ${hub} 2>/dev/null; exit $unlinked`);
+      if (!(await unlink(here, box))) linked.push(here.self);
+      await stopUnit(here, unitOf(box, "hub"));
+      if (!(await stillDoomed())) return spare();
+      await holder.renew();
+      await coder.remove(box);
+      await holder.drop();
+      here.say(`deleted ${box}`);
+      if (!linked.length) return 0;
+      here.say(`still linked on ${linked.join(", ")}; run fleet box unlink ${box} there`);
+      return 1;
+    });
+  } catch (error) {
+    if (error instanceof registry.HoldLost) return spare();
+    throw error;
   }
 }
 
-export function list(coder: BoxCoder, here: Machine): number {
-  for (const box of coder.boxes()) here.print(`${box.name}  ${box.status}  last used ${box.lastUsedAt}`);
+export async function list(coder: BoxCoder, here: Machine): Promise<number> {
+  for (const box of await coder.boxes()) here.print(`${box.name}  ${box.status}  last used ${box.lastUsedAt}`);
   return 0;
 }
 
@@ -477,22 +515,22 @@ export async function refreshPool(coder: BoxCoder, here: Machine): Promise<numbe
   const results = await Promise.all(boxes.map(async (box) => {
     let usable = false;
     try {
-      const live = coder.boxes().find((candidate) => candidate.name === box);
+      const live = (await coder.boxes()).find((candidate) => candidate.name === box);
       if (!live) await registry.withPool(file, (pool) => registry.forget(pool, box), here);
       if (!live || recorded[box]?.id !== live.id || live.template !== here.settings.template) {
         here.print(`${skippedLine(box)}; it leaves the pool`);
         return true;
       }
-      if (statusOf(coder, box) !== "running") await coder.start(box, { update: true });
+      if ((await statusOf(coder, box)) !== "running") await coder.start(box, startLimitMs, { update: true });
       await waitReady(coder, here, box);
       usable = true;
       const record = linkFile(here, box);
       if (!existsSync(record) || here.now() - statSync(record).mtimeMs >= linkFreshMs) {
         await link(coder, here, box);
-        onEveryPeer(here, remoteFleet(`box link ${box}`));
+        await onEveryPeer(here, remoteFleet(`box link ${box}`));
       }
       const warmed = await coder.sshLater(box, `bash -lc ${quote(warm)}`);
-      coder.stop(box);
+      await coder.stop(box);
       here.print(`${box}: ${warmed.code === 0 ? "refreshed" : `refresh failed (exit ${warmed.code}); kept in the pool`}`);
       return warmed.code === 0;
     } catch (error) {
@@ -510,7 +548,7 @@ export async function refreshPool(coder: BoxCoder, here: Machine): Promise<numbe
 }
 
 export type NightlyStep = { name: string; run(): number | Promise<number> };
-export type NightlyParts = { reap(): Promise<number>; grant(devbox: string): number; refresh(): Promise<number> };
+export type NightlyParts = { reap(): Promise<number>; grant(devbox: string): Promise<number>; refresh(): Promise<number> };
 
 export function nightlySteps(here: Machine, parts: NightlyParts): NightlyStep[] {
   return [
@@ -543,8 +581,5 @@ export async function saveToken(home: string, pasted: string): Promise<void> {
   if (!token) throw new Error("No token on standard input. Run claude setup-token, then paste the token it prints into fleet box token.");
   const path = join(home, claudeTokenPath);
   await mkdir(dirname(path), { recursive: true });
-  const partial = `${path}.${process.pid}.partial`;
-  await writeFile(partial, `${token}\n`, { mode: 0o600 });
-  await chmod(partial, 0o600);
-  await rename(partial, path);
+  await writePrivateFile(path, `${token}\n`);
 }

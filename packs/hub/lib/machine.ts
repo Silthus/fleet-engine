@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
-import { rename, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
-import { capture, type Env, type Result } from "./coder.ts";
+import { capture, type Capture, type Env, type Result } from "./coder.ts";
+import { writePrivateFile } from "./mcphub/client.ts";
 import type { Clock } from "./pool.ts";
 
 export type BoxSettings = {
@@ -20,14 +20,15 @@ export type Machine = Clock & {
   devboxes: string[];
   codex: boolean;
   settings: BoxSettings;
-  onPeer(alias: string, command: string, stdin?: string): Result;
-  run(argv: string[], stdin?: string): Result;
+  onPeer(alias: string, command: string, stdin?: string): Promise<Result>;
+  run(argv: string[], stdin?: string): Promise<Result>;
   freePort(): number;
   environmentId(url: string, timeoutMs: number): Promise<string | undefined>;
   print(line: string): void;
   say(line: string): void;
 };
 
+export const shellLimitMs = 5 * 60_000;
 export const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 export const remoteFleet = (args: string) => `sh "$HOME/.local/share/fleet/engine/fleet" ${args}`;
 const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
@@ -65,9 +66,7 @@ export function readRole(home: string): string | undefined {
 export async function markHub(home: string): Promise<void> {
   const machine = readMachineFile(home);
   if (!machine) throw new Error(`${machinePath(home)} does not exist. Run fleet setup on this machine first.`);
-  const partial = `${machinePath(home)}.${process.pid}.partial`;
-  await writeFile(partial, JSON.stringify({ ...machine, role: "hub" }, null, 2) + "\n");
-  await rename(partial, machinePath(home));
+  await writePrivateFile(machinePath(home), JSON.stringify({ ...machine, role: "hub" }, null, 2) + "\n");
 }
 
 export function requireHub(home: string, command: string): void {
@@ -119,6 +118,14 @@ function savedDevboxes(home: string): string[] {
   return Array.isArray(saved) ? saved.filter((host): host is string => typeof host === "string") : [];
 }
 
+export function shellsWith(run: Capture): Pick<Machine, "onPeer" | "run"> {
+  const input = (stdin?: string) => (stdin === undefined ? {} : { stdin });
+  return {
+    onPeer: (alias, command, stdin) => run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`], { ...input(stdin), timeoutMs: shellLimitMs }),
+    run: (argv, stdin) => run(argv, { ...input(stdin), timeoutMs: shellLimitMs }),
+  };
+}
+
 export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
   const settings = readBoxSettings(env);
   const profile = readProfile(env);
@@ -133,8 +140,7 @@ export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
     devboxes,
     codex: profile.plan === "codex" || profile.plan === "both",
     settings,
-    onPeer: (alias, command, stdin) => capture(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`], stdin === undefined ? {} : { stdin }),
-    run: (argv, stdin) => capture(argv, stdin === undefined ? {} : { stdin }),
+    ...shellsWith(capture),
     now: Date.now,
     sleep: (ms) => Bun.sleep(ms),
     freePort,

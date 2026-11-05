@@ -26,11 +26,11 @@ export function fakeMachine(home: string, fields: Partial<Machine> = {}) {
     devboxes: ["devbox-1", "devbox-2"],
     codex: false,
     settings: readBoxSettings({ FLEET_SETTINGS: JSON.stringify(boxSettings) }),
-    onPeer: (alias, command) => {
+    onPeer: async (alias, command) => {
       calls.push(`peer ${alias}: ${command}`);
       return ok;
     },
-    run: (argv) => {
+    run: async (argv) => {
       calls.push(`run ${argv.join(" ")}`);
       return ok;
     },
@@ -64,11 +64,11 @@ export function fakeCoder(fields: Partial<CommandCoder> = {}) {
   const calls: SshCall[] = [];
   const done: string[] = [];
   const coder: CommandCoder = {
-    binary: "coder",
+    binary: async () => "coder",
     env: {},
-    token: () => "[]",
-    boxes: () => [box("box-lane")],
-    ssh: (box, command, stdin) => {
+    token: async () => "[]",
+    boxes: async () => [box("box-lane")],
+    ssh: async (box, command, stdin) => {
       calls.push({ box, command, ...(stdin === undefined ? {} : { stdin }) });
       return ok;
     },
@@ -76,13 +76,13 @@ export function fakeCoder(fields: Partial<CommandCoder> = {}) {
       calls.push({ box, command });
       return ok;
     },
-    sshAfterStartup: () => ok,
-    remove: (box) => void done.push(`remove ${box}`),
-    stop: (box) => void done.push(`stop ${box}`),
-    extend: (box, duration) => void done.push(`extend ${box} ${duration}`),
+    sshAfterStartup: async () => ok,
+    remove: async (box) => void done.push(`remove ${box}`),
+    stop: async (box) => void done.push(`stop ${box}`),
+    extend: async (box, duration) => void done.push(`extend ${box} ${duration}`),
     start: async (box) => void done.push(`start ${box}`),
     create: async (name, from, disk) => (done.push(`create ${name} from ${from} with ${disk} GB`), `ws-${name}`),
-    run: () => 0,
+    run: async () => 0,
     ...fields,
   };
   return { coder, calls, done };

@@ -4,11 +4,12 @@ import { dirname, join } from "node:path";
 export type Hold = { token: string; until: number };
 export type Entry = { id: string; claim?: string; hold?: Hold };
 export type Pool = { free: string[]; refreshing: string[]; boxes: Record<string, Entry> };
-export type Claimed = { box: string; id: string; claim: string };
+export type Owned = { claim: string; token: string };
+export type Claimed = Owned & { box: string; id: string };
 export type Held = { state: "held"; token: string; claim?: string } | { state: "stale" } | { state: "busy" } | { state: "unowned" };
 export type Clock = { now(): number; sleep(ms: number): Promise<void> };
 export type PoolClient = {
-  own(box: string, id: string): Promise<string>;
+  own(box: string, id: string): Promise<Owned>;
   claim(): Promise<Claimed | undefined>;
   hold(box: string, id: string, claim?: string): Promise<Held>;
   renew(box: string, token: string): Promise<boolean>;
@@ -61,18 +62,21 @@ const newId = () => crypto.randomUUID();
 const without = (names: string[], box: string) => names.filter((name) => name !== box);
 const heldBy = (entry: Entry | undefined, token: string): entry is Entry & { hold: Hold } => entry?.hold?.token === token;
 
-export function own(pool: Pool, box: string, id: string): string {
-  const claim = newId();
-  pool.boxes[box] = { id, claim };
-  return claim;
+const newHold = (now: number): Hold => ({ token: newId(), until: now + holdMs });
+
+export function own(pool: Pool, now: number, box: string, id: string): Owned {
+  const entry = { id, claim: newId(), hold: newHold(now) };
+  pool.boxes[box] = entry;
+  return { claim: entry.claim, token: entry.hold.token };
 }
 
-export function claim(pool: Pool): Claimed | undefined {
+export function claim(pool: Pool, now: number): Claimed | undefined {
   for (let box = pool.free.shift(); box; box = pool.free.shift()) {
     const entry = pool.boxes[box];
     if (!entry) continue;
-    entry.claim = newId();
-    return { box, id: entry.id, claim: entry.claim };
+    const owned = { claim: newId(), hold: newHold(now) };
+    Object.assign(entry, owned);
+    return { box, id: entry.id, claim: owned.claim, token: owned.hold.token };
   }
   return undefined;
 }
@@ -87,7 +91,7 @@ export function hold(pool: Pool, now: number, box: string, id: string, claim?: s
     pool.free = without(pool.free, box);
     entry.claim = newId();
   }
-  entry.hold = { token: newId(), until: now + holdMs };
+  entry.hold = newHold(now);
   return { state: "held", token: entry.hold.token, ...(free ? { claim: entry.claim } : {}) };
 }
 
@@ -126,7 +130,7 @@ export function drop(pool: Pool, box: string, key: string): void {
 export function poolAt(file: string, size: number, clock: Clock = realClock): PoolClient {
   const change = <T>(step: (pool: Pool, now: number) => T) => withPool(file, (pool) => step(pool, clock.now()), clock);
   return {
-    own: (box, id) => change((pool) => own(pool, box, id)),
+    own: (box, id) => change((pool, now) => own(pool, now, box, id)),
     claim: () => change(claim),
     hold: (box, id, claimed) => change((pool, now) => hold(pool, now, box, id, claimed)),
     renew: (box, token) => change((pool, now) => renew(pool, now, box, token)),
@@ -134,6 +138,37 @@ export function poolAt(file: string, size: number, clock: Clock = realClock): Po
     give: (box, token) => change((pool) => give(pool, box, token, size)),
     drop: (box, key) => change((pool) => drop(pool, box, key)),
   };
+}
+
+export class HoldLost extends Error {}
+export type Holder = { held: boolean; renew(): Promise<void>; give(): Promise<boolean>; drop(): Promise<void> };
+const unheld: Holder = { held: false, renew: async () => {}, give: async () => false, drop: async () => {} };
+
+export async function withHold<T>(pool: PoolClient | undefined, box: string, token: string | undefined, step: (holder: Holder) => Promise<T>): Promise<T> {
+  if (!pool || token === undefined) return step(unheld);
+  let holding = true;
+  const holder: Holder = {
+    held: true,
+    renew: async () => {
+      if (await pool.renew(box, token)) return;
+      holding = false;
+      throw new HoldLost(`another operation took ${box} over while this one held it, so this one stopped before it changed the box`);
+    },
+    give: async () => {
+      const given = await pool.give(box, token);
+      holding = !given;
+      return given;
+    },
+    drop: async () => {
+      await pool.drop(box, token);
+      holding = false;
+    },
+  };
+  try {
+    return await step(holder);
+  } finally {
+    if (holding) await pool.unhold(box, token).catch(() => undefined);
+  }
 }
 
 export const pooled = (file: string) => {
