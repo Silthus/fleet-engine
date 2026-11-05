@@ -108,6 +108,13 @@
       "type": "string",
       "default": "~",
       "ask": "never"
+    },
+    {
+      "key": "hub.proxyAccounts",
+      "question": "How many of your own Claude subscriptions must the hub's proxy hold before fleet cli-proxy doctor passes?",
+      "type": "number",
+      "default": 2,
+      "ask": "never"
     }
   ],
   "workflows": [
@@ -244,6 +251,31 @@
         ]
       },
       "risk": "Every run sends your agent sessions to an analyst model and spends your AI plan's usage, so it starts off. Your session text stays on the hub for 14 days."
+    },
+    {
+      "id": "own-account-balancing",
+      "name": "Own-account balancing",
+      "default": false,
+      "needs": [
+        "hub"
+      ],
+      "settings": [
+        "hub.alias",
+        "hub.relayPort",
+        "hub.proxyAccounts"
+      ],
+      "sentence": "The hub holds your own Claude subscriptions in a local proxy, and Claude Code on the hub, your devboxes, and boxes spends the one whose weekly quota resets first.",
+      "moment": {
+        "time": "11:30",
+        "title": "No weekly quota left unused",
+        "body": "Your first subscription resets tomorrow and still has quota. Every thread spends it first. When it hits its limit, the next one takes over, and nobody signs in again.",
+        "words": [
+          "hub",
+          "devbox",
+          "thread"
+        ]
+      },
+      "risk": "The hub keeps your Claude sign-ins in CLIProxyAPI, and every machine in the workflow sends Claude Code through it. Read Anthropic's terms first. As read on 2026-11-05: the Anthropic Usage Policy, effective Nov 12, 2026, section \"Do Not Abuse Our Platform\" (https://www.anthropic.com/legal/aup), lists: \"Resell, proxy, or otherwise provide access to Claude through unauthorized means, including services that route requests through consumer subscriptions or misrepresent the product or client being used\". The Anthropic Consumer Terms, effective Oct 8, 2025, section 2 (https://www.anthropic.com/legal/consumer-terms), say: \"You may not share your Account login information, Anthropic API key, or Account credentials with anyone else. You also may not make your Account available to anyone else.\" Section 3, item 7 of the same terms lists: \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" Balancing is only for your own subscriptions, never for someone else's."
     }
   ],
   "config": [
@@ -279,6 +311,34 @@
         "both"
       ],
       "workflow": "mcp-gateway"
+    },
+    {
+      "provider": "claude",
+      "key": "env.ANTHROPIC_BASE_URL",
+      "value": "http://127.0.0.1:8317",
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "own-account-balancing"
+    },
+    {
+      "provider": "claude",
+      "key": "apiKeyHelper",
+      "value": "cat \"$HOME/.config/fleet/cli-proxy.key\"",
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "own-account-balancing"
     }
   ],
   "jobs": [
@@ -391,6 +451,24 @@
         "hub"
       ],
       "workflow": "disk-watch"
+    },
+    {
+      "id": "cli-proxy-balance",
+      "command": [
+        "fleet",
+        "cli-proxy-balance"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "roles": [
+        "hub"
+      ],
+      "workflow": "own-account-balancing",
+      "plans": [
+        "claude",
+        "both"
+      ]
     }
   ],
   "human": [
@@ -424,6 +502,23 @@
     }
   ],
   "steps": [
+    {
+      "id": "cli-proxy-route",
+      "run": [
+        "fleet",
+        "cli-proxy",
+        "route"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "own-account-balancing"
+    },
     {
       "id": "mcphub",
       "run": [
@@ -510,6 +605,27 @@
         "mac"
       ],
       "workflow": "linked-hub"
+    },
+    {
+      "id": "cli-proxy",
+      "run": [
+        "fleet",
+        "cli-proxy",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "cli-proxy",
+        "doctor"
+      ],
+      "roles": [
+        "hub"
+      ],
+      "workflow": "own-account-balancing",
+      "plans": [
+        "claude",
+        "both"
+      ]
     }
   ],
   "checks": [
@@ -522,6 +638,24 @@
       ],
       "say": "This machine cannot reach the MCP gateway. Run fleet mcphub check here to see why; on the hub, fleet mcphub grant <this machine's SSH name> gives it a key.",
       "workflow": "mcp-gateway"
+    },
+    {
+      "id": "cli-proxy-client",
+      "run": [
+        "fleet",
+        "cli-proxy",
+        "check"
+      ],
+      "say": "Claude Code cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check here to see why.",
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "own-account-balancing"
     }
   ]
 }

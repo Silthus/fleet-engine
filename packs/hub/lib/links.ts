@@ -3,7 +3,8 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tryLockBox } from "./box-lock.ts";
 import { boxPrefix, slugFor, type Coder, type Result } from "./coder.ts";
-import { quote, type Machine, type PeerLinkInput, type PeerMachine } from "./machine.ts";
+import { proxyPort, relayPortOf } from "./run.ts";
+import { quote, remoteFleet, type Machine, type PeerLinkInput, type PeerMachine } from "./machine.ts";
 import { GatewayClientError, gatewayPort, localGatewayUrl, readGatewayClient, writePrivateFile, type GatewaySettings } from "./mcphub/client.ts";
 import { isBoxName } from "./names.ts";
 import { poolFile, recorded } from "./pool.ts";
@@ -18,6 +19,7 @@ const answerLimitMs = 60_000;
 export const claudeTokenPath = ".config/fleet/box-claude-token";
 export const boxMarkerPath = ".config/fleet/box-marker";
 const gatewayClientPath = ".config/fleet/mcphub.client.json";
+const proxyKeyPath = ".config/fleet/cli-proxy.key";
 
 export const t3Of = (here: Pick<Machine, "home">) => join(here.home, ".local/bin/t3");
 export const linkFile = (here: Pick<Machine, "home">, box: string) => join(here.home, ".config/fleet/boxes", `${box}.json`);
@@ -61,12 +63,20 @@ async function handOverGitHub(coder: Pick<Coder, "ssh">, here: Machine, box: str
   if (login.code !== 0) throw new Error(`Cannot log in the GitHub CLI on ${box}: ${login.stderr.trim()}`);
 }
 
+async function handOverProxy(coder: Pick<Coder, "ssh">, here: Machine, box: string): Promise<void> {
+  const key = join(here.home, proxyKeyPath);
+  if (!existsSync(key)) return here.say(`skip ~/${proxyKeyPath}: this machine has none`);
+  const connected = await coder.ssh(box, `umask 077 && ${remoteFleet("cli-proxy connect")}`, readFileSync(key, "utf8"));
+  if (connected.code !== 0) here.say(`${box} keeps its own Claude sign-in: ${(connected.stderr || connected.stdout).trim()}`);
+}
+
 export async function handOver(coder: Pick<Coder, "ssh">, here: Machine, box: string): Promise<boolean> {
   const gateway = await handOverGateway(coder, here, box);
   const token = join(here.home, claudeTokenPath);
   if (existsSync(token)) await writeOnBox(coder, box, claudeTokenPath, readFileSync(token, "utf8"));
   else here.say(`skip ~/${claudeTokenPath}: this machine has none`);
   await handOverGitHub(coder, here, box);
+  if (here.settings.proxy) await handOverProxy(coder, here, box);
   return gateway;
 }
 
@@ -95,7 +105,7 @@ export async function stopUnit(here: Pick<Machine, "run">, unit: string): Promis
 }
 
 const reverse = (port: number) => ["-R", `${port}:127.0.0.1:${port}`];
-export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", ...reverse(here.settings.relayPort), ...reverse(gatewayPort), box, "--", "sleep infinity"];
+export const hubForward = (here: Machine, box: string) => ["ssh", "--disable-autostart", "--wait=no", ...reverse(relayPortOf(here.settings.relayPort, here.settings.proxy)), ...reverse(gatewayPort), ...(here.settings.proxy ? reverse(proxyPort) : []), box, "--", "sleep infinity"];
 const t3Forward = (box: string, port: number) => ["port-forward", "--disable-autostart", box, "--tcp", `${port}:${t3Port}`];
 
 async function environmentAt(here: Linker, url: string): Promise<string> {

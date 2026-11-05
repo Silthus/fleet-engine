@@ -5,10 +5,10 @@ import { peersOf, readRole } from "./machine.ts";
 import { gatewayPort, refuseLinks } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
 import { isBoxName, sshName } from "./names.ts";
-import { hostPattern, must, relayPortOf } from "./run.ts";
+import { hostPattern, must, proxyPort, relayPortOf } from "./run.ts";
 
 export type TunnelMode = "plan" | "install" | "doctor";
-export type TunnelMachine = { home: string; devboxes: string[]; relayPort: number; httpsHost?: string; hosts: string; run: Run; print(line: string): void };
+export type TunnelMachine = { home: string; devboxes: string[]; relayPort: number; httpsHost?: string; proxy?: boolean; hosts: string; run: Run; print(line: string): void };
 
 const marker = "# Managed by Fleet hub SSH tunnels.";
 const hostsMarker = " # fleet-hub-tunnel";
@@ -19,14 +19,14 @@ export function tunnelTargets(hub: string, devboxes: string[], self: string): st
   return peersOf(hub, devboxes, self).filter((alias) => alias !== hub);
 }
 
-export function tunnelUnit(alias: string, relayPort: number): string {
+export function tunnelUnit(alias: string, relayPort: number, proxy = false): string {
   return `${marker}
 [Unit]
 Description=Fleet hub SSH tunnel for ${sshName(alias)}
 
 [Service]
 Environment=CODER_SSH_DISABLE_AUTOSTART=true
-ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ConnectTimeout=30 -o ExitOnForwardFailure=yes -o ForwardAgent=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ${loopback(gatewayPort)} ${loopback(relayPortOf(relayPort))} ${alias}
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ConnectTimeout=30 -o ExitOnForwardFailure=yes -o ForwardAgent=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ${loopback(gatewayPort)} ${loopback(relayPortOf(relayPort, proxy))}${proxy ? ` ${loopback(proxyPort)}` : ""} ${alias}
 Restart=always
 RestartSec=5
 
@@ -52,7 +52,7 @@ export async function sshTunnels(mode: TunnelMode, machine: TunnelMachine): Prom
 async function hubTunnels(mode: TunnelMode, machine: TunnelMachine) {
   const directory = join(machine.home, ".config/systemd/user");
   for (const box of machine.devboxes.filter(isBoxName)) machine.print(`${box}: skipped: a box gets the gateway and relay ports from its own box forward`);
-  const units = machine.devboxes.filter((alias) => !isBoxName(alias)).map((alias) => ({ alias, name: unitName(alias), path: join(directory, unitName(alias)), content: tunnelUnit(alias, machine.relayPort) }));
+  const units = machine.devboxes.filter((alias) => !isBoxName(alias)).map((alias) => ({ alias, name: unitName(alias), path: join(directory, unitName(alias)), content: tunnelUnit(alias, machine.relayPort, machine.proxy) }));
   const changed = await changedFiles(machine.home, units, marker, "tunnel");
   const systemctl = (...args: string[]) => must(machine.run, ["systemctl", "--user", ...args]);
   const stale = mode === "plan" ? [] : await staleUnits(machine.home, directory, units.map((unit) => unit.name));
