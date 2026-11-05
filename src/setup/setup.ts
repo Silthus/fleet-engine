@@ -6,7 +6,7 @@ import { loadMachine, loadProfile, saveMachine, thisMachine } from "../profile/p
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
-import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
+import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, waitsForTeams, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { devboxQuestion, devboxSteps, profileForBox, type DevboxContext } from "./devbox.ts";
@@ -48,6 +48,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   const box: Machine = { ...realMachine, ...options.machine };
   const fetchTeam = (ref: SourceRef) => (options.fetchSource ?? fetchSource)(ref, sourceCache(options.home));
   if (progress.done.includes("github")) {
+    catalog.teamsKnown = true;
     for (const ref of teamRefs(progress.draft)) {
       if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
       const fetched = await fetchTeam(ref);
@@ -66,7 +67,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     ];
     if (reopened.length || Object.entries(fromFlags).some(([key, value]) => saved.settings?.[key] !== value)) reopened.push(...answersChanged);
     progress.done = progress.done.filter((id) => !reopened.some((step) => id === step || id.startsWith(`${step}:`)));
-    if (Object.keys(fromFlags).length) {
+    if (Object.keys(fromFlags).length && !waitsForTeams(flags, catalog)) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
       await remember();
     }
@@ -99,6 +100,10 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       await context.answer({ sources: [...(progress.draft.sources ?? defaultSources), ref] });
       terminal.print(`  ✓ You are in the ${ref.repo.split("/")[0]} org, so the ${packList(fetched.packs.map((pack) => pack.manifest.name), catalog)} pack is ticked`);
     }
+    catalog.teamsKnown = true;
+    picksFrom(flags, catalog);
+    const fromFlags = settingsFrom(flags, catalog);
+    if (Object.keys(fromFlags).length) await context.answer({ settings: { ...progress.draft.settings, ...fromFlags } });
   };
   const profile = profileStep({
     terminal,
@@ -173,6 +178,10 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     for (const line of doneScreen(summary)) terminal.print(line);
     return 0;
   } catch (error) {
+    if (error instanceof FlagError) {
+      terminal.print(`fleet setup: ${error.message}`);
+      return 2;
+    }
     if (!(error instanceof Stopped)) throw error;
     const next = steps().find((step) => !progress.done.includes(step.id));
     terminal.print("");
@@ -258,6 +267,7 @@ export async function loadCatalog(engineRoot: string, team: SourceRef[], home: s
     sources: [engine],
     packs: [...engine.packs],
     teamPacks: [],
+    teamsKnown: false,
     add(source) {
       catalog.sources.push(source);
       catalog.packs.push(...source.packs);

@@ -14,8 +14,26 @@ export type Catalog = {
   packs: LoadedPack[];
   /** Packs from team sources: setup offers them only to the team's members, and ticks them by default. */
   teamPacks: string[];
+  /** True once GitHub sign-in has shown which team sources this person may use. */
+  teamsKnown: boolean;
   add(source: AvailableSource): void;
 };
+
+/** Team sources that GitHub sign-in has yet to decide on: their packs may name more workflows and settings. */
+function pendingTeams(catalog: Pick<Catalog, "sources" | "teamsKnown">) {
+  return catalog.teamsKnown ? [] : teamSources.map(({ source }) => source.name).filter((name) => !catalog.sources.some((loaded) => loaded.ref.name === name));
+}
+
+const laterWorkflow = (catalog: Pick<Catalog, "sources" | "teamsKnown">) => pendingTeams(catalog).length > 0;
+const laterSetting = (catalog: Pick<Catalog, "sources" | "teamsKnown">, key: string) => pendingTeams(catalog).some((name) => key.startsWith(`${name}.`));
+
+/** True when some flag names a workflow or setting that only a team pack, still to be fetched, can have. */
+export function waitsForTeams(flags: SetupFlags, catalog: Catalog) {
+  const manifests = catalog.packs.map((pack) => pack.manifest);
+  const known = workflowDefaults(manifests);
+  const keys = new Set(manifests.flatMap((manifest) => (manifest.settings ?? []).map((setting) => setting.key)));
+  return Object.keys(flags.workflows).some((id) => !Object.hasOwn(known, id) && laterWorkflow(catalog)) || Object.keys(flags.set).some((key) => !keys.has(key) && laterSetting(catalog, key));
+}
 
 export type QuestionContext = {
   terminal: Terminal;
@@ -86,7 +104,7 @@ export function picksFrom(flags: SetupFlags, catalog: Catalog): Required<Pick<Dr
   if (unmet) throw new FlagError(`${title(unmet.pack)} needs ${unmet.needs.map(title).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const manifests = catalog.packs.map((pack) => pack.manifest);
   const known = workflowDefaults(manifests);
-  for (const id of Object.keys(flags.workflows)) if (!Object.hasOwn(known, id)) throw new FlagError(`--workflows: no workflow named ${id}`);
+  for (const id of Object.keys(flags.workflows)) if (!Object.hasOwn(known, id) && !laterWorkflow(catalog)) throw new FlagError(`--workflows: no workflow named ${id}`);
   return { packs, workflows: workflowOverrides({ ...preset.workflows, ...flags.workflows }, manifests) };
 }
 
@@ -99,13 +117,15 @@ export function unmetNeeds(packs: string[], catalog: Pick<Catalog, "packs">) {
     .filter((item) => item.needs.length);
 }
 
-export function settingsFrom(flags: SetupFlags, catalog: Pick<Catalog, "packs">): Record<string, SettingValue> {
+export function settingsFrom(flags: SetupFlags, catalog: Pick<Catalog, "packs"> & Partial<Pick<Catalog, "sources" | "teamsKnown">>): Record<string, SettingValue> {
   const settings = catalog.packs.flatMap((pack) => pack.manifest.settings ?? []);
+  const later = (key: string) => laterSetting({ sources: catalog.sources ?? [], teamsKnown: catalog.teamsKnown ?? true }, key);
   return Object.fromEntries(
-    Object.entries(flags.set).map(([key, raw]) => {
+    Object.entries(flags.set).flatMap(([key, raw]) => {
       const setting = settings.find((item) => item.key === key);
+      if (!setting && later(key)) return [];
       if (!setting) throw new FlagError(`--set ${key}: no pack has this setting`);
-      return [key, parseSettingValue(setting, raw)];
+      return [[key, parseSettingValue(setting, raw)]];
     }),
   );
 }

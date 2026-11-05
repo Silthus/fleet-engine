@@ -5,17 +5,61 @@ export type IssueNode = {
 };
 export type Ticket = IssueNode & { parent?: number };
 export type MapRef = { owner: string; repo: string; number: number };
-export type Comment = { author: string; body: string; url: string; createdAt: string };
+export type Comment = { author: string; body: string; url: string; createdAt: string; updatedAt?: string };
 export type Discussion = { body: string; comments: Comment[] };
 export type FetchIssue = (owner: string, repo: string, number: number) => Promise<IssueNode>;
 export type FetchDiscussion = (owner: string, repo: string, number: number) => Promise<Discussion>;
 
-export const parked = "wayfinder:awaiting-human";
+export type Tracker = () => string;
+export type MapIo = { print(line: string): void; tracker: Tracker; fetchIssue?: FetchIssue; fetchDiscussion?: FetchDiscussion };
 
-export function mapRef(value: string, usage: string): MapRef {
+export const parked = "wayfinder:awaiting-human";
+export const trackerSetting = "orchestration.tracker";
+const fenceOpener = /^(\s*)(`{3,}(?=[^`]*$)|~{3,})/;
+const fenceCloser = /^(\s*)(`{3,}|~{3,})\s*$/;
+type Fence = { indent: number; marker: string };
+
+export function mapRef(value: string, usage: string, tracker: Tracker = () => ""): MapRef {
+  const bare = value.match(/^#?(\d+)$/);
+  if (bare) return { ...trackerRepository(tracker()), number: Number(bare[1]) };
   const match = value.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/) ?? value.match(/^([^/\s]+)\/([^#\s]+)#(\d+)$/);
   if (!match) throw new Error(usage);
   return { owner: match[1]!, repo: match[2]!, number: Number(match[3]) };
+}
+
+function trackerRepository(tracker: string): { owner: string; repo: string } {
+  if (!tracker) throw new Error(`Set ${trackerSetting} to the owner/repo that holds your maps, or name the map as owner/repo#number.`);
+  const match = tracker.match(/^([^/\s]+)\/([^/\s]+)$/);
+  if (!match) throw new Error(`${trackerSetting} is ${tracker}, not an owner/repo.`);
+  return { owner: match[1]!, repo: match[2]! };
+}
+
+export function proseLines(text: string): string[] {
+  let open: Fence | undefined;
+  return text.split("\n").filter((line) => {
+    if (open) {
+      if (closesFence(line, open)) open = undefined;
+      return false;
+    }
+    const opener = line.match(fenceOpener);
+    open = opener ? { indent: opener[1]!.length, marker: opener[2]! } : undefined;
+    return !open;
+  });
+}
+
+function closesFence(line: string, open: Fence): boolean {
+  const closer = line.match(fenceCloser);
+  if (!closer || closer[1]!.length > open.indent + 3) return false;
+  const marker = closer[2]!;
+  return marker[0] === open.marker[0] && marker.length >= open.marker.length;
+}
+
+export function tableCell(text: string): string {
+  return text.replace(/(?<!\\)\|/g, "\\|");
+}
+
+export function issueLink({ owner, repo, number }: MapRef): string {
+  return `https://github.com/${owner}/${repo}/issues/${number}`;
 }
 
 export async function descendants(issue: IssueNode, fetchIssue: FetchIssue, parent?: number): Promise<Ticket[]> {
@@ -39,7 +83,7 @@ export function splitRepository(repository: string): [string, string] {
 
 const fields = "number title state repository { nameWithOwner } assignees(first: 10) { nodes { login } } labels(first: 20) { nodes { name } } blockedBy(first: 50) { nodes { number state repository { nameWithOwner } } }";
 const issueQuery = `query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { issue(number: $number) { ${fields} subIssues(first: 100) { nodes { ${fields} subIssuesSummary { total } } } } } }`;
-const discussionQuery = "query($owner: String!, $repo: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $repo) { issue(number: $number) { body comments(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { author { login } body url createdAt } } } } }";
+const discussionQuery = "query($owner: String!, $repo: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $repo) { issue(number: $number) { body comments(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { author { login } body url createdAt updatedAt } } } } }";
 
 type GraphIssue = {
   number: number; title: string; state: string; repository: { nameWithOwner: string };
@@ -49,7 +93,7 @@ type GraphIssue = {
 };
 type GraphDiscussion = {
   body: string;
-  comments: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { author: { login: string } | null; body: string; url: string; createdAt: string }[] };
+  comments: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: { author: { login: string } | null; body: string; url: string; createdAt: string; updatedAt: string }[] };
 };
 
 function issueNode(issue: GraphIssue): IssueNode {
@@ -65,7 +109,7 @@ function issueNode(issue: GraphIssue): IssueNode {
 function discussion(pages: GraphDiscussion[]): Discussion {
   return {
     body: pages[0]?.body ?? "",
-    comments: pages.flatMap((page) => page.comments.nodes).map((node) => ({ author: node.author?.login ?? "", body: node.body, url: node.url, createdAt: node.createdAt })),
+    comments: pages.flatMap((page) => page.comments.nodes).map((node) => ({ author: node.author?.login ?? "", body: node.body, url: node.url, createdAt: node.createdAt, updatedAt: node.updatedAt })),
   };
 }
 
