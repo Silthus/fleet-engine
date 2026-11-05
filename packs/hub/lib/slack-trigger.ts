@@ -188,7 +188,7 @@ export async function slackTriggerCommand(args: string[], context: SlackTriggerC
   requireHubRole(context.home, "slack-trigger");
   const boxes = devboxesOf(env, context.home).filter((box) => box !== context.self);
   if (!boxes.length) throw new Error("Your profile lists no devbox to start Slack threads on. Add one with fleet devbox add <ssh host>.");
-  return underLock(context, "slack-trigger", "Slack trigger", async () => {
+  return underLock(context, "slack-trigger", "The Slack trigger", async () => {
     const slack = await openSlack(context, server);
     try {
       await watchSlack({

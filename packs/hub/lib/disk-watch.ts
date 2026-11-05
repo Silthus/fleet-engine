@@ -12,6 +12,7 @@ const sweepEveryHours = 1;
 const repeatHours = 24;
 const reportLines = 40;
 const alertModel = "claude-haiku-5-5";
+const sweepMinutes = 90;
 
 export type DiskWatchOptions = {
   boxes: string[]; statePath: string; now: () => number; log: (line: string) => void; dryRun?: boolean;
@@ -78,8 +79,9 @@ function hubDisks(context: DiskWatchContext, local: string, sweepBelowGigabytes:
     return df.code === 0 && Number.isFinite(available) ? available * 1024 : null;
   };
   const sweep = async (box: string) => {
-    const argv = box === local ? ["sh", localFleet, "disk-sweep"] : sshArgv(box, `${remoteFleet("disk-sweep")} 2>&1`);
-    const swept = await spawnText(argv, env, { timeoutMs: 60 * 60_000 });
+    const floors = ["--floor", String(sweepBelowGigabytes), "--alert-floor", String(alertBelowGigabytes)];
+    const argv = box === local ? ["sh", localFleet, "disk-sweep", ...floors] : sshArgv(box, `${remoteFleet(["disk-sweep", ...floors].join(" "))} 2>&1`);
+    const swept = await spawnText(argv, env, { timeoutMs: sweepMinutes * 60_000 });
     const output = `${swept.stdout}${swept.stderr}`.trim();
     return swept.code === 0 ? output : `The sweep failed with exit ${swept.code === 124 ? "timeout" : swept.code}.\n${output}`;
   };
@@ -87,12 +89,12 @@ function hubDisks(context: DiskWatchContext, local: string, sweepBelowGigabytes:
     const shownFree = `${(free / gigabyte).toFixed(1)}G`;
     const look = `df -h ~; ${remoteFleet("prune --dry-run --no-fetch --min-idle-hours 1")}`;
     const prompt = `${box} has ${shownFree} free, below ${alertBelowGigabytes}G, though a cleanup sweep ran within the hour. A full disk crashes T3 and every lane on the box.
-The sweep removes everything it can prove safe. Its report from this pass:
+The sweep ran T3's storage cleanup, fleet prune, and the package managers' own cache cleaners, and removed nothing else. Its report from this pass ends with the largest folders under $HOME:
 
 ${report}
 
 Check what is left, read-only: run \`${box === local ? look : `ssh ${box} '${look}'`}\`.
-Delete nothing and start no lanes. Reply in at most 10 lines: the free space, what holds it, and what your user must decide to free it.`;
+Delete nothing and start no lanes. Reply in at most 10 lines: the free space, the largest folders the report names, and what your user must decide to free it.`;
     const script = threadScript(stringSetting("hub.threadFolder", env), `${box}: ${shownFree} free`, threadModel("lookup", alertModel, env));
     return (await spawnText(onBox(local, script), env, { stdin: prompt, timeoutMs: 600_000 })).code === 0;
   };
@@ -107,7 +109,7 @@ export async function diskWatchCommand(args: string[], context: DiskWatchContext
   const targets = diskWatchTargets(env, context.home, stringSetting("hub.alias", env), context.self);
   const sweepBelowGigabytes = numberSetting("hub.diskSweepGigabytes", env);
   const alertBelowGigabytes = numberSetting("hub.diskAlertGigabytes", env);
-  return underLock(context, "disk-watch", "disk watch", async () => {
+  return underLock(context, "disk-watch", "The disk watch", async () => {
     await watchDisks({
       boxes: [targets.local, ...targets.remote], statePath: join(stateDir(context.home, env), "disk-watch.json"), now: context.now, log: context.log, dryRun,
       alertBelowGigabytes, ...hubDisks(context, targets.local, sweepBelowGigabytes, alertBelowGigabytes),

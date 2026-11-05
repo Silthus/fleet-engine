@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { diskWatchCommand, diskWatchTargets, watchDisks, type DiskWatchOptions } from "./disk-watch.ts";
+import { underLock } from "./hub-job.ts";
 import { writeHome } from "./testing.ts";
 
 const temp = tempDirs();
@@ -87,7 +88,7 @@ function stubs(dir: string) {
 host=$5
 case "$6" in
   *"df -Pk"*) printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\\n/dev/root 100 50 %s 50%% /\\n' "$(cat "${dir}/free-$host")" ;;
-  *disk-sweep*) echo "swept $host"; cp "${dir}/after-$host" "${dir}/free-$host" ;;
+  *disk-sweep*) printf 'swept %s\n30.0G /home/%s/.cache\n' "$host" "$host"; cp "${dir}/after-$host" "${dir}/free-$host" ;;
 esac`);
   script("t3", `echo "t3 $*" >> "${dir}/calls.log"\ncat > "${dir}/prompt.txt"`);
   return dir;
@@ -118,11 +119,12 @@ test("on the hub, fleet disk-watch reads each devbox over SSH, sweeps it with th
   const hub = await hubHere({ "box-1": [12, 30], "box-2": [12, 4] });
   expect(await diskWatchCommand([], hub.context)).toBe(0);
   const calls = hub.calls();
-  expect(calls).toContain(`ssh -o BatchMode=yes -o ConnectTimeout=10 box-1 sh "$HOME/.local/share/fleet/engine/fleet" disk-sweep 2>&1`);
-  expect(calls.filter((call) => call.startsWith("t3 "))).toEqual(["t3 thread start --title box-2: 4.0G free --provider claudeAgent --model small-model /tmp/notes -".replace("/tmp/notes", join(hub.home, "notes"))]);
+  expect(calls).toContain(`ssh -o BatchMode=yes -o ConnectTimeout=10 box-1 sh "$HOME/.local/share/fleet/engine/fleet" disk-sweep --floor 15 --alert-floor 10 2>&1`);
+  expect(calls.filter((call) => call.startsWith("t3 "))).toEqual([`t3 project add ${join(hub.home, "notes")}`, "t3 thread start --title box-2: 4.0G free --provider claudeAgent --model small-model /tmp/notes -".replace("/tmp/notes", join(hub.home, "notes"))]);
   const prompt = readFileSync(join(hub.bin, "prompt.txt"), "utf8");
   expect(prompt).toContain("box-2 has 4.0G free, below 10G");
-  expect(prompt).toContain("swept box-2");
+  expect(prompt).toContain("swept box-2\n30.0G /home/box-2/.cache");
+  expect(prompt).toContain("the largest folders the report names");
   expect(prompt).toContain(`ssh box-2 'df -h ~; sh "$HOME/.local/share/fleet/engine/fleet" prune --dry-run --no-fetch --min-idle-hours 1'`);
   expect(calls.some((call) => call.startsWith("local"))).toBe(false);
 });
@@ -131,21 +133,18 @@ test("the hub sweeps its own disk with its own launcher, without SSH", async () 
   const hub = await hubHere({});
   hub.context.localFree = () => 8 * gigabyte;
   expect(await diskWatchCommand([], hub.context)).toBe(0);
-  expect(hub.calls()).toEqual(["local disk-sweep", "t3 thread start --title my-hub: 8.0G free --provider claudeAgent --model small-model " + join(hub.home, "notes") + " -"]);
+  expect(hub.calls()).toEqual(["local disk-sweep --floor 15 --alert-floor 10", `t3 project add ${join(hub.home, "notes")}`, "t3 thread start --title my-hub: 8.0G free --provider claudeAgent --model small-model " + join(hub.home, "notes") + " -"]);
 });
 
-test("a second disk watch that finds the lock of a running one does nothing, so the same machine is not alerted twice; a dead run's lock is taken over", async () => {
+test("a second disk watch while one runs does nothing, so the same machine is not alerted twice, and the next one after it ends runs", async () => {
   const hub = await hubHere({ "box-2": [4, 4] });
-  writeHome(hub.home, { ".local/state/fleet/disk-watch.lock/owner": JSON.stringify({ pid: process.pid, token: "running" }) });
-  expect(await diskWatchCommand([], hub.context)).toBe(0);
+  expect(await underLock(hub.context, "disk-watch", "The disk watch", () => diskWatchCommand([], hub.context))).toBe(0);
   expect(hub.calls()).toEqual([]);
-  expect(hub.lines).toEqual(["Another disk watch runs, so this one ends."]);
-  writeHome(hub.home, { ".local/state/fleet/disk-watch.lock/owner": JSON.stringify({ pid: 2 ** 22 + 1, token: "dead" }) });
+  expect(hub.lines).toEqual(["The disk watch is already running, so this run ends."]);
   expect(await diskWatchCommand([], hub.context)).toBe(0);
-  expect(hub.calls().filter((call) => call.startsWith("t3 ")).length).toBe(1);
-  expect(existsSync(join(hub.home, ".local/state/fleet/disk-watch.lock"))).toBe(false);
+  expect(hub.calls().filter((call) => call.startsWith("t3 thread")).length).toBe(1);
   expect(await diskWatchCommand([], hub.context)).toBe(0);
-  expect(hub.calls().filter((call) => call.startsWith("t3 ")).length).toBe(1);
+  expect(hub.calls().filter((call) => call.startsWith("t3 thread")).length).toBe(1);
 });
 
 test("fleet disk-watch runs only on the hub and takes only --dry-run", async () => {

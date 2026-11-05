@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, gitEnv, tempDirs } from "../../../src/testing/git.ts";
-import { diskSweep, diskSweepCommand, judgeArgv, judgeModel, removePath, runT3Cleanup, sweepGuard, type DiskSweepOptions } from "./disk-sweep.ts";
+import { tempDirs } from "../../../src/testing/git.ts";
+import type { Result } from "./coder.ts";
+import { diskSweep, diskSweepCommand, runT3Cleanup, sweepCleaners, type DiskSweepOptions } from "./disk-sweep.ts";
 
 const gigabyte = 1024 ** 3;
 const temp = tempDirs();
@@ -12,164 +13,154 @@ afterEach(() => {
   temp.cleanup();
 });
 
-const proposal = (candidates: Array<{ path: string; reason: string }>) => `Two caches hold most of the space.\n\n\`\`\`json\n${JSON.stringify({ candidates })}\n\`\`\`\n`;
+const home = "/home/me";
+const launcher = "/home/me/.local/share/fleet/engine/fleet";
+const done: Result = { code: 0, stdout: "", stderr: "" };
 
-function sweep(fields: Partial<DiskSweepOptions> = {}) {
+function sweep(fields: Partial<DiskSweepOptions> = {}, freed: Record<string, number> = {}) {
   const logged: string[] = [];
   const printed: string[] = [];
-  const prompts: string[] = [];
-  const removed: string[] = [];
-  let free = 12 * gigabyte;
+  const ran: string[] = [];
+  let cleaned = 0;
+  let free = 4 * gigabyte;
   const options: DiskSweepOptions = {
-    dryRun: false, floorGigabytes: 10, free: () => free, log: (line) => logged.push(line), print: (line) => printed.push(line),
-    cleanup: async () => ((free += gigabyte), { counts: { removed: 3, kept: 1, failed: 0 }, bytesFreed: gigabyte }),
-    judge: async (prompt) => (prompts.push(prompt), { code: 0, stdout: proposal([{ path: "/home/me/.cache/tool", reason: "a tool cache" }, { path: "/home/me/dev", reason: "big" }]), stderr: "" }),
-    check: (path) => (path.endsWith("/dev") ? { refuse: "it is a folder directly under $HOME" } : { remove: path }),
-    remove: (path) => { removed.push(path); free += 5 * gigabyte; },
+    home, dryRun: false, floorGigabytes: 15, alertGigabytes: 10, free: () => free,
+    cleanup: async () => ((cleaned++, free += gigabyte), { counts: { removed: 3, kept: 1, failed: 0 }, bytesFreed: gigabyte }),
+    cleaners: sweepCleaners(home, {}),
+    installed: () => true,
+    run: async (argv) => {
+      ran.push(argv.join(" "));
+      free += (freed[argv[0] === "sh" ? "fleet" : argv[0]!] ?? 0) * gigabyte;
+      return argv[0] === "du" ? { code: 0, stdout: duOutput, stderr: "" } : done;
+    },
+    log: (line) => logged.push(line), print: (line) => printed.push(line),
     ...fields,
   };
-  return { options, logged, printed, prompts, removed };
+  return { options, logged, printed, ran, cleaned: () => cleaned };
 }
 
-test("a sweep runs T3's storage cleanup, then the judge proposes, and the command removes only what its checks allow", async () => {
+const sizes: Array<[number, string]> = [
+  [90, ""], [30, ".cache"], [20, ".cache/uv"], [12, "dev"], [11, "dev/big"], [9, ".t3"], [8, ".t3/worktrees"], [5, "notes"],
+  [4, ".bun"], [3, ".bun/install"], [2, "go"], [1, "go/pkg"], [0.5, ".local"],
+];
+const duOutput = sizes.map(([gigabytes, path]) => `${gigabytes * 1024 * 1024}\t${path ? `${home}/${path}` : home}`).join("\n");
+
+test("the cleaners are T3's storage cleanup, then fleet prune the way the base pack runs it, then each package cache's own cleaner, in this order, and never docker", async () => {
+  expect(sweepCleaners(home, {}).map((cleaner) => cleaner.argv)).toEqual([
+    ["sh", launcher, "prune", "--auto"],
+    ["bun", "pm", "cache", "rm"],
+    ["pnpm", "store", "prune"],
+    ["uv", "cache", "prune"],
+    ["go", "clean", "-cache"],
+  ]);
+  expect(sweepCleaners(home, { FLEET_ENGINE_DIR: "/opt/engine" })[0]!.argv).toEqual(["sh", "/opt/engine/fleet", "prune", "--auto"]);
   const run = sweep();
   expect(await diskSweep(run.options)).toBe(0);
-  expect(run.logged).toEqual([
-    "Sweep: 12.0G free.",
-    "T3 storage cleanup: removed 3, kept 1, failed 0, freed 1.0G. 13.0G free.",
-    "Removed /home/me/.cache/tool: a tool cache.",
-    "Refused /home/me/dev: it is a folder directly under $HOME.",
-    "Judgment pass done: 18.0G free.",
-  ]);
-  expect(run.removed).toEqual(["/home/me/.cache/tool"]);
-  expect(run.printed).toEqual(["Two caches hold most of the space."]);
-  const prompt = run.prompts[0]!;
-  expect(prompt).toContain("This box has 13.0G free in $HOME. Under 10G, lanes stop");
-  expect(prompt).toContain("~/.local/state/fleet/jobs/worktree-prune.log");
-  expect(prompt).toContain("You cannot delete anything.");
+  expect(run.cleaned()).toBe(1);
+  expect(run.ran).toEqual([`sh ${launcher} prune --auto`, "bun pm cache rm", "pnpm store prune", "uv cache prune", "go clean -cache", `du -x -k -d 2 ${home}`]);
+  expect(run.ran.some((line) => line.includes("docker"))).toBe(false);
 });
 
-test("a dry run skips T3's cleanup, logs each candidate and what it would remove, and removes nothing", async () => {
-  let cleaned = false;
-  const run = sweep({ dryRun: true, cleanup: async () => ((cleaned = true), { counts: { removed: 0, kept: 0, failed: 0 }, bytesFreed: 0 }) });
-  expect(await diskSweep(run.options)).toBe(0);
-  expect(cleaned).toBe(false);
-  expect(run.removed).toEqual([]);
-  expect(run.logged).toEqual([
-    "Sweep (dry run): 12.0G free.",
-    "T3 storage cleanup skipped: T3 has no dry run.",
-    "Would remove /home/me/.cache/tool: a tool cache.",
-    "Refused /home/me/dev: it is a folder directly under $HOME.",
-    "Judgment pass done: 12.0G free.",
-  ]);
+test("a cleaner whose tool is not installed is skipped", async () => {
+  const run = sweep({ installed: (tool) => tool !== "pnpm" && tool !== "go" });
+  await diskSweep(run.options);
+  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune --auto`, "bun pm cache rm", "uv cache prune"]);
+  expect(run.logged).toContain("Skipped pnpm store prune: pnpm is not installed.");
+  expect(run.logged).toContain("Skipped go clean -cache: go is not installed.");
 });
 
-test("a failed T3 cleanup is logged and the judge still runs; a failed judge or one without a candidate list fails the sweep and removes nothing", async () => {
+test("a failing or hanging cleaner, or a failing T3 cleanup, is logged, and the next one runs", async () => {
   const run = sweep({
     cleanup: async () => { throw new Error("T3 is not running on this machine"); },
-    judge: async () => ({ code: 1, stdout: "", stderr: "claude: not signed in" }),
+    run: async (argv) => {
+      run.ran.push(argv.join(" "));
+      if (argv[0] === "bun") return { code: 1, stdout: "", stderr: "bun: something broke\nerror: cache is locked" };
+      if (argv[0] === "pnpm") return { code: 124, stdout: "", stderr: "" };
+      return argv[0] === "du" ? { code: 0, stdout: duOutput, stderr: "" } : done;
+    },
   });
-  expect(await diskSweep(run.options)).toBe(1);
-  expect(run.logged).toEqual(["Sweep: 12.0G free.", "T3 storage cleanup failed: T3 is not running on this machine", "Judgment pass failed: 12.0G free."]);
-  expect(run.printed).toEqual(["claude: not signed in"]);
-  const listless = sweep({ judge: async () => ({ code: 0, stdout: "I removed it all myself.", stderr: "" }) });
-  expect(await diskSweep(listless.options)).toBe(1);
-  expect(listless.removed).toEqual([]);
-  expect(listless.logged.at(-1)).toBe("Judgment pass failed: the judge returned no candidate list. 13.0G free.");
+  expect(await diskSweep(run.options)).toBe(0);
+  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune --auto`, "bun pm cache rm", "pnpm store prune", "uv cache prune", "go clean -cache"]);
+  expect(run.logged).toEqual([
+    "Sweep: 4.0G free, floor 15G.",
+    "T3 storage cleanup failed: T3 is not running on this machine. 4.0G free.",
+    "fleet prune --auto: done. 4.0G free.",
+    "bun pm cache rm failed with exit 1: error: cache is locked. 4.0G free.",
+    "pnpm store prune stopped at its 10 minute limit. 4.0G free.",
+    "uv cache prune: done. 4.0G free.",
+    "go clean -cache: done. 4.0G free.",
+    "Still 4.0G free, below the 10G alert floor. Nothing else is removed.",
+  ]);
 });
 
-function sandboxHome() {
-  const home = realpathSync(temp.make("sweep-home-"));
-  const outside = realpathSync(temp.make("sweep-outside-"));
-  const at = (path: string) => join(home, path);
-  const folder = (path: string) => (mkdirSync(at(path), { recursive: true }), writeFileSync(join(at(path), "blob"), "x"), at(path));
-  const repo = (path: string) => {
-    folder(path);
-    git(at(path), "init", "-q", "-b", "main");
-    writeFileSync(join(at(path), ".gitignore"), "node_modules/\n");
-    git(at(path), "add", ".");
-    git(at(path), "commit", "-q", "-m", "first");
-    folder(`${path}/node_modules/dep`);
-    return at(path);
-  };
-  const pushed = repo("dev/pushed");
-  git(outside, "init", "-q", "--bare", "remote.git");
-  git(pushed, "remote", "add", "origin", join(outside, "remote.git"));
-  git(pushed, "push", "-q", "origin", "main");
-  repo("dev/unpushed");
-  repo("dev/dirty");
-  writeFileSync(join(at("dev/dirty"), "notes.txt"), "work in progress");
-  folder(".cache/tool");
-  folder("mem/cache");
-  folder(".config/app/Cache");
-  folder("scratch/old");
-  repo("scratch/old/project");
-  folder(".local/share/tool");
-  mkdirSync(join(outside, "data"));
-  writeFileSync(join(outside, "data", "keep"), "x");
-  symlinkSync(join(outside, "data"), at(".cache/link"));
-  const env = { ...gitEnv, HOME: home, FLEET_MEMORY_DIR: at("mem") };
-  return { home, outside, at, env };
+test("the sweep stops once free space is back above the floor", async () => {
+  const run = sweep({}, { bun: 6, pnpm: 6 });
+  expect(await diskSweep(run.options)).toBe(0);
+  expect(run.ran).toEqual([`sh ${launcher} prune --auto`, "bun pm cache rm", "pnpm store prune"]);
+  expect(run.logged.slice(-2)).toEqual(["pnpm store prune: done. 17.0G free.", "17.0G free, above the 15G floor, so the sweep stops."]);
+  expect(run.printed).toEqual([]);
+  const roomy = sweep({ free: () => 40 * gigabyte });
+  await diskSweep(roomy.options);
+  expect([roomy.cleaned(), roomy.ran]).toEqual([0, []]);
+});
+
+test("above the alert floor nothing is listed; below it, the report ends with the ten largest folders under $HOME from a read-only du", async () => {
+  const between = sweep({}, { fleet: 7 });
+  await diskSweep(between.options);
+  expect(between.ran.at(-1)).toBe("go clean -cache");
+  expect(between.printed).toEqual([]);
+  const low = sweep();
+  await diskSweep(low.options);
+  expect(low.ran.at(-1)).toBe(`du -x -k -d 2 ${home}`);
+  expect(low.printed).toEqual([[
+    "The largest folders under $HOME, for you to decide:",
+    `30.0G ${home}/.cache`, `20.0G ${home}/.cache/uv`, `12.0G ${home}/dev`, `11.0G ${home}/dev/big`, `9.0G ${home}/.t3`,
+    `8.0G ${home}/.t3/worktrees`, `5.0G ${home}/notes`, `4.0G ${home}/.bun`, `3.0G ${home}/.bun/install`, `2.0G ${home}/go`,
+  ].join("\n")]);
+  const slow = sweep({ run: async (argv) => (argv[0] === "du" ? { code: 124, stdout: `${20 * 1024 * 1024}\t${home}/.cache\n`, stderr: "" } : done) });
+  await diskSweep(slow.options);
+  expect(slow.printed).toEqual([`The largest folders under $HOME, for you to decide:\n20.0G ${home}/.cache\ndu did not finish in 5 minutes, so the list may miss folders.`]);
+});
+
+test("a dry run lists the cleaners it would run, and runs none", async () => {
+  const run = sweep({ dryRun: true, installed: (tool) => tool !== "go" });
+  expect(await diskSweep(run.options)).toBe(0);
+  expect([run.cleaned(), run.ran, run.printed]).toEqual([0, [], []]);
+  expect(run.logged).toEqual([
+    "Sweep (dry run): 4.0G free, floor 15G.",
+    "Would run T3 storage cleanup.",
+    "Would run fleet prune --auto.",
+    "Would run bun pm cache rm.",
+    "Would run pnpm store prune.",
+    "Would run uv cache prune.",
+    "Skipped go clean -cache: go is not installed.",
+  ]);
+});
+
+function stubTools(dir: string) {
+  mkdirSync(dir, { recursive: true });
+  const script = (name: string, body: string) => (writeFileSync(join(dir, name), `#!/bin/sh\necho "${name} $*" >> "${dir}/calls.log"\n${body}\n`), chmodSync(join(dir, name), 0o755));
+  script("bun", "exit 1");
+  script("pnpm", "");
+  script("uv", "");
+  for (const tool of ["sh", "du"]) symlinkSync(`/usr/bin/${tool}`, join(dir, tool));
+  return dir;
 }
 
-test("the command refuses a candidate in a dirty or unpushed work tree, in the memory checkout or a protected folder, behind a symlink out of $HOME, or one that is or holds a repository", () => {
-  const { home, at, env } = sandboxHome();
-  const check = sweepGuard(home, env);
-  expect(check(at("dev/dirty/node_modules"))).toEqual({ refuse: "its Git work tree has uncommitted changes or untracked files" });
-  expect(check(at("dev/unpushed/node_modules"))).toEqual({ refuse: "its Git work tree has commits that no remote holds" });
-  expect(check(at("mem/cache"))).toEqual({ refuse: `it is inside ${at("mem")}, which the sweep never touches` });
-  expect(check(at(".config/app/Cache"))).toEqual({ refuse: `it is inside ${at(".config")}, which the sweep never touches` });
-  expect(check(at(".cache/link"))).toEqual({ refuse: "it is outside $HOME" });
-  expect(check(at("dev/pushed"))).toEqual({ refuse: "it is a Git work tree root" });
-  expect(check(at("dev/pushed/.git/objects"))).toEqual({ refuse: "it is inside a Git directory" });
-  expect(check(at("scratch/old"))).toEqual({ refuse: "it holds a Git repository" });
-  expect(check(at("dev"))).toEqual({ refuse: "it is $HOME or a folder directly under it" });
-  expect(check(home)).toEqual({ refuse: "it is $HOME or a folder directly under it" });
-  expect(check("relative/path")).toEqual({ refuse: "it is not an absolute path" });
-  expect(check(at(".cache/gone"))).toEqual({ refuse: "it does not exist" });
-  expect(check("~/.cache/tool")).toEqual({ remove: at(".cache/tool") });
-  expect(check(at("dev/pushed/node_modules"))).toEqual({ remove: at("dev/pushed/node_modules") });
-});
-
-const allCandidates = (at: (path: string) => string) => ["dev/dirty/node_modules", "dev/unpushed/node_modules", "mem/cache", ".cache/link", "dev/pushed", "scratch/old", ".cache/tool", ".local/share/tool"]
-  .map((path) => ({ path: at(path), reason: "proposed" }));
-
-test("on a real disk, a plain cache folder is removed and every refused candidate stays", async () => {
-  const { home, outside, at, env } = sandboxHome();
-  const run = sweep({ check: sweepGuard(home, env), remove: removePath, judge: async () => ({ code: 0, stdout: proposal(allCandidates(at)), stderr: "" }) });
-  expect(await diskSweep(run.options)).toBe(0);
-  expect([existsSync(at(".cache/tool")), existsSync(at(".local/share/tool"))]).toEqual([false, false]);
-  for (const kept of ["dev/dirty/node_modules/dep/blob", "dev/unpushed/node_modules/dep/blob", "mem/cache/blob", "dev/pushed/.gitignore", "scratch/old/project/.gitignore", ".cache/link"]) expect(existsSync(at(kept))).toBe(true);
-  expect(existsSync(join(outside, "data", "keep"))).toBe(true);
-  expect(run.logged.filter((line) => line.startsWith("Removed"))).toEqual([`Removed ${at(".cache/tool")}: proposed.`, `Removed ${at(".local/share/tool")}: proposed.`]);
-  expect(run.logged.filter((line) => line.startsWith("Refused")).length).toBe(6);
-});
-
-test("on a real disk, a dry run touches nothing", async () => {
-  const { home, at, env } = sandboxHome();
-  const run = sweep({ dryRun: true, check: sweepGuard(home, env), remove: removePath, judge: async () => ({ code: 0, stdout: proposal(allCandidates(at)), stderr: "" }) });
-  expect(await diskSweep(run.options)).toBe(0);
-  expect([existsSync(at(".cache/tool/blob")), existsSync(at(".local/share/tool/blob"))]).toEqual([true, true]);
-  expect(run.logged.filter((line) => line.startsWith("Would remove"))).toEqual([`Would remove ${at(".cache/tool")}: proposed.`, `Would remove ${at(".local/share/tool")}: proposed.`]);
-});
-
-test("the judge takes the survey model and effort from the model table, and the old model only when the table has no Claude survey row", () => {
-  const rows = (provider: string) => JSON.stringify([{ role: "survey", work: "Surveys", provider, model: provider === "claude" ? "mid-model" : "other-model", effort: "medium" }]);
-  expect(judgeModel({ FLEET_MODELS: rows("claude") })).toEqual({ model: "mid-model", effort: "medium" });
-  expect(judgeModel({ FLEET_MODELS: rows("codex") })).toEqual({ model: "claude-sonnet-5-5", effort: "high" });
-  expect(judgeModel({})).toEqual({ model: "claude-sonnet-5-5", effort: "high" });
-});
-
-test("the judge runs without bypass, in restricted mode with no MCP servers, and with read-only tools only", () => {
-  const argv = judgeArgv({ model: "mid-model", effort: "medium" });
-  expect(argv.slice(0, 14)).toEqual([
-    "claude", "-p", "--model", "mid-model", "--effort", "medium", "--no-session-persistence", "--restricted", "--strict-mcp-config", "--permission-mode", "dontAsk", "--tools", "Bash,Read,Glob,Grep", "--allowedTools",
-  ]);
-  expect(argv).not.toContain("bypassPermissions");
-  const allowed = argv.slice(14, argv.indexOf("--disallowedTools"));
-  expect(allowed).toEqual(["Read", "Glob", "Grep", "Bash(du *)", "Bash(ls *)", "Bash(df *)", "Bash(find *)", "Bash(git status*)", "Bash(git log*)", "Bash(git -C * status*)", "Bash(git -C * log*)"]);
-  const denied = argv.slice(argv.indexOf("--disallowedTools") + 1);
-  expect(denied).toEqual(expect.arrayContaining(["Bash(*find * -delete*)", "Bash(*find * -exec*)", "Bash(*find * -ok*)", "Bash(*find * -fprint*)", "Bash(*find * -fls*)", "Bash(rm *)", "Write", "Edit"]));
+test("fleet disk-sweep runs the installed cleaners from PATH and the engine launcher, takes its floors from its arguments, and lists the largest folders", async () => {
+  const sandbox = temp.make("sweep-home-");
+  const bin = stubTools(join(sandbox, "bin"));
+  mkdirSync(join(sandbox, "engine"));
+  writeFileSync(join(sandbox, "engine/fleet"), `echo "fleet $*" >> "${bin}/calls.log"`);
+  mkdirSync(join(sandbox, "data/inner"), { recursive: true });
+  const env = { HOME: sandbox, PATH: bin, FLEET_ENGINE_DIR: join(sandbox, "engine"), FLEET_SETTINGS: JSON.stringify({ "base.diskFloorGigabytes": 10 }) };
+  const lines: string[] = [];
+  const code = await diskSweepCommand(["--floor", "1000000", "--alert-floor", "1000000"], { home: sandbox, env, log: (line) => lines.push(line), print: (line) => lines.push(line), cleanup: async () => { throw new Error("no T3"); } });
+  expect(code).toBe(0);
+  expect(readFileSync(join(bin, "calls.log"), "utf8").trim().split("\n")).toEqual(["fleet prune --auto", "bun pm cache rm", "pnpm store prune", "uv cache prune"]);
+  expect(lines).toContain("Skipped go clean -cache: go is not installed.");
+  expect(lines.some((line) => line.startsWith("bun pm cache rm failed with exit 1"))).toBe(true);
+  expect(lines.at(-1)).toContain(`${sandbox}/data/inner`);
 });
 
 test("T3's storage cleanup runs over a session allowed to change settings, with a 20 minute limit", async () => {
@@ -201,6 +192,9 @@ test("T3's storage cleanup runs over a session allowed to change settings, with 
   expect(deadlines).toContain("server.runStorageCleanup 1200000");
 });
 
-test("fleet disk-sweep takes only --dry-run", async () => {
-  await expect(diskSweepCommand(["--all"], { home: "/nowhere", env: {} })).rejects.toThrow("Usage: fleet disk-sweep [--dry-run]");
+test("fleet disk-sweep takes only --dry-run and its two floors", async () => {
+  const usage = "Usage: fleet disk-sweep [--dry-run] [--floor <gigabytes>] [--alert-floor <gigabytes>]";
+  await expect(diskSweepCommand(["--all"], { home: "/nowhere", env: {} })).rejects.toThrow(usage);
+  await expect(diskSweepCommand(["--floor"], { home: "/nowhere", env: {} })).rejects.toThrow(usage);
+  await expect(diskSweepCommand(["--floor", "lots"], { home: "/nowhere", env: {} })).rejects.toThrow(usage);
 });

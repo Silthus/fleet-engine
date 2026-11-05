@@ -3,6 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileS
 import { dirname, join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { reactionDays, slackMember, slackTriggerCommand, watchSlack, type SlackTriggerContext } from "./slack-trigger.ts";
+import { underLock } from "./hub-job.ts";
 import { writeHome } from "./testing.ts";
 
 const temp = tempDirs();
@@ -209,9 +210,8 @@ test("the check passes only when the gateway lists the Slack server's tools, and
 test("a second trigger that finds the lock of a running one does nothing, and only --dry-run or check is taken", async () => {
   const gateway = fakeGateway(slackTools.map((tool) => `chat-${tool}`), () => "");
   const here = hub({ "hub.slackUserId": me }, gateway);
-  writeHome(here.home, { ".local/state/fleet/slack-trigger.lock/owner": JSON.stringify({ pid: process.pid, token: "running" }) });
-  expect(await slackTriggerCommand([], here.context)).toBe(0);
-  expect(here.lines).toEqual(["Another Slack trigger runs, so this one ends."]);
+  expect(await underLock(here.context, "slack-trigger", "The Slack trigger", () => slackTriggerCommand([], here.context))).toBe(0);
+  expect(here.lines).toEqual(["The Slack trigger is already running, so this run ends."]);
   expect(gateway.calls).toEqual([]);
   await expect(slackTriggerCommand(["--now"], here.context)).rejects.toThrow("Usage: fleet slack-trigger [--dry-run | check]");
   expect(existsSync(join(here.home, ".local/state/fleet/slack-trigger.json"))).toBe(false);

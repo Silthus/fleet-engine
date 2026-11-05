@@ -191,11 +191,12 @@
         "hub.diskAlertGigabytes",
         "hub.threadFolder"
       ],
-      "sentence": "The hub cleans a devbox whose disk runs low, and tells you only when the cleanup cannot free enough.",
+      "sentence": "The hub cleans a devbox whose disk runs low with fleet prune and each tool's own cache cleaner, and names the largest folders only when that cannot free enough.",
+      "risk": "The sweep removes only what fleet prune and the cache cleaners of T3, Bun, pnpm, uv and Go remove: merged and idle worktrees, and caches that tools fill again. It deletes no other file and never touches Docker; for the rest, you decide.",
       "moment": {
         "time": "15:10",
         "title": "A full disk you never saw",
-        "body": "A devbox dropped under its free-space floor after a big build. The hub cleaned old caches and worktrees on it, so your threads kept running.",
+        "body": "A devbox dropped under its free-space floor after a big build. The hub ran fleet prune and the package managers' own cache cleaners on it, so your threads kept running.",
         "words": [
           "hub",
           "devbox",
