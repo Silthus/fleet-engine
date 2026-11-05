@@ -593,10 +593,8 @@
     {
       "id": "codex-cli",
       "run": [
-        "bun",
-        "add",
-        "-g",
-        "@openai/codex"
+        "fleet",
+        "install-codex"
       ],
       "check": [
         "codex",

@@ -1,8 +1,13 @@
+import { join } from "node:path";
+
 export type Run = (command: string[]) => Promise<{ code: number; out: string }>;
+
+export const codexInstaller = join(import.meta.dir, "../lib/install-codex.sh");
 
 const updates: Array<{ name: string; installed: string[]; marker: string; update: string[] }> = [
   { name: "Claude Code", installed: ["sh", "-c", 'test -x "$HOME/.local/bin/claude" && echo native'], marker: "native", update: ["claude", "update"] },
-  { name: "Codex", installed: ["bun", "pm", "ls", "-g"], marker: "@openai/codex", update: ["bun", "add", "-g", "@openai/codex@latest"] },
+  { name: "Codex", installed: ["sh", "-c", 'readlink "$HOME/.local/bin/codex"'], marker: "/.local/share/fleet/codex/", update: ["sh", codexInstaller] },
+  { name: "Codex from Bun", installed: ["bun", "pm", "ls", "-g"], marker: "@openai/codex", update: ["bun", "add", "-g", "@openai/codex@latest"] },
 ];
 
 /** Updates each agent CLI that Fleet installed and skips the others. Returns the lines to print and whether every update worked. */

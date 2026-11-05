@@ -75,9 +75,10 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
   for (const step of plan.steps) {
     if (failed.has(step.pack) || (await waits(step))) continue;
     if (step.check && (await run(step.check)) === 0) continue;
-    if ((await run(step.run)) === 0) continue;
+    const ran = (await run(step.run)) === 0;
+    if (ran && (!step.check || (await run(step.check)) === 0)) continue;
     failed.add(step.pack);
-    report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack failed.`, repair: "apply" });
+    report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: ran ? `Step ${step.id} of the ${step.pack} pack ran, but does not pass its check.` : `Step ${step.id} of the ${step.pack} pack failed.`, repair: "apply" });
     if (step.pack === "base") report.ok = false;
   }
   return report;
