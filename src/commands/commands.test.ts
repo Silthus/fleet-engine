@@ -2,8 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../cli.ts";
+import type { AvailableSource, ProfileFile } from "../pack/types.ts";
 import { defaultSources } from "../setup/defaults.ts";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
+import { engineSource, resolveEngine } from "../testing/packs.ts";
+import { settingsCommand } from "./settings.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -113,6 +116,19 @@ describe("fleet settings and fleet set", () => {
     expect(result.output).toContain("  pull-requests.mergeCommand = not set");
     expect(result.output).not.toContain("memory.repo");
     expect(result.output).toEndWith("Change one with fleet set <pack.key>=<value>.");
+  });
+
+  test("lists an engine setting once when a pack overrides its default, with the value that wins", async () => {
+    const engine = await engineSource();
+    const signer = { key: "identity.signer", question: "Which key signs?", type: "choice" as const, choices: [{ value: "1password", label: "1Password" }], default: "1password", ask: "never" as const };
+    const team: AvailableSource = { ref: { name: "team", repo: "team/packs", ref: "main" }, dir: "/team", packs: [{ manifest: { schema: 1, name: "team", summary: "Team rules.", settings: [signer] }, dir: "/team/packs/team" }] };
+    const plan = resolveEngine([engine, team], { packs: ["team"] });
+    const lines: string[] = [];
+    const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [team.ref], packs: ["team"], plan: "both", settings: {}, workflows: {} } satisfies ProfileFile;
+    const code = settingsCommand([], { profileDir: "/profile", profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line), apply: async () => 0 });
+    expect(code).toBe(0);
+    expect(lines.filter((line) => line.includes("identity.signer ="))).toEqual(["  identity.signer = 1password (default)"]);
+    expect(lines).not.toContain("team:");
   });
 
   test("checks each value against its type, then pushes and applies it", async () => {
