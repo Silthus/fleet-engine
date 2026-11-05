@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LoadedPack, PackManifest } from "../src/pack/types.ts";
 import { tempDirs } from "../src/testing/git.ts";
-import { presetPicks, commandFlags, setSetting, questions } from "../page/model.ts";
+import { presetPicks, commandFlags, setSetting, questions, setupAsks, settingAsks } from "../page/model.ts";
 import { buildPage, pageData } from "./build-page.ts";
 
 const root = join(import.meta.dir, "..");
@@ -54,6 +54,20 @@ describe("the page build", () => {
     const eu = setSetting(data, presetPicks(data, "everyday"), "posthog.region", "eu");
     expect(commandFlags(data, eu)).toEqual(["--preset", "everyday", "--set", "posthog.region=eu"]);
     expect(questions(data, eu).count).toBe(questions(data, presetPicks(data, "everyday")).count - 1);
+  });
+
+  test("a team build whose pack makes its own devbox promises no devbox questions, since setup asks for no devbox then", async () => {
+    const data = await pageData({ audience: "posthog", team: [teamPack()] });
+    const michael = presetPicks(data, "michael");
+    const open = questions(data, michael);
+    expect(open.devbox.map((setting) => setting.key)).toContain("orchestration.loopProject");
+    expect(setupAsks(data, michael)).not.toContain("when you add a devbox");
+    expect(setupAsks(data, michael)).toEndWith(`. Set the ${open.devbox.length} settings only a devbox needs in Tune it, or later with fleet set`);
+    expect(settingAsks(open, open.devbox[0]!)).toBe("set it here or later with fleet set");
+    const without = await pageData({ audience: "posthog", team: [teamPack({ name: "acme" })] });
+    const acme = questions(without, presetPicks(without, "michael"));
+    expect(setupAsks(without, presetPicks(without, "michael"))).toEndWith(`, plus ${acme.devbox.length} when you add a devbox`);
+    expect(settingAsks(acme, acme.devbox[0]!)).toBe("setup asks when you add a devbox");
   });
 
   test("a team build shows a pack by its title, and by its capitalised name without one", async () => {

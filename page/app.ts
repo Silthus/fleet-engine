@@ -11,6 +11,7 @@ import {
   profileFile,
   questions,
   setSetting,
+  settingAsks,
   setupAsks,
   togglePack,
   toggleWorkflow,
@@ -131,7 +132,7 @@ function control(setting: PackSetting, id: string) {
 function markFor(setting: PackSetting, open = questions(data, picks)) {
   const value = picks.settings[setting.key];
   if (value !== undefined && value !== setting.default) return '<span class="mark changed">changed</span>';
-  const asks = open.settings.includes(setting) ? "setup asks" : open.devbox.includes(setting) ? "setup asks when you add a devbox" : undefined;
+  const asks = settingAsks(open, setting);
   return asks ? `<span class="mark">· ${asks}</span>` : "";
 }
 

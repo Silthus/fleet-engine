@@ -34,6 +34,7 @@ export type PageData = {
   packs: PagePack[];
   /** Packs from a team's private source, which setup ticks in every preset. */
   teamPacks: string[];
+  ownDevboxPacks: string[];
   concepts: Array<{ word: string; note: string }>;
   /** Needs that hold only while a pack is on, such as hub. */
   needPacks: Partial<Record<Need, string>>;
@@ -145,12 +146,21 @@ export function questions(data: PageData, picks: Picks) {
   const settings = picked(data, picks).flatMap((pack) => activeSettings(data, picks, pack, (workflow) => onForMacSetup(data, picks, workflow))).filter(open);
   const keys = new Set(settings.map((setting) => setting.key));
   const devbox = picked(data, picks).flatMap((pack) => activeSettings(data, picks, pack)).filter((setting) => open(setting) && !keys.has(setting.key));
-  return { settings, devbox, count: settings.length + 1 };
+  return { settings, devbox, devboxStep: !picks.packs.some((pack) => data.ownDevboxPacks.includes(pack)), count: settings.length + 1 };
+}
+
+export function settingAsks(open: ReturnType<typeof questions>, setting: PackSetting) {
+  if (open.settings.includes(setting)) return "setup asks";
+  if (!open.devbox.includes(setting)) return undefined;
+  return open.devboxStep ? "setup asks when you add a devbox" : "set it here or later with fleet set";
 }
 
 export function setupAsks(data: PageData, picks: Picks) {
-  const { count, devbox } = questions(data, picks);
-  return `asks ${count} more question${count === 1 ? "" : "s"}${devbox.length ? `, plus ${devbox.length} when you add a devbox` : ""}`;
+  const { count, devbox, devboxStep } = questions(data, picks);
+  const asks = `asks ${count} more question${count === 1 ? "" : "s"}`;
+  if (!devbox.length) return asks;
+  if (devboxStep) return `${asks}, plus ${devbox.length} when you add a devbox`;
+  return `${asks}. Set the ${devbox.length === 1 ? "setting" : `${devbox.length} settings`} only a devbox needs in Tune it, or later with fleet set`;
 }
 
 export function commandFlags(data: PageData, picks: Picks): string[] {
