@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PackSetting } from "../pack/types.ts";
 import { parseSetupFlags } from "./flags.ts";
-import { settingSteps, type Catalog, type Draft } from "./questions.ts";
+import { packList, settingSteps, type Catalog, type Draft } from "./questions.ts";
 
 const region: PackSetting = {
   key: "team.region",
@@ -52,5 +52,12 @@ describe("a setting's time-zone default", () => {
     const result = await ask(undefined);
     expect(result.output).toContain("  1) US (default)");
     expect(result.settings).toEqual({ "team.region": "us" });
+  });
+});
+
+describe("a pack's name in setup", () => {
+  test("is its title, or its capitalised name without one", () => {
+    const packs = [{ dir: "/team/packs/posthog", manifest: { schema: 1 as const, name: "posthog", title: "PostHog", summary: "Team rules." } }, { dir: "/packs/memory", manifest: { schema: 1 as const, name: "memory", summary: "Memory." } }];
+    expect(packList(["posthog", "memory", "later"], { packs } as Catalog)).toBe("PostHog, Memory, later");
   });
 });
