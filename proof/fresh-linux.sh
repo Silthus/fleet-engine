@@ -118,7 +118,12 @@ check_codex() {
   where=$(fleet_cmd_env "$user" sh -c 'command -v codex' || true)
   node=$(fleet_cmd_env "$user" sh -c 'command -v node' || true)
   note "codex: ${where:-not found}; node: ${node:-not found}"
-  [ -z "$where" ] || note "codex launcher: $(head -1 "$where" 2>/dev/null)"
+  if [ -n "$where" ]; then
+    case "$(head -c 2 "$where" 2>/dev/null)" in
+      '#!') note "codex launcher: $(head -1 "$where")" ;;
+      *) note "codex launcher: a binary, $(readlink -f "$where")" ;;
+    esac
+  fi
   if version=$(fleet_cmd_env "$user" codex --version 2>&1); then
     pass "$user codex runs" "codex --version: $version"
   else
