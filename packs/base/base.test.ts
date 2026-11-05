@@ -87,7 +87,13 @@ describe("the Base pack", () => {
     expect(plan("claude").steps.map((step) => step.id)).toEqual(["claude-cli"]);
     expect(plan("codex").steps.map((step) => step.id)).toEqual(["codex-cli-mac"]);
     expect(plan("both").steps.find((step) => step.id === "codex-cli-mac")).toMatchObject({ run: ["brew", "install", "--cask", "codex"], check: ["codex", "--version"] });
-    expect(plan("both", devbox).steps.find((step) => step.id === "codex-cli")).toMatchObject({ run: ["bun", "add", "-g", "@openai/codex"], check: ["codex", "--version"] });
+  });
+
+  test("installs Codex on Linux from its release package, which needs no Node", () => {
+    const step = plan("both", devbox).steps.find((item) => item.id === "codex-cli");
+    expect(step).toMatchObject({ run: ["fleet", "install-codex"], check: ["codex", "--version"] });
+    expect(step?.run).not.toContain("@openai/codex");
+    expect(plan("both", devbox).commands["install-codex"]?.path).toEndWith("packs/base/commands/install-codex.ts");
   });
 
   test("gives each plan one T3 default model from its own provider", () => {
