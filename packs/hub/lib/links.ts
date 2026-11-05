@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { boxPrefix, slugFor, type Coder } from "./coder.ts";
 import { quote, type Machine } from "./machine.ts";
 
-export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshLater" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
+export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
 type Link = { environmentId: string; port: number };
 
 export const t3Port = 3773;

@@ -323,7 +323,7 @@
   "human": [
     {
       "id": "box-claude-token",
-      "say": "Make a long-lived Claude token for your boxes, then paste the token it prints into fleet box token.",
+      "say": "Make a long-lived Claude token for your boxes, then paste the token it prints into fleet box token. The hub hands it to each new box.",
       "command": "claude setup-token",
       "interactive": true,
       "probe": [
@@ -332,8 +332,7 @@
         "test \"$(stat -c %a \"$HOME/.config/fleet/box-claude-token\" 2>/dev/null)\" = 600"
       ],
       "roles": [
-        "hub",
-        "devbox"
+        "hub"
       ],
       "workflow": "boxes"
     }

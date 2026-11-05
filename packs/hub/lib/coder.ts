@@ -12,7 +12,7 @@ const tokenScopes = ["coder:workspaces.create", "coder:workspaces.operate", "cod
 export type Env = Record<string, string | undefined>;
 export type Result = { code: number; stdout: string; stderr: string };
 export type Box = { name: string; id: string; template: string; status: string; lastUsedAt: string };
-export type Capture = (argv: string[], options: { env?: Env; stdin?: string; timeoutMs: number }) => Promise<Result>;
+export type Capture = (argv: string[], options: { env?: Env; stdin?: string; timeoutMs: number; inherit?: boolean }) => Promise<Result>;
 export type Timer = (ms: number, fire: () => void) => () => void;
 export type CoderOptions = { home: string; env: Env; coderUrl: string; template: string; capture?: Capture; fetch?: typeof fetch };
 
@@ -42,8 +42,9 @@ const realTimer: Timer = (ms, fire) => {
 };
 
 export function captureWith(timer: Timer): Capture {
-  return async (argv, { env, stdin, timeoutMs }) => {
-    const child = Bun.spawn(argv, { env: env as Record<string, string> | undefined, stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin), stdout: "pipe", stderr: "pipe", detached: true });
+  return async (argv, { env, stdin, timeoutMs, inherit = false }) => {
+    const output = inherit ? "inherit" : "pipe";
+    const child = Bun.spawn(argv, { env: env as Record<string, string> | undefined, stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin), stdout: output, stderr: output, detached: true });
     let expired = false;
     const cancel = timer(timeoutMs, () => {
       expired = true;
@@ -51,7 +52,8 @@ export function captureWith(timer: Timer): Capture {
       kill(child.pid);
     });
     try {
-      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      const text = (stream: ReadableStream<Uint8Array> | number | undefined) => (stream instanceof ReadableStream ? new Response(stream).text() : "");
+      const [stdout, stderr, code] = await Promise.all([text(child.stdout), text(child.stderr), child.exited]);
       return expired ? timeoutResult(timeoutMs, stdout) : { code, stdout, stderr };
     } finally {
       cancel();
@@ -60,6 +62,7 @@ export function captureWith(timer: Timer): Capture {
 }
 
 export const capture = captureWith(realTimer);
+const limit = (timeoutMs: number) => AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)));
 
 export class Coder {
   readonly env: Env;
@@ -136,14 +139,15 @@ export class Coder {
       .map((workspace) => ({ name: workspace.name, id: workspace.id, template: workspace.template_name, status: workspace.latest_build.status, lastUsedAt: workspace.last_used_at }));
   }
 
-  async create(name: string, from: string, diskGigabytes: number): Promise<string> {
-    const { id, parameters: known } = await this.activeTemplate();
-    const copied = await this.api<Array<{ name: string; value: string }>>(`/api/v2/workspacebuilds/${(await this.workspace(from)).latest_build.id}/parameters`);
+  async create(name: string, from: string, diskGigabytes: number, timeoutMs = coderLimitMs): Promise<string> {
+    const signal = limit(timeoutMs);
+    const { id, parameters: known } = await this.activeTemplate(signal);
+    const copied = await this.api<Array<{ name: string; value: string }>>(`/api/v2/workspacebuilds/${(await this.workspace(from, signal)).latest_build.id}/parameters`, undefined, signal);
     const parameters = new Map(copied.filter((parameter) => known.includes(parameter.name)).map((parameter) => [parameter.name, parameter.value]));
     const overrides: Record<string, string | undefined> = { disk_size: String(diskGigabytes), auto_start_app: "false", clone_source_instance_id: "", dotfiles_branch: this.env.FLEET_BOX_DOTFILES_BRANCH };
     for (const [key, value] of Object.entries(overrides)) if (value !== undefined && known.includes(key)) parameters.set(key, value);
     const rich_parameter_values = [...parameters].map(([key, value]) => ({ name: key, value }));
-    const created = await this.api<{ id: string }>("/api/v2/users/me/workspaces", { method: "POST", body: { name, template_id: id, rich_parameter_values, ttl_ms: idleStopMs } });
+    const created = await this.api<{ id: string }>("/api/v2/users/me/workspaces", { method: "POST", body: { name, template_id: id, rich_parameter_values, ttl_ms: idleStopMs } }, signal);
     return created.id;
   }
 
@@ -159,7 +163,7 @@ export class Coder {
     return this.api(`/api/v2/users/me/workspace/${name}`, undefined, signal);
   }
 
-  private async api<T>(path: string, change?: { method: "POST"; body?: unknown }, signal?: AbortSignal): Promise<T> {
+  private async api<T>(path: string, change?: { method: "POST" | "PUT"; body?: unknown }, signal?: AbortSignal): Promise<T> {
     const response = await this.fetch(`${this.env.CODER_URL}${path}`, {
       ...(change ? { method: change.method, body: JSON.stringify(change.body) } : {}),
       ...(signal ? { signal } : {}),
@@ -169,9 +173,9 @@ export class Coder {
     return response.json() as Promise<T>;
   }
 
-  async start(name: string, timeoutMs: number, { update = false } = {}): Promise<void> {
-    const signal = AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)));
-    const path = `/api/v2/workspaces/${(await this.workspace(name, signal)).id}/builds`;
+  async start(id: string, timeoutMs: number, { update = false } = {}): Promise<void> {
+    const signal = limit(timeoutMs);
+    const path = `/api/v2/workspaces/${id}/builds`;
     if (update) {
       try {
         const { versionId } = await this.activeTemplate(signal);
@@ -179,22 +183,22 @@ export class Coder {
         return;
       } catch (error) {
         if (signal.aborted) throw error;
-        console.error(`Fleet box: ${name} keeps its template version: ${(error as Error).message}`);
+        console.error(`Fleet box: workspace ${id} keeps its template version: ${(error as Error).message}`);
       }
     }
     await this.api(path, { method: "POST", body: { transition: "start" } }, signal);
   }
 
-  async stop(name: string): Promise<void> {
-    await this.must(["stop", "-y", name]);
+  async stop(id: string, timeoutMs = coderLimitMs): Promise<void> {
+    await this.api(`/api/v2/workspaces/${id}/builds`, { method: "POST", body: { transition: "stop" } }, limit(timeoutMs));
   }
 
-  async extend(name: string, duration: string): Promise<void> {
-    await this.must(["schedule", "extend", name, duration]);
+  async remove(id: string, timeoutMs = coderLimitMs): Promise<void> {
+    await this.api(`/api/v2/workspaces/${id}/builds`, { method: "POST", body: { transition: "delete" } }, limit(timeoutMs));
   }
 
-  async remove(name: string): Promise<void> {
-    await this.must(["delete", "-y", name]);
+  async extend(id: string, deadline: string, timeoutMs = coderLimitMs): Promise<void> {
+    await this.api(`/api/v2/workspaces/${id}/extend`, { method: "PUT", body: { deadline } }, limit(timeoutMs));
   }
 
   private sshArgs(wait: "yes" | "no", name: string, command: string): string[] {
@@ -207,12 +211,6 @@ export class Coder {
 
   async run(name: string, command: string): Promise<number> {
     return Bun.spawnSync([await this.binary(), ...this.sshArgs("no", name, command)], { env: this.env as Record<string, string>, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1;
-  }
-
-  async sshLater(name: string, command: string): Promise<Result> {
-    const child = Bun.spawn([await this.binary(), ...this.sshArgs("no", name, command)], { env: this.env as Record<string, string>, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { code: await child.exited, stdout, stderr };
   }
 
   ssh(name: string, command: string, stdin?: string, timeoutMs?: number): Promise<Result> {

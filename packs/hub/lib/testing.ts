@@ -1,9 +1,9 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Result } from "./coder.ts";
+import type { Box, Result } from "./coder.ts";
 import type { CommandCoder } from "./box-command.ts";
 import { readBoxSettings, type Machine } from "./machine.ts";
-import { poolFile, type Entry, type Pool } from "./pool.ts";
+import { poolFile, type Entry } from "./pool.ts";
 
 export const boxSettings = {
   "hub.alias": "my-hub", "hub.coderUrl": "https://coder.example.com", "hub.boxTemplate": "linux-box", "hub.boxDiskGigabytes": 120,
@@ -15,6 +15,7 @@ export const start = Date.parse("2026-11-01T00:00:00Z");
 
 export function fakeMachine(home: string, fields: Partial<Machine> = {}) {
   const calls: string[] = [];
+  const toHub: string[][] = [];
   const lines: string[] = [];
   let now = start;
   const machine: Machine = {
@@ -30,6 +31,7 @@ export function fakeMachine(home: string, fields: Partial<Machine> = {}) {
       calls.push(`peer ${alias}: ${command}`);
       return ok;
     },
+    toHub: async (args) => (toHub.push(args), 0),
     run: async (argv) => {
       calls.push(`run ${argv.join(" ")}`);
       return ok;
@@ -42,50 +44,61 @@ export function fakeMachine(home: string, fields: Partial<Machine> = {}) {
     say: (line) => lines.push(line),
     ...fields,
   };
-  return { machine, calls, lines };
+  return { machine, calls, lines, toHub };
 }
 
-export const box = (name: string, status = "running", fields: { id?: string; template?: string; lastUsedAt?: string } = {}) =>
+export const box = (name: string, status = "running", fields: { id?: string; template?: string; lastUsedAt?: string } = {}): Box =>
   ({ name, id: `ws-${name}`, template: "linux-box", status, lastUsedAt: "2026-10-28T07:00:00Z", ...fields });
 
 export function writePool(home: string, pool: { free?: string[]; refreshing?: string[]; boxes: Record<string, Entry> }) {
-  writeHome(home, { ".config/fleet/box-pool.json": JSON.stringify({ free: [], refreshing: [], ...pool }) });
+  writeHome(home, { ".config/fleet/box-pool.json": JSON.stringify({ free: [], ...pool }) });
 }
 
-export function changePoolNow(home: string, step: (pool: Pool) => void) {
-  const pool = JSON.parse(readFileSync(poolFile(home), "utf8")) as Pool;
-  step(pool);
-  writeFileSync(poolFile(home), JSON.stringify(pool));
-}
+export const registryOf = (home: string) => JSON.parse(readFileSync(poolFile(home), "utf8")) as { free: string[]; boxes: Record<string, Entry> };
 
 export type SshCall = { box: string; command: string; stdin?: string };
 
-export function fakeCoder(fields: Partial<CommandCoder> = {}) {
+export function fakeCoder(fields: Partial<CommandCoder> = {}, listed: Box[] = [box("box-lane")]) {
   const calls: SshCall[] = [];
   const done: string[] = [];
+  const named = (id: string) => listed.find((entry) => entry.id === id)?.name ?? id;
+  const mark = (id: string, status: string) => {
+    const found = listed.find((entry) => entry.id === id);
+    if (found) found.status = status;
+  };
   const coder: CommandCoder = {
     binary: async () => "coder",
     env: {},
     token: async () => "[]",
-    boxes: async () => [box("box-lane")],
+    boxes: async () => listed.map((entry) => ({ ...entry })),
     ssh: async (box, command, stdin) => {
       calls.push({ box, command, ...(stdin === undefined ? {} : { stdin }) });
       return ok;
     },
-    sshLater: async (box, command) => {
-      calls.push({ box, command });
-      return ok;
-    },
     sshAfterStartup: async () => ok,
-    remove: async (box) => void done.push(`remove ${box}`),
-    stop: async (box) => void done.push(`stop ${box}`),
-    extend: async (box, duration) => void done.push(`extend ${box} ${duration}`),
-    start: async (box) => void done.push(`start ${box}`),
-    create: async (name, from, disk) => (done.push(`create ${name} from ${from} with ${disk} GB`), `ws-${name}`),
+    remove: async (id) => {
+      done.push(`remove ${named(id)}`);
+      const index = listed.findIndex((entry) => entry.id === id);
+      if (index >= 0) listed.splice(index, 1);
+    },
+    stop: async (id) => {
+      done.push(`stop ${named(id)}`);
+      mark(id, "stopped");
+    },
+    extend: async (id, deadline) => void done.push(`extend ${named(id)} until ${deadline}`),
+    start: async (id) => {
+      done.push(`start ${named(id)}`);
+      mark(id, "running");
+    },
+    create: async (name, from, disk) => {
+      done.push(`create ${name} from ${from} with ${disk} GB`);
+      listed.push(box(name));
+      return `ws-${name}`;
+    },
     run: async () => 0,
     ...fields,
   };
-  return { coder, calls, done };
+  return { coder, calls, done, listed };
 }
 
 export function writeHome(home: string, files: Record<string, string>) {

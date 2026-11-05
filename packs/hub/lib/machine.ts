@@ -21,6 +21,7 @@ export type Machine = Clock & {
   codex: boolean;
   settings: BoxSettings;
   onPeer(alias: string, command: string, stdin?: string): Promise<Result>;
+  toHub(args: string[]): Promise<number>;
   run(argv: string[], stdin?: string): Promise<Result>;
   freePort(): number;
   environmentId(url: string, timeoutMs: number): Promise<string | undefined>;
@@ -29,6 +30,7 @@ export type Machine = Clock & {
 };
 
 export const shellLimitMs = 5 * 60_000;
+export const hubCallLimitMs = 3 * 3_600_000;
 export const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 export const remoteFleet = (args: string) => `sh "$HOME/.local/share/fleet/engine/fleet" ${args}`;
 const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
@@ -118,10 +120,12 @@ function savedDevboxes(home: string): string[] {
   return Array.isArray(saved) ? saved.filter((host): host is string => typeof host === "string") : [];
 }
 
-export function shellsWith(run: Capture): Pick<Machine, "onPeer" | "run"> {
+export function shellsWith(run: Capture, hub: string): Pick<Machine, "onPeer" | "toHub" | "run"> {
   const input = (stdin?: string) => (stdin === undefined ? {} : { stdin });
+  const ssh = (alias: string, command: string) => ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`];
   return {
-    onPeer: (alias, command, stdin) => run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`], { ...input(stdin), timeoutMs: shellLimitMs }),
+    onPeer: (alias, command, stdin) => run(ssh(alias, command), { ...input(stdin), timeoutMs: shellLimitMs }),
+    toHub: async (args) => (await run(ssh(hub, remoteFleet(args.map(quote).join(" "))), { timeoutMs: hubCallLimitMs, inherit: true })).code,
     run: (argv, stdin) => run(argv, { ...input(stdin), timeoutMs: shellLimitMs }),
   };
 }
@@ -140,7 +144,7 @@ export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
     devboxes,
     codex: profile.plan === "codex" || profile.plan === "both",
     settings,
-    ...shellsWith(capture),
+    ...shellsWith(capture, settings.alias),
     now: Date.now,
     sleep: (ms) => Bun.sleep(ms),
     freePort,

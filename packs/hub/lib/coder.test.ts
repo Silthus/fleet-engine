@@ -51,10 +51,10 @@ test("without a coder CLI on PATH, it downloads one from the Coder address only 
   };
   const coder = new Coder({ ...settings, home, env: { PATH: join(home, "empty") }, capture });
   expect(calls).toEqual([]);
-  await coder.stop("box-lane");
+  await coder.ssh("box-lane", "true");
   const arch = process.arch === "arm64" ? "arm64" : "amd64";
   expect(calls[0]).toEqual(["curl", "-fsSL", "-o", expect.stringMatching(/\/\.local\/bin\/\.coder\.[0-9a-f-]{36}$/), `https://coder.example.com/bin/coder-linux-${arch}`]);
-  expect(calls[1]).toEqual([join(home, ".local/bin/coder"), "stop", "-y", "box-lane"]);
+  expect(calls[1]).toEqual([join(home, ".local/bin/coder"), "ssh", "--disable-autostart", "--wait=no", "box-lane", "--", "true"]);
   expect(readFileSync(join(home, ".local/bin/coder"), "utf8")).toBe("coder binary");
 });
 
@@ -186,7 +186,7 @@ test("downloading the coder CLI never writes through a file planted at a tempora
     return ok;
   };
   const coder = new Coder({ ...settings, home, env: { PATH: join(home, "empty") }, capture });
-  await coder.stop("box-lane");
+  await coder.ssh("box-lane", "true");
   expect(readFileSync(join(home, "victim"), "utf8")).toBe("keep\n");
   expect(lstatSync(target).isSymbolicLink()).toBe(false);
   expect(readFileSync(target, "utf8")).toBe("coder binary");
@@ -280,8 +280,56 @@ test("starting a box gives every Coder API request of the start one time limit",
     return Response.json(answers[path] ?? { id: "ws-1" });
   }) as unknown as typeof fetch;
   const coder = new Coder({ ...settings, home: homeWith({}), env: { CODER_SESSION_TOKEN: "t" }, fetch: fetcher });
-  await coder.start("box-lane", 60_000, { update: true });
-  expect(signals).toHaveLength(4);
+  await coder.start("ws-1", 60_000, { update: true });
+  expect(signals).toHaveLength(3);
   expect(new Set(signals).size).toBe(1);
   expect(signals[0]).toBeInstanceOf(AbortSignal);
+});
+
+test("stop, delete, start and extend address the workspace by the id the pool recorded, through the Coder API, each with a time limit", async () => {
+  const requests: Array<{ method: string; path: string; body?: unknown; limited: boolean }> = [];
+  const fetcher = (async (url: string, init?: RequestInit) => {
+    requests.push({ method: init?.method ?? "GET", path: url.replace("https://coder.example.com", ""), ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}), limited: init?.signal instanceof AbortSignal });
+    return Response.json({});
+  }) as unknown as typeof fetch;
+  const { calls, capture } = recording();
+  const coder = new Coder({ ...settings, home: homeWith({}), env: { CODER_SESSION_TOKEN: "t" }, fetch: fetcher, capture });
+  await coder.stop("ws-1");
+  await coder.remove("ws-2", 1000);
+  await coder.start("ws-3", 1000);
+  await coder.extend("ws-4", "2026-11-01T02:00:00.000Z");
+  expect(requests).toEqual([
+    { method: "POST", path: "/api/v2/workspaces/ws-1/builds", body: { transition: "stop" }, limited: true },
+    { method: "POST", path: "/api/v2/workspaces/ws-2/builds", body: { transition: "delete" }, limited: true },
+    { method: "POST", path: "/api/v2/workspaces/ws-3/builds", body: { transition: "start" }, limited: true },
+    { method: "PUT", path: "/api/v2/workspaces/ws-4/extend", body: { deadline: "2026-11-01T02:00:00.000Z" }, limited: true },
+  ]);
+  expect(calls).toEqual([]);
+});
+
+test("creating a box has a time limit on every Coder API request", async () => {
+  const signals: Array<AbortSignal | undefined> = [];
+  const answers: Record<string, unknown> = {
+    "/api/v2/templates": [{ id: "tpl-1", name: "linux-box", active_version_id: "v-1" }],
+    "/api/v2/templateversions/v-1/rich-parameters": [],
+    "/api/v2/users/me/workspace/devbox-1": { id: "ws-1", latest_build: { id: "build-1" } },
+    "/api/v2/workspacebuilds/build-1/parameters": [],
+    "/api/v2/users/me/workspaces": { id: "ws-new" },
+  };
+  const fetcher = (async (url: string, init?: RequestInit) => (signals.push(init?.signal ?? undefined), Response.json(answers[url.replace("https://coder.example.com", "")]))) as unknown as typeof fetch;
+  const coder = new Coder({ ...settings, home: homeWith({}), env: { CODER_SESSION_TOKEN: "t" }, fetch: fetcher });
+  expect(await coder.create("box-lane", "devbox-1", 120)).toBe("ws-new");
+  expect(signals).toHaveLength(5);
+  expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+});
+
+test("a call that hands its output through to the caller still has a time limit and kills its process group", async () => {
+  const ready = join(temp.make("fleet-ready-"), "ready");
+  const bin = sandboxBin({ hang: `${announce(ready)}\n${hangs}` });
+  const clock = handTimer();
+  const result = captureWith(clock.timer)([join(bin, "hang")], { timeoutMs: 30, inherit: true });
+  await appeared(ready);
+  expect(clock.pending.map((entry) => entry.ms)).toEqual([30]);
+  clock.fire();
+  expect(await result).toEqual({ code: 124, stdout: "", stderr: "timed out after 30 ms" });
 });
