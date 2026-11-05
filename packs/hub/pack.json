@@ -122,7 +122,8 @@
         "hub.boxIdleHours",
         "hub.boxReapDays",
         "hub.boxKeepDirs",
-        "hub.boxWarmCommand"
+        "hub.boxWarmCommand",
+        "hub.relayPort"
       ],
       "sentence": "An agent borrows a short-lived devbox from a warm pool for a big job, links it to T3 Code, and gives it back when the job ends.",
       "moment": {
@@ -264,6 +265,73 @@
         "both"
       ],
       "workflow": "mcp-gateway"
+    }
+  ],
+  "jobs": [
+    {
+      "id": "box-sweep",
+      "command": [
+        "fleet",
+        "box",
+        "sweep"
+      ],
+      "schedule": {
+        "every": "15m"
+      },
+      "roles": [
+        "hub"
+      ],
+      "workflow": "boxes"
+    },
+    {
+      "id": "box-nightly",
+      "command": [
+        "fleet",
+        "box",
+        "nightly"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "02:47"
+      },
+      "roles": [
+        "hub"
+      ],
+      "workflow": "boxes"
+    },
+    {
+      "id": "box-restore",
+      "command": [
+        "fleet",
+        "box",
+        "restore"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "roles": [
+        "devbox",
+        "hub"
+      ],
+      "workflow": "boxes"
+    }
+  ],
+  "human": [
+    {
+      "id": "box-claude-token",
+      "say": "Make a long-lived Claude token for your boxes, then paste the token it prints into fleet box token.",
+      "command": "claude setup-token",
+      "interactive": true,
+      "probe": [
+        "sh",
+        "-c",
+        "test \"$(stat -c %a \"$HOME/.config/fleet/box-claude-token\" 2>/dev/null)\" = 600"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "boxes"
     }
   ]
 }

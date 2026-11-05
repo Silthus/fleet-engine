@@ -1,0 +1,127 @@
+import { afterEach, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tempDirs } from "../../../src/testing/git.ts";
+import { Coder, grant, reap, type Box, type Capture } from "./coder.ts";
+
+const temp = tempDirs();
+afterEach(() => temp.cleanup());
+const ok = { code: 0, stdout: "", stderr: "" };
+const settings = { coderUrl: "https://coder.example.com", template: "linux-box" };
+
+function homeWith(files: Record<string, string>) {
+  const home = temp.make("fleet-coder-");
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(join(home, path, ".."), { recursive: true });
+    writeFileSync(join(home, path), content);
+  }
+  return home;
+}
+
+function recording() {
+  const calls: string[][] = [];
+  const capture: Capture = (argv) => {
+    calls.push(argv);
+    return ok;
+  };
+  return { calls, capture };
+}
+
+test("the Coder session comes from the environment first, then Fleet's session files, then the Coder CLI's", () => {
+  const both = { ".config/fleet/coder-session": "fleet-token\n", ".config/fleet/coder-url": "https://fleet.example.com\n", ".config/coderv2/session": "cli-token\n", ".config/coderv2/url": "https://cli.example.com\n" };
+  const fromEnv = new Coder({ ...settings, home: homeWith(both), env: { CODER_SESSION_TOKEN: "env-token", CODER_URL: "https://env.example.com" } });
+  expect([fromEnv.env.CODER_SESSION_TOKEN, fromEnv.env.CODER_URL]).toEqual(["env-token", "https://env.example.com"]);
+  const fromFleet = new Coder({ ...settings, home: homeWith(both), env: {} });
+  expect([fromFleet.env.CODER_SESSION_TOKEN, fromFleet.env.CODER_URL]).toEqual(["fleet-token", "https://fleet.example.com"]);
+  const fromCli = new Coder({ ...settings, home: homeWith({ ".config/coderv2/session": "cli-token\n", ".config/coderv2/url": "https://cli.example.com\n" }), env: {} });
+  expect([fromCli.env.CODER_SESSION_TOKEN, fromCli.env.CODER_URL]).toEqual(["cli-token", "https://cli.example.com"]);
+});
+
+test("without a Coder URL in the environment or a session file, the hub.coderUrl setting is the address", () => {
+  const coder = new Coder({ ...settings, home: homeWith({}), env: { CODER_SESSION_TOKEN: "env-token" } });
+  expect(coder.env.CODER_URL).toBe("https://coder.example.com");
+});
+
+test("without a coder CLI on PATH, it downloads one from the Coder address only when a command needs it", () => {
+  const home = homeWith({});
+  const { calls, capture } = recording();
+  const coder = new Coder({ ...settings, home, env: { PATH: join(home, "empty") }, capture });
+  expect(calls).toEqual([]);
+  coder.stop("box-lane");
+  const arch = process.arch === "arm64" ? "arm64" : "amd64";
+  expect(calls[0]).toEqual(["curl", "-fsSL", "-o", join(home, ".local/bin/coder"), `https://coder.example.com/bin/coder-linux-${arch}`]);
+  expect(calls[1]).toEqual([join(home, ".local/bin/coder"), "stop", "-y", "box-lane"]);
+});
+
+test("a new box starts from the hub.boxTemplate template with the spawning devbox's parameters and the configured disk", async () => {
+  const requests: Array<{ path: string; body?: unknown }> = [];
+  const answers: Record<string, unknown> = {
+    "/api/v2/templates": [{ id: "tpl-other", name: "other", active_version_id: "v-other" }, { id: "tpl-1", name: "linux-box", active_version_id: "v-1" }],
+    "/api/v2/templateversions/v-1/rich-parameters": [{ name: "region" }, { name: "disk_size" }],
+    "/api/v2/users/me/workspace/devbox-1": { id: "ws-1", latest_build: { id: "build-1" } },
+    "/api/v2/workspacebuilds/build-1/parameters": [{ name: "region", value: "eu" }, { name: "dropped", value: "x" }, { name: "disk_size", value: "50" }],
+    "/api/v2/users/me/workspaces": {},
+  };
+  const fetcher = (async (url: string, init?: RequestInit) => {
+    const path = url.replace("https://coder.example.com", "");
+    requests.push({ path, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+    return Response.json(answers[path]);
+  }) as unknown as typeof fetch;
+  const coder = new Coder({ ...settings, home: homeWith({}), env: { CODER_SESSION_TOKEN: "t" }, fetch: fetcher });
+  await coder.create("box-lane", "devbox-1", 120);
+  expect(requests.at(-1)).toEqual({
+    path: "/api/v2/users/me/workspaces",
+    body: { name: "box-lane", template_id: "tpl-1", rich_parameter_values: [{ name: "region", value: "eu" }, { name: "disk_size", value: "120" }], ttl_ms: 2 * 3_600_000 },
+  });
+});
+
+test("the reaper deletes only boxes that stopped, failed, or were cancelled and went unused for the given days, and rechecks each before it deletes", async () => {
+  const now = Date.parse("2026-11-01T00:00:00Z");
+  const daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString();
+  const box = (name: string, status: string, lastUsedAt: string): Box => ({ name, status, lastUsedAt });
+  const listed = [box("box-old", "stopped", daysAgo(4)), box("box-busy", "running", daysAgo(4)), box("box-recent", "stopped", daysAgo(1)), box("box-woke", "stopped", daysAgo(4)), box("box-failed", "failed", daysAgo(4)), box("box-canceled", "canceled", daysAgo(4))];
+  const current = listed.map((entry) => (entry.name === "box-woke" ? { ...entry, status: "starting" } : entry));
+  const removed: string[] = [];
+  let reads = 0;
+  const coder = { boxes: () => (reads++ === 0 ? listed : current) };
+  const remove = async (name: string) => {
+    removed.push(name);
+  };
+  const print = () => {};
+  await reap(coder, { days: 3, dryRun: true, now, print }, remove);
+  expect(removed).toEqual([]);
+  reads = 0;
+  await reap(coder, { days: 3, dryRun: false, now, print }, remove);
+  expect(removed).toEqual(["box-old", "box-failed", "box-canceled"]);
+});
+
+test("a grant mints a dated token, writes the URL and token on the devbox over stdin, and only then removes the older tokens", () => {
+  const now = Date.parse("2026-11-01T12:34:00Z");
+  const tokens: string[][] = [];
+  const coder = {
+    env: { CODER_URL: "https://coder.example.com" },
+    token: (args: string[]) => {
+      tokens.push(args);
+      return args[0] === "list" ? JSON.stringify([{ id: "k1", token_name: "fleet-devbox-1-202610010000-abcd", expires_at: "2026-11-02T00:00:00Z" }, { id: "k2", token_name: "someone-else", expires_at: "2026-12-01T00:00:00Z" }]) : "new-secret\n";
+    },
+  };
+  const written: Array<{ command: string; stdin?: string }> = [];
+  const onDevbox = (_target: string, command: string, stdin?: string) => {
+    written.push({ command, stdin });
+    return ok;
+  };
+  expect(grant(coder, "devbox-1", { ifExpiring: true, now, onDevbox, print: () => {} })).toBe(0);
+  expect(tokens[1]?.slice(0, 3)).toEqual(["create", "--name", expect.stringMatching(/^fleet-devbox-1-202611011234-[0-9a-f]{4}$/)]);
+  expect(written.map((call) => call.stdin)).toEqual([undefined, "https://coder.example.com\n", "new-secret\n"]);
+  expect(written.map((call) => call.command).join("\n")).not.toContain("new-secret");
+  expect(tokens.at(-1)).toEqual(["remove", "fleet-devbox-1-202610010000-abcd"]);
+});
+
+test("a grant with --if-expiring keeps a token that lasts more than a week", () => {
+  const now = Date.parse("2026-11-01T00:00:00Z");
+  const coder = { env: {}, token: () => JSON.stringify([{ id: "k1", token_name: "fleet-devbox-1-202610010000-abcd", expires_at: "2026-11-20T00:00:00Z" }]) };
+  const onDevbox = () => ({ ...ok, stdout: "k1\n" });
+  const lines: string[] = [];
+  expect(grant(coder, "devbox-1", { ifExpiring: true, now, onDevbox, print: (line) => lines.push(line) })).toBe(0);
+  expect(lines).toEqual(["fleet-devbox-1-202610010000-abcd: still valid until 2026-11-20T00:00:00Z"]);
+});

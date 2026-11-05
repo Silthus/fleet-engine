@@ -1,4 +1,6 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AvailableSource, MachineFile, MachineRole, Plan, Profile } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
@@ -101,5 +103,42 @@ describe("the Hub pack", () => {
     }
     const listed = new Set((manifest.workflows ?? []).flatMap((workflow) => workflow.settings ?? []));
     expect(Object.keys(declared).filter((key) => !listed.has(key))).toEqual([]);
+  });
+
+  test("plans the Boxes jobs on the hub, only the forward restore on a devbox, and nothing when the workflow is off", () => {
+    const hub: MachineFile = { schema: 1, role: "hub" };
+    const items = (machine: MachineFile, fields: Partial<Profile> = {}) => {
+      const result = plan({ packs: ["hub"], ...fields }, machine);
+      return { jobs: result.jobs.filter((job) => job.pack === "hub").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub").map((step) => step.id) };
+    };
+    expect(items(hub)).toEqual({
+      jobs: ["box-sweep: fleet box sweep every 15m", "box-nightly: fleet box nightly every 1d at 02:47", "box-restore: fleet box restore every 5m"],
+      human: ["box-claude-token"],
+    });
+    expect(items(devbox)).toEqual({ jobs: ["box-restore: fleet box restore every 5m"], human: ["box-claude-token"] });
+    expect(items(mac)).toEqual({ jobs: [], human: [] });
+    expect(items(hub, { workflows: { boxes: false } })).toEqual({ jobs: [], human: [] });
+  });
+
+  test("the Boxes workflow's settings reach its commands, the relay port for a box's hub forward included", () => {
+    const settings = plan({ packs: ["hub"], workflows: { "linked-hub": false } }).settings;
+    expect(Object.keys(settings).filter((key) => key.startsWith("hub.box") || key === "hub.relayPort").sort()).toEqual([
+      "hub.boxDiskGigabytes", "hub.boxIdleHours", "hub.boxKeepDirs", "hub.boxPoolSize", "hub.boxReapDays", "hub.boxTemplate", "hub.relayPort",
+    ]);
+  });
+
+  test("the Claude token step tells the person to paste into fleet box token, and its probe passes only for a token file with mode 0600", () => {
+    const step = plan({ packs: ["hub"] }, { schema: 1, role: "hub" }).human.find((item) => item.id === "box-claude-token")!;
+    expect(step).toMatchObject({ command: "claude setup-token", interactive: true, workflow: "boxes" });
+    expect(step.say).toContain("fleet box token");
+    const home = temp.make("hub-token-");
+    const probe = () => Bun.spawnSync(step.probe, { env: { HOME: home, PATH: "/usr/bin:/bin" } }).exitCode;
+    expect(probe()).not.toBe(0);
+    mkdirSync(join(home, ".config/fleet"), { recursive: true });
+    writeFileSync(join(home, ".config/fleet/box-claude-token"), "sk-test\n", { mode: 0o644 });
+    chmodSync(join(home, ".config/fleet/box-claude-token"), 0o644);
+    expect(probe()).not.toBe(0);
+    chmodSync(join(home, ".config/fleet/box-claude-token"), 0o600);
+    expect(probe()).toBe(0);
   });
 });
