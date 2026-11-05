@@ -1,15 +1,15 @@
-import type { PackSetting, SettingValue } from "../pack/types.ts";
+import type { PackManifest, PackSetting, SettingValue } from "../pack/types.ts";
 import { FlagError, parseSettingValue } from "../setup/flags.ts";
 import { activePacks, type ChangeContext, manifests, saveAndApply } from "./change.ts";
 
 /** Lists the settings of the packs that are on, with where each value comes from. */
 export function settingsCommand(args: string[], context: ChangeContext): number {
   if (args.length) throw new FlagError("usage: fleet settings. Change a setting with fleet set <pack.key>=<value>.");
-  const packs = activePacks(context).filter((manifest) => manifest.settings?.length);
+  const packs = listedSettings(activePacks(context));
   if (!packs.length) return context.print("The packs you have on have no settings."), 0;
   for (const manifest of packs) {
     context.print(`${manifest.name}:`);
-    for (const setting of manifest.settings!) {
+    for (const setting of manifest.settings) {
       context.print(`  ${setting.key} = ${shown(setting, context)}`);
       context.print(`      ${setting.question}`);
     }
@@ -19,9 +19,17 @@ export function settingsCommand(args: string[], context: ChangeContext): number 
   return 0;
 }
 
+function listedSettings(manifests: PackManifest[]) {
+  const firstPack = new Map<string, string>();
+  for (const manifest of manifests) for (const setting of manifest.settings ?? []) if (!firstPack.has(setting.key)) firstPack.set(setting.key, manifest.name);
+  return manifests
+    .map((manifest) => ({ name: manifest.name, settings: (manifest.settings ?? []).filter((setting) => firstPack.get(setting.key) === manifest.name) }))
+    .filter((manifest) => manifest.settings.length);
+}
+
 function shown(setting: PackSetting, context: ChangeContext) {
   const value = context.plan.settings[setting.key];
-  if (value === undefined) return setting.optional ? "not set" : "not set yet, Fleet needs it";
+  if (value === undefined) return context.plan.unanswered.some((item) => item.key === setting.key) ? "not set yet, Fleet needs it" : "not set";
   if (setting.key in context.profile.settings) return String(value);
   return `${String(value)} (default)`;
 }

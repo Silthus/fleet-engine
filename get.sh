@@ -1,6 +1,7 @@
 #!/bin/sh
 # Fleet bootstrap. Installs what Fleet needs, fetches the engine at a pinned
-# ref, then runs fleet setup, or fleet apply when --profile names a profile.
+# ref, installs its packages, puts fleet on the login PATH, then runs
+# fleet setup, or fleet apply when --profile names a profile.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh
 #   sh get.sh [--ref <ref>] [--profile <dir> | --install-only] [-- <flags for fleet>]
@@ -106,6 +107,7 @@ fetch_engine() {
     fail "$engine_dir holds files that are not a Fleet engine. Move them away, or set FLEET_ENGINE_DIR."
   fi
   mkdir -p "$engine_dir"
+  engine_dir=$(CDPATH='' cd -- "$engine_dir" && pwd)
   [ -d "$engine_dir/.git" ] || git -C "$engine_dir" init -q
   [ -z "$(git -C "$engine_dir" status --porcelain)" ] || fail "$engine_dir has local changes. Save them elsewhere and remove them, then run this again."
   if ! origin=$(git -C "$engine_dir" remote get-url origin 2>/dev/null); then
@@ -116,6 +118,61 @@ fetch_engine() {
   fi
   git -C "$engine_dir" fetch -q --depth 1 --tags origin "$ref" || fail "could not fetch the engine at $ref from $engine_repo."
   git -C "$engine_dir" checkout -q --force --detach FETCH_HEAD
+}
+
+install_packages() {
+  log=$(mktemp)
+  if ! (cd "$engine_dir" && bun install --frozen-lockfile --production) >"$log" 2>&1; then
+    cat "$log" >&2
+    rm -f "$log"
+    fail "could not install the engine's packages in $engine_dir."
+  fi
+  rm -f "$log"
+}
+
+link_fleet() {
+  bin_dir="$HOME/.local/bin"
+  mkdir -p "$bin_dir"
+  if { [ -e "$bin_dir/fleet" ] || [ -L "$bin_dir/fleet" ]; } && [ "$(sed -n 2p "$bin_dir/fleet" 2>/dev/null)" != "# Fleet" ]; then
+    say "$bin_dir/fleet is not Fleet's, so it stays as it is. Run Fleet with sh $engine_dir/fleet."
+    return 0
+  fi
+  quoted=$(printf '%s' "$engine_dir/fleet" | sed "s/'/'\\\\''/g")
+  wrapper=$(mktemp "$bin_dir/fleet.XXXXXX")
+  printf "#!/bin/sh\n# Fleet\nexec sh '%s' \"\$@\"\n" "$quoted" >"$wrapper"
+  chmod 755 "$wrapper"
+  mv -f "$wrapper" "$bin_dir/fleet"
+}
+
+add_login_line() {
+  [ ! -s "$1" ] || [ -z "$(tail -c 1 "$1")" ] || printf '\n' >>"$1"
+  printf '%s\n' "$2" >>"$1"
+}
+
+login_path() {
+  dirs="\$HOME/.local/bin \$HOME/.bun/bin"
+  shell=${SHELL:-}
+  if [ "$(uname -s)" = Darwin ]; then
+    dirs="$dirs /opt/homebrew/bin"
+    [ -n "$shell" ] || shell=zsh
+  fi
+  case "${shell##*/}" in
+    zsh) file=.zprofile ;;
+    bash) file=.profile; [ ! -f "$HOME/.bash_login" ] || file=.bash_login; [ ! -f "$HOME/.bash_profile" ] || file=.bash_profile ;;
+    fish) file=.config/fish/conf.d/fleet.fish ;;
+    *) file=.profile ;;
+  esac
+  if [ "$file" = .config/fish/conf.d/fleet.fish ]; then
+    line="fish_add_path --global $dirs"
+    [ "$(cat "$HOME/$file" 2>/dev/null)" != "$line" ] || return 0
+    mkdir -p "$HOME/.config/fish/conf.d"
+    printf '%s\n' "$line" >"$HOME/$file"
+  else
+    line="export PATH=\"$(printf '%s' "$dirs" | tr ' ' ':'):\$PATH\" # Added by Fleet"
+    ! grep -qxF "$line" "$HOME/$file" 2>/dev/null || return 0
+    add_login_line "$HOME/$file" "$line"
+  fi
+  say "Open a new terminal to use fleet. ~/$file now puts ~/.local/bin and ~/.bun/bin on your PATH."
 }
 
 case "$(uname -s)" in
@@ -129,6 +186,9 @@ esac
 t3_cli
 has git || fail "git is missing."
 fetch_engine
+install_packages
+link_fleet
+login_path
 say "Engine ready at $ref in $engine_dir."
 
 [ -z "$install_only" ] || exit 0

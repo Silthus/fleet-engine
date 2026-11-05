@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PackManifest, ProfileFile } from "../pack/types.ts";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
-import { activeChoices, loadMachine, loadProfile, ProfileError, saveAnswers, saveMachine, workflowOverrides } from "./profile.ts";
+import { activeChoices, loadMachine, loadProfile, ProfileError, saveAnswers, saveMachine, thisMachine, workflowOverrides } from "./profile.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -115,6 +115,36 @@ describe("saving answers", () => {
     expect(git(remote, "rev-parse", "main")).toBe(git(dir, "rev-parse", "HEAD"));
   });
 
+  test("a push the remote rejects because it is ahead says why and how to recover", async () => {
+    const remote = temp.make("remote-");
+    git(remote, "init", "-q", "--bare", "-b", "main");
+    const dir = profileRepo();
+    git(dir, "remote", "add", "origin", remote);
+    git(dir, "push", "-q", "-u", "origin", "main");
+    const other = temp.make("other-");
+    git(other, "clone", "-q", remote, ".");
+    writeFileSync(join(other, "about-me.md"), "Hi\n");
+    git(other, "add", ".");
+    git(other, "commit", "-q", "-m", "Elsewhere");
+    git(other, "push", "-q");
+    const error = await saveAnswers(dir, { plan: "claude" }, { push: true }).catch((caught: Error) => caught);
+    expect(error).toBeInstanceOf(ProfileError);
+    expect((error as Error).message).toBe(
+      `${dir}: could not push answers: ! [rejected] main -> main (fetch first). ${dir} and its remote both have changes the other lacks. Run git -C ${dir} pull --rebase, then try again.`,
+    );
+  });
+
+  test("a failed push never shows the credentials in the remote's URL", async () => {
+    const dir = profileRepo();
+    git(dir, "remote", "add", "origin", "http://nora:hunter2@127.0.0.1:1/nora/fleet-profile.git?access_token=EXAMPLE_TOKEN");
+    git(dir, "config", "branch.main.remote", "origin");
+    git(dir, "config", "branch.main.merge", "refs/heads/main");
+    const error = await saveAnswers(dir, { plan: "claude" }, { push: true }).catch((caught: Error) => caught);
+    expect(error).toBeInstanceOf(ProfileError);
+    expect((error as Error).message).toContain("http://127.0.0.1:1/nora/fleet-profile.git");
+    expect((error as Error).message).not.toMatch(/hunter2|EXAMPLE_TOKEN|nora:/);
+  });
+
   test("rejects a profile with invalid fields", async () => {
     expect(loadProfile(profileRepo({ ...profile, workflows: { maps: "false" } }))).rejects.toThrow("workflows must map ids to true or false");
     expect(loadProfile(profileRepo({ schema: 1 }))).rejects.toThrow("engine needs a repo");
@@ -137,6 +167,14 @@ describe("machine file", () => {
     expect(await loadMachine(home)).toBeUndefined();
     await saveMachine(home, { schema: 1, role: "mac", setup: { done: ["github", "packs"], draft: { packs: ["orchestration"], plan: "claude" } } });
     expect(await loadMachine(home)).toEqual({ schema: 1, role: "mac", setup: { done: ["github", "packs"], draft: { packs: ["orchestration"], plan: "claude" } } });
+  });
+
+  test("a new Mac is a mac and never a Coder devbox, even with Coder's variables set", () => {
+    const coder = { CODER_AGENT_URL: "https://coder.example", CODER: "true" };
+    expect(thisMachine(undefined, "darwin", {})).toEqual({ schema: 1, role: "mac" });
+    expect(thisMachine(undefined, "darwin", coder)).toEqual({ schema: 1, role: "mac" });
+    expect(thisMachine({ schema: 1, role: "mac", profileDir: "/Users/octo/fleet-profile" }, "darwin", coder)).toEqual({ schema: 1, role: "mac", profileDir: "/Users/octo/fleet-profile" });
+    expect(thisMachine(undefined, "linux", coder)).toEqual({ schema: 1, role: "devbox", coder: true });
   });
 
   test("rejects a schema it does not know", async () => {

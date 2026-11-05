@@ -147,7 +147,9 @@
         "hub"
       ],
       "settings": [
-        "hub.alias"
+        "hub.alias",
+        "hub.httpsHost",
+        "hub.relayPort"
       ],
       "sentence": "The hub signs in to your MCP servers once, and agents on every machine reach them through it.",
       "moment": {
@@ -265,6 +267,37 @@
         "codex",
         "both"
       ],
+      "workflow": "mcp-gateway"
+    }
+  ],
+  "steps": [
+    {
+      "id": "mcphub",
+      "run": [
+        "fleet",
+        "mcphub",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "mcphub",
+        "doctor"
+      ],
+      "roles": [
+        "hub"
+      ],
+      "workflow": "mcp-gateway"
+    }
+  ],
+  "checks": [
+    {
+      "id": "mcphub-client",
+      "run": [
+        "fleet",
+        "mcphub",
+        "check"
+      ],
+      "say": "This machine cannot reach the MCP gateway. Run fleet mcphub check here to see why; on the hub, fleet mcphub grant <this machine's SSH name> gives it a key.",
       "workflow": "mcp-gateway"
     }
   ]
