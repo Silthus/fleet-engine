@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { hubCallLimitMs, hubCommand, markHub, peersOf, quote, readBoxSettings, readRole, remoteFleet, requireHub, shellLimitMs, shellsWith, thisMachine } from "./machine.ts";
+import { hubCallLimitMs, hubCommand, markHub, peerMachine, peerSsh, peersOf, quote, readBoxSettings, readRole, remoteFleet, requireHub, shellLimitMs, shellsWith, thisMachine } from "./machine.ts";
 import type { Capture } from "./coder.ts";
 import { boxSettings } from "./testing.ts";
 
@@ -63,9 +63,42 @@ test("peers and nightly grants cover the devboxes in the profile and those fleet
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ devboxes: ["devbox-2"] }));
   const machine = thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings), FLEET_PROFILE_DIR: profile }, home);
   expect(machine.devboxes).toEqual(["devbox-2", "devbox-3"]);
-  expect(machine.peers).toEqual(["my-hub", "devbox-2", "devbox-3"]);
+  expect(machine.peers).toEqual(["devbox-2", "devbox-3"]);
   const withoutProfile = thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings) }, home);
   expect(withoutProfile.devboxes).toEqual(["devbox-3", "devbox-2"]);
+});
+
+test("the peer list needs only hub.alias, so Hub links works without the Boxes settings", () => {
+  const home = homeWithMachine({ schema: 1, role: "devbox", devboxes: ["devbox-3", "devbox-2"] });
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ devboxes: ["devbox-2", "devbox-4"] }));
+  const here = peerMachine({ FLEET_SETTINGS: JSON.stringify({ "hub.alias": "my-hub" }), FLEET_PROFILE_DIR: profile }, home, "devbox-4");
+  expect(here.devboxes).toEqual(["devbox-2", "devbox-4", "devbox-3"]);
+  expect(here.peers).toEqual(["my-hub", "devbox-2", "devbox-3"]);
+  expect(here.self).toBe("devbox-4");
+});
+
+test("a box in the devbox list is never a peer, whether the profile or the machine file names it", () => {
+  const home = homeWithMachine({ schema: 1, role: "devbox", devboxes: ["box-saved"] });
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ devboxes: ["devbox-2", "box-lane"] }));
+  const here = peerMachine({ FLEET_SETTINGS: JSON.stringify({ "hub.alias": "my-hub" }), FLEET_PROFILE_DIR: profile }, home, "devbox-4");
+  expect(here.devboxes).toEqual(["devbox-2", "box-lane", "box-saved"]);
+  expect(here.peers).toEqual(["my-hub", "devbox-2"]);
+});
+
+test("every SSH command to a peer turns agent forwarding off, whatever the person's own SSH config says", () => {
+  expect(peerSsh("box-1", "echo hi")).toEqual(["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", "box-1", "bash -lc 'echo hi'"]);
+});
+
+test("the hub never lists itself as a peer when its SSH alias differs from its host name, and a devbox leaves out the name its machine file records", () => {
+  const settings = { FLEET_SETTINGS: JSON.stringify({ "hub.alias": "my-hub" }) };
+  const hubHome = homeWithMachine({ schema: 1, role: "hub", devboxes: ["devbox-2"] });
+  expect(peerMachine(settings, hubHome, "hub-host").peers).toEqual(["devbox-2"]);
+  const devboxHome = homeWithMachine({ schema: 1, role: "devbox", name: "devbox-4", devboxes: ["devbox-4", "devbox-2"] });
+  expect(peerMachine(settings, devboxHome, "ip-10-0-0-4").peers).toEqual(["my-hub", "devbox-2"]);
+  const unnamed = homeWithMachine({ schema: 1, role: "devbox", devboxes: ["devbox-2"] });
+  expect(peerMachine(settings, unnamed, "devbox-9").peers).toEqual(["my-hub", "devbox-2"]);
 });
 
 test("fleet hub here never writes through a file planted at a temporary name", async () => {
@@ -86,7 +119,7 @@ test("every call to a peer over SSH and every local command gets an operation ti
   await onPeer("my-hub", "fleet box pool list", "input");
   await run(["systemctl", "--user", "is-active", "unit"]);
   expect(asked).toEqual([
-    { argv: ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "my-hub", "bash -lc 'fleet box pool list'"], timeoutMs: shellLimitMs, stdin: "input" },
+    { argv: ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", "my-hub", "bash -lc 'fleet box pool list'"], timeoutMs: shellLimitMs, stdin: "input" },
     { argv: ["systemctl", "--user", "is-active", "unit"], timeoutMs: shellLimitMs },
   ]);
   expect(shellLimitMs).toBeGreaterThan(0);
@@ -97,9 +130,9 @@ test("a devbox hands a box operation to the hub in one SSH call through the engi
   const capture: Capture = async (argv, options) => (asked.push({ argv, timeoutMs: options.timeoutMs, ...(options.inherit ? { inherit: true } : {}) }), { code: 3, stdout: "", stderr: "" });
   const { toHub } = shellsWith(capture, "my-hub");
   expect(await toHub(["box", "spawn", "Lane 7", "--for", "devbox-1"])).toBe(3);
-  expect(asked.map(({ argv, ...rest }) => ({ argv: argv.slice(0, 6), ...rest }))).toEqual([{ argv: ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "my-hub"], timeoutMs: hubCallLimitMs, inherit: true }]);
-  const echoed = Bun.spawnSync(["bash", "-c", asked[0]!.argv[6]!.replace("bash -lc", "bash -c")], { env: { HOME: "/home/someone", PATH: "/usr/bin:/bin" }, stdout: "pipe", stderr: "pipe" });
+  expect(asked.map(({ argv, ...rest }) => ({ argv: argv.slice(0, 8), ...rest }))).toEqual([{ argv: ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", "my-hub"], timeoutMs: hubCallLimitMs, inherit: true }]);
+  const echoed = Bun.spawnSync(["bash", "-c", asked[0]!.argv[8]!.replace("bash -lc", "bash -c")], { env: { HOME: "/home/someone", PATH: "/usr/bin:/bin" }, stdout: "pipe", stderr: "pipe" });
   expect(echoed.stderr.toString()).toContain("/home/someone/.local/share/fleet/engine/fleet");
-  expect(asked[0]!.argv[6]).toBe(`bash -lc ${quote(`${remoteFleet("")}'box' 'spawn' 'Lane 7' '--for' 'devbox-1'`)}`);
+  expect(asked[0]!.argv[8]).toBe(`bash -lc ${quote(`${remoteFleet("")}'box' 'spawn' 'Lane 7' '--for' 'devbox-1'`)}`);
   expect(hubCallLimitMs).toBeGreaterThan(shellLimitMs);
 });

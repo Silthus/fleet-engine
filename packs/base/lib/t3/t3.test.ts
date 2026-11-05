@@ -252,7 +252,7 @@ test("only the user's own messages and question answers in T3 count as their wor
   ]);
 });
 
-test("a thread starts in T3's scratch project with the model row's provider, model, and effort, through a session that may write and is revoked", async () => {
+test("a thread starts in T3's scratch project with the model row's provider, model, and effort, through a session that may only read and operate, and is revoked", async () => {
   const payloads: Record<string, unknown> = {};
   const t3 = await stub({
     shell: { projects: [], threads: [] },
@@ -263,7 +263,7 @@ test("a thread starts in T3's scratch project with the model row's provider, mod
     },
   });
   const row = { role: "implementation", work: "", provider: "codex" as const, model: "gpt-big", effort: "high" as const };
-  const thread = await withT3Session((client) => launchScratchThread(client, { title: "Dream 2026-11-05", prompt: "Follow the dream skill.", row }), { home: t3.home, access: "write" });
+  const thread = await withT3Session((client) => launchScratchThread(client, { title: "Dream 2026-11-05", prompt: "Follow the dream skill.", row }), { home: t3.home, scopes: ["orchestration:read", "orchestration:operate"] });
   expect(thread).toBe("thread-1");
   expect(t3.rpcTags).toEqual(["projects.ensureScratch", "orchestration.launchThread"]);
   expect(payloads["orchestration.launchThread"]).toMatchObject({
@@ -272,6 +272,22 @@ test("a thread starts in T3's scratch project with the model row's provider, mod
     modelSelection: { instanceId: "codex", model: "gpt-big", options: [{ id: "reasoningEffort", value: "high" }] },
   });
   const cli = await t3.cliCalls();
-  expect(cli[0]).toBe("auth session issue --json --ttl 5m --label fleet --subject fleet");
+  expect(cli[0]).toBe("auth session issue --json --ttl 5m --label fleet --subject fleet --scope orchestration:read --scope orchestration:operate");
   expect(cli.at(-1)).toBe("auth session revoke shell-session");
+});
+
+test("a session can ask for the scopes its caller needs, such as access:write to link an environment", async () => {
+  const calls: string[][] = [];
+  await withT3Session(async () => undefined, {
+    server: { origin: "http://127.0.0.1:9", wsUrl: "ws://127.0.0.1:9/ws", cli: { command: "running-t3", args: [] } },
+    scopes: ["access:read", "access:write"],
+    runCli(_server, args) {
+      calls.push(args);
+      return { status: 0, stdout: args.includes("issue") ? JSON.stringify({ sessionId: "write-session", token: "private-bearer" }) : "" };
+    },
+  });
+  expect(calls).toEqual([
+    ["auth", "session", "issue", "--json", "--ttl", "5m", "--label", "fleet", "--subject", "fleet", "--scope", "access:read", "--scope", "access:write"],
+    ["auth", "session", "revoke", "write-session"],
+  ]);
 });

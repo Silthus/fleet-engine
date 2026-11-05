@@ -83,7 +83,7 @@
     },
     {
       "key": "hub.httpsHost",
-      "question": "Which private host name do your devboxes use to reach the hub over HTTPS, such as hub.internal.example.com? Leave it empty to reach it over SSH tunnels only.",
+      "question": "Which private host name does a browser on your own computer use to open the hub's sign-in pages over HTTPS, such as hub.internal.example.com? Devboxes always reach the hub through their SSH tunnels. Leave it empty to skip HTTPS.",
       "type": "string",
       "optional": true,
       "ask": "never"
@@ -346,6 +346,39 @@
       "workflow": "dream"
     },
     {
+      "id": "peers-renew",
+      "command": [
+        "fleet",
+        "peers",
+        "renew"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "03:07"
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "peers-restore",
+      "command": [
+        "fleet",
+        "peers",
+        "restore"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
       "id": "disk-watch",
       "command": [
         "fleet",
@@ -375,6 +408,19 @@
         "hub"
       ],
       "workflow": "boxes"
+    },
+    {
+      "id": "hub-https-trust",
+      "say": "Trust the hub's private certificate on this computer, so your browser opens the hub's sign-in pages over HTTPS. On the hub, run fleet hub-https ca, save the certificate it prints as hub-ca.crt on this Mac, open it in Keychain Access, and set it to Always Trust. Fleet skips this step while hub.httpsHost is empty.",
+      "probe": [
+        "fleet",
+        "hub-https",
+        "trusted"
+      ],
+      "roles": [
+        "mac"
+      ],
+      "workflow": "linked-hub"
     }
   ],
   "steps": [
@@ -394,6 +440,76 @@
         "hub"
       ],
       "workflow": "mcp-gateway"
+    },
+    {
+      "id": "hub-https",
+      "run": [
+        "fleet",
+        "hub-https",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "hub-https",
+        "doctor"
+      ],
+      "roles": [
+        "hub"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "ssh-tunnels",
+      "run": [
+        "fleet",
+        "ssh-tunnels",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "ssh-tunnels",
+        "doctor"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "peers",
+      "run": [
+        "fleet",
+        "peers",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "peers",
+        "doctor"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "hub-tunnel",
+      "run": [
+        "fleet",
+        "hub-tunnel",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "hub-tunnel",
+        "doctor"
+      ],
+      "roles": [
+        "mac"
+      ],
+      "workflow": "linked-hub"
     }
   ],
   "checks": [

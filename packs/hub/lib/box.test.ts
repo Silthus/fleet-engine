@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { claimScript, isIdle, nightly, nightlySteps, recycleScript, refreshPool, release, saveToken, setUpScript, spawn, startBox, sweep, unfinishedThreads } from "./box.ts";
 import { boxCommand, type BoxDeps } from "./box-command.ts";
-import { BoxBusy, lockBox } from "./box-lock.ts";
+import { LockBusy, lockBox } from "./box-lock.ts";
 import type { Box } from "./coder.ts";
 import { link, restoreForwards } from "./links.ts";
 import type { Machine } from "./machine.ts";
@@ -470,7 +470,7 @@ test("fleet box start takes a pooled box out of the pool under its lock before i
   const fake = fakeCoder({}, [box("box-a", "stopped"), box("box-b", "stopped")]);
   const startById = fake.coder.start;
   fake.coder.start = async (id, timeoutMs) => {
-    during.locked = await lockBox(home, "box-a", noWait).then(() => "free", (error) => (error instanceof BoxBusy ? "busy" : String(error)));
+    during.locked = await lockBox(home, "box-a", noWait).then(() => "free", (error) => (error instanceof LockBusy ? "busy" : String(error)));
     during.pooled = pooled(poolFile(home));
     await startById(id, timeoutMs);
   };
@@ -533,12 +533,12 @@ test("fleet box start on a box a lane holds keeps a release out until the box is
     fake.done.push("start box-lane");
   };
   expect(await startBox(fake.coder, machine, "box-lane", noWait)).toBe(0);
-  expect(duringStart).toBeInstanceOf(BoxBusy);
+  expect(duringStart).toBeInstanceOf(LockBusy);
   expect(fake.done).toEqual(["start box-lane"]);
   expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-1" });
 
   const unlock = await lockBox(home, "box-lane", noWait);
-  await expect(startBox(fake.coder, machine, "box-lane", noWait)).rejects.toBeInstanceOf(BoxBusy);
+  await expect(startBox(fake.coder, machine, "box-lane", noWait)).rejects.toBeInstanceOf(LockBusy);
   unlock();
   expect(fake.done).toEqual(["start box-lane"]);
 });
@@ -776,7 +776,7 @@ test("a pooled spawn holds the box's lock through setup and linking, so a releas
   });
   const { coder, done } = spawnCoder(0, [box("box-a")]);
   expect(await spawn(coder, machine, "lane")).toBe(0);
-  expect(during.release).toBeInstanceOf(BoxBusy);
+  expect(during.release).toBeInstanceOf(LockBusy);
   expect(during.pooled).toEqual([]);
   expect(done).toEqual([]);
   expect(registryOf(home).boxes["box-a"]).toEqual({ id: "ws-box-a", claim: expect.any(String) });
@@ -793,7 +793,7 @@ test("a new box's spawn holds its lock from before it creates it, so a forced re
     return ssh(name, command, stdin, timeoutMs);
   };
   expect(await spawn(fake.coder, machine, "lane", { reuse: false })).toBe(0);
-  expect(duringSetup).toBeInstanceOf(BoxBusy);
+  expect(duringSetup).toBeInstanceOf(LockBusy);
   expect(fake.done).toEqual(["create box-lane from devbox-1 with 120 GB"]);
   expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: expect.any(String) });
 });
@@ -844,7 +844,7 @@ test("round 4, finding 2: a spawn whose peer calls outlast the old 30-minute hol
   const fake = spawnCoder(0, [box("box-a", "stopped")]);
   expect(await spawn(fake.coder, machine, "lane")).toBe(0);
   expect(machine.now() - start).toBeGreaterThan(60 * 60_000);
-  expect(other.release).toBeInstanceOf(BoxBusy);
+  expect(other.release).toBeInstanceOf(LockBusy);
   expect(lines).toContain("box-other-lane env-box");
   expect(lines.at(-1)).toBe("box-a env-box");
   const claim = registryOf(home).boxes["box-a"]?.claim;
@@ -869,7 +869,7 @@ test("round 4, finding 3: setup writes credentials only while it holds the box, 
     return ssh(name, command, stdin, timeoutMs);
   };
   expect(await spawn(fake.coder, machine, "lane")).toBe(0);
-  expect(during).toBeInstanceOf(BoxBusy);
+  expect(during).toBeInstanceOf(LockBusy);
   expect(fake.calls.some((call) => call.stdin === "sk-secret-token\n")).toBe(true);
   expect(registryOf(home).boxes["box-lane"]?.id).toBe("ws-box-lane");
 });
@@ -905,8 +905,8 @@ test("round 4, finding 4: there is no lease to expire, so a sweep whose idle che
     return { ...ok, stdout: command.startsWith("cut ") ? "c-old\n" : "" };
   };
   expect(await sweep(fake.coder, machine)).toBe(0);
-  expect(during.release).toBeInstanceOf(BoxBusy);
-  expect(during.start).toBeInstanceOf(BoxBusy);
+  expect(during.release).toBeInstanceOf(LockBusy);
+  expect(during.start).toBeInstanceOf(LockBusy);
   expect(fake.done).toEqual(["stop box-lane"]);
   expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-old" });
 });
@@ -1138,7 +1138,7 @@ test("round 6, finding 3: fleet box start holds the box through its last forward
     },
   });
   expect(await startBox(fake.coder, machine, "box-lane", noWait)).toBe(0);
-  expect(meanwhile.map((outcome) => outcome instanceof BoxBusy)).toEqual([true, true]);
+  expect(meanwhile.map((outcome) => outcome instanceof LockBusy)).toEqual([true, true]);
   const { port } = (await Bun.file(join(home, ".config/fleet/boxes/box-lane.json")).json()) as { port: number };
   expect(services.at(-1)).toContain(`'${port}:3773'`);
   expect(fake.done).toEqual(["start box-lane"]);
@@ -1148,7 +1148,7 @@ test("round 6, finding 3: a standalone restore holds each box while it restores 
   const home = hubHome();
   linkedHere(home);
   writeHome(home, { ".config/fleet/boxes/box-other.json": JSON.stringify({ environmentId: "env-2", port: 22000 }) });
-  const probe = () => lockBox(home, "box-lane", noWait).then((unlock) => (unlock(), "free"), (error) => (error instanceof BoxBusy ? "busy" : String(error)));
+  const probe = () => lockBox(home, "box-lane", noWait).then((unlock) => (unlock(), "free"), (error) => (error instanceof LockBusy ? "busy" : String(error)));
   const during: string[] = [];
   const { machine, lines } = onHub(home, {
     run: async (argv) => {
@@ -1156,6 +1156,7 @@ test("round 6, finding 3: a standalone restore holds each box while it restores 
       if (argv[0] === "systemd-run" || argv[1] === "environment") during.push(`${argv[0] === "systemd-run" ? argv[3] : argv[2]} ${await probe()}`);
       return ok;
     },
+    linkEnvironment: async () => void during.push(`link ${await probe()}`),
   });
   const coder = fakeCoder({ ssh: async (_name, command) => ({ ...ok, stdout: command.includes("t3 pair") ? "pair-code\n" : "" }) }).coder;
   const unlock = await lockBox(home, "box-other", noWait);
@@ -1279,4 +1280,23 @@ test("round 7, finding 2: recycling fails when a folder it cleans, or a folder a
   const bare = temp.make("fleet-box-");
   const run = recycle(bare);
   expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
+});
+
+test("setting up or claiming a box marks it as a box, the mark outlives a recycle, and it never writes through a planted symlink", () => {
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl", "curl", "sleep"]);
+  for (const script of [setUpScript("box-lane by devbox-1 at now"), claimScript("lane by devbox-1 at now")]) {
+    const home = temp.make("fleet-box-");
+    expect(runOnBox(script, home, bin).exitCode).toBe(0);
+    expect(readFileSync(join(home, ".config/fleet/box-marker"), "utf8")).toBe("");
+    expect(Bun.spawnSync(["sh", "-c", recycleScript([])], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` } }).exitCode).toBe(0);
+    expect(existsSync(join(home, ".config/fleet/box-claim"))).toBe(false);
+    expect(existsSync(join(home, ".config/fleet/box-marker"))).toBe(true);
+  }
+  const planted = temp.make("fleet-box-");
+  const elsewhere = temp.make("fleet-elsewhere-");
+  writeHome(elsewhere, { target: "untouched\n" });
+  mkdirSync(join(planted, ".config/fleet"), { recursive: true });
+  symlinkSync(join(elsewhere, "target"), join(planted, ".config/fleet/box-marker"));
+  expect(runOnBox(claimScript("lane by devbox-1 at now"), planted, bin).exitCode).toBe(0);
+  expect(readFileSync(join(elsewhere, "target"), "utf8")).toBe("untouched\n");
 });

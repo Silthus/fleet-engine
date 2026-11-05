@@ -2,8 +2,8 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { BoxBusy, lockBox, tryLockBox, userWaitMs, withBoxLock, type HeldLock, type LockOptions } from "./box-lock.ts";
-import { assertBox, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForward, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
+import { LockBusy, lockBox, tryLockBox, userWaitMs, withBoxLock, type HeldLock, type LockOptions } from "./box-lock.ts";
+import { assertBox, boxMarkerPath, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForward, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
 import type { Box } from "./coder.ts";
 import { quote, remoteFleet, type Machine } from "./machine.ts";
 import { writePrivateFile } from "./mcphub/client.ts";
@@ -26,7 +26,7 @@ const busyLifeMs = 2 * 3_600_000;
 const linkFreshMs = 21 * 86_400_000;
 const machineFileCheck = "test -f ~/.config/fleet/machine.json";
 
-const claimRecord = (claim: string) => `mkdir -p ~/.config/fleet && printf '%s\\n' ${quote(claim)} > ~/.config/fleet/box-claim`;
+const claimRecord = (claim: string) => `mkdir -p ~/.config/fleet && printf '%s\\n' ${quote(claim)} > ~/.config/fleet/box-claim && { [ -e ~/${boxMarkerPath} ] || [ -L ~/${boxMarkerPath} ] || : > ~/${boxMarkerPath}; }`;
 const restartT3 = [
   "systemctl --user restart t3code.service",
   `for i in $(seq 60); do curl -fs http://127.0.0.1:${t3Port}/.well-known/t3/environment > /dev/null && break; sleep 1; done`,
@@ -293,7 +293,7 @@ async function claimFromPool(coder: BoxCoder, here: Machine, lane: Lane): Promis
     try {
       unlock = await lockBox(here.home, box, { waitMs: 0 });
     } catch (error) {
-      if (!(error instanceof BoxBusy)) throw error;
+      if (!(error instanceof LockBusy)) throw error;
       here.say(`${box} is busy; trying the next one`);
       continue;
     }

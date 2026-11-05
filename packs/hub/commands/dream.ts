@@ -32,5 +32,5 @@ await runCommand(() => dreamCommand(Bun.argv.slice(2), {
   boxes,
   git: (args) => capture(["git", ...args], { timeoutMs: shellLimitMs }),
   analyst: () => modelAnalyst(modelFor("lookup", env), home, env, boundedSpawn()),
-  launch: (title, prompt) => withT3Session((client) => launchScratchThread(client, { title, prompt, row: modelFor("implementation", env) }), { home, access: "write" }),
+  launch: (title, prompt) => withT3Session((client) => launchScratchThread(client, { title, prompt, row: modelFor("implementation", env) }), { home, scopes: ["orchestration:read", "orchestration:operate"] }),
 }), "fleet dream");
