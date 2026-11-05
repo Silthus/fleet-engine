@@ -1,5 +1,3 @@
-import { optionalStringSetting } from "../../base/lib/settings.ts";
-
 type Env = Record<string, string | undefined>;
 export type ReviewBotAction = "review" | "stamp";
 export type ReviewBotRequest = { action: ReviewBotAction; repo: string; pr: number; minutes: number; deep: boolean };
@@ -32,9 +30,22 @@ export function handlerArgs(request: ReviewBotRequest): string[] {
 }
 
 export async function askReviewBot(request: ReviewBotRequest, env: Env = Bun.env): Promise<number> {
-  const handler = (JSON.parse(env.FLEET_HANDLERS ?? "{}") as Record<string, string>)["review-bot"];
-  if (handler) return Bun.spawn(["bun", handler, ...handlerArgs(request)], { stdio: ["inherit", "inherit", "inherit"], env }).exited;
-  const fallback = optionalStringSetting(fallbackSetting[request.action], env) || defaultFallback[request.action];
+  const handler = (JSON.parse(env.FLEET_HANDLERS || "{}") as Record<string, string>)["review-bot"];
+  if (handler) return runHandler(["bun", handler, ...handlerArgs(request)], env);
+  const fallback = fallbackText(request.action, env);
   console.log(`No review bot is on for this machine. ${fallback.replaceAll("{repo}", request.repo).replaceAll("{pr}", String(request.pr))}`);
   return 2;
+}
+
+async function runHandler(command: string[], env: Env): Promise<number> {
+  const child = Bun.spawn(command, { stdio: ["inherit", "inherit", "inherit"], env });
+  const forward = (signal: NodeJS.Signals) => child.kill(signal);
+  process.on("SIGINT", forward).on("SIGTERM", forward);
+  try { return await child.exited; }
+  finally { process.off("SIGINT", forward).off("SIGTERM", forward); }
+}
+
+function fallbackText(action: ReviewBotAction, env: Env): string {
+  const value = (JSON.parse(env.FLEET_SETTINGS || "{}") as Record<string, unknown>)[fallbackSetting[action]];
+  return typeof value === "string" && value.trim() ? value : defaultFallback[action];
 }

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import type {
   AvailableSource,
@@ -84,7 +84,9 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
       if (!fits(pack, handler, `handler ${handler.seam}`)) continue;
       const other = plan.handlers[handler.seam];
       if (other) throw new ResolveError(`the ${handler.seam} handler is declared by both ${other.pack} and ${pack}`);
-      plan.handlers[handler.seam] = { pack, path: within(dir, handler.path, pack) };
+      const path = within(dir, handler.path, pack);
+      if (!existsSync(path) || !statSync(path).isFile()) throw new ResolveError(`${pack}: the ${handler.seam} handler ${handler.path} is not a file`);
+      plan.handlers[handler.seam] = { pack, path };
     }
     for (const script of manifest.t3ProjectScripts ?? []) {
       if (!fits(pack, script, `t3 project script ${script.id}`)) continue;

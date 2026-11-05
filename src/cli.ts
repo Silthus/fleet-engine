@@ -136,7 +136,10 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
     stdio: ["inherit", "inherit", "inherit"],
     env: { ...Bun.env, HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) },
   });
-  return child.exited;
+  const forward = (signal: NodeJS.Signals) => child.kill(signal);
+  process.on("SIGINT", forward).on("SIGTERM", forward);
+  try { return await child.exited; }
+  finally { process.off("SIGINT", forward).off("SIGTERM", forward); }
 }
 
 function handlerPaths(plan: Plan) {

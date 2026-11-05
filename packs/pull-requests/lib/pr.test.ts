@@ -240,6 +240,30 @@ test("without a review-bot handler, review and stamp print the fallback the sett
   expect(box.calls()).toEqual([]);
 });
 
+test("run outside fleet, review and stamp still print the default fallback and exit 2", () => {
+  const box = sandbox();
+  delete box.env.FLEET_HANDLERS;
+  delete box.env.FLEET_SETTINGS;
+  const { FLEET_HANDLERS: _, FLEET_SETTINGS: __, ...inherited } = process.env;
+  const result = Bun.spawnSync(["bun", command, "review", "--repo", "acme/widgets", "--pr", "12"], { env: { ...inherited, HOME: box.home } });
+  expect(result.exitCode).toBe(2);
+  expect(result.stdout.toString().trim()).toBe("No review bot is on for this machine. Ask for a review the way the repo's docs say.");
+});
+
+test("stopping review stops the review-bot handler before review exits", async () => {
+  const box = sandbox();
+  const stopped = join(box.home, "stopped");
+  const handler = join(box.home, "slow-bot.ts");
+  writeFileSync(handler, `process.on("SIGTERM", async () => { await Bun.write(${JSON.stringify(stopped)}, "stopped"); process.exit(5); });\nconsole.log("ready");\nsetInterval(() => {}, 1000);\n`);
+  const child = Bun.spawn(["bun", command, "review", "--repo", "acme/widgets", "--pr", "12"], { env: { ...process.env, HOME: box.home, FLEET_SETTINGS: "{}", FLEET_HANDLERS: JSON.stringify({ "review-bot": handler }) }, stdout: "pipe" });
+  const reader = child.stdout.getReader();
+  let seen = "";
+  while (!seen.includes("ready")) seen += new TextDecoder().decode((await reader.read()).value);
+  child.kill("SIGTERM");
+  expect(await child.exited).toBe(5);
+  expect(readFileSync(stopped, "utf8")).toBe("stopped");
+});
+
 test("wrong arguments print the usage and exit 1", () => {
   const box = sandbox();
   for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"], ["review", "--repo", "acme/widgets"], ["review", "--repo", "acme/widgets", "--pr", "1", "--minutes", "0"], ["stamp", "--repo", "acme/widgets", "--pr", "1", "--deep"]]) {

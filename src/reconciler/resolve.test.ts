@@ -203,6 +203,10 @@ describe("resolve", () => {
     expect(() => plan({ packs: ["bots", "rival"] }, mac, [engine, bots, rival])).toThrow("the review-bot handler is declared by both bots and rival");
     const leak = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "../../../outside.ts" }] });
     expect(() => plan({ packs: ["bots"] }, mac, [engine, leak])).toThrow("bots: path ../../../outside.ts leaves its pack");
+    const missing = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib/missing.ts" }] });
+    expect(() => plan({ packs: ["bots"] }, mac, [engine, missing])).toThrow("bots: the review-bot handler lib/missing.ts is not a file");
+    const folder = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib" }] }, { "lib/bot.ts": "export {};\n" });
+    expect(() => plan({ packs: ["bots"] }, mac, [engine, folder])).toThrow("bots: the review-bot handler lib is not a file");
   });
 
   test("marks a pack of an unreachable source as unavailable", () => {

@@ -229,6 +229,8 @@ describe("fleet routing", () => {
     writeFileSync(join(engine, "packs/rival/pack.json"), JSON.stringify({ schema: 1, name: "rival", summary: "rival pack.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] }));
     writeFileSync(join(engine, "packs/tools/commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", Bun.env.FLEET_HANDLERS ?? "none");\n`);
     rmSync(join(engine, "packs/rival/commands/hello.ts"));
+    mkdirSync(join(engine, "packs/rival/lib"));
+    writeFileSync(join(engine, "packs/rival/lib/bot.ts"), "export {};\n");
     expect((await fleet(["apply", "--profile", profileDir(["tools", "rival"])], home, engine)).code).toBe(0);
     expect((await fleet(["hello"], home, engine)).code).toBe(0);
     expect(JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"))).toEqual({ "review-bot": join(engine, "packs/rival/lib/bot.ts") });
