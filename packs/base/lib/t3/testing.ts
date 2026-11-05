@@ -14,6 +14,8 @@ export type T3Fixture = {
   resolutions?: Resolution[];
   links?: LinkedEnvironment[];
   tools?: ToolHandler;
+  rpc?: (tag: string, payload: unknown) => unknown;
+  environmentId?: string;
 };
 
 export type T3Stub = {
@@ -21,6 +23,7 @@ export type T3Stub = {
   origin: string;
   cliCalls(): Promise<string[]>;
   rpcTags: string[];
+  rpcCalls: { tag: string; payload: unknown }[];
   toolCalls: { name: string; args: Record<string, unknown> }[];
   stop(): Promise<void>;
 };
@@ -62,6 +65,7 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
   await mkdir(userdata, { recursive: true });
   if (fixture.resolutions) writeT3EventStore(join(userdata, "statev2.sqlite"), fixture.resolutions);
   const rpcTags: string[] = [];
+  const rpcCalls: T3Stub["rpcCalls"] = [];
   const toolCalls: T3Stub["toolCalls"] = [];
   const server = Bun.serve({
     port: 0,
@@ -72,6 +76,7 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
       if (bearer !== `Bearer ${shellToken}` || request.headers.get("x-t3-orchestration-protocol") !== "2") return new Response(null, { status: 401 });
       if (url.pathname === "/ws") return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
       if (url.pathname === "/api/orchestration/shell") return Response.json(fixture.shell);
+      if (url.pathname === "/.well-known/t3/environment" && fixture.environmentId) return Response.json({ environmentId: fixture.environmentId });
       const bounded = url.pathname.match(/^\/api\/orchestration\/threads\/([^/]+)\/bounded$/);
       if (bounded) {
         const items = fixture.turnItems?.[decodeURIComponent(bounded[1]!)];
@@ -84,8 +89,9 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
         const message = JSON.parse(String(raw));
         if (message._tag !== "Request") return;
         rpcTags.push(message.tag);
+        rpcCalls.push({ tag: message.tag, payload: message.payload });
         const value = message.tag === "orchestration.getArchivedShellSnapshot" ? fixture.archived ?? { projects: [], threads: [] }
-          : message.tag === "peerLinks.list" ? { links: fixture.links ?? [] } : undefined;
+          : message.tag === "peerLinks.list" ? { links: fixture.links ?? [] } : fixture.rpc?.(message.tag, message.payload);
         const exit = value ? { _tag: "Success", value } : { _tag: "Failure", cause: { _tag: "Fail", error: { _tag: "UnknownMethod" } } };
         socket.send(JSON.stringify({ _tag: "Exit", requestId: message.id, exit }));
       },
@@ -101,6 +107,7 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
     home,
     origin,
     rpcTags,
+    rpcCalls,
     toolCalls,
     cliCalls: async () => (await readFile(join(home, "cli.log"), "utf8").catch(() => "")).split("\n").filter(Boolean),
     async stop() {

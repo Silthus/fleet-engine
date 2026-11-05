@@ -19,6 +19,7 @@ export type T3SessionOptions = {
   timeoutMs?: number;
   runCli?: RunT3Cli;
   deadline?: T3Deadline;
+  scopes?: string[];
 };
 
 export type T3Deadline = (what: string, ms: number, expire: () => void) => () => void;
@@ -33,6 +34,7 @@ type PendingCall = { resolve(value: unknown): void; reject(error: Error): void }
 
 const defaultTimeoutMs = 30_000;
 const sessionLabel = "fleet";
+const readScopes = ["orchestration:read", "access:read"];
 
 export async function readT3Settings<T>(client: Pick<T3Client, "call">): Promise<T> {
   return (await client.call<{ settings: T }>("server.getConfig", {})).settings;
@@ -134,7 +136,7 @@ export async function withT3Session<T>(run: (client: T3HttpClient) => Promise<T>
   const deadline = options.deadline ?? realDeadline;
   const ttl = options.ttl ?? "5m";
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
-  const session = issueSession(server, runCli, ["--ttl", ttl, "--label", sessionLabel, "--subject", sessionLabel, "--scope", "orchestration:read", "--scope", "access:read"]);
+  const session = issueSession(server, runCli, ["--ttl", ttl, "--label", sessionLabel, "--subject", sessionLabel, ...(options.scopes ?? readScopes).flatMap((scope) => ["--scope", scope])]);
   const issued = [session];
   let rpc: Promise<T3Rpc> | undefined;
   let mcp: Promise<McpConnection> | undefined;
