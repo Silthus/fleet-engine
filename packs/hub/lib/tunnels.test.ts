@@ -117,3 +117,29 @@ test("on a devbox, a symlinked hosts file stays, and an empty hub.httpsHost need
 test("ssh-tunnels refuses on a Mac or a plain Linux machine and names the Mac command", async () => {
   await expect(sshTunnels("install", machine("mac").deps)).rejects.toThrow("fleet hub-tunnel");
 });
+
+test("install on the hub disables and deletes the tunnel unit of a devbox that left the list, and keeps units Fleet did not write", async () => {
+  const home = roleHome(temp.make("fleet-tunnels-"), "hub");
+  const elsewhere = join(temp.make("fleet-elsewhere-"), "unit");
+  writeFileSync(elsewhere, tunnelUnit("box-7", 60002));
+  mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
+  writeFileSync(unitPath(home, "box-9"), tunnelUnit("box-9", 60002));
+  writeFileSync(unitPath(home, "box-8"), "[Service]\nExecStart=/bin/true\n");
+  symlinkSync(elsewhere, unitPath(home, "box-7"));
+  writeFileSync(join(home, ".config/systemd/user/other.service"), tunnelUnit("box-6", 60002));
+  const { deps, calls } = machine("hub", { home });
+  expect(await sshTunnels("install", deps)).toBe(0);
+  expect(existsSync(unitPath(home, "box-9"))).toBe(false);
+  expect(calls).toContain("systemctl --user disable --now fleet-ssh-box-9.service");
+  expect(calls.indexOf("systemctl --user disable --now fleet-ssh-box-9.service")).toBeLessThan(calls.indexOf("systemctl --user daemon-reload"));
+  expect(readFileSync(unitPath(home, "box-8"), "utf8")).toBe("[Service]\nExecStart=/bin/true\n");
+  expect(readFileSync(elsewhere, "utf8")).toBe(tunnelUnit("box-7", 60002));
+  expect(existsSync(join(home, ".config/systemd/user/other.service"))).toBe(true);
+  expect(calls.filter((call) => call.includes("disable"))).toEqual(["systemctl --user disable --now fleet-ssh-box-9.service"]);
+  const plan = machine("hub", { home: roleHome(temp.make("fleet-tunnels-"), "hub") });
+  mkdirSync(join(plan.home, ".config/systemd/user"), { recursive: true });
+  writeFileSync(unitPath(plan.home, "box-9"), tunnelUnit("box-9", 60002));
+  await sshTunnels("plan", plan.deps);
+  expect(existsSync(unitPath(plan.home, "box-9"))).toBe(true);
+  expect(plan.calls).toEqual([]);
+});

@@ -80,8 +80,8 @@ test("grant on the hub itself writes a loopback key file directly, scoped to the
   expect(hub.printed).toEqual(["my-hub: saved its MCP gateway key."]);
 });
 
-test("grant sends a devbox its key over SSH on stdin, never in argv, with the HTTPS address or the tunnel address", async () => {
-  for (const [gateway, baseUrl] of [[secure, secureUrl], [{ relayPort: 60001 }, localGatewayUrl]] as const) {
+test("grant sends a devbox its key over SSH on stdin, never in argv, always with the tunnel address, even when the hub has an HTTPS host", async () => {
+  for (const [gateway, baseUrl] of [[secure, localGatewayUrl], [{ relayPort: 60001 }, localGatewayUrl]] as const) {
     const home = hubHome();
     const { calls, run } = fakeRun();
     await grant("box-1", fakeHub(home, { run, gateway }));

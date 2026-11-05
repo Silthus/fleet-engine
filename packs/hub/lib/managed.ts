@@ -6,14 +6,21 @@ export type Managed = { path: string; content: string };
 
 export const readIfThere = (path: string) => readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
 
+export function ownedBy(content: string, marker: string): boolean {
+  const [first, second] = content.split("\n", 2);
+  return first === marker || (first?.startsWith("<?xml ") === true && first.endsWith("?>") && second === marker);
+}
+
+export async function readOwned(home: string, path: string, marker: string, what: string): Promise<string | undefined> {
+  await refuseLinks(home, path, `${what} path`);
+  const existing = await readIfThere(path);
+  if (existing !== undefined && !ownedBy(existing, marker)) throw new Error(`Keep unmanaged ${what} file: ${path}`);
+  return existing;
+}
+
 export async function changedFiles(home: string, files: Managed[], marker: string, what: string): Promise<Managed[]> {
   const changed: Managed[] = [];
-  for (const file of files) {
-    await refuseLinks(home, file.path, `${what} path`);
-    const existing = await readIfThere(file.path);
-    if (existing !== undefined && !existing.includes(marker)) throw new Error(`Keep unmanaged ${what} file: ${file.path}`);
-    if (existing !== file.content) changed.push(file);
-  }
+  for (const file of files) if ((await readOwned(home, file.path, marker, what)) !== file.content) changed.push(file);
   return changed;
 }
 

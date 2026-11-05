@@ -16,6 +16,7 @@ export type T3SessionOptions = {
   home?: string;
   server?: T3Server;
   ttl?: string;
+  scopes?: string[];
   timeoutMs?: number;
   runCli?: RunT3Cli;
   deadline?: T3Deadline;
@@ -134,7 +135,8 @@ export async function withT3Session<T>(run: (client: T3HttpClient) => Promise<T>
   const deadline = options.deadline ?? realDeadline;
   const ttl = options.ttl ?? "5m";
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
-  const session = issueSession(server, runCli, ["--ttl", ttl, "--label", sessionLabel, "--subject", sessionLabel, "--scope", "orchestration:read", "--scope", "access:read"]);
+  const scopes = options.scopes ?? ["orchestration:read", "access:read"];
+  const session = issueSession(server, runCli, ["--ttl", ttl, "--label", sessionLabel, "--subject", sessionLabel, ...scopes.flatMap((scope) => ["--scope", scope])]);
   const issued = [session];
   let rpc: Promise<T3Rpc> | undefined;
   let mcp: Promise<McpConnection> | undefined;

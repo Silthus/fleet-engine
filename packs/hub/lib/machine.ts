@@ -3,6 +3,7 @@ import { rename, writeFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
+import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Env, type Result } from "./coder.ts";
 import type { Clock } from "./pool.ts";
 
@@ -10,6 +11,8 @@ export type BoxSettings = {
   alias: string; coderUrl: string; template: string; diskGigabytes: number; poolSize: number;
   idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; warmCommand?: string;
 };
+
+export type PeerLinkInput = { url: string; alternateUrls: string[]; pairingCode: string; access: "full-access" };
 
 export type PeerMachine = Clock & {
   home: string;
@@ -20,6 +23,7 @@ export type PeerMachine = Clock & {
   run(argv: string[], stdin?: string): Result;
   freePort(): number;
   environmentId(url: string, timeoutMs: number): Promise<string | undefined>;
+  linkEnvironment(input: PeerLinkInput): Promise<void>;
   print(line: string): void;
   say(line: string): void;
 };
@@ -27,6 +31,7 @@ export type PeerMachine = Clock & {
 export type Machine = PeerMachine & { workspace: string; isHub: boolean; codex: boolean; settings: BoxSettings };
 
 export const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+export const peerSsh = (alias: string, command: string) => ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`];
 export const remoteFleet = (args: string) => `sh "$HOME/.local/share/fleet/engine/fleet" ${args}`;
 const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
 
@@ -124,12 +129,13 @@ export function peerMachine(env: Env = Bun.env, home = homedir(), self = hostnam
     self,
     peers: peersOf(stringSetting("hub.alias", env), devboxes, self),
     devboxes,
-    onPeer: (alias, command, stdin) => capture(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`], stdin === undefined ? {} : { stdin }),
+    onPeer: (alias, command, stdin) => capture(peerSsh(alias, command), stdin === undefined ? {} : { stdin }),
     run: (argv, stdin) => capture(argv, stdin === undefined ? {} : { stdin }),
     now: Date.now,
     sleep: (ms) => Bun.sleep(ms),
     freePort,
     environmentId,
+    linkEnvironment: async (input) => void (await withT3Session((client) => client.call("peerLinks.link", input), { home, scopes: ["access:read", "access:write"] })),
     print: (line) => console.log(line),
     say: (line) => console.error(`${label}: ${line}`),
   };

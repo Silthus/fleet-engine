@@ -115,3 +115,31 @@ test("remove unloads and deletes the agent, and plan changes nothing", async () 
   expect(removed.calls).toContain(`launchctl bootout gui/501/${tunnelLabel}`);
   expect(existsSync(agent(home))).toBe(false);
 });
+
+test("remove keeps a linked LaunchAgents folder and an agent Fleet did not write, and unloads nothing", async () => {
+  const home = temp.make("fleet-mac-");
+  const elsewhere = temp.make("fleet-elsewhere-");
+  writeFileSync(join(elsewhere, `${tunnelLabel}.plist`), agentPlist("/opt/bin/coder", "my-hub", 60002, "/log"));
+  mkdirSync(join(home, "Library"), { recursive: true });
+  symlinkSync(elsewhere, join(home, "Library/LaunchAgents"));
+  const linked = mac({ home, loaded: true });
+  await expect(hubTunnel("remove", linked.deps)).rejects.toThrow("Keep linked hub tunnel path");
+  expect(existsSync(join(elsewhere, `${tunnelLabel}.plist`))).toBe(true);
+  const other = temp.make("fleet-mac-");
+  mkdirSync(join(other, "Library/LaunchAgents"), { recursive: true });
+  writeFileSync(agent(other), `<plist><string>${tunnelLabel}</string></plist>`);
+  const unmanaged = mac({ home: other, loaded: true });
+  await expect(hubTunnel("remove", unmanaged.deps)).rejects.toThrow("Keep unmanaged hub tunnel file");
+  expect(existsSync(agent(other))).toBe(true);
+  expect([...linked.calls, ...unmanaged.calls].some((call) => call.includes("bootout"))).toBe(false);
+});
+
+test("the agent carries its ownership mark as a comment right after the XML declaration, and a plist that only quotes the label elsewhere is not Fleet's", async () => {
+  const plist = agentPlist("/opt/bin/coder", "my-hub", 60002, "/log");
+  expect(plist.split("\n").slice(0, 2)).toEqual([`<?xml version="1.0" encoding="UTF-8"?>`, "<!-- Managed by Fleet hub tunnel. -->"]);
+  const home = temp.make("fleet-mac-");
+  mkdirSync(join(home, "Library/LaunchAgents"), { recursive: true });
+  const quoting = plist.replace("<!-- Managed by Fleet hub tunnel. -->\n", "").replace("</dict>", "  <key>Comment</key>\n  <string><!-- Managed by Fleet hub tunnel. --></string>\n</dict>");
+  writeFileSync(agent(home), quoting);
+  await expect(hubTunnel("install", mac({ home }).deps)).rejects.toThrow("Keep unmanaged hub tunnel file");
+});

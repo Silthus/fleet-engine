@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { boxPrefix, slugFor, type Coder } from "./coder.ts";
-import { quote, type Machine, type PeerMachine } from "./machine.ts";
+import { quote, type Machine, type PeerLinkInput, type PeerMachine } from "./machine.ts";
+import { writePrivateFile } from "./mcphub/client.ts";
 
 export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshLater" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
 type Link = { environmentId: string; port: number };
-export type Linker = Pick<PeerMachine, "home" | "self" | "run" | "now" | "sleep" | "freePort" | "environmentId" | "say">;
+export type Linker = Pick<PeerMachine, "home" | "self" | "run" | "now" | "sleep" | "freePort" | "environmentId" | "linkEnvironment" | "say">;
 type Target = { name: string; record: string; unit: string; forward(port: number): void; onTarget(command: string): { stdout: string } };
 
 export const t3Port = 3773;
@@ -109,18 +111,23 @@ export async function linkTarget(here: Linker, target: Target): Promise<string> 
   try {
     const url = `http://127.0.0.1:${port}`;
     const environmentId = await environmentAt(here, url);
-    const code = target.onTarget(pairCommand(here)).stdout.trim();
-    if (!code) throw new Error(`${target.name} did not issue a pairing code.`);
-    const linked = here.run([t3Of(here), "environment", "link", url, "--pairing-code", code, "--access", "full-access"]);
-    if (linked.code !== 0) throw new Error(`Cannot link ${target.name}: ${(linked.stderr || linked.stdout).trim()}`);
-    mkdirSync(dirname(target.record), { recursive: true });
-    writeFileSync(target.record, `${JSON.stringify({ environmentId, port } satisfies Link)}\n`, { mode: 0o600 });
+    await pairWith(here, target.name, [url], `Cannot link ${target.name}`, target.onTarget);
+    await mkdir(dirname(target.record), { recursive: true, mode: 0o700 });
+    await writePrivateFile(target.record, `${JSON.stringify({ environmentId, port } satisfies Link)}\n`);
     here.say(`linked ${target.name} as T3 environment ${environmentId} at ${url}`);
     return environmentId;
   } catch (error) {
     stopUnit(here, target.unit);
     throw error;
   }
+}
+
+export async function pairWith(here: Pick<Linker, "self" | "linkEnvironment">, name: string, urls: string[], failure: string, onTarget: Target["onTarget"]): Promise<void> {
+  const pairingCode = onTarget(pairCommand(here)).stdout.trim();
+  if (!pairingCode) throw new Error(`${name} did not issue a pairing code.`);
+  const input: PeerLinkInput = { url: urls[0]!, alternateUrls: urls.slice(1), pairingCode, access: "full-access" };
+  try { await here.linkEnvironment(input); }
+  catch (error) { throw new Error(`${failure}: ${(error as Error).message.replaceAll(pairingCode, "[pairing code]")}`); }
 }
 
 export function recordedEnvironment(here: Machine, box: string): string {

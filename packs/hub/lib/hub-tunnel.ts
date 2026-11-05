@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { changedFiles, writeFiles } from "./managed.ts";
+import { changedFiles, readOwned, writeFiles } from "./managed.ts";
 import { localGatewayUrl, readGatewayClient, saveGatewayClient, type Fetch, type GatewaySettings } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
 import { gatewayPort, relayPortOf } from "./run.ts";
@@ -12,6 +12,7 @@ export type MacTunnel = {
 };
 
 export const tunnelLabel = "com.fleet.hub-tunnel";
+const marker = "<!-- Managed by Fleet hub tunnel. -->";
 const healthTries = 10;
 const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const string = (value: string) => `<string>${escape(value)}</string>`;
@@ -20,6 +21,7 @@ export function agentPlist(coder: string, alias: string, relayPort: number, log:
   const program = [coder, "port-forward", alias, "--tcp", `127.0.0.1:${gatewayPort}:${gatewayPort}`, "--tcp", `127.0.0.1:${relayPort}:${relayPort}`, "--disable-autostart"];
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
+    marker,
     `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
     `<plist version="1.0">`,
     `<dict>`,
@@ -53,6 +55,7 @@ export async function hubTunnel(mode: MacTunnelMode, mac: MacTunnel): Promise<nu
   const loaded = async () => (await mac.run(["launchctl", "print", `${domain}/${tunnelLabel}`])).code === 0;
   const forwards = `127.0.0.1:${gatewayPort} and 127.0.0.1:${relayPortOf(mac.relayPort)} to ${mac.alias}`;
   if (mode === "remove") {
+    await readOwned(mac.home, agent, marker, "hub tunnel");
     if (await loaded()) await mac.run(["launchctl", "bootout", `${domain}/${tunnelLabel}`]);
     await rm(agent, { force: true });
     return mac.print("Hub tunnel: removed. This Mac no longer forwards ports to the hub."), 0;
@@ -73,7 +76,7 @@ async function install(mac: MacTunnel, agent: string, domain: string, loaded: ()
   if (!/^[a-z0-9][a-z0-9-]*$/.test(mac.alias)) throw new Error(`hub.alias must be the hub's Coder workspace name, not ${JSON.stringify(mac.alias)}.`);
   if (!mac.coder) throw new Error("Install the Coder CLI first, then run coder login.");
   const content = agentPlist(mac.coder, mac.alias, mac.relayPort, join(mac.home, "Library/Logs/fleet-hub-tunnel.log"));
-  const changed = await changedFiles(mac.home, [{ path: agent, content }], string(tunnelLabel), "hub tunnel");
+  const changed = await changedFiles(mac.home, [{ path: agent, content }], marker, "hub tunnel");
   if (changed.length) {
     if (await loaded()) await mac.run(["launchctl", "bootout", `${domain}/${tunnelLabel}`]);
     await writeFiles(changed);

@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { hubCommand, markHub, peerMachine, peersOf, readBoxSettings, readRole, requireHub, thisMachine } from "./machine.ts";
+import { hubCommand, markHub, peerMachine, peerSsh, peersOf, readBoxSettings, readRole, requireHub, thisMachine } from "./machine.ts";
 import { boxSettings } from "./testing.ts";
 
 const temp = tempDirs();
@@ -75,4 +75,8 @@ test("the peer list needs only hub.alias, so Hub links works without the Boxes s
   expect(here.devboxes).toEqual(["devbox-2", "devbox-4", "devbox-3"]);
   expect(here.peers).toEqual(["my-hub", "devbox-2", "devbox-3"]);
   expect(here.self).toBe("devbox-4");
+});
+
+test("every SSH command to a peer turns agent forwarding off, whatever the person's own SSH config says", () => {
+  expect(peerSsh("box-1", "echo hi")).toEqual(["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", "box-1", "bash -lc 'echo hi'"]);
 });

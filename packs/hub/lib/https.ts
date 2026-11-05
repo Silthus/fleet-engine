@@ -1,13 +1,13 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { changedFiles, writeFiles } from "./managed.ts";
+import { changedFiles, readIfThere, writeFiles } from "./managed.ts";
 import { readRole } from "./machine.ts";
 import { refuseLinks } from "./mcphub/client.ts";
 import { dataDir } from "./mcphub/hub.ts";
 import type { Run } from "./mcphub/hub.ts";
 import { gatewayPort, hostPattern, must, relayPortOf } from "./run.ts";
 
-export type HttpsMode = "plan" | "install" | "doctor";
+export type HttpsMode = "plan" | "install" | "doctor" | "ca" | "trusted";
 export type HttpsHub = {
   home: string; httpsHost?: string; relayPort: number; user: string; uid: number;
   caddyInstalled(): boolean; run: Run; sleep(ms: number): Promise<void>; print(line: string): void;
@@ -18,6 +18,9 @@ const service = "fleet-hub-https.service";
 const caddy = "/usr/bin/caddy";
 const httpsDir = (home: string) => join(home, ".local/share/fleet-hub-https");
 const gateway = `reverse_proxy 127.0.0.1:${gatewayPort}`;
+const authorityDir = (home: string) => join(httpsDir(home), "caddy/pki/authorities/local");
+const authorityName = "Caddy Local Authority";
+const certificatePattern = /^(-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+-----END CERTIFICATE-----\n?)+$/;
 
 export function caddyfile(home: string, host: string, port: number): string {
   return `${marker}
@@ -77,7 +80,9 @@ WantedBy=default.target
 export async function hubHttps(mode: HttpsMode, hub: HttpsHub): Promise<number> {
   if (!hub.httpsHost) return hub.print("Hub HTTPS is off: hub.httpsHost is empty."), 0;
   if (!hostPattern.test(hub.httpsHost)) throw new Error(`hub.httpsHost is not a host name: ${JSON.stringify(hub.httpsHost)}`);
+  if (mode === "trusted") return (await hub.run(["security", "find-certificate", "-c", authorityName])).code === 0 ? 0 : 1;
   if (readRole(hub.home) !== "hub") throw new Error(`fleet hub-https ${mode} runs only on the hub.`);
+  if (mode === "ca") return printAuthority(hub);
   const port = relayPortOf(hub.relayPort);
   const origin = `https://${hub.httpsHost}:${port}`;
   if (mode === "plan") return hub.print(`Hub HTTPS plan: private TLS on loopback at ${origin}`), 0;
@@ -89,7 +94,7 @@ export async function hubHttps(mode: HttpsMode, hub: HttpsHub): Promise<number> 
   const systemctl = (...args: string[]) => must(hub.run, ["systemctl", "--user", ...args]);
   if (mode === "install") {
     const config = join(httpsDir(hub.home), "Caddyfile");
-    await refuseLinks(hub.home, join(httpsDir(hub.home), "caddy/pki/authorities/local/root.key"), "hub HTTPS path");
+    await refuseLinks(hub.home, join(authorityDir(hub.home), "root.key"), "hub HTTPS path");
     const changed = await changedFiles(hub.home, [{ path: config, content: caddyfile(hub.home, hub.httpsHost, port) }, { path: join(hub.home, ".config/systemd/user", service), content: unit }], marker, "hub HTTPS");
     await mkdir(httpsDir(hub.home), { recursive: true, mode: 0o700 });
     await chmod(httpsDir(hub.home), 0o700);
@@ -113,5 +118,16 @@ export async function hubHttps(mode: HttpsMode, hub: HttpsHub): Promise<number> 
   const bound = await listeners();
   if (!bound.includes(address) || bound.some((local) => local !== address)) throw new Error(`Hub HTTPS must listen on loopback only, at ${address}.`);
   hub.print(`Hub HTTPS: active at ${origin}`);
+  return 0;
+}
+
+async function printAuthority(hub: HttpsHub): Promise<number> {
+  const path = join(authorityDir(hub.home), "root.crt");
+  await refuseLinks(hub.home, path, "hub HTTPS path");
+  const text = await readIfThere(path);
+  if (text === undefined) throw new Error("Hub HTTPS has no root certificate yet. Run fleet hub-https install.");
+  if (!certificatePattern.test(text)) throw new Error(`${path} is not a public certificate.`);
+  hub.print(`Hub HTTPS root certificate: ${path}`);
+  hub.print(text.trimEnd());
   return 0;
 }

@@ -251,3 +251,19 @@ test("only the user's own messages and question answers in T3 count as their wor
     ["mcp:thread-1", "q1:0", "Accept both (Recommended)", "Accept both gaps?", "question"],
   ]);
 });
+
+test("a session can ask for the scopes its caller needs, such as access:write to link an environment", async () => {
+  const calls: string[][] = [];
+  await withT3Session(async () => undefined, {
+    server: { origin: "http://127.0.0.1:9", wsUrl: "ws://127.0.0.1:9/ws", cli: { command: "running-t3", args: [] } },
+    scopes: ["access:read", "access:write"],
+    runCli(_server, args) {
+      calls.push(args);
+      return { status: 0, stdout: args.includes("issue") ? JSON.stringify({ sessionId: "write-session", token: "private-bearer" }) : "" };
+    },
+  });
+  expect(calls).toEqual([
+    ["auth", "session", "issue", "--json", "--ttl", "5m", "--label", "fleet", "--subject", "fleet", "--scope", "access:read", "--scope", "access:write"],
+    ["auth", "session", "revoke", "write-session"],
+  ]);
+});

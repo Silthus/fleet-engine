@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { caddyfile, hubHttps, type HttpsHub } from "./https.ts";
 import { fakeRun, modeOf, roleHome } from "./run-testing.ts";
+import { writeHome } from "./testing.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -131,4 +132,44 @@ test("doctor fails when Caddy listens anywhere but loopback, and rejects a host 
   const open = hub({ home: deps.home, waits: 0, listening: "LISTEN 0 4096 127.0.0.1:60002 0.0.0.0:*\nLISTEN 0 4096 0.0.0.0:60002 0.0.0.0:*\n" });
   await expect(hubHttps("doctor", open.deps)).rejects.toThrow("must listen on loopback only");
   await expect(hubHttps("plan", hub({ httpsHost: "bad host\nExecStart=x" }).deps)).rejects.toThrow("hub.httpsHost is not a host name");
+});
+
+const authority = (home: string) => join(home, ".local/share/fleet-hub-https/caddy/pki/authorities/local");
+const certificate = "-----BEGIN CERTIFICATE-----\nMIIBroot\n-----END CERTIFICATE-----\n";
+const keyLabel = ["EC", "PRIVATE", "KEY"].join(" ");
+const privateKey = `-----BEGIN ${keyLabel}-----\nnot-a-real-key-secret\n-----END ${keyLabel}-----\n`;
+
+test("ca prints the path and contents of Caddy's public root certificate on the hub, and never its key", async () => {
+  const { deps, home, calls, printed } = hub();
+  writeHome(home, { ".local/share/fleet-hub-https/caddy/pki/authorities/local/root.crt": certificate, ".local/share/fleet-hub-https/caddy/pki/authorities/local/root.key": privateKey });
+  expect(await hubHttps("ca", deps)).toBe(0);
+  expect(printed).toEqual([`Hub HTTPS root certificate: ${join(authority(home), "root.crt")}`, certificate.trimEnd()]);
+  expect(printed.join("\n")).not.toMatch(/PRIVATE KEY|secret/);
+  expect(calls).toEqual([]);
+});
+
+test("ca refuses a certificate file that holds a private key, a linked authority folder, and a hub without a certificate yet", async () => {
+  const mixed = hub();
+  writeHome(mixed.home, { ".local/share/fleet-hub-https/caddy/pki/authorities/local/root.crt": certificate + privateKey });
+  await expect(hubHttps("ca", mixed.deps)).rejects.toThrow("is not a public certificate");
+  expect(mixed.printed.join("\n")).not.toContain("secret");
+  const linked = hub();
+  const elsewhere = temp.make("fleet-elsewhere-");
+  writeHome(elsewhere, { "root.crt": certificate });
+  mkdirSync(join(authority(linked.home), ".."), { recursive: true });
+  symlinkSync(elsewhere, authority(linked.home));
+  await expect(hubHttps("ca", linked.deps)).rejects.toThrow("Keep linked hub HTTPS path");
+  await expect(hubHttps("ca", hub().deps)).rejects.toThrow("Run fleet hub-https install");
+  await expect(hubHttps("ca", hub({ home: roleHome(temp.make("fleet-https-"), "mac") }).deps)).rejects.toThrow("runs only on the hub");
+});
+
+test("trusted passes at once without an HTTPS host, and otherwise asks this Mac's keychains for the hub's root certificate", async () => {
+  const off = hub({ home: roleHome(temp.make("fleet-https-"), "mac"), httpsHost: undefined });
+  expect(await hubHttps("trusted", off.deps)).toBe(0);
+  expect(off.calls).toEqual([]);
+  const missing = hub({ home: roleHome(temp.make("fleet-https-"), "mac"), run: fakeRun(() => ({ code: 44 })).run });
+  expect(await hubHttps("trusted", missing.deps)).toBe(1);
+  const found = fakeRun();
+  expect(await hubHttps("trusted", hub({ home: roleHome(temp.make("fleet-https-"), "mac"), run: found.run }).deps)).toBe(0);
+  expect(found.calls).toEqual(["security find-certificate -c Caddy Local Authority"]);
 });

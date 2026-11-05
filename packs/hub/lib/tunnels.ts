@@ -1,7 +1,8 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { changedFiles, writeFiles } from "./managed.ts";
+import { changedFiles, ownedBy, readIfThere, writeFiles } from "./managed.ts";
 import { peersOf, readRole } from "./machine.ts";
+import { refuseLinks } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
 import { gatewayPort, hostPattern, must, relayPortOf, sshName } from "./run.ts";
 
@@ -53,6 +54,7 @@ async function hubTunnels(mode: TunnelMode, machine: TunnelMachine) {
   const changed = await changedFiles(machine.home, units, marker, "tunnel");
   const systemctl = (...args: string[]) => must(machine.run, ["systemctl", "--user", ...args]);
   if (mode === "install") {
+    await removeStaleUnits(machine.home, directory, units.map((unit) => unit.name), systemctl);
     await writeFiles(changed);
     await systemctl("daemon-reload");
     for (const unit of units) {
@@ -68,6 +70,17 @@ async function hubTunnels(mode: TunnelMode, machine: TunnelMachine) {
     machine.print(`${unit.alias}: SSH tunnel ${mode === "plan" ? "planned" : "active"}`);
   }
   return 0;
+}
+
+async function removeStaleUnits(home: string, directory: string, wanted: string[], systemctl: (...args: string[]) => Promise<string>) {
+  await refuseLinks(home, directory, "tunnel path");
+  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+  for (const name of names.filter((file) => /^fleet-ssh-.+\.service$/.test(file) && !wanted.includes(file))) {
+    const path = join(directory, name);
+    if (!(await lstat(path)).isFile() || !ownedBy((await readIfThere(path)) ?? "", marker)) continue;
+    await systemctl("disable", "--now", name);
+    await rm(path);
+  }
 }
 
 async function devboxHosts(mode: TunnelMode, machine: TunnelMachine) {

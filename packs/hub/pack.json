@@ -93,7 +93,7 @@
     },
     {
       "key": "hub.httpsHost",
-      "question": "Which private host name do your devboxes use to reach the hub over HTTPS, such as hub.internal.example.com? Leave it empty to reach it over SSH tunnels only.",
+      "question": "Which private host name does a browser on your own computer use to open the hub's sign-in pages over HTTPS, such as hub.internal.example.com? Devboxes always reach the hub through their SSH tunnels. Leave it empty to skip HTTPS.",
       "type": "string",
       "optional": true,
       "ask": "never"
@@ -335,6 +335,22 @@
         "devbox"
       ],
       "workflow": "linked-hub"
+    },
+    {
+      "id": "peers-restore",
+      "command": [
+        "fleet",
+        "peers",
+        "restore"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
     }
   ],
   "human": [
@@ -353,6 +369,19 @@
         "devbox"
       ],
       "workflow": "boxes"
+    },
+    {
+      "id": "hub-https-trust",
+      "say": "Trust the hub's private certificate on this computer, so your browser opens the hub's sign-in pages over HTTPS. On the hub, run fleet hub-https ca, save the certificate it prints as hub-ca.crt on this Mac, open it in Keychain Access, and set it to Always Trust. Fleet skips this step while hub.httpsHost is empty.",
+      "probe": [
+        "fleet",
+        "hub-https",
+        "trusted"
+      ],
+      "roles": [
+        "mac"
+      ],
+      "workflow": "linked-hub"
     }
   ],
   "steps": [
@@ -400,6 +429,24 @@
       "check": [
         "fleet",
         "ssh-tunnels",
+        "doctor"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "peers",
+      "run": [
+        "fleet",
+        "peers",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "peers",
         "doctor"
       ],
       "roles": [

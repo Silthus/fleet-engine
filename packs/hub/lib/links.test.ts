@@ -41,7 +41,8 @@ test("link forwards the box's T3 here, pairs with a one-time code made on the bo
   const { machine, calls } = fakeMachine(home);
   const { coder } = fakeCoder({ ssh: (_box, command) => ({ ...ok, stdout: command.includes("t3 pair") ? "pair-code\n" : "" }) });
   expect(await link(coder, machine, "box-lane")).toBe("env-box");
-  expect(calls).toContain(`run ${join(home, ".local/bin/t3")} environment link http://127.0.0.1:21000 --pairing-code pair-code --access full-access`);
+  expect(calls).toContain("link http://127.0.0.1:21000 with full-access access");
+  expect(calls.join("\n")).not.toContain("pair-code");
   expect(await Bun.file(join(home, ".config/fleet/boxes/box-lane.json")).json()).toEqual({ environmentId: "env-box", port: 21000 });
 });
 

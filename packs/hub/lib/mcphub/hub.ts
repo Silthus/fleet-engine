@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { devboxGatewayUrl, gatewayGroup, isGatewayUrl, localGatewayUrl, refuseLinks, saveGatewayClient, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
+import { gatewayGroup, isGatewayUrl, localGatewayUrl, refuseLinks, saveGatewayClient, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type Run = (command: string[], options?: { cwd?: string; input?: string }) => Promise<RunResult>;
@@ -164,7 +164,7 @@ export async function grant(machine: string, hub: Hub) {
   }
   if (machine === alias) await saveGatewayClient(hub.home, { baseUrl: localGatewayUrl, token: key.token }, hub.gateway);
   else {
-    const result = await hub.run(["ssh", machine, acceptCommand], { input: JSON.stringify({ baseUrl: devboxGatewayUrl(hub.gateway), token: key.token }) });
+    const result = await hub.run(["ssh", machine, acceptCommand], { input: JSON.stringify({ baseUrl: localGatewayUrl, token: key.token }) });
     if (result.code) throw new Error(`${machine} could not save its MCP gateway key: ${result.stderr.trim()}. Run fleet apply on ${machine} first.`);
   }
   hub.print(`${machine}: saved its MCP gateway key.`);
