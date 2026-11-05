@@ -19,7 +19,7 @@ export type PeerMachine = Clock & {
   self: string;
   peers: string[];
   devboxes: string[];
-  onPeer(alias: string, command: string, stdin?: string): Result;
+  onPeer(alias: string, command: string, stdin?: string, timeoutMs?: number): Result;
   run(argv: string[], stdin?: string): Result;
   freePort(): number;
   environmentId(url: string, timeoutMs: number): Promise<string | undefined>;
@@ -122,14 +122,21 @@ function savedDevboxes(home: string): string[] {
   return Array.isArray(saved) ? saved.filter((host): host is string => typeof host === "string") : [];
 }
 
+function namesOfThisMachine(home: string, hub: string): string[] {
+  const machine = readMachineFile(home);
+  return [...(machine?.role === "hub" ? [hub] : []), ...(typeof machine?.name === "string" ? [machine.name] : [])];
+}
+
 export function peerMachine(env: Env = Bun.env, home = homedir(), self = hostname(), label = "Fleet box"): PeerMachine {
   const devboxes = [...new Set([...readProfile(env).devboxes, ...savedDevboxes(home)])];
+  const hub = stringSetting("hub.alias", env);
+  const ownNames = namesOfThisMachine(home, hub);
   return {
     home,
     self,
-    peers: peersOf(stringSetting("hub.alias", env), devboxes, self),
+    peers: peersOf(hub, devboxes, self).filter((alias) => !ownNames.includes(alias)),
     devboxes,
-    onPeer: (alias, command, stdin) => capture(peerSsh(alias, command), stdin === undefined ? {} : { stdin }),
+    onPeer: (alias, command, stdin, timeoutMs) => capture(peerSsh(alias, command), { ...(stdin === undefined ? {} : { stdin }), ...(timeoutMs === undefined ? {} : { timeoutMs }) }),
     run: (argv, stdin) => capture(argv, stdin === undefined ? {} : { stdin }),
     now: Date.now,
     sleep: (ms) => Bun.sleep(ms),

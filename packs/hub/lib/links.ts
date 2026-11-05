@@ -1,14 +1,14 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { boxPrefix, slugFor, type Coder } from "./coder.ts";
+import { boxPrefix, slugFor, type Coder, type Result } from "./coder.ts";
 import { quote, type Machine, type PeerLinkInput, type PeerMachine } from "./machine.ts";
 import { writePrivateFile } from "./mcphub/client.ts";
 
 export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshLater" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
 type Link = { environmentId: string; port: number };
 export type Linker = Pick<PeerMachine, "home" | "self" | "run" | "now" | "sleep" | "freePort" | "environmentId" | "linkEnvironment" | "say">;
-type Target = { name: string; record: string; unit: string; forward(port: number): void; onTarget(command: string): { stdout: string } };
+type Target = { name: string; record: string; unit: string; forward(port: number): void; onTarget(command: string): Result };
 
 export const t3Port = 3773;
 const answerLimitMs = 60_000;
@@ -85,9 +85,17 @@ export function unlink(here: Linker, box: string): boolean {
   return forget(here, linkFile(here, box), unitOf(box, "t3"));
 }
 
+export function readRecord(path: string): Link | undefined {
+  const found = lstatSync(path, { throwIfNoEntry: false });
+  if (!found) return undefined;
+  if (!found.isFile()) throw new Error(`Keep ${path}: it is not a regular file`);
+  return JSON.parse(readFileSync(path, "utf8")) as Link;
+}
+
 export function forget(here: Linker, record: string, unit: string): boolean {
-  if (existsSync(record)) {
-    const { environmentId } = JSON.parse(readFileSync(record, "utf8")) as Link;
+  const recorded = readRecord(record);
+  if (recorded) {
+    const { environmentId } = recorded;
     const unlinked = here.run([t3Of(here), "environment", "unlink", environmentId]);
     if (unlinked.code !== 0) {
       here.say(`could not unlink ${environmentId}: ${unlinked.stderr.trim()}`);
@@ -123,15 +131,18 @@ export async function linkTarget(here: Linker, target: Target): Promise<string> 
 }
 
 export async function pairWith(here: Pick<Linker, "self" | "linkEnvironment">, name: string, urls: string[], failure: string, onTarget: Target["onTarget"]): Promise<void> {
-  const pairingCode = onTarget(pairCommand(here)).stdout.trim();
-  if (!pairingCode) throw new Error(`${name} did not issue a pairing code.`);
+  const issued = onTarget(pairCommand(here));
+  const pairingCode = issued.code === 0 ? issued.stdout.trim() : "";
+  if (!pairingCode) throw new Error(`${name} did not issue a pairing code${issued.code === 0 ? "." : `: ${issued.stderr.trim()}`}`);
   const input: PeerLinkInput = { url: urls[0]!, alternateUrls: urls.slice(1), pairingCode, access: "full-access" };
   try { await here.linkEnvironment(input); }
   catch (error) { throw new Error(`${failure}: ${(error as Error).message.replaceAll(pairingCode, "[pairing code]")}`); }
 }
 
 export function recordedEnvironment(here: Machine, box: string): string {
-  return (JSON.parse(readFileSync(linkFile(here, box), "utf8")) as Link).environmentId;
+  const recorded = readRecord(linkFile(here, box));
+  if (!recorded) throw new Error(`${box} has no recorded link.`);
+  return recorded.environmentId;
 }
 
 export function restoreForwards(coder: Pick<Coder, "binary" | "env">, here: Machine): number {
@@ -146,7 +157,7 @@ export function restoreRecorded(here: Pick<Machine, "run" | "say">, directory: s
     const unit = unitFor(name);
     if (here.run(["systemctl", "--user", "is-active", "--quiet", `${unit}.service`]).code === 0) continue;
     try {
-      const { port } = JSON.parse(readFileSync(join(directory, file), "utf8")) as Link;
+      const { port } = readRecord(join(directory, file))!;
       forward(name, unit, port);
       here.say(`restored the T3 forward to ${name} on port ${port}`);
     } catch (error) {

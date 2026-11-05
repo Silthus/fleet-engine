@@ -30,3 +30,8 @@ export async function writeFiles(files: Managed[]): Promise<void> {
     await writePrivateFile(file.path, file.content);
   }
 }
+
+export async function requireInstalled(home: string, files: Managed[], marker: string, what: string, fix: string, stale: string[] = []): Promise<void> {
+  const differing = [...(await changedFiles(home, files, marker, what)).map((file) => file.path), ...stale];
+  if (differing.length) throw new Error(`These ${what} files differ from what install writes now: ${differing.join(", ")}. Run ${fix}.`);
+}

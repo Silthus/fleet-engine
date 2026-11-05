@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { changedFiles, readOwned, writeFiles } from "./managed.ts";
+import { changedFiles, readOwned, requireInstalled, writeFiles, type Managed } from "./managed.ts";
 import { localGatewayUrl, readGatewayClient, saveGatewayClient, type Fetch, type GatewaySettings } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
 import { gatewayPort, relayPortOf } from "./run.ts";
@@ -62,7 +62,7 @@ export async function hubTunnel(mode: MacTunnelMode, mac: MacTunnel): Promise<nu
   }
   if (mode === "plan") return mac.print(`Hub tunnel plan: write ${agent} and load it at login. It forwards ${forwards}.`), 0;
   if (mode === "install") await install(mac, agent, domain, loaded);
-  else if (!(await Bun.file(agent).exists())) throw new Error("The launch agent is missing. Run fleet hub-tunnel install.");
+  else await requireInstalled(mac.home, [wantedAgent(mac, agent)], marker, "hub tunnel", "fleet hub-tunnel install");
   if (!(await loaded())) throw new Error("The launch agent is not loaded. Run fleet hub-tunnel install.");
   for (let attempt = 1; !(await answers(mac)); attempt++) {
     if (attempt === healthTries) throw new Error(`127.0.0.1:${gatewayPort} does not reach the MCP gateway on ${mac.alias}. Check ~/Library/Logs/fleet-hub-tunnel.log, and run coder login if the session expired.`);
@@ -72,11 +72,14 @@ export async function hubTunnel(mode: MacTunnelMode, mac: MacTunnel): Promise<nu
   return 0;
 }
 
-async function install(mac: MacTunnel, agent: string, domain: string, loaded: () => Promise<boolean>) {
+function wantedAgent(mac: MacTunnel, agent: string): Managed {
   if (!/^[a-z0-9][a-z0-9-]*$/.test(mac.alias)) throw new Error(`hub.alias must be the hub's Coder workspace name, not ${JSON.stringify(mac.alias)}.`);
   if (!mac.coder) throw new Error("Install the Coder CLI first, then run coder login.");
-  const content = agentPlist(mac.coder, mac.alias, mac.relayPort, join(mac.home, "Library/Logs/fleet-hub-tunnel.log"));
-  const changed = await changedFiles(mac.home, [{ path: agent, content }], marker, "hub tunnel");
+  return { path: agent, content: agentPlist(mac.coder, mac.alias, mac.relayPort, join(mac.home, "Library/Logs/fleet-hub-tunnel.log")) };
+}
+
+async function install(mac: MacTunnel, agent: string, domain: string, loaded: () => Promise<boolean>) {
+  const changed = await changedFiles(mac.home, [wantedAgent(mac, agent)], marker, "hub tunnel");
   if (changed.length) {
     if (await loaded()) await mac.run(["launchctl", "bootout", `${domain}/${tunnelLabel}`]);
     await writeFiles(changed);

@@ -143,3 +143,12 @@ test("the agent carries its ownership mark as a comment right after the XML decl
   writeFileSync(agent(home), quoting);
   await expect(hubTunnel("install", mac({ home }).deps)).rejects.toThrow("Keep unmanaged hub tunnel file");
 });
+
+test("the doctor fails when the owned agent differs from what install writes now, such as an old hub name or relay port", async () => {
+  const { deps, home } = mac();
+  await hubTunnel("install", deps);
+  expect(await hubTunnel("doctor", mac({ home, loaded: true }).deps)).toBe(0);
+  await expect(hubTunnel("doctor", mac({ home, loaded: true, relayPort: 60003 }).deps)).rejects.toThrow(agent(home));
+  await expect(hubTunnel("doctor", mac({ home, loaded: true, alias: "new-hub" }).deps)).rejects.toThrow("Run fleet hub-tunnel install");
+  await expect(hubTunnel("doctor", mac({ home, loaded: true, coder: "/usr/local/bin/coder" }).deps)).rejects.toThrow(agent(home));
+});

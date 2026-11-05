@@ -1,15 +1,16 @@
-import { chmod, mkdir } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedFiles, readIfThere, writeFiles } from "./managed.ts";
-import { readRole } from "./machine.ts";
-import { refuseLinks } from "./mcphub/client.ts";
+import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed } from "./managed.ts";
+import { refuseLinks, writePrivateFile } from "./mcphub/client.ts";
+import { peerSsh, readRole, remoteFleet } from "./machine.ts";
 import { dataDir } from "./mcphub/hub.ts";
 import type { Run } from "./mcphub/hub.ts";
 import { gatewayPort, hostPattern, must, relayPortOf } from "./run.ts";
 
 export type HttpsMode = "plan" | "install" | "doctor" | "ca" | "trusted";
 export type HttpsHub = {
-  home: string; httpsHost?: string; relayPort: number; user: string; uid: number;
+  home: string; alias: string; httpsHost?: string; relayPort: number; user: string; uid: number;
   caddyInstalled(): boolean; run: Run; sleep(ms: number): Promise<void>; print(line: string): void;
 };
 
@@ -19,8 +20,8 @@ const caddy = "/usr/bin/caddy";
 const httpsDir = (home: string) => join(home, ".local/share/fleet-hub-https");
 const gateway = `reverse_proxy 127.0.0.1:${gatewayPort}`;
 const authorityDir = (home: string) => join(httpsDir(home), "caddy/pki/authorities/local");
-const authorityName = "Caddy Local Authority";
 const certificatePattern = /^(-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+-----END CERTIFICATE-----\n?)+$/;
+const caHeading = "Hub HTTPS root certificate: ";
 
 export function caddyfile(home: string, host: string, port: number): string {
   return `${marker}
@@ -80,7 +81,7 @@ WantedBy=default.target
 export async function hubHttps(mode: HttpsMode, hub: HttpsHub): Promise<number> {
   if (!hub.httpsHost) return hub.print("Hub HTTPS is off: hub.httpsHost is empty."), 0;
   if (!hostPattern.test(hub.httpsHost)) throw new Error(`hub.httpsHost is not a host name: ${JSON.stringify(hub.httpsHost)}`);
-  if (mode === "trusted") return (await hub.run(["security", "find-certificate", "-c", authorityName])).code === 0 ? 0 : 1;
+  if (mode === "trusted") return trusted(hub);
   if (readRole(hub.home) !== "hub") throw new Error(`fleet hub-https ${mode} runs only on the hub.`);
   if (mode === "ca") return printAuthority(hub);
   const port = relayPortOf(hub.relayPort);
@@ -92,10 +93,12 @@ export async function hubHttps(mode: HttpsMode, hub: HttpsHub): Promise<number> 
     }
   }
   const systemctl = (...args: string[]) => must(hub.run, ["systemctl", "--user", ...args]);
+  const config = join(httpsDir(hub.home), "Caddyfile");
+  const files: Managed[] = [{ path: config, content: caddyfile(hub.home, hub.httpsHost, port) }, { path: join(hub.home, ".config/systemd/user", service), content: unit }];
+  if (mode === "doctor") await requireInstalled(hub.home, files, marker, "hub HTTPS", "fleet hub-https install");
   if (mode === "install") {
-    const config = join(httpsDir(hub.home), "Caddyfile");
     await refuseLinks(hub.home, join(authorityDir(hub.home), "root.key"), "hub HTTPS path");
-    const changed = await changedFiles(hub.home, [{ path: config, content: caddyfile(hub.home, hub.httpsHost, port) }, { path: join(hub.home, ".config/systemd/user", service), content: unit }], marker, "hub HTTPS");
+    const changed = await changedFiles(hub.home, files, marker, "hub HTTPS");
     await mkdir(httpsDir(hub.home), { recursive: true, mode: 0o700 });
     await chmod(httpsDir(hub.home), 0o700);
     await writeFiles(changed);
@@ -127,7 +130,21 @@ async function printAuthority(hub: HttpsHub): Promise<number> {
   const text = await readIfThere(path);
   if (text === undefined) throw new Error("Hub HTTPS has no root certificate yet. Run fleet hub-https install.");
   if (!certificatePattern.test(text)) throw new Error(`${path} is not a public certificate.`);
-  hub.print(`Hub HTTPS root certificate: ${path}`);
+  hub.print(`${caHeading}${path}`);
   hub.print(text.trimEnd());
   return 0;
+}
+
+async function trusted(hub: HttpsHub): Promise<number> {
+  const answer = await hub.run(peerSsh(hub.alias, remoteFleet("hub-https ca")));
+  const certificate = answer.code === 0 ? answer.stdout.split("\n").filter((line) => !line.startsWith(caHeading)).join("\n").trim() + "\n" : "";
+  if (!certificatePattern.test(certificate)) return hub.print(`${hub.alias} gave no public root certificate: ${(answer.stderr || answer.stdout).trim()}`), 1;
+  const folder = await mkdtemp(join(tmpdir(), "fleet-hub-ca-"));
+  try {
+    const path = join(folder, "hub-ca.crt");
+    await writePrivateFile(path, certificate);
+    return (await hub.run(["security", "verify-cert", "-l", "-L", "-c", path])).code === 0 ? 0 : 1;
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
 }

@@ -58,7 +58,9 @@ test("install on the hub writes one unit per devbox with mode 600, restarts the 
 });
 
 test("the doctor fails when a tunnel is not running", async () => {
-  const { deps } = machine("hub", { run: fakeRun((command) => (command.includes("is-active") ? { code: 3 } : undefined)).run });
+  const installed = machine("hub");
+  await sshTunnels("install", installed.deps);
+  const { deps } = machine("hub", { home: installed.home, run: fakeRun((command) => (command.includes("is-active") ? { code: 3 } : undefined)).run });
   await expect(sshTunnels("doctor", deps)).rejects.toThrow("systemctl --user is-active --quiet fleet-ssh-box-1.service failed");
 });
 
@@ -142,4 +144,15 @@ test("install on the hub disables and deletes the tunnel unit of a devbox that l
   await sshTunnels("plan", plan.deps);
   expect(existsSync(unitPath(plan.home, "box-9"))).toBe(true);
   expect(plan.calls).toEqual([]);
+});
+
+test("the hub doctor fails when a wanted unit is missing or differs from what install writes now, or a stale Fleet unit remains", async () => {
+  const { deps, home } = machine("hub");
+  await sshTunnels("install", deps);
+  expect(await sshTunnels("doctor", machine("hub", { home }).deps)).toBe(0);
+  await expect(sshTunnels("doctor", machine("hub", { home, relayPort: 60003 }).deps)).rejects.toThrow(`${unitPath(home, "box-1")}`);
+  await expect(sshTunnels("doctor", machine("hub", { home, devboxes: ["box-1", "box-2", "box-3"] }).deps)).rejects.toThrow(`${unitPath(home, "box-3")}`);
+  await expect(sshTunnels("doctor", machine("hub", { home, devboxes: ["box-1"] }).deps)).rejects.toThrow(`${unitPath(home, "box-2")}`);
+  await expect(sshTunnels("doctor", machine("hub", { home, devboxes: ["box-1"] }).deps)).rejects.toThrow("Run fleet ssh-tunnels install");
+  expect(readFileSync(unitPath(home, "box-2"), "utf8")).toBe(tunnelUnit("box-2", 60002));
 });

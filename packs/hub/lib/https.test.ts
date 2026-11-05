@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { caddyfile, hubHttps, type HttpsHub } from "./https.ts";
@@ -21,7 +21,7 @@ function hub(fields: Partial<HttpsHub> & { listening?: string; waits?: number } 
   const printed: string[] = [];
   const slept: number[] = [];
   const { listening: _listening, waits: _waits, ...overrides } = fields;
-  const deps: HttpsHub = { home, httpsHost: host, relayPort: 60002, user: "me", uid: 1000, caddyInstalled: () => true, run: fake.run, sleep: async (ms) => void slept.push(ms), print: (line) => printed.push(line), ...overrides };
+  const deps: HttpsHub = { home, alias: "my-hub", httpsHost: host, relayPort: 60002, user: "me", uid: 1000, caddyInstalled: () => true, run: fake.run, sleep: async (ms) => void slept.push(ms), print: (line) => printed.push(line), ...overrides };
   return { deps, home, calls: fake.calls, printed, slept };
 }
 
@@ -163,13 +163,44 @@ test("ca refuses a certificate file that holds a private key, a linked authority
   await expect(hubHttps("ca", hub({ home: roleHome(temp.make("fleet-https-"), "mac") }).deps)).rejects.toThrow("runs only on the hub");
 });
 
-test("trusted passes at once without an HTTPS host, and otherwise asks this Mac's keychains for the hub's root certificate", async () => {
+test("trusted passes at once without an HTTPS host, and runs nothing", async () => {
   const off = hub({ home: roleHome(temp.make("fleet-https-"), "mac"), httpsHost: undefined });
   expect(await hubHttps("trusted", off.deps)).toBe(0);
   expect(off.calls).toEqual([]);
-  const missing = hub({ home: roleHome(temp.make("fleet-https-"), "mac"), run: fakeRun(() => ({ code: 44 })).run });
-  expect(await hubHttps("trusted", missing.deps)).toBe(1);
-  const found = fakeRun();
-  expect(await hubHttps("trusted", hub({ home: roleHome(temp.make("fleet-https-"), "mac"), run: found.run }).deps)).toBe(0);
-  expect(found.calls).toEqual(["security find-certificate -c Caddy Local Authority"]);
+});
+
+function trustSandbox(fields: { trusted: boolean; answer?: string; sshCode?: number }) {
+  const home = roleHome(temp.make("fleet-https-"), "mac");
+  const bin = temp.make("fleet-bin-");
+  const log = join(bin, "calls.log");
+  writeFileSync(join(bin, "answer"), fields.answer ?? `Hub HTTPS root certificate: /home/me/.local/share/fleet-hub-https/caddy/pki/authorities/local/root.crt\n${certificate}`);
+  writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "ssh $*" >> "${log}"\n/bin/cat "${join(bin, "answer")}"\nexit ${fields.sshCode ?? 0}\n`);
+  writeFileSync(join(bin, "security"), `#!/bin/sh\necho "security $*" >> "${log}"\nwhile [ $# -gt 0 ]; do [ "$1" = -c ] && /bin/cat "$2" > "${join(bin, "checked.crt")}"; shift; done\n${fields.trusted ? "exit 0" : "echo 'Cert Verify Result: CSSMERR_TP_NOT_TRUSTED' >&2; exit 1"}\n`);
+  for (const name of ["ssh", "security"]) chmodSync(join(bin, name), 0o755);
+  const settings = { "hub.alias": "my-hub", "hub.httpsHost": host, "hub.relayPort": 60002 };
+  const probe = () => Bun.spawnSync([process.execPath, join(import.meta.dir, "../commands/hub-https.ts"), "trusted"], { env: { HOME: home, PATH: bin, TMPDIR: temp.make("fleet-tmp-"), FLEET_SETTINGS: JSON.stringify(settings) } });
+  const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []);
+  return { bin, probe, calls };
+}
+
+test("trusted fetches the hub's root certificate over SSH and passes only when this Mac's keychain trust settings accept it", () => {
+  const trusted = trustSandbox({ trusted: true });
+  expect(trusted.probe().exitCode).toBe(0);
+  const [ssh, security] = trusted.calls();
+  expect(ssh).toStartWith("ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 my-hub bash -lc ");
+  expect(ssh).toContain(`fleet/engine/fleet" hub-https ca`);
+  expect(security).toMatch(/^security verify-cert -l -L -c \S+$/);
+  expect(readFileSync(join(trusted.bin, "checked.crt"), "utf8")).toBe(certificate);
+  expect(existsSync(security!.split(" ").at(-1)!)).toBe(false);
+  const present = trustSandbox({ trusted: false });
+  expect(present.probe().exitCode).toBe(1);
+  expect(present.calls()[1]).toStartWith("security verify-cert ");
+});
+
+test("trusted fails without asking the keychain when the hub gives no certificate, or one that holds a key", () => {
+  for (const fields of [{ trusted: true, sshCode: 255, answer: "" }, { trusted: true, answer: `Hub HTTPS root certificate: /x/root.crt\n${certificate}${privateKey}` }]) {
+    const sandbox = trustSandbox(fields);
+    expect(sandbox.probe().exitCode).not.toBe(0);
+    expect(sandbox.calls().some((call) => call.startsWith("security"))).toBe(false);
+  }
 });
