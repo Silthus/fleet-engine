@@ -256,12 +256,20 @@ test("stopping review stops the review-bot handler before review exits", async (
   const handler = join(box.home, "slow-bot.ts");
   writeFileSync(handler, `process.on("SIGTERM", async () => { await Bun.write(${JSON.stringify(stopped)}, "stopped"); process.exit(5); });\nconsole.log("ready");\nsetInterval(() => {}, 1000);\n`);
   const child = Bun.spawn(["bun", command, "review", "--repo", "acme/widgets", "--pr", "12"], { env: { ...process.env, HOME: box.home, FLEET_SETTINGS: "{}", FLEET_HANDLERS: JSON.stringify({ "review-bot": handler }) }, stdout: "pipe" });
-  const reader = child.stdout.getReader();
-  let seen = "";
-  while (!seen.includes("ready")) seen += new TextDecoder().decode((await reader.read()).value);
-  child.kill("SIGTERM");
-  expect(await child.exited).toBe(5);
-  expect(readFileSync(stopped, "utf8")).toBe("stopped");
+  try {
+    const reader = child.stdout.getReader();
+    let seen = "";
+    while (!seen.includes("ready")) {
+      const chunk = await reader.read();
+      if (chunk.done) throw new Error(`review ended before its handler was ready: ${seen}`);
+      seen += new TextDecoder().decode(chunk.value);
+    }
+    child.kill("SIGTERM");
+    expect(await child.exited).toBe(5);
+    expect(readFileSync(stopped, "utf8")).toBe("stopped");
+  } finally {
+    child.kill("SIGKILL");
+  }
 });
 
 test("wrong arguments print the usage and exit 1", () => {
