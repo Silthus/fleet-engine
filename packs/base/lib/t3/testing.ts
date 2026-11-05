@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ export type T3Fixture = {
   shell: ShellSnapshot;
   archived?: ShellSnapshot;
   turnItems?: Record<string, TurnItem[]>;
+  resolutions?: Resolution[];
   links?: LinkedEnvironment[];
   tools?: ToolHandler;
 };
@@ -36,6 +38,20 @@ case "$*" in
 esac
 `;
 
+export type Resolution = { thread: string; request: string; command: string | null };
+
+export function writeT3EventStore(path: string, resolutions: Resolution[]) {
+  const db = new Database(path);
+  db.run(`create table orchestration_events (sequence integer primary key autoincrement, aggregate_kind text not null, stream_id text not null,
+    event_type text not null, command_id text, payload_json text not null)`);
+  for (const { thread, request, command } of resolutions) {
+    db.run("insert into orchestration_events (aggregate_kind, stream_id, event_type, command_id, payload_json) values ('thread', ?, 'runtime-request.updated', null, ?)", [thread, JSON.stringify({ id: request, status: "pending" })]);
+    db.run("insert into orchestration_events (aggregate_kind, stream_id, event_type, command_id, payload_json) values ('thread', ?, 'runtime-request.updated', ?, ?)", [thread, command, JSON.stringify({ id: request, status: "resolved", answers: { "0": "yes" } })]);
+  }
+  db.close();
+  return path;
+}
+
 export class ToolRefusal extends Error {
   constructor(readonly code: string, message: string) { super(message); }
 }
@@ -44,6 +60,7 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
   const home = await mkdtemp(join(tmpdir(), "fleet-t3-"));
   const userdata = join(home, ".t3", "userdata");
   await mkdir(userdata, { recursive: true });
+  if (fixture.resolutions) writeT3EventStore(join(userdata, "statev2.sqlite"), fixture.resolutions);
   const rpcTags: string[] = [];
   const toolCalls: T3Stub["toolCalls"] = [];
   const server = Bun.serve({

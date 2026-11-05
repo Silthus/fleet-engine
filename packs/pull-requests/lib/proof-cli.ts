@@ -1,22 +1,30 @@
-import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { closeSync, existsSync, openSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, listStanding, parseVerdict, proofDirectory, proofGate, readJson, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewRecords, roundId, saveProof, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
-import { askModel, family, familyOf, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
+import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
+import { askModel, family, familyOf, modelLabel, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
+import { judge } from "./proof-judge.ts";
+import { lensBrief, lensLog, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, type Lens, type PanelGuide, type PanelIO } from "./proof-panel.ts";
+import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
 import { listenIn, withoutThread, type ThreadWords } from "./proof-answers.ts";
 import { modelFor } from "../../base/lib/models.ts";
 import { numberSetting } from "../../base/lib/settings.ts";
+import { t3StatePath } from "../../base/lib/prune.ts";
+import { readThreadWords, t3UserData, withT3Session } from "../../base/lib/t3/index.ts";
 
-export type ProofContext = { home: string; cwd: string; env: Record<string, string | undefined>; print: (text: string) => void; now?: () => Date; threadWords?: ThreadWords };
+export type ProofContext = {
+  home: string; cwd: string; env: Record<string, string | undefined>; print: (text: string) => void; now?: () => Date; threadWords?: ThreadWords;
+  detach?: (args: string[], log: string) => Promise<number>; pause?: () => Promise<void>; github?: GitHub;
+};
 type Result = { code: number; stdout: string; stderr: string };
 type Run = (command: string[]) => Result;
-type Parsed = { options: Map<string, string>; flags: Set<string>; files: string[] };
+type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; files: string[] };
 type CommandContext = ProofContext & { run: Run };
 type Subcommand = {
-  usage: string; summary: string; examples: string[]; options?: string[]; flags?: string[];
+  usage: string; summary: string; examples: string[]; options?: string[]; repeatable?: string[]; flags?: string[]; hidden?: boolean;
   run: (parsed: Parsed, identity: () => ProofIdentity, context: CommandContext) => Promise<number>;
 };
 
@@ -64,6 +72,21 @@ that with --reuse-from and the reason; the gate prints it.`,
       return 0;
     },
   },
+  publish: {
+    usage: "publish --asset-repo <owner/name> [--recheck] <file>...",
+    summary: `Publish screenshots to a public repository of your own GitHub account when gh cannot attach them to the PR.
+--asset-repo names that repository; fleet has no default. It refuses a private repository and one your account does
+not own, and it publishes each screenshot under proof/ on the fleet-proof branch, named by the hash of its bytes,
+with no name of the PR or its repository. Publish only screenshots with invented test data. --recheck asks GitHub
+again after you change the repository's access.`,
+    examples: ["fleet proof publish --asset-repo octocat/assets after.png"], options: ["--asset-repo"], flags: ["--recheck"],
+    run: async ({ options, flags, files }, identity, { print, home, cwd, github }) => {
+      requireFiles(files, "publish");
+      const assets = required(options, "--asset-repo", "publish");
+      for (const file of files) print(await publishProof(home, identity(), resolve(cwd, file), assets, github ?? githubRequest, flags.has("--recheck")));
+      return 0;
+    },
+  },
   require: {
     usage: "require (--kinds <kind,kind> | --none --reason <why>) [--author claude|gpt]",
     summary: `Record the proof kinds the PR owes. Repeated calls add kinds. A PR that owes none records --none with the
@@ -82,7 +105,7 @@ family does not change.`,
     },
   },
   review: {
-    usage: "review [--scope full|fixes|final] [--base <reviewed-sha>] [--phase review|babysit] [--override <dated quote> --thread <id> | --standing <reason>]",
+    usage: "review [--lens <name>[:same|:other]]... [--knowledge <lens>=<file>]... [--scope full|fixes|final] [--base <reviewed-sha>] [--phase review|babysit] [--override <dated quote> --thread <id> | --standing <reason>] | review --wait [--round <number|final>]",
     summary: `Reserve a review round and run the reviewer yourself, read-only, from the model table of your AI plan: the review
 row for a PR that Claude wrote, and the review-codex row for a PR that Codex wrote when the table has one, else the
 review row. On the both plan that reviewer is the family that did not write the PR; on a single plan it is a fresh
@@ -92,19 +115,47 @@ finding's anchor against the diff and prints the result after the findings; it k
 review-start. When the reviewer gives no answer, the round stays reserved and the next fleet proof review on the same
 commit retries it. The setting pull-requests.reviewTimeoutMinutes limits the reviewer. FLEET_PROOF_REVIEWER replaces
 its command, and FLEET_PROOF_REVIEWER_MODEL its model.
+
+With --lens, the round is a qa-swarm panel: one reviewer per lens, each with the Brief of the qa-swarm PANEL.md in
+~/.agents/skills/qa-swarm, filled by fleet, and the lens's hunting grounds. A lens runs on the family of its PANEL.md
+lane: the fresh-eyes lane on the author's family, the others on the reviewer above. :same or :other picks the family.
+--knowledge adds the repo's review material for a lens, and gives the text of a Team perspective that PANEL.md does
+not list. fleet starts the lenses in the background and returns at once; at most pull-requests.panelSlots reviewers
+run at once on this machine, and the rest wait. Each raw answer is kept in lenses/<name>.md. A lens that ends without
+a FINDINGS block or a COVERED list of every changed file runs once more; when it fails again, the round stays
+unfinished with the cause, and the same review --lens command reruns the failed lenses; :same or :other moves a
+failed lens to the family that is up when the other has an outage. When every lens is done, fleet joins the answers
+under one heading per lens as the round's findings.
+--wait waits up to 9 minutes for the panel of the unfinished round, the latest round, or --round, and prints each
+lens. Exit 0 when the round is finished, with its findings; 1 when a lens failed; 2 when lenses still run, so run
+--wait again. It restarts a lens whose worker died.
 ${overrideHelp}`,
-    examples: ["fleet proof review", "fleet proof review --scope fixes --base 1a2b3c4"],
-    options: ["--scope", "--base", "--phase", "--override", "--thread", "--standing"],
-    run: async ({ options }, identity, context) => runReview(options, identity(), context),
+    examples: ["fleet proof review", "fleet proof review --scope fixes --base 1a2b3c4", "fleet proof review --lens fresh-eyes --lens correctness --lens design --knowledge correctness=incidents.md", "fleet proof review --wait"],
+    options: ["--scope", "--base", "--phase", "--override", "--thread", "--standing", "--round"], repeatable: ["--lens", "--knowledge"], flags: ["--wait"],
+    run: async (parsed, identity, context) => {
+      if (parsed.flags.has("--wait")) return waitForReview(parsed.options, identity(), context);
+      if (parsed.lists.has("--lens")) return runPanel(parsed, identity(), context);
+      return runReview(parsed.options, identity(), context);
+    },
   },
   show: {
     usage: "show [--round <number|final|final-n>]",
-    summary: "Print the latest review round, or --round: who reviewed it and where its findings are. --round final is the latest final read.",
+    summary: `Print the latest review round, or --round: who reviewed it and where its findings are. --round final is the
+latest final read. For a panel, print each lens: its state, family and model, how long it ran, and its raw answer, or
+its log while it runs.`,
     examples: ["fleet proof show", "fleet proof show --round 2", "fleet proof show --round final-1"],
     options: ["--round"],
     run: async ({ options }, identity, context) => {
       const directory = await reviewDirectory(context.home, identity(), roundOption(options));
-      for (const line of await roundLines(directory)) context.print(line);
+      for (const line of await roundLines(directory, context)) context.print(line);
+      return 0;
+    },
+  },
+  "panel-lens": {
+    usage: "panel-lens --directory <round directory> --lens <name>", summary: "Run one lens of a panel. fleet proof review starts it.", examples: [], hidden: true,
+    options: ["--directory", "--lens"],
+    run: async ({ options }, _, context) => {
+      await runLens(required(options, "--directory", "panel-lens"), required(options, "--lens", "panel-lens"), panelIO(context));
       return 0;
     },
   },
@@ -113,7 +164,8 @@ ${overrideHelp}`,
     summary: `Save your answer to each finding of a finished review: fixed in which commit, or rejected and why. Number the
 answers in the order of the findings, one line each, such as "1. fixed in 1a2b3c4: <how>" or "2. rejected: <why>". Each
 list item of findings.md is one finding; findings without a list are one. The gate fails while a finding has no
-answer. A new call replaces the earlier answer. A final read takes the id that review-start printed.`,
+answer. A new call replaces the earlier answer. A final read takes the id that review-start printed. The judge in fleet proof gate checks
+each answer against HEAD.`,
     examples: ["fleet proof respond --round 1 responses.md", "fleet proof respond --round final-1 responses.md"],
     options: ["--round"],
     run: async ({ options, files }, identity, { print, home, cwd }) => {
@@ -145,8 +197,8 @@ that names the gap kind and the PR, with the options "Accept the gap" and "Keep 
 question tool. --accept takes their choice of "Accept the gap" there, with their words in quotes. A typed message, a
 refusal, an answer to another question, a quote of the user's instructions, or an answer already used does not count.
 A gap recorded again, such as with another reason, needs a new answer. A standing rule (fleet proof standing) covers
-a kind without asking. Their acceptance settles the kind: the gate then ignores that kind's evidence. Kind ci records
-that CI cannot run on HEAD, such as on a fork PR.
+a kind without asking. Their acceptance settles the kind: the gate then ignores that kind's evidence, and the judge
+does not see it. Kind ci records that CI cannot run on HEAD, such as on a fork PR.
 ${answerHelp}`,
     examples: ["fleet proof gap --kind prod-shape --reason 'No production read access'", `fleet proof gap --kind prod-shape --accept '2026-10-25 "Accept the gap"' --thread mcp:1a2b`],
     options: ["--kind", "--reason", "--accept", "--thread"],
@@ -163,18 +215,32 @@ ${answerHelp}`,
   },
   gate: {
     usage: "gate [--landed]",
-    summary: `Check the owed proofs, the review and the answers to its findings, and the CI of the commit on GitHub. Exit 0
-only on a pass: 1 means the owed proofs are not recorded, a proof is missing, the commit is not reviewed, a finding
-has no answer, the commit is not the PR's head on GitHub, or its checks are red or pending; 3 means only unaccepted
-gaps remain. No gap waives the head check. The last line is the verdict and names what it covered. A clean merge of
-the PR's base carries the review and the evidence of its other parent forward.`,
+    summary: `Check the owed proofs, the review and the answers to its findings, and the CI of the commit on GitHub, then let
+the judge weigh them. Exit 0 only on a pass: 1 means the owed proofs are not recorded, a proof is missing, the commit
+is not reviewed, a finding has no answer, the commit is not the PR's head on GitHub, its checks are red or pending,
+or the judge failed or was unavailable; 3 means only unaccepted gaps remain. No gap waives the head check. The last
+line is the verdict and names what it covered. A clean merge of the PR's base carries the review and the evidence of
+its other parent forward.
+When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
+picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's
+findings and responses, and the coding standards in ~/.agents/guides/coding-standards.md. It answers four questions:
+does the evidence prove HEAD, do the owed kinds fit the diff, does the review hold, and how good is the code. A failed
+question or a high quality finding fails the gate; medium and low findings are listed. The verdict is cached per set
+of inputs. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
+--kind judge) lets the gate pass once their standing rule covers it, or once they choose "Accept the gap" in your
+question tool for the question that the gate prints. A refusal or a typed message never accepts it. The setting
+pull-requests.reviewTimeoutMinutes limits the judge. FLEET_PROOF_JUDGE replaces its command, and
+FLEET_PROOF_JUDGE_MODEL its model.`,
     examples: ["fleet proof gate", "fleet proof gate --landed"], flags: ["--landed"],
-    run: async ({ flags }, identity, { print, home, run, now }) => {
+    run: async ({ flags }, identity, context) => {
+      const { print, home, run, now } = context;
       const head = identity();
       const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), ci: () => ciOf(head, run), pushedHead: () => pushedHeadOf(head, run), now: now?.() });
       for (const line of gate.lines) print(line);
-      print(gate.code === 0 ? `gate: pass (${gate.summary})` : `gate: fail (exit ${gate.code})`);
-      return gate.code;
+      const judged = gate.code === 0 ? await judgeHead(head, gate, context) : { code: gate.code, lines: [], covered: "" };
+      for (const line of judged.lines) print(line);
+      print(judged.code === 0 ? `gate: pass (${gate.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`);
+      return judged.code;
     },
   },
   "review-start": {
@@ -219,6 +285,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const limit = numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
   const rubric = await readRubric(home);
   const pending = await unfinishedFleetReview(home, head);
+  if (pending && await readPlan(pending.directory)) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
   const reserved = pending
     ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base }
     : await reserveFleetReview(options, head, context);
@@ -249,13 +316,139 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   return { ...reserved, scope, base };
 }
 
-async function roundLines(directory: string) {
+const waitPolls = 108;
+const pollInterval = 5_000;
+const proofEntry = resolve(import.meta.dir, "../commands/proof.ts");
+
+const reviewLimit = (env: Record<string, string | undefined>) => numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
+
+const panelIO = ({ home, env, now, pause }: CommandContext): PanelIO => ({
+  env, now: now ?? (() => new Date()), pause: pause ?? (() => Bun.sleep(pollInterval)), slots: join(ledgerRoot(home), ".panel-slots"),
+  slotCount: numberSetting("pull-requests.panelSlots", env), pid: process.pid, limit: reviewLimit(env),
+});
+
+async function startLens(directory: string, name: string, context: CommandContext) {
+  const detach = context.detach ?? detachFleet(context);
+  await recordWorker(directory, name, await detach(["panel-lens", "--directory", directory, "--lens", name], lensLog(directory, name)));
+}
+
+const detachFleet = ({ cwd, env }: CommandContext) => async (args: string[], log: string) => {
+  const output = openSync(log, "a", 0o600);
+  try {
+    const child = Bun.spawn([process.execPath, proofEntry, ...args], { cwd, env: env as Record<string, string>, stdin: "ignore", stdout: output, stderr: output, detached: true });
+    child.unref();
+    return child.pid;
+  } finally { closeSync(output); }
+};
+
+async function runPanel({ options, lists }: Parsed, head: ProofIdentity, context: CommandContext) {
+  const { home, print, env } = context;
+  const author = await authorOf(home, head);
+  const guide = await readPanelGuide(home);
+  const knowledge = await knowledgeOf(lists.get("--knowledge") ?? [], context.cwd);
+  const lenses = lists.get("--lens")!.map((argument) => resolveLens(guide, argument, author, knowledge, env));
+  const pending = await unfinishedFleetReview(home, head);
+  const directory = pending ? await rerunPanel(pending.directory, lenses, context) : await reservePanel(options, head, lenses, guide, context);
+  const round = (await readJson<{ round: number | "final" }>(join(directory, "round.json"), { round: 0 })).round;
+  print(JSON.stringify({ round, directory, lenses: lenses.map(({ name, family }) => ({ name, family })) }));
+  print("The lenses run in the background. Run fleet proof review --wait for the findings, and fleet proof show to see each lens.");
+  return 0;
+}
+
+const castOf = ({ family, row }: Lens, env: Record<string, string | undefined>) => ({ family, row, model: modelLabel("reviewer", row, env) });
+
+async function reservePanel(options: Map<string, string>, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
+  const { home, cwd, env, run } = context;
+  const rubric = await readRubric(home);
+  const reserved = await reserveFleetReview(options, head, context);
+  const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
+  const pr = pullRequestDetails(head, run);
+  const owed = await readOwed(home, head);
+  const settled = (await reviewRecords(home, head)).filter((review) => review.responses).map((review) => `${review.label}:\n${review.responses!.trim()}`).join("\n\n");
+  const diff = diffOf(from, head.commit, run);
+  const diffFile = join(reserved.directory, "diff.patch");
+  await writeFile(diffFile, diff, { mode: 0o600 });
+  const input = {
+    title: pr.title, body: pr.body, base: pr.baseRefName, from, commit: head.commit, diff, diffFile, settled,
+    owed: owed?.none ? `none (${owed.none.reason})` : owed?.kinds.join(", ") || "none recorded", rubric,
+  };
+  const changedFiles = changedFilesOf(from, head.commit, run);
+  const rules = reviewRules(changedFiles, baseTip(head, run), run);
+  const briefed = lenses.map((lens) => ({ ...lens, knowledge: [rules, lens.knowledge].filter(Boolean).join("\n\n") }));
+  const plan = {
+    lenses: lenses.map((lens) => ({ name: lens.name, title: lens.title, ...castOf(lens, env) })),
+    changedFiles, from, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory],
+  };
+  await planPanel(reserved.directory, plan, new Map(briefed.map((lens) => [lens.name, lensBrief(guide, lens, input)])));
+  for (const lens of lenses) await startLens(reserved.directory, lens.name, context);
+  return reserved.directory;
+}
+
+async function rerunPanel(directory: string, lenses: Lens[], context: CommandContext) {
+  const plan = await readPlan(directory);
+  if (!plan) throw new Error(`${directory} is reserved for one reviewer. Run fleet proof review without --lens to retry it`);
+  const planned = plan.lenses.map((lens) => lens.name);
+  if (lenses.map((lens) => lens.name).sort().join() !== [...planned].sort().join()) throw new Error(`The unfinished round runs the lenses ${planned.join(", ")}. Pass the same --lens set to rerun its failed lenses`);
+  const casts = new Map(lenses.map((lens) => [lens.name, castOf(lens, context.env)]));
+  for (const name of await requeueFailed(directory, casts)) await startLens(directory, name, context);
+  return directory;
+}
+
+async function knowledgeOf(values: string[], cwd: string) {
+  const knowledge = new Map<string, string[]>();
+  for (const value of values) {
+    const match = /^([a-z0-9-]+)=(.+)$/.exec(value);
+    if (!match) throw usageError("review", `--knowledge takes <lens>=<file>, not ${value}`);
+    const [, lens = "", file = ""] = match;
+    knowledge.set(lens, [...knowledge.get(lens) ?? [], (await readFile(resolve(cwd, file), "utf8")).trim()]);
+  }
+  return knowledge;
+}
+
+async function waitForReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+  const directory = options.has("--round") ? await reviewDirectory(context.home, head, roundOption(options)) : (await unfinishedFleetReview(context.home, head))?.directory ?? await reviewDirectory(context.home, head);
+  const code = await waitForPanel(directory, panelIO(context), (name) => startLens(directory, name, context), waitPolls);
+  for (const line of await roundLines(directory, context)) context.print(line);
+  if (code === 0) context.print(await readFile(join(directory, "findings.md"), "utf8"));
+  if (code === 1) context.print("A lens failed, and the round stays unfinished. Run the same fleet proof review --lens command to rerun the failed lenses.");
+  if (code === 2) context.print("Lenses still run. Run fleet proof review --wait again.");
+  return code;
+}
+
+type Gate = Awaited<ReturnType<typeof proofGate>>;
+
+async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContext) {
+  const { home, cwd, env, run, now } = context;
+  const author = await authorOf(home, head);
+  const row = reviewerRow(author, env);
+  const limit = reviewLimit(env);
+  const from = mergeBase(head, run);
+  const input = {
+    cwd: topLevel(run) ?? cwd, from, commit: head.commit, diff: diffOf(from, head.commit, run), crossFamily: familyOf(row) !== author, ci: gate.ci, owed: gate.owed!, ledger: gate.lines,
+    evidence: gate.evidence, reviews: await reviewRecords(home, head), rubric: await readRubric(home), references: skillReferences(home),
+  };
+  const today = now?.() ?? new Date();
+  const outcome = await judge(input, {
+    ask: (request) => askModel("judge", row, request, env, limit), model: modelLabel("judge", row, env), arbiter: arbiterOf(context),
+    directory: judgeDirectory(home, head), commit: head.commit, now: today,
+  });
+  if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}` };
+  const gap = await judgeGap(home, head, today);
+  if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}` };
+  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: not accepted: ${gap.reason}. ${askGap(head, "judge", gap.reason)}`], covered: "" };
+  const standing = await standingFor(home, "judge", today);
+  const hint = standing ? [`judge gap: the user's standing rule accepts a judge gap on HEAD until ${standing.until}. Record it with fleet proof gap --kind judge --reason <why the judge is wrong>`] : [];
+  return { code: 1, lines: [...outcome.lines, ...hint], covered: "" };
+}
+
+async function roundLines(directory: string, { now }: CommandContext) {
   const round = await readJson<{ round: number | "final"; commit: string; reviewer?: string; capturedBy?: string; standing?: { reason: string; until: string } } | undefined>(join(directory, "round.json"), undefined);
   if (!round) throw new Error(`${directory} has no reservation`);
   const finished = round.reviewer ? `finished by ${round.reviewer}, ${round.capturedBy === "fleet" ? "captured by fleet" : "saved by the author"}: ${join(directory, "findings.md")}` : "reserved, no findings yet";
   const header = `${round.round === "final" ? "final read" : `round ${round.round}`} on ${short(round.commit)}: ${finished}`;
   const anchors = join(directory, "anchors.md");
-  return [header, ...(existsSync(anchors) ? [`anchor check by fleet: ${anchors}`] : []), ...(round.standing ? [`accepted by the standing rule until ${round.standing.until}: ${round.standing.reason}`] : [])];
+  const standing = round.standing ? [`accepted by the standing rule until ${round.standing.until}: ${round.standing.reason}`] : [];
+  return [header, ...(existsSync(anchors) ? [`anchor check by fleet: ${anchors}`] : []), ...standing, ...(await readPlan(directory) ? await panelLines(directory, now?.() ?? new Date()) : [])];
 }
 
 function roundOption(options: Map<string, string>) {
@@ -275,14 +468,14 @@ const decisionOf = (options: Map<string, string>, context: CommandContext) => ({
   limits: { free: numberSetting("pull-requests.freeReviews", context.env), ceiling: numberSetting("pull-requests.reviewCeiling", context.env) },
 });
 
-function hearing(options: Map<string, string>, { threadWords }: CommandContext) {
+function hearing(options: Map<string, string>, { home, threadWords }: CommandContext) {
   const thread = options.get("--thread");
-  return thread === undefined ? withoutThread : listenIn(thread, threadWords ?? unreadableThreads);
+  return thread === undefined ? withoutThread : listenIn(thread, threadWords ?? t3ThreadWords(home));
 }
 
-const unreadableThreads: ThreadWords = async (thread) => {
-  throw new Error(`Cannot read T3 thread ${thread}: this version of fleet proof does not read T3 threads yet`);
-};
+const t3ThreadWords = (home: string): ThreadWords => (thread) =>
+  withT3Session((client) => readThreadWords(client, thread, t3StatePath(t3UserData(home))), { home })
+    .catch((error: Error) => { throw new Error(`Cannot read T3 thread ${thread} (${error.message})`); });
 
 function resolveAuthor(requested: string | undefined, env: Record<string, string | undefined>): Family | undefined {
   const session = sessionFamily(env);
@@ -296,7 +489,7 @@ or --commit to choose others. --commit and --base take any commit Git resolves h
 const kindsHelp = "Kinds: live-run, ui-walk, prod-shape, cross-version, shadow-diff, post-deploy-watch. A gap also takes ci and judge, and a standing rule also takes review.";
 
 function overview() {
-  const lines = Object.values(subcommands).map((command) => `  fleet proof ${command.usage}`);
+  const lines = Object.values(subcommands).filter((command) => !command.hidden).map((command) => `  fleet proof ${command.usage}`);
   return [`Usage: fleet proof <command> [--repo owner/name] [--pr number] [--commit sha]`, ...lines, "", identityHelp, kindsHelp,
     "Run fleet proof <command> --help for its details and an example."].join("\n");
 }
@@ -320,14 +513,15 @@ function requireFiles(files: string[], name: string) {
 
 function parse(name: string, command: Subcommand, args: string[]): Parsed {
   const valued = ["--repo", "--pr", "--commit", ...(command.options ?? [])];
-  const parsed: Parsed = { options: new Map(), flags: new Set(), files: [] };
+  const parsed: Parsed = { options: new Map(), lists: new Map(), flags: new Set(), files: [] };
   while (args.length) {
     const arg = args.shift()!;
     if (command.flags?.includes(arg)) parsed.flags.add(arg);
-    else if (valued.includes(arg)) {
+    else if (valued.includes(arg) || command.repeatable?.includes(arg)) {
       const value = args.shift();
       if (value === undefined || value.startsWith("--")) throw usageError(name, `${arg} needs a value`);
-      parsed.options.set(arg, value);
+      if (valued.includes(arg)) parsed.options.set(arg, value);
+      else parsed.lists.set(arg, [...parsed.lists.get(arg) ?? [], value]);
     } else if (arg.startsWith("-")) throw usageError(name, `Unknown option ${arg}`);
     else parsed.files.push(arg);
   }

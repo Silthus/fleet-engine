@@ -406,9 +406,26 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
 const findingItem = /^\s*(?:[-*]|\d+[.)])\s+\S/;
 const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
 
+const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
+
+const findingsBlock = /^\s*FINDINGS\b:?/;
+
+function reviewedLines(findings: string) {
+  const lines = findings.split("\n");
+  const lensAnswer = lines.some((line) => findingsBlock.test(line));
+  let inside = !lensAnswer;
+  return lines.flatMap((line) => {
+    if (findingsBlock.test(line)) { inside = true; return [line.replace(findingsBlock, "")]; }
+    if (/^COVERED\b/.test(line)) inside = false;
+    else if (!lensAnswer && /^#/.test(line)) inside = true;
+    return inside ? [line] : [];
+  }).filter((line) => line.trim());
+}
+
 function findingCount(findings: string) {
-  if (/^no findings\.?$/i.test(findings.trim())) return 0;
-  return Math.max(1, findings.split("\n").filter((line) => findingItem.test(line)).length);
+  const reviewed = reviewedLines(findings);
+  const items = reviewed.filter((line) => findingItem.test(line)).length;
+  return items || (reviewed.every((line) => noFinding.test(line.trim())) ? 0 : 1);
 }
 
 function unanswered(findings: string, responses: string) {
@@ -582,6 +599,11 @@ export async function standingFor(home: string, kind: StandingKind, now: Date) {
 function standingCommands(instructions: string) {
   const commands = instructions.replace(/\s+/g, " ").matchAll(/fleet proof standing --kind ([a-z,-]+) --until (\d{4}-\d{2}-\d{2}) --rule ["“]([^"”]*)["”]/g);
   return [...commands].map(([, kinds, until, rule]) => ({ kinds: kinds!.split(","), until: until!, rule: rule! }));
+}
+
+export async function judgeGap(home: string, identity: ProofIdentity, now: Date) {
+  const gap = await readJson<Gap | undefined>(gapPath(home, identity, "judge"), undefined);
+  return gap?.commit === identity.commit ? { reason: gap.reason, acceptance: await gapAcceptance(home, gap, "judge", now) } : undefined;
 }
 
 type Acceptance = { by: "the user" | "standing rule"; line: string };
@@ -762,3 +784,12 @@ export async function reviewRecords(home: string, identity: ProofIdentity) {
     };
   }));
 }
+
+export async function reviewOfCommit(home: string, identity: ProofIdentity) {
+  const review = (await finishedReviews(home, identity)).filter((finished) => finished.commit === identity.commit).at(-1);
+  if (!review) return undefined;
+  const reservation = await readJson<Reservation | undefined>(join(pullRequestDirectory(home, identity), "reviews", review.name, "round.json"), undefined);
+  return { label: reviewLabel(review.name), scope: reservation?.scope ?? "full", base: reservation?.base, reviewer: review.reviewer };
+}
+
+export const judgeDirectory = (home: string, identity: ProofIdentity) => join(pullRequestDirectory(home, identity), "judge");
