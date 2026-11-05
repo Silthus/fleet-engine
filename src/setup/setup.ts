@@ -2,9 +2,9 @@ import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import { cachedSource, fetchSource } from "../pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SourceRef } from "../pack/types.ts";
-import { loadMachine, loadProfile, saveMachine, thisMachine } from "../profile/profile.ts";
+import { loadMachine, loadProfile, saveAnswers, saveMachine, thisMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
-import { defaultSources, engineRepo } from "./defaults.ts";
+import { defaultSources, engineRepo, makesOwnDevbox } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
 import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, waitsForTeams, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
@@ -141,6 +141,14 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   });
   const devbox: Devbox = {
     question,
+    pushed: (step) => ({
+      ...step,
+      async run() {
+        const outcome = await step.run();
+        if (outcome !== "unanswered" && machine.profileDir) await saveAnswers(machine.profileDir, { settings: progress.draft.settings ?? {} }, { push: true });
+        return outcome;
+      },
+    }),
     steps: (host, plan) => devboxSteps(host, { terminal, machine: box, nonInteractive: flags.nonInteractive, plan: plan.ai, models: plan.models, profile: () => profileForBox(box, machine.profileDir) }),
   };
   const check = () =>
@@ -190,7 +198,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
 }
 
-type Devbox = { question: Step; steps(host: string, plan: { ai: DevboxContext["plan"]; models: DevboxContext["models"] }): Step[] };
+type Devbox = { question: Step; pushed(step: Step): Step; steps(host: string, plan: { ai: DevboxContext["plan"]; models: DevboxContext["models"] }): Step[] };
 
 function planFor(context: QuestionContext, machine: MachineFile) {
   const draft = context.draft.packs ? context.draft : { ...context.draft, ...picksFrom(context.flags, context.catalog) };
@@ -202,7 +210,8 @@ function planFor(context: QuestionContext, machine: MachineFile) {
 function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>, machineSteps: Step[], devbox: Devbox): Step[] {
   const { profile, plan } = planFor(context, machine);
   const box = human.machine;
-  const sshDevbox = !profile.packs.includes("posthog") && (machine.role === "mac" || machine.role === "linux");
+  const sshDevbox = !makesOwnDevbox(profile.packs) && (machine.role === "mac" || machine.role === "linux");
+  const devboxAsk = sshDevbox && machine.devboxes?.length ? planFor(context, { ...machine, role: "devbox" }).plan.ask.filter((setting) => !plan.ask.some((asked) => asked.key === setting.key)) : [];
   return [
     bootstrapStep(context.terminal, box.has),
     humanStep(githubSignIn(box, signedIn), human),
@@ -212,6 +221,7 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     ...machineSteps,
     ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human)),
     ...(sshDevbox ? [devbox.question] : []),
+    ...settingSteps(context, devboxAsk).map(devbox.pushed),
     ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),
     ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)]),
     ...(sshDevbox ? (machine.devboxes ?? []).flatMap((host) => devbox.steps(host, plan)) : []),
