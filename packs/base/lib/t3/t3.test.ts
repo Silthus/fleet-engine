@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverT3Server, listLinkedEnvironments, listLinkedThreads, readLinkedThread, readT3Settings, readThreadWords, t3CliRunner, T3ToolError, withT3Session, type LinkedEnvironment, type T3Deadline } from "./index.ts";
+import { discoverT3Server, launchScratchThread, listLinkedEnvironments, listLinkedThreads, readLinkedThread, readT3Settings, readThreadWords, t3CliRunner, T3ToolError, withT3Session, type LinkedEnvironment, type T3Deadline } from "./index.ts";
 import { startT3Stub, ToolRefusal, writeT3EventStore, type Resolution, type T3Stub } from "./testing.ts";
 
 const cleanups: (() => unknown)[] = [];
@@ -250,6 +250,30 @@ test("only the user's own messages and question answers in T3 count as their wor
     ["mcp:thread-1", "m2", "Yes from the phone.", "Shall I run round 3?", "typed"],
     ["mcp:thread-1", "q1:0", "Accept both (Recommended)", "Accept both gaps?", "question"],
   ]);
+});
+
+test("a thread starts in T3's scratch project with the model row's provider, model, and effort, through a session that may only read and operate, and is revoked", async () => {
+  const payloads: Record<string, unknown> = {};
+  const t3 = await stub({
+    shell: { projects: [], threads: [] },
+    rpc(tag, payload) {
+      payloads[tag] = payload;
+      if (tag === "projects.ensureScratch") return { projectId: "scratch-1" };
+      if (tag === "orchestration.launchThread") return { threadId: "thread-1" };
+    },
+  });
+  const row = { role: "implementation", work: "", provider: "codex" as const, model: "gpt-big", effort: "high" as const };
+  const thread = await withT3Session((client) => launchScratchThread(client, { title: "Dream 2026-11-05", prompt: "Follow the dream skill.", row }), { home: t3.home, scopes: ["orchestration:read", "orchestration:operate"] });
+  expect(thread).toBe("thread-1");
+  expect(t3.rpcTags).toEqual(["projects.ensureScratch", "orchestration.launchThread"]);
+  expect(payloads["orchestration.launchThread"]).toMatchObject({
+    projectId: "scratch-1", title: "Dream 2026-11-05", generateTitle: false, runtimeMode: "full-access", interactionMode: "default",
+    workspaceStrategy: { type: "root" }, initialMessage: { text: "Follow the dream skill.", attachments: [] },
+    modelSelection: { instanceId: "codex", model: "gpt-big", options: [{ id: "reasoningEffort", value: "high" }] },
+  });
+  const cli = await t3.cliCalls();
+  expect(cli[0]).toBe("auth session issue --json --ttl 5m --label fleet --subject fleet --scope orchestration:read --scope orchestration:operate");
+  expect(cli.at(-1)).toBe("auth session revoke shell-session");
 });
 
 test("a session can ask for the scopes its caller needs, such as access:write to link an environment", async () => {

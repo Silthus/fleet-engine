@@ -7,7 +7,7 @@ import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../sr
 import { t3CliRunner } from "../base/lib/t3/index.ts";
 import { startT3Stub, type T3Stub } from "../base/lib/t3/testing.ts";
 import { slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
-import type { Run } from "./lib/launch.ts";
+import { launchOnBox, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
 import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
 
@@ -363,24 +363,36 @@ describe("a launch that fails", () => {
     expect(titles).toEqual(["Slack: why?"]);
   });
 
-  test("on a box, releases the box it claimed", async () => {
-    const slack = slackStub([{ user: ownerId, ts: "300.1", text: "go :t3code:" }]);
+  test("on a box, an uncertain launch keeps its box and retries there with the same command ID", async () => {
+    let answers = 0;
     const fleet = processes((argv) => {
-      if (argv.slice(1).join(" ") === "box spawn") return { code: 0, stdout: "box-8 env-box-8\n" };
-      if (argv[2] === "run") return { code: 1, stdout: "", stderr: "T3 did not answer at http://127.0.0.1:3773\n" };
-      if (argv[2] === "release") return { code: 0, stdout: "" };
+      if (argv.slice(1).join(" ") === "box spawn") return { code: 0, stdout: `box-${8 + answers} env-box-${8 + answers}\n` };
+      if (argv[2] === "run") return answers++ === 1 ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-on-box" })}\n` } : { code: 1, stdout: "", stderr: "T3 did not answer at http://127.0.0.1:3773\n" };
       return undefined;
     });
-    const stop = new AbortController();
-    const running = slackTrigger(["run"], commandDeps(homeWithTokens(), { slackBase: slack.base, stop: stop.signal, run: fleet.run, env: { FLEET_SETTINGS: settings({ "hub.boxTemplate": "devbox" }), FLEET_MODELS: models, FLEET_ENGINE_DIR: "/opt/fleet-engine" } }));
-    await slack.connected();
-    slack.send({ type: "message", user: ownerId, channel: "C1", ts: "300.1", text: "go :t3code:" });
-    await slack.until(() => slack.method("chat.postEphemeral").length === 1);
-    stop.abort();
-    await running;
-    expect(fleet.calls.map((call) => call.argv.slice(1).join(" ")).filter((line) => line.startsWith("box"))).toEqual(["box spawn", "box run box-8 -- fleet slack-trigger launch", "box release box-8"]);
-    expect(slack.method("chat.postEphemeral")[0]!.args.text).toBe("Could not start a T3 thread. Fleet retries every minute for a day.");
-    expect(slack.method("reactions.add")).toEqual([]);
+    const { deps, replies, later } = rig([]);
+    deps.launch = launchOnBox("/opt/fleet-engine/fleet", fleet.run);
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    later(60_000);
+    await retryPending(deps);
+    const boxCalls = fleet.calls.filter((call) => call.argv[1] === "box");
+    expect(boxCalls.map((call) => call.argv.slice(1).join(" "))).toEqual(["box spawn", "box run box-8 -- fleet slack-trigger launch", "box run box-8 -- fleet slack-trigger launch"]);
+    const sent = boxCalls.filter((call) => call.argv[2] === "run").map((call) => JSON.parse(call.input!));
+    expect(sent[0].commandId).toBe(sent[1].commandId);
+    expect(sent[0]).not.toHaveProperty("claim");
+    expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day.", "Started <https://app.t3.codes/threads/env-box-8/thread-on-box|Slack: why?> on box-8."]);
+  });
+
+  test("releases a box it kept when the trigger gives up after a day", async () => {
+    const released: string[] = [];
+    const { deps, later } = rig([]);
+    const launch = Object.assign(async () => ({ failed: "T3 did not answer", claim: { box: "box-9", environmentId: "env-box-9" } }), { release: async (claim: { box: string }) => void released.push(claim.box) });
+    deps.launch = launch;
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    expect(JSON.parse(readFileSync(deps.statePath, "utf8")).pending["C1:1.1"].claim).toEqual({ box: "box-9", environmentId: "env-box-9" });
+    later(86_400_001);
+    await retryPending(deps);
+    expect(released).toEqual(["box-9"]);
   });
 });
 

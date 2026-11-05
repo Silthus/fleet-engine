@@ -164,3 +164,40 @@ describe("the Hub pack", () => {
     expect(probe()).toBe(0);
   });
 });
+
+describe("the Dream workflow", () => {
+  const hub: MachineFile = { schema: 1, role: "hub" };
+  const dreamOn = { packs: ["hub", "memory"], workflows: { dream: true }, settings: { ...answers, "memory.repo": "me/notes" } };
+  const dreamJobs = (result: Plan) => result.jobs.filter((job) => job.workflow === "dream").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every} at ${job.schedule.at}`);
+
+  test("is off by default, because each run spends model tokens, and says so in its risk", () => {
+    const workflow = sources[0]!.packs.find((pack) => pack.manifest.name === "hub")!.manifest.workflows!.find((item) => item.id === "dream")!;
+    expect(workflow).toMatchObject({ name: "Dream", default: false, needs: ["hub", "gh"] });
+    expect(workflow.risk).toMatch(/model/);
+    expect(workflow.settings!.every((key) => key.startsWith("hub."))).toBe(true);
+    expect(plan({ packs: ["hub"] }, hub).workflows.find((item) => item.id === "dream")).toMatchObject({ active: false, reason: "turned off" });
+  });
+
+  test("plans the nightly job only on the hub, and only while Dream is on", () => {
+    expect(dreamJobs(plan(dreamOn, hub))).toEqual(["dream: fleet dream run every 1d at 04:10"]);
+    expect(dreamJobs(plan(dreamOn, devbox))).toEqual([]);
+    expect(dreamJobs(plan(dreamOn, mac))).toEqual([]);
+    expect(dreamJobs(plan({ ...dreamOn, workflows: {} }, hub))).toEqual([]);
+  });
+
+  test("gives fleet commands its session limit only while Dream is on, which is how the box hook knows to save digests", () => {
+    expect(plan(dreamOn, hub).settings["hub.dreamSessions"]).toBe(150);
+    expect(plan({ ...dreamOn, workflows: {} }, hub).settings["hub.dreamSessions"]).toBeUndefined();
+  });
+
+  test("passes the Memory pack's memory.repo only when the Memory pack is on", () => {
+    expect(plan(dreamOn, hub).settings["memory.repo"]).toBe("me/notes");
+    expect(plan({ ...dreamOn, packs: ["hub"] }, hub).settings["memory.repo"]).toBeUndefined();
+  });
+
+  test("ships the dream and fleet-hub skills with the Hub pack, which has no skills bound to a workflow", () => {
+    const skills = (result: Plan) => result.files.map((file) => file.target).filter((target) => /^\.agents\/skills\/(dream|fleet-hub)$/.test(target)).sort();
+    expect(skills(plan(dreamOn, hub))).toEqual([".agents/skills/dream", ".agents/skills/fleet-hub"]);
+    expect(skills(plan({ packs: [] }, hub))).toEqual([]);
+  });
+});

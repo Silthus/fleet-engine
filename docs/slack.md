@@ -17,7 +17,11 @@ reaction from anyone else starts nothing.
 service `fleet-slack-trigger` on Linux, or the launchd agent
 `dev.fleet.slack-trigger` on a Mac. It runs on your hub when the Hub pack is
 on. Without the Hub pack, it runs on your only machine, when your profile lists
-no devboxes. It holds a Socket Mode connection to your own Slack app, so Slack
+no devboxes and the machine is not a devbox. A profile that two machines share
+without a hub, such as two Macs, runs it on both, and each starts a thread for
+the same message. Turn on the Hub pack in that case.
+
+The trigger holds a Socket Mode connection to your own Slack app, so Slack
 sends each event within a second, and no address is public.
 
 1. Slack sends every message and reaction in your channels. The trigger keeps
@@ -32,8 +36,10 @@ sends each event within a second, and no address is public.
    and the thread asks you before anything other people see.
 3. It reacts with `:eyes:` as you and posts an ephemeral reply, which only you
    see, with the thread's link on `app.t3.codes`.
-4. A failed launch retries every minute for a day. You get one ephemeral reply
-   about it.
+4. A failed launch retries every minute for a day, with the same command ID,
+   so T3 starts one thread even when an answer got lost. On a box, the retries
+   go to the same box, and Fleet releases that box when it gives up. You get
+   one ephemeral reply about it.
 
 `~/.local/state/fleet/slack-trigger.json` keeps the handled messages for 31
 days, so each message starts one thread. The log is

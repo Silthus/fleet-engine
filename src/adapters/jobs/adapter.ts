@@ -253,8 +253,8 @@ async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   }
   if (dryRun) return done;
   const units = plans.filter((item) => item.current !== item.content);
-  await writeLaunchers(home, plans.map((item) => item.script).filter(stale), result);
   await writeWithBackups(home, plans.filter((item) => item.pending && item.marked === undefined).map((item) => ({ target: restartTarget(item.job.id), before: undefined, after: "" })));
+  await writeLaunchers(home, plans.map((item) => item.script).filter(stale), result);
   if (units.length) await writeWithBackups(home, units.map((item) => ({ target: unitTarget(item.job.id), before: item.current, after: item.content })));
   result.actions.push(...units.map((item) => ({ target: unitTarget(item.job.id), operation: item.current === undefined ? ("create" as const) : ("replace" as const) })));
   await writeWithBackups(home, plans.filter((item) => item.copy !== item.content).map((item) => ({ target: copyTarget(item.job.id), before: item.copy, after: item.content })));
