@@ -82,6 +82,29 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "github" }] } }))).rejects.toThrow("steps start: after must name a human step of this pack");
   });
 
+  test("accepts T3 project scripts with a name, a command, and project paths", async () => {
+    const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: ["~/posthog", "~/*/posthog"] };
+    expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [script] } }))).resolves.toHaveLength(1);
+    expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, command: undefined }] } }))).rejects.toThrow("t3ProjectScripts prepare: needs an id, a name, a command, and projects or a projectSetting");
+    expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, projects: ["posthog"] }] } }))).rejects.toThrow("t3ProjectScripts prepare: each project must be an absolute path or start with ~/");
+    expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, id: "Prepare It" }] } }))).rejects.toThrow("t3ProjectScripts Prepare It: id must be lowercase words joined by dashes");
+    await expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, name: "" }] } }))).rejects.toThrow("t3ProjectScripts prepare: needs an id, a name, a command, and projects or a projectSetting");
+    await expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, command: "   " }] } }))).rejects.toThrow("t3ProjectScripts prepare: needs an id, a name, a command, and projects or a projectSetting");
+  });
+
+  test("accepts a T3 project script whose project comes from a setting", async () => {
+    const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: [], projectSetting: "team.checkout" };
+    await expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [script] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, projectSetting: undefined }] } }))).rejects.toThrow("t3ProjectScripts prepare: needs an id, a name, a command, and projects or a projectSetting");
+    await expect(loadPacks(sourceWith({ base: { ...base, t3ProjectScripts: [{ ...script, projectSetting: " " }] } }))).rejects.toThrow("t3ProjectScripts prepare: projectSetting must name a setting");
+  });
+
+  test("leaves T3's project settings to t3ProjectScripts", async () => {
+    for (const key of ["projectSettingsOverrides", "projectScriptOverrides"]) {
+      await expect(loadPacks(sourceWith({ base: { ...base, config: [{ provider: "t3", key, value: {} }] } }))).rejects.toThrow(`config ${key}: T3 project settings hold Fleet's worktree scripts, so set those with t3ProjectScripts`);
+    }
+  });
+
   test("accepts a Claude MCP server only by name, with a server object", async () => {
     const server = { provider: "claude", key: "mcpServers.metabase", value: { type: "stdio", command: "fleet" } };
     expect(loadPacks(sourceWith({ base: { ...base, config: [server] } }))).resolves.toHaveLength(1);

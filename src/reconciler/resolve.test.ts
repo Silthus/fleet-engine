@@ -278,6 +278,30 @@ describe("resolve guards", () => {
     expect(() => plan({ packs: ["prune"] }, mac, [engine, prune])).toThrow("job prune is declared by both base and prune");
   });
 
+  test("plans T3 project scripts by scope, owned by their pack", () => {
+    const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: ["~/app"] };
+    const team = withPack(pack("team", { t3ProjectScripts: [{ ...script, roles: ["devbox"] }, { ...script, id: "mac-only", on: ["darwin"] }] }));
+    expect(plan({ packs: ["team"] }, devbox, [engine, team]).t3ProjectScripts).toEqual([{ ...script, roles: ["devbox"], pack: "team" }]);
+    expect(plan({ packs: ["team"] }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, id: "mac-only", on: ["darwin"], pack: "team" }]);
+  });
+
+  test("adds the path a T3 project script's setting names to its projects", () => {
+    const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: ["~/app"], projectSetting: "team.checkout" };
+    const team = withPack(pack("team", { settings: [{ key: "team.checkout", question: "Where is the checkout?", type: "string", default: "~/dev/app", ask: "never" }], t3ProjectScripts: [script] }));
+    expect(plan({ packs: ["team"] }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, projects: ["~/app", "~/dev/app"], pack: "team" }]);
+    expect(plan({ packs: ["team"], settings: { "team.checkout": "~/app" } }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, pack: "team" }]);
+    expect(plan({ packs: ["team"], settings: { "team.checkout": "app" } }, mac, [engine, team]).t3ProjectScripts).toEqual([{ ...script, pack: "team" }]);
+  });
+
+  test("rejects two T3 project scripts that would get the same id", () => {
+    const script = { id: "prepare", name: "Prepare worktree", command: "fleet prepare", projects: ["~/app"] };
+    const team = withPack(pack("team", { t3ProjectScripts: [{ ...script, id: "extra-prepare" }] }));
+    const teamExtra = withPack(pack("team-extra", { t3ProjectScripts: [script] }));
+    expect(() => plan({ packs: ["team", "team-extra"] }, mac, [engine, team, teamExtra])).toThrow(new ResolveError("t3 project script prepare of team-extra and extra-prepare of team both get the id fleet-team-extra-prepare"));
+    const twice = withPack(pack("twice", { t3ProjectScripts: [script, { ...script, name: "Again" }] }));
+    expect(() => plan({ packs: ["twice"] }, mac, [engine, twice])).toThrow(new ResolveError("t3 project script prepare of twice and prepare of twice both get the id fleet-twice-prepare"));
+  });
+
   test("keeps the AI plan and resolves a T3 job's project", () => {
     expect(plan({ plan: "claude" }).ai).toBe("claude");
     const result = plan({ workflows: { "quality-loop": true }, settings: { "orchestration.tracker": "me/maps", "orchestration.loopProject": "chosen-project" } }, devbox);
