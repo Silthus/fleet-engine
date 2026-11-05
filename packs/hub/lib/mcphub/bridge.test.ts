@@ -394,3 +394,126 @@ test("stops with one plain line, without the key, when the gateway is unreachabl
   expect(client.errors).toEqual(["Cannot reach the MCP gateway at http://127.0.0.1:3317/mcphub. On the hub, run: fleet mcphub doctor"]);
   expect(client.errors.join("\n")).not.toContain(token);
 });
+
+test("drops an answer to a question the old session asked, so it never reaches the new session", async () => {
+  const gateway = fakeGateway({ "tools/list": (message) => Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }) });
+  const { client, done } = await connected(gateway);
+  client.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "send", arguments: {} } });
+  const asked = await client.next((message) => message.method === "elicitation/create");
+  gateway.restart();
+  client.send({ jsonrpc: "2.0", id: asked.id!, result: { action: "accept" } });
+  client.send({ jsonrpc: "2.0", id: 9, method: "tools/list" });
+  await client.next((message) => message.id === 9);
+  expect(gateway.seen.filter((item) => item.session === "session-2").map((item) => item.method)).not.toContain("response");
+  client.close();
+  expect(await done).toBe(0);
+  expect(client.errors).toEqual([]);
+});
+
+test("a failing stream of the old session does not stop the new one", async () => {
+  let failOld!: () => void;
+  let gets = 0;
+  const gateway = fakeGateway({ "tools/list": (message) => Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }) });
+  const fetcher = Object.assign(async (input: string | URL | Request, init: RequestInit = {}) => {
+    if (init.method !== "GET" || ++gets > 1) return fetch(input, init);
+    return new Promise<Response>((_, reject) => { failOld = () => reject(new TypeError("connection reset")); });
+  }, { preconnect: fetch.preconnect }) as typeof fetch;
+  const { client, done } = await connected(gateway, fetcher);
+  await gateway.saw("notifications/initialized");
+  gateway.restart();
+  client.send({ jsonrpc: "2.0", id: 9, method: "tools/list" });
+  await client.next((message) => message.id === 9);
+  failOld();
+  for (let tick = 0; tick < 20; tick++) await new Promise((resolve) => setImmediate(resolve));
+  client.send({ jsonrpc: "2.0", id: 11, method: "tools/list" });
+  expect(await client.next((message) => message.id === 11)).toEqual({ jsonrpc: "2.0", id: 11, result: { tools: [] } });
+  client.close();
+  expect(await done).toBe(0);
+  expect(client.errors).toEqual([]);
+});
+
+test("an answer to the old session's question never answers the new session's question with the same id", async () => {
+  const gateway = fakeGateway();
+  const { client, done } = await connected(gateway);
+  client.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "send", arguments: {} } });
+  const old = await client.next((message) => message.method === "elicitation/create");
+  gateway.restart();
+  client.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "send", arguments: {} } });
+  const fresh = await client.next((message) => message.method === "elicitation/create" && message.id !== old.id);
+  client.send({ jsonrpc: "2.0", id: old.id!, result: { action: "accept" } });
+  client.send({ jsonrpc: "2.0", id: fresh.id!, result: { action: "decline" } });
+  expect((await client.next((message) => message.id === 4)).result).toEqual({ content: [{ type: "text", text: "answered decline" }] });
+  const answers = gateway.seen.filter((item) => item.method === "response");
+  expect(answers.map((item) => [item.session, item.message?.id, item.message?.result?.action])).toEqual([["session-2", "ask-1", "decline"]]);
+  client.close();
+  expect(await done).toBe(0);
+});
+
+test("a question that arrives late on a POST of the old session is dropped, and its answer still reaches the client", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const gateway = fakeGateway({ "tools/list": (message) => Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }) });
+  const late = intercepting("tools/call", async (_, message) => {
+    await held;
+    const late: Message = { jsonrpc: "2.0", id: "late-1", method: "elicitation/create", params: { message: "Late?" } };
+    return new Response(sse(late, { jsonrpc: "2.0", id: message.id, result: { content: [] } }), { headers: { "content-type": "text/event-stream" } });
+  });
+  const { client, done } = await connected(gateway, late.fetcher);
+  await gateway.saw("notifications/initialized");
+  client.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "slow", arguments: {} } });
+  await late.reached;
+  gateway.restart();
+  client.send({ jsonrpc: "2.0", id: 9, method: "tools/list" });
+  await client.next((message) => message.id === 9);
+  release();
+  expect((await client.next((message) => message.id === 5)).result).toEqual({ content: [] });
+  expect(client.received.filter((message) => message.method === "elicitation/create")).toEqual([]);
+  client.close();
+  expect(await done).toBe(0);
+});
+
+test("the old session's stream failing while the new session starts does not stop the bridge", async () => {
+  let failOld!: () => void;
+  let gets = 0;
+  let initializes = 0;
+  const gateway = fakeGateway({ "tools/list": (message) => Response.json({ jsonrpc: "2.0", id: message.id, result: { tools: [] } }) });
+  const fetcher = Object.assign(async (input: string | URL | Request, init: RequestInit = {}) => {
+    if (init.method === "GET" && ++gets === 1) return new Promise<Response>((_, reject) => { failOld = () => reject(new TypeError("connection reset")); });
+    const message = typeof init.body === "string" ? (JSON.parse(init.body) as Message) : undefined;
+    if (message?.method === "initialize" && ++initializes === 2) {
+      failOld();
+      for (let tick = 0; tick < 20; tick++) await new Promise((resolve) => setImmediate(resolve));
+    }
+    return fetch(input, init);
+  }, { preconnect: fetch.preconnect }) as typeof fetch;
+  const { client, done } = await connected(gateway, fetcher);
+  await gateway.saw("notifications/initialized");
+  gateway.restart();
+  client.send({ jsonrpc: "2.0", id: 9, method: "tools/list" });
+  expect(await client.next((message) => message.id === 9)).toEqual({ jsonrpc: "2.0", id: 9, result: { tools: [] } });
+  client.close();
+  expect(await done).toBe(0);
+  expect(client.errors).toEqual([]);
+});
+
+test("a cancelled gateway question reaches the client with the bridge id, and its later answer is dropped", async () => {
+  let cancel!: () => void;
+  const gateway = fakeGateway({}, () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(sse({ jsonrpc: "2.0", id: "ask-0", method: "elicitation/create", params: { message: "Send it?" } })));
+      cancel = () => controller.enqueue(encoder.encode(sse({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "ask-0", reason: "gone" } }, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "unknown" } })));
+    },
+  }), { headers: { "content-type": "text/event-stream" } }));
+  const { client, done } = await connected(gateway);
+  const asked = await client.next((message) => message.method === "elicitation/create");
+  cancel();
+  const cancelled = await client.next((message) => message.method === "notifications/cancelled");
+  expect(cancelled.params).toEqual({ requestId: asked.id, reason: "gone" });
+  client.send({ jsonrpc: "2.0", id: asked.id!, result: { action: "accept" } });
+  client.send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 99 } });
+  await gateway.saw("notifications/cancelled");
+  expect(client.received.filter((message) => message.method === "notifications/cancelled")).toHaveLength(1);
+  expect(gateway.seen.map((item) => item.method)).not.toContain("response");
+  client.close();
+  expect(await done).toBe(0);
+});

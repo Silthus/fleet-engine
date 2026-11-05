@@ -6,7 +6,8 @@ export type GatewayClient = { baseUrl: string; token: string };
 export type GatewaySettings = { httpsHost?: string; relayPort: number };
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-export const localGatewayUrl = "http://127.0.0.1:3317/mcphub";
+export const gatewayPort = 3317;
+export const localGatewayUrl = `http://127.0.0.1:${gatewayPort}/mcphub`;
 export const gatewayGroup = "fleet";
 export const grantHint = "On the hub, run: fleet mcphub grant <this machine's SSH name>";
 const invalidClient = `~/.config/fleet/mcphub.client.json is not a key from your hub. ${grantHint}`;
@@ -53,14 +54,19 @@ export async function refuseLinks(home: string, target: string, what: string) {
 export async function writePrivateFile(path: string, content: string) {
   const temporary = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}`);
   const file = await open(temporary, "wx", 0o600);
+  let renamed = false;
   try {
-    await file.writeFile(content);
-    await file.sync();
+    try {
+      await file.writeFile(content);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await rename(temporary, path);
+    renamed = true;
   } finally {
-    await file.close();
+    if (!renamed) await rm(temporary, { force: true });
   }
-  try { await rename(temporary, path); }
-  catch (error) { await rm(temporary, { force: true }); throw error; }
 }
 
 export async function saveGatewayClient(home: string, value: unknown, settings: GatewaySettings) {

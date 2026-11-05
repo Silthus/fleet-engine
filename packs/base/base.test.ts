@@ -80,7 +80,20 @@ describe("the Base pack", () => {
     expect(plan("both", devbox).steps.map((step) => step.id)).toEqual(["claude-cli", "codex-cli"]);
     expect(plan("claude", devbox).steps.map((step) => step.id)).toEqual(["claude-cli"]);
     expect(plan("codex", devbox).steps.map((step) => step.id)).toEqual(["codex-cli"]);
-    expect(plan("both").steps).toEqual([]);
+  });
+
+  test("installs the agent CLIs on a Mac too, Codex from its Homebrew cask, so a clean Mac without Node can sign in", () => {
+    expect(plan("both").steps.map((step) => step.id)).toEqual(["claude-cli", "codex-cli-mac"]);
+    expect(plan("claude").steps.map((step) => step.id)).toEqual(["claude-cli"]);
+    expect(plan("codex").steps.map((step) => step.id)).toEqual(["codex-cli-mac"]);
+    expect(plan("both").steps.find((step) => step.id === "codex-cli-mac")).toMatchObject({ run: ["brew", "install", "--cask", "codex"], check: ["codex", "--version"] });
+  });
+
+  test("installs Codex on Linux from its release package, which needs no Node", () => {
+    const step = plan("both", devbox).steps.find((item) => item.id === "codex-cli");
+    expect(step).toMatchObject({ run: ["fleet", "install-codex"], check: ["codex", "--version"] });
+    expect(step?.run).not.toContain("@openai/codex");
+    expect(plan("both", devbox).commands["install-codex"]?.path).toEndWith("packs/base/commands/install-codex.ts");
   });
 
   test("gives each plan one T3 default model from its own provider", () => {

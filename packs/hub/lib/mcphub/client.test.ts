@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../../src/testing/git.ts";
-import { checkGateway, clientPath, devboxGatewayUrl, localGatewayUrl, readGatewayClient, saveGatewayClient } from "./client.ts";
+import { checkGateway, clientPath, devboxGatewayUrl, localGatewayUrl, readGatewayClient, saveGatewayClient, writePrivateFile } from "./client.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -95,4 +95,11 @@ test("the check says what to run on the hub when the key is missing or the gatew
   }
   const invalid = await checkGateway(home({ baseUrl: "https://elsewhere.example.com/mcphub", token }), secure, down);
   expect(invalid.line).toBe("~/.config/fleet/mcphub.client.json is not a key from your hub. On the hub, run: fleet mcphub grant <this machine's SSH name>");
+});
+
+test("leaves no temporary file behind when writing a private file fails", async () => {
+  const dir = temp.make("private-");
+  const unwritable = { toString: () => { throw new Error("cannot write"); } } as unknown as string;
+  await expect(writePrivateFile(join(dir, "key.json"), unwritable)).rejects.toThrow();
+  expect(readdirSync(dir)).toEqual([]);
 });
