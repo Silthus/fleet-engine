@@ -9,7 +9,7 @@ import { quote, remoteFleet, type Machine } from "./machine.ts";
 import { writePrivateFile } from "./mcphub/client.ts";
 import * as registry from "./pool.ts";
 
-export type BoxHooks = { stopping?(box: string): void };
+export type BoxHooks = { stopping?(box: string): void | Promise<void> };
 
 const readyLimitMs = 15 * 60_000;
 const applyLimitMs = 15 * 60_000;
@@ -432,7 +432,7 @@ async function sweepOne(coder: BoxCoder, here: Machine, name: string, hooks: Box
   if (live.status !== "running") return;
   const answer = await coder.ssh(name, remoteFleet("box idle"), undefined, idleCheckLimitMs);
   if (answer.code === 0) {
-    hooks.stopping?.(name);
+    await hooks.stopping?.(name);
     await stopById(coder, here, box);
   } else if (answer.code === 1) await coder.extend(box.id, new Date(here.now() + busyLifeMs).toISOString());
   here.print(`${name}: ${answer.code === 0 ? "idle, stopped" : answer.code === 1 ? `busy, kept up for ${busyLifeMs / 3_600_000} hours` : `did not answer (exit ${answer.code}); kept`}`);
@@ -527,7 +527,7 @@ export async function release(coder: BoxCoder, here: Machine, box: string, { for
     const workspace = { name: box, id: live.id };
     const keep = force ? undefined : await unfinishedWorkOn(coder, workspace);
     if (keep) return kept(`${keep}, or release it with --force.`);
-    if (!force) hooks.stopping?.(box);
+    if (!force) await hooks.stopping?.(box);
     if (!owned && recycle) here.say(`${box} is not a box this pool made, so it is deleted instead of pooled`);
     const how: registry.Leaving = owned && recycle ? "pool" : "delete";
     if (!owned) return finishRelease(coder, here, workspace, how, false, { stillDoomed, ...(devbox ? { devbox } : {}) });

@@ -93,7 +93,7 @@ describe("the page build", () => {
   test("the public build shows the Hub pack without its box workflow and box settings", async () => {
     const data = await pageData({ audience: "public" });
     const hub = data.packs.find((pack) => pack.name === "hub")!;
-    expect(hub.workflows.map((workflow) => workflow.id)).toEqual(["mcp-gateway", "disk-watch", "linked-hub", "slack-trigger"]);
+    expect(hub.workflows.map((workflow) => workflow.id)).toEqual(["mcp-gateway", "disk-watch", "linked-hub", "slack-trigger", "dream"]);
     expect(hub.settings.map((setting) => setting.key).filter((key) => key.startsWith("hub.box"))).toEqual([]);
     expect(data.needPacks).toEqual({ hub: "hub" });
     expect(await buildPage({ audience: "public" })).not.toMatch(/short-lived boxes|box · /);

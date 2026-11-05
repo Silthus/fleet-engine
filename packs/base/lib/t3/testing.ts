@@ -14,6 +14,7 @@ export type T3Fixture = {
   resolutions?: Resolution[];
   links?: LinkedEnvironment[];
   tools?: ToolHandler;
+  rpc?: (tag: string, payload: unknown) => unknown;
 };
 
 export type T3Stub = {
@@ -85,7 +86,7 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
         if (message._tag !== "Request") return;
         rpcTags.push(message.tag);
         const value = message.tag === "orchestration.getArchivedShellSnapshot" ? fixture.archived ?? { projects: [], threads: [] }
-          : message.tag === "peerLinks.list" ? { links: fixture.links ?? [] } : undefined;
+          : message.tag === "peerLinks.list" ? { links: fixture.links ?? [] } : fixture.rpc?.(message.tag, message.payload);
         const exit = value ? { _tag: "Success", value } : { _tag: "Failure", cause: { _tag: "Fail", error: { _tag: "UnknownMethod" } } };
         socket.send(JSON.stringify({ _tag: "Exit", requestId: message.id, exit }));
       },
