@@ -107,6 +107,7 @@ fetch_engine() {
     fail "$engine_dir holds files that are not a Fleet engine. Move them away, or set FLEET_ENGINE_DIR."
   fi
   mkdir -p "$engine_dir"
+  engine_dir=$(CDPATH='' cd -- "$engine_dir" && pwd)
   [ -d "$engine_dir/.git" ] || git -C "$engine_dir" init -q
   [ -z "$(git -C "$engine_dir" status --porcelain)" ] || fail "$engine_dir has local changes. Save them elsewhere and remove them, then run this again."
   if ! origin=$(git -C "$engine_dir" remote get-url origin 2>/dev/null); then
@@ -130,21 +131,47 @@ install_packages() {
 }
 
 link_fleet() {
-  mkdir -p "$HOME/.local/bin"
+  bin_dir="$HOME/.local/bin"
+  mkdir -p "$bin_dir"
+  if { [ -e "$bin_dir/fleet" ] || [ -L "$bin_dir/fleet" ]; } && [ "$(sed -n 2p "$bin_dir/fleet" 2>/dev/null)" != "# Fleet" ]; then
+    say "$bin_dir/fleet is not Fleet's, so it stays as it is. Run Fleet with sh $engine_dir/fleet."
+    return 0
+  fi
   quoted=$(printf '%s' "$engine_dir/fleet" | sed "s/'/'\\\\''/g")
-  printf "#!/bin/sh\nexec sh '%s' \"\$@\"\n" "$quoted" >"$HOME/.local/bin/fleet.new"
-  chmod 755 "$HOME/.local/bin/fleet.new"
-  mv -f "$HOME/.local/bin/fleet.new" "$HOME/.local/bin/fleet"
+  wrapper=$(mktemp "$bin_dir/fleet.XXXXXX")
+  printf "#!/bin/sh\n# Fleet\nexec sh '%s' \"\$@\"\n" "$quoted" >"$wrapper"
+  chmod 755 "$wrapper"
+  mv -f "$wrapper" "$bin_dir/fleet"
+}
+
+add_login_line() {
+  [ ! -s "$1" ] || [ -z "$(tail -c 1 "$1")" ] || printf '\n' >>"$1"
+  printf '%s\n' "$2" >>"$1"
 }
 
 login_path() {
-  case "$(uname -s)" in
-    Darwin) file=.zprofile; dirs="\$HOME/.local/bin:\$HOME/.bun/bin:/opt/homebrew/bin" ;;
-    *) file=.profile; [ ! -f "$HOME/.bash_profile" ] || file=.bash_profile; dirs="\$HOME/.local/bin:\$HOME/.bun/bin" ;;
+  dirs="\$HOME/.local/bin \$HOME/.bun/bin"
+  shell=${SHELL:-}
+  if [ "$(uname -s)" = Darwin ]; then
+    dirs="$dirs /opt/homebrew/bin"
+    [ -n "$shell" ] || shell=zsh
+  fi
+  case "${shell##*/}" in
+    zsh) file=.zprofile ;;
+    bash) file=.profile; [ ! -f "$HOME/.bash_login" ] || file=.bash_login; [ ! -f "$HOME/.bash_profile" ] || file=.bash_profile ;;
+    fish) file=.config/fish/conf.d/fleet.fish ;;
+    *) file=.profile ;;
   esac
-  line="export PATH=\"$dirs:\$PATH\" # Added by Fleet"
-  ! grep -qxF "$line" "$HOME/$file" 2>/dev/null || return 0
-  printf '%s\n' "$line" >>"$HOME/$file"
+  if [ "$file" = .config/fish/conf.d/fleet.fish ]; then
+    line="fish_add_path --global $dirs"
+    [ "$(cat "$HOME/$file" 2>/dev/null)" != "$line" ] || return 0
+    mkdir -p "$HOME/.config/fish/conf.d"
+    printf '%s\n' "$line" >"$HOME/$file"
+  else
+    line="export PATH=\"$(printf '%s' "$dirs" | tr ' ' ':'):\$PATH\" # Added by Fleet"
+    ! grep -qxF "$line" "$HOME/$file" 2>/dev/null || return 0
+    add_login_line "$HOME/$file" "$line"
+  fi
   say "Open a new terminal to use fleet. ~/$file now puts ~/.local/bin and ~/.bun/bin on your PATH."
 }
 

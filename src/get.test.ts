@@ -1,98 +1,10 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { describe, expect, test } from "bun:test";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, isolateGit, tempDirs } from "./testing/git.ts";
+import { git } from "./testing/git.ts";
+import { getShHarness, onLinuxHost, repoRoot } from "./testing/get-sh.ts";
 
-isolateGit();
-const temp = tempDirs();
-const shared = tempDirs();
-afterEach(() => temp.cleanup());
-afterAll(() => shared.cleanup());
-
-const repoRoot = join(import.meta.dir, "..");
-const systemTools = ["sh", "env", "id", "cat", "mkdir", "mktemp", "rm", "chmod", "dirname", "sed", "grep", "head", "install", "tar", "gzip", "git", "bun", "sha256sum", "tr", "ls", "cp", "mv", "basename", "sleep", "python3"];
-let engineRepo: string;
-
-beforeAll(() => {
-  engineRepo = shared.make("engine-repo-");
-  for (const path of ["src", "packs", "fleet", "package.json", "bun.lock", ".gitignore", "presets.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
-  git(engineRepo, "init", "-q", "-b", "main");
-  git(engineRepo, "add", ".");
-  git(engineRepo, "commit", "-q", "-m", "engine");
-  git(engineRepo, "tag", "v0.1.0");
-});
-
-type SandboxOptions = { without?: string[]; brewInstaller?: string };
-
-const onLinuxHost = test.if(process.platform === "linux");
-
-function sandbox(os: "Linux" | "Darwin", options: SandboxOptions = {}) {
-  const root = temp.make("get-");
-  const bin = join(root, "bin");
-  const home = join(root, "home");
-  mkdirSync(bin);
-  mkdirSync(home);
-  for (const tool of systemTools.filter((name) => !options.without?.includes(name))) symlinkSync(Bun.which(tool) ?? `/missing/${tool}`, join(bin, tool));
-  const log = join(root, "calls.log");
-  const stub = (name: string, body: string) => {
-    rmSync(join(bin, name), { force: true });
-    writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n${body}\n`);
-    chmodSync(join(bin, name), 0o755);
-  };
-  stub("uname", `case "$1" in -s) echo ${os} ;; -m) echo x86_64 ;; esac`);
-  writeFileSync(join(root, "fake-bun"), `#!/bin/sh\necho "bun $*" >> "${log}"\n${fakeBun(log)}\n`);
-  chmodSync(join(root, "fake-bun"), 0o755);
-  if (!options.without?.includes("bun")) cpSync(join(root, "fake-bun"), join(bin, "bun"));
-  stub("xcode-select", "exit 0");
-  stub("claude", "exit 0");
-  stub("codex", "exit 0");
-  const t3Installer = `printf '#!/bin/sh\\necho "t3 $*" >> "${log}"\\n' > "$HOME/.local/bin/t3"; chmod +x "$HOME/.local/bin/t3"; echo "t3 installer channel=$T3CODE_CHANNEL" >> "${log}"`;
-  const brewInstaller = options.brewInstaller ?? `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
-  const ghTar = buildGhTarball(root);
-  stub("curl", `
-out=; url=; effective=
-while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; -w) effective=1; shift ;; -*) ;; *) url=$1 ;; esac; shift; done
-case "$url" in
-  https://t3.codes/install.sh) echo '${t3Installer.replaceAll("'", "'\\''")}' > "$out" ;;
-  https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh) echo '${brewInstaller.replaceAll("'", "'\\''")}' > "$out" ;;
-  https://github.com/cli/cli/releases/latest) printf 'https://github.com/cli/cli/releases/tag/v9.9.9' ;;
-  *gh_9.9.9_linux_amd64.tar.gz) cp "${ghTar}" "$out" ;;
-  *gh_9.9.9_checksums.txt) echo "$(sha256sum "${ghTar}" | cut -c1-64)  gh_9.9.9_linux_amd64.tar.gz" > "$out" ;;
-  *) echo "unexpected url $url" >&2; exit 22 ;;
-esac`);
-  symlinkSync(Bun.which("cut") ?? "/usr/bin/cut", join(bin, "cut"));
-  return { root, bin, home, log, stub };
-}
-
-function fakeBun(log: string) {
-  return `[ "$1" = install ] || exec "${process.execPath}" "$@"
-echo "bun install ran in $PWD" >> "${log}"
-mkdir -p node_modules && "${Bun.which("ln") ?? "ln"}" -sfn "${join(repoRoot, "node_modules", "smol-toml")}" node_modules/smol-toml`;
-}
-
-function buildGhTarball(root: string) {
-  const dir = join(root, "gh-build", "gh_9.9.9_linux_amd64", "bin");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "gh"), "#!/bin/sh\nexit 0\n");
-  chmodSync(join(dir, "gh"), 0o755);
-  const tarball = join(root, "gh.tar.gz");
-  Bun.spawnSync(["tar", "-czf", tarball, "-C", join(root, "gh-build"), "gh_9.9.9_linux_amd64"]);
-  return tarball;
-}
-
-function profile() {
-  const dir = temp.make("profile-");
-  writeFileSync(join(dir, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "v0.1.0", channel: "release" }, sources: [], packs: [], plan: "both", settings: {}, workflows: {} }, null, 2));
-  return dir;
-}
-
-function getSh(box: ReturnType<typeof sandbox>, args: string[]) {
-  const result = Bun.spawnSync(["sh", join(repoRoot, "get.sh"), ...args], {
-    env: { PATH: box.bin, HOME: box.home, FLEET_ENGINE_REPO: engineRepo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
-    stdin: "ignore",
-  });
-  return { code: result.exitCode, output: result.stdout.toString() + result.stderr.toString(), calls: existsSync(box.log) ? readFileSync(box.log, "utf8") : "" };
-}
+const { temp, engine, sandbox, profile, getSh } = getShHarness();
 
 describe("get.sh", () => {
   test("passes sh -n", () => {
@@ -136,7 +48,7 @@ describe("get.sh", () => {
   onLinuxHost("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {
     const box = sandbox("Darwin");
     const command = `printf 'piped script\\n' | sh ${join(repoRoot, "get.sh")} --ref v0.1.0 --profile ${profile()}`;
-    const env = { PATH: box.bin, HOME: box.home, SHELL: "/bin/sh", FLEET_ENGINE_REPO: engineRepo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    const env = { PATH: box.bin, HOME: box.home, SHELL: "/bin/sh", FLEET_ENGINE_REPO: engine.repo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
     const result = Bun.spawnSync([Bun.which("script") ?? "script", "-qec", command, "/dev/null"], { env, stdin: "ignore" });
     expect(result.exitCode).toBe(0);
     expect(readFileSync(box.log, "utf8")).toContain("brew installer stdin=tty");
@@ -211,48 +123,6 @@ describe("get.sh", () => {
     expect(result.code).toBe(1);
     expect(result.output).toContain("lockfile is out of date");
     expect(result.output).toContain("Fleet: could not install the engine's packages in " + join(box.home, ".local/share/fleet/engine") + ".");
-  });
-
-  test("puts fleet into ~/.local/bin, where it runs the engine even from a directory it cannot read", () => {
-    const box = sandbox("Linux");
-    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
-    const fleet = join(box.home, ".local/bin/fleet");
-    const unreadable = join(box.root, "unreadable");
-    mkdirSync(unreadable, { mode: 0o100 });
-    const result = Bun.spawnSync([fleet, "--help"], { cwd: unreadable, env: { PATH: box.bin, HOME: box.home } });
-    chmodSync(unreadable, 0o700);
-    expect(result.stderr.toString()).toBe("");
-    expect(result.stdout.toString()).toStartWith("Fleet: one setup for T3 Code, agents, and your workflows");
-    expect(result.exitCode).toBe(0);
-  });
-
-  test("on Linux adds the PATH line to ~/.profile once and keeps the lines already there", () => {
-    const box = sandbox("Linux");
-    writeFileSync(join(box.home, ".profile"), "umask 022\n");
-    const first = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
-    const second = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
-    expect(first.code).toBe(0);
-    expect(second.code).toBe(0);
-    expect(readFileSync(join(box.home, ".profile"), "utf8")).toBe('umask 022\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" # Added by Fleet\n');
-    expect(first.output).toContain("Fleet: Open a new terminal to use fleet. ~/.profile now puts ~/.local/bin and ~/.bun/bin on your PATH.");
-    expect(second.output).not.toContain("Open a new terminal");
-  });
-
-  test("on Linux uses ~/.bash_profile when it exists, because bash then skips ~/.profile", () => {
-    const box = sandbox("Linux");
-    writeFileSync(join(box.home, ".bash_profile"), ". ~/.bashrc\n");
-    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
-    expect(readFileSync(join(box.home, ".bash_profile"), "utf8")).toEndWith('export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" # Added by Fleet\n');
-    expect(existsSync(join(box.home, ".profile"))).toBe(false);
-  });
-
-  onLinuxHost("on macOS adds the PATH line, with Homebrew's bin, to ~/.zprofile once", () => {
-    const box = sandbox("Darwin");
-    box.stub("brew", "exit 0");
-    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
-    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
-    expect(readFileSync(join(box.home, ".zprofile"), "utf8")).toBe('export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:$PATH" # Added by Fleet\n');
-    expect(existsSync(join(box.home, ".profile"))).toBe(false);
   });
 
   test("a second run changes nothing", () => {

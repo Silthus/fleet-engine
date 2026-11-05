@@ -38,7 +38,7 @@ These tests stub `uname`, `xcode-select`, `curl`, `brew` and `sleep` in a sandbo
 - `has bun || brew install bun`
 - `[ -d "/Applications/T3 Code.app" ] || brew install --cask t3-code`
 
-Then, on both systems, `t3_cli` installs the `t3` command from `https://t3.codes/install.sh` with `T3CODE_CHANNEL=nightly`, unless `t3` is on `PATH`. `fetch_engine` fetches the engine at the pinned ref into `~/.local/share/fleet/engine`. `install_packages` runs `bun install --frozen-lockfile --production` there. `link_fleet` writes `~/.local/bin/fleet`, a two-line script that runs the engine's `fleet`. `login_path` adds one line, once, to `~/.zprofile`. The line puts `~/.local/bin`, `~/.bun/bin` and `/opt/homebrew/bin` on the login `PATH`, because zsh's default `PATH` has none of them. When it adds the line, `get.sh` says to open a new terminal. With no `--profile`, `get.sh` runs `fleet setup`. Under `curl | sh` it gives `fleet setup` the terminal through `/dev/tty`.
+Then, on both systems, `t3_cli` installs the `t3` command from `https://t3.codes/install.sh` with `T3CODE_CHANNEL=nightly`, unless `t3` is on `PATH`. `fetch_engine` fetches the engine at the pinned ref into `~/.local/share/fleet/engine`. `install_packages` runs `bun install --frozen-lockfile --production` there. `link_fleet` writes `~/.local/bin/fleet`, a short script that runs the engine's `fleet`. Its second line is `# Fleet`. When `~/.local/bin/fleet` exists without that line, `get.sh` leaves it as it is and says how to run the engine directly. `login_path` adds one line, once, to the login file of the shell in `$SHELL`. For zsh, the macOS default, and when `$SHELL` is not set, that file is `~/.zprofile`. The line puts `~/.local/bin`, `~/.bun/bin` and `/opt/homebrew/bin` on the login `PATH`, because zsh's default `PATH` has none of them. When it adds the line, `get.sh` says to open a new terminal. With no `--profile`, `get.sh` runs `fleet setup`. Under `curl | sh` it gives `fleet setup` the terminal through `/dev/tty`.
 
 **Code.** `get.sh`: `mac_tools`, `t3_cli`, `fetch_engine`, `install_packages`, `link_fleet`, `login_path`, the last `exec` lines.
 
@@ -50,8 +50,9 @@ Then, on both systems, `t3_cli` installs the `t3` command from `https://t3.codes
 - `src/get.test.ts › get.sh with an existing engine directory › refuses a directory that is not an engine, and an engine with local changes`
 - `src/get.test.ts › get.sh › a second run changes nothing`
 - `src/get.test.ts › get.sh › installs the engine's packages in the engine directory` (new)
-- `src/get.test.ts › get.sh › puts fleet into ~/.local/bin, where it runs the engine even from a directory it cannot read` (new)
-- `src/get.test.ts › get.sh › on macOS adds the PATH line, with Homebrew's bin, to ~/.zprofile once` (new)
+- `src/get-path.test.ts › fleet on the PATH › puts fleet into ~/.local/bin, where it runs the engine even from a directory it cannot read` (new)
+- `src/get-path.test.ts › fleet on the PATH › on macOS adds the PATH line, with Homebrew's bin, to ~/.zprofile once` (new)
+- `src/get-path.test.ts › fleet on the PATH › replaces its own fleet in ~/.local/bin and leaves another fleet there alone` (new)
 
 **Agent can run.** Yes, with stubs. The skip for an existing `/Applications/T3 Code.app` has no test: the path is absolute, and a test cannot make it.
 
