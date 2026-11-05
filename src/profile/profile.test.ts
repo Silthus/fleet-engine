@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PackManifest, ProfileFile } from "../pack/types.ts";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
-import { activeChoices, loadMachine, loadProfile, ProfileError, saveAnswers, saveMachine, workflowOverrides } from "./profile.ts";
+import { activeChoices, loadMachine, loadProfile, ProfileError, saveAnswers, saveMachine, thisMachine, workflowOverrides } from "./profile.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -137,6 +137,14 @@ describe("machine file", () => {
     expect(await loadMachine(home)).toBeUndefined();
     await saveMachine(home, { schema: 1, role: "mac", setup: { done: ["github", "packs"], draft: { packs: ["orchestration"], plan: "claude" } } });
     expect(await loadMachine(home)).toEqual({ schema: 1, role: "mac", setup: { done: ["github", "packs"], draft: { packs: ["orchestration"], plan: "claude" } } });
+  });
+
+  test("a new Mac is a mac and never a Coder devbox, even with Coder's variables set", () => {
+    const coder = { CODER_AGENT_URL: "https://coder.example", CODER: "true" };
+    expect(thisMachine(undefined, "darwin", {})).toEqual({ schema: 1, role: "mac" });
+    expect(thisMachine(undefined, "darwin", coder)).toEqual({ schema: 1, role: "mac" });
+    expect(thisMachine({ schema: 1, role: "mac", profileDir: "/Users/octo/fleet-profile" }, "darwin", coder)).toEqual({ schema: 1, role: "mac", profileDir: "/Users/octo/fleet-profile" });
+    expect(thisMachine(undefined, "linux", coder)).toEqual({ schema: 1, role: "devbox", coder: true });
   });
 
   test("rejects a schema it does not know", async () => {
