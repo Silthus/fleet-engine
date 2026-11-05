@@ -30,6 +30,21 @@ test("through fleet, sweep refuses on a machine that is not the hub, and fleet h
   expect(status).toEqual({ stdout: "This machine's role: hub\nhub.alias: my-hub\n", stderr: "", code: 0 });
 });
 
+test("through fleet, dream refuses without the Memory pack, and dream digest prints this machine's sessions without their tokens", async () => {
+  const home = await hubProfile();
+  const refused = await runFleet(["dream", "budget"], { HOME: home });
+  expect(refused).toMatchObject({ code: 1, stderr: "Dream needs the Memory pack: turn it on, then run fleet apply\n" });
+  const token = `ghp_${"a1".repeat(18)}`;
+  const project = join(home, ".claude/projects/-dev-app");
+  mkdirSync(project, { recursive: true });
+  writeFileSync(join(project, "s-1.jsonl"), JSON.stringify({ type: "user", sessionId: "s-1", cwd: join(home, "dev/app"), timestamp: new Date().toISOString(), message: { role: "user", content: `Use this token: ${token}` } }));
+  const digest = await runFleet(["dream", "digest", "--since", "1d"], { HOME: home, XDG_STATE_HOME: join(home, ".local/state") });
+  expect(digest.code).toBe(0);
+  expect(digest.stdout).toContain("[redacted GitHub token]");
+  expect(digest.stdout).not.toContain(token);
+  expect(JSON.parse(digest.stdout).repo).toBe("app");
+});
+
 test("through fleet, disk-watch refuses off the hub, and disk-sweep checks its arguments", async () => {
   const home = await hubProfile();
   const watch = await runFleet(["disk-watch"], { HOME: home });
