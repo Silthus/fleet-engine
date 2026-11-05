@@ -1,11 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverT3Server, listLinkedEnvironments, listLinkedThreads, readLinkedThread, readT3Settings, readThreadWords, t3CliRunner, T3ToolError, withT3Session, type LinkedEnvironment, type T3Deadline } from "./index.ts";
-import { startT3Stub, ToolRefusal, type T3Stub } from "./testing.ts";
+import { startT3Stub, ToolRefusal, writeT3EventStore, type Resolution, type T3Stub } from "./testing.ts";
 
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
@@ -215,17 +214,8 @@ test("the stub publishes its server only once the server runs, so discovery alwa
   for (const t3 of started) expect(discoverT3Server(t3.home).cli.args).toEqual([join(t3.home, "t3-server.js")]);
 });
 
-function t3EventStore(resolutions: { thread: string; request: string; command: string | null }[]) {
-  const path = join(temporaryHome(), "statev2.sqlite");
-  const db = new Database(path);
-  db.run(`create table orchestration_events (sequence integer primary key autoincrement, aggregate_kind text not null, stream_id text not null,
-    event_type text not null, command_id text, payload_json text not null)`);
-  for (const { thread, request, command } of resolutions) {
-    db.run("insert into orchestration_events (aggregate_kind, stream_id, event_type, command_id, payload_json) values ('thread', ?, 'runtime-request.updated', null, ?)", [thread, JSON.stringify({ id: request, status: "pending" })]);
-    db.run("insert into orchestration_events (aggregate_kind, stream_id, event_type, command_id, payload_json) values ('thread', ?, 'runtime-request.updated', ?, ?)", [thread, command, JSON.stringify({ id: request, status: "resolved", answers: { "0": "yes" } })]);
-  }
-  db.close();
-  return path;
+function t3EventStore(resolutions: Resolution[]) {
+  return writeT3EventStore(join(temporaryHome(), "statev2.sqlite"), resolutions);
 }
 
 test("only the user's own messages and question answers in T3 count as their words", async () => {
