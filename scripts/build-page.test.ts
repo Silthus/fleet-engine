@@ -72,6 +72,7 @@ describe("the page build", () => {
     expect(hub.workflows.map((workflow) => workflow.id)).toEqual(["mcp-gateway", "disk-watch", "linked-hub", "slack-trigger"]);
     expect(hub.settings.map((setting) => setting.key).filter((key) => key.startsWith("hub.box"))).toEqual([]);
     expect(data.needPacks).toEqual({ hub: "hub" });
+    expect(await buildPage({ audience: "public" })).not.toMatch(/short-lived boxes|box · /);
   });
 
   test("the command line writes a build for a pack source to --out", async () => {
