@@ -189,12 +189,22 @@ test("trusted fetches the hub's root certificate over SSH and passes only when t
   const [ssh, security] = trusted.calls();
   expect(ssh).toStartWith("ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 my-hub bash -lc ");
   expect(ssh).toContain(`fleet/engine/fleet" hub-https ca`);
-  expect(security).toMatch(/^security verify-cert -l -L -c \S+$/);
+  expect(security).toMatch(/^security verify-cert -l -L -p ssl -c \S+$/);
   expect(readFileSync(join(trusted.bin, "checked.crt"), "utf8")).toBe(certificate);
   expect(existsSync(security!.split(" ").at(-1)!)).toBe(false);
   const present = trustSandbox({ trusted: false });
   expect(present.probe().exitCode).toBe(1);
   expect(present.calls()[1]).toStartWith("security verify-cert ");
+});
+
+test("trusted gives the SSH call and the keychain check a time limit", async () => {
+  const home = roleHome(temp.make("fleet-https-"), "mac");
+  const limits: Array<[string, number | undefined]> = [];
+  const answer = `Hub HTTPS root certificate: /x/root.crt\n${certificate}`;
+  const { deps } = hub({ home, run: async (command, options) => (limits.push([command[0]!, options?.timeoutMs]), { code: 0, stdout: command[0] === "ssh" ? answer : "", stderr: "" }) });
+  expect(await hubHttps("trusted", deps)).toBe(0);
+  expect(limits.map(([name]) => name)).toEqual(["ssh", "security"]);
+  for (const [, limit] of limits) expect(limit).toBeGreaterThan(0);
 });
 
 test("trusted fails without asking the keychain when the hub gives no certificate, or one that holds a key", () => {

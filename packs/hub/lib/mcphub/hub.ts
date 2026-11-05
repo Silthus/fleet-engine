@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { gatewayGroup, isGatewayUrl, localGatewayUrl, refuseLinks, saveGatewayClient, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
-export type Run = (command: string[], options?: { cwd?: string; input?: string }) => Promise<RunResult>;
+export type Run = (command: string[], options?: { cwd?: string; input?: string; timeoutMs?: number }) => Promise<RunResult>;
 
 export type Hub = {
   home: string;

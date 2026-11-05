@@ -2,11 +2,24 @@ import type { Run } from "./mcphub/hub.ts";
 
 const runtimeDir = () => Bun.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}`;
 
+export const timedOut = 124;
+
 export const run: Run = async (command, options = {}) => {
-  const child = Bun.spawn(command, { cwd: options.cwd, env: { ...Bun.env, XDG_RUNTIME_DIR: runtimeDir() }, stdin: options.input === undefined ? "ignore" : new TextEncoder().encode(options.input), stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { code, stdout, stderr };
+  const limited = options.timeoutMs !== undefined;
+  const child = Bun.spawn(command, { cwd: options.cwd, env: { ...Bun.env, XDG_RUNTIME_DIR: runtimeDir() }, stdin: options.input === undefined ? "ignore" : new TextEncoder().encode(options.input), stdout: "pipe", stderr: "pipe", detached: limited });
+  let expired = false;
+  const timer = limited ? setTimeout(() => { expired = true; killGroup(child.pid); }, options.timeoutMs) : undefined;
+  try {
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    return expired ? { code: timedOut, stdout, stderr: `${stderr}timed out after ${options.timeoutMs} ms\n` } : { code, stdout, stderr };
+  } finally {
+    clearTimeout(timer);
+  }
 };
+
+function killGroup(pid: number): void {
+  try { process.kill(-pid, "SIGKILL"); } catch { }
+}
 
 export async function must(run: Run, command: string[], input?: string): Promise<string> {
   const result = await run(command, input === undefined ? {} : { input });

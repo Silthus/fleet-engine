@@ -49,6 +49,29 @@ test("a peer link forwards the peer's T3 over the person's own SSH config, pairs
   expect(calls.join("\n")).not.toContain("coder");
 });
 
+test("linking a peer that already has a working link renews it in place, and keeps its record and forward when the pairing fails", async () => {
+  const home = temp.make("fleet-peers-");
+  const record = join(home, ".config/fleet/peer-links/devbox-2.json");
+  writeHome(home, { ".config/fleet/peer-links/devbox-2.json": JSON.stringify({ environmentId: "env-peer-2", port: 22000 }) });
+  const listed = JSON.stringify([{ environmentId: "env-peer-2", label: "Second devbox", urls: ["http://127.0.0.1:22000"], status: "reachable", expiresAt: "2026-12-30T00:00:00Z" }]);
+  const failing = fakeMachine(home, {
+    onPeer: () => ({ ...ok, stdout: "pairing-code\n" }),
+    run: (argv) => (failing.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: listed } : ok),
+    linkEnvironment: async () => { throw new Error("T3 is busy"); },
+  });
+  expect(await linkPeers(failing.machine, ["devbox-2"])).toBe(1);
+  expect(failing.calls.some((call) => /environment unlink|systemctl --user stop|systemd-run/.test(call))).toBe(false);
+  expect(JSON.parse(readFileSync(record, "utf8"))).toEqual({ environmentId: "env-peer-2", port: 22000 });
+  const working = fakeMachine(home, {
+    onPeer: () => ({ ...ok, stdout: "pairing-code\n" }),
+    run: (argv) => (working.calls.push(`run ${argv.join(" ")}`), argv[2] === "list" ? { ...ok, stdout: listed } : ok),
+  });
+  expect(await linkPeers(working.machine, ["devbox-2"])).toBe(0);
+  expect(working.calls).toContain("link http://127.0.0.1:22000 with full-access access");
+  expect(working.calls.some((call) => /environment unlink|systemctl --user stop|systemd-run/.test(call))).toBe(false);
+  expect(JSON.parse(readFileSync(record, "utf8"))).toEqual({ environmentId: "env-peer-2", port: 22000 });
+});
+
 test("linking a name that is not a peer refuses before it links anything", async () => {
   const { machine, calls } = fakeMachine(temp.make("fleet-peers-"));
   await expect(linkPeers(machine, ["devbox-2", "box-9"])).rejects.toThrow("Not a peer of devbox-1: box-9");

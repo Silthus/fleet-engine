@@ -135,15 +135,17 @@ async function printAuthority(hub: HttpsHub): Promise<number> {
   return 0;
 }
 
+const trustProbeLimitMs = 60_000;
+
 async function trusted(hub: HttpsHub): Promise<number> {
-  const answer = await hub.run(peerSsh(hub.alias, remoteFleet("hub-https ca")));
+  const answer = await hub.run(peerSsh(hub.alias, remoteFleet("hub-https ca")), { timeoutMs: trustProbeLimitMs });
   const certificate = answer.code === 0 ? answer.stdout.split("\n").filter((line) => !line.startsWith(caHeading)).join("\n").trim() + "\n" : "";
   if (!certificatePattern.test(certificate)) return hub.print(`${hub.alias} gave no public root certificate: ${(answer.stderr || answer.stdout).trim()}`), 1;
   const folder = await mkdtemp(join(tmpdir(), "fleet-hub-ca-"));
   try {
     const path = join(folder, "hub-ca.crt");
     await writePrivateFile(path, certificate);
-    return (await hub.run(["security", "verify-cert", "-l", "-L", "-c", path])).code === 0 ? 0 : 1;
+    return (await hub.run(["security", "verify-cert", "-l", "-L", "-p", "ssl", "-c", path], { timeoutMs: trustProbeLimitMs })).code === 0 ? 0 : 1;
   } finally {
     await rm(folder, { recursive: true, force: true });
   }

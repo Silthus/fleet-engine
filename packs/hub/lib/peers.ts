@@ -30,9 +30,12 @@ export async function unlinkPeer(here: PeerHere, alias: string): Promise<boolean
   return forget(here, recordOf(here, alias), peerUnitOf(alias));
 }
 
-async function linkPeer(here: PeerHere, alias: string): Promise<string> {
+async function linkPeer(here: PeerHere, alias: string): Promise<void> {
+  const recorded = readRecord(recordOf(here, alias));
+  const urls = recorded ? (linkFor(alias, linksHere(here), recorded.environmentId)?.urls ?? []) : [];
+  if (urls.length) return relink(here, alias, urls);
   if (!(await unlinkPeer(here, alias))) throw new Error(`Unlink the earlier link to ${alias} first.`);
-  return pairPeer(here, alias);
+  await pairPeer(here, alias);
 }
 
 function pairPeer(here: PeerHere, alias: string): Promise<string> {
