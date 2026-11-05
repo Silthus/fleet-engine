@@ -30,6 +30,7 @@ function plan(config: Array<ConfigEntry & { pack?: string }> = []): Plan {
     steps: [],
     checks: [],
     commands: {},
+    handlers: {},
     settings: {},
     unanswered: [],
     ask: [],

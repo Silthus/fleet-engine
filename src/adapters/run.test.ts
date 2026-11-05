@@ -103,6 +103,7 @@ function plan(): Plan {
     steps: [],
     checks: [],
     commands: {},
+    handlers: {},
     settings: {},
     unanswered: [],
     ask: [],

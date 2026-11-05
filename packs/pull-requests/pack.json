@@ -92,6 +92,20 @@
       "ask": "never"
     },
     {
+      "key": "pull-requests.reviewFallback",
+      "question": "What should fleet pr review tell an agent to do when no pack provides a review bot? {repo} and {pr} stand for the pull request.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "pull-requests.stampFallback",
+      "question": "What should fleet pr stamp tell an agent to do when no pack provides a review bot? {repo} and {pr} stand for the pull request.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
       "key": "pull-requests.approvalBot",
       "question": "Which bot or reviewer should approve a pull request when you say \"stamp it\"?",
       "type": "string",

@@ -59,6 +59,7 @@ function plan(os: "darwin" | "linux", config: Array<Owned<ConfigEntry>>, jobs: A
     steps: [],
     checks: [],
     commands: {},
+    handlers: {},
     settings: {},
     unanswered: [],
     ask: [],

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import type {
   AvailableSource,
@@ -51,6 +51,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
     steps: [],
     checks: [],
     commands: {},
+    handlers: {},
     models: modelTable(order, profile),
     settings: {},
     unanswered: [],
@@ -79,6 +80,14 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
     for (const step of manifest.human ?? []) if (fits(pack, step, `human ${step.id}`)) plan.human.push({ ...step, pack });
     for (const step of manifest.steps ?? []) if (fits(pack, step, `step ${step.id}`)) plan.steps.push({ ...step, pack });
     for (const check of manifest.checks ?? []) if (fits(pack, check, `check ${check.id}`)) plan.checks.push({ ...check, pack });
+    for (const handler of manifest.handlers ?? []) {
+      if (!fits(pack, handler, `handler ${handler.seam}`)) continue;
+      const other = plan.handlers[handler.seam];
+      if (other) throw new ResolveError(`the ${handler.seam} handler is declared by both ${other.pack} and ${pack}`);
+      const path = within(dir, handler.path, pack);
+      if (!existsSync(path) || !statSync(path).isFile()) throw new ResolveError(`${pack}: the ${handler.seam} handler ${handler.path} is not a file`);
+      plan.handlers[handler.seam] = { pack, path };
+    }
     for (const script of manifest.t3ProjectScripts ?? []) {
       if (!fits(pack, script, `t3 project script ${script.id}`)) continue;
       const twin = plan.t3ProjectScripts?.find((item) => `${item.pack}-${item.id}` === `${pack}-${script.id}`);
