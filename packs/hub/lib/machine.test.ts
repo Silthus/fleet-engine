@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { hubCommand, markHub, peersOf, readBoxSettings, readRole, requireHub } from "./machine.ts";
+import { hubCommand, markHub, peersOf, readBoxSettings, readRole, requireHub, thisMachine } from "./machine.ts";
 import { boxSettings } from "./testing.ts";
 
 const temp = tempDirs();
@@ -54,4 +54,15 @@ test("fleet hub status prints this machine's role and the hub.alias setting", as
 test("a hub-only command refuses on a machine that is not the hub and says how to fix it", () => {
   expect(() => requireHub(homeWithMachine({ schema: 1, role: "devbox" }), "sweep")).toThrow("fleet box sweep runs only on the hub. This machine's role is devbox. Run fleet hub here on the hub");
   expect(() => requireHub(homeWithMachine({ schema: 1, role: "hub" }), "sweep")).not.toThrow();
+});
+
+test("peers and nightly grants cover the devboxes in the profile and those fleet devbox add saved in machine.json, once each", () => {
+  const home = homeWithMachine({ schema: 1, role: "hub", devboxes: ["devbox-3", "devbox-2"] });
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ devboxes: ["devbox-2"] }));
+  const machine = thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings), FLEET_PROFILE_DIR: profile }, home);
+  expect(machine.devboxes).toEqual(["devbox-2", "devbox-3"]);
+  expect(machine.peers).toEqual(["my-hub", "devbox-2", "devbox-3"]);
+  const withoutProfile = thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings) }, home);
+  expect(withoutProfile.devboxes).toEqual(["devbox-3", "devbox-2"]);
 });

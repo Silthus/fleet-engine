@@ -44,6 +44,13 @@ export function fakeMachine(home: string, fields: Partial<Machine> = {}) {
   return { machine, calls, lines };
 }
 
+export const box = (name: string, status = "running", fields: { id?: string; template?: string; lastUsedAt?: string } = {}) =>
+  ({ name, id: `ws-${name}`, template: "linux-box", status, lastUsedAt: "2026-10-28T07:00:00Z", ...fields });
+
+export function writePool(home: string, pool: { free?: string[]; refreshing?: string[]; boxes: Record<string, { id: string; claim?: string; holding?: string }> }) {
+  writeHome(home, { ".config/fleet/box-pool.json": JSON.stringify({ free: [], refreshing: [], ...pool }) });
+}
+
 export type SshCall = { box: string; command: string; stdin?: string };
 
 export function fakeCoder(fields: Partial<CommandCoder> = {}) {
@@ -53,7 +60,7 @@ export function fakeCoder(fields: Partial<CommandCoder> = {}) {
     binary: "coder",
     env: {},
     token: () => "[]",
-    boxes: () => [{ name: "box-lane", status: "running", lastUsedAt: "2026-10-28T07:00:00Z" }],
+    boxes: () => [box("box-lane")],
     ssh: (box, command, stdin) => {
       calls.push({ box, command, ...(stdin === undefined ? {} : { stdin }) });
       return ok;
@@ -67,7 +74,7 @@ export function fakeCoder(fields: Partial<CommandCoder> = {}) {
     stop: (box) => void done.push(`stop ${box}`),
     extend: (box, duration) => void done.push(`extend ${box} ${duration}`),
     start: async (box) => void done.push(`start ${box}`),
-    create: async (box, from, disk) => void done.push(`create ${box} from ${from} with ${disk} GB`),
+    create: async (name, from, disk) => (done.push(`create ${name} from ${from} with ${disk} GB`), `ws-${name}`),
     run: () => 0,
     ...fields,
   };

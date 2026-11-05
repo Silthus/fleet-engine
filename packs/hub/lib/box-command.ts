@@ -1,7 +1,7 @@
 import { boxPrefix, grant, reap, type Coder } from "./coder.ts";
 import { link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
 import { quote, requireHub, type Machine } from "./machine.ts";
-import { idle, list, nightly, nightlySteps, poolOn, refreshPool, release, saveToken, spawn, startBox, sweep, threads, type BoxHooks } from "./box.ts";
+import { idle, list, nightly, nightlySteps, ownership, poolAt, poolOn, refreshPool, release, saveToken, spawn, startBox, sweep, threads, type BoxHooks } from "./box.ts";
 import * as registry from "./pool.ts";
 
 export type CommandCoder = BoxCoder & Pick<Coder, "env" | "token">;
@@ -27,14 +27,18 @@ const usage = `Usage: fleet box spawn [<name>] [--new]
        fleet box sweep             Stop idle boxes and keep busy ones up (hub, every 15 minutes)
        fleet box reap [--days <n>] [--dry-run]
                                    Delete boxes stopped for n days, hub.boxReapDays by default (hub)
-       fleet box pool [list | claim | give <box> | drop <box> | refresh]
+       fleet box pool [list | refresh]
                                    The hub's pool of stopped boxes; refresh starts, cleans, warms and stops
-                                   each free box (hub)
+                                   each free box. Spawn, start and release use its other subcommands over
+                                   SSH: claim, own, reserve, hold, unhold, give and drop (hub)
        fleet box grant <devbox> [--if-expiring]
                                    Mint a Coder token on the hub and give it to a devbox (hub)
        fleet box nightly           Reap, grant each devbox a token that expires soon, and refresh the pool (hub, nightly)`;
 
 const hubOnly = ["sweep", "reap", "pool", "grant", "nightly"];
+const poolArity: Record<string, [number, number]> = { list: [0, 0], claim: [0, 0], refresh: [0, 0], own: [2, 2], reserve: [1, 1], hold: [2, 3], unhold: [2, 2], give: [2, 2], drop: [1, 1] };
+const reserveCodes = { reserved: 0, held: 3, busy: 4 };
+const holdCodes = { held: 0, stale: 3, unowned: 4 };
 const option = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
 
 function valid(args: string[]): boolean {
@@ -55,26 +59,44 @@ function valid(args: string[]): boolean {
     case "reap":
       return args.slice(1).every((arg, index, all) => arg === "--dry-run" || (arg === "--days" && /^\d+$/.test(all[index + 1] ?? "")) || all[index - 1] === "--days");
     case "pool": {
-      const named = name === "give" || name === "drop";
-      return [undefined, "list", "claim", "give", "drop", "refresh"].includes(name) && rest.length === (named ? 1 : 0) && (!named || rest[0]!.startsWith(boxPrefix));
+      if (name === undefined) return true;
+      if (!Object.hasOwn(poolArity, name)) return false;
+      const [least, most] = poolArity[name]!;
+      return rest.length >= least && rest.length <= most && rest.every((arg, index) => (index === 0 ? /^box-[a-z0-9][a-z0-9-]*$/ : /^[\w-]*$/).test(arg));
     }
     default:
       return false;
   }
 }
 
-async function poolCommand(coder: () => CommandCoder, here: Machine, command = "list", box?: string): Promise<number> {
+async function poolCommand(coder: () => CommandCoder, here: Machine, [verb = "list", box = "", value = "", claim]: string[]): Promise<number> {
   const file = registry.poolFile(here.home);
-  if (command === "claim") {
-    const claimed = await registry.claim(file);
-    if (claimed) here.print(claimed);
-    return claimed ? 0 : 3;
+  const pool = poolAt(file, here.settings.poolSize);
+  switch (verb) {
+    case "own": return here.print(await pool.own(box, value)), 0;
+    case "claim": {
+      const claimed = await pool.claim();
+      if (claimed) here.print(`${claimed.box} ${claimed.id} ${claimed.claim}`);
+      return claimed ? 0 : 3;
+    }
+    case "reserve": {
+      const reserved = await pool.reserve(box);
+      if (reserved.state === "reserved") here.print(reserved.claim);
+      return reserveCodes[reserved.state];
+    }
+    case "hold": {
+      const held = await pool.hold(box, value, claim);
+      if (held.state === "held") here.print(held.token);
+      return holdCodes[held.state];
+    }
+    case "unhold": return await pool.unhold(box, value), 0;
+    case "give": return (await pool.give(box, value)) ? 0 : 3;
+    case "drop": return await pool.drop(box), 0;
+    case "refresh": return refreshPool(coder(), here);
+    default:
+      for (const name of registry.pooled(file)) here.print(name);
+      return 0;
   }
-  if (command === "give") return (await registry.give(file, box!, here.settings.poolSize)) ? 0 : 3;
-  if (command === "drop") return await registry.drop(file, box!), 0;
-  if (command === "refresh") return refreshPool(coder(), here);
-  for (const name of registry.pooled(file)) here.print(name);
-  return 0;
 }
 
 export async function boxCommand(args: string[], deps: BoxDeps): Promise<number> {
@@ -87,7 +109,8 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
   const grantTo = (devbox: string, ifExpiring: boolean) => grant(coder(), devbox, { ifExpiring, now: here.now(), onDevbox: here.onPeer, print: here.print });
   const reapNow = (days: number, dryRun: boolean) => {
     const pooled = new Set(registry.pooled(registry.poolFile(here.home)));
-    const unpooled = { boxes: () => coder().boxes().filter((box) => !pooled.has(box.name)) };
+    for (const box of ownership(coder().boxes(), here).skipped) here.print(`${box.name}: skipped, not a box this pool made`);
+    const unpooled = { boxes: () => ownership(coder().boxes(), here).owned.filter((box) => !pooled.has(box.name)) };
     return reap(unpooled, { days, dryRun, now: here.now(), print: here.print }, (box, stillStale) => release(coder(), here, box, { force: true, stillDoomed: stillStale, pool: poolOn(here), hooks: deps.hooks }));
   };
   switch (command) {
@@ -98,16 +121,16 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
     case "unlink": return unlink(here, name!) ? 0 : 1;
     case "list": return list(coder(), here);
     case "sweep": return sweep(coder(), here, deps.hooks);
-    case "pool": return poolCommand(coder, here, name, rest[0]);
+    case "pool": return poolCommand(coder, here, args.slice(1));
     case "grant": return grantTo(name!, rest.includes("--if-expiring"));
     case "reap": return reapNow(Number(option(args, "--days") ?? here.settings.reapDays), args.includes("--dry-run"));
     case "nightly": return nightly(nightlySteps(here, { reap: () => reapNow(here.settings.reapDays, false), grant: (devbox) => grantTo(devbox, true), refresh: () => refreshPool(coder(), here) }), here);
     case "run": return coder().run(name!, `bash -lc ${quote(rest.slice(1).join(" "))}`);
     case "link": return await link(coder(), here, name!), 0;
-    case "start": return startBox(coder(), here, name!);
+    case "start": return startBox(coder(), here, name!, poolOn(here));
     case "spawn": {
       const label = name === "--new" ? undefined : name;
-      return spawn(coder(), here, label, args.includes("--new") ? undefined : poolOn(here));
+      return spawn(coder(), here, label, poolOn(here), !args.includes("--new"));
     }
     default: return release(coder(), here, name!, { force: rest.includes("--force"), recycle: !rest.includes("--delete"), pool: poolOn(here), hooks: deps.hooks });
   }

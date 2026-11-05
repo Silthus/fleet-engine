@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { Coder, grant, reap, type Box, type Capture } from "./coder.ts";
+import { capture as realCapture, Coder, grant, reap, type Box, type Capture } from "./coder.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -60,7 +60,7 @@ test("a new box starts from the hub.boxTemplate template with the spawning devbo
     "/api/v2/templateversions/v-1/rich-parameters": [{ name: "region" }, { name: "disk_size" }],
     "/api/v2/users/me/workspace/devbox-1": { id: "ws-1", latest_build: { id: "build-1" } },
     "/api/v2/workspacebuilds/build-1/parameters": [{ name: "region", value: "eu" }, { name: "dropped", value: "x" }, { name: "disk_size", value: "50" }],
-    "/api/v2/users/me/workspaces": {},
+    "/api/v2/users/me/workspaces": { id: "ws-new" },
   };
   const fetcher = (async (url: string, init?: RequestInit) => {
     const path = url.replace("https://coder.example.com", "");
@@ -68,7 +68,7 @@ test("a new box starts from the hub.boxTemplate template with the spawning devbo
     return Response.json(answers[path]);
   }) as unknown as typeof fetch;
   const coder = new Coder({ ...settings, home: homeWith({}), env: { CODER_SESSION_TOKEN: "t" }, fetch: fetcher });
-  await coder.create("box-lane", "devbox-1", 120);
+  expect(await coder.create("box-lane", "devbox-1", 120)).toBe("ws-new");
   expect(requests.at(-1)).toEqual({
     path: "/api/v2/users/me/workspaces",
     body: { name: "box-lane", template_id: "tpl-1", rich_parameter_values: [{ name: "region", value: "eu" }, { name: "disk_size", value: "120" }], ttl_ms: 2 * 3_600_000 },
@@ -78,7 +78,7 @@ test("a new box starts from the hub.boxTemplate template with the spawning devbo
 test("the reaper deletes only boxes that stopped, failed, or were cancelled and went unused for the given days, and rechecks each before it deletes", async () => {
   const now = Date.parse("2026-11-01T00:00:00Z");
   const daysAgo = (days: number) => new Date(now - days * 86_400_000).toISOString();
-  const box = (name: string, status: string, lastUsedAt: string): Box => ({ name, status, lastUsedAt });
+  const box = (name: string, status: string, lastUsedAt: string): Box => ({ name, id: `ws-${name}`, template: "linux-box", status, lastUsedAt });
   const listed = [box("box-old", "stopped", daysAgo(4)), box("box-busy", "running", daysAgo(4)), box("box-recent", "stopped", daysAgo(1)), box("box-woke", "stopped", daysAgo(4)), box("box-failed", "failed", daysAgo(4)), box("box-canceled", "canceled", daysAgo(4))];
   const current = listed.map((entry) => (entry.name === "box-woke" ? { ...entry, status: "starting" } : entry));
   const removed: string[] = [];
@@ -86,6 +86,7 @@ test("the reaper deletes only boxes that stopped, failed, or were cancelled and 
   const coder = { boxes: () => (reads++ === 0 ? listed : current) };
   const remove = async (name: string) => {
     removed.push(name);
+    return 0;
   };
   const print = () => {};
   await reap(coder, { days: 3, dryRun: true, now, print }, remove);
@@ -124,4 +125,46 @@ test("a grant with --if-expiring keeps a token that lasts more than a week", () 
   const lines: string[] = [];
   expect(grant(coder, "devbox-1", { ifExpiring: true, now, onDevbox, print: (line) => lines.push(line) })).toBe(0);
   expect(lines).toEqual(["fleet-devbox-1-202610010000-abcd: still valid until 2026-11-20T00:00:00Z"]);
+});
+
+test("the reaper goes on after a failed delete and fails at the end, so the nightly job does not report success", async () => {
+  const now = Date.parse("2026-11-01T00:00:00Z");
+  const old = new Date(now - 4 * 86_400_000).toISOString();
+  const listed: Box[] = ["box-a", "box-b", "box-c"].map((name) => ({ name, id: `ws-${name}`, template: "linux-box", status: "stopped", lastUsedAt: old }));
+  const tried: string[] = [];
+  const remove = async (name: string) => {
+    tried.push(name);
+    if (name === "box-b") throw new Error("coder delete failed");
+    return name === "box-a" ? 1 : 0;
+  };
+  const lines: string[] = [];
+  expect(await reap({ boxes: () => listed }, { days: 3, dryRun: false, now, print: (line) => lines.push(line) }, remove)).toBe(1);
+  expect(tried).toEqual(["box-a", "box-b", "box-c"]);
+  expect(lines).toContain("box-b: coder delete failed");
+  expect(await reap({ boxes: () => listed }, { days: 3, dryRun: false, now, print: () => {} }, async () => 0)).toBe(0);
+});
+
+test("a command with a time limit is killed when it hangs, and reports the timeout", () => {
+  const bin = temp.make("fleet-bin-");
+  writeFileSync(join(bin, "hang"), "#!/bin/sh\nexec sleep 30\n");
+  chmodSync(join(bin, "hang"), 0o755);
+  const began = Date.now();
+  const result = realCapture([join(bin, "hang")], { timeoutMs: 20 });
+  expect(Date.now() - began).toBeLessThan(2000);
+  expect(result.code).toBe(124);
+  expect(result.stderr).toContain("timed out");
+});
+
+test("the readiness calls pass their time limit down to the coder process", () => {
+  const limits: Array<number | undefined> = [];
+  const capture: Capture = (argv, options) => {
+    limits.push(options?.timeoutMs);
+    return { ...ok, stdout: argv.includes("list") ? "[]" : "" };
+  };
+  const coder = new Coder({ ...settings, home: homeWith({}), env: { PATH: "/nowhere", CODER_SESSION_TOKEN: "t" }, capture });
+  Object.defineProperty(coder, "binary", { value: "coder" });
+  coder.sshAfterStartup("box-lane", "true", 4000);
+  coder.ssh("box-lane", "test -f x", undefined, 3000);
+  coder.boxes(2000);
+  expect(limits).toEqual([4000, 3000, 2000]);
 });

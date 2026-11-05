@@ -23,7 +23,7 @@ export type Machine = Clock & {
   onPeer(alias: string, command: string, stdin?: string): Result;
   run(argv: string[], stdin?: string): Result;
   freePort(): number;
-  environmentId(url: string): Promise<string | undefined>;
+  environmentId(url: string, timeoutMs: number): Promise<string | undefined>;
   print(line: string): void;
   say(line: string): void;
 };
@@ -108,23 +108,29 @@ function freePort(): number {
   return port;
 }
 
-async function environmentId(url: string): Promise<string | undefined> {
-  const response = await fetch(`${url}/.well-known/t3/environment`).catch(() => null);
-  return response?.ok ? ((await response.json()) as { environmentId: string }).environmentId : undefined;
+async function environmentId(url: string, timeoutMs: number): Promise<string | undefined> {
+  const signal = AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)));
+  const response = await fetch(`${url}/.well-known/t3/environment`, { signal }).catch(() => null);
+  return response?.ok ? (((await response.json().catch(() => ({}))) as { environmentId?: string }).environmentId) : undefined;
 }
 
-export function thisMachine(env: Env = Bun.env): Machine {
-  const home = homedir();
+function savedDevboxes(home: string): string[] {
+  const saved = readMachineFile(home)?.devboxes;
+  return Array.isArray(saved) ? saved.filter((host): host is string => typeof host === "string") : [];
+}
+
+export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
   const settings = readBoxSettings(env);
   const profile = readProfile(env);
+  const devboxes = [...new Set([...profile.devboxes, ...savedDevboxes(home)])];
   const self = hostname();
   return {
     home,
     self,
     workspace: env.CODER_WORKSPACE_NAME ?? self,
     isHub: readRole(home) === "hub",
-    peers: peersOf(settings.alias, profile.devboxes, self),
-    devboxes: profile.devboxes,
+    peers: peersOf(settings.alias, devboxes, self),
+    devboxes,
     codex: profile.plan === "codex" || profile.plan === "both",
     settings,
     onPeer: (alias, command, stdin) => capture(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`], stdin === undefined ? {} : { stdin }),

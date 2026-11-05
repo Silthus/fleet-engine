@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { boxNameFor, handOver, link, restoreForwards, unlink } from "./links.ts";
+import { boxNameFor, handOver, link, restoreForwards, startUnit, unlink } from "./links.ts";
 import { fakeCoder, fakeMachine, linkedHere, ok, writeHome } from "./testing.ts";
 
 const temp = tempDirs();
@@ -97,20 +97,39 @@ test("restore starts the dead forwards of recorded box links on their recorded p
       return ok;
     },
   });
-  expect(restoreForwards({ binary: "coder" }, machine)).toBe(0);
+  expect(restoreForwards({ binary: "coder", env: { CODER_SESSION_TOKEN: "secret" } }, machine)).toBe(0);
   expect(started).toHaveLength(2);
   expect(started[0]).toStartWith("--unit=fleet-box-box-lane-t3 ");
   expect(started[0]).toContain("'port-forward' '--disable-autostart' 'box-lane' '--tcp' '21000:3773'");
-  expect(started[0]).toContain('CODER_SESSION_TOKEN="$(cat ~/.config/coderv2/session)"');
+  expect(started[0]).toContain(`. '${join(home, ".config/fleet/box-coder.env")}' && export CODER_SESSION_TOKEN CODER_URL && exec`);
+  expect(started.join("\n")).not.toContain("secret");
   expect(started[1]).toStartWith("--unit=fleet-box-box-other-t3 ");
 });
 
 test("restore does nothing when every recorded forward runs, or when there is no link", () => {
   const home = temp.make("fleet-box-");
   const { machine, calls } = fakeMachine(home, { run: (argv) => (calls.push(argv.join(" ")), ok) });
-  expect(restoreForwards({ get binary(): string { throw new Error("no coder needed"); } }, machine)).toBe(0);
+  expect(restoreForwards({ get binary(): string { throw new Error("no coder needed"); }, env: {} }, machine)).toBe(0);
   expect(calls).toEqual([]);
   writeHome(home, { ".config/fleet/boxes/box-lane.json": JSON.stringify({ environmentId: "env-1", port: 21000 }) });
-  expect(restoreForwards({ get binary(): string { throw new Error("no coder needed"); } }, machine)).toBe(0);
+  expect(restoreForwards({ get binary(): string { throw new Error("no coder needed"); }, env: {} }, machine)).toBe(0);
   expect(calls).toEqual(["systemctl --user is-active --quiet fleet-box-box-lane-t3.service"]);
+});
+
+test("a forward service gets the Coder session the commands resolved, from the environment too, through a private file and never its command line", () => {
+  const home = temp.make("fleet-box-");
+  const bin = temp.make("fleet-bin-");
+  const seen = join(bin, "seen");
+  writeFileSync(join(bin, "coder"), `#!/bin/sh\nprintf '%s %s' "$CODER_SESSION_TOKEN" "$CODER_URL" > "${seen}"\n`);
+  chmodSync(join(bin, "coder"), 0o755);
+  const started: string[][] = [];
+  const { machine } = fakeMachine(home, { run: (argv) => (started.push(argv), ok) });
+  const coder = { binary: join(bin, "coder"), env: { CODER_SESSION_TOKEN: "env-secret", CODER_URL: "https://env.example.com" } };
+  startUnit(coder, machine, "fleet-box-box-lane-t3", ["port-forward", "box-lane"]);
+  const service = started.find((argv) => argv[0] === "systemd-run")!;
+  expect(service.join(" ")).not.toContain("env-secret");
+  expect(statSync(join(home, ".config/fleet/box-coder.env")).mode & 0o777).toBe(0o600);
+  const ran = Bun.spawnSync([...service.slice(service.indexOf("sh"))], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  expect(ran.exitCode).toBe(0);
+  expect(readFileSync(seen, "utf8")).toBe("env-secret https://env.example.com");
 });

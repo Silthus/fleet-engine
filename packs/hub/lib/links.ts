@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { boxPrefix, slugFor, type Coder } from "./coder.ts";
 import { quote, type Machine } from "./machine.ts";
 
-export type BoxCoder = Pick<Coder, "binary" | "boxes" | "ssh" | "sshLater" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
+export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshLater" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
 type Link = { environmentId: string; port: number };
 
 export const t3Port = 3773;
@@ -42,10 +42,19 @@ export function handOver(coder: Pick<Coder, "ssh">, here: Machine, box: string):
   if (login.code !== 0) throw new Error(`Cannot log in the GitHub CLI on ${box}: ${login.stderr.trim()}`);
 }
 
-export function startUnit(coder: Pick<Coder, "binary">, here: Machine, unit: string, args: string[]): void {
+function writeSession(here: Machine, env: Coder["env"]): string {
+  const path = join(here.home, ".config/fleet/box-coder.env");
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const partial = `${path}.${crypto.randomUUID()}.partial`;
+  writeFileSync(partial, `CODER_SESSION_TOKEN=${quote(env.CODER_SESSION_TOKEN ?? "")}\nCODER_URL=${quote(env.CODER_URL ?? "")}\n`, { mode: 0o600, flag: "wx" });
+  renameSync(partial, path);
+  return path;
+}
+
+export function startUnit(coder: Pick<Coder, "binary" | "env">, here: Machine, unit: string, args: string[]): void {
   stopUnit(here, unit);
-  const session = existsSync(join(here.home, ".config/fleet/coder-session")) ? [".config/fleet/coder-session", ".config/fleet/coder-url"] : [".config/coderv2/session", ".config/coderv2/url"];
-  const script = `export CODER_SESSION_TOKEN="$(cat ~/${session[0]})" CODER_URL="$(cat ~/${session[1]})" && exec ${[coder.binary, ...args].map(quote).join(" ")}`;
+  const session = writeSession(here, coder.env);
+  const script = `. ${quote(session)} && export CODER_SESSION_TOKEN CODER_URL && exec ${[coder.binary, ...args].map(quote).join(" ")}`;
   const started = here.run(["systemd-run", "--user", "--collect", `--unit=${unit}`, "-p", "Restart=always", "-p", "RestartSec=30", "sh", "-c", script]);
   if (started.code !== 0) throw new Error(`Cannot start ${unit}: ${started.stderr.trim()}`);
 }
@@ -60,9 +69,9 @@ const t3Forward = (box: string, port: number) => ["port-forward", "--disable-aut
 async function environmentAt(here: Machine, url: string): Promise<string> {
   const deadline = here.now() + answerLimitMs;
   while (here.now() < deadline) {
-    const environmentId = await here.environmentId(url);
+    const environmentId = await here.environmentId(url, deadline - here.now());
     if (environmentId) return environmentId;
-    await here.sleep(1000);
+    if (here.now() < deadline) await here.sleep(Math.min(1000, deadline - here.now()));
   }
   throw new Error(`T3 did not answer at ${url} within a minute.`);
 }
@@ -83,7 +92,7 @@ export function unlink(here: Machine, box: string): boolean {
   return true;
 }
 
-export async function link(coder: Pick<Coder, "binary" | "ssh">, here: Machine, box: string): Promise<string> {
+export async function link(coder: Pick<Coder, "binary" | "env" | "ssh">, here: Machine, box: string): Promise<string> {
   if (!unlink(here, box)) throw new Error(`Unlink the earlier link to ${box} first.`);
   const unit = unitOf(box, "t3");
   const port = here.freePort();
@@ -110,7 +119,7 @@ export function recordedEnvironment(here: Machine, box: string): string {
   return (JSON.parse(readFileSync(linkFile(here, box), "utf8")) as Link).environmentId;
 }
 
-export function restoreForwards(coder: Pick<Coder, "binary">, here: Machine): number {
+export function restoreForwards(coder: Pick<Coder, "binary" | "env">, here: Machine): number {
   const directory = join(here.home, ".config/fleet/boxes");
   const recorded = existsSync(directory) ? readdirSync(directory).filter((file) => file.endsWith(".json")).sort() : [];
   let failed = 0;

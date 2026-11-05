@@ -1,14 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import {
-  claimScript, isIdle, nightly, nightlySteps, poolOn, recycleScript, refreshPool, release, saveToken, setUpScript, spawn, sweep, unfinishedThreads, type PoolClient,
+  claimScript, isIdle, nightly, nightlySteps, poolAt, poolOn, recycleScript, refreshPool, release, saveToken, setUpScript, spawn, startBox, sweep, unfinishedThreads, type PoolClient,
 } from "./box.ts";
 import { boxCommand } from "./box-command.ts";
-import { give, poolFile, pooled } from "./pool.ts";
-import { fakeCoder, fakeMachine, linkedHere, ok, start, stubBin, writeHome } from "./testing.ts";
+import { poolFile, pooled } from "./pool.ts";
+import { link } from "./links.ts";
+import { box, fakeCoder, fakeMachine, linkedHere, ok, start, stubBin, writeHome, writePool } from "./testing.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -17,12 +18,18 @@ const launcher = 'sh "$HOME/.local/share/fleet/engine/fleet"';
 function poolClient(room: boolean) {
   const calls: string[] = [];
   const client: PoolClient = {
+    own: async () => "c-1",
     claim: async () => undefined,
+    reserve: async () => ({ state: "held" }),
+    hold: async (box) => (calls.push(`hold ${box}`), { state: "held", token: "t-1" }),
+    unhold: async (box) => void calls.push(`unhold ${box}`),
     give: async (box) => (calls.push(`give ${box}`), room),
     drop: async (box) => void calls.push(`drop ${box}`),
   };
   return { client, calls };
 }
+
+const localPool = (machine: { home: string }) => poolAt(poolFile(machine.home), 4);
 
 test("release refuses a workspace that is not a box and deletes nothing", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
@@ -72,7 +79,7 @@ test("release keeps a box whose threads still run or wait for an answer, names t
 
 test("release keeps a box it cannot ask about its threads: one that is stopped, gone, or does not answer", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
-  const stopped = fakeCoder({ boxes: () => [{ name: "box-lane", status: "stopped", lastUsedAt: "2026-10-28T07:00:00Z" }] });
+  const stopped = fakeCoder({ boxes: () => [box("box-lane", "stopped")] });
   const gone = fakeCoder({ boxes: () => [] });
   const silent = fakeCoder({ ssh: () => ({ code: 255, stdout: "", stderr: "connection refused" }) });
   for (const { coder, done } of [stopped, gone, silent]) {
@@ -84,7 +91,7 @@ test("release keeps a box it cannot ask about its threads: one that is stopped, 
 
 test("a forced release deletes a box without asking about its threads", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
-  const { coder, calls, done } = fakeCoder({ boxes: () => [{ name: "box-lane", status: "stopped", lastUsedAt: "2026-10-28T07:00:00Z" }] });
+  const { coder, calls, done } = fakeCoder({ boxes: () => [box("box-lane", "stopped")] });
   expect(await release(coder, machine, "box-lane", { force: true })).toBe(0);
   expect(calls).toEqual([]);
   expect(done).toEqual(["remove box-lane"]);
@@ -106,12 +113,12 @@ test("release returns a box to the pool: it stops the box and its hub forwards, 
   const { coder, done } = fakeCoder();
   const { client, calls: asked } = poolClient(true);
   const giveBack = client.give;
-  client.give = async (box) => {
+  client.give = async (box, token) => {
     expect(done).toContain("stop box-lane");
-    return giveBack(box);
+    return giveBack(box, token);
   };
   expect(await release(coder, machine, "box-lane", { pool: client })).toBe(0);
-  expect(asked).toEqual(["give box-lane"]);
+  expect(asked).toEqual(["hold box-lane", "give box-lane"]);
   expect(done).toEqual(["stop box-lane"]);
   expect(existsSync(record)).toBe(true);
   expect(calls.filter((call) => call.includes("unlink"))).toEqual([]);
@@ -123,18 +130,23 @@ test("release deletes the box and drops it from the pool when the pool is full",
   const { coder, done } = fakeCoder();
   const { client, calls: asked } = poolClient(false);
   expect(await release(coder, machine, "box-lane", { pool: client })).toBe(0);
-  expect(asked).toEqual(["give box-lane", "drop box-lane"]);
+  expect(asked).toEqual(["hold box-lane", "give box-lane", "drop box-lane"]);
   expect(done).toEqual(["stop box-lane", "remove box-lane"]);
 });
 
 test("a devbox asks the hub at hub.alias about the pool through the engine launcher, and keeps the box when the hub cannot answer", async () => {
   const asked: string[] = [];
   const { machine } = fakeMachine(temp.make("fleet-box-"), {
-    onPeer: (alias, command) => (asked.push(`${alias}: ${command}`), command.includes("box pool give") ? { ...ok, code: 255 } : ok),
+    onPeer: (alias, command) => {
+      asked.push(`${alias}: ${command}`);
+      if (command.includes("box pool give")) return { ...ok, code: 255 };
+      return { ...ok, stdout: command.includes("box pool hold") ? "t-1\n" : "" };
+    },
   });
   const { coder, done } = fakeCoder();
   await expect(release(coder, machine, "box-lane", { pool: poolOn(machine) })).rejects.toThrow("stays stopped");
-  expect(asked).toContain(`my-hub: ${launcher} box pool give box-lane`);
+  expect(asked).toContain(`my-hub: ${launcher} box pool hold 'box-lane' 'ws-box-lane' ''`);
+  expect(asked).toContain(`my-hub: ${launcher} box pool give 'box-lane' 't-1'`);
   expect(done).toEqual(["stop box-lane"]);
 });
 
@@ -142,9 +154,11 @@ test("the hub keeps the pool in its own file, sized by hub.boxPoolSize", async (
   const home = temp.make("fleet-box-");
   const { machine } = fakeMachine(home, { isHub: true });
   const pool = poolOn(machine);
-  for (const box of ["box-a", "box-b", "box-c", "box-d"]) expect(await pool.give(box)).toBe(true);
-  expect(await pool.give("box-e")).toBe(false);
-  expect(await pool.claim()).toBe("box-a");
+  for (const name of ["box-a", "box-b", "box-c", "box-d", "box-e"]) {
+    const held = await pool.hold(name, `ws-${name}`, await pool.own(name, `ws-${name}`));
+    expect(await pool.give(name, held.state === "held" ? held.token : "")).toBe(name !== "box-e");
+  }
+  expect((await pool.claim())?.box).toBe("box-a");
   expect(pooled(poolFile(home))).toEqual(["box-b", "box-c", "box-d"]);
 });
 
@@ -183,10 +197,11 @@ test("a box is idle after hub.boxIdleHours quiet hours, or after 24 while a heav
 
 test("the sweep asks each running box through the engine launcher, stops idle ones, keeps busy ones up, and goes on after a Coder error", () => {
   const answers: Record<string, number> = { "box-idle": 0, "box-busy": 1, "box-old": 127, "box-flaky": 1, "box-later": 0 };
-  const box = (name: string, status = "running") => ({ name, status, lastUsedAt: "2026-10-28T07:00:00Z" });
   const asked: string[] = [];
   const stopping: string[] = [];
-  const { machine } = fakeMachine(temp.make("fleet-box-"));
+  const home = temp.make("fleet-box-");
+  writePool(home, { boxes: Object.fromEntries(["box-idle", "box-busy", "box-old", "box-stopped", "box-flaky", "box-later"].map((name) => [name, { id: `ws-${name}` }])) });
+  const { machine } = fakeMachine(home);
   const { coder, done } = fakeCoder({
     boxes: () => [box("box-idle"), box("box-busy"), box("box-old"), box("box-stopped", "stopped"), box("box-flaky"), box("box-later")],
     ssh: (name, command) => (asked.push(command), { ...ok, code: answers[name]! }),
@@ -218,6 +233,66 @@ test("recycling clears T3 worktrees and scratch, stops the heavy slice, keeps ex
   expect(readFileSync(join(bin, "calls.log"), "utf8")).toBe("systemctl --user stop fleet-heavy.slice\n");
   Bun.spawnSync(["sh", "-c", recycleScript([])], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` } });
   expect(readdirSync(join(home, "dev"))).toEqual([]);
+});
+
+function treeOf(root: string): string[] {
+  return readdirSync(root, { recursive: true, encoding: "utf8" }).sort();
+}
+
+test("recycling refuses a symlinked ~/dev and leaves the folders in its target alone", () => {
+  const home = temp.make("fleet-box-");
+  const elsewhere = temp.make("fleet-elsewhere-");
+  writeHome(elsewhere, { "project/a": "keep me", "other/b": "keep me" });
+  symlinkSync(elsewhere, join(home, "dev"));
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl"]);
+  const before = treeOf(elsewhere);
+  const run = Bun.spawnSync(["sh", "-c", recycleScript([])], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` }, stderr: "pipe" });
+  expect(treeOf(elsewhere)).toEqual(before);
+  expect(run.exitCode).not.toBe(0);
+  expect(run.stderr.toString()).toContain("symlink");
+});
+
+test("recycling removes a symlink under the T3 worktrees or in ~/dev itself, and never what it points to, even a kept folder", () => {
+  const home = temp.make("fleet-box-");
+  const outside = temp.make("fleet-outside-");
+  writeHome(home, { "dev/notes/plan.md": "kept", "dev/notes/sub/x": "kept", ".t3/worktrees/real/lane/f": "" });
+  writeHome(outside, { "secret/s": "kept" });
+  mkdirSync(join(home, ".t3/worktrees"), { recursive: true });
+  symlinkSync(join(home, "dev/notes"), join(home, ".t3/worktrees/notes-link"));
+  symlinkSync(join(outside, "secret"), join(home, "dev/linked"));
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl"]);
+  const run = Bun.spawnSync(["sh", "-c", recycleScript(["notes"])], { env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` } });
+  expect(run.exitCode).toBe(0);
+  expect(treeOf(join(home, "dev/notes"))).toEqual(["plan.md", "sub", "sub/x"]);
+  expect(treeOf(outside)).toEqual(["secret", "secret/s"]);
+  expect(readdirSync(join(home, "dev"))).toEqual(["notes"]);
+  expect(readdirSync(join(home, ".t3/worktrees"))).toEqual(["real"]);
+  expect(readdirSync(join(home, ".t3/worktrees/real"))).toEqual([]);
+});
+
+test("the token drop-in never writes through a planted symlink, and refuses a symlinked drop-in folder", () => {
+  const home = temp.make("fleet-box-");
+  const elsewhere = temp.make("fleet-elsewhere-");
+  writeHome(home, { ".config/fleet/box-claude-token": "sk-test-token\n" });
+  writeHome(elsewhere, { target: "untouched\n" });
+  const dir = join(home, ".config/systemd/user/t3code.service.d");
+  mkdirSync(dir, { recursive: true });
+  symlinkSync(join(elsewhere, "target"), join(dir, "claude-token.conf.new"));
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl", "curl", "sleep"]);
+  expect(runOnBox(setUpScript("claim"), home, bin).exitCode).toBe(0);
+  expect(readFileSync(join(elsewhere, "target"), "utf8")).toBe("untouched\n");
+  expect(statSync(join(dir, "claude-token.conf")).mode & 0o777).toBe(0o600);
+  expect(readdirSync(dir).filter((name) => name !== "claude-token.conf.new")).toEqual(["claude-token.conf"]);
+
+  const linkedHome = temp.make("fleet-box-");
+  const target = temp.make("fleet-elsewhere-");
+  writeHome(linkedHome, { ".config/fleet/box-claude-token": "sk-test-token\n" });
+  mkdirSync(join(linkedHome, ".config/systemd/user"), { recursive: true });
+  symlinkSync(target, join(linkedHome, ".config/systemd/user/t3code.service.d"));
+  const refused = runOnBox(setUpScript("claim"), linkedHome, bin);
+  expect(refused.exitCode).not.toBe(0);
+  expect(refused.stderr.toString()).toContain("symlink");
+  expect(readdirSync(target)).toEqual([]);
 });
 
 function runOnBox(script: string, home: string, bin: string) {
@@ -259,7 +334,7 @@ test("a box without a handed-over Claude token keeps T3 without a token drop-in"
 
 function spawnCoder(machineFileAfter = 2) {
   let checks = 0;
-  const running = ["box-lane", "box-lane-7", "box-pooled", "box-a", "box-b"].map((name) => ({ name, status: "running", lastUsedAt: "2026-10-28T07:00:00Z" }));
+  const running = ["box-lane", "box-lane-7", "box-pooled", "box-a", "box-b"].map((name) => box(name));
   return fakeCoder({
     boxes: () => running,
     ssh: (box, command, stdin) => {
@@ -276,7 +351,7 @@ test("spawning a new box waits for fleet apply's machine file, hands over this m
   writeHome(home, { ".config/fleet/box-claude-token": "sk-secret-token\n" });
   const { machine, calls, lines } = fakeMachine(home);
   spawned = spawnCoder();
-  expect(await spawn(spawned.coder, machine, "Lane 7")).toBe(0);
+  expect(await spawn(spawned.coder, machine, "Lane 7", localPool(machine))).toBe(0);
   expect(spawned.done).toEqual(["create box-lane-7 from devbox-1 with 120 GB"]);
   const commands = spawned.calls.map((call) => call.command);
   expect(commands.filter((command) => command === "test -f ~/.config/fleet/machine.json")).toHaveLength(3);
@@ -292,7 +367,7 @@ test("spawning a new box waits for fleet apply's machine file, hands over this m
 test("a spawn without a Claude token still works and says Claude is not signed in on the box; with Codex in the plan it names Codex's sign-in", async () => {
   const { machine, lines } = fakeMachine(temp.make("fleet-box-"), { codex: true });
   spawned = spawnCoder(0);
-  expect(await spawn(spawned.coder, machine, "lane")).toBe(0);
+  expect(await spawn(spawned.coder, machine, "lane", localPool(machine))).toBe(0);
   expect(lines.join("\n")).toContain("Claude is not signed in on box-lane");
   expect(lines.join("\n")).toContain("fleet box run box-lane -- codex login --device-auth");
 });
@@ -300,7 +375,7 @@ test("a spawn without a Claude token still works and says Claude is not signed i
 test("a spawn gives up when fleet apply never writes the machine file on the box, after a bounded wait on the injected clock", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
   spawned = spawnCoder(Number.POSITIVE_INFINITY);
-  await expect(spawn(spawned.coder, machine, "lane")).rejects.toThrow("did not finish fleet apply");
+  await expect(spawn(spawned.coder, machine, "lane", localPool(machine))).rejects.toThrow("did not finish fleet apply");
   expect(machine.now() - start).toBeLessThan(16 * 60_000);
 });
 
@@ -308,12 +383,13 @@ test("a spawn claims a pooled box first, cleans it, and records who claimed it",
   const { machine, calls, lines } = fakeMachine(temp.make("fleet-box-"));
   spawned = spawnCoder(0);
   let claims = 0;
-  const pool: PoolClient = { claim: async () => (claims++ === 0 ? "box-pooled" : undefined), give: async () => true, drop: async () => {} };
+  const { client: pool } = poolClient(true);
+  pool.claim = async () => (claims++ === 0 ? { box: "box-pooled", id: "ws-box-pooled", claim: "c-9" } : undefined);
   expect(await spawn(spawned.coder, machine, "lane", pool)).toBe(0);
   expect(spawned.done).toEqual([]);
   const commands = spawned.calls.map((call) => call.command);
   expect(commands.some((command) => command.includes("fleet-heavy.slice"))).toBe(true);
-  expect(commands.some((command) => command.includes("lane by devbox-1 at 2026-11-01"))).toBe(true);
+  expect(commands.some((command) => command.includes("c-9 lane by devbox-1 at 2026-11-01"))).toBe(true);
   expect(calls.some((call) => call.startsWith("peer my-hub:") && call.includes(`${launcher} box link box-pooled`))).toBe(true);
   expect(lines.at(-1)).toBe("box-pooled env-box");
 });
@@ -321,7 +397,7 @@ test("a spawn claims a pooled box first, cleans it, and records who claimed it",
 test("the nightly pool refresh warms each free box with hub.boxWarmCommand in a login shell, and only cleans it when no command is set", async () => {
   const home = temp.make("fleet-box-");
   const file = poolFile(home);
-  for (const box of ["box-a", "box-b"]) await give(file, box, 4);
+  writePool(home, { free: ["box-a", "box-b"], boxes: { "box-a": { id: "ws-box-a" }, "box-b": { id: "ws-box-b" } } });
   const warmed = fakeMachine(home, { isHub: true, settings: { ...fakeMachine(home).machine.settings, warmCommand: "make warm" } });
   spawned = spawnCoder(0);
   expect(await refreshPool(spawned.coder, warmed.machine)).toBe(0);
@@ -388,4 +464,150 @@ test("fleet box token reads the token from standard input", async () => {
   const { deps } = commandDeps(home);
   expect(await boxCommand(["token"], { ...deps, readStdin: async () => "sk-from-stdin\n" })).toBe(0);
   expect(readFileSync(join(home, ".config/fleet/box-claude-token"), "utf8")).toBe("sk-from-stdin\n");
+});
+
+test("fleet box nightly exits 1 when a reaped box could not be released everywhere", async () => {
+  const home = temp.make("fleet-box-");
+  writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub" }) });
+  const { machine, lines } = fakeMachine(home, {
+    self: "my-hub", isHub: true, devboxes: [], peers: ["devbox-2"],
+    onPeer: (alias) => ({ ...ok, code: alias === "devbox-2" ? 255 : 0 }),
+  });
+  machine.settings = { ...machine.settings, poolSize: 0 };
+  writePool(home, { boxes: { "box-old": { id: "ws-box-old", claim: "c-1" } } });
+  const stale = box("box-old", "stopped", { lastUsedAt: "2026-10-20T00:00:00Z" });
+  const { coder, done } = fakeCoder({ boxes: () => [stale] });
+  expect(await boxCommand(["nightly"], { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} })).toBe(1);
+  expect(done).toEqual(["remove box-old"]);
+  expect(lines).toContain("reap failed (exit 1)");
+});
+
+function hangingCoder(machine: { sleep(ms: number): Promise<void> }, fields: Parameters<typeof fakeCoder>[0] = {}) {
+  const limits: number[] = [];
+  const hang = (timeoutMs?: number) => {
+    if (timeoutMs === undefined) throw new Error("hangs forever: no time limit");
+    limits.push(timeoutMs);
+    void machine.sleep(timeoutMs);
+    return { code: 124, stdout: "", stderr: "timed out" };
+  };
+  return { limits, hang, ...fakeCoder({ sshAfterStartup: (_box, _command, timeoutMs) => hang(timeoutMs), ...fields }) };
+}
+
+test("waiting for a new box gives up at its deadline even when every coder call hangs, because each call gets the time that is left", async () => {
+  const { machine } = fakeMachine(temp.make("fleet-box-"));
+  const { coder, limits } = hangingCoder(machine);
+  await expect(spawn(coder, machine, "lane", localPool(machine))).rejects.toThrow("was not ready after 15 minutes");
+  expect(machine.now() - start).toBeLessThanOrEqual(15 * 60_000);
+  expect(limits.length).toBeGreaterThan(0);
+
+  const applying = fakeMachine(temp.make("fleet-box-"));
+  const stuck = hangingCoder(applying.machine, { sshAfterStartup: () => ok });
+  stuck.coder.ssh = (_box, _command, _stdin, timeoutMs) => stuck.hang(timeoutMs);
+  await expect(spawn(stuck.coder, applying.machine, "lane", localPool(applying.machine))).rejects.toThrow("did not finish fleet apply");
+  expect(applying.machine.now() - start).toBeLessThanOrEqual(15 * 60_000 + 5000);
+});
+
+test("linking gives up at its deadline when the box's T3 never answers a request, because each request gets the time that is left", async () => {
+  const limits: number[] = [];
+  const { machine } = fakeMachine(temp.make("fleet-box-"), {
+    environmentId: async (_url, timeoutMs) => {
+      if (timeoutMs === undefined) throw new Error("hangs forever: no time limit");
+      limits.push(timeoutMs);
+      await machine.sleep(timeoutMs);
+      return undefined;
+    },
+  });
+  await expect(link(fakeCoder().coder, machine, "box-lane")).rejects.toThrow("within a minute");
+  expect(machine.now() - start).toBeLessThanOrEqual(60_000);
+  expect(limits[0]).toBe(60_000);
+});
+
+function hubHome() {
+  const home = temp.make("fleet-box-");
+  writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub" }) });
+  return home;
+}
+
+const registryOf = (home: string) => JSON.parse(readFileSync(poolFile(home), "utf8")) as { free: string[]; refreshing: string[]; boxes: Record<string, { id: string; claim?: string }> };
+
+test("an unrelated box-* workspace under the same Coder account survives sweep, spawn and reap, and is listed as skipped", async () => {
+  const home = hubHome();
+  writePool(home, { free: ["box-personal"], boxes: { "box-mine": { id: "ws-box-mine", claim: "c-1" }, "box-moved": { id: "ws-box-moved", claim: "c-2" } } });
+  const { machine, lines } = fakeMachine(home, { self: "my-hub", isHub: true, devboxes: [], peers: ["devbox-2"] });
+  const listed = [box("box-mine"), box("box-personal", "running", { id: "ws-personal" }), box("box-moved", "running", { template: "other" })];
+  const { coder, calls, done } = fakeCoder({
+    boxes: () => listed,
+    ssh: (name, command) => (calls.push({ box: name, command }), { ...ok, stdout: command.includes("t3 pair") ? "pair-code\n" : "" }),
+    create: async (name) => (done.push(`create ${name}`), listed.push(box(name)), `ws-${name}`),
+  });
+  const unrelated = () => [...calls.map((call) => call.box), ...done].filter((entry) => /box-(personal|moved)/.test(entry));
+
+  expect(sweep(coder, machine)).toBe(0);
+  expect(done).toEqual(["stop box-mine"]);
+  expect(lines).toContain("box-personal: skipped, not a box this pool made");
+  expect(lines).toContain("box-moved: skipped, not a box this pool made");
+
+  expect(await spawn(coder, machine, "lane", poolOn(machine))).toBe(0);
+  expect(done).toContain("create box-lane");
+  expect(registryOf(home).boxes["box-lane"]?.id).toBe("ws-box-lane");
+
+  for (const entry of listed) Object.assign(entry, { status: "stopped", lastUsedAt: "2026-10-20T00:00:00Z" });
+  const deps = { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} };
+  expect(await boxCommand(["reap"], deps)).toBe(0);
+  expect(pooled(poolFile(home)).sort()).toEqual(["box-lane", "box-mine"]);
+  expect(unrelated()).toEqual([]);
+});
+
+test("a release that read an older claim neither stops nor pools a box that was claimed again since", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-new" } } });
+  const { machine, lines } = fakeMachine(home, { isHub: true });
+  const { coder, done } = fakeCoder({ ssh: (_box, command) => ({ ...ok, stdout: command.includes("box-claim") ? "c-old\n" : "" }) });
+  expect(await release(coder, machine, "box-lane", { pool: poolOn(machine) })).toBe(1);
+  expect(done).toEqual([]);
+  expect(pooled(poolFile(home))).toEqual([]);
+  expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-new" });
+  expect(lines.join("\n")).toContain("claimed again");
+});
+
+test("fleet box start takes a pooled box out of the pool before it starts it, and refuses one the pool is refreshing", async () => {
+  const home = hubHome();
+  writePool(home, { free: ["box-a"], refreshing: ["box-b"], boxes: { "box-a": { id: "ws-box-a" }, "box-b": { id: "ws-box-b" } } });
+  const { machine, lines } = fakeMachine(home, { isHub: true });
+  let claimedMeanwhile: unknown = "not asked";
+  const { coder, calls, done } = fakeCoder({
+    boxes: () => [box("box-a"), box("box-b", "stopped")],
+    start: async (name) => {
+      claimedMeanwhile = await poolOn(machine).claim();
+      done.push(`start ${name}`);
+    },
+  });
+  expect(await startBox(coder, machine, "box-a", poolOn(machine))).toBe(0);
+  expect(claimedMeanwhile).toBeUndefined();
+  expect(pooled(poolFile(home))).toEqual(["box-b"]);
+  const claim = registryOf(home).boxes["box-a"]?.claim;
+  expect(claim).toBeString();
+  expect(calls.some((call) => call.box === "box-a" && call.command.includes("box-claim") && call.command.includes(claim!))).toBe(true);
+  expect(await startBox(coder, machine, "box-b", poolOn(machine))).toBe(1);
+  expect(done).toEqual(["start box-a"]);
+  expect(lines.join("\n")).toContain("box-b is busy");
+});
+
+test("a reaped box that turns active while it is being released is neither stopped nor pooled, and keeps its claim", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-old": { id: "ws-box-old", claim: "c-1" } } });
+  const stale = box("box-old", "stopped", { lastUsedAt: "2026-10-20T00:00:00Z" });
+  const { machine, lines } = fakeMachine(home, {
+    self: "my-hub", isHub: true, devboxes: [], peers: ["devbox-2"],
+    onPeer: (_alias, command) => {
+      if (command.includes("fleet-box-box-old-hub.service")) stale.status = "running";
+      return ok;
+    },
+  });
+  const { coder, done } = fakeCoder({ boxes: () => [stale] });
+  expect(await boxCommand(["reap"], { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} })).toBe(1);
+  expect(done).toEqual([]);
+  expect(pooled(poolFile(home))).toEqual([]);
+  expect(registryOf(home).boxes["box-old"]).toEqual({ id: "ws-box-old", claim: "c-1" });
+  expect(lines.join("\n")).toContain("kept box-old");
 });

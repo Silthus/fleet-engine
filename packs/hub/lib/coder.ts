@@ -11,8 +11,8 @@ const tokenScopes = ["coder:workspaces.create", "coder:workspaces.operate", "cod
 
 export type Env = Record<string, string | undefined>;
 export type Result = { code: number; stdout: string; stderr: string };
-export type Box = { name: string; status: string; lastUsedAt: string };
-export type Capture = (argv: string[], options?: { env?: Env; stdin?: string }) => Result;
+export type Box = { name: string; id: string; template: string; status: string; lastUsedAt: string };
+export type Capture = (argv: string[], options?: { env?: Env; stdin?: string; timeoutMs?: number }) => Result;
 export type CoderOptions = { home: string; env: Env; coderUrl: string; template: string; capture?: Capture; fetch?: typeof fetch };
 
 export function slugFor(name: string): string {
@@ -23,8 +23,12 @@ export function slugFor(name: string): string {
   return `${slug.slice(0, 19).replace(/-+$/, "")}-${hash}`;
 }
 
+export const timedOut = 124;
+const limited = (timeoutMs?: number) => (timeoutMs === undefined ? {} : { timeout: Math.max(1, Math.ceil(timeoutMs)), killSignal: "SIGKILL" as const });
+
 export const capture: Capture = (argv, options = {}) => {
-  const child = Bun.spawnSync(argv, { env: options.env as Record<string, string> | undefined, stdin: options.stdin === undefined ? "ignore" : Buffer.from(options.stdin), stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawnSync(argv, { env: options.env as Record<string, string> | undefined, stdin: options.stdin === undefined ? "ignore" : Buffer.from(options.stdin), stdout: "pipe", stderr: "pipe", ...limited(options.timeoutMs) });
+  if (child.exitedDueToTimeout) return { code: timedOut, stdout: child.stdout.toString(), stderr: `timed out after ${options.timeoutMs} ms` };
   return { code: child.exitCode ?? 1, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
 };
 
@@ -69,29 +73,32 @@ export class Coder {
     return target;
   }
 
-  private call(args: string[], stdin?: string): Result {
-    return this.capture([this.binary, ...args], { env: this.env, ...(stdin === undefined ? {} : { stdin }) });
+  private call(args: string[], stdin?: string, timeoutMs?: number): Result {
+    return this.capture([this.binary, ...args], { env: this.env, ...(stdin === undefined ? {} : { stdin }), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
   }
 
-  private must(args: string[]): string {
-    const result = this.call(args);
+  private must(args: string[], timeoutMs?: number): string {
+    const result = this.call(args, undefined, timeoutMs);
     if (result.code !== 0) throw new Error(`coder ${args[0]} failed: ${(result.stderr || result.stdout).trim()}`);
     return result.stdout;
   }
 
-  boxes(): Box[] {
-    const workspaces = JSON.parse(this.must(["list", "-o", "json"])) as Array<{ name: string; last_used_at: string; latest_build: { status: string } }>;
-    return workspaces.filter((workspace) => workspace.name.startsWith(boxPrefix)).map((workspace) => ({ name: workspace.name, status: workspace.latest_build.status, lastUsedAt: workspace.last_used_at }));
+  boxes(timeoutMs?: number): Box[] {
+    const workspaces = JSON.parse(this.must(["list", "-o", "json"], timeoutMs)) as Array<{ id: string; name: string; template_name: string; last_used_at: string; latest_build: { status: string } }>;
+    return workspaces
+      .filter((workspace) => workspace.name.startsWith(boxPrefix))
+      .map((workspace) => ({ name: workspace.name, id: workspace.id, template: workspace.template_name, status: workspace.latest_build.status, lastUsedAt: workspace.last_used_at }));
   }
 
-  async create(name: string, from: string, diskGigabytes: number): Promise<void> {
+  async create(name: string, from: string, diskGigabytes: number): Promise<string> {
     const { id, parameters: known } = await this.activeTemplate();
     const copied = await this.api<Array<{ name: string; value: string }>>(`/api/v2/workspacebuilds/${(await this.workspace(from)).latest_build.id}/parameters`);
     const parameters = new Map(copied.filter((parameter) => known.includes(parameter.name)).map((parameter) => [parameter.name, parameter.value]));
     const overrides: Record<string, string | undefined> = { disk_size: String(diskGigabytes), auto_start_app: "false", clone_source_instance_id: "", dotfiles_branch: this.env.FLEET_BOX_DOTFILES_BRANCH };
     for (const [key, value] of Object.entries(overrides)) if (value !== undefined && known.includes(key)) parameters.set(key, value);
     const rich_parameter_values = [...parameters].map(([key, value]) => ({ name: key, value }));
-    await this.api("/api/v2/users/me/workspaces", { method: "POST", body: { name, template_id: id, rich_parameter_values, ttl_ms: idleStopMs } });
+    const created = await this.api<{ id: string }>("/api/v2/users/me/workspaces", { method: "POST", body: { name, template_id: id, rich_parameter_values, ttl_ms: idleStopMs } });
+    return created.id;
   }
 
   private async activeTemplate(): Promise<{ id: string; versionId: string; parameters: string[] }> {
@@ -145,8 +152,8 @@ export class Coder {
     return [this.binary, "ssh", "--disable-autostart", `--wait=${wait}`, name, "--", command];
   }
 
-  sshAfterStartup(name: string, command: string): Result {
-    return this.capture(this.sshTo("yes", name, command), { env: this.env });
+  sshAfterStartup(name: string, command: string, timeoutMs?: number): Result {
+    return this.capture(this.sshTo("yes", name, command), { env: this.env, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
   }
 
   run(name: string, command: string): number {
@@ -159,8 +166,8 @@ export class Coder {
     return { code: await child.exited, stdout, stderr };
   }
 
-  ssh(name: string, command: string, stdin?: string): Result {
-    return this.capture(this.sshTo("no", name, command), { env: this.env, ...(stdin === undefined ? {} : { stdin }) });
+  ssh(name: string, command: string, stdin?: string, timeoutMs?: number): Result {
+    return this.capture(this.sshTo("no", name, command), { env: this.env, ...(stdin === undefined ? {} : { stdin }), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
   }
 
   token(args: string[]): string {
@@ -170,17 +177,24 @@ export class Coder {
 
 export type ReapOptions = { days: number; dryRun: boolean; now: number; print(line: string): void };
 
-export async function reap(coder: { boxes(): Box[] }, options: ReapOptions, remove: (box: string, stillStale: () => boolean) => Promise<unknown>): Promise<number> {
+export async function reap(coder: { boxes(): Box[] }, options: ReapOptions, remove: (box: string, stillStale: () => boolean) => Promise<number>): Promise<number> {
   const cutoff = options.now - options.days * 86_400_000;
   const stale = (box: Box | undefined) => !!box && idleStatuses.has(box.status) && Date.parse(box.lastUsedAt) < cutoff;
   const current = (name: string) => coder.boxes().find((candidate) => candidate.name === name);
+  let failed = 0;
   for (const listed of coder.boxes()) {
     const box = stale(listed) && !options.dryRun ? current(listed.name) : listed;
     const doomed = stale(box);
     options.print(`${doomed ? (options.dryRun ? "would delete" : "delete") : "keep"}: ${listed.name} (${box?.status ?? "gone"}, last used ${box?.lastUsedAt ?? listed.lastUsedAt})`);
-    if (doomed && !options.dryRun) await remove(listed.name, () => stale(current(listed.name)));
+    if (!doomed || options.dryRun) continue;
+    try {
+      if ((await remove(listed.name, () => stale(current(listed.name)))) !== 0) failed = 1;
+    } catch (error) {
+      failed = 1;
+      options.print(`${listed.name}: ${(error as Error).message}`);
+    }
   }
-  return 0;
+  return failed;
 }
 
 type Token = { id: string; token_name: string; expires_at: string };
