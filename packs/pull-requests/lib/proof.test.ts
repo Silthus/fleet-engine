@@ -1,109 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import { standingFor } from "./proof.ts";
-import type { ThreadWord } from "./proof-answers.ts";
+
+import { cleanFixtures, fixture, settings, lookup, checkout, reviewHead, decideRule, withDecideRule, finishRound, recordingModel } from "./proof-testing.ts";
+
+afterEach(cleanFixtures);
 
 const command = resolve(dirname(fileURLToPath(import.meta.url)), "../commands/proof.ts");
-const fixtures: string[] = [];
-afterEach(() => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })));
-
-function fixture(prefix: string) {
-  const directory = mkdtempSync(join(tmpdir(), prefix));
-  fixtures.push(directory);
-  return directory;
-}
-
-const settings = { "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 6, "pull-requests.reviewTimeoutMinutes": 20 };
-const lookup = { role: "lookup", work: "Find files", provider: "claude", model: "lookup-model", effort: "medium" };
-const models = [lookup, { role: "review", work: "Review Claude's code", provider: "codex", model: "review-model", effort: "high" }, { role: "review-codex", work: "Review Codex's code", provider: "claude", model: "review-codex-model", effort: "high" }];
-
-function checkout() {
-  const directory = fixture("fleet-proof-checkout-");
-  const [home, repository, bin, github] = ["home", "repository", "bin", "github"].map((name) => join(directory, name));
-  for (const path of [home, repository, bin, github]) mkdirSync(path);
-  writeFileSync(join(bin, "gh"), `#!/bin/sh
-echo "$*" >> "${github}/calls"
-case "$*" in "api "*)
-  sha=$(printf '%s' "$*" | sed -n 's#.*/commits/\\([0-9a-f]*\\)/.*#\\1#p')
-  case "$*" in *"/check-runs"*) kind=check-runs;; *) kind=statuses;; esac
-  file="${github}/$kind-$sha"; [ -f "$file" ] || file="${github}/$kind-any"
-  cat "$file" 2>/dev/null; exit 0;;
-esac
-head=$(cat "${github}/head" 2>/dev/null || git -C "${repository}" rev-parse HEAD)
-case "$*" in *headRefOid*) [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head";; esac
-printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRefName":"main","headRefOid":"%s","title":"Greet new members","body":"Adds the greeting."}\\n' "$head"
-`, { mode: 0o755 });
-  for (const model of ["claude", "codex"]) writeFileSync(join(bin, model), `#!/bin/sh\necho "the test ran the real ${model}" >&2\nexit 97\n`, { mode: 0o755 });
-  const runs: Record<string, { status: string; conclusion: string | null }> = { pass: { status: "completed", conclusion: "success" }, fail: { status: "completed", conclusion: "failure" }, cancel: { status: "completed", conclusion: "cancelled" }, pending: { status: "in_progress", conclusion: null } };
-  const lines = (items: object[]) => items.map((item) => JSON.stringify(item) + "\n").join("");
-  const ci = (checks: { name: string; bucket: string }[] | "none", commit = "any") => writeFileSync(join(github, `check-runs-${commit}`), checks === "none" ? "" : lines(checks.map(({ name, bucket }) => ({ name, ...runs[bucket] }))));
-  const statuses = (list: { context: string; state: string }[], commit = "any") => writeFileSync(join(github, `statuses-${commit}`), lines(list));
-  const githubHead = (commit: string | undefined, next?: string) => {
-    if (commit) writeFileSync(join(github, "head"), commit); else rmSync(join(github, "head"), { force: true });
-    if (next) writeFileSync(join(github, "next-head"), next);
-  };
-  const githubCalls = () => readFileSync(join(github, "calls"), "utf8").trim().split("\n");
-  ci([{ name: "test", bucket: "pass" }]);
-  mkdirSync(join(home, ".agents/guides"), { recursive: true });
-  const clock = { now: new Date("2026-10-25T12:00:00Z") };
-  const env: Record<string, string | undefined> = {
-    ...process.env, PATH: `${bin}:${process.env.PATH}`, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
-    GIT_AUTHOR_NAME: "Fleet", GIT_AUTHOR_EMAIL: "fleet@example.com", GIT_COMMITTER_NAME: "Fleet", GIT_COMMITTER_EMAIL: "fleet@example.com",
-    CLAUDE_CODE_SESSION_ID: "session-under-test", CODEX_THREAD_ID: undefined, FLEET_SETTINGS: JSON.stringify(settings), FLEET_MODELS: JSON.stringify(models),
-  };
-  const git = (...args: string[]) => {
-    const result = Bun.spawnSync(["git", ...args], { cwd: repository, env, stdout: "pipe", stderr: "pipe" });
-    if (result.exitCode !== 0 && args[0] !== "merge") throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-    return result.stdout.toString().trim();
-  };
-  const commit = (file: string, content: string) => {
-    writeFileSync(join(repository, file), content);
-    git("add", file);
-    git("commit", "-q", "-m", `Change ${file}`);
-    return git("rev-parse", "HEAD");
-  };
-  const advanceBase = (file: string, content: string) => {
-    git("checkout", "-q", "main");
-    commit(file, content);
-    git("update-ref", "refs/remotes/origin/main", "HEAD");
-    git("checkout", "-q", "feature");
-  };
-  const words: ThreadWord[] = [];
-  const thread = "mcp:thread-1";
-  const say = (text: string, answered = "Shall I run one more round?", id = `message-${words.length + 1}`) => words.push({ thread, id, text, answered, at: clock.now.toISOString(), source: "typed" });
-  const choose = (option: string, question = "Run one more review round? example/product#42: the arbiter escalates.") => words.push({ thread, id: `request-${words.length + 1}:0`, text: option, answered: question, at: clock.now.toISOString(), source: "question" });
-  const chooseGap = (kind: string, reason: string, option = "Accept the gap", number = 42) => choose(option, `Accept the ${kind} gap? example/product#${number}: ${reason}`);
-  const threadWords = async (name: string) => {
-    if (name !== "thread-1" && name !== thread) throw new Error(`No thread ${name}`);
-    return words;
-  };
-  const fleetIn = async (cwd: string, ...args: string[]) => {
-    const lines: string[] = [];
-    const context: ProofContext = { home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords };
-    const code = await proofCommand(args, context);
-    return { code, output: lines.join("\n") };
-  };
-  const fleet = (...args: string[]) => fleetIn(repository, ...args);
-  const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
-  git("init", "-q", "-b", "main");
-  git("remote", "add", "origin", "https://github.com/example/product.git");
-  commit("shared.txt", "one\n");
-  git("update-ref", "refs/remotes/origin/main", "HEAD");
-  git("checkout", "-q", "-b", "feature");
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, githubHead, githubCalls, clock, say, choose, chooseGap };
-}
-
-async function reviewHead(pr: ReturnType<typeof checkout>) {
-  expect((await pr.fleet("review-start", "--scope", "full")).code).toBe(0);
-  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
-  expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
-  return pr.git("rev-parse", "HEAD");
-}
 
 test("fleet proof explains each command and fails closed with one line when it cannot run", async () => {
   const directory = fixture("fleet-proof-cli-");
@@ -137,8 +42,9 @@ test("fleet proof explains each command and fails closed with one line when it c
 test("fleet proof lists only the commands this version ships", async () => {
   const pr = checkout();
   const listed = (await pr.fleet("--help")).output.split("\n").flatMap((line) => /^  fleet proof (\S+)/.exec(line)?.[1] ?? []);
-  expect(listed).toEqual(["path", "save", "require", "show", "respond", "standing", "gap", "gate", "review-start", "review-finish"]);
-  await expect(pr.fleet("review")).rejects.toThrow("Unknown command review. Run fleet proof --help");
+  expect(listed).toEqual(["path", "save", "publish", "require", "review", "show", "respond", "standing", "gap", "gate", "miss", "eval", "review-start", "review-finish"]);
+  await expect(pr.fleet("lessons")).rejects.toThrow("Unknown command lessons. Run fleet proof --help");
+  expect((await pr.fleet("require", "--help")).output).toContain("the review row of the model table for a PR that Claude wrote, and the\nreview-codex row for one that Codex wrote");
 });
 
 test("a clean merge of the base carries the review of the PR forward and records it", async () => {
@@ -154,7 +60,7 @@ test("a clean merge of the base carries the review of the PR forward and records
 
   expect(gate.code).toBe(0);
   expect(gate.output).toContain(`carried forward from the review of ${reviewed.slice(0, 7)}`);
-  expect(gate.output.split("\n").at(-1)).toBe(`gate: pass (kinds: none; review: carried from ${reviewed.slice(0, 7)}; CI: green)`);
+  expect(gate.output.split("\n").at(-1)).toBe(`gate: pass (kinds: none; review: carried from ${reviewed.slice(0, 7)}; CI: green; judge: pass by judge-under-test)`);
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${merge}.json`), "utf8"))).toMatchObject({ commit: merge, from: reviewed, merges: [merge] });
 
   pr.commit("feature.txt", "fixed\n");
@@ -261,7 +167,7 @@ test("the gate fails until the owed proofs are recorded, and a recorded none pri
   const none = await pr.fleet("gate");
   expect(none.code).toBe(0);
   expect(none.output).toContain("owed proofs: none (docs only)");
-  expect(none.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: green)");
+  expect(none.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: green; judge: pass by judge-under-test)");
 
   await pr.fleet("require", "--kinds", "live-run");
   const owed = await pr.fleet("gate");
@@ -337,18 +243,6 @@ test("a standing rule from the user's guides accepts its kind's gaps until its d
   expect(await standingFor(pr.home, "prod-shape", new Date("2026-11-01T23:00:00Z"))).toBeUndefined();
 });
 
-const decideRule = "Until 2026-11-26, decide review rounds, judge gaps, and post-deploy-watch gaps yourself.";
-
-function withDecideRule(pr: ReturnType<typeof checkout>) {
-  const record = (kinds: string) => `\`fleet proof standing --kind ${kinds} --until 2026-11-26 --rule "${decideRule}"\``;
-  writeFileSync(join(pr.home, ".agents/AGENTS.md"), `# Agents\n\n## Skill settings\n\n- ${decideRule} Record it with ${record("review,judge,post-deploy-watch")}, ${record("review")}, or ${record("judge")}.\n`);
-}
-
-async function finishRound(pr: ReturnType<typeof checkout>, round: string) {
-  writeFileSync(join(pr.repository, "findings.md"), `Findings of ${round}.\n`);
-  await pr.fleet("review-finish", "--round", round, "--reviewer", "gpt-6.1-sol", "findings.md");
-}
-
 test("under the user's standing review rule, an agent answers an arbiter escalation itself, and the round keeps the escalation and the agent's reason", async () => {
   const pr = checkout();
   withDecideRule(pr);
@@ -417,13 +311,6 @@ test("the review settings set how many reviews run free and where the loop stops
   await finishRound(pr, "2");
   await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head)).rejects.toThrow("2 panel rounds done. Ask the user with your question tool");
 });
-
-function recordingModel(pr: ReturnType<typeof checkout>, provider: "claude" | "codex", answer: string) {
-  const calls = join(pr.home, `${provider}-calls`);
-  const reply = provider === "claude" ? `echo '${answer}'` : `for arg in "$@"; do [ "$previous" = "-o" ] && echo '${answer}' > "$arg"; previous="$arg"; done`;
-  writeFileSync(join(pr.env.PATH!.split(":")[0]!, provider), `#!/bin/sh\necho "$*" >> "${calls}"\ncat > "${calls}-prompt"\n${reply}\n`, { mode: 0o755 });
-  return { calls: () => readFileSync(calls, "utf8").trim().split("\n"), prompt: () => readFileSync(`${calls}-prompt`, "utf8") };
-}
 
 test("without a replacement command, the arbiter runs the lookup row of the model table with its provider, model, and effort", async () => {
   const pr = checkout();
@@ -518,7 +405,7 @@ test("the gate reads CI on HEAD, and a ci gap stands in where CI cannot run", as
   await pr.fleet("gap", "--kind", "ci", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
-  expect(accepted.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: gap accepted)");
+  expect(accepted.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: gap accepted; judge: pass by judge-under-test)");
 });
 
 test("require records the author family of the session, and refuses a family that contradicts it or changes", async () => {
@@ -549,7 +436,7 @@ test("one answer accepts the gap of the kind and PR its question names, however 
 test("a refusal never reads as an acceptance: the quote must be the user's whole message", async () => {
   const pr = checkout();
   pr.commit("feature.txt", "new\n");
-  pr.say("Do not accept the gap.");
+  pr.chooseGap("prod-shape", "No sandbox", "Do not accept the gap.");
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
   await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "accept the gap."`, "--thread", "thread-1")).rejects.toThrow("Quote their whole message");
 });
@@ -595,66 +482,6 @@ test("stray entries in reviews/ are ignored, and findings already in the round f
 
   pr.commit("feature.txt", "fixed\n");
   expect((await pr.fleet("review-start", "--scope", "final", "--base", head)).output).toContain(`"round":"final"`);
-});
-
-const escalate = "cat >/dev/null; echo 'ESCALATE: Round 2 undoes the rename round 1 asked for.'";
-
-async function twoRounds(pr: ReturnType<typeof checkout>) {
-  const head = pr.commit("feature.txt", "new\n");
-  for (const round of ["1", "2"]) {
-    await pr.fleet("review-start", ...(round === "1" ? ["--scope", "full"] : ["--scope", "fixes", "--base", head]));
-    await finishRound(pr, round);
-  }
-  return ["review-start", "--scope", "fixes", "--base", head];
-}
-
-test("the arbiter permits a round only with an exact CONTINUE line; no verdict stops the loop like an escalation", async () => {
-  const pr = checkout();
-  const third = await twoRounds(pr);
-  for (const arbiter of ["cat >/dev/null; exit 97", "cat >/dev/null; echo 'CONTINUE is unsafe; ESCALATE instead.'", "cat >/dev/null; echo 'CONTINUE, but ESCALATE: round 2 undoes round 1.'"]) {
-    pr.env.FLEET_REVIEW_ARBITER = arbiter;
-    await expect(pr.fleet(...third)).rejects.toThrow("The arbiter gave no verdict");
-    expect(existsSync(join(pr.pullRequest, "reviews/3"))).toBe(false);
-  }
-  pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
-  expect((await pr.fleet(...third)).code).toBe(0);
-});
-
-test("an override counts only when the user chose Run one more round in the question tool fleet named; a refusal or a typed message never does", async () => {
-  const pr = checkout();
-  const third = await twoRounds(pr);
-  pr.env.FLEET_REVIEW_ARBITER = escalate;
-  const question = "Run one more review round? example/product#42: The arbiter escalates: Round 2 undoes the rename round 1 asked for.";
-  const stop = await pr.fleet(...third).catch((error: Error) => error.message);
-  expect(stop).toContain(`Question: "${question}" Options: "Run one more round", "Stop here".`);
-  expect(stop).toContain(`--override '<date> "Run one more round"' --thread <your T3 thread id>`);
-  const override = (words: string) => pr.fleet(...third, "--override", `2026-10-25 "${words}"`, "--thread", "thread-1");
-
-  pr.choose("Stop here", question);
-  await expect(override("Stop here")).rejects.toThrow(`The user chose "Stop here", not "Run one more round"`);
-  pr.say("Run one more round", question);
-  await expect(override("Run one more round")).rejects.toThrow("is a message the user typed");
-  pr.choose("Run one more round", "Shall I merge it?");
-  await expect(override("Run one more round")).rejects.toThrow("answers another question");
-  expect(existsSync(join(pr.pullRequest, "reviews/3"))).toBe(false);
-
-  pr.choose("Run one more round", question);
-  expect((await override("Run one more round")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8"))).toMatchObject({ answer: { message: "request-4:0", answered: question } });
-});
-
-test("one answer starts one round, counts only on the PR its question names, and a start that fails releases it", async () => {
-  const pr = checkout();
-  const base = pr.commit("feature.txt", "new\n");
-  pr.choose("Run one more round");
-  const start = (number: string, ...scope: string[]) => pr.fleet("review-start", "--repo", "example/product", "--pr", number, ...(scope.length ? scope : ["--scope", "full"]), "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1");
-  await expect(start("42", "--scope", "fixes", "--base", base)).rejects.toThrow("Round 1 is --scope full");
-  await expect(start("43")).rejects.toThrow("answers another question");
-  const results = await Promise.allSettled([start("42"), start("42")]);
-  expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
-  expect(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason)).toContain("Ask the user again");
-  expect(existsSync(join(pr.pullRequest, "reviews/1"))).toBe(true);
-  expect(existsSync(join(pr.pullRequest, "reviews/2"))).toBe(false);
 });
 
 test("round 1 reviews the full diff and takes no base", async () => {
@@ -749,109 +576,4 @@ test("respond and review-finish take the id of the final read review-start print
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the nit is gone.\n");
   expect((await pr.fleet("respond", "--round", "final-1", "responses.md")).output).toBe(join(pr.pullRequest, "reviews/final-1/responses.md"));
   expect(existsSync(join(pr.pullRequest, "reviews/final-2/responses.md"))).toBe(false);
-});
-
-test("an answer typed by the user never counts, whatever its message id looks like", async () => {
-  const pr = checkout();
-  const third = await twoRounds(pr);
-  pr.env.FLEET_REVIEW_ARBITER = escalate;
-  pr.say("Run one more round", "Run one more review round? example/product#42: The arbiter escalates: Round 2 undoes the rename round 1 asked for.", "message:123");
-  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("is a message the user typed");
-});
-
-test("an approval counts only for the PR its question names", async () => {
-  const pr = checkout();
-  const third = await twoRounds(pr);
-  pr.env.FLEET_REVIEW_ARBITER = escalate;
-  pr.choose("Run one more round", "Run one more review round? example/product#43: The arbiter escalates.");
-  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("answers another question");
-  pr.choose("Run one more round", "Run one more review round? example/product#420: The arbiter escalates.");
-  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("answers another question");
-});
-
-test("one answer cannot start two rounds of one PR at once, nor one round after another under another spelling of its thread", async () => {
-  const pr = checkout();
-  const third = await twoRounds(pr);
-  const reviewed = pr.git("rev-parse", "HEAD");
-  pr.commit("feature.txt", "fixed\n");
-  pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
-  pr.choose("Run one more round");
-  const override = (thread: string) => ["--override", `2026-10-25 "Run one more round"`, "--thread", thread];
-  const results = await Promise.allSettled([pr.fleet(...third, ...override("thread-1")), pr.fleet("review-start", "--scope", "final", "--base", reviewed, ...override("thread-1"))]);
-  expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
-  expect(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason)).toContain("Ask the user again");
-
-  const pr2 = checkout();
-  const later = await twoRounds(pr2);
-  pr2.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
-  pr2.choose("Run one more round");
-  expect((await pr2.fleet(...later, ...override("thread-1"))).code).toBe(0);
-  await finishRound(pr2, "3");
-  await expect(pr2.fleet(...later, ...override("mcp:thread-1"))).rejects.toThrow("Ask the user again");
-});
-
-test("indented findings each need an answer", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "new\n");
-  await pr.fleet("review-start", "--scope", "full");
-  writeFileSync(join(pr.repository, "findings.md"), "Findings:\n\n  1. high, feature.txt:1, the greeting is wrong\n  2. low, feature.txt:1, a nit\n");
-  await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md");
-  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting is right now.\n");
-  await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 2");
-});
-
-test("a gap counts as accepted only when the user chose Accept the gap in the question tool for that kind and PR", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "new\n");
-  await reviewHead(pr);
-  await pr.fleet("require", "--kinds", "prod-shape");
-  const recorded = await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
-  expect(recorded.output).toContain(`Question: "Accept the prod-shape gap? example/product#42: No sandbox" Options: "Accept the gap", "Keep the gap open".`);
-  const accept = (words: string) => pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "${words}"`, "--thread", "thread-1");
-
-  pr.say("Accept the gap", "Accept the prod-shape gap? example/product#42: No sandbox");
-  await expect(accept("Accept the gap")).rejects.toThrow("is a message the user typed");
-  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
-  await expect(accept("Keep the gap open")).rejects.toThrow(`The user chose "Keep the gap open", not "Accept the gap"`);
-  pr.chooseGap("cross-version", "No sandbox");
-  await expect(accept("Accept the gap")).rejects.toThrow("answers another question");
-  expect((await pr.fleet("gate")).code).toBe(3);
-
-  pr.chooseGap("prod-shape", "No sandbox");
-  expect((await accept("Accept the gap")).code).toBe(0);
-  expect((await pr.fleet("gate")).code).toBe(0);
-});
-
-test("an answer accepts one gap once: a gap recorded again with another reason needs a new answer", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "new\n");
-  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
-  pr.chooseGap("prod-shape", "No sandbox");
-  const accept = () => pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
-  expect((await accept()).code).toBe(0);
-  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "The sandbox has no production data");
-  await expect(accept()).rejects.toThrow("Ask the user again");
-  pr.chooseGap("prod-shape", "The sandbox has no production data");
-  expect((await accept()).code).toBe(0);
-});
-
-test("a later identical choice for another PR does not hide the user's unused answer for this PR", async () => {
-  const pr = checkout();
-  const third = await twoRounds(pr);
-  pr.env.FLEET_REVIEW_ARBITER = escalate;
-  pr.choose("Run one more round", "Run one more review round? example/product#42: The arbiter escalates.");
-  pr.choose("Run one more round", "Run one more review round? example/product#43: The arbiter escalates.");
-  expect((await pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8")).answer).toMatchObject({ message: "request-1:0" });
-});
-
-test("a claim that another start is still writing counts as used", async () => {
-  const pr = checkout();
-  const third = await twoRounds(pr);
-  pr.env.FLEET_REVIEW_ARBITER = escalate;
-  pr.choose("Run one more round", "Run one more review round? example/product#42: The arbiter escalates.");
-  const claims = join(pr.home, ".local/state/fleet/proof/claims");
-  mkdirSync(claims, { recursive: true });
-  writeFileSync(join(claims, `${createHash("sha256").update("mcp:thread-1/request-1:0").digest("hex")}.json`), "");
-  await expect(pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).rejects.toThrow("This answer is already used on a PR. One answer counts once. Ask the user again");
 });

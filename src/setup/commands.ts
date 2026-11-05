@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { closeSync, openSync } from "node:fs";
 import { platform } from "node:os";
 
 export type ExecResult = { code: number; output: string };
@@ -11,7 +12,7 @@ export type Machine = {
   exec: Exec;
   /** Starts a sign-in command in the background, its output shown in the terminal. */
   start(command: string[]): Started;
-  /** Runs a command in the foreground with its output in the terminal, and the keyboard too when it needs input. */
+  /** Runs a command in the foreground with its output in the terminal, and the keyboard too when it needs input: /dev/tty, so it works when setup's own input is a pipe. */
   run(command: string[], options?: { input?: boolean }): Promise<number>;
   sleep(ms: number): Promise<void>;
   openUrl(url: string): Promise<void>;
@@ -48,10 +49,13 @@ export const realMachine: Machine = {
     return { stop, exited };
   },
   async run(command, options = {}) {
+    const keyboard = options.input ? openKeyboard() : undefined;
     try {
-      return await Bun.spawn(command, { stdin: options.input ? "inherit" : "ignore", stdout: "inherit", stderr: "inherit" }).exited;
+      return await Bun.spawn(command, { stdin: keyboard ?? (options.input ? "inherit" : "ignore"), stdout: "inherit", stderr: "inherit" }).exited;
     } catch {
       return 127;
+    } finally {
+      if (keyboard !== undefined) closeSync(keyboard);
     }
   },
   sleep: (ms) => Bun.sleep(ms),
@@ -61,3 +65,11 @@ export const realMachine: Machine = {
   },
   has: (tool) => Bun.which(tool) !== null,
 };
+
+function openKeyboard(): number | undefined {
+  try {
+    return openSync("/dev/tty", "r");
+  } catch {
+    return undefined;
+  }
+}

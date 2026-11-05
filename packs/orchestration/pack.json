@@ -42,6 +42,13 @@
       "ask": "never"
     },
     {
+      "key": "orchestration.rolloutLog",
+      "question": "Which file logs your rollouts, one JSON line per stage, so fleet lessons can name holds and rollbacks? ~/ is allowed.",
+      "type": "string",
+      "default": "",
+      "ask": "never"
+    },
+    {
       "key": "orchestration.goals",
       "question": "Where do your team's goals live, so a map can name the metric its work moves?",
       "type": "string",
@@ -92,6 +99,7 @@
       "settings": [
         "orchestration.tracker",
         "orchestration.lessonsLog",
+        "orchestration.rolloutLog",
         "orchestration.goals",
         "orchestration.analyticsProject"
       ],
