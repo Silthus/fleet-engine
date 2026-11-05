@@ -1,13 +1,15 @@
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { LinkedEnvironment } from "../../base/lib/t3/environments.ts";
-import { forget, linkTarget, pairWith, readRecord, restoreRecorded, stopUnit, t3Of, t3Port, type Linker } from "./links.ts";
+import { tryLockPeer, userWaitMs, withPeerLock } from "./box-lock.ts";
+import { boxMarkerPath, forget, linkTarget, pairWith, readRecord, reviveLink, stopUnit, t3Of, t3Port, type Linker } from "./links.ts";
 import { changedFiles, readIfThere, writeFiles } from "./managed.ts";
 import type { PeerMachine } from "./machine.ts";
 import { refuseLinks, writePrivateFile } from "./mcphub/client.ts";
-import { sshName } from "./run.ts";
+import { isBoxName, sshName } from "./names.ts";
 
 export type PeerLink = Pick<LinkedEnvironment, "environmentId" | "label" | "urls" | "status" | "expiresAt">;
-export type PeerHere = Linker & Pick<PeerMachine, "peers" | "onPeer" | "print">;
+export type PeerHere = Linker & Pick<PeerMachine, "peers" | "devboxes" | "onPeer" | "print">;
 
 const renewWithinMs = 7 * 86_400_000;
 const marker = "# Managed by Fleet peer access.";
@@ -16,6 +18,31 @@ const peerLinks = (here: Pick<PeerHere, "home">) => join(here.home, ".config/fle
 const recordOf = (here: Pick<PeerHere, "home">, alias: string) => join(peerLinks(here), `${sshName(alias)}.json`);
 const guardPeerLinks = (here: Pick<PeerHere, "home">) => refuseLinks(here.home, peerLinks(here), "peer link folder");
 export const peerUnitOf = (alias: string) => `fleet-peer-${alias}-t3`;
+const isThisABox = (here: Pick<PeerHere, "home">) => !!lstatSync(join(here.home, boxMarkerPath), { throwIfNoEntry: false });
+
+function recordedAliases(here: Pick<PeerHere, "home">): string[] {
+  const directory = peerLinks(here);
+  return existsSync(directory) ? readdirSync(directory).filter((file) => file.endsWith(".json")).map((file) => file.slice(0, -".json".length)).sort() : [];
+}
+
+function holding<T>(here: PeerHere, alias: string, step: () => Promise<T>): Promise<T> {
+  return withPeerLock(here.home, alias, { waitMs: userWaitMs, waiting: () => here.say(`${alias}: waiting for another fleet peers operation on it to end`) }, step);
+}
+
+async function whenFree(here: PeerHere, alias: string, step: () => Promise<boolean>): Promise<boolean> {
+  try {
+    const unlock = await tryLockPeer(here.home, alias);
+    if (!unlock) return here.say(`${alias}: another fleet peers operation holds it; skipped`), true;
+    try {
+      return await unlock.during(step);
+    } finally {
+      unlock();
+    }
+  } catch (error) {
+    here.say((error as Error).message);
+    return false;
+  }
+}
 
 async function startPeerForward(here: PeerHere, unit: string, alias: string, port: number): Promise<void> {
   await stopUnit(here, unit);
@@ -48,7 +75,7 @@ export async function linkPeers(here: PeerHere, aliases: string[] = []): Promise
   await guardPeerLinks(here);
   const failed: string[] = [];
   for (const alias of aliases.length ? aliases : here.peers) {
-    try { await linkPeer(here, alias); }
+    try { await holding(here, alias, () => linkPeer(here, alias)); }
     catch (error) { here.say(`${alias}: ${(error as Error).message}`); failed.push(alias); }
   }
   if (failed.length) here.say(`not linked: ${failed.join(", ")}`);
@@ -77,9 +104,34 @@ async function relink(here: PeerHere, alias: string, urls: string[]): Promise<vo
   here.say(`renewed the link to ${alias} at ${urls.join(", ")}`);
 }
 
+async function forgetLeaver(here: PeerHere, alias: string): Promise<boolean> {
+  const record = recordOf(here, alias);
+  readRecord(record);
+  await stopUnit(here, peerUnitOf(alias));
+  if (!(await forget(here, record, peerUnitOf(alias)))) return false;
+  here.say(`${alias} left the peer list: stopped its forward and forgot its link`);
+  return true;
+}
+
+function restorePeer(here: PeerHere, alias: string): Promise<boolean> {
+  const unit = peerUnitOf(alias);
+  return reviveLink(here, recordOf(here, alias), alias, unit, (port) => startPeerForward(here, unit, alias, port));
+}
+
 export async function restorePeers(here: PeerHere): Promise<number> {
   await guardPeerLinks(here);
-  return restoreRecorded(here, peerLinks(here), peerUnitOf, (alias, unit, port) => startPeerForward(here, unit, alias, port));
+  let failed = 0;
+  for (const alias of recordedAliases(here)) {
+    const step = here.peers.includes(alias) ? () => restorePeer(here, alias) : () => forgetLeaver(here, alias);
+    if (!(await whenFree(here, alias, step))) failed = 1;
+  }
+  return failed;
+}
+
+async function renewPeer(here: PeerHere, alias: string, links: PeerLink[]): Promise<void> {
+  const urls = linkFor(alias, links, readRecord(recordOf(here, alias))?.environmentId)?.urls ?? [];
+  if (urls.length) await relink(here, alias, urls);
+  else await pairPeer(here, alias);
 }
 
 export async function renewPeers(here: PeerHere): Promise<number> {
@@ -100,10 +152,8 @@ export async function renewPeers(here: PeerHere): Promise<number> {
   });
   const due = peersToRenew(readable, links, here.now(), recorded);
   for (const alias of due) {
-    const urls = linkFor(alias, links, recorded[alias])?.urls ?? [];
     try {
-      if (urls.length) await relink(here, alias, urls);
-      else await pairPeer(here, alias);
+      await holding(here, alias, () => renewPeer(here, alias, links));
     } catch (error) {
       here.say(`${alias}: ${(error as Error).message}`);
       failed.push(alias);
@@ -111,7 +161,7 @@ export async function renewPeers(here: PeerHere): Promise<number> {
   }
   const renewed = due.filter((alias) => !failed.includes(alias)).length;
   here.say(due.length ? `${renewed} of ${due.length} peer links renewed` : "every peer link lasts more than a week");
-  const problems = [...(failed.length ? [`not linked: ${failed.join(", ")}`] : []), ...(restoreFailed ? ["a recorded peer forward did not restart"] : [])];
+  const problems = [...(failed.length ? [`not linked: ${failed.join(", ")}`] : []), ...(restoreFailed ? ["a recorded peer forward did not restart, or a peer that left the list kept its link"] : [])];
   if (problems.length) here.say(problems.join("; "));
   return problems.length ? 1 : 0;
 }
@@ -148,8 +198,10 @@ export async function peerDoctor(home: string, peers: string[]): Promise<boolean
 
 export async function peersCommand(args: string[], here: PeerHere): Promise<number> {
   const [mode = "plan", ...rest] = args;
+  if (mode !== "link" && (rest.length || !["plan", "install", "doctor", "renew", "restore"].includes(mode))) return here.print(usage), 2;
+  if (isThisABox(here)) return here.print("This machine is a box. A box has no peers, so fleet peers has nothing to do."), 0;
+  for (const box of here.devboxes.filter(isBoxName)) here.say(`${box}: skipped: a box is not a peer`);
   if (mode === "link") return linkPeers(here, rest);
-  if (rest.length || !["plan", "install", "doctor", "renew", "restore"].includes(mode)) return here.print(usage), 2;
   if (mode === "renew") return renewPeers(here);
   if (mode === "restore") return restorePeers(here);
   if (mode === "doctor") return await peerDoctor(here.home, here.peers), here.print(`Peer access: the SSH config names ${here.peers.join(", ")}`), 0;

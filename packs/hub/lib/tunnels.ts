@@ -4,7 +4,8 @@ import { changedFiles, ownedBy, readIfThere, requireInstalled, writeFiles } from
 import { peersOf, readRole } from "./machine.ts";
 import { gatewayPort, refuseLinks } from "./mcphub/client.ts";
 import type { Run } from "./mcphub/hub.ts";
-import { hostPattern, must, relayPortOf, sshName } from "./run.ts";
+import { isBoxName, sshName } from "./names.ts";
+import { hostPattern, must, relayPortOf } from "./run.ts";
 
 export type TunnelMode = "plan" | "install" | "doctor";
 export type TunnelMachine = { home: string; devboxes: string[]; relayPort: number; httpsHost?: string; hosts: string; run: Run; print(line: string): void };
@@ -50,7 +51,8 @@ export async function sshTunnels(mode: TunnelMode, machine: TunnelMachine): Prom
 
 async function hubTunnels(mode: TunnelMode, machine: TunnelMachine) {
   const directory = join(machine.home, ".config/systemd/user");
-  const units = machine.devboxes.map((alias) => ({ alias, name: unitName(alias), path: join(directory, unitName(alias)), content: tunnelUnit(alias, machine.relayPort) }));
+  for (const box of machine.devboxes.filter(isBoxName)) machine.print(`${box}: skipped: a box gets the gateway and relay ports from its own box forward`);
+  const units = machine.devboxes.filter((alias) => !isBoxName(alias)).map((alias) => ({ alias, name: unitName(alias), path: join(directory, unitName(alias)), content: tunnelUnit(alias, machine.relayPort) }));
   const changed = await changedFiles(machine.home, units, marker, "tunnel");
   const systemctl = (...args: string[]) => must(machine.run, ["systemctl", "--user", ...args]);
   const stale = mode === "plan" ? [] : await staleUnits(machine.home, directory, units.map((unit) => unit.name));

@@ -5,6 +5,7 @@ import { numberSetting, optionalStringSetting, stringSetting } from "../../base/
 import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Capture, type Env, type Result } from "./coder.ts";
 import { writePrivateFile } from "./mcphub/client.ts";
+import { isBoxName } from "./names.ts";
 import type { Clock } from "./pool.ts";
 
 export type BoxSettings = {
@@ -146,7 +147,7 @@ export function peerMachine(env: Env = Bun.env, home = homedir(), self = hostnam
   return {
     home,
     self,
-    peers: peersOf(hub, devboxes, self).filter((alias) => !ownNames.includes(alias)),
+    peers: peersOf(hub, devboxes, self).filter((alias) => !ownNames.includes(alias) && !isBoxName(alias)),
     devboxes,
     onPeer,
     run,

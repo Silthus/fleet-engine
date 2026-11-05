@@ -253,7 +253,7 @@ test("renewal fails, and says so in its last line, when a recorded forward canno
     },
   });
   expect(await renewPeers(machine)).toBe(1);
-  expect(lines.at(-1)).toBe("a recorded peer forward did not restart");
+  expect(lines.at(-1)).toBe("a recorded peer forward did not restart, or a peer that left the list kept its link");
 });
 
 test("the peer doctor passes after install, fails with what to run before it, and writes nothing", async () => {
@@ -347,4 +347,150 @@ test("a peer whose pairing times out fails alone while the others still link", a
   expect(lines).toContain("my-hub: my-hub did not issue a pairing code: timed out after 300000 ms");
   expect(lines).toContain("not linked: my-hub");
   expect(existsSync(join(home, ".config/fleet/peer-links/devbox-2.json"))).toBe(true);
+});
+
+const gate = () => {
+  let open!: () => void;
+  const opened = new Promise<void>((resolve) => { open = resolve; });
+  return { open, opened };
+};
+
+function forwardRig(running: number | undefined) {
+  const state = { running, linked: [] as string[] };
+  const run = async (argv: string[]) => {
+    if (argv[2] === "is-active") return { ...ok, code: state.running === undefined ? 3 : 0 };
+    if (argv[2] === "stop") state.running = undefined;
+    if (argv[0] === "systemd-run") state.running = Number(argv.find((arg) => arg.startsWith("127.0.0.1:"))!.split(":")[1]);
+    if (argv[2] === "list") return { ...ok, stdout: "[]" };
+    return ok;
+  };
+  const renewing = (home: string, fields: Parameters<typeof fakeMachine>[1] = {}) => fakeMachine(home, {
+    peers: ["devbox-2"], run, environmentId: async () => "env-new",
+    onPeer: async () => ({ ...ok, stdout: "pair-code\n" }),
+    linkEnvironment: async (input) => void state.linked.push(input.url),
+    ...fields,
+  });
+  return { state, run, renewing };
+}
+
+const peerRecord = (home: string, alias: string) => join(home, `.config/fleet/peer-links/${alias}.json`);
+const portOf = (home: string, alias: string) => (JSON.parse(readFileSync(peerRecord(home, alias), "utf8")) as { port: number }).port;
+
+test("a renew waits for a restore that holds the peer, so the forward, the record and T3 all end on the renewed port", async () => {
+  const home = temp.make("fleet-peers-");
+  writeHome(home, { ".config/fleet/peer-links/devbox-2.json": JSON.stringify({ environmentId: "env-old", port: 22000 }) });
+  const rig = forwardRig(undefined);
+  const stopping = gate();
+  const resume = gate();
+  const waiting = gate();
+  const restorer = fakeMachine(home, { peers: ["devbox-2"], run: async (argv) => {
+    if (argv[2] === "stop") { stopping.open(); await resume.opened; }
+    return rig.run(argv);
+  } });
+  const restoring = restorePeers(restorer.machine);
+  await stopping.opened;
+  const said: string[] = [];
+  const renewing = renewPeers(rig.renewing(home, { say: (line) => { said.push(line); if (line.includes("waiting")) waiting.open(); } }).machine);
+  await Promise.race([waiting.opened, renewing]);
+  resume.open();
+  expect(await restoring).toBe(0);
+  expect(await renewing).toBe(0);
+  expect(rig.state.running).toBe(21000);
+  expect(portOf(home, "devbox-2")).toBe(21000);
+  expect(rig.state.linked).toEqual(["http://127.0.0.1:21000"]);
+  expect(said).toContain("devbox-2: waiting for another fleet peers operation on it to end");
+});
+
+test("a restore during a renew skips the peer the renew holds and says so, so the renewed forward stays", async () => {
+  const home = temp.make("fleet-peers-");
+  writeHome(home, { ".config/fleet/peer-links/devbox-2.json": JSON.stringify({ environmentId: "env-old", port: 22000 }) });
+  const rig = forwardRig(22000);
+  const pairing = gate();
+  const resume = gate();
+  const renewing = renewPeers(rig.renewing(home, { onPeer: async () => {
+    pairing.open();
+    await resume.opened;
+    return { ...ok, stdout: "pair-code\n" };
+  } }).machine);
+  await pairing.opened;
+  const restorer = fakeMachine(home, { peers: ["devbox-2"], run: async (argv) => (argv[2] === "is-active" ? { ...ok, code: 3 } : rig.run(argv)) });
+  expect(await restorePeers(restorer.machine)).toBe(0);
+  expect(restorer.lines).toEqual(["devbox-2: another fleet peers operation holds it; skipped"]);
+  resume.open();
+  expect(await renewing).toBe(0);
+  expect(rig.state.running).toBe(21000);
+  expect(portOf(home, "devbox-2")).toBe(21000);
+  expect(rig.state.linked).toEqual(["http://127.0.0.1:21000"]);
+});
+
+test("restore and renew stop, unlink and forget a peer that left the peer list, and never restart its forward", async () => {
+  for (const command of ["restore", "renew"]) {
+    const home = temp.make("fleet-peers-");
+    for (const [alias, port] of [["devbox-2", 22000], ["devbox-3", 23000]] as const) writeHome(home, { [`.config/fleet/peer-links/${alias}.json`]: JSON.stringify({ environmentId: `env-${alias}`, port }) });
+    const { machine, calls, lines } = fakeMachine(home, {
+      now: () => now,
+      peers: ["devbox-2"],
+      run: async (argv) => {
+        calls.push(`run ${argv.join(" ")}`);
+        if (argv[2] === "is-active") return { ...ok, code: 3 };
+        if (argv[2] === "list") return { ...ok, stdout: JSON.stringify([linkTo("devbox-2", "2026-12-30T00:00:00Z")]) };
+        return ok;
+      },
+    });
+    expect(await peersCommand([command], machine)).toBe(0);
+    expect(calls).toContain(`run ${t3(home)} environment unlink env-devbox-3`);
+    expect(calls).toContain("run systemctl --user stop fleet-peer-devbox-3-t3.service");
+    expect(calls.filter((call) => call.startsWith("run systemd-run")).map((call) => call.split(" ")[4])).toEqual(["--unit=fleet-peer-devbox-2-t3"]);
+    expect(existsSync(peerRecord(home, "devbox-3"))).toBe(false);
+    expect(portOf(home, "devbox-2")).toBe(22000);
+    expect(lines).toContain("devbox-3 left the peer list: stopped its forward and forgot its link");
+  }
+});
+
+test("a peer that left the list keeps its record when T3 cannot unlink it or Fleet did not write it, and restore fails without restarting it", async () => {
+  const home = temp.make("fleet-peers-");
+  writeHome(home, {
+    ".config/fleet/peer-links/devbox-3.json": JSON.stringify({ environmentId: "env-devbox-3", port: 23000 }),
+    ".config/fleet/peer-links/devbox-4.json": JSON.stringify({ notes: "mine" }),
+  });
+  const { machine, calls, lines } = fakeMachine(home, {
+    peers: ["devbox-2"],
+    run: async (argv) => {
+      calls.push(`run ${argv.join(" ")}`);
+      if (argv[2] === "is-active") return { ...ok, code: 3 };
+      if (argv[2] === "unlink") return { ...ok, code: 1, stderr: "T3 is not running" };
+      return ok;
+    },
+  });
+  expect(await restorePeers(machine)).toBe(1);
+  expect(calls).toContain("run systemctl --user stop fleet-peer-devbox-3-t3.service");
+  expect(calls.some((call) => call.startsWith("run systemd-run"))).toBe(false);
+  expect(calls.some((call) => call.includes("devbox-4"))).toBe(false);
+  expect(existsSync(peerRecord(home, "devbox-3"))).toBe(true);
+  expect(readFileSync(peerRecord(home, "devbox-4"), "utf8")).toBe(JSON.stringify({ notes: "mine" }));
+  expect(lines).toContain("could not unlink env-devbox-3: T3 is not running");
+  expect(lines).toContain(`Keep ${peerRecord(home, "devbox-4")}: Fleet did not write it`);
+});
+
+test("a box in the devbox list is not a peer, and fleet peers says so once", async () => {
+  const home = temp.make("fleet-peers-");
+  const { machine, lines } = fakeMachine(home, { devboxes: ["devbox-1", "devbox-2", "box-lane"] });
+  expect(await peersCommand(["plan"], machine)).toBe(0);
+  expect(lines).toEqual(["box-lane: skipped: a box is not a peer", "Peer access plan: my-hub, devbox-2"]);
+});
+
+test("on a box, every fleet peers job and step does nothing and passes", async () => {
+  const home = temp.make("fleet-peers-");
+  writeHome(home, {
+    ".config/fleet/box-marker": "",
+    ".config/fleet/peer-links/devbox-2.json": JSON.stringify({ environmentId: "env-devbox-2", port: 22000 }),
+  });
+  for (const mode of ["renew", "restore", "install", "doctor", "plan", "link"]) {
+    const { machine, calls, lines } = fakeMachine(home, { run: async (argv) => (calls.push(`run ${argv.join(" ")}`), { ...ok, code: 1, stderr: "unreachable" }) });
+    expect(await peersCommand([mode], machine)).toBe(0);
+    expect(calls).toEqual([]);
+    expect(lines).toEqual(["This machine is a box. A box has no peers, so fleet peers has nothing to do."]);
+  }
+  expect(existsSync(join(home, ".ssh"))).toBe(false);
+  expect(existsSync(peerRecord(home, "devbox-2"))).toBe(true);
 });

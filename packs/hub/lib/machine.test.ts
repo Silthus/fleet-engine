@@ -78,6 +78,15 @@ test("the peer list needs only hub.alias, so Hub links works without the Boxes s
   expect(here.self).toBe("devbox-4");
 });
 
+test("a box in the devbox list is never a peer, whether the profile or the machine file names it", () => {
+  const home = homeWithMachine({ schema: 1, role: "devbox", devboxes: ["box-saved"] });
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ devboxes: ["devbox-2", "box-lane"] }));
+  const here = peerMachine({ FLEET_SETTINGS: JSON.stringify({ "hub.alias": "my-hub" }), FLEET_PROFILE_DIR: profile }, home, "devbox-4");
+  expect(here.devboxes).toEqual(["devbox-2", "box-lane", "box-saved"]);
+  expect(here.peers).toEqual(["my-hub", "devbox-2"]);
+});
+
 test("every SSH command to a peer turns agent forwarding off, whatever the person's own SSH config says", () => {
   expect(peerSsh("box-1", "echo hi")).toEqual(["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", "box-1", "bash -lc 'echo hi'"]);
 });

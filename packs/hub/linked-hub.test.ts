@@ -51,7 +51,7 @@ test("through fleet, hub-https doctor passes with no HTTPS host, and peers plan 
   const home = temp.make("fleet-links-cli-");
   const profile = await fleetMachine(home, { "hub.alias": "my-hub" });
   const fleet = await Bun.file(`${profile}/fleet.json`).json();
-  await Bun.write(`${profile}/fleet.json`, JSON.stringify({ ...fleet, packs: ["hub"], devboxes: ["box-1", "box-2"] }));
+  await Bun.write(`${profile}/fleet.json`, JSON.stringify({ ...fleet, packs: ["hub"], devboxes: ["devbox-1", "devbox-2"] }));
   expect(await runFleet(["hub-https", "doctor"], { HOME: home })).toEqual({ stdout: "Hub HTTPS is off: hub.httpsHost is empty.\n", stderr: "", code: 0 });
-  expect(await runFleet(["peers", "plan"], { HOME: home })).toEqual({ stdout: "Peer access plan: my-hub, box-1, box-2\n", stderr: "", code: 0 });
+  expect(await runFleet(["peers", "plan"], { HOME: home })).toEqual({ stdout: "Peer access plan: my-hub, devbox-1, devbox-2\n", stderr: "", code: 0 });
 });

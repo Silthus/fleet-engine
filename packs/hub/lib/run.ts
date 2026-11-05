@@ -17,14 +17,8 @@ export async function must(run: Run, command: string[], input?: string): Promise
 }
 
 export const hostPattern = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
-export const aliasPattern = /^[a-z0-9][a-z0-9.-]*$/;
 
 export function relayPortOf(port: number): number {
   if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === gatewayPort) throw new Error(`hub.relayPort must be a port from 1024 to 65535 other than ${gatewayPort}, not ${port}.`);
   return port;
-}
-
-export function sshName(alias: string): string {
-  if (!aliasPattern.test(alias)) throw new Error(`${JSON.stringify(alias)} is not an SSH name Fleet can use.`);
-  return alias;
 }

@@ -5,6 +5,7 @@ import { tryLockBox } from "./box-lock.ts";
 import { boxPrefix, slugFor, type Coder, type Result } from "./coder.ts";
 import { quote, type Machine, type PeerLinkInput, type PeerMachine } from "./machine.ts";
 import { GatewayClientError, gatewayPort, localGatewayUrl, readGatewayClient, writePrivateFile, type GatewaySettings } from "./mcphub/client.ts";
+import { isBoxName } from "./names.ts";
 import { poolFile, recorded } from "./pool.ts";
 
 export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;
@@ -15,6 +16,7 @@ type Target = { name: string; record: string; unit: string; forward(port: number
 export const t3Port = 3773;
 const answerLimitMs = 60_000;
 export const claudeTokenPath = ".config/fleet/box-claude-token";
+export const boxMarkerPath = ".config/fleet/box-marker";
 const gatewayClientPath = ".config/fleet/mcphub.client.json";
 
 export const t3Of = (here: Pick<Machine, "home">) => join(here.home, ".local/bin/t3");
@@ -25,7 +27,7 @@ export const pairCommand = (here: Pick<Machine, "self">) => `~/.local/bin/t3 pai
 export const boxNameFor = (name: string) => `${boxPrefix}${slugFor(name.startsWith(boxPrefix) ? name.slice(boxPrefix.length) : name)}`;
 
 export function assertBox(name: string): void {
-  if (!/^box-[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`${name} is not a box. Only box-* workspaces can be linked or released.`);
+  if (!isBoxName(name)) throw new Error(`${name} is not a box. Only box-* workspaces can be linked or released.`);
 }
 
 export async function writeOnBox(coder: Pick<Coder, "ssh">, box: string, path: string, content: string): Promise<void> {
@@ -112,7 +114,9 @@ export function readRecord(path: string): Link | undefined {
   const found = lstatSync(path, { throwIfNoEntry: false });
   if (!found) return undefined;
   if (!found.isFile()) throw new Error(`Keep ${path}: it is not a regular file`);
-  return JSON.parse(readFileSync(path, "utf8")) as Link;
+  const record = (() => { try { return JSON.parse(readFileSync(path, "utf8")) as Partial<Link>; } catch { return {}; } })();
+  if (typeof record.environmentId !== "string" || !Number.isInteger(record.port)) throw new Error(`Keep ${path}: Fleet did not write it`);
+  return record as Link;
 }
 
 export async function forget(here: Linker, record: string, unit: string): Promise<boolean> {
@@ -184,7 +188,7 @@ async function revive(here: Pick<Machine, "run" | "say">, unit: string, start: (
   }
 }
 
-async function reviveLink(here: Pick<Machine, "run" | "say">, record: string, name: string, unit: string, forward: (port: number) => Promise<void>): Promise<boolean> {
+export async function reviveLink(here: Pick<Machine, "run" | "say">, record: string, name: string, unit: string, forward: (port: number) => Promise<void>): Promise<boolean> {
   if (!lstatSync(record, { throwIfNoEntry: false })) return true;
   return revive(here, unit, async () => {
     const { port } = readRecord(record)!;
@@ -206,16 +210,6 @@ function restorable(here: Machine): string[] {
   const linked = existsSync(directory) ? readdirSync(directory).filter((file) => file.endsWith(".json")).map((file) => file.slice(0, -".json".length)) : [];
   const held = here.isHub ? Object.keys(recorded(poolFile(here.home))).filter((box) => laneHolds(here, box)) : [];
   return [...new Set([...linked, ...held])].sort();
-}
-
-export async function restoreRecorded(here: Pick<Machine, "run" | "say">, directory: string, unitFor: (name: string) => string, forward: (name: string, unit: string, port: number) => Promise<void>): Promise<number> {
-  const names = existsSync(directory) ? readdirSync(directory).filter((file) => file.endsWith(".json")).map((file) => file.slice(0, -".json".length)).sort() : [];
-  let failed = 0;
-  for (const name of names) {
-    const unit = unitFor(name);
-    if (!(await reviveLink(here, join(directory, `${name}.json`), name, unit, (port) => forward(name, unit, port)))) failed = 1;
-  }
-  return failed;
 }
 
 export async function restoreForwards(coder: Pick<Coder, "binary" | "env">, here: Machine): Promise<number> {
