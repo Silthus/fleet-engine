@@ -495,3 +495,25 @@ test("the old session's stream failing while the new session starts does not sto
   expect(await done).toBe(0);
   expect(client.errors).toEqual([]);
 });
+
+test("a cancelled gateway question reaches the client with the bridge id, and its later answer is dropped", async () => {
+  let cancel!: () => void;
+  const gateway = fakeGateway({}, () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(sse({ jsonrpc: "2.0", id: "ask-0", method: "elicitation/create", params: { message: "Send it?" } })));
+      cancel = () => controller.enqueue(encoder.encode(sse({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "ask-0", reason: "gone" } }, { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "unknown" } })));
+    },
+  }), { headers: { "content-type": "text/event-stream" } }));
+  const { client, done } = await connected(gateway);
+  const asked = await client.next((message) => message.method === "elicitation/create");
+  cancel();
+  const cancelled = await client.next((message) => message.method === "notifications/cancelled");
+  expect(cancelled.params).toEqual({ requestId: asked.id, reason: "gone" });
+  client.send({ jsonrpc: "2.0", id: asked.id!, result: { action: "accept" } });
+  client.send({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: 99 } });
+  await gateway.saw("notifications/cancelled");
+  expect(client.received.filter((message) => message.method === "notifications/cancelled")).toHaveLength(1);
+  expect(gateway.seen.map((item) => item.method)).not.toContain("response");
+  client.close();
+  expect(await done).toBe(0);
+});

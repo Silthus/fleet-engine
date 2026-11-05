@@ -4,7 +4,7 @@ export type Write = (line: string) => void | Promise<void>;
 export type BridgeOptions = { client: GatewayClient; stdin: ReadableStream<Uint8Array>; write: Write; fail: (line: string) => void; fetch: Fetch };
 
 type Id = string | number;
-type Message = { id?: Id | null; method?: string; result?: { protocolVersion?: unknown } };
+type Message = { id?: Id | null; method?: string; params?: { requestId?: unknown } & Record<string, unknown>; result?: { protocolVersion?: unknown } };
 
 const endedEarly = "The MCP gateway ended its answer early.";
 const lostSession = "The MCP gateway lost this session and could not start a new one. Restart this MCP server, and on the hub, run: fleet mcphub doctor";
@@ -66,12 +66,27 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     for (const id of waiting) await write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: reason } }));
   }
 
+  function cancelledAlias(message: Message, from: string | undefined): Message | undefined {
+    const requestId = message.params?.requestId;
+    for (const [alias, question] of questions) {
+      if (question.session !== from || question.id !== requestId) continue;
+      questions.delete(alias);
+      return { ...message, params: { ...message.params, requestId: alias } };
+    }
+    return undefined;
+  }
+
   async function deliver(text: string, waiting: Set<Id>, from: string | undefined) {
     let parsed: Message | Message[];
     try { parsed = JSON.parse(text); } catch { return; }
     for (const message of [parsed].flat()) {
       if (typeof message.result?.protocolVersion === "string" && !protocol) protocol = message.result.protocolVersion;
       if (message.method === undefined && message.id !== undefined && message.id !== null) waiting.delete(message.id);
+      if (message.method === "notifications/cancelled") {
+        const cancelled = cancelledAlias(message, from);
+        if (cancelled) await write(JSON.stringify(cancelled));
+        continue;
+      }
       if (message.method === undefined || message.id === undefined || message.id === null) { await write(JSON.stringify(message)); continue; }
       if (from !== session) continue;
       const alias = `fleet-${++asked}`;
