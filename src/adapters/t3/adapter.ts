@@ -22,11 +22,6 @@ type Link = { environmentId: string; label: string; status: "reachable" | "unrea
 
 const finding = (id: string, say: string, repair?: Finding["repair"]): Finding => ({ id: `t3:${id}`, pack: "engine", say, ...(repair ? { repair } : {}) });
 
-export async function seedT3(plan: Plan, home: string, options: { adopt?: string[]; dryRun?: boolean } = {}): Promise<AdapterResult> {
-  const settings = { adopt: options.adopt ?? [], dryRun: options.dryRun ?? false, outage: sourceOutage(plan) };
-  return settings.dryRun ? reconcileSettings(plan, home, settings) : withLock(home, () => reconcileSettings(plan, home, settings));
-}
-
 export function t3Adapter(options: T3Options = {}): T3Adapter {
   const run = options.run ?? spawnRunner;
   const server = options.server ?? localT3Server;
@@ -41,11 +36,13 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
       const skipped = skipOtherHome("t3", "T3 Code", home, options);
       if (skipped) return skipped;
       const reconcile = async () => {
-        if (plan.os === "linux") await reconcileService(run, user, dryRun, result);
         const settings = { adopt, dryRun, outage: sourceOutage(plan) };
+        const seeded = !(await server.answering(home));
+        if (seeded) merge(result, await reconcileSettings(plan, home, settings));
+        if (plan.os === "linux") await reconcileService(run, user, dryRun, result);
         result.findings.push(...settingProblems(plan));
         if (!(await server.answering(home))) {
-          merge(result, await reconcileSettings(plan, home, settings));
+          if (!seeded) merge(result, await reconcileSettings(plan, home, settings));
           const waiting = taskProjects(plan);
           if (waiting.length) result.findings.push(finding("projects", `T3 Code is not running, so ${waiting.join(", ")} ${waiting.length === 1 ? "waits to be added as a project" : "wait to be added as projects"}. The next fleet apply after T3 Code starts adds ${waiting.length === 1 ? "it" : "them"}.`, "apply"));
           result.findings.push(...waitingScripts(plan));
