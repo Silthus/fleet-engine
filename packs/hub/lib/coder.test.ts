@@ -224,6 +224,11 @@ function stateOf(pid: number): string {
   }
 }
 
+async function settled(pid: number): Promise<string> {
+  for (let attempt = 0; attempt < 500 && !["Z", "X", "gone"].includes(stateOf(pid)); attempt++) await Bun.sleep(2);
+  return stateOf(pid);
+}
+
 const announce = (file: string, what = "$$") => `echo ${what} > ${file}.tmp && /bin/mv ${file}.tmp ${file}`;
 const hangs = "exec /bin/sleep 30";
 
@@ -268,7 +273,7 @@ test("a timeout kills the whole process group, including a child the shell start
   const child = Number(readFileSync(pidFile, "utf8"));
   clock.fire();
   expect((await result).code).toBe(124);
-  expect(["Z", "X", "gone"]).toContain(stateOf(child));
+  expect(["Z", "X", "gone"]).toContain(await settled(child));
 });
 
 test("starting a box gives every Coder API request of the start one time limit", async () => {
