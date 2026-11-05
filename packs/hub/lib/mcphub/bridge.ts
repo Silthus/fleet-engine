@@ -29,7 +29,8 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
   let ready: Promise<unknown> = Promise.resolve();
   let renewing: Promise<boolean> = Promise.resolve(true);
   let listening: AbortController | undefined;
-  const askedBy = new Map<Id, string | undefined>();
+  const questions = new Map<string, { session: string | undefined; id: Id }>();
+  let asked = 0;
   let stop!: (line: string) => void;
   const stopped = new Promise<number>((resolve) => {
     stop = (line) => {
@@ -70,9 +71,12 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     try { parsed = JSON.parse(text); } catch { return; }
     for (const message of [parsed].flat()) {
       if (typeof message.result?.protocolVersion === "string" && !protocol) protocol = message.result.protocolVersion;
-      if (message.method !== undefined && message.id !== undefined && message.id !== null) askedBy.set(message.id, from);
       if (message.method === undefined && message.id !== undefined && message.id !== null) waiting.delete(message.id);
-      await write(JSON.stringify(message));
+      if (message.method === undefined || message.id === undefined || message.id === null) { await write(JSON.stringify(message)); continue; }
+      if (from !== session) continue;
+      const alias = `fleet-${++asked}`;
+      questions.set(alias, { session: from, id: message.id });
+      await write(JSON.stringify({ ...message, id: alias }));
     }
   }
 
@@ -115,16 +119,23 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
   function renew(stale: string) {
     if (session === stale) {
       session = undefined;
+      listening?.abort();
+      for (const [alias, question] of questions) if (question.session === stale) questions.delete(alias);
       renewing = startSession().then((started) => started || (stop(lostSession), false));
     }
     return renewing;
   }
 
-  const answersRetired = (message: Message) => message.method === undefined && message.id !== undefined && message.id !== null && askedBy.has(message.id) && askedBy.get(message.id) !== session;
+  function forCurrentSession(message: Message): Message[] {
+    if (message.method !== undefined || message.id === undefined || message.id === null) return [message];
+    const question = questions.get(String(message.id));
+    questions.delete(String(message.id));
+    return question && question.session === session ? [{ ...message, id: question.id }] : [];
+  }
 
   async function post(given: Message[], batch: boolean, retried = false): Promise<void> {
     if (!(await renewing)) return;
-    const messages = given.filter((message) => !answersRetired(message));
+    const messages = retried ? given.filter((message) => message.method !== undefined) : given.flatMap(forCurrentSession);
     if (!messages.length) return;
     const line = JSON.stringify(batch ? messages : messages[0]);
     const sentWith = session;
@@ -136,7 +147,6 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
       if (await renew(sentWith)) return post(messages, batch, true);
       return;
     }
-    for (const message of messages) if (message.method === undefined && message.id !== undefined && message.id !== null) askedBy.delete(message.id);
     const waiting = new Set(requestIds(messages));
     if (!response.ok) {
       await response.body?.cancel();
@@ -144,7 +154,7 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     }
     if (initializing) session = response.headers.get("mcp-session-id") ?? undefined, handshake = [line];
     if (messages.some((message) => message.method === "notifications/initialized")) handshake.push(line), background(listen());
-    background(relay(response, waiting, session));
+    background(relay(response, waiting, initializing ? session : sentWith));
   }
 
   function dispatch(line: string) {
