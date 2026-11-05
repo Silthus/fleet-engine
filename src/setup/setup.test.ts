@@ -31,6 +31,17 @@ describe("fleet setup questions", () => {
     expect(result.applied).toEqual([profilePath(home)]);
   });
 
+  test("on a Mac, saves the mac role, offers a devbox, and sets up this Mac", async () => {
+    const home = temp.make("home-");
+    const result = await fleetSetup(home, [], ["", "", ""], undefined, undefined, 0, "darwin");
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("▶ Set up this Mac: fleet apply installs your packs");
+    expect(result.output).not.toContain("Set up this machine");
+    expect(result.output).toContain("  This Mac ");
+    expect(machine(home)).toMatchObject({ schema: 1, role: "mac", devboxes: [], setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "chatgpt", "check"] } });
+    expect(result.applied).toEqual([profilePath(home)]);
+  });
+
   test("Ctrl-C keeps every answer, and a rerun picks up at the next question", async () => {
     const home = temp.make("home-");
     const stopped = await fleetSetup(home, [], ["2"]);

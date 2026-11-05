@@ -223,6 +223,30 @@ describe("launchd jobs on a Mac", () => {
     expect(readFileSync(join(home, ".local/state/fleet/jobs/prune.sh"), "utf8")).toContain(`PATH='${home}/.local/bin:${home}/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'`);
   });
 
+  test("escapes &, <, and > in the plist's paths, so a home with them still loads", async () => {
+    const home = temp.make("home-a&b<c>-");
+    const mac = launchctl();
+    await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+    const text = readFileSync(join(home, "Library/LaunchAgents/dev.fleet.prune.plist"), "utf8");
+    const escaped = home.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    expect(text).toContain(`<string>${escaped}/.local/state/fleet/jobs/prune.sh</string>`);
+    expect(text).toContain(`<string>${escaped}/.local/state/fleet/jobs/prune.log</string>`);
+    expect(text).not.toContain(home);
+    expect(mac.calls).toContainEqual(["launchctl", "bootstrap", "gui/501", join(home, "Library/LaunchAgents/dev.fleet.prune.plist")]);
+  });
+
+  test("reports a job that launchd does not load, and loads it on the next apply", async () => {
+    const home = temp.make("home-");
+    const mac = launchctl();
+    const refuse: CommandRunner = async (command) => (command[1] === "bootstrap" ? { code: 5, stdout: "" } : { code: 113, stdout: "" });
+    const refused = await apply(plan("darwin", [prune]), { home, adapters: [jobsAdapter({ run: refuse, engineRoot: engine, uid: 501 })] });
+    expect(refused.findings).toContainEqual({ id: "job:prune", pack: "base", say: "launchd did not load the prune job.", repair: "apply" });
+    expect(existsSync(join(home, "Library/LaunchAgents/dev.fleet.prune.plist"))).toBe(true);
+
+    await apply(plan("darwin", [prune]), { home, adapters: [mac.adapter] });
+    expect(mac.loaded.has("gui/501/dev.fleet.prune")).toBe(true);
+  });
+
   test("keeps an agent that launchd does not stop", async () => {
     const home = temp.make("home-");
     const mac = launchctl(true);

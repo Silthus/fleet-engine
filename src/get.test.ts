@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git, isolateGit, tempDirs } from "./testing/git.ts";
 
@@ -22,15 +22,18 @@ beforeAll(() => {
   git(engineRepo, "tag", "v0.1.0");
 });
 
-function sandbox(os: "Linux" | "Darwin") {
+type SandboxOptions = { without?: string[]; brewInstaller?: string };
+
+function sandbox(os: "Linux" | "Darwin", options: SandboxOptions = {}) {
   const root = temp.make("get-");
   const bin = join(root, "bin");
   const home = join(root, "home");
   mkdirSync(bin);
   mkdirSync(home);
-  for (const tool of systemTools) symlinkSync(Bun.which(tool) ?? `/missing/${tool}`, join(bin, tool));
+  for (const tool of systemTools.filter((name) => !options.without?.includes(name))) symlinkSync(Bun.which(tool) ?? `/missing/${tool}`, join(bin, tool));
   const log = join(root, "calls.log");
   const stub = (name: string, body: string) => {
+    rmSync(join(bin, name), { force: true });
     writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n${body}\n`);
     chmodSync(join(bin, name), 0o755);
   };
@@ -39,7 +42,7 @@ function sandbox(os: "Linux" | "Darwin") {
   stub("claude", "exit 0");
   stub("codex", "exit 0");
   const t3Installer = `printf '#!/bin/sh\\necho "t3 $*" >> "${log}"\\n' > "$HOME/.local/bin/t3"; chmod +x "$HOME/.local/bin/t3"; echo "t3 installer channel=$T3CODE_CHANNEL" >> "${log}"`;
-  const brewInstaller = `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
+  const brewInstaller = options.brewInstaller ?? `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
   const ghTar = buildGhTarball(root);
   stub("curl", `
 out=; url=; effective=
@@ -53,7 +56,7 @@ case "$url" in
   *) echo "unexpected url $url" >&2; exit 22 ;;
 esac`);
   symlinkSync(Bun.which("cut") ?? "/usr/bin/cut", join(bin, "cut"));
-  return { root, bin, home, log };
+  return { root, bin, home, log, stub };
 }
 
 function buildGhTarball(root: string) {
@@ -126,6 +129,55 @@ describe("get.sh", () => {
     const result = Bun.spawnSync([Bun.which("script") ?? "script", "-qec", command, "/dev/null"], { env, stdin: "ignore" });
     expect(result.exitCode).toBe(0);
     expect(readFileSync(box.log, "utf8")).toContain("brew installer stdin=tty");
+  });
+
+  test("on macOS installs the Command Line Tools first and waits until they are there", () => {
+    const box = sandbox("Darwin");
+    const count = join(box.root, "xcode-checks");
+    box.stub("xcode-select", `[ "$1" = -p ] || exit 0\nn=$(cat "${count}" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "${count}"; [ $n -ge 3 ]`);
+    box.stub("sleep", "exit 0");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("Installing the Command Line Tools. Finish the window that opens; this script waits.");
+    const calls = result.calls.split("\n");
+    expect(calls.slice(0, 5)).toEqual(["uname -s", "xcode-select -p", "xcode-select --install", "xcode-select -p", "sleep 5"]);
+    expect(calls.indexOf("xcode-select -p", 4)).toBeLessThan(calls.findIndex((call) => call.startsWith("curl ")));
+  });
+
+  test("on macOS with Homebrew present, skips its installer and installs Bun with brew when Bun is missing", () => {
+    const box = sandbox("Darwin", { without: ["bun"] });
+    box.stub("brew", "exit 0");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    expect(result.output).not.toContain("Installing Homebrew");
+    expect(result.calls).not.toContain("Homebrew/install");
+    const calls = result.calls.split("\n");
+    expect(calls).toContain("brew install gh");
+    expect(calls).toContain("brew install bun");
+    expect(calls).toContain("brew install --cask t3-code");
+  });
+
+  test("on macOS stops when the Homebrew installer leaves no brew on PATH", () => {
+    const box = sandbox("Darwin", { brewInstaller: "exit 0" });
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("Fleet: Homebrew installed, but brew is not on PATH.");
+    expect(result.calls).not.toContain("brew install");
+    expect(existsSync(join(box.home, ".local/share/fleet/engine"))).toBe(false);
+  });
+
+  test("under curl | sh, hands fleet setup the terminal so it can ask its questions", () => {
+    const box = sandbox("Darwin");
+    const fakeEngine = temp.make("fake-engine-");
+    writeFileSync(join(fakeEngine, "fleet"), `if [ -t 0 ]; then where=tty; else where=pipe; fi\necho "fleet $* stdin=$where" >> "${box.log}"\n`);
+    git(fakeEngine, "init", "-q", "-b", "main");
+    git(fakeEngine, "add", ".");
+    git(fakeEngine, "commit", "-q", "-m", "fake engine");
+    const command = `printf 'piped script\\n' | sh ${join(repoRoot, "get.sh")} --ref main -- --preset starter`;
+    const env = { PATH: box.bin, HOME: box.home, SHELL: "/bin/sh", FLEET_ENGINE_REPO: fakeEngine, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    const result = Bun.spawnSync([Bun.which("script") ?? "script", "-qec", command, "/dev/null"], { env, stdin: "ignore" });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(box.log, "utf8").split("\n")).toContain("fleet setup --preset starter stdin=tty");
   });
 
   test("a second run changes nothing", () => {
