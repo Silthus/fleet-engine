@@ -10,7 +10,8 @@
 #
 # FLEET_PROOF_ENGINE serves get.sh and the engine from that copy, at its HEAD
 # (or a bundle's first branch), while the engine repo is private. Without it,
-# the proof uses the public repo. FLEET_PROOF_REF picks the ref (main).
+# the proof uses the public repo. FLEET_PROOF_REF picks the ref (main). The
+# copy's main points at the same commit, because the profile pins main.
 set -eu
 
 ref=${FLEET_PROOF_REF:-main}
@@ -189,7 +190,7 @@ snapshot() {
     cd "$home"
     find . \( -path ./.t3 -o -path ./.cache -o -path ./.bun -o -path ./.npm -o -path ./.proof \
       -o -path ./.local/share/fleet/sources -o -path ./.local/share/fleet/engine/.git -o -path ./.local/state/fleet/logs \
-      -o -path ./.local/share/claude -o -path ./.local/share/t3code -o -path ./.claude/statsig -o -path ./.claude/todos \) -prune \
+      -o -path ./.local/share/claude -o -path ./.local/share/t3code -o -path ./.claude/statsig -o -path ./.claude/todos -o -path ./.codex/tmp \) -prune \
       -o -type f -print | LC_ALL=C sort | xargs -r -d '\n' sha256sum
     [ ! -f .t3/userdata/settings.json ] || sha256sum .t3/userdata/settings.json
   )
@@ -334,6 +335,7 @@ if [ -n "$source_engine" ]; then
   engine_git="$work/engine.git"
   git -c safe.directory='*' clone -q --bare "$source_engine" "$engine_git"
   git --git-dir="$engine_git" update-ref "refs/heads/$ref" "$commit"
+  git --git-dir="$engine_git" update-ref refs/heads/main "$commit"
   git --git-dir="$engine_git" show "$ref:get.sh" >"$work/get.sh"
   chmod -R a+rX "$work/engine.git" "$work/get.sh"
   engine_url="file://$engine_git"

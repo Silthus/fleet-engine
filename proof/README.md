@@ -34,9 +34,14 @@ sudo sh proof/fresh-linux.sh
    - `~/.t3/userdata/settings.json` held Fleet's keys before T3 Code's server
      first started;
    - T3 Code runs on a port no other user's T3 Code uses;
+   - a new login shell runs `fleet`, from the login file get.sh picks by
+     `$SHELL` (`~/.profile` for bash, unless `~/.bash_profile` or
+     `~/.bash_login` exists);
+   - `codex --version` runs, with no Node installed;
    - `fleet doctor` lists only sign-ins as open;
    - `fleet apply` again, and the one-liner or `install.sh` again, change
-     nothing.
+     nothing. Caches, logs, and Codex's scratch folder `~/.codex/tmp` do not
+     count.
 5. It removes both users, their homes, their crontabs, and the work folder.
 
 It exits 1 when a check fails.
@@ -53,7 +58,13 @@ sandbox answers from the same copy.
 sudo FLEET_PROOF_ENGINE=/path/to/fleet-engine sh proof/fresh-linux.sh
 ```
 
-`FLEET_PROOF_REF` picks the engine ref, `main` by default.
+`FLEET_PROOF_REF` picks the engine ref, `main` by default. The copy's `main`
+points at the same commit, because setup pins the profile's engine at `main`
+and user B's `install.sh` fetches get.sh at that ref.
+
+```sh
+sudo FLEET_PROOF_ENGINE=/path/to/engine.bundle FLEET_PROOF_REF=my-branch sh proof/fresh-linux.sh
+```
 
 ## What is real
 
