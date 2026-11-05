@@ -181,7 +181,7 @@ describe("fleet routing", () => {
     cpSync(join(repoRoot, "packs/base"), join(root, "packs/base"), { recursive: true });
     for (const pack of ["tools", "rival"]) {
       mkdirSync(join(root, "packs", pack, "commands"), { recursive: true });
-      writeFileSync(join(root, "packs", pack, "pack.json"), JSON.stringify({ schema: 1, name: pack, summary: `${pack} pack.` }));
+      writeFileSync(join(root, "packs", pack, "pack.json"), JSON.stringify({ schema: 1, name: pack, summary: `${pack} pack.`, ...(pack === "rival" ? { title: "Rival Tools" } : {}) }));
       writeFileSync(join(root, "packs", pack, "commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", "${pack} " + Bun.argv.slice(2).join(" "));\n`);
     }
     return root;
@@ -256,7 +256,7 @@ describe("fleet routing", () => {
 
   test("names the pack to turn on for a command of a disabled pack", async () => {
     const { home, engine } = await machineWith([]);
-    expect(await fleet(["hello"], home, engine)).toMatchObject({ code: 2, output: "fleet hello comes from the rival pack, which is off. Turn it on with fleet packs." });
+    expect(await fleet(["hello"], home, engine)).toMatchObject({ code: 2, output: "fleet hello comes from the Rival Tools pack, which is off. Turn it on with fleet packs." });
     expect(existsSync(join(home, "hello.txt"))).toBe(false);
     expect((await fleet(["nope"], home, engine)).output).toStartWith("fleet: unknown command nope");
   });

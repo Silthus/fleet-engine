@@ -166,7 +166,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     const { plan } = planFor(context, machine);
     const summary = {
       role: machine.role,
-      packs: plan.packs.filter((pack) => pack.available && pack.name !== "base").map((pack) => title(pack.name)),
+      packs: plan.packs.filter((pack) => pack.available && pack.name !== "base").map((pack) => title(pack.name, catalog.packs)),
       devboxes: machine.devboxes ?? [],
       profileRepo: repoName((await profileForBox(box, machine.profileDir)).url),
       runsByItself: runsByItself(

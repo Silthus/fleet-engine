@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
 import { defaultSources } from "./defaults.ts";
-import { profilePath } from "./profile.ts";
+import { profileGuide, profilePath } from "./profile.ts";
 import { fleetSetup, githubRepo, machineFile, pushedAnswers } from "./testing.ts";
 
 isolateGit();
@@ -33,6 +33,11 @@ describe("fleet setup profile", () => {
     const guide = git(githubRepo(home, "nora/fleet-profile"), "show", "main:README.md");
     expect(guide).toContain("### pull-requests");
     expect(guide).toContain("| `pull-requests.freeReviews` |");
+  });
+
+  test("heads a pack's section in the profile guide with its title", () => {
+    const guide = profileGuide([{ schema: 1, name: "team", title: "Team Tools", summary: "Team rules.", settings: [{ key: "team.region", question: "Which region?", type: "string" }] }]);
+    expect(guide).toContain("### Team Tools");
   });
 
   test("with Memory on it also creates the memory repo and points memory.repo at it", async () => {
