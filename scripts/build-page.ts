@@ -60,6 +60,9 @@ export async function pageData({ audience, team = [] }: PageOptions): Promise<Pa
 }
 
 function pagePack(manifest: PackManifest, holds: (need: Need) => boolean): PagePack {
+  const workflows = manifest.workflows ?? [];
+  const shownWorkflows = workflows.filter((workflow) => (workflow.needs ?? []).every(holds));
+  const listedOnlyByHidden = (key: string) => workflows.some((workflow) => workflow.settings?.includes(key)) && !shownWorkflows.some((workflow) => workflow.settings?.includes(key));
   return {
     name: manifest.name,
     title: packTitle(manifest),
@@ -69,10 +72,8 @@ function pagePack(manifest: PackManifest, holds: (need: Need) => boolean): PageP
     ...(manifest.risk ? { risk: manifest.risk } : {}),
     requires: (manifest.requires ?? []).filter((name) => name !== "base"),
     always: manifest.name === "base",
-    workflows: (manifest.workflows ?? [])
-      .filter((workflow) => (workflow.needs ?? []).every(holds))
-      .map((workflow) => ({ ...workflow, needs: workflow.needs ?? [], settings: workflow.settings ?? [] })),
-    settings: (manifest.settings ?? []).filter((setting) => !engineSettings.includes(setting.key)),
+    workflows: shownWorkflows.map((workflow) => ({ ...workflow, needs: workflow.needs ?? [], settings: workflow.settings ?? [] })),
+    settings: (manifest.settings ?? []).filter((setting) => !engineSettings.includes(setting.key) && !listedOnlyByHidden(setting.key)),
   };
 }
 

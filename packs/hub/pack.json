@@ -1,0 +1,271 @@
+{
+  "schema": 1,
+  "name": "hub",
+  "summary": "One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks.",
+  "day": "Every machine reaches your MCP servers through the hub, and a devbox that fills its disk is cleaned before you notice.",
+  "cost": "One devbox that stays on, and some setup on it. Every other machine keeps working when the hub is down.",
+  "risk": "The hub holds sign-ins for your MCP servers and reaches every devbox over SSH. Keep it as private as your laptop.",
+  "settings": [
+    {
+      "key": "hub.alias",
+      "question": "What is the SSH name of your hub, the always-on devbox that manages the others, such as my-hub?",
+      "type": "string"
+    },
+    {
+      "key": "hub.coderUrl",
+      "question": "What is the address of your Coder deployment, such as https://coder.example.com?",
+      "type": "string"
+    },
+    {
+      "key": "hub.boxTemplate",
+      "question": "Which Coder template do new boxes start from?",
+      "type": "string"
+    },
+    {
+      "key": "hub.boxDiskGigabytes",
+      "question": "How many gigabytes of disk does a new box get?",
+      "type": "number",
+      "default": 200,
+      "ask": "never"
+    },
+    {
+      "key": "hub.boxPoolSize",
+      "question": "How many stopped boxes may the pool keep warm for the next job?",
+      "type": "number",
+      "default": 8,
+      "ask": "never"
+    },
+    {
+      "key": "hub.boxIdleHours",
+      "question": "After how many hours without a running thread is a box idle, so the hub stops it?",
+      "type": "number",
+      "default": 4,
+      "ask": "never"
+    },
+    {
+      "key": "hub.boxReapDays",
+      "question": "After how many days stopped is a box given back to the pool or deleted?",
+      "type": "number",
+      "default": 3,
+      "ask": "never"
+    },
+    {
+      "key": "hub.boxKeepDirs",
+      "question": "Which folders in ~/dev should a reused box keep, separated by spaces? Every other folder there is removed before the next job.",
+      "type": "string",
+      "default": "",
+      "ask": "never"
+    },
+    {
+      "key": "hub.boxWarmCommand",
+      "question": "Which command warms a pooled box each night, such as a dependency install in your main checkout? Leave it empty to skip.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "hub.diskSweepGigabytes",
+      "question": "Below how many free gigabytes does the hub clean a devbox's disk?",
+      "type": "number",
+      "default": 15,
+      "ask": "never"
+    },
+    {
+      "key": "hub.diskAlertGigabytes",
+      "question": "Below how many free gigabytes after a cleanup does the hub tell you?",
+      "type": "number",
+      "default": 10,
+      "ask": "never"
+    },
+    {
+      "key": "hub.slackUserId",
+      "question": "What is your Slack member ID, so only your own messages start threads? In Slack, open your profile, then More, then Copy member ID. Leave it empty to use the member ID a team pack has.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "hub.slackTriggerEmoji",
+      "question": "Which emoji on your Slack message starts a thread, without the colons?",
+      "type": "string",
+      "default": "t3code",
+      "ask": "never"
+    },
+    {
+      "key": "hub.httpsHost",
+      "question": "Which private host name do your devboxes use to reach the hub over HTTPS, such as hub.internal.example.com? Leave it empty to reach it over SSH tunnels only.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "hub.relayPort",
+      "question": "Which port on the hub do the SSH tunnels from your devboxes use?",
+      "type": "number",
+      "default": 60001,
+      "ask": "never"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "boxes",
+      "name": "Boxes",
+      "default": true,
+      "needs": [
+        "hub",
+        "coder"
+      ],
+      "settings": [
+        "hub.alias",
+        "hub.coderUrl",
+        "hub.boxTemplate",
+        "hub.boxDiskGigabytes",
+        "hub.boxPoolSize",
+        "hub.boxIdleHours",
+        "hub.boxReapDays",
+        "hub.boxKeepDirs",
+        "hub.boxWarmCommand"
+      ],
+      "sentence": "An agent borrows a short-lived devbox from a warm pool for a big job, links it to T3 Code, and gives it back when the job ends.",
+      "moment": {
+        "time": "10:00",
+        "title": "A fresh box in a minute",
+        "body": "A thread needs a clean machine for a long test run. It borrows a warm box from the pool, runs there, and returns the box when it is done.",
+        "words": [
+          "hub",
+          "devbox",
+          "Coder",
+          "thread"
+        ]
+      }
+    },
+    {
+      "id": "mcp-gateway",
+      "name": "MCP gateway",
+      "default": true,
+      "needs": [
+        "hub"
+      ],
+      "settings": [
+        "hub.alias"
+      ],
+      "sentence": "The hub signs in to your MCP servers once, and agents on every machine reach them through it.",
+      "moment": {
+        "time": "09:20",
+        "title": "Every tool, signed in once",
+        "body": "An agent on your laptop reads a Slack thread and an agent on a fresh box queries your analytics, both through the hub. You signed in to each tool once.",
+        "words": [
+          "hub",
+          "agent",
+          "MCP server"
+        ]
+      }
+    },
+    {
+      "id": "disk-watch",
+      "name": "Disk watch",
+      "default": true,
+      "needs": [
+        "hub"
+      ],
+      "settings": [
+        "hub.alias",
+        "hub.diskSweepGigabytes",
+        "hub.diskAlertGigabytes"
+      ],
+      "sentence": "The hub cleans a devbox whose disk runs low, and tells you only when the cleanup cannot free enough.",
+      "moment": {
+        "time": "15:10",
+        "title": "A full disk you never saw",
+        "body": "A devbox dropped under its free-space floor after a big build. The hub cleaned old caches and worktrees on it, so your threads kept running.",
+        "words": [
+          "hub",
+          "devbox",
+          "worktree"
+        ]
+      }
+    },
+    {
+      "id": "linked-hub",
+      "name": "Hub links",
+      "default": true,
+      "needs": [
+        "hub"
+      ],
+      "settings": [
+        "hub.alias",
+        "hub.httpsHost",
+        "hub.relayPort"
+      ],
+      "sentence": "The hub keeps SSH tunnels and T3 links to every devbox open, so each one can start threads on the others.",
+      "moment": {
+        "time": "08:50",
+        "title": "Every devbox reaches every other",
+        "body": "A thread on one devbox hands a task to another. The hub keeps the tunnels and links between them renewed every night.",
+        "words": [
+          "hub",
+          "devbox",
+          "T3 Code"
+        ]
+      }
+    },
+    {
+      "id": "slack-trigger",
+      "name": "Slack trigger",
+      "default": false,
+      "needs": [
+        "hub"
+      ],
+      "settings": [
+        "hub.slackUserId",
+        "hub.slackTriggerEmoji"
+      ],
+      "sentence": "An emoji on your Slack message, or your reaction to someone else's, starts a T3 thread about it.",
+      "moment": {
+        "time": "13:40",
+        "title": "A thread from a Slack emoji",
+        "body": "A teammate reports a bug in Slack. You react with one emoji, and a thread starts on a devbox to find the cause.",
+        "words": [
+          "hub",
+          "thread"
+        ]
+      },
+      "risk": "Your Slack messages and the threads they belong to become agent prompts. Only your own messages and reactions start a thread."
+    }
+  ],
+  "config": [
+    {
+      "provider": "claude",
+      "key": "mcpServers.fleet-hub",
+      "value": {
+        "type": "stdio",
+        "command": "sh",
+        "args": [
+          "-c",
+          "exec sh \"${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet\" mcphub connect"
+        ]
+      },
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "mcp-gateway"
+    },
+    {
+      "provider": "codex",
+      "key": "mcp_servers.fleet-hub",
+      "value": {
+        "command": "sh",
+        "args": [
+          "-c",
+          "exec sh \"${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet\" mcphub connect"
+        ]
+      },
+      "plans": [
+        "codex",
+        "both"
+      ],
+      "workflow": "mcp-gateway"
+    }
+  ]
+}

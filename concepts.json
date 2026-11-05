@@ -7,6 +7,8 @@
   { "word": "worktree", "note": "A separate checkout of the same repo, so several threads can change code at once without touching each other." },
   { "word": "devbox", "note": "A Linux machine, local or in the cloud, where agents and threads run." },
   { "word": "always-on devbox", "note": "A devbox that stays on overnight, so scheduled agent work can run while you sleep." },
+  { "word": "hub", "note": "One always-on devbox that manages your other machines: it shares your MCP servers, keeps your devboxes linked, and watches their disks. Only the Hub pack adds one." },
+  { "word": "MCP server", "note": "A connector that gives agents a tool, such as Slack or your analytics, through the Model Context Protocol." },
   { "word": "map", "note": "A plan for big work: one issue that lists tickets, each small enough for one pull request." },
   { "word": "conductor", "note": "The thread that works through a map. It starts one worker thread for each ticket that is ready." },
   { "word": "draft pull request", "note": "A pull request that is not yet ready for review. Agents open drafts, and you decide when one is ready." },
