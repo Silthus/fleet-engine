@@ -74,3 +74,42 @@ Put shared setup in the profile and roll it out. Keep a value for one machine
 in that machine's own local files, outside the profile. To add a devbox, run
 `fleet devbox add <ssh name>` on the hub: it sets the host up as a devbox and
 lists it.
+
+## Own-account balancing
+
+This workflow is off by default. Read its terms note first:
+`fleet packs` shows it, and only the person turns the workflow on, with
+`fleet packs --workflows own-account-balancing=on`. Balancing is only for
+the person's own subscriptions, never for someone else's.
+
+- **The proxy.** On the hub, `fleet apply` runs `fleet cli-proxy install`.
+  It installs the pinned CLIProxyAPI release, checks its SHA-256, and runs it
+  as the user service `fleet-cli-proxy.service` at `http://127.0.0.1:8317`,
+  loopback only. Its files are in `~/.local/share/fleet-cli-proxy/`. The
+  client key is in `~/.config/fleet/cli-proxy.key` and the management key in
+  `~/.local/share/fleet-cli-proxy/management.env`, both mode 600. Install
+  keeps a file that Fleet did not write and stops at a linked path.
+- **Subscriptions.** The person adds each of their own Claude accounts on the
+  hub. `fleet cli-proxy doctor` prints the login command until the proxy holds
+  `hub.proxyAccounts` subscriptions (2 by default). Keep the login URL and
+  callback values out of logs and Git.
+- **The balancer.** Every 5 minutes, `fleet cli-proxy-balance` reads the weekly
+  usage of each subscription and gives the highest priority to the one whose
+  weekly quota resets first. A full or unreadable subscription gets priority
+  0. It keeps fill-first routing, and session affinity keeps each session on
+  one subscription. `fleet cli-proxy-balance --dry-run` prints the ranking and
+  changes nothing.
+- **Claude Code.** On the hub and on each devbox, Fleet sets
+  `env.ANTHROPIC_BASE_URL` to the proxy and `apiKeyHelper` to a command that
+  reads the client key file. The key is never in the settings file.
+- **Devboxes.** The hub's SSH tunnel to each devbox carries port 8317. On the
+  hub, `fleet cli-proxy doctor` prints one connect command per devbox; it
+  sends the key on standard input. Boxes get the key and connect when the hub
+  hands them over.
+- **When the proxy is down.** `fleet apply` and `fleet doctor` run
+  `fleet cli-proxy route` and `fleet cli-proxy check`. When the proxy does not
+  answer this machine's key, they remove Fleet's two Claude settings, so Claude
+  Code uses its own sign-in. The next `fleet apply` sends it back to the proxy
+  once the proxy answers again.
+- **Stop on one machine.** `fleet cli-proxy disconnect` removes the settings
+  and the key. Then run `claude` and enter `/login`.

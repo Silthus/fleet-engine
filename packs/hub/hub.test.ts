@@ -201,3 +201,60 @@ describe("the Dream workflow", () => {
     expect(skills(plan({ packs: [] }, hub))).toEqual([]);
   });
 });
+
+describe("the Own-account balancing workflow", () => {
+  const hub: MachineFile = { schema: 1, role: "hub" };
+  const balancing = { packs: ["hub"], workflows: { "own-account-balancing": true } };
+  const manifest = () => sources[0]!.packs.find((pack) => pack.manifest.name === "hub")!.manifest;
+  const proxyItems = (result: Plan) => ({
+    jobs: result.jobs.filter((job) => job.workflow === "own-account-balancing").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}`),
+    steps: result.steps.filter((step) => step.workflow === "own-account-balancing").map((step) => step.id),
+    checks: result.checks.filter((check) => check.workflow === "own-account-balancing").map((check) => check.id),
+    config: result.config.filter((entry) => entry.workflow === "own-account-balancing").map((entry) => `${entry.provider}:${entry.key}`),
+  });
+  const nothing = { jobs: [], steps: [], checks: [], config: [] };
+
+  test("is off by default, needs only the hub, and its risk quotes the Anthropic terms word for word", () => {
+    const workflow = manifest().workflows!.find((item) => item.id === "own-account-balancing")!;
+    expect(workflow).toMatchObject({ name: "Own-account balancing", default: false, needs: ["hub"] });
+    expect(workflow.moment).toBeDefined();
+    for (const quote of [
+      "https://www.anthropic.com/legal/aup",
+      "Do Not Abuse Our Platform",
+      "\"Resell, proxy, or otherwise provide access to Claude through unauthorized means, including services that route requests through consumer subscriptions or misrepresent the product or client being used\"",
+      "https://www.anthropic.com/legal/consumer-terms",
+      "\"You may not share your Account login information, Anthropic API key, or Account credentials with anyone else. You also may not make your Account available to anyone else.\"",
+      "\"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\"",
+      "2026-11-05",
+      "only for your own subscriptions, never for someone else's",
+    ]) expect(workflow.risk).toContain(quote);
+    expect(plan({ packs: ["hub"] }, hub).workflows.find((item) => item.id === "own-account-balancing")).toMatchObject({ active: false, reason: "turned off" });
+  });
+
+  test("with the workflow off, the Hub pack plans nothing new on any role", () => {
+    for (const machine of [hub, devbox, mac]) expect(proxyItems(plan({ packs: ["hub"] }, machine))).toEqual(nothing);
+    expect(plan({ packs: ["hub"] }, hub).settings["hub.proxyAccounts"]).toBeUndefined();
+  });
+
+  test("with it on, the hub gets the proxy, its balancer, and the route; a devbox gets only the route; the Mac gets nothing", () => {
+    const route = { checks: ["cli-proxy-client"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper"] };
+    expect(proxyItems(plan(balancing, hub))).toEqual({ jobs: ["cli-proxy-balance: fleet cli-proxy-balance every 5m"], steps: ["cli-proxy-route", "cli-proxy"], ...route });
+    expect(proxyItems(plan(balancing, devbox))).toEqual({ jobs: [], steps: ["cli-proxy-route"], ...route });
+    expect(proxyItems(plan(balancing, mac))).toEqual(nothing);
+    for (const machine of [hub, devbox]) expect(proxyItems(plan({ ...balancing, plan: "codex" }, machine))).toEqual(nothing);
+    expect(plan(balancing, hub).settings["hub.proxyAccounts"]).toBe(2);
+  });
+
+  test("sends Claude Code to the loopback proxy, and keeps the client key out of the settings: Claude reads it from a private file", () => {
+    const config = plan(balancing, devbox).config.filter((entry) => entry.workflow === "own-account-balancing");
+    expect(Object.fromEntries(config.map((entry) => [entry.key, entry.value]))).toEqual({ "env.ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", apiKeyHelper: "cat \"$HOME/.config/fleet/cli-proxy.key\"" });
+    expect(config.map((entry) => entry.pack)).toEqual(["hub", "hub"]);
+  });
+
+  test("runs the route before the hub's other steps, so a failed step can never leave Claude Code at a dead proxy", () => {
+    const steps = plan(balancing, hub).steps.filter((step) => step.pack === "hub").map((step) => step.id);
+    expect(steps[0]).toBe("cli-proxy-route");
+    expect(plan(balancing, hub).steps.find((step) => step.id === "cli-proxy-route")).toMatchObject({ run: ["fleet", "cli-proxy", "route"] });
+    expect(plan(balancing, hub).steps.find((step) => step.id === "cli-proxy-route")!.check).toBeUndefined();
+  });
+});

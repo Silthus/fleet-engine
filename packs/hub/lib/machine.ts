@@ -10,7 +10,7 @@ import type { Clock } from "./pool.ts";
 
 export type BoxSettings = {
   alias: string; coderUrl: string; template: string; diskGigabytes: number; poolSize: number;
-  idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; httpsHost?: string; warmCommand?: string;
+  idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; httpsHost?: string; warmCommand?: string; proxy?: true;
 };
 
 export type PeerLinkInput = { url: string; alternateUrls: string[]; pairingCode: string; access: "full-access" };
@@ -38,6 +38,8 @@ export const peerSsh = (alias: string, command: string) => ["ssh", "-o", "BatchM
 export const remoteFleet = (args: string) => `sh "$HOME/.local/share/fleet/engine/fleet" ${args}`;
 const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
 
+export const proxyOn = (env: Env) => typeof (JSON.parse(env.FLEET_SETTINGS ?? "{}") as Record<string, unknown>)["hub.proxyAccounts"] === "number";
+
 export function readBoxSettings(env: Env): BoxSettings {
   const warmCommand = optionalStringSetting("hub.boxWarmCommand", env);
   const httpsHost = optionalStringSetting("hub.httpsHost", env);
@@ -53,6 +55,7 @@ export function readBoxSettings(env: Env): BoxSettings {
     relayPort: numberSetting("hub.relayPort", env),
     ...(httpsHost ? { httpsHost } : {}),
     ...(warmCommand ? { warmCommand } : {}),
+    ...(proxyOn(env) ? { proxy: true as const } : {}),
   };
 }
 
