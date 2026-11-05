@@ -142,8 +142,11 @@ describe("fleet update", () => {
     writeFileSync(join(remote, "VERSION"), "v0.2.0");
     git(remote, "commit", "-q", "-am", "v0.2.0");
     git(remote, "tag", "v0.2.0");
+    const before = git(engineDir, "rev-parse", "HEAD");
     const result = await run(engineDir, { repo: remote, ref: "v0.1.0", channel: "release" });
-    expect(result).toMatchObject({ code: 1, applied: 0, output: expect.stringContaining("could not install the engine's packages") });
+    expect(result).toMatchObject({ code: 1, applied: 0, version: "v0.1.0" });
+    expect(git(engineDir, "rev-parse", "HEAD")).toBe(before);
+    expect(result.output).toContain(`could not install the engine's packages in ${engineDir}, so the update was rolled back. The engine stays at ${before.slice(0, 7)}.\n`);
   });
 
   test("stops before apply when the track checkout fails", async () => {

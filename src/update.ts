@@ -27,8 +27,11 @@ export async function readNotice(home: string): Promise<string | undefined> {
 
 export async function update(options: UpdateOptions): Promise<number> {
   if (!(await ready(options))) return 1;
+  const before = (await git(options.engineDir, "rev-parse", "HEAD")).out;
   const moved = options.engine.channel === "track" ? await trackMain(options) : await followRelease(options);
-  if (!moved || !(await installPackages(options))) return 1;
+  if (!moved) return 1;
+  const failed = await installPackages(options.engineDir);
+  if (failed !== undefined) return await rollBack(options, before, failed), 1;
   const profile = await git(options.profileDir, "remote");
   if (profile.ok && profile.out) {
     const pulled = await git(options.profileDir, "pull", "-q", "--ff-only");
@@ -84,12 +87,18 @@ async function followRelease(options: UpdateOptions) {
   return true;
 }
 
-async function installPackages(options: UpdateOptions) {
-  const child = Bun.spawn([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: options.engineDir, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 300_000 });
+async function installPackages(engineDir: string) {
+  const child = Bun.spawn([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: engineDir, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 300_000 });
   const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  if (code === 0) return true;
-  options.print(`fleet update: could not install the engine's packages in ${options.engineDir}. Run bun install --frozen-lockfile --production there, then fleet update again.\n${(err || out).trim()}`);
-  return false;
+  return code === 0 ? undefined : (err || out).trim();
+}
+
+async function rollBack(options: UpdateOptions, before: string, installError: string) {
+  const failed = `fleet update: could not install the engine's packages in ${options.engineDir}`;
+  const restored = await git(options.engineDir, "checkout", "-q", "--force", "--detach", before);
+  if (!restored.ok) return options.print(`${failed}, and could not roll the engine back to ${before.slice(0, 7)}: ${restored.err}. Run get.sh again to repair it.\n${installError}`);
+  const repair = (await installPackages(options.engineDir)) === undefined ? "" : " Its packages did not install either, so run get.sh again to repair it.";
+  options.print(`${failed}, so the update was rolled back. The engine stays at ${before.slice(0, 7)}.${repair}\n${installError}`);
 }
 
 async function saveNotice(home: string, newMajor: string | undefined) {
