@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
+import { pruneOptions } from "../../base/lib/prune.ts";
 import type { Result } from "./coder.ts";
 import { diskSweep, diskSweepCommand, sweepCleaners, type DiskSweepOptions } from "./disk-sweep.ts";
 
@@ -11,6 +12,7 @@ afterEach(() => temp.cleanup());
 
 const home = "/home/me";
 const launcher = "/home/me/.local/share/fleet/engine/fleet";
+const bootLog = "/home/me/.t3/userdata/logs/boot-service.log";
 const done: Result = { code: 0, stdout: "", stderr: "" };
 
 function sweep(fields: Partial<DiskSweepOptions> = {}, freed: Record<string, number> = {}) {
@@ -27,6 +29,10 @@ function sweep(fields: Partial<DiskSweepOptions> = {}, freed: Record<string, num
       free += (freed[argv[0] === "sh" ? "fleet" : argv[0]!] ?? 0) * gigabyte;
       return argv[0] === "du" ? { code: 0, stdout: duOutput, stderr: "" } : done;
     },
+    trimLog: (path, limitBytes, keepBytes) => {
+      ran.push(`trim ${path} ${limitBytes / 1024 ** 2}M ${keepBytes / 1024 ** 2}M`);
+      free += (freed.trim ?? 0) * gigabyte;
+    },
     log: (line) => logged.push(line), print: (line) => printed.push(line),
     ...fields,
   };
@@ -39,25 +45,32 @@ const sizes: Array<[number, string]> = [
 ];
 const duOutput = sizes.map(([gigabytes, path]) => `${gigabytes * 1024 * 1024}\t${path ? `${home}/${path}` : home}`).join("\n");
 
-test("the cleaners are fleet prune the way the base pack runs it, then the pnpm, uv and Go cache cleaners, in this order, and never T3's storage cleanup, Bun's cache, or docker", async () => {
-  expect(sweepCleaners(home, {}).map((cleaner) => cleaner.argv)).toEqual([
-    ["sh", launcher, "prune", "--auto"],
+test("the cleaners are the base pack's plain fleet prune, the T3 boot log trim, then the pnpm, uv and Go cache cleaners, in this order, and never fleet prune --auto, T3's storage cleanup, Bun's cache, or docker", async () => {
+  expect(sweepCleaners(home, {}).map((cleaner) => ("argv" in cleaner ? cleaner.argv : ["trim", cleaner.trim.path]))).toEqual([
+    ["sh", launcher, "prune"],
+    ["trim", bootLog],
     ["pnpm", "store", "prune"],
     ["uv", "cache", "prune"],
     ["go", "clean", "-cache"],
   ]);
-  expect(sweepCleaners(home, { FLEET_ENGINE_DIR: "/opt/engine" })[0]!.argv).toEqual(["sh", "/opt/engine/fleet", "prune", "--auto"]);
+  expect((sweepCleaners(home, { FLEET_ENGINE_DIR: "/opt/engine" })[0] as { argv: string[] }).argv).toEqual(["sh", "/opt/engine/fleet", "prune"]);
   const run = sweep();
   expect(await diskSweep(run.options)).toBe(0);
-  expect(run.ran).toEqual([`sh ${launcher} prune --auto`, "pnpm store prune", "uv cache prune", "go clean -cache", `du -x -k -d 2 ${home}`]);
-  expect(run.ran.some((line) => /docker|bun|runStorageCleanup/.test(line))).toBe(false);
-  expect(run.logged.some((line) => line.includes("T3"))).toBe(false);
+  expect(run.ran).toEqual([`sh ${launcher} prune`, `trim ${bootLog} 100M 20M`, "pnpm store prune", "uv cache prune", "go clean -cache", `du -x -k -d 2 ${home}`]);
+  expect(run.ran.some((line) => /--auto|docker|bun|runStorageCleanup|nix|cargo/.test(line))).toBe(false);
+});
+
+test("the base pack runs the sweep's prune arguments as a plain prune, without the --auto pass that collects Nix garbage and removes Cargo, uv and old T3 files", () => {
+  const prune = sweepCleaners(home, {})[0] as { argv: string[] };
+  const parsed = pruneOptions(prune.argv.slice(3), () => {}, { home, env: {}, floorGigabytes: 10 });
+  expect(parsed.auto).toBeNull();
+  expect(parsed.options.dryRun).toBe(false);
 });
 
 test("a cleaner whose tool is not installed is skipped", async () => {
   const run = sweep({ installed: (tool) => tool !== "pnpm" && tool !== "go" });
   await diskSweep(run.options);
-  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune --auto`, "uv cache prune"]);
+  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune`, `trim ${bootLog} 100M 20M`, "uv cache prune"]);
   expect(run.logged).toContain("Skipped pnpm store prune: pnpm is not installed.");
   expect(run.logged).toContain("Skipped go clean -cache: go is not installed.");
 });
@@ -72,10 +85,11 @@ test("a failing or hanging cleaner is logged, and the next one runs", async () =
     },
   });
   expect(await diskSweep(run.options)).toBe(0);
-  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune --auto`, "pnpm store prune", "uv cache prune", "go clean -cache"]);
+  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune`, `trim ${bootLog} 100M 20M`, "pnpm store prune", "uv cache prune", "go clean -cache"]);
   expect(run.logged).toEqual([
     "Sweep: 4.0G free, floor 15G.",
-    "fleet prune --auto: done. 4.0G free.",
+    "fleet prune: done. 4.0G free.",
+    "trim the T3 boot log: done. 4.0G free.",
     "pnpm store prune stopped at its 10 minute limit. 4.0G free.",
     "uv cache prune failed with exit 1: error: cache is locked. 4.0G free.",
     "go clean -cache: done. 4.0G free.",
@@ -86,7 +100,7 @@ test("a failing or hanging cleaner is logged, and the next one runs", async () =
 test("the sweep stops once free space is back above the floor", async () => {
   const run = sweep({}, { fleet: 6, pnpm: 6 });
   expect(await diskSweep(run.options)).toBe(0);
-  expect(run.ran).toEqual([`sh ${launcher} prune --auto`, "pnpm store prune"]);
+  expect(run.ran).toEqual([`sh ${launcher} prune`, `trim ${bootLog} 100M 20M`, "pnpm store prune"]);
   expect(run.logged.slice(-2)).toEqual(["pnpm store prune: done. 16.0G free.", "16.0G free, above the 15G floor, so the sweep stops."]);
   expect(run.printed).toEqual([]);
   const roomy = sweep({ free: () => 40 * gigabyte });
@@ -118,7 +132,8 @@ test("a dry run lists the cleaners it would run, and runs none", async () => {
   expect([run.ran, run.printed]).toEqual([[], []]);
   expect(run.logged).toEqual([
     "Sweep (dry run): 4.0G free, floor 15G.",
-    "Would run fleet prune --auto.",
+    "Would run fleet prune.",
+    "Would run trim the T3 boot log.",
     "Would run pnpm store prune.",
     "Would run uv cache prune.",
     "Skipped go clean -cache: go is not installed.",
@@ -144,7 +159,7 @@ test("fleet disk-sweep runs the installed cleaners from PATH and the engine laun
   const lines: string[] = [];
   const code = await diskSweepCommand(["--floor", "1000000", "--alert-floor", "1000000"], { home: sandbox, env, log: (line) => lines.push(line), print: (line) => lines.push(line) });
   expect(code).toBe(0);
-  expect(readFileSync(join(bin, "calls.log"), "utf8").trim().split("\n")).toEqual(["fleet prune --auto", "pnpm store prune", "uv cache prune"]);
+  expect(readFileSync(join(bin, "calls.log"), "utf8").trim().split("\n")).toEqual(["fleet prune", "pnpm store prune", "uv cache prune"]);
   expect(lines).toContain("Skipped go clean -cache: go is not installed.");
   expect(lines.some((line) => line.startsWith("uv cache prune failed with exit 1"))).toBe(true);
   expect(lines.at(-1)).toContain(`${sandbox}/data/inner`);
@@ -157,9 +172,14 @@ test("fleet disk-sweep takes only --dry-run and its two floors", async () => {
   await expect(diskSweepCommand(["--floor", "lots"], { home: "/nowhere", env: {} })).rejects.toThrow(usage);
 });
 
-test("the Disk watch risk text names every removal that cannot be undone, and no cleaner the sweep does not run", () => {
+test("the Disk watch risk text names each removal the sweep can make, and each one it never makes", () => {
   const manifest = JSON.parse(readFileSync(join(import.meta.dir, "../pack.json"), "utf8")) as { workflows: Array<{ id: string; risk?: string }> };
   const risk = manifest.workflows.find((workflow) => workflow.id === "disk-watch")!.risk!;
-  expect(risk).toContain("boot log");
-  expect(risk).not.toMatch(/T3, Bun|Bun,/);
+  const [removes, never] = risk.split("It never");
+  for (const removal of [
+    "fleet prune", "idle for 6 hours, or 24", "on the default branch", "merged pull request", "T3 thread is closed", "agent has been idle for a day",
+    "lockfile and tool output changes", "Git no longer tracks", "boot log over 100 MB", "pnpm store prune", "uv cache prune", "go clean -cache",
+  ]) expect(removes).toContain(removal);
+  for (const untouched of ["Nix garbage", "Cargo build output", "uv cache folder", "old T3 versions", "Docker", "Bun's cache"]) expect(never).toContain(untouched);
+  expect(risk).toContain("It deletes no other file.");
 });

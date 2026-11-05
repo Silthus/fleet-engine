@@ -193,11 +193,11 @@
         "hub.threadFolder"
       ],
       "sentence": "The hub cleans a devbox whose disk runs low with fleet prune and each tool's own cache cleaner, and names the largest folders only when that cannot free enough.",
-      "risk": "The sweep removes only what fleet prune and the pnpm, uv and Go cache cleaners remove: merged and idle worktrees, caches that tools fill again, and the oldest part of a T3 boot log over 100 MB. It never touches Docker or Bun's cache, which projects can link into, and deletes no other file. For the rest, you decide.",
+      "risk": "The sweep deletes only this. Through fleet prune: worktrees idle for 6 hours, or 24 when no T3 thread or agent owns them, whose commits are on the default branch or in a merged pull request, whose T3 thread is closed, or whose agent has been idle for a day. Their commits stay on their branch, but their lockfile and tool output changes are dropped. Also worktree folders that Git no longer tracks and no open T3 thread uses. Itself: the oldest part of a T3 boot log over 100 MB. Through pnpm store prune, uv cache prune and go clean -cache: caches those tools fill again. It never runs Nix garbage collection and never removes Cargo build output, the uv cache folder, old T3 versions, Docker data or Bun's cache, which projects can link into. It deletes no other file. For the rest, you decide.",
       "moment": {
         "time": "15:10",
         "title": "A full disk you never saw",
-        "body": "A devbox dropped under its free-space floor after a big build. The hub ran fleet prune and the pnpm, uv and Go cache cleaners on it, so your threads kept running.",
+        "body": "A devbox dropped under its free-space floor after a big build. The hub ran fleet prune, trimmed the T3 boot log, and ran the pnpm, uv and Go cache cleaners on it, so your threads kept running.",
         "words": [
           "hub",
           "devbox",

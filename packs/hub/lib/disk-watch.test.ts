@@ -59,6 +59,40 @@ test("a box is swept at most once an hour and alerted at most once a day, and cl
   expect(JSON.parse(readFileSync(run.options.statePath, "utf8"))).toEqual({});
 });
 
+test("a box that climbs back above the sweep floor after its sweep resets both limits, so the next incident is swept and alerted again", async () => {
+  const run = watch({ "box-3": [4, 30, 4, 6] });
+  writeFileSync(run.options.statePath, JSON.stringify({ "box-3": { sweptAt: start - 2 * hour, alertedAt: start - 2 * hour } }));
+  await watchDisks(run.options);
+  expect(run.swept).toEqual(["box-3"]);
+  expect(JSON.parse(readFileSync(run.options.statePath, "utf8"))).toEqual({});
+  run.advance(hour / 4);
+  await watchDisks(run.options);
+  expect([run.swept, run.alerts]).toEqual([["box-3", "box-3"], ["box-3 6.0 line 11"]]);
+});
+
+test("an alert that may have started a thread counts against the daily limit, even when its launch reports failure", async () => {
+  let threads = 0;
+  const run = watch({ "box-3": [6] }, { alert: async () => (threads++, false) });
+  await watchDisks(run.options);
+  run.advance(2 * hour);
+  await watchDisks(run.options);
+  expect(threads).toBe(1);
+  expect(run.lines).toContain("box-3: alert failed or lost its answer, so it is not tried again today");
+  expect(run.lines.at(-1)).toBe("box-3: alerted already");
+  expect(JSON.parse(readFileSync(run.options.statePath, "utf8"))["box-3"].alertedAt).toBe(start);
+});
+
+test("a pass that dies during one box's alert keeps the alert it began there and the one it finished on another box", async () => {
+  let threads = 0;
+  const crashed = watch({ "box-3": [6], "box-4": [6] }, { alert: async (box) => { threads++; if (box === "box-4") throw new Error("killed"); return true; } });
+  await expect(watchDisks(crashed.options)).rejects.toThrow("killed");
+  const after = watch({ "box-3": [6], "box-4": [6] }, { statePath: crashed.options.statePath, alert: async () => (threads++, true) });
+  after.advance(2 * hour);
+  await watchDisks(after.options);
+  expect(threads).toBe(2);
+  expect(after.lines.filter((line) => line.endsWith("alerted already")).sort()).toEqual(["box-3: alerted already", "box-4: alerted already"]);
+});
+
 test("a box that does not answer is logged, and a dry run sweeps, alerts, and saves nothing", async () => {
   const run = watch({ "box-1": [6] }, { dryRun: true });
   run.options.boxes = ["box-1", "box-gone"];

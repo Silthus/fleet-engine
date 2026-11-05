@@ -26,31 +26,43 @@ type WatchState = Record<string, { sweptAt?: number; alertedAt?: number }>;
 
 export async function watchDisks(options: DiskWatchOptions): Promise<void> {
   const state = readState(options.statePath);
-  await Promise.all(options.boxes.map((box) => watchDisk(box, state, options)));
-  if (!options.dryRun) writeStateFile(options.statePath, state);
+  const save = () => { if (!options.dryRun) writeStateFile(options.statePath, state); };
+  const passes = await Promise.allSettled(options.boxes.map((box) => watchDisk(box, state, options, save)));
+  save();
+  const failed = passes.find((pass) => pass.status === "rejected");
+  if (failed) throw failed.reason;
 }
 
-async function watchDisk(box: string, state: WatchState, options: DiskWatchOptions): Promise<void> {
+async function watchDisk(box: string, state: WatchState, options: DiskWatchOptions, save: () => void): Promise<void> {
   let free = await options.read(box);
   if (free === null) { options.log(`${box}: unreachable`); return; }
-  if (free >= options.sweepBelowGigabytes * gigabyte) { delete state[box]; options.log(shown(box, free)); return; }
+  if (free >= options.sweepBelowGigabytes * gigabyte) { recovered(box, state, save); options.log(shown(box, free)); return; }
   const entry = state[box] ??= {};
   let report = "No sweep ran in this pass. The last one ran less than an hour ago.";
   if (options.now() - (entry.sweptAt ?? 0) < sweepEveryHours * hour) options.log(`${shown(box, free)}; swept already`);
   else if (options.dryRun) options.log(`${shown(box, free)}; would sweep`);
   else {
     options.log(`${shown(box, free)}; sweeping`);
-    report = (await options.sweep(box)).split("\n").slice(-reportLines).join("\n");
     entry.sweptAt = options.now();
+    save();
+    report = (await options.sweep(box)).split("\n").slice(-reportLines).join("\n");
     free = await options.read(box) ?? free;
     options.log(`${shown(box, free)} after the sweep`);
+    if (free >= options.sweepBelowGigabytes * gigabyte) { recovered(box, state, save); return; }
   }
   if (free >= options.alertBelowGigabytes * gigabyte) return;
   if (options.now() - (entry.alertedAt ?? 0) < repeatHours * hour) { options.log(`${box}: alerted already`); return; }
   if (options.dryRun) { options.log(`${box}: would alert`); return; }
+  entry.alertedAt = options.now();
+  save();
   const alerted = await options.alert(box, free, report);
-  if (alerted) entry.alertedAt = options.now();
-  options.log(`${box}: ${alerted ? "alerted" : "alert failed"}`);
+  options.log(`${box}: ${alerted ? "alerted" : "alert failed or lost its answer, so it is not tried again today"}`);
+}
+
+function recovered(box: string, state: WatchState, save: () => void): void {
+  if (!state[box]) return;
+  delete state[box];
+  save();
 }
 
 const shown = (box: string, free: number) => `${box}: ${(free / gigabyte).toFixed(1)}G free`;
@@ -89,7 +101,7 @@ function hubDisks(context: DiskWatchContext, local: string, sweepBelowGigabytes:
     const shownFree = `${(free / gigabyte).toFixed(1)}G`;
     const look = `df -h ~; ${remoteFleet("prune --dry-run --no-fetch --min-idle-hours 1")}`;
     const prompt = `${box} has ${shownFree} free, below ${alertBelowGigabytes}G, though a cleanup sweep ran within the hour. A full disk crashes T3 and every lane on the box.
-The sweep ran fleet prune and the pnpm, uv and Go cache cleaners, and removed nothing else. Its report from this pass ends with the largest folders under $HOME:
+The sweep ran fleet prune, trimmed the T3 boot log, and ran the pnpm, uv and Go cache cleaners. It removed nothing else. Its report from this pass ends with the largest folders under $HOME:
 
 ${report}
 
