@@ -409,14 +409,16 @@ describe("Claude MCP servers", () => {
   const serverRecord = ".config/fleet/claude-servers.json";
 
   /** Behaves like claude mcp add-json and remove at user scope: each call reads ~/.claude.json fresh and writes it whole. */
-  function claudeMcp(options: { normalize?: (value: Record<string, unknown>) => unknown; missing?: boolean; beforeEachCall?: (home: string) => void } = {}) {
+  function claudeMcp(options: { normalize?: (value: Record<string, unknown>) => unknown; missing?: boolean; beforeEachCall?: (home: string, command: string[]) => void; refuse?: (command: string[]) => boolean } = {}) {
     const calls: string[][] = [];
     const run: CommandRunner = async (command, runOptions) => {
       calls.push(command);
       if (options.missing) return { code: 127, stdout: "" };
+      if (command[1] === "mcp") expect(runOptions?.clearEnv).toEqual(["CLAUDE_CONFIG_DIR"]);
+      if (options.refuse?.(command)) return { code: 1, stdout: "", stderr: "refused" };
       if (command[1] === "plugin") return { code: 0, stdout: command[2] === "list" ? "[]" : "" };
       const home = runOptions!.home!;
-      options.beforeEachCall?.(home);
+      options.beforeEachCall?.(home, command);
       const path = join(home, claudeJson);
       const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
       const servers = (state.mcpServers ??= {});
@@ -463,6 +465,29 @@ describe("Claude MCP servers", () => {
     const cli = claudeMcp({ beforeEachCall: (dir) => write(dir, claudeJson, { ...read(dir, claudeJson), numStartups: 42 }) });
     await apply(plan([server]), { home, adapters: cli.adapters });
     expect(read(home, claudeJson)).toEqual({ ...claudeState, numStartups: 42, mcpServers: { ...claudeState.mcpServers, metabase } });
+  });
+
+  test("claim nothing from a failed add, and keep owning a server whose removal failed", async () => {
+    const home = temp.make("home-");
+    let refuse = true;
+    const failing = claudeMcp({ refuse: (command) => refuse && command[2] === "remove" });
+    await apply(plan([{ ...server, value: { type: "stdio", command: "old" } }]), { home, adapters: claudeMcp().adapters });
+    const report = await apply(plan([server]), { home, adapters: failing.adapters });
+    expect(failing.mcp().map((call) => call[2])).toEqual(["remove"]);
+    expect(report.findings.map((finding) => finding.id)).toContain("claude-server:metabase");
+    expect(read(home, serverRecord).servers).toEqual([{ name: "metabase", value: { type: "stdio", command: "old" }, pack: "posthog", stored: { type: "stdio", command: "old" } }]);
+    refuse = false;
+    await apply(plan([server]), { home, adapters: failing.adapters });
+    expect(read(home, claudeJson).mcpServers.metabase).toEqual(metabase);
+
+    const raced = temp.make("home-");
+    const theirs = { type: "stdio", command: "someone-else" };
+    const racing = claudeMcp({ beforeEachCall: (dir, command) => void (command[2] === "add-json" && write(dir, claudeJson, { mcpServers: { metabase: theirs } })) });
+    await apply(plan([server]), { home: raced, adapters: racing.adapters });
+    expect(existsSync(join(raced, serverRecord))).toBe(false);
+    const after = await apply(plan(), { home: raced, adapters: claudeMcp().adapters });
+    expect(read(raced, claudeJson).mcpServers.metabase).toEqual(theirs);
+    expect(after.actions).toEqual([]);
   });
 
   test("keep a server of the same name that the user wrote, until they adopt Fleet's", async () => {

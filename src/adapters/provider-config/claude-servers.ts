@@ -21,6 +21,7 @@ export function wantedServers(plan: Plan): Wanted[] {
 const finding = (id: string, say: string, repair?: Finding["repair"]): Finding => ({ id, pack: "engine", say, ...(repair ? { repair } : {}) });
 
 /**
+ * Claude Code runs without CLAUDE_CONFIG_DIR, so it writes the ~/.claude.json that Fleet reads.
  * Adds and removes the Claude MCP servers packs declare through claude mcp, so Claude Code writes ~/.claude.json itself.
  * Claude Code saves that file from several paths, not all of them locked, so no other writer can avoid racing it.
  */
@@ -69,22 +70,26 @@ export async function reconcileServers(plan: Plan, home: string, options: { dryR
     if (reason) result.findings.push(finding(`config:${claudeJson}`, `${claudeJson} needs an update: ${reason}.`, "apply"));
     return result;
   }
-  const claude = (args: string[]) => options.run(["claude", "mcp", ...args, "--scope", "user"], { home });
+  const claude = (args: string[]) => options.run(["claude", "mcp", ...args, "--scope", "user"], { home, clearEnv: ["CLAUDE_CONFIG_DIR"] });
+  const blocked = new Set<string>();
   for (const name of remove) {
     const removed = await claude(["remove", name]);
     if (removed.code === 127) return waiting(result, wanted);
     if (removed.code === 0) continue;
-    const departed = previous.find((item) => item.name === name && !add.some((server) => server.name === name));
-    if (departed) next.push(departed);
+    blocked.add(name);
+    const old = previous.find((item) => item.name === name);
+    if (old) next.push(old);
     result.findings.push(finding(`claude-server:${name}`, `Claude Code did not remove the MCP server ${name}: ${firstLine(removed)}. Run fleet apply again.`, "apply"));
   }
-  for (const server of add) {
-    const added = await claude(["add-json", server.name, JSON.stringify(server.value)]);
-    if (added.code === 127) return waiting(result, wanted);
-    if (added.code !== 0) result.findings.push(finding(`claude-server:${server.name}`, `Claude Code did not add the MCP server ${server.name}: ${firstLine(added)}. Check its value in the ${server.pack} pack.`, "apply"));
+  const added: Wanted[] = [];
+  for (const server of add.filter((item) => !blocked.has(item.name))) {
+    const outcome = await claude(["add-json", server.name, JSON.stringify(server.value)]);
+    if (outcome.code === 127) return waiting(result, wanted);
+    if (outcome.code === 0) added.push(server);
+    else result.findings.push(finding(`claude-server:${server.name}`, `Claude Code did not add the MCP server ${server.name}: ${firstLine(outcome)}. Check its value in the ${server.pack} pack.`, "apply"));
   }
   const after = await currentServers(home);
-  for (const server of add) if (after[server.name] !== undefined) next.push({ ...server, stored: after[server.name] });
+  for (const server of added) if (after[server.name] !== undefined) next.push({ ...server, stored: after[server.name] });
   if (reason) result.actions.push({ target: claudeJson, operation: "replace", reason });
   const text = `${JSON.stringify({ servers: next }, null, 2)}\n`;
   if (text !== recordText && (next.length || recordText !== undefined)) await writeWithBackups(home, [{ target: serversTarget, before: recordText, after: text }]);
