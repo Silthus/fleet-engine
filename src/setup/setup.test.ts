@@ -139,7 +139,7 @@ describe("fleet setup questions", () => {
     expect(result.output).toStartWith("fleet setup: Orchestration needs Pull-requests. Add pull-requests, or remove orchestration.");
   });
 
-  test("refuses unknown packs, workflows, and settings before it asks anything", async () => {
+  test("refuses unknown packs, workflows, and settings before it asks anything; an unknown workflow waits for GitHub sign-in, which may find a team pack", async () => {
     const home = temp.make("home-");
     for (const [args, message] of [
       [["--add", "nope"], "fleet setup: no pack named nope."],
@@ -151,7 +151,7 @@ describe("fleet setup questions", () => {
     ] as const) {
       const result = await fleetSetup(home, [...args]);
       expect(result.code).toBe(2);
-      expect(result.output).toStartWith(message);
+      expect(result.output.split("\n").find((line) => line.startsWith("fleet setup:"))).toStartWith(message);
       expect(result.prompts).toEqual([]);
     }
   });
