@@ -13,7 +13,7 @@ point() {
 }
 
 published() {
-  [ -x "$1/bin/codex" ] && "$1/bin/codex" --version >/dev/null 2>&1
+  [ -x "$1/bin/codex" ] && "$1/bin/codex" --version >/dev/null 2>&1 9>&-
 }
 
 case "$(uname -m)" in
@@ -63,7 +63,7 @@ if [ ! -d "$releases/$tag" ]; then
   [ "$(sha256sum "$work/$asset" | awk '{ print $1 }')" = "$want" ] || fail "$asset does not match its checksum."
   mkdir "$work/package"
   tar -xzf "$work/$asset" -C "$work/package" || fail "could not unpack $asset."
-  "$work/package/bin/codex" --version >/dev/null || fail "the downloaded Codex does not run on this machine."
+  "$work/package/bin/codex" --version >/dev/null 9>&- || fail "the downloaded Codex does not run on this machine."
   mkdir -p "$releases"
   mv -T "$work/package" "$releases/$tag" 2>/dev/null || published "$releases/$tag" || fail "could not move Codex $tag into $releases."
 fi
@@ -72,7 +72,7 @@ mkdir -p "$(dirname "$link")"
 point "$current" "releases/$tag"
 point "$link" "$current/bin/codex"
 if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
-  running=$(ls -l /proc/[0-9]*/exe 2>/dev/null || true)
+  running=$(QUOTING_STYLE=literal ls -l /proc/[0-9]*/exe 2>/dev/null || true)
   for entry in "$package"/* "$releases"/*; do
     case "$entry" in
       "$releases"|"$current"|"$package/$previous"|"$releases/$tag") continue ;;
@@ -84,6 +84,7 @@ if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
     esac
   done
 fi
+exec 9>&-
 
 if [ "$(command -v codex || true)" = "$HOME/.bun/bin/codex" ] && command -v bun >/dev/null 2>&1; then
   bun remove -g @openai/codex >/dev/null 2>&1 || fail "$HOME/.bun/bin/codex comes before $link on PATH. Run bun remove -g @openai/codex."

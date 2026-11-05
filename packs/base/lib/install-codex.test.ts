@@ -10,8 +10,10 @@ const script = join(import.meta.dir, "install-codex.sh");
 const tag = "rust-v9.9.9";
 const realMv = Bun.which("mv") ?? "/bin/mv";
 const realReadlink = Bun.which("readlink") ?? "/bin/readlink";
+const realFlock = Bun.which("flock") ?? "/usr/bin/flock";
 
-function stub(bin: string, name: string, body: string) {
+function stub(bin: string, name: string, body: string, keep?: string) {
+  if (keep) copyFileSync(join(bin, name), keep);
   writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${join(bin, "calls.log")}"\n${body}\n`);
   chmodSync(join(bin, name), 0o755);
 }
@@ -24,7 +26,7 @@ async function release(root: string, targets: string[], options: { tag?: string;
   for (const target of targets) {
     const tree = temp.make("package-");
     mkdirSync(join(tree, "bin"));
-    writeFileSync(join(tree, "bin", "codex"), `#!/bin/sh\necho "codex-cli ${name.replace("rust-v", "")} ${target}"\n`);
+    writeFileSync(join(tree, "bin", "codex"), `#!/bin/sh\n[ ! -e /proc/$$/fd/9 ] || : > "$HOME/codex-saw-lock"\necho "codex-cli ${name.replace("rust-v", "")} ${target}"\n`);
     chmodSync(join(tree, "bin", "codex"), 0o755);
     const asset = `codex-package-${target}.tar.gz`;
     expect(await Bun.spawn(["tar", "-czf", join(dir, asset), "-C", tree, "bin"]).exited).toBe(0);
@@ -66,8 +68,8 @@ async function machine(arch: string, targets: string[], options: { corrupt?: boo
   };
 }
 
-async function install(box: { bin: string; home: string }, path = `${box.bin}:${box.home}/.local/bin:/usr/bin:/bin`) {
-  const child = Bun.spawn(["/bin/sh", script], { env: { HOME: box.home, PATH: path }, stdout: "pipe", stderr: "pipe" });
+async function install(box: { bin: string; home: string }, path = `${box.bin}:${box.home}/.local/bin:/usr/bin:/bin`, env: Record<string, string> = {}) {
+  const child = Bun.spawn(["/bin/sh", script], { env: { HOME: box.home, PATH: path, ...env }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
@@ -116,7 +118,7 @@ describe("install-codex.sh", () => {
     expect(readdirSync(codexHome(box.home)).sort()).toEqual(["current", "releases"]);
   });
 
-  onLinux("holds one install lock from before it reads the old install until it has pruned", async () => {
+  onLinux("holds one install lock from before it reads the old install until it has pruned, and passes it to no Codex it starts", async () => {
     const box = await machine("x86_64", ["x86_64-unknown-linux-musl"]);
     expect((await install(box)).code).toBe(0);
     await box.publish("rust-v10.0.0");
@@ -124,22 +126,22 @@ describe("install-codex.sh", () => {
     await box.publish("rust-v10.1.0");
     const log = join(box.bin, "calls.log");
     writeFileSync(log, "");
-    const held = (name: string) => `echo "${name} holds $(${realReadlink} /proc/$$/fd/9 2>/dev/null)" >> "${log}"`;
-    stub(box.bin, "flock", `${held("flock")}\nexit 0`);
+    const lock = join(box.home, ".local/share/fleet/codex.lock");
+    const held = (name: string) => `if ${realFlock} -n "${lock}" true; then echo "${name} free" >> "${log}"; else echo "${name} locked" >> "${log}"; fi`;
     stub(box.bin, "readlink", `${held("readlink")}\nexec ${realReadlink} "$@"`);
     stub(box.bin, "rm", `${held("rm")}\nexec ${Bun.which("rm") ?? "/bin/rm"} "$@"`);
+    stub(box.bin, "curl", `${held("curl")}\nexec ${join(box.bin, "curl.real")} "$@"`, join(box.bin, "curl.real"));
     expect((await install(box)).code).toBe(0);
     const lines = box.calls().split("\n");
-    const lock = join(box.home, ".local/share/fleet/codex.lock");
-    const first = (name: string) => lines.findIndex((line) => line.startsWith(`${name} `));
-    expect(lines[first("flock")]).toBe("flock 9");
-    expect(lines).toContain(`flock holds ${lock}`);
-    expect(first("flock")).toBeLessThan(first("readlink"));
-    expect(first("flock")).toBeLessThan(first("curl"));
+    const checks = lines.filter((line) => / (free|locked)$/.test(line));
+    const firstRead = checks.findIndex((line) => line.startsWith("readlink "));
     const pruned = lines.findIndex((line) => line === `rm -rf ${join(codexHome(box.home), "releases", tag)}`);
+    expect(firstRead).toBeGreaterThan(-1);
     expect(pruned).toBeGreaterThan(-1);
-    expect(lines[pruned + 1]).toBe(`rm holds ${lock}`);
-    expect(lines.filter((line) => line.startsWith("readlink holds ") || line.startsWith("rm holds "))).toSatisfy((held) => held.length > 0 && held.every((line) => line.endsWith(` holds ${lock}`)));
+    expect(lines[pruned + 1]).toBe("rm locked");
+    expect(checks.filter((line) => line.startsWith("readlink ") || line.startsWith("curl "))).toSatisfy((all) => all.length > 0 && all.every((line) => line.endsWith(" locked")));
+    expect(Bun.spawnSync([realFlock, "-n", lock, "true"]).exitCode).toBe(0);
+    expect(existsSync(join(box.home, "codex-saw-lock"))).toBe(false);
     expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual(["rust-v10.0.0", "rust-v10.1.0"]);
   });
 
@@ -165,9 +167,9 @@ describe("install-codex.sh", () => {
     expect(readdirSync(join(box.home, ".local/share/fleet")).filter((name) => name.startsWith("codex-new."))).toEqual([]);
   });
 
-  onLinux("keeps a release while a session still runs from it", async () => {
+  onLinux.each([["ls's default quoting", {}], ["QUOTING_STYLE=c", { QUOTING_STYLE: "c" }]] as const)("keeps a release while a session still runs from it, with %s", async (_quoting, env) => {
     const box = await machine("x86_64", ["x86_64-unknown-linux-musl"]);
-    expect((await install(box)).code).toBe(0);
+    expect((await install(box, undefined, env)).code).toBe(0);
     const old = join(codexHome(box.home), "releases", tag);
     copyFileSync("/bin/sh", join(old, "bin/codex"));
     const session = Bun.spawn([join(old, "bin/codex"), "-c", "echo ready; read line"], { stdin: "pipe", stdout: "pipe" });
@@ -175,16 +177,16 @@ describe("install-codex.sh", () => {
       const reader = session.stdout.getReader();
       expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n");
       await box.publish("rust-v10.0.0");
-      expect((await install(box)).code).toBe(0);
+      expect((await install(box, undefined, env)).code).toBe(0);
       await box.publish("rust-v10.1.0");
-      expect((await install(box)).code).toBe(0);
+      expect((await install(box, undefined, env)).code).toBe(0);
       expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual(["rust-v10.0.0", "rust-v10.1.0", tag]);
     } finally {
       session.kill();
       await session.exited;
     }
     await box.publish("rust-v10.2.0");
-    expect((await install(box)).code).toBe(0);
+    expect((await install(box, undefined, env)).code).toBe(0);
     expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual(["rust-v10.1.0", "rust-v10.2.0"]);
   });
 
