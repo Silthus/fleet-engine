@@ -15,6 +15,10 @@ beforeAll(async () => {
 
 const answers = { "hub.alias": "my-hub", "hub.coderUrl": "https://coder.example.com", "hub.boxTemplate": "linux" };
 const plan = (fields: Partial<Profile> = {}, machine: MachineFile = devbox) => resolveEngine(sources, { settings: answers, ...fields }, machine);
+function coderTeam(): AvailableSource {
+  const dir = temp.make("team-");
+  return { ref: { name: "team", repo: "example/team-packs", ref: "main" }, dir, packs: [{ dir, manifest: { schema: 1, name: "posthog", summary: "A team pack that brings Coder." } }] };
+}
 const gatewayKeys = ["claude:mcpServers.fleet-hub", "codex:mcp_servers.fleet-hub"];
 
 describe("without the Hub pack", () => {
@@ -80,24 +84,30 @@ describe("the Hub pack", () => {
     }
   });
 
-  test("asks setup for the hub's name, the Coder address, and the box template, which have no default", () => {
-    const fresh = resolveEngine(sources, { packs: ["hub"] }, devbox);
-    expect(fresh.unanswered.map((setting) => setting.key)).toEqual(["hub.alias", "hub.coderUrl", "hub.boxTemplate"]);
-    expect(plan({ packs: ["hub"] }).unanswered).toEqual([]);
+  test("asks setup for the hub's name, and for the Coder address and box template only when a team pack brings Coder", () => {
+    expect(resolveEngine(sources, { packs: ["hub"] }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias"]);
+    const team = [...sources, coderTeam()];
+    expect(resolveEngine(team, { packs: ["hub", "posthog"] }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias", "hub.coderUrl", "hub.boxTemplate"]);
+    expect(resolveEngine(team, { packs: ["hub", "posthog"], settings: answers }, devbox).unanswered).toEqual([]);
   });
 
-  test("asks for the Slack member ID only when the Slack trigger is on, and lets it fall back to the PostHog pack's", () => {
-    const asked = (fields: Partial<Profile>) => plan({ packs: ["hub"], ...fields }).ask.map((setting) => setting.key);
-    expect(asked({})).not.toContain("hub.slackUserId");
-    expect(asked({ workflows: { "slack-trigger": true } })).toContain("hub.slackUserId");
-    expect(plan({ packs: ["hub"], workflows: { "slack-trigger": true } }).unanswered.map((setting) => setting.key)).toEqual([]);
+  test("turns Boxes on only when a team pack brings Coder", () => {
+    const boxes = (result: Plan) => result.workflows.find((workflow) => workflow.pack === "hub" && workflow.id === "boxes")?.active;
+    expect(boxes(plan({ packs: ["hub"] }))).toBe(false);
+    expect(boxes(resolveEngine([...sources, coderTeam()], { packs: ["hub", "posthog"], settings: answers }, devbox))).toBe(true);
+  });
+
+  test("never asks for the Slack member ID, so a team pack that already asks for it is not asked twice", () => {
+    const withTrigger = plan({ packs: ["hub"], workflows: { "slack-trigger": true } });
+    expect(withTrigger.ask.map((setting) => setting.key)).not.toContain("hub.slackUserId");
+    expect(withTrigger.unanswered.map((setting) => setting.key)).toEqual([]);
   });
 
   test("declares every value the old hub code hardcoded as a setting with no default value", async () => {
     const manifest = sources[0]!.packs.find((pack) => pack.manifest.name === "hub")!.manifest;
     const declared = Object.fromEntries((manifest.settings ?? []).map((setting) => [setting.key, setting]));
     for (const key of ["hub.alias", "hub.coderUrl", "hub.boxTemplate", "hub.slackUserId", "hub.httpsHost", "hub.boxWarmCommand"]) {
-      expect([key, declared[key]?.default]).toEqual([key, undefined]);
+      expect([key, key in declared, declared[key]?.default]).toEqual([key, true, undefined]);
     }
     const listed = new Set((manifest.workflows ?? []).flatMap((workflow) => workflow.settings ?? []));
     expect(Object.keys(declared).filter((key) => !listed.has(key))).toEqual([]);

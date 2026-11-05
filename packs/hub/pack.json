@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "name": "hub",
-  "summary": "One always-on devbox manages the others: it lends short-lived boxes, signs in to your MCP servers once, and watches every devbox's disk.",
-  "day": "An agent borrows a fresh box for a big job and gives it back when it is done. Every machine reaches your MCP servers through the hub, and a devbox that fills its disk is cleaned before you notice.",
-  "cost": "One devbox that stays on, a Coder deployment for the boxes, and some setup on that devbox. Every other machine keeps working when the hub is down.",
-  "risk": "The hub holds sign-ins for your MCP servers and can start, stop, and delete your boxes. Keep it as private as your laptop.",
+  "summary": "One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks.",
+  "day": "Every machine reaches your MCP servers through the hub, and a devbox that fills its disk is cleaned before you notice.",
+  "cost": "One devbox that stays on, and some setup on it. Every other machine keeps working when the hub is down.",
+  "risk": "The hub holds sign-ins for your MCP servers and reaches every devbox over SSH. Keep it as private as your laptop.",
   "settings": [
     {
       "key": "hub.alias",
@@ -79,9 +79,10 @@
     },
     {
       "key": "hub.slackUserId",
-      "question": "What is your Slack member ID, so only your own messages start threads? In Slack, open your profile, then More, then Copy member ID. Leave it empty to use the one the PostHog pack has.",
+      "question": "What is your Slack member ID, so only your own messages start threads? In Slack, open your profile, then More, then Copy member ID. Leave it empty to use the member ID a team pack has.",
       "type": "string",
-      "optional": true
+      "optional": true,
+      "ask": "never"
     },
     {
       "key": "hub.slackTriggerEmoji",
@@ -111,7 +112,8 @@
       "name": "Boxes",
       "default": true,
       "needs": [
-        "hub"
+        "hub",
+        "coder"
       ],
       "settings": [
         "hub.alias",
