@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type { BoxHooks } from "../box.ts";
 import type { Coder, Env } from "../coder.ts";
 import { remoteFleet } from "../machine.ts";
@@ -46,8 +46,14 @@ export function repoOf(cwd: string, home: string): string {
   return named?.[1] ?? "home";
 }
 
-function memoryPaths(text: string): string[] {
-  return [...text.matchAll(/\.agents\/memory\/([\w./-]+\.md)/g)].map((match) => match[1]!);
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+export function memoryMatcher(home: string, env: Env): (text: string) => string[] {
+  const checkout = resolve(memoryCheckout(home, env));
+  const fromHome = relative(home, checkout);
+  const roots = [checkout, ...(fromHome && !fromHome.startsWith("..") ? [fromHome] : [])].map(escaped);
+  const pattern = new RegExp(String.raw`(?<![\w-])(?:${roots.join("|")})/([\w./-]+\.md)`, "g");
+  return (text) => [...text.matchAll(pattern)].map((match) => match[1]!);
 }
 
 function blank(machine: string, provider: Digest["provider"]): Digest {
@@ -89,8 +95,9 @@ const claudeEdits = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
 const usageTotal = (usage: Record<string, number> = {}) =>
   (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.output_tokens ?? 0);
 
-export function digestClaude(path: string, machine: string, home: string): Digest {
+export function digestClaude(path: string, machine: string, home: string, env: Env): Digest {
   const digest = blank(machine, "claude");
+  const memoryPaths = memoryMatcher(home, env);
   const calls = new Map<string, string>();
   const reads = new Map<string, string[]>();
   const spent = new Map<string, number>();
@@ -142,8 +149,9 @@ export function digestClaude(path: string, machine: string, home: string): Diges
 
 const codexFailure = /exit code[:\s]+[1-9]|"exit_code":\s*[1-9]|Process exited with code [1-9]/i;
 
-export function digestCodex(path: string, machine: string, home: string): Digest {
+export function digestCodex(path: string, machine: string, home: string, env: Env): Digest {
   const digest = blank(machine, "codex");
+  const memoryPaths = memoryMatcher(home, env);
   const calls = new Map<string, string>();
   const reads = new Map<string, string[]>();
   const meter = new EffortMeter();
@@ -203,16 +211,21 @@ function belongsToDream(digest: Digest, home: string, env: Env): boolean {
 }
 
 export function localDigests(home: string, machine: string, since: number, env: Env): Digest[] {
-  const claude = filesSince(join(home, ".claude/projects"), since, (path) => path.endsWith(".jsonl"), 1).map((path) => digestClaude(path, machine, home));
-  const codex = filesSince(join(home, ".codex/sessions"), since, (path) => /rollout-.*\.jsonl$/.test(path), 4).map((path) => digestCodex(path, machine, home));
+  const claude = filesSince(join(home, ".claude/projects"), since, (path) => path.endsWith(".jsonl"), 1).map((path) => digestClaude(path, machine, home, env));
+  const codex = filesSince(join(home, ".codex/sessions"), since, (path) => /rollout-.*\.jsonl$/.test(path), 4).map((path) => digestCodex(path, machine, home, env));
   const cutoff = new Date(since).toISOString();
   const notDream = [...claude, ...codex].filter((digest) => !belongsToDream(digest, home, env));
   for (const item of notDream) item.entries = item.entries.filter((entry) => !entry.at || entry.at >= cutoff);
   return notDream.filter((digest) => digest.session && digest.entries.some((entry) => entry.role === "user"));
 }
 
+function redactDigest(item: Digest): Digest {
+  const { tokens, effort, ...text } = item;
+  return { ...item, ...(redactValue(text) as Omit<Digest, "tokens" | "effort">), tokens, ...(effort ? { effort } : {}) };
+}
+
 export function digestLines(home: string, machine: string, since: number, now: number, env: Env): string {
-  let output = localDigests(home, machine, since, env).map((item) => `${JSON.stringify(redactValue(item))}\n`).join("");
+  let output = localDigests(home, machine, since, env).map((item) => `${JSON.stringify(redactDigest(item))}\n`).join("");
   const inbox = inboxDir(home, env);
   for (const file of existsSync(inbox) ? readdirSync(inbox).sort() : []) {
     const path = join(inbox, file);

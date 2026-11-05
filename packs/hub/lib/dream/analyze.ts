@@ -11,6 +11,7 @@ export type Findings = { taskType?: string; findings: Finding[] };
 export type Analyst = (item: Digest, index: string, run: string) => Promise<Findings>;
 export type AnalyzeIo = { home: string; env: Env; limit: number; jobs: number; analyst: Analyst; say(line: string): void };
 type Seen = Record<string, string>;
+export type Unreached = { machine: string; reason: string };
 
 const digestLimit = 40_000;
 export const analystTimeoutMs = 10 * 60_000;
@@ -140,6 +141,12 @@ export function readSeen(state: string): Seen {
   return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
 }
 
+export const unreachedPath = (run: string) => join(run, "unreached.json");
+
+function readUnreached(run: string): Unreached[] {
+  return existsSync(unreachedPath(run)) ? JSON.parse(readFileSync(unreachedPath(run), "utf8")) : [];
+}
+
 export async function analyze(run: string, io: AnalyzeIo): Promise<string> {
   const state = stateDir(io.home, io.env);
   const indexPath = join(memoryCheckout(io.home, io.env), "MEMORY.md");
@@ -179,6 +186,7 @@ export async function analyze(run: string, io: AnalyzeIo): Promise<string> {
 function report(run: string, all: Array<{ file: string; item: Digest }>, cut: number, failed: string[]): string {
   const byKind = new Map<string, string[]>();
   const machines = new Set<string>();
+  const unreached = readUnreached(run);
   let analyzed = 0;
   for (const { file, item } of all) {
     const path = join(run, "findings", file);
@@ -196,6 +204,7 @@ function report(run: string, all: Array<{ file: string; item: Digest }>, cut: nu
   return [
     `# Dream findings ${basename(run)}`, "",
     `${analyzed} sessions analyzed from ${machines.size} machines (${[...machines].sort().join(", ")}).`,
+    unreached.length ? `Not reached: ${unreached.map((item) => `${item.machine} (${item.reason})`).join(", ")}.` : "",
     cut > 0 ? `${cut} sessions with the fewest messages were left out by --limit.` : "",
     failed.length ? `Analysts failed on:\n${failed.map((line) => `- ${line}`).join("\n")}` : "", "",
     ...order.filter((kind) => byKind.has(kind)).flatMap((kind) => [`## ${kind} (${byKind.get(kind)!.length})`, "", ...byKind.get(kind)!, ""]),

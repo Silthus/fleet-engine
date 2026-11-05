@@ -282,3 +282,25 @@ test("every analyst runs with a ten minute limit, and one that hits it fails its
     expect(limits).toEqual([600_000]);
   }
 });
+
+test("final finding 4: collect saves the machines it could not reach in the run, and findings.md names them in its first lines without their error text", async () => {
+  const home = hubHome();
+  const run = join(home, ".local/state/fleet/dream/2026-11-05");
+  const errorText = ["ssh: Permission denied for ", "fake", "Secret42"].join("");
+  const { io: dream } = io(home, {
+    onPeer: async (alias) => alias === "devbox-1" ? ok(line(digest())) : { code: 255, stdout: "", stderr: errorText },
+    boxes: () => ({ running: async () => ["box-b"], ssh: async () => ({ code: 1, stdout: "", stderr: errorText }) }),
+  });
+  expect(await dreamCommand(["prepare"], dream)).toBe(0);
+  expect(JSON.parse(readFileSync(join(run, "unreached.json"), "utf8"))).toEqual([{ machine: "devbox-2", reason: "exit 255" }, { machine: "box-b", reason: "exit 1" }]);
+  const report = readFileSync(join(run, "findings.md"), "utf8");
+  expect(report.split("\n").slice(0, 4)).toEqual(["# Dream findings 2026-11-05", "", "1 sessions analyzed from 1 machines (devbox-1).", "Not reached: devbox-2 (exit 255), box-b (exit 1)."]);
+  expect(["findings.md", "unreached.json"].filter((file) => readFileSync(join(run, file), "utf8").includes("Secret42"))).toEqual([]);
+  const { io: again } = io(home, { onPeer: async () => ok(line(digest())), boxes: () => ({ running: async () => { throw new Error(errorText); }, ssh: async () => ok() }) });
+  expect(await dreamCommand(["prepare"], again)).toBe(0);
+  expect(JSON.parse(readFileSync(join(run, "unreached.json"), "utf8"))).toEqual([{ machine: "boxes", reason: "could not list them" }]);
+  expect(readFileSync(join(run, "findings.md"), "utf8")).toContain("Not reached: boxes (could not list them).");
+  const { io: clean } = io(home, { onPeer: async () => ok(line(digest())) });
+  expect(await dreamCommand(["prepare"], clean)).toBe(0);
+  expect(readFileSync(join(run, "findings.md"), "utf8")).not.toContain("Not reached");
+});

@@ -1,5 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, utimesSync } from "node:fs";
+import { budget } from "./budget.ts";
+import { collect } from "./collect.ts";
 import { join } from "node:path";
 import { tempDirs } from "../../../../src/testing/git.ts";
 import { boxSettings, fakeCoder, fakeMachine, writeHome, writePool } from "../testing.ts";
@@ -35,7 +37,7 @@ test("a Claude digest keeps the person's words, the agent's replies, failed tool
     user(cwd, "<command-name>/clear</command-name>", 7),
     "not json {",
   ]);
-  const digest = digestClaude(path, "devbox-1", home);
+  const digest = digestClaude(path, "devbox-1", home, {});
   expect(digest).toMatchObject({
     machine: "devbox-1", provider: "claude", session: "s-1", cwd, repo: "app", model: "claude-test", toolCalls: 5,
     skills: ["tdd"], memoryReads: ["tech/login.md"], memoryWrites: ["tech/login.md"], tokens: 170,
@@ -49,7 +51,7 @@ test("a Claude digest keeps the person's words, the agent's replies, failed tool
 test("a Claude digest clips a long message and says how much it left out", () => {
   const home = temp.make("fleet-dream-");
   const cwd = join(home, "dev/app");
-  const digest = digestClaude(claudeSession(home, cwd, [user(cwd, "x".repeat(2500), 0)]), "devbox-1", home);
+  const digest = digestClaude(claudeSession(home, cwd, [user(cwd, "x".repeat(2500), 0)]), "devbox-1", home, {});
   expect(digest.entries[0]!.text).toBe(`${"x".repeat(2000)} […500 more]`);
 });
 
@@ -69,7 +71,7 @@ test("a Codex digest reads its session, model, tokens, messages, failed commands
     { type: "response_item", timestamp: hourAgo(6), payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Done." }] } },
   ];
   writeHome(home, { ".codex/sessions/2026/11/05/rollout-c-1.jsonl": lines.map((line) => JSON.stringify(line)).join("\n") });
-  const digest = digestCodex(join(home, ".codex/sessions/2026/11/05/rollout-c-1.jsonl"), "devbox-1", home);
+  const digest = digestCodex(join(home, ".codex/sessions/2026/11/05/rollout-c-1.jsonl"), "devbox-1", home, {});
   expect(digest).toMatchObject({
     provider: "codex", session: "c-1", repo: "shop", model: "gpt-test", tokens: 900, toolCalls: 3,
     memoryWrites: ["projects/shop/cart.md"], effort: { tokens: 900, toolCalls: 2, errors: 1, seconds: 240 },
@@ -291,4 +293,76 @@ test("a digest carries every third-round shape through redaction and leaves ordi
   expect([hunter, "fallback-1234", "unquoted-123456", "tok0042tok", "c2lnRmFrZTQy", "Bearer abc", "a=b"].filter((secret) => output.includes(secret))).toEqual([]);
   const entries: Array<{ text: string }> = JSON.parse(output).entries;
   expect(entries.map((entry) => entry.text)).toContain(ordinary);
+});
+
+test("final finding 1: a digest redacts every cookie of a quoted header in a tool call and in a failed tool's output", () => {
+  const home = temp.make("fleet-dream-");
+  const cwd = join(home, "dev/app");
+  const cookies = [fake("theme", "=light"), fake("sessionid=", "fakeSession42"), fake("csrftoken=", "fakeCsrf43")].join("; ");
+  claudeSession(home, cwd, [
+    user(cwd, "Call the API", 0),
+    assistant(cwd, [{ type: "tool_use", id: "t1", name: "Bash", input: { command: `curl -H "Cookie: ${cookies}" https://api.example.com` } }], 1),
+    user(cwd, [{ type: "tool_result", tool_use_id: "t1", is_error: true, content: `exit code 1\n< Set-Cookie: ${cookies}; Path=/\n> Cookie: ${cookies}` }], 2),
+  ]);
+  const output = digestLines(home, "devbox-1", now - 86_400_000, now, {});
+  expect(["light", "fakeSession42", "fakeCsrf43"].filter((secret) => output.includes(secret))).toEqual([]);
+  const error: string = JSON.parse(output).entries.find((entry: { role: string }) => entry.role === "error").text;
+  expect(error).toBe('Bash {"command":"curl -H \\"Cookie: [redacted credential]\\" https://api.example.com"} → exit code 1\n< Set-Cookie: [redacted credential]\n> Cookie: [redacted credential]');
+});
+
+test("final finding 2: a digest redacts numbers and booleans under secret names, and keeps its own token counts", () => {
+  const home = temp.make("fleet-dream-");
+  const cwd = join(home, "dev/app");
+  const pin = fake("8675", "309");
+  const code = fake("9876", "54321");
+  claudeSession(home, cwd, [
+    user(cwd, "Log in", 0),
+    assistant(cwd, [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "login", password: Number(pin) } }], 1, "m-1", { input_tokens: 100, output_tokens: 20 }),
+    user(cwd, [{ type: "tool_result", tool_use_id: "t1", is_error: true, content: `exit code 1 ${JSON.stringify({ access_token: Number(code), auth: true, retries: 3 })}` }], 2),
+    user(cwd, [{ type: "tool_result", tool_use_id: "t1", is_error: true, content: JSON.stringify({ pin_token: Number(code) }) }], 3),
+    assistant(cwd, [{ type: "tool_use", id: "t2", name: "Edit", input: { file_path: join(cwd, "login.ts") } }], 4, "m-2"),
+  ]);
+  const output = digestLines(home, "devbox-1", now - 86_400_000, now, {});
+  expect([pin, code].filter((secret) => output.includes(secret))).toEqual([]);
+  const digest = JSON.parse(output);
+  expect(digest).toMatchObject({ tokens: 120, effort: { tokens: 120, toolCalls: 2, errors: 2 } });
+  expect(digest.entries.filter((entry: { role: string }) => entry.role === "error").map((entry: { text: string }) => entry.text)).toEqual([
+    'Bash {"command":"login","password":"[redacted credential]"} → exit code 1 {"access_token":"[redacted credential]","auth":"[redacted credential]","retries":3}',
+    'Bash {"command":"login","password":"[redacted credential]"} → {"pin_token":"[redacted credential]"}',
+  ]);
+});
+
+test("final finding 3: with FLEET_MEMORY_DIR set, both parsers record reads and writes in that checkout, so collect keeps the memory fresh", async () => {
+  const home = temp.make("fleet-dream-");
+  const memory = join(home, "notes/memory");
+  const env = { FLEET_MEMORY_DIR: memory };
+  const cwd = join(home, "dev/app");
+  writeHome(home, {
+    "notes/memory/MEMORY.md": "# Memory\n- [Rule](tech/rule.md)\n- [Tip](tech/tip.md)\n",
+    "notes/memory/tech/rule.md": "---\nname: rule\ndescription: A rule\nmetadata:\n  type: reference\nmodified: 2026-01-01\n---\nA rule.\n",
+    "notes/memory/tech/tip.md": "---\nname: tip\ndescription: A tip\nmetadata:\n  type: reference\nmodified: 2026-01-01\n---\nA tip.\n",
+  });
+  claudeSession(home, cwd, [
+    user(cwd, "Fix it", 0),
+    assistant(cwd, [
+      { type: "tool_use", id: "t1", name: "Read", input: { file_path: join(memory, "tech/rule.md") } },
+      { type: "tool_use", id: "t2", name: "Read", input: { file_path: join(home, ".agents/memory/tech/elsewhere.md") } },
+      { type: "tool_use", id: "t3", name: "Write", input: { file_path: join(memory, "tech/new.md") } },
+    ], 1),
+  ]);
+  const codexLines = [
+    { type: "session_meta", payload: { id: "c-1", cwd } },
+    { type: "response_item", timestamp: hourAgo(2), payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Ship it" }] } },
+    { type: "response_item", timestamp: hourAgo(3), payload: { type: "function_call", call_id: "f1", name: "shell", arguments: JSON.stringify({ command: ["cat", `${memory}/tech/tip.md`] }) } },
+    { type: "response_item", timestamp: hourAgo(4), payload: { type: "custom_tool_call", call_id: "f2", name: "apply_patch", input: `*** Update File: ${memory}/tech/rule.md` } },
+  ];
+  writeHome(home, { ".codex/sessions/2026/11/05/rollout-c-1.jsonl": codexLines.map((line) => JSON.stringify(line)).join("\n") });
+  const [claude, codex] = digestLines(home, "devbox-1", now - 86_400_000, now, env).trim().split("\n").map((line) => JSON.parse(line));
+  expect([claude.memoryReads, claude.memoryWrites]).toEqual([["tech/rule.md"], ["tech/new.md"]]);
+  expect([codex.memoryReads, codex.memoryWrites]).toEqual([["tech/tip.md"], ["tech/rule.md"]]);
+  const git = async () => ({ code: 0, stdout: "", stderr: "" });
+  await collect("1d", { home, env, self: "devbox-1", now: () => now, peers: [], onPeer: git, boxes: () => undefined, git, say: () => {} });
+  const usage = JSON.parse(readFileSync(join(home, ".local/state/fleet/dream/usage.json"), "utf8"));
+  expect(Object.keys(usage).sort()).toEqual(["tech/new.md", "tech/rule.md", "tech/tip.md"]);
+  expect(budget(memory, usage, now).filter((problem) => problem.problem.startsWith("stale"))).toEqual([]);
 });

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join } from "node:path";
 import type { Env, Result } from "../coder.ts";
 import { peersOf, quote, remoteFleet } from "../machine.ts";
-import { readSeen } from "./analyze.ts";
+import { readSeen, unreachedPath, type Unreached } from "./analyze.ts";
 import { digestLines, memoryCheckout, parseSince, stateDir, type Digest } from "./digest.ts";
 
 export type DreamBoxes = { running(): Promise<string[]>; ssh(box: string, command: string): Promise<Result> };
@@ -41,26 +41,34 @@ async function gather(since: number, io: CollectIo) {
   const remote = remoteFleet(`dream digest --since ${quote(new Date(since).toISOString())}`);
   const gathered = parseDigests(digestLines(io.home, io.self, since, io.now(), io.env), io.self, io.say);
   const failed: string[] = [];
+  const unreached: Unreached[] = [];
   for (const alias of io.peers) {
     const answer = await io.onPeer(alias, remote);
     if (answer.code === 0) gathered.push(...parseDigests(answer.stdout, alias, io.say));
-    else failed.push(`${alias} (exit ${answer.code}: ${answer.stderr.trim().split("\n").pop()})`);
+    else {
+      failed.push(`${alias} (exit ${answer.code}: ${answer.stderr.trim().split("\n").pop()})`);
+      unreached.push({ machine: alias, reason: `exit ${answer.code}` });
+    }
   }
   try {
     const boxes = io.boxes();
     for (const box of (await boxes?.running()) ?? []) {
       const answer = await boxes!.ssh(box, `bash -lc ${quote(remote)}`);
       if (answer.code === 0) gathered.push(...parseDigests(answer.stdout, box, io.say));
-      else failed.push(`${box} (exit ${answer.code})`);
+      else {
+        failed.push(`${box} (exit ${answer.code})`);
+        unreached.push({ machine: box, reason: `exit ${answer.code}` });
+      }
     }
   } catch (error) {
     failed.push(`boxes (${(error as Error).message})`);
+    unreached.push({ machine: "boxes", reason: "could not list them" });
   }
-  return { gathered, failed };
+  return { gathered, failed, unreached };
 }
 
 export async function collect(since: string, io: CollectIo): Promise<string> {
-  const { gathered, failed } = await gather(parseSince(since, io.now()), io);
+  const { gathered, failed, unreached } = await gather(parseSince(since, io.now()), io);
   const state = stateDir(io.home, io.env);
   const seen = readSeen(state);
   const newest = new Map<string, Digest>();
@@ -70,6 +78,7 @@ export async function collect(since: string, io: CollectIo): Promise<string> {
   }
   const run = join(state, dateOf(io.now()));
   mkdirSync(join(run, "digests"), { recursive: true, mode: 0o700 });
+  writeFileSync(unreachedPath(run), JSON.stringify(unreached), { mode: 0o600 });
   const usagePath = join(state, "usage.json");
   const usage: Record<string, string> = existsSync(usagePath) ? JSON.parse(readFileSync(usagePath, "utf8")) : {};
   let kept = 0;

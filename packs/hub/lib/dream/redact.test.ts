@@ -181,3 +181,56 @@ test("the third-round shapes are idempotent", () => {
   expect(leaks(once, hunter)).toEqual([]);
   expect(redactCredentials(once)).toBe(once);
 });
+
+const hidden = "[redacted credential]";
+const cookies = [fake("theme", "=light"), fake("sessionid=", "fakeSession42"), fake("csrftoken=", "fakeCsrf43")].join("; ");
+const bearer = fake("Bearer ", "fake", "Bearer44", ".x");
+const basic = fake("Basic ", "dXNl", "cjpGYWtl", "NDU=");
+const headerSecrets = ["light", "fakeSession42", "fakeCsrf43", "Bearer44", "cjpGYWtl", "Digest46"];
+
+test("final finding 1: a Cookie, Set-Cookie, Authorization, or Proxy-Authorization header is redacted whole, quoted or not", () => {
+  const output = redactCredentials([
+    `curl -H "Cookie: ${cookies}" https://api.example.com`,
+    `curl -H 'Set-Cookie: ${cookies}; Path=/; HttpOnly' https://api.example.com`,
+    `curl -H "Authorization: ${bearer} extra" -H "Proxy-Authorization: ${basic}" https://api.example.com`,
+    `Cookie: ${cookies}`,
+    `set-cookie: ${cookies}; Secure`,
+    `  proxy-authorization: Digest username="u", response="${fake("fake", "Digest46")}"`,
+    String.raw`{"command": "curl -H \"Cookie: ${cookies}\" https://api.example.com", "next": 1`,
+  ].join("\n"));
+  expect(leaks(output, ...headerSecrets)).toEqual([]);
+  expect(output.split("\n")).toEqual([
+    `curl -H "Cookie: ${hidden}" https://api.example.com`,
+    `curl -H 'Set-Cookie: ${hidden}' https://api.example.com`,
+    `curl -H "Authorization: ${hidden}" -H "Proxy-Authorization: ${hidden}" https://api.example.com`,
+    `Cookie: ${hidden}`,
+    `set-cookie: ${hidden}`,
+    `  proxy-authorization: ${hidden}`,
+    String.raw`{"command": "curl -H \"Cookie: ${hidden}\" https://api.example.com", "next": 1`,
+  ]);
+  expect(redactCredentials(output)).toBe(output);
+});
+
+test("final finding 1: a whole header is redacted inside decoded JSON too, and a second pass changes nothing", () => {
+  const output = redactCredentials(JSON.stringify({ command: `curl -H "Cookie: ${cookies}" -H 'Authorization: ${bearer}' https://api.example.com`, headers: { Cookie: cookies } }));
+  expect(leaks(output, ...headerSecrets)).toEqual([]);
+  expect(JSON.parse(output)).toEqual({ command: `curl -H "Cookie: ${hidden}" -H 'Authorization: ${hidden}' https://api.example.com`, headers: { Cookie: hidden } });
+  expect(redactCredentials(output)).toBe(output);
+});
+
+test("final finding 2: a number or boolean under a secret name is redacted, and other scalars stay", () => {
+  const pin = Number(fake("8675", "309"));
+  expect(redactValue({ password: pin, access_token: [pin, pin], "x-api-key": pin, auth: true, retries: 3, verbose: false, token: null })).toEqual({
+    password: hidden, access_token: [hidden, hidden], "x-api-key": hidden, auth: hidden, retries: 3, verbose: false, token: null,
+  });
+  const once = redactCredentials(JSON.stringify({ password: pin, nested: { pin_token: pin } }));
+  expect(once).toBe(`{"password":"${hidden}","nested":{"pin_token":"${hidden}"}}`);
+  expect(redactCredentials(once)).toBe(once);
+});
+
+test("final finding 2: a number or boolean under a quoted secret name in plain text is redacted, and a second pass changes nothing", () => {
+  const pin = fake("8675", "309");
+  const once = redactCredentials(String.raw`exit code 1 {"password": ${pin}, "auth":true, "retries": 3} and {\"access_token\":${pin}}`);
+  expect(once).toBe(String.raw`exit code 1 {"password": "${hidden}", "auth":"${hidden}", "retries": 3} and {\"access_token\":\"${hidden}\"}`);
+  expect(redactCredentials(once)).toBe(once);
+});
