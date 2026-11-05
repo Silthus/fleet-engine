@@ -1,15 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { inside } from "../../files/install.ts";
 
-export type Wait = (ms: number) => Promise<void>;
-/** sharedLock: another program takes <file>.lock, a proper-lockfile folder, before it writes the file, so Fleet takes it too and waits with this function. */
-export type Write = { target: string; before?: string; after: string; sharedLock?: Wait };
-
-const staleLockMs = 10_000;
-const lockTries = 40;
-const lockPauseMs = 50;
+export type Write = { target: string; before?: string; after: string };
 
 const lockTarget = ".local/state/fleet/lock";
 
@@ -77,10 +71,8 @@ export async function writeWithBackups(home: string, writes: Write[]) {
       await writeFile(temporary, write.after, { mode: 0o600, flag: "wx" });
       try {
         await requireRealPath(home, write.target);
-        await holdingSharedLock(write, path, async () => {
-          if ((await optional(path)) !== write.before) throw new Error(`${write.target} changed while Fleet was applying. Run fleet apply again.`);
-          await rename(temporary, path);
-        });
+        if ((await optional(path)) !== write.before) throw new Error(`${write.target} changed while Fleet was applying. Run fleet apply again.`);
+        await rename(temporary, path);
       } catch (error) {
         await rm(temporary, { force: true });
         throw error;
@@ -101,34 +93,9 @@ async function requireRealPath(home: string, target: string) {
 async function restore(home: string, write: Write) {
   if (await linkOnPath(home, write.target)) return;
   const path = inside(home, write.target);
-  await holdingSharedLock(write, path, async () => {
-    if ((await optional(path)) !== write.after) return;
-    if (write.before === undefined) return void (await rm(path, { force: true }));
-    const temporary = `${path}.${randomUUID()}.tmp`;
-    await writeFile(temporary, write.before, { mode: 0o600, flag: "wx" });
-    await rename(temporary, path);
-  });
-}
-
-/** Takes the lock the way proper-lockfile does: the folder <file>.lock, which its holder refreshes, so one older than ten seconds is left over from a crash. */
-async function holdingSharedLock(write: Write, path: string, work: () => Promise<void>) {
-  if (!write.sharedLock) return work();
-  const lock = `${path}.lock`;
-  for (let tries = 0; ; tries++) {
-    try {
-      await mkdir(lock);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const info = await stat(lock).catch(() => undefined);
-      if (info && Date.now() - info.mtimeMs > staleLockMs) await rm(lock, { recursive: true, force: true });
-      else if (tries >= lockTries) throw new Error(`${write.target} stays locked by another program, such as Claude Code saving it. Run fleet apply again.`);
-      else await write.sharedLock(lockPauseMs);
-    }
-  }
-  try {
-    await work();
-  } finally {
-    await rm(lock, { recursive: true, force: true });
-  }
+  if ((await optional(path)) !== write.after) return;
+  if (write.before === undefined) return void (await rm(path, { force: true }));
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temporary, write.before, { mode: 0o600, flag: "wx" });
+  await rename(temporary, path);
 }
