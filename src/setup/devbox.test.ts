@@ -131,7 +131,7 @@ describe("the devbox over SSH", () => {
     expect((await fleetSetup(home, args, ["~/code/app"], fakeMachine(home))).output).toContain("could not push answers");
 
     const blocked = await fleetSetup(home, ["--non-interactive", ...args], [], fakeMachine(home));
-    expect(blocked.output).toContain("could not push answers");
+    expect(blocked.output).toContain("could not push answers: ! [remote rejected] main -> main (pre-receive hook declined). Fix that, then try again.");
     expect(blocked.output).not.toContain("▶ Install Fleet on box-1");
 
     rmSync(rejecting);
