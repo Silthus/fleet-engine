@@ -43,6 +43,7 @@ fails="$work/fails"
 : >"$fails"
 created=
 clean_uids=
+cleanup_failed=
 
 home_of() { getent passwd "$1" | cut -d: -f6; }
 
@@ -57,18 +58,22 @@ remove_user() {
     note "left $user alone: its home is $(home_of "$user"), not the proof's $home"
     return
   fi
+  crontab -r -u "$user" 2>/dev/null
   loginctl disable-linger "$user" 2>/dev/null
   systemctl stop "user@$uid.service" 2>/dev/null
   pkill -KILL -u "$uid" 2>/dev/null
   sleep 1
-  crontab -r -u "$user" 2>/dev/null
   case " $clean_uids " in *" $uid "*) find /tmp /var/tmp -xdev -path "$work" -prune -o -user "$uid" -prune -exec rm -rf {} + 2>/dev/null ;; esac
-  userdel "$user" 2>/dev/null
+  if ! userdel "$user" 2>/dev/null && id "$user" >/dev/null 2>&1; then
+    note "could not remove $user (uid $uid), so its home $home stays"
+    cleanup_failed=1
+    return
+  fi
   [ ! -f "/var/mail/$user" ] || [ "$(stat -c %u "/var/mail/$user")" != "$uid" ] || rm -f "/var/mail/$user"
   case "$home" in
     "$work"/home-*) [ -L "$home" ] || [ ! -d "$home" ] || [ "$(stat -c %u "$home")" != "$uid" ] || rm -rf "$home" ;;
   esac
-  if id "$user" >/dev/null 2>&1; then note "could not remove $user"; else note "removed $user (uid $uid), its home $home, and its crontab"; fi
+  note "removed $user (uid $uid), its home $home, and its crontab"
 }
 
 cleanup() {
@@ -77,8 +82,13 @@ cleanup() {
   trap '' HUP INT TERM
   say "Cleanup"
   for entry in $created; do remove_user "${entry%%:*}" "${entry#*:}"; done
-  rm -rf "$work"
-  note "removed $work"
+  if [ -n "$cleanup_failed" ]; then
+    note "kept $work, because an account in it is still there"
+    [ "$code" -ne 0 ] || code=1
+  else
+    rm -rf "$work"
+    note "removed $work"
+  fi
   exit "$code"
 }
 trap cleanup EXIT
@@ -348,6 +358,8 @@ check_port() {
   [ -z "$listeners" ] || printf '%s\n' "$listeners" | sed 's/  */ /g; s/^/   listener: /'
   service=
   others=
+  unknown=$(printf '%s\n' "$listeners" | grep -v '^$' | grep -c -v 'pid=[0-9]' || true)
+  [ "$unknown" -eq 0 ] || others="$others $unknown listener(s) with no process information"
   for pid in $(printf '%s\n' "$listeners" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u); do
     owner=$(awk '/^Uid:/ { print $2 }' "/proc/$pid/status" 2>/dev/null || true)
     if [ "$owner" != "$uid" ]; then others="$others $pid (uid ${owner:-gone})"

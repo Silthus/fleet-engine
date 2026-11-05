@@ -60,9 +60,10 @@ sudo sh proof/fresh-linux.sh
      proof compares the versions and link targets of `bun`, `claude`,
      `codex`, and `t3` instead.
 5. It removes both users, their crontabs, and the work folder with their
-   homes. Cleanup removes an account only when its home is the proof's home
-   for it, and removes a home only when it is in the work folder and the
-   proof user owns it.
+   homes. The homes live only in the proof's own new work folder, so cleanup
+   never deletes a home outside it. Cleanup removes an account only when its
+   home is the proof's home for it. When an account cannot be removed, cleanup
+   keeps the work folder and the proof exits non-zero.
 
 It exits 1 when a check fails.
 
