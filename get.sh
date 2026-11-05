@@ -1,6 +1,7 @@
 #!/bin/sh
 # Fleet bootstrap. Installs what Fleet needs, fetches the engine at a pinned
-# ref, then runs fleet setup, or fleet apply when --profile names a profile.
+# ref, installs its packages, puts fleet on the login PATH, then runs
+# fleet setup, or fleet apply when --profile names a profile.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh
 #   sh get.sh [--ref <ref>] [--profile <dir> | --install-only] [-- <flags for fleet>]
@@ -118,6 +119,35 @@ fetch_engine() {
   git -C "$engine_dir" checkout -q --force --detach FETCH_HEAD
 }
 
+install_packages() {
+  log=$(mktemp)
+  if ! (cd "$engine_dir" && bun install --frozen-lockfile --production) >"$log" 2>&1; then
+    cat "$log" >&2
+    rm -f "$log"
+    fail "could not install the engine's packages in $engine_dir."
+  fi
+  rm -f "$log"
+}
+
+link_fleet() {
+  mkdir -p "$HOME/.local/bin"
+  quoted=$(printf '%s' "$engine_dir/fleet" | sed "s/'/'\\\\''/g")
+  printf "#!/bin/sh\nexec sh '%s' \"\$@\"\n" "$quoted" >"$HOME/.local/bin/fleet.new"
+  chmod 755 "$HOME/.local/bin/fleet.new"
+  mv -f "$HOME/.local/bin/fleet.new" "$HOME/.local/bin/fleet"
+}
+
+login_path() {
+  case "$(uname -s)" in
+    Darwin) file=.zprofile; dirs="\$HOME/.local/bin:\$HOME/.bun/bin:/opt/homebrew/bin" ;;
+    *) file=.profile; [ ! -f "$HOME/.bash_profile" ] || file=.bash_profile; dirs="\$HOME/.local/bin:\$HOME/.bun/bin" ;;
+  esac
+  line="export PATH=\"$dirs:\$PATH\" # Added by Fleet"
+  ! grep -qxF "$line" "$HOME/$file" 2>/dev/null || return 0
+  printf '%s\n' "$line" >>"$HOME/$file"
+  say "Open a new terminal to use fleet. ~/$file now puts ~/.local/bin and ~/.bun/bin on your PATH."
+}
+
 case "$(uname -s)" in
   Darwin) mac_tools ;;
   Linux)
@@ -129,6 +159,9 @@ esac
 t3_cli
 has git || fail "git is missing."
 fetch_engine
+install_packages
+link_fleet
+login_path
 say "Engine ready at $ref in $engine_dir."
 
 [ -z "$install_only" ] || exit 0

@@ -15,7 +15,7 @@ let engineRepo: string;
 
 beforeAll(() => {
   engineRepo = shared.make("engine-repo-");
-  for (const path of ["src", "packs", "fleet", "package.json", "presets.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
+  for (const path of ["src", "packs", "fleet", "package.json", "bun.lock", ".gitignore", "presets.json"]) cpSync(join(repoRoot, path), join(engineRepo, path), { recursive: true });
   git(engineRepo, "init", "-q", "-b", "main");
   git(engineRepo, "add", ".");
   git(engineRepo, "commit", "-q", "-m", "engine");
@@ -40,6 +40,9 @@ function sandbox(os: "Linux" | "Darwin", options: SandboxOptions = {}) {
     chmodSync(join(bin, name), 0o755);
   };
   stub("uname", `case "$1" in -s) echo ${os} ;; -m) echo x86_64 ;; esac`);
+  writeFileSync(join(root, "fake-bun"), `#!/bin/sh\necho "bun $*" >> "${log}"\n${fakeBun(log)}\n`);
+  chmodSync(join(root, "fake-bun"), 0o755);
+  if (!options.without?.includes("bun")) cpSync(join(root, "fake-bun"), join(bin, "bun"));
   stub("xcode-select", "exit 0");
   stub("claude", "exit 0");
   stub("codex", "exit 0");
@@ -59,6 +62,12 @@ case "$url" in
 esac`);
   symlinkSync(Bun.which("cut") ?? "/usr/bin/cut", join(bin, "cut"));
   return { root, bin, home, log, stub };
+}
+
+function fakeBun(log: string) {
+  return `[ "$1" = install ] || exec "${process.execPath}" "$@"
+echo "bun install ran in $PWD" >> "${log}"
+mkdir -p node_modules && "${Bun.which("ln") ?? "ln"}" -sfn "${join(repoRoot, "node_modules", "smol-toml")}" node_modules/smol-toml`;
 }
 
 function buildGhTarball(root: string) {
@@ -150,7 +159,7 @@ describe("get.sh", () => {
 
   onLinuxHost("on macOS with Homebrew present, skips its installer and installs Bun with brew when Bun is missing", () => {
     const box = sandbox("Darwin", { without: ["bun"] });
-    box.stub("brew", "exit 0");
+    box.stub("brew", `[ "$2" = bun ] && cp "${join(box.root, "fake-bun")}" "${join(box.bin, "bun")}"; exit 0`);
     const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
     expect(result.code).toBe(0);
     expect(result.output).not.toContain("Installing Homebrew");
@@ -182,6 +191,68 @@ describe("get.sh", () => {
     const result = Bun.spawnSync([Bun.which("script") ?? "script", "-qec", command, "/dev/null"], { env, stdin: "ignore" });
     expect(result.exitCode).toBe(0);
     expect(readFileSync(box.log, "utf8").split("\n")).toContain("fleet setup --preset starter stdin=tty");
+  });
+
+  test("installs the engine's packages in the engine directory", () => {
+    const box = sandbox("Linux");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    const engineDir = join(box.home, ".local/share/fleet/engine");
+    const calls = result.calls.split("\n");
+    expect(calls).toContain("bun install --frozen-lockfile --production");
+    expect(calls).toContain(`bun install ran in ${engineDir}`);
+    expect(git(engineDir, "status", "--porcelain")).toBe("");
+  });
+
+  test("stops with the installer's output when the engine's packages do not install", () => {
+    const box = sandbox("Linux");
+    box.stub("bun", `[ "$1" = install ] || exec "${process.execPath}" "$@"\necho "lockfile is out of date" >&2\nexit 1`);
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("lockfile is out of date");
+    expect(result.output).toContain("Fleet: could not install the engine's packages in " + join(box.home, ".local/share/fleet/engine") + ".");
+  });
+
+  test("puts fleet into ~/.local/bin, where it runs the engine even from a directory it cannot read", () => {
+    const box = sandbox("Linux");
+    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
+    const fleet = join(box.home, ".local/bin/fleet");
+    const unreadable = join(box.root, "unreadable");
+    mkdirSync(unreadable, { mode: 0o100 });
+    const result = Bun.spawnSync([fleet, "--help"], { cwd: unreadable, env: { PATH: box.bin, HOME: box.home } });
+    chmodSync(unreadable, 0o700);
+    expect(result.stderr.toString()).toBe("");
+    expect(result.stdout.toString()).toStartWith("Fleet: one setup for T3 Code, agents, and your workflows");
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("on Linux adds the PATH line to ~/.profile once and keeps the lines already there", () => {
+    const box = sandbox("Linux");
+    writeFileSync(join(box.home, ".profile"), "umask 022\n");
+    const first = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    const second = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(first.code).toBe(0);
+    expect(second.code).toBe(0);
+    expect(readFileSync(join(box.home, ".profile"), "utf8")).toBe('umask 022\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" # Added by Fleet\n');
+    expect(first.output).toContain("Fleet: Open a new terminal to use fleet. ~/.profile now puts ~/.local/bin and ~/.bun/bin on your PATH.");
+    expect(second.output).not.toContain("Open a new terminal");
+  });
+
+  test("on Linux uses ~/.bash_profile when it exists, because bash then skips ~/.profile", () => {
+    const box = sandbox("Linux");
+    writeFileSync(join(box.home, ".bash_profile"), ". ~/.bashrc\n");
+    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
+    expect(readFileSync(join(box.home, ".bash_profile"), "utf8")).toEndWith('export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" # Added by Fleet\n');
+    expect(existsSync(join(box.home, ".profile"))).toBe(false);
+  });
+
+  onLinuxHost("on macOS adds the PATH line, with Homebrew's bin, to ~/.zprofile once", () => {
+    const box = sandbox("Darwin");
+    box.stub("brew", "exit 0");
+    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
+    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
+    expect(readFileSync(join(box.home, ".zprofile"), "utf8")).toBe('export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:$PATH" # Added by Fleet\n');
+    expect(existsSync(join(box.home, ".profile"))).toBe(false);
   });
 
   test("a second run changes nothing", () => {

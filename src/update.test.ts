@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProfileFile } from "./pack/types.ts";
 import { git, isolateGit, tempDirs } from "./testing/git.ts";
@@ -12,6 +12,8 @@ afterEach(() => temp.cleanup());
 function engineRemote(tags: string[]) {
   const dir = temp.make("engine-remote-");
   git(dir, "init", "-q", "-b", "main");
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "engine" }));
+  writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
   for (const tag of tags) {
     writeFileSync(join(dir, "VERSION"), tag);
     git(dir, "add", ".");
@@ -114,6 +116,34 @@ describe("fleet update", () => {
     const result = await run(engineCheckout(remote, "main"), { repo: remote, ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 0, applied: 1, output: expect.stringContaining("is not a release, so fleet update does not move it back") });
     expect(result.version).toBe("main");
+  });
+
+  test("installs the packages the new engine needs before it applies", async () => {
+    const remote = engineRemote(["v0.1.0"]);
+    const engineDir = engineCheckout(remote, "v0.1.0");
+    mkdirSync(join(remote, "dep"));
+    writeFileSync(join(remote, "dep", "package.json"), JSON.stringify({ name: "dep", version: "1.0.0" }));
+    writeFileSync(join(remote, "package.json"), JSON.stringify({ name: "engine", dependencies: { dep: "file:./dep" } }));
+    expect(Bun.spawnSync([process.execPath, "install"], { cwd: remote, stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+    writeFileSync(join(remote, "VERSION"), "v0.2.0");
+    git(remote, "add", ".");
+    git(remote, "commit", "-q", "-m", "v0.2.0");
+    git(remote, "tag", "v0.2.0");
+    const result = await run(engineDir, { repo: remote, ref: "v0.1.0", channel: "release" });
+    expect(result).toMatchObject({ code: 0, applied: 1, version: "v0.2.0" });
+    expect(existsSync(join(engineDir, "node_modules", "dep", "package.json"))).toBe(true);
+    expect(git(engineDir, "status", "--porcelain")).toBe("");
+  });
+
+  test("stops before apply when the engine's packages do not install", async () => {
+    const remote = engineRemote(["v0.1.0"]);
+    const engineDir = engineCheckout(remote, "v0.1.0");
+    writeFileSync(join(remote, "package.json"), JSON.stringify({ name: "engine", dependencies: { missing: "file:./missing" } }));
+    writeFileSync(join(remote, "VERSION"), "v0.2.0");
+    git(remote, "commit", "-q", "-am", "v0.2.0");
+    git(remote, "tag", "v0.2.0");
+    const result = await run(engineDir, { repo: remote, ref: "v0.1.0", channel: "release" });
+    expect(result).toMatchObject({ code: 1, applied: 0, output: expect.stringContaining("could not install the engine's packages") });
   });
 
   test("stops before apply when the track checkout fails", async () => {

@@ -28,7 +28,7 @@ export async function readNotice(home: string): Promise<string | undefined> {
 export async function update(options: UpdateOptions): Promise<number> {
   if (!(await ready(options))) return 1;
   const moved = options.engine.channel === "track" ? await trackMain(options) : await followRelease(options);
-  if (!moved) return 1;
+  if (!moved || !(await installPackages(options))) return 1;
   const profile = await git(options.profileDir, "remote");
   if (profile.ok && profile.out) {
     const pulled = await git(options.profileDir, "pull", "-q", "--ff-only");
@@ -82,6 +82,14 @@ async function followRelease(options: UpdateOptions) {
   if (!checkedOut.ok) return options.print(`fleet update: could not check out ${target.tag}: ${checkedOut.err}`), false;
   options.print(`Engine is at ${target.tag}.`);
   return true;
+}
+
+async function installPackages(options: UpdateOptions) {
+  const child = Bun.spawn([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: options.engineDir, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 300_000 });
+  const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  if (code === 0) return true;
+  options.print(`fleet update: could not install the engine's packages in ${options.engineDir}. Run bun install --frozen-lockfile --production there, then fleet update again.\n${(err || out).trim()}`);
+  return false;
 }
 
 async function saveNotice(home: string, newMajor: string | undefined) {
