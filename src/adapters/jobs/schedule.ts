@@ -1,6 +1,9 @@
-import type { PackJob } from "../../pack/types.ts";
+import type { Owned, PackJob, TimerSchedule as Schedule } from "../../pack/types.ts";
 
-type Schedule = PackJob["schedule"];
+export type TimedJob = Owned<PackJob> & { schedule: Schedule };
+
+export const isService = (job: Owned<PackJob>) => job.schedule.every === "always";
+export const isTimed = (job: Owned<PackJob>): job is TimedJob => !isService(job);
 
 export const defaultTime = "03:17";
 

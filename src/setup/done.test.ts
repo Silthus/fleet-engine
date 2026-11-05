@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
-import type { PackJob, Plan } from "../pack/types.ts";
+import type { PackJob, PackManifest, Plan } from "../pack/types.ts";
 import { doneScreen, firstPrompt, here, repoName, runsByItself, standaloneProblems } from "./done.ts";
 import { fakeMachine, fleetSetup, onBox } from "./testing.ts";
 
@@ -40,6 +40,11 @@ describe("the done screen", () => {
     const nightly = { id: "nightly-update", schedule: { every: "1d" as const, at: "03:17" } };
     const lines = runsByItself(jobs(nightly, { id: "sweep", schedule: { every: "1h", at: "03:17" } }), [], [{ host: "box-1", plan: jobs(nightly, { id: "quality-loop", schedule: { every: "1d" } }) }]);
     expect(lines).toEqual(["nightly-update, every day at 03:17", "sweep, every hour at :17", "quality-loop, every day at 03:17, on box-1"]);
+  });
+
+  test("lists a service as running all the time", () => {
+    const plan = { jobs: [{ id: "slack-trigger", schedule: { every: "always" }, workflow: "slack-thread" }] } as unknown as Plan;
+    expect(runsByItself(plan, [{ workflows: [{ id: "slack-thread", name: "Start a thread from Slack" }] } as unknown as PackManifest])).toEqual(["Start a thread from Slack, all the time"]);
   });
 
   test("names the profile repo from its clone URL", () => {

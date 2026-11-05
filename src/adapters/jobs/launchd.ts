@@ -5,13 +5,14 @@ export const labelPrefix = "dev.fleet.";
 const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const string = (value: string) => `<string>${escape(value)}</string>`;
 
-function timer(value: LaunchdTimer) {
+function timer(value: LaunchdTimer | "always") {
+  if (value === "always") return [`  <key>RunAtLoad</key>`, `  <true/>`, `  <key>KeepAlive</key>`, `  <true/>`];
   if ("StartInterval" in value) return [`  <key>StartInterval</key>`, `  <integer>${value.StartInterval}</integer>`];
   const entries = Object.entries(value.StartCalendarInterval).flatMap(([key, number]) => [`    <key>${key}</key>`, `    <integer>${number}</integer>`]);
   return [`  <key>StartCalendarInterval</key>`, `  <dict>`, ...entries, `  </dict>`];
 }
 
-export function plist(id: string, script: string, schedule: LaunchdTimer, log: string) {
+export function plist(id: string, script: string, schedule: LaunchdTimer | "always", log: string) {
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,

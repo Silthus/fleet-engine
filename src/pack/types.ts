@@ -52,10 +52,13 @@ export type T3Task = {
 /** Limits an item to some machines, plans, or one workflow. An item without a field fits every value. */
 export type Scope = { on?: Os[]; roles?: MachineRole[]; plans?: AiPlan[]; workflow?: string };
 
+export type TimerSchedule = { every: "5m" | "15m" | "1h" | "1d"; at?: string };
+
+/** every always makes the job a service that runs all the time: a systemd user service on Linux, a launchd agent kept alive on a Mac. */
 export type PackJob = Scope & {
   id: string;
   command: string[];
-  schedule: { every: "5m" | "15m" | "1h" | "1d"; at?: string };
+  schedule: TimerSchedule | { every: "always"; at?: undefined };
   runner?: "os" | "t3";
   task?: T3Task;
 };
