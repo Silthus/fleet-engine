@@ -14,8 +14,15 @@ export type Catalog = {
   packs: LoadedPack[];
   /** Packs from team sources: setup offers them only to the team's members, and ticks them by default. */
   teamPacks: string[];
+  /** True once GitHub sign-in has shown which team sources this person may use. */
+  teamsKnown: boolean;
   add(source: AvailableSource): void;
 };
+
+/** Before GitHub sign-in, a name under a team source's prefix may belong to a team pack that is not fetched yet. */
+function laterTeamName(catalog: Pick<Catalog, "sources" | "teamsKnown">, name: string, separator: "." | "-") {
+  return !catalog.teamsKnown && teamSources.some(({ source }) => name.startsWith(`${source.name}${separator}`) && !catalog.sources.some((loaded) => loaded.ref.name === source.name));
+}
 
 export type QuestionContext = {
   terminal: Terminal;
@@ -86,7 +93,7 @@ export function picksFrom(flags: SetupFlags, catalog: Catalog): Required<Pick<Dr
   if (unmet) throw new FlagError(`${title(unmet.pack)} needs ${unmet.needs.map(title).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const manifests = catalog.packs.map((pack) => pack.manifest);
   const known = workflowDefaults(manifests);
-  for (const id of Object.keys(flags.workflows)) if (!Object.hasOwn(known, id)) throw new FlagError(`--workflows: no workflow named ${id}`);
+  for (const id of Object.keys(flags.workflows)) if (!Object.hasOwn(known, id) && !laterTeamName(catalog, id, "-")) throw new FlagError(`--workflows: no workflow named ${id}`);
   return { packs, workflows: workflowOverrides({ ...preset.workflows, ...flags.workflows }, manifests) };
 }
 
@@ -99,13 +106,15 @@ export function unmetNeeds(packs: string[], catalog: Pick<Catalog, "packs">) {
     .filter((item) => item.needs.length);
 }
 
-export function settingsFrom(flags: SetupFlags, catalog: Pick<Catalog, "packs">): Record<string, SettingValue> {
+export function settingsFrom(flags: SetupFlags, catalog: Pick<Catalog, "packs"> & Partial<Pick<Catalog, "sources" | "teamsKnown">>): Record<string, SettingValue> {
   const settings = catalog.packs.flatMap((pack) => pack.manifest.settings ?? []);
+  const later = (key: string) => laterTeamName({ sources: catalog.sources ?? [], teamsKnown: catalog.teamsKnown ?? true }, key, ".");
   return Object.fromEntries(
-    Object.entries(flags.set).map(([key, raw]) => {
+    Object.entries(flags.set).flatMap(([key, raw]) => {
       const setting = settings.find((item) => item.key === key);
+      if (!setting && later(key)) return [];
       if (!setting) throw new FlagError(`--set ${key}: no pack has this setting`);
-      return [key, parseSettingValue(setting, raw)];
+      return [[key, parseSettingValue(setting, raw)]];
     }),
   );
 }

@@ -1,5 +1,6 @@
 /// <reference lib="dom" />
 import type { PackSetting, SettingValue } from "../src/pack/types.ts";
+import { parseSettingValue } from "../src/setup/flags.ts";
 import {
   activePreset,
   activeSettings,
@@ -48,13 +49,13 @@ function presetLabel() {
 function packBar() {
   const preset = activePreset(data, picks);
   const presets = data.presets
-    .map((item) => `<button class="chip" data-act="preset" data-id="${item.id}" aria-pressed="${preset?.id === item.id}" title="${esc(item.blurb)}">${esc(item.name)}</button>`)
+    .map((item) => `<button class="chip" data-act="preset" data-id="${esc(item.id)}" aria-pressed="${preset?.id === item.id}" title="${esc(item.blurb)}">${esc(item.name)}</button>`)
     .join("");
   const packs = data.packs
     .map((pack) =>
       pack.always
         ? `<span class="chip" aria-disabled="true">${flag(pack.name)}${esc(pack.title)} · always</span>`
-        : `<button class="chip" data-act="pack" data-id="${pack.name}" aria-pressed="${picks.packs.includes(pack.name)}">${flag(pack.name)}${esc(pack.title)}</button>`,
+        : `<button class="chip" data-act="pack" data-id="${esc(pack.name)}" aria-pressed="${picks.packs.includes(pack.name)}">${flag(pack.name)}${esc(pack.title)}</button>`,
     )
     .join("");
   return `<div class="packbar" aria-label="Your picks">
@@ -66,10 +67,10 @@ function packBar() {
 function fixButton(item: Moment) {
   const state = momentState(data, picks, item.workflow, item.pack.name);
   if (state.on) return "";
-  if ("workflow" in state.fix) return `<button data-act="wf" data-id="${item.workflow.id}">Turn on ${esc(item.workflow.name)}</button>`;
+  if ("workflow" in state.fix) return `<button data-act="wf" data-id="${esc(item.workflow.id)}">Turn on ${esc(item.workflow.name)}</button>`;
   const pack = packOf(state.fix.pack);
   const label = pack.name === item.pack.name ? `Add the ${esc(pack.title)} pack` : `Needs the ${esc(pack.title)} pack`;
-  return `<button data-act="pack" data-id="${pack.name}">${label}</button>`;
+  return `<button data-act="pack" data-id="${esc(pack.name)}">${label}</button>`;
 }
 
 function timeline() {
@@ -80,7 +81,7 @@ function timeline() {
     words.forEach((concept) => seen.add(concept.word));
     const needText = item.workflow.needs.map((need) => data.needLabels[need] ?? need).join(", ");
     const fix = fixButton(item);
-    return `<article class="moment ${on ? "" : "off"} ${item.moment.night ? "night" : ""}" data-workflow="${item.workflow.id}">
+    return `<article class="moment ${on ? "" : "off"} ${item.moment.night ? "night" : ""}" data-workflow="${esc(item.workflow.id)}">
       <div class="time">${esc(item.moment.time)}</div>
       <div style="min-width:0"><h3>${esc(item.moment.title)}</h3><p>${fmt(item.moment.body)}</p>
         <div class="tag">${flag(item.pack.name)}<span>${esc(item.pack.title)} · ${esc(item.workflow.name)}${needText ? ` · needs ${esc(needText)}` : ""}</span></div>
@@ -104,7 +105,7 @@ function workflowRows(pack: PagePack) {
       const state = momentState(data, picks, workflow, pack.name);
       const needed = !state.on && "pack" in state.fix ? packOf(state.fix.pack) : undefined;
       return `<div class="wf ${state.on ? "" : "wf-off"}">
-        <button class="switch" role="switch" aria-label="${esc(workflow.name)}" aria-checked="${state.on}" data-act="wf" data-id="${workflow.id}" ${needed ? "disabled" : ""}></button>
+        <button class="switch" role="switch" aria-label="${esc(workflow.name)}" aria-checked="${state.on}" data-act="wf" data-id="${esc(workflow.id)}" ${needed ? "disabled" : ""}></button>
         <div class="wf-body"><div class="wf-name">${esc(workflow.name)}${workflow.default ? "" : ' <span class="badge">off by default</span>'}</div>
           <div class="wf-sentence">${fmt(workflow.sentence)}</div>
           ${needs(workflow, missingPack(data, picks, workflow))}
@@ -126,18 +127,32 @@ function control(setting: PackSetting, id: string) {
   return `<input id="${id}" data-key="${esc(setting.key)}" type="${setting.type === "number" ? "number" : "text"}" value="${esc(value ?? "")}" placeholder="${setting.optional ? "Optional" : "Setup asks"}">`;
 }
 
+function markFor(setting: PackSetting, open = questions(data, picks)) {
+  const value = picks.settings[setting.key];
+  if (value !== undefined && value !== setting.default) return '<span class="mark changed">changed</span>';
+  const asks = open.settings.includes(setting) ? "setup asks" : open.devbox.includes(setting) ? "the devbox asks" : undefined;
+  return asks ? `<span class="mark">· ${asks}</span>` : "";
+}
+
 function settingsBlock(pack: PagePack) {
   const shown = activeSettings(data, picks, pack);
   if (!shown.length) return "";
-  const open = new Set(questions(data, picks).settings.map((setting) => setting.key));
+  const open = questions(data, picks);
   return `<div class="settings">${shown
     .map((setting) => {
       const id = `s-${setting.key.replace(/\W/g, "-")}`;
-      const value = picks.settings[setting.key];
-      const mark = value !== undefined && value !== setting.default ? ' <span class="mark changed">changed</span>' : open.has(setting.key) ? ' <span class="mark">· setup asks</span>' : "";
-      return `<div class="setting"><label for="${id}">${esc(setting.question)}${mark}</label>${control(setting, id)}</div>`;
+      return `<div class="setting"><label for="${id}">${esc(setting.question)} <span data-mark="${esc(setting.key)}">${markFor(setting, open)}</span></label>${control(setting, id)}</div>`;
     })
     .join("")}</div>`;
+}
+
+function refreshMarks() {
+  const open = questions(data, picks);
+  const settings = data.packs.flatMap((pack) => pack.settings);
+  for (const slot of document.querySelectorAll<HTMLElement>("[data-mark]")) {
+    const setting = settings.find((item) => item.key === slot.dataset.mark);
+    if (setting) slot.innerHTML = markFor(setting, open);
+  }
 }
 
 function tune() {
@@ -146,8 +161,8 @@ function tune() {
       .map((pack) => {
         const on = pack.always || picks.packs.includes(pack.name);
         const state = pack.always ? '<span class="badge">always</span>' : on ? "" : '<span class="badge">off</span>';
-        const add = on ? "" : `<div class="get"><button data-act="pack" data-id="${pack.name}">Add the ${esc(pack.title)} pack</button></div>`;
-        return `<details data-pack="${pack.name}" ${opened.has(pack.name) ? "open" : ""}><summary>${flag(pack.name)} ${esc(pack.title)} ${state}</summary>
+        const add = on ? "" : `<div class="get"><button data-act="pack" data-id="${esc(pack.name)}">Add the ${esc(pack.title)} pack</button></div>`;
+        return `<details data-pack="${esc(pack.name)}" ${opened.has(pack.name) ? "open" : ""}><summary>${flag(pack.name)} ${esc(pack.title)} ${state}</summary>
         <div class="facts"><p>${fmt(pack.day ?? pack.summary)}</p>${pack.cost ? `<p class="muted">${fmt(pack.cost)}</p>` : ""}${pack.risk ? `<div class="warnbox">${fmt(pack.risk)}</div>` : ""}${add}</div>
         ${workflowRows(pack)}${on ? settingsBlock(pack) : ""}</details>`;
       })
@@ -200,8 +215,23 @@ function diagram() {
   </svg></div>`;
 }
 
+const attr = (name: string, value: string | undefined) => (value === undefined ? "" : `[${name}="${CSS.escape(value)}"]`);
+
+function focusTarget() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !active.dataset.act) return undefined;
+  const pack = active.closest<HTMLElement>("details[data-pack]");
+  const moment = active.closest<HTMLElement>("article[data-workflow]");
+  const scope = pack ? `details${attr("data-pack", pack.dataset.pack)}` : moment ? `article${attr("data-workflow", moment.dataset.workflow)}` : active.closest(".packbar") ? ".packbar" : active.closest("#out") ? "#out" : "";
+  return `${scope} ${attr("data-act", active.dataset.act)}${attr("data-id", active.dataset.id)}`;
+}
+
+function restoreFocus(target: string | undefined) {
+  if (target) document.querySelector<HTMLElement>(target)?.focus({ preventScroll: true });
+}
+
 function render() {
-  const focus = document.activeElement instanceof HTMLElement && document.activeElement.dataset.act ? `[data-act="${document.activeElement.dataset.act}"][data-id="${document.activeElement.dataset.id}"]` : undefined;
+  const focus = focusTarget();
   const top = window.scrollY;
   opened = new Set([...document.querySelectorAll<HTMLDetailsElement>("details[data-pack][open]")].map((details) => details.dataset.pack!));
   document.getElementById("app")!.innerHTML = `<div class="wrap">
@@ -214,20 +244,14 @@ function render() {
     <section class="finish">${tune()}<div class="get-col"><h2>Get it</h2>${output()}</div></section>
   </div>`;
   window.scrollTo(0, top);
-  if (focus) document.querySelector<HTMLElement>(focus)?.focus();
+  restoreFocus(focus);
 }
 
 function refreshOutput() {
+  const focus = focusTarget();
   const out = document.getElementById("out");
   if (out) out.outerHTML = output();
-}
-
-function settingValue(setting: PackSetting, raw: string): SettingValue | undefined {
-  if (raw === "") return undefined;
-  if (setting.type === "number") return Number.isFinite(Number(raw)) ? Number(raw) : undefined;
-  if (setting.type === "boolean") return raw === "true";
-  if (setting.type === "choice") return setting.choices?.find((choice) => String(choice.value) === raw)?.value;
-  return raw;
+  restoreFocus(focus);
 }
 
 function copy(button: HTMLElement) {
@@ -259,13 +283,26 @@ document.addEventListener("click", (event) => {
   render();
 });
 
-function onSetting(event: Event, full: boolean) {
+function onSetting(event: Event, committed: boolean) {
   const input = event.target as HTMLInputElement | HTMLSelectElement;
   const key = input.dataset?.key;
   const setting = key && data.packs.flatMap((pack) => pack.settings).find((item) => item.key === key);
   if (!setting) return;
-  picks = setSetting(data, picks, setting.key, settingValue(setting, input.value));
-  full ? render() : refreshOutput();
+  const text = input.value.trim();
+  let value: SettingValue | undefined;
+  try {
+    value = text === "" ? undefined : parseSettingValue(setting, text);
+  } catch (error) {
+    input.setAttribute("aria-invalid", "true");
+    input.title = (error as Error).message;
+    return;
+  }
+  input.removeAttribute("aria-invalid");
+  input.removeAttribute("title");
+  picks = setSetting(data, picks, setting.key, value);
+  if (committed && input instanceof HTMLInputElement) input.value = value === undefined ? "" : String(value);
+  refreshMarks();
+  refreshOutput();
 }
 document.addEventListener("input", (event) => onSetting(event, false));
 document.addEventListener("change", (event) => onSetting(event, true));

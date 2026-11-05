@@ -87,6 +87,7 @@ button, input, select { font: inherit; color: inherit; }
 .setting { display: flex; flex-direction: column; gap: 4px; font-size: 0.88rem; min-width: 0; }
 .setting label { color: var(--muted); }
 .setting input, .setting select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; min-width: 0; }
+.setting input[aria-invalid="true"] { border-color: var(--flag-red); outline-color: var(--flag-red); }
 .mark { font-weight: 600; }
 .mark.changed { color: var(--accent); }
 
