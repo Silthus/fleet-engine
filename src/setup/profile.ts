@@ -156,7 +156,7 @@ export function profileGuide(packs: PackManifest[]) {
     .filter((pack) => pack.settings?.length)
     .map((pack) => {
       const rows = pack.settings!.map((setting) => `| \`${setting.key}\` | ${setting.question} | ${setting.default === undefined ? (setting.optional ? "not set" : "asked") : `\`${String(setting.default)}\``} |`);
-      return [`### ${pack.name}`, "", "| Setting | What it is | Default |", "| --- | --- | --- |", ...rows].join("\n");
+      return [`### ${pack.title ?? pack.name}`, "", "| Setting | What it is | Default |", "| --- | --- | --- |", ...rows].join("\n");
     });
   return [
     "# My Fleet profile",

@@ -34,7 +34,7 @@ describe("the page build", () => {
     const html = await buildPage({ audience: "public" });
     expect(html.match(/posthog|hogli|coder|stamphog|reviewhog/gi)).toBeNull();
     const data = await pageData({ audience: "public" });
-    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory"]);
+    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "hub"]);
     expect(data.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id)).not.toContain("previews");
   });
 
@@ -52,12 +52,33 @@ describe("the page build", () => {
     expect(questions(data, eu).count).toBe(questions(data, presetPicks(data, "everyday")).count - 1);
   });
 
-  test("a workflow that needs the hub shows only when a Hub pack is in the build", async () => {
-    const boxes = { id: "boxes", name: "Boxes", sentence: "Heavy work runs on a box.", needs: ["hub" as const], default: true, moment: { time: "13:00", title: "Tests on a box", body: "A box runs them." } };
-    const withHub = await pageData({ audience: "posthog", team: [teamPack({ name: "acme", audience: undefined, workflows: [boxes], settings: [] }), teamPack({ name: "hub", audience: undefined, workflows: [], settings: [] })] });
-    expect(withHub.needPacks).toEqual({ hub: "hub" });
-    const without = await pageData({ audience: "posthog", team: [teamPack({ name: "acme", audience: undefined, workflows: [boxes], settings: [] })] });
-    expect(without.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id)).not.toContain("boxes");
+  test("a team build shows a pack by its title, and by its capitalised name without one", async () => {
+    const data = await pageData({ audience: "posthog", team: [teamPack({ title: "PostHog" }), teamPack({ name: "acme", audience: undefined, workflows: [], settings: [] })] });
+    expect(data.packs.filter((pack) => pack.name === "posthog" || pack.name === "acme").map((pack) => pack.title)).toEqual(["PostHog", "Acme"]);
+    expect(data.teamNote).toStartWith("The PostHog and Acme pack");
+  });
+
+  test("a workflow that needs a team pack shows only when that pack is in the build, and so do the settings only it lists", async () => {
+    const boxes = { id: "team-boxes", name: "Team boxes", sentence: "Heavy work runs on a box.", needs: ["hub" as const, "coder" as const], default: true, settings: ["acme.template"], moment: { time: "13:00", title: "Tests on a box", body: "A box runs them." } };
+    const acme = (name: string) => teamPack({ name, audience: undefined, workflows: [boxes], settings: [{ key: "acme.template", question: "Which template?", type: "string" }] });
+    const ids = (data: { packs: Array<{ workflows: Array<{ id: string }> }> }) => data.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id);
+    const keys = (data: { packs: Array<{ settings: Array<{ key: string }> }> }) => data.packs.flatMap((pack) => pack.settings).map((setting) => setting.key);
+    const withTeam = await pageData({ audience: "posthog", team: [acme("posthog")] });
+    expect(ids(withTeam)).toContain("team-boxes");
+    expect(keys(withTeam)).toContain("acme.template");
+    expect(withTeam.needPacks).toEqual({ hub: "hub", coder: "posthog" });
+    const without = await pageData({ audience: "posthog", team: [acme("acme")] });
+    expect(ids(without)).not.toContain("team-boxes");
+    expect(keys(without)).not.toContain("acme.template");
+  });
+
+  test("the public build shows the Hub pack without its box workflow and box settings", async () => {
+    const data = await pageData({ audience: "public" });
+    const hub = data.packs.find((pack) => pack.name === "hub")!;
+    expect(hub.workflows.map((workflow) => workflow.id)).toEqual(["mcp-gateway", "disk-watch", "linked-hub", "slack-trigger"]);
+    expect(hub.settings.map((setting) => setting.key).filter((key) => key.startsWith("hub.box"))).toEqual([]);
+    expect(data.needPacks).toEqual({ hub: "hub" });
+    expect(await buildPage({ audience: "public" })).not.toMatch(/short-lived boxes|box · /);
   });
 
   test("the command line writes a build for a pack source to --out", async () => {

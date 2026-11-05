@@ -33,6 +33,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
   if (!isRecord(raw)) return fail("not a JSON object");
   if (raw.schema !== 1) return fail(`unknown schema ${String(raw.schema)}`);
   if (typeof raw.name !== "string" || !packName.test(raw.name)) return fail("name must be lowercase words joined by dashes");
+  if (raw.title !== undefined && !filled(raw.title)) return fail("title must be the name people read");
   if (typeof raw.summary !== "string" || raw.summary === "") return fail("summary must be one plain sentence");
   for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "t3ProjectScripts"]) {
     if (raw[field] !== undefined && !Array.isArray(raw[field])) fail(`${field} must be a list`);
