@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import type { Finding, Owned, Plan, T3ProjectScript } from "../../pack/types.ts";
 import type { AdapterResult } from "../../reconciler/apply.ts";
+import { settingProject } from "../../reconciler/resolve.ts";
 import { engineShellCommand } from "../../reconciler/engine-command.ts";
 import { sourceOutage } from "../provider-config/adapter.ts";
 import { same } from "../provider-config/fields.ts";
@@ -19,6 +20,15 @@ const isFleet = (script: Script) => script.id.startsWith(prefix);
 const finding = (id: string, say: string, repair: Finding["repair"]): Finding => ({ id: `t3:${id}`, pack: "engine", say, repair });
 
 export const plannedScripts = (plan: Plan) => plan.t3ProjectScripts ?? [];
+
+/** A setting a script names that holds no usable path: the script skips it, and fleet set can fix it. */
+export function settingProblems(plan: Plan): Finding[] {
+  return plannedScripts(plan).flatMap((script) => {
+    const value = script.projectSetting === undefined ? undefined : plan.settings[script.projectSetting];
+    if (value === undefined || settingProject(script, plan.settings) !== undefined) return [];
+    return [finding(`script-setting:${scriptId(script)}`, `The setting ${script.projectSetting} is ${JSON.stringify(value)}, not an absolute path or a path under ~/, so the worktree script ${scriptId(script)} skips it. Fix it with fleet set ${script.projectSetting}=<path>.`, "human")];
+  });
+}
 
 export function waitingScripts(plan: Plan): Finding[] {
   const ids = plannedScripts(plan).map(scriptId);

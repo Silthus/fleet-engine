@@ -503,6 +503,16 @@ describe("T3 project scripts", () => {
     expect(updates(server)).toBe(1);
   });
 
+  test("skips a project setting that holds no usable path, and says how to fix it, without stopping the apply", async () => {
+    const home = temp.make("home-");
+    const { server, adapter } = setup({ projects: ["/work/app"], settings: { projectSettingsOverrides: {} } });
+    const broken = withScripts([{ ...prepare, projectSetting: "team.checkout" }]);
+    broken.settings = { "team.checkout": "app" };
+    const report = await apply(broken, { home, adapters: [adapter] });
+    expect(report.findings).toContainEqual({ id: "t3:script-setting:fleet-team-prepare", pack: "engine", say: 'The setting team.checkout is "app", not an absolute path or a path under ~/, so the worktree script fleet-team-prepare skips it. Fix it with fleet set team.checkout=<path>.', repair: "human" });
+    expect(Object.keys(server.state.settings.projectSettingsOverrides as object)).toEqual(["project-0"]);
+  });
+
   test("waits while T3 Code is not running, and doctor names the missing script without writing", async () => {
     const home = temp.make("home-");
     const stopped = await apply(withScripts([prepare]), { home, adapters: [setup({ up: false }).adapter] });

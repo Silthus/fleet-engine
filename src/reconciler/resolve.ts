@@ -227,10 +227,15 @@ function activeSettings(order: Candidate[], active: Set<string>): Array<PackSett
 }
 
 /** Keeps the last declaration of a setting, so a later pack sets the default of one the engine reads. Base's signer default is coder in a Coder workspace. */
-function withProjectSetting(script: Owned<T3ProjectScript>, settings: Record<string, SettingValue>): Owned<T3ProjectScript> {
+/** The project a script's setting names, when its value is an absolute path or starts with ~/. The T3 adapter reports any other value. */
+export function settingProject(script: T3ProjectScript, settings: Record<string, SettingValue>): string | undefined {
   const value = script.projectSetting === undefined ? undefined : settings[script.projectSetting];
+  return typeof value === "string" && (value.startsWith("/") || value.startsWith("~/")) ? value : undefined;
+}
+
+function withProjectSetting(script: Owned<T3ProjectScript>, settings: Record<string, SettingValue>): Owned<T3ProjectScript> {
+  const value = settingProject(script, settings);
   if (value === undefined) return script;
-  if (typeof value !== "string" || !(value.startsWith("/") || value.startsWith("~/"))) throw new ResolveError(`setting ${script.projectSetting} must be an absolute path or start with ~/, because t3 project script ${script.id} of ${script.pack} uses it as a project`);
   return script.projects.includes(value) ? script : { ...script, projects: [...script.projects, value] };
 }
 

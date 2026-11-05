@@ -8,7 +8,7 @@ import { withLock } from "../provider-config/store.ts";
 import { skipOtherHome, spawnRunner, type CommandRunner } from "../run.ts";
 import type { T3Rpc, T3Server } from "./port.ts";
 import { reconcileService } from "./service.ts";
-import { reconcileScripts, waitingScripts } from "./scripts.ts";
+import { reconcileScripts, settingProblems, waitingScripts } from "./scripts.ts";
 import { localT3Server } from "./session.ts";
 import { desktopTarget, reconcileSettings, settingsFields, settingsTarget } from "./settings.ts";
 import { activeProjects, expandHome, t3Tasks } from "./tasks.ts";
@@ -43,6 +43,7 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
       const reconcile = async () => {
         if (plan.os === "linux") await reconcileService(run, user, dryRun, result);
         const settings = { adopt, dryRun, outage: sourceOutage(plan) };
+        result.findings.push(...settingProblems(plan));
         if (!(await server.answering(home))) {
           merge(result, await reconcileSettings(plan, home, settings));
           const waiting = taskProjects(plan);
