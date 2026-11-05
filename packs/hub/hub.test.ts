@@ -120,7 +120,7 @@ describe("the Hub pack", () => {
     const hub: MachineFile = { schema: 1, role: "hub" };
     const items = (machine: MachineFile, fields: Partial<Profile> = {}) => {
       const result = withBoxes(fields, machine);
-      return { jobs: result.jobs.filter((job) => job.pack === "hub").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub").map((step) => step.id) };
+      return { jobs: result.jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub").map((step) => step.id) };
     };
     expect(items(hub)).toEqual({
       jobs: ["box-sweep: fleet box sweep every 15m", "box-nightly: fleet box nightly every 1d at 02:47", "box-restore: fleet box restore every 5m"],
@@ -129,7 +129,30 @@ describe("the Hub pack", () => {
     expect(items(devbox)).toEqual({ jobs: ["box-restore: fleet box restore every 5m"], human: ["box-claude-token"] });
     expect(items(mac)).toEqual({ jobs: [], human: [] });
     expect(items(hub, { workflows: { boxes: false } })).toEqual({ jobs: [], human: [] });
-    expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub")).toEqual([]);
+    expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes")).toEqual([]);
+  });
+
+  test("plans the disk watch job on the hub while Disk watch is on, and the Slack trigger job and check only once Slack trigger is turned on", () => {
+    const hub: MachineFile = { schema: 1, role: "hub" };
+    const items = (machine: MachineFile, workflows: Record<string, boolean> = {}) => {
+      const result = plan({ packs: ["hub"], workflows }, machine);
+      return [
+        ...result.jobs.filter((job) => job.pack === "hub").map((job) => `job ${job.id}: ${job.command.join(" ")} every ${job.schedule.every}`),
+        ...result.checks.filter((check) => check.pack === "hub" && check.id !== "mcphub-client").map((check) => `check ${check.id}: ${check.run.join(" ")}`),
+      ];
+    };
+    expect(items(hub)).toEqual(["job disk-watch: fleet disk-watch every 15m"]);
+    expect(items(hub, { "slack-trigger": true })).toEqual([
+      "job disk-watch: fleet disk-watch every 15m", "job slack-trigger: fleet slack-trigger every 5m", "check slack-trigger: fleet slack-trigger check",
+    ]);
+    expect(items(hub, { "disk-watch": false, "slack-trigger": true })).toEqual(["job slack-trigger: fleet slack-trigger every 5m", "check slack-trigger: fleet slack-trigger check"]);
+    expect(items(devbox, { "slack-trigger": true })).toEqual([]);
+    expect(items(mac, { "slack-trigger": true })).toEqual([]);
+  });
+
+  test("the Slack trigger reaches the gateway key's settings and its Slack server, and the threads' folder defaults to home", () => {
+    const settings = plan({ packs: ["hub"], workflows: { "slack-trigger": true, "mcp-gateway": false, "linked-hub": false, "disk-watch": false } }).settings;
+    expect(settings).toMatchObject({ "hub.slackServer": "slack", "hub.slackTriggerEmoji": "t3code", "hub.threadFolder": "~", "hub.relayPort": 60001 });
   });
 
   test("the Boxes workflow's settings reach its commands, the relay port for a box's hub forward included", () => {

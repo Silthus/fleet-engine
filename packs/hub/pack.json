@@ -104,6 +104,20 @@
       "type": "number",
       "default": 60001,
       "ask": "never"
+    },
+    {
+      "key": "hub.slackServer",
+      "question": "What is the name of your Slack MCP server in the hub's MCPHub, so the Slack trigger can read Slack through it?",
+      "type": "string",
+      "default": "slack",
+      "ask": "never"
+    },
+    {
+      "key": "hub.threadFolder",
+      "question": "Which folder do the hub's threads start in, such as ~/notes? The hub starts its disk alerts there, and a devbox starts its Slack threads there. Fleet adds it as a T3 Code project when T3 does not know it yet.",
+      "type": "string",
+      "default": "~",
+      "ask": "never"
     }
   ],
   "workflows": [
@@ -174,7 +188,8 @@
       "settings": [
         "hub.alias",
         "hub.diskSweepGigabytes",
-        "hub.diskAlertGigabytes"
+        "hub.diskAlertGigabytes",
+        "hub.threadFolder"
       ],
       "sentence": "The hub cleans a devbox whose disk runs low, and tells you only when the cleanup cannot free enough.",
       "moment": {
@@ -221,7 +236,11 @@
       ],
       "settings": [
         "hub.slackUserId",
-        "hub.slackTriggerEmoji"
+        "hub.slackTriggerEmoji",
+        "hub.slackServer",
+        "hub.threadFolder",
+        "hub.httpsHost",
+        "hub.relayPort"
       ],
       "sentence": "An emoji on your Slack message, or your reaction to someone else's, starts a T3 thread about it.",
       "moment": {
@@ -318,6 +337,34 @@
         "hub"
       ],
       "workflow": "boxes"
+    },
+    {
+      "id": "disk-watch",
+      "command": [
+        "fleet",
+        "disk-watch"
+      ],
+      "schedule": {
+        "every": "15m"
+      },
+      "roles": [
+        "hub"
+      ],
+      "workflow": "disk-watch"
+    },
+    {
+      "id": "slack-trigger",
+      "command": [
+        "fleet",
+        "slack-trigger"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "roles": [
+        "hub"
+      ],
+      "workflow": "slack-trigger"
     }
   ],
   "human": [
@@ -367,6 +414,19 @@
       ],
       "say": "This machine cannot reach the MCP gateway. Run fleet mcphub check here to see why; on the hub, fleet mcphub grant <this machine's SSH name> gives it a key.",
       "workflow": "mcp-gateway"
+    },
+    {
+      "id": "slack-trigger",
+      "run": [
+        "fleet",
+        "slack-trigger",
+        "check"
+      ],
+      "say": "The Slack trigger cannot read Slack. Run fleet slack-trigger check here to see why: set your member ID with fleet set hub.slackUserId <id>, or name your Slack MCP server with fleet set hub.slackServer <name>.",
+      "roles": [
+        "hub"
+      ],
+      "workflow": "slack-trigger"
     }
   ]
 }

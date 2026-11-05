@@ -29,3 +29,13 @@ test("through fleet, sweep refuses on a machine that is not the hub, and fleet h
   const status = await runFleet(["hub", "status"], { HOME: home });
   expect(status).toEqual({ stdout: "This machine's role: hub\nhub.alias: my-hub\n", stderr: "", code: 0 });
 });
+
+test("through fleet, disk-watch refuses off the hub, disk-sweep checks its arguments, and slack-trigger asks for the member ID", async () => {
+  const home = await hubProfile();
+  const watch = await runFleet(["disk-watch"], { HOME: home });
+  expect([watch.code, watch.stderr]).toEqual([1, "fleet disk-watch: fleet disk-watch runs only on the hub. This machine's role is linux. Run fleet hub here on the hub, or run this there.\n"]);
+  const sweep = await runFleet(["disk-sweep", "--all"], { HOME: home });
+  expect([sweep.code, sweep.stderr]).toEqual([1, "fleet disk-sweep: Usage: fleet disk-sweep [--dry-run]\n"]);
+  const trigger = await runFleet(["slack-trigger", "check"], { HOME: home });
+  expect([trigger.code, trigger.stdout]).toEqual([1, "The Slack trigger has no Slack member ID. Run: fleet set hub.slackUserId <id>\n"]);
+});

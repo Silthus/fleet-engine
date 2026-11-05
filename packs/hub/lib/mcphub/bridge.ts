@@ -163,7 +163,7 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
   return Promise.race([pump(), stopped]);
 }
 
-async function* events(body: ReadableStream<Uint8Array>) {
+export async function* events(body: ReadableStream<Uint8Array>) {
   const decoder = new TextDecoder();
   let buffer = "";
   for await (const chunk of body) {
