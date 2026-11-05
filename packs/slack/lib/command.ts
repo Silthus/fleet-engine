@@ -1,9 +1,11 @@
-import { join } from "node:path";
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { modelFor } from "../../base/lib/models.ts";
 import { optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import type { T3SessionOptions } from "../../base/lib/t3/index.ts";
 import { launchHere, launchOnBox, spawnRun, type Launch, type LaunchRequest, type Run } from "./launch.ts";
 import { manifest, manifestLink, readTokens, serve, slackApi, slackApiBase, type Sleep, type Tokens } from "./slack.ts";
+import { Interrupted, secretReader, type ReadSecret } from "./secret.ts";
 import { handleTrigger, retryPending, triggerOf, type Owner, type TriggerDeps } from "./trigger.ts";
 
 type Env = Record<string, string | undefined>;
@@ -13,6 +15,7 @@ export type SlackCommandDeps = {
   home: string;
   print: (line: string) => void;
   readStdin: () => Promise<string>;
+  readSecret?: ReadSecret;
   run?: Run;
   slackBase?: string;
   sleep?: Sleep;
@@ -22,7 +25,7 @@ export type SlackCommandDeps = {
   every?: (work: () => void, ms: number) => () => void;
 };
 
-export const usage = "Usage: fleet slack-trigger manifest | run | check | launch";
+export const usage = "Usage: fleet slack-trigger manifest | setup | run | check | launch";
 
 export const tokensFile = (home: string) => join(home, ".config/fleet/slack-app.json");
 export const stateFile = (home: string) => join(home, ".local/state/fleet/slack-trigger.json");
@@ -43,7 +46,7 @@ export function launcher(env: Env, run: Run, t3: T3SessionOptions = {}): Launch 
 
 export async function slackTrigger(args: string[], deps: SlackCommandDeps): Promise<number> {
   const [mode = "", ...rest] = args;
-  if (rest.length || !["manifest", "run", "check", "launch"].includes(mode)) return deps.print(usage), 2;
+  if (rest.length || !["manifest", "setup", "run", "check", "launch"].includes(mode)) return deps.print(usage), 2;
   const run = deps.run ?? spawnRun;
   if (mode === "launch") return launchFromStdin(deps);
   const owner = await ownerOf(deps.env, run);
@@ -52,6 +55,7 @@ export async function slackTrigger(args: string[], deps: SlackCommandDeps): Prom
     return 0;
   }
   if (mode === "check") return checkApp(owner, deps);
+  if (mode === "setup") return setUpApp(owner, deps);
   const now = deps.now ?? Date.now;
   const log = (line: string) => deps.print(`${new Date(now()).toISOString()} ${line}`);
   const tokens = await waitForTokens(deps, log);
@@ -81,12 +85,62 @@ async function waitForTokens(deps: SlackCommandDeps, log: (line: string) => void
       return readTokens(tokensFile(deps.home));
     } catch (error) {
       const message = (error as Error).message;
-      if (message !== said) log(`waiting for the Slack app: ${message}. Run fleet slack-trigger manifest to set it up.`);
+      if (message !== said) log(`waiting for the Slack app: ${message}. Run fleet slack-trigger setup to set it up.`);
       said = message;
     }
     await sleep(60_000);
   }
   return undefined;
+}
+
+async function setUpApp(owner: Owner, deps: SlackCommandDeps): Promise<number> {
+  const read = deps.readSecret ?? secretReader();
+  const path = tokensFile(deps.home);
+  const base = deps.slackBase ?? slackApiBase;
+  const say = deps.print;
+  say(`Fleet starts a T3 thread when you, ${owner.slackUserId}, write to your own Slack app. Make that app in four steps.`);
+  say("");
+  say(`1. Open this link, pick your workspace, and create the app: ${manifestLink(owner.name)}`);
+  say("2. Under Basic Information, App-Level Tokens, generate a token with the connections:write scope.");
+  try {
+    const appToken = await ask(read, "   Paste the app-level token (xapp-…, hidden): ", "xapp-", async (token) => void (await slackApi(token, base, deps.sleep)("apps.connections.open", {})), say);
+    say("3. Under Install App, install the app to your workspace.");
+    say("4. Copy the User OAuth Token from the same page.");
+    const userToken = await ask(read, "   Paste the user token (xoxp-…, hidden): ", "xoxp-", async (token) => {
+      const { user_id } = await slackApi(token, base, deps.sleep)("auth.test", {});
+      if (user_id !== owner.slackUserId) throw new Error(`it belongs to ${user_id}, not to slack.userId ${owner.slackUserId}`);
+    }, say);
+    saveTokens(path, { appToken, userToken });
+  } catch (error) {
+    if (error instanceof Interrupted) return say(`Stopped. Nothing was saved. Run fleet slack-trigger setup again.`), 130;
+    throw error;
+  }
+  say(`Saved ${path}, readable only by you. The Slack trigger picks the app up within a minute.`);
+  return 0;
+}
+
+async function ask(read: ReadSecret, prompt: string, prefix: string, verify: (token: string) => Promise<void>, say: (line: string) => void): Promise<string> {
+  for (;;) {
+    const token = await read(prompt);
+    if (!token.startsWith(prefix)) {
+      say(`   That does not start with ${prefix}. Try again.`);
+      continue;
+    }
+    try {
+      await verify(token);
+      return token;
+    } catch (error) {
+      say(`   Slack did not accept it: ${(error as Error).message.replace(token, "…")}. Try again.`);
+    }
+  }
+}
+
+function saveTokens(path: string, tokens: Tokens) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const draft = `${path}.${process.pid}.tmp`;
+  writeFileSync(draft, `${JSON.stringify(tokens, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(draft, 0o600);
+  renameSync(draft, path);
 }
 
 async function checkApp(owner: Owner, deps: SlackCommandDeps): Promise<number> {

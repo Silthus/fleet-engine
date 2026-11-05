@@ -44,18 +44,27 @@ days, so each message starts one thread. The log is
 Each person makes their own app. Its name, `T3Code - <name>`, comes from your
 Git name, which Fleet sets from your GitHub account.
 
-1. Run `fleet slack-trigger manifest` and open its link. It makes the app from
-   the manifest in your workspace.
+`fleet setup` walks you through it when you turn on Start a thread from Slack.
+To do it later, or again, run `fleet slack-trigger setup` on the machine that
+runs the trigger:
+
+1. Open the link it shows. It makes the app from the manifest in your
+   workspace.
 2. Under **Basic Information**, add an app-level token with the
-   `connections:write` scope. It starts with `xapp-`.
+   `connections:write` scope, and paste it. It starts with `xapp-`.
 3. Under **Install App**, install the app. A workspace admin may need to
-   approve it. Copy the **User OAuth Token**. It starts with `xoxp-`.
-4. Write both tokens to `~/.config/fleet/slack-app.json` on the machine that
-   runs the trigger, readable only by you (`chmod 600`):
-   `{"appToken": "xapp-…", "userToken": "xoxp-…"}`.
-5. Run `fleet apply`. It starts the service, and `fleet doctor` runs
-   `fleet slack-trigger check`, which checks that the file is private and that
-   the user token is yours.
+   approve it.
+4. Copy the **User OAuth Token**, and paste it. It starts with `xoxp-`.
+
+The terminal does not show what you paste. Fleet checks each token with Slack,
+and checks that the user token is yours. Then it writes both tokens to
+`~/.config/fleet/slack-app.json`, readable only by you. The running trigger
+picks the file up within a minute. `fleet setup --non-interactive` skips this
+step and lists it as still needed.
+
+`fleet doctor` runs `fleet slack-trigger check`, which checks that the file is
+private and that the user token is yours. `fleet slack-trigger manifest`
+prints the manifest itself.
 
 To mention the app in a channel, invite it there first. Messages and reactions
 work in every channel you are in, without the app.
