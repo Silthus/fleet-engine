@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { ledgerRoot } from "./proof.ts";
 import { appendLine, hashOf, missSources, readLines, type Miss, type MissSource } from "./proof-misses.ts";
 import type { ModelAnswer } from "./proof-models.ts";
+import type { Slot } from "./proof-panel.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { reviewRules } from "./review-rules.ts";
 
@@ -20,9 +21,9 @@ export type EvalIO = {
   checkoutOf: (repo: string) => string | undefined;
   runIn: (cwd: string) => Run;
   crossFamily: (miss: Miss) => Promise<boolean>;
-  review: (miss: Miss, prompt: string, cwd: string, readable: string) => Promise<ModelAnswer>;
+  review: (miss: Miss, prompt: string, cwd: string, readable: string, slot: Slot) => Promise<ModelAnswer>;
   judge: (prompt: string) => Promise<ModelAnswer>;
-  slot: <T>(work: () => Promise<T>) => Promise<T>;
+  slot: <T>(work: (slot: Slot) => Promise<T>) => Promise<T>;
   rubric: string; references: string[];
 };
 
@@ -37,7 +38,7 @@ async function scoreCase(miss: Miss, io: EvalIO): Promise<CaseResult> {
   const absent = [miss.base, miss.head].filter((commit) => run(["git", "cat-file", "-e", `${commit}^{commit}`]).code !== 0);
   if (absent.length) return result("skipped", `${absent.map(short).join(" and ")} missing in ${checkout}; fetch them there`);
   try {
-    return await io.slot(async () => {
+    return await io.slot(async (slot) => {
       const diff = run(["git", "diff", "--no-ext-diff", "--no-textconv", "--no-relative", miss.base, miss.head]);
       if (diff.code !== 0) return result("failed", `cannot diff ${short(miss.base)}..${short(miss.head)} (${firstLine(diff.stderr)})`);
       const changedFiles = run(["git", "diff", "--name-only", "--no-relative", miss.base, miss.head]).stdout.split("\n").filter(Boolean);
@@ -49,7 +50,7 @@ async function scoreCase(miss: Miss, io: EvalIO): Promise<CaseResult> {
           scope: miss.scope, from: miss.base, commit: miss.head, diff: diff.stdout, diffFile, crossFamily, title: miss.title, body: miss.body,
           rubric: io.rubric, references: io.references, reviewRules: reviewRules(changedFiles, miss.base, run),
         });
-        return io.review(miss, prompt, tree, dirname(tree));
+        return io.review(miss, prompt, tree, dirname(tree), slot);
       });
       if (!findings.ok) return result("failed", `the reviewer ${findings.model} gave no findings (${findings.cause})`, findings);
       const judged = await io.judge(judgePrompt(miss, findings.text));

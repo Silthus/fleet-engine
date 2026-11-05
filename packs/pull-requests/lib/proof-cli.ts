@@ -500,7 +500,7 @@ async function runEval(options: Map<string, string>, lists: Map<string, string[]
   const io: EvalIO = {
     checkoutOf: checkoutsOf(lists.get("--checkout") ?? [], context), runIn: (cwd) => runIn(cwd, env),
     crossFamily: async (miss) => { const { author, row } = await reviewerOf(miss); return familyOf(row) !== author; },
-    review: async (miss, prompt, cwd, readable) => askModel("reviewer", (await reviewerOf(miss)).row, { prompt, cwd, readable: [join(home, ".agents/skills"), readable] }, env, reviewLimitMs),
+    review: async (miss, prompt, cwd, readable, slot) => askModel("reviewer", (await reviewerOf(miss)).row, { prompt, cwd, readable: [join(home, ".agents/skills"), readable], started: slot.recordReviewer }, env, reviewLimitMs),
     judge: (prompt) => askModel("eval-judge", judgeRow, { prompt, cwd: tmpdir() }, env, evalJudgeLimit),
     slot: (work) => withSlot(panelIO(context), work), rubric, references,
   };
