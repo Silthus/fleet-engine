@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ModelRow } from "../models.ts";
 import type { T3Client } from "./session.ts";
 
-export type ThreadLaunch = { title: string; prompt: string; row: ModelRow };
+export type ThreadLaunch = { title: string; prompt: string; row: ModelRow; commandId?: string };
 
 const instances = { claude: { instanceId: "claudeAgent", effort: "effort" }, codex: { instanceId: "codex", effort: "reasoningEffort" } } as const;
 const launchTimeoutMs = 120_000;
@@ -11,7 +11,7 @@ export async function launchScratchThread(client: Pick<T3Client, "call">, launch
   const { projectId } = await client.call<{ projectId: string }>("projects.ensureScratch", {});
   const instance = instances[launch.row.provider];
   const { threadId } = await client.call<{ threadId: string }>("orchestration.launchThread", {
-    commandId: randomUUID(),
+    commandId: launch.commandId ?? randomUUID(),
     projectId,
     title: launch.title,
     generateTitle: false,

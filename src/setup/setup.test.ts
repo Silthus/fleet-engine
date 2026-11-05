@@ -80,13 +80,13 @@ describe("fleet setup questions", () => {
 
   test("picks packs one by one", async () => {
     const home = temp.make("home-");
-    const result = await fleetSetup(home, [], ["4", "y", "n", "", "y", "n", "", ""]);
+    const result = await fleetSetup(home, [], ["4", "y", "n", "", "y", "n", "n", "", ""]);
     expect(result.code).toBe(0);
     expect(savedAnswers(home).packs).toEqual(["pull-requests", "communication", "memory"]);
     expect(result.output).toContain("One always-on devbox manages the others");
 
     const needs = temp.make("home-");
-    const picked = await fleetSetup(needs, [], ["4", "n", "y", "n", "n", "n", "", ""]);
+    const picked = await fleetSetup(needs, [], ["4", "n", "y", "n", "n", "n", "n", "", ""]);
     expect(picked.output).toContain("  Orchestration needs Pull-requests, so it is on too.");
     expect(savedAnswers(needs).packs).toEqual(["orchestration", "pull-requests"]);
   });

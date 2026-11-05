@@ -46,7 +46,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
 }
 
 const oses = ["darwin", "linux"];
-const roles = ["mac", "devbox", "linux", "hub"];
+const roles = ["mac", "devbox", "linux", "hub", "solo"];
 const intervals = ["5m", "15m", "1h", "1d", "always"];
 const runtimeModes = ["full-access", "auto", "approval-required"];
 const providers = ["claude", "codex", "t3"];
@@ -55,7 +55,7 @@ const efforts = ["low", "medium", "high", "xhigh", "max"];
 
 function scopeProblem(item: Record<string, unknown>) {
   if (item.on !== undefined && !isListOf(item.on, oses)) return "on must list darwin or linux";
-  if (item.roles !== undefined && !isListOf(item.roles, roles)) return "roles must list mac, devbox, linux, or hub";
+  if (item.roles !== undefined && !isListOf(item.roles, roles)) return "roles must list mac, devbox, linux, hub, or solo";
   if (item.plans !== undefined && !isListOf(item.plans, plans)) return "plans must list claude, codex, or both";
   if (item.workflow !== undefined && typeof item.workflow !== "string") return "workflow must be an id";
   return undefined;
