@@ -229,7 +229,7 @@ Each step is for a person on a clean macOS user account.
 3. Type the Mac password once when Homebrew asks for it.
 4. Check that `gh`, `bun`, `t3` and `/Applications/T3 Code.app` exist when `get.sh` ends.
 5. Approve the GitHub device code in the browser that setup opens.
-6. Install the Claude Code and Codex CLIs if setup stops with "claude is not installed here" or "codex is not installed here" (see Gaps), then run `fleet setup` again.
+6. After the step "Set up this Mac", check that `claude --version` and `codex --version` work. The Base pack's `claude-cli` and `codex-cli` steps install them, for the chosen plans only.
 7. Finish `claude auth login` and `codex login` in the browser.
 8. With the PostHog pack: finish the Coder sign-in in the browser and paste the token into setup's terminal. Then check that `coder list` shows one PostHog devbox.
 9. Before you open T3 Code, check that `~/.t3/userdata/desktop-settings.json` holds `"updateChannel": "nightly"`. Then open T3 Code and check that it starts on the nightly channel with the seeded settings.
@@ -239,7 +239,7 @@ Each step is for a person on a clean macOS user account.
 
 ## Gaps
 
-- **Agent CLIs on the Mac.** Nothing installs the Claude Code or Codex CLI on the Mac. The Base pack's `claude-cli` and `codex-cli` steps are `"on": ["linux"]`, as the spec says, and `get.sh` does not install them. On a clean Mac, setup stops at "Sign in to Claude" with "claude is not installed here. Install it, then run fleet setup again." This conflicts with the spec's story of one command that needs nothing installed first. It needs a decision, so this branch does not change it.
+- **Agent CLIs on the Mac, fixed here.** The Base pack's `claude-cli` and `codex-cli` steps ran only on Linux, so a clean Mac stopped at "Sign in to Claude" with "claude is not installed here". They now run on every machine. Both installers support macOS, and each step's check (`claude --version`, `codex --version`) skips a CLI that is already there. Test: `packs/base/base.test.ts` › `installs the agent CLIs on a Mac too, so a clean Mac can sign in`. A person still has to prove both installers on a clean Mac (step 6 above).
 - **Spec step 13 is not built.** No T3 Code app sign-in on the Mac, and no T3 Connect on the Mac. With the PostHog pack there is no T3 link to the Coder devbox at all.
 - **`seedT3` is unused in the product.** The T3 adapter does the same work through `reconcileSettings` when T3 is not running. Nothing calls `seedT3` outside tests.
 - **No test:** finding the T3 server on the Mac through `ps` and the `.app` bundle (`serverCli` in `src/adapters/t3/session.ts`).

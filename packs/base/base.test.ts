@@ -80,7 +80,12 @@ describe("the Base pack", () => {
     expect(plan("both", devbox).steps.map((step) => step.id)).toEqual(["claude-cli", "codex-cli"]);
     expect(plan("claude", devbox).steps.map((step) => step.id)).toEqual(["claude-cli"]);
     expect(plan("codex", devbox).steps.map((step) => step.id)).toEqual(["codex-cli"]);
-    expect(plan("both").steps).toEqual([]);
+  });
+
+  test("installs the agent CLIs on a Mac too, so a clean Mac can sign in", () => {
+    expect(plan("both").steps.map((step) => step.id)).toEqual(["claude-cli", "codex-cli"]);
+    expect(plan("claude").steps.map((step) => step.id)).toEqual(["claude-cli"]);
+    expect(plan("codex").steps.map((step) => step.id)).toEqual(["codex-cli"]);
   });
 
   test("gives each plan one T3 default model from its own provider", () => {
