@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProfileFile } from "./pack/types.ts";
 import { git, isolateGit, tempDirs } from "./testing/git.ts";
@@ -147,6 +147,29 @@ describe("fleet update", () => {
     expect(result).toMatchObject({ code: 1, applied: 0, version: "v0.1.0" });
     expect(git(engineDir, "rev-parse", "HEAD")).toBe(before);
     expect(result.output).toContain(`could not install the engine's packages in ${engineDir}, so the update was rolled back. The engine stays at ${before.slice(0, 7)}.\n`);
+  });
+
+  test("puts back the old engine's packages when the new engine's install fails halfway", async () => {
+    const remote = engineRemote(["v0.1.0"]);
+    const release = (version: string, dep: string, scripts?: Record<string, string>) => {
+      mkdirSync(join(remote, "dep"), { recursive: true });
+      writeFileSync(join(remote, "dep", "package.json"), JSON.stringify({ name: "dep", version: dep }));
+      writeFileSync(join(remote, "package.json"), JSON.stringify({ name: "engine", dependencies: { dep: "file:./dep" }, ...(scripts ? { scripts } : {}) }));
+      expect(Bun.spawnSync([process.execPath, "install", "--ignore-scripts"], { cwd: remote, stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+      writeFileSync(join(remote, "VERSION"), version);
+      git(remote, "add", ".");
+      git(remote, "commit", "-q", "-m", version);
+      git(remote, "tag", version);
+    };
+    release("v0.1.1", "1.0.0");
+    release("v0.2.0", "2.0.0", { postinstall: "exit 1" });
+    const engineDir = engineCheckout(remote, "v0.1.1");
+    expect(Bun.spawnSync([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: engineDir, stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+    const installed = () => JSON.parse(readFileSync(join(engineDir, "node_modules", "dep", "package.json"), "utf8")).version;
+    expect(installed()).toBe("1.0.0");
+    const result = await run(engineDir, { repo: remote, ref: "v0.1.1", channel: "release" });
+    expect(result).toMatchObject({ code: 1, applied: 0, version: "v0.1.1" });
+    expect(installed()).toBe("1.0.0");
   });
 
   test("stops before apply when the track checkout fails", async () => {
