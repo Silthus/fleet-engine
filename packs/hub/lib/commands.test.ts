@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { fleetMachine, runFleet } from "../../orchestration/lib/testing.ts";
@@ -11,7 +11,12 @@ async function hubProfile() {
   const home = temp.make("fleet-hub-cli-");
   const profile = await fleetMachine(home, { "hub.alias": "my-hub", "hub.coderUrl": "https://coder.example.com", "hub.boxTemplate": "linux-box" });
   const fleet = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
-  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...fleet, packs: ["hub"], devboxes: ["devbox-2"] }));
+  const team = join(home, ".local/share/fleet/sources/team");
+  mkdirSync(join(team, ".git"), { recursive: true });
+  mkdirSync(join(team, "packs/posthog"), { recursive: true });
+  writeFileSync(join(team, "packs/posthog/pack.json"), JSON.stringify({ schema: 1, name: "posthog", summary: "A team pack that brings Coder." }));
+  const sources = [...fleet.sources, { name: "team", repo: "example/team-packs", ref: "main" }];
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...fleet, sources, packs: ["hub", "posthog"], devboxes: ["devbox-2"] }));
   return home;
 }
 

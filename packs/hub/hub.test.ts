@@ -17,6 +17,7 @@ beforeAll(async () => {
 
 const answers = { "hub.alias": "my-hub", "hub.coderUrl": "https://coder.example.com", "hub.boxTemplate": "linux" };
 const plan = (fields: Partial<Profile> = {}, machine: MachineFile = devbox) => resolveEngine(sources, { settings: answers, ...fields }, machine);
+const withBoxes = (fields: Partial<Profile> = {}, machine: MachineFile = devbox) => resolveEngine([...sources, coderTeam()], { settings: answers, ...fields, packs: [...(fields.packs ?? ["hub"]), "posthog"] }, machine);
 function coderTeam(): AvailableSource {
   const dir = temp.make("team-");
   return { ref: { name: "team", repo: "example/team-packs", ref: "main" }, dir, packs: [{ dir, manifest: { schema: 1, name: "posthog", summary: "A team pack that brings Coder." } }] };
@@ -118,7 +119,7 @@ describe("the Hub pack", () => {
   test("plans the Boxes jobs on the hub, only the forward restore on a devbox, and nothing when the workflow is off", () => {
     const hub: MachineFile = { schema: 1, role: "hub" };
     const items = (machine: MachineFile, fields: Partial<Profile> = {}) => {
-      const result = plan({ packs: ["hub"], ...fields }, machine);
+      const result = withBoxes(fields, machine);
       return { jobs: result.jobs.filter((job) => job.pack === "hub").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub").map((step) => step.id) };
     };
     expect(items(hub)).toEqual({
@@ -128,17 +129,18 @@ describe("the Hub pack", () => {
     expect(items(devbox)).toEqual({ jobs: ["box-restore: fleet box restore every 5m"], human: ["box-claude-token"] });
     expect(items(mac)).toEqual({ jobs: [], human: [] });
     expect(items(hub, { workflows: { boxes: false } })).toEqual({ jobs: [], human: [] });
+    expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub")).toEqual([]);
   });
 
   test("the Boxes workflow's settings reach its commands, the relay port for a box's hub forward included", () => {
-    const settings = plan({ packs: ["hub"], workflows: { "linked-hub": false } }).settings;
+    const settings = withBoxes({ workflows: { "linked-hub": false } }).settings;
     expect(Object.keys(settings).filter((key) => key.startsWith("hub.box") || key === "hub.relayPort").sort()).toEqual([
       "hub.boxDiskGigabytes", "hub.boxIdleHours", "hub.boxKeepDirs", "hub.boxPoolSize", "hub.boxReapDays", "hub.boxTemplate", "hub.relayPort",
     ]);
   });
 
   test("the Claude token step tells the person to paste into fleet box token, and its probe passes only for a token file with mode 0600", () => {
-    const step = plan({ packs: ["hub"] }, { schema: 1, role: "hub" }).human.find((item) => item.id === "box-claude-token")!;
+    const step = withBoxes({}, { schema: 1, role: "hub" }).human.find((item) => item.id === "box-claude-token")!;
     expect(step).toMatchObject({ command: "claude setup-token", interactive: true, workflow: "boxes" });
     expect(step.say).toContain("fleet box token");
     const home = temp.make("hub-token-");
