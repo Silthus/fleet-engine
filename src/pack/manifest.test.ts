@@ -37,6 +37,12 @@ describe("loadPacks", () => {
     expect(loadPacks(dir)).rejects.toThrow(new PackError(`${join(dir, "packs/base/pack.json")}: unknown schema 2`));
   });
 
+  test("accepts a title and rejects an empty one", async () => {
+    const [pack] = await loadPacks(sourceWith({ base: { ...base, title: "Base rules" } }));
+    expect(pack!.manifest.title).toBe("Base rules");
+    expect(loadPacks(sourceWith({ base: { ...base, title: "" } }))).rejects.toThrow("title must be the name people read");
+  });
+
   test("rejects a manifest whose name is not its directory", async () => {
     expect(loadPacks(sourceWith({ other: base }))).rejects.toThrow("name base does not match its directory other");
   });

@@ -102,6 +102,7 @@ export type GuideEntry = { guide: string; section?: string; path: string };
 export type PackManifest = {
   schema: 1;
   name: string;
+  title?: string;
   summary: string;
   audience?: Audience;
   day?: string;

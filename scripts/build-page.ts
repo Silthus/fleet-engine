@@ -2,7 +2,7 @@ import { join, resolve } from "node:path";
 import { engineSettings, loadPacks } from "../src/pack/manifest.ts";
 import type { Audience, Concept, LoadedPack, Need, PackManifest, Preset } from "../src/pack/types.ts";
 import { engineRepo } from "../src/setup/defaults.ts";
-import { choosablePacks, defaultPreset, filledBySetup, title, type Catalog } from "../src/setup/questions.ts";
+import { choosablePacks, defaultPreset, filledBySetup, packTitle, type Catalog } from "../src/setup/questions.ts";
 import type { PageData, PagePack } from "../page/model.ts";
 
 const engineRoot = join(import.meta.dir, "..");
@@ -54,7 +54,7 @@ export async function pageData({ audience, team = [] }: PageOptions): Promise<Pa
     needPacks: Object.fromEntries(Object.entries(needPacks).filter(([need]) => used.has(need as Need))),
     needLabels: Object.fromEntries(Object.entries(needLabels).filter(([need]) => used.has(need as Need))),
     teamNote: teamPacks.length
-      ? `The ${teamPacks.map(title).join(" and ")} pack comes from your team's private pack source. Setup ticks it when GitHub shows you are in the team's org.`
+      ? `The ${teamManifests.map(packTitle).join(" and ")} pack comes from your team's private pack source. Setup ticks it when GitHub shows you are in the team's org.`
       : "A team can add its own pack from a private pack source: a GitHub repo of packs. Setup ticks it for members of the team's GitHub org.",
   };
 }
@@ -62,7 +62,7 @@ export async function pageData({ audience, team = [] }: PageOptions): Promise<Pa
 function pagePack(manifest: PackManifest, holds: (need: Need) => boolean): PagePack {
   return {
     name: manifest.name,
-    title: title(manifest.name),
+    title: packTitle(manifest),
     summary: manifest.summary,
     ...(manifest.day ? { day: manifest.day } : {}),
     ...(manifest.cost ? { cost: manifest.cost } : {}),

@@ -52,6 +52,12 @@ describe("the page build", () => {
     expect(questions(data, eu).count).toBe(questions(data, presetPicks(data, "everyday")).count - 1);
   });
 
+  test("a team build shows a pack by its title, and by its capitalised name without one", async () => {
+    const data = await pageData({ audience: "posthog", team: [teamPack({ title: "PostHog" }), teamPack({ name: "acme", audience: undefined, workflows: [], settings: [] })] });
+    expect(data.packs.filter((pack) => pack.name === "posthog" || pack.name === "acme").map((pack) => pack.title)).toEqual(["PostHog", "Acme"]);
+    expect(data.teamNote).toStartWith("The PostHog and Acme pack");
+  });
+
   test("a workflow that needs the hub shows only when a Hub pack is in the build", async () => {
     const boxes = { id: "boxes", name: "Boxes", sentence: "Heavy work runs on a box.", needs: ["hub" as const], default: true, moment: { time: "13:00", title: "Tests on a box", body: "A box runs them." } };
     const withHub = await pageData({ audience: "posthog", team: [teamPack({ name: "acme", audience: undefined, workflows: [boxes], settings: [] }), teamPack({ name: "hub", audience: undefined, workflows: [], settings: [] })] });
