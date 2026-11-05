@@ -64,6 +64,8 @@ function scopeProblem(item: Record<string, unknown>) {
 export function configEntryProblem(item: unknown) {
   if (!isRecord(item)) return "must be an object";
   if (!providers.includes(item.provider as string) || typeof item.key !== "string") return "needs a provider and a key";
+  if (item.provider === "claude" && item.key === "mcpServers") return "a Claude MCP server key names one server, such as mcpServers.<name>";
+  if (item.provider === "claude" && item.key.startsWith("mcpServers.") && !isRecord(item.value)) return 'a Claude MCP server must be an object, such as { "type": "stdio", "command": ... }';
   return scopeProblem(item);
 }
 

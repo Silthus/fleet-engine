@@ -6,11 +6,26 @@ import { apply } from "../reconciler/apply.ts";
 import { tempDirs } from "../testing/git.ts";
 import { identityAdapter } from "./identity/adapter.ts";
 import { jobsAdapter } from "./jobs/adapter.ts";
-import { accountHome, directoryHome, passwdHome, type CommandRunner } from "./run.ts";
+import { accountHome, directoryHome, passwdHome, spawnRunner, type CommandRunner } from "./run.ts";
 import { t3Adapter } from "./t3/adapter.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
+
+describe("the command runner", () => {
+  test("runs with the given HOME and without the variables it is told to clear", async () => {
+    const before = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = "/elsewhere";
+    try {
+      const shown = await spawnRunner(["sh", "-c", 'printf "%s %s" "$HOME" "${CLAUDE_CONFIG_DIR-unset}"'], { home: "/tmp/fleet-home", clearEnv: ["CLAUDE_CONFIG_DIR"] });
+      expect(shown.stdout).toBe("/tmp/fleet-home unset");
+      expect((await spawnRunner(["sh", "-c", 'printf %s "$CLAUDE_CONFIG_DIR"'])).stdout).toBe("/elsewhere");
+    } finally {
+      if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = before;
+    }
+  });
+});
 
 describe("account home lookup", () => {
   const passwd = ["root:x:0:0:root:/root:/bin/bash", "DOMAIN\\octo:x:1000:1000:Octo Cat,,,:/home/DOMAIN\\octo:/bin/zsh", "broken:x:1001", "relative:x:1002:1002::home/relative:/bin/sh", ""].join("\n");
