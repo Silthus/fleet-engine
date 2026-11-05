@@ -8,7 +8,7 @@ import { engineAdapters } from "../index.ts";
 import type { FleetTask } from "../jobs/adapter.ts";
 import { jobsAdapter } from "../jobs/adapter.ts";
 import type { CommandRunner } from "../run.ts";
-import { seedT3, t3Adapter } from "./adapter.ts";
+import { t3Adapter } from "./adapter.ts";
 import type { T3Rpc, T3Server } from "./port.ts";
 import { t3Tasks } from "./tasks.ts";
 
@@ -182,11 +182,16 @@ function setup(options: Parameters<typeof fakeServer>[0] = {}, machine: Machine 
   return { server, commands, adapter };
 }
 
-describe("seedT3", () => {
+function seed(target: Plan, home: string, options: { adopt?: string[] } = {}) {
+  const stopped = fakeServer({ up: false });
+  return t3Adapter({ run: runner(stopped).run, server: stopped.server, user: "octo" }).apply(target, { home, dryRun: false, adopt: options.adopt ?? [] });
+}
+
+describe("T3 settings while T3 Code is stopped", () => {
   test("merges the pack keys and keeps every unknown key", async () => {
     const home = temp.make("home-");
     write(home, settingsFile, { addProjectBaseDirectory: "~/code", storageCleanup: { worktreeOnMerge: false, logsAfterDays: 14 }, keybindings: [{ key: "mod+k" }] });
-    const result = await seedT3(plan("linux", base), home);
+    const result = await seed(plan("linux", base), home);
     expect(read(home, settingsFile)).toEqual({
       addProjectBaseDirectory: "~/code",
       keybindings: [{ key: "mod+k" }],
@@ -200,11 +205,11 @@ describe("seedT3", () => {
 
   test("creates the file on a fresh machine, and a rerun writes nothing and does nothing", async () => {
     const home = temp.make("home-");
-    const first = await seedT3(plan("linux", base), home);
+    const first = await seed(plan("linux", base), home);
     expect(first.actions.map((action) => [action.target, action.operation])).toEqual([[settingsFile, "create"]]);
     const text = readFileSync(join(home, settingsFile), "utf8");
     const saved = backups(home);
-    const again = await seedT3(plan("linux", base), home);
+    const again = await seed(plan("linux", base), home);
     expect(again).toEqual({ actions: [], findings: [] });
     expect(readFileSync(join(home, settingsFile), "utf8")).toBe(text);
     expect(backups(home)).toEqual(saved);
@@ -212,9 +217,9 @@ describe("seedT3", () => {
 
   test("keeps a key the user changed after Fleet set it", async () => {
     const home = temp.make("home-");
-    await seedT3(plan("linux", base), home);
+    await seed(plan("linux", base), home);
     write(home, settingsFile, { ...read(home, settingsFile), sidebarAutoSettleAfterDays: 10 });
-    const result = await seedT3(plan("linux", [entry("defaultThreadEnvMode", "worktree"), entry("sidebarAutoSettleAfterDays", 5), base[2]!]), home);
+    const result = await seed(plan("linux", [entry("defaultThreadEnvMode", "worktree"), entry("sidebarAutoSettleAfterDays", 5), base[2]!]), home);
     expect(read(home, settingsFile).sidebarAutoSettleAfterDays).toBe(10);
     expect(result.findings).toEqual([{ id: `kept:${settingsFile}`, pack: "engine", say: `Kept your sidebarAutoSettleAfterDays in ${settingsFile}. Run fleet apply --adopt ${settingsFile} to take Fleet's value.` }]);
     expect(result.actions).toEqual([]);
@@ -223,16 +228,16 @@ describe("seedT3", () => {
   test("--adopt takes Fleet's value over the user's", async () => {
     const home = temp.make("home-");
     write(home, settingsFile, { defaultThreadEnvMode: "local" });
-    await seedT3(plan("linux", base), home, { adopt: [settingsFile] });
+    await seed(plan("linux", base), home, { adopt: [settingsFile] });
     expect(read(home, settingsFile).defaultThreadEnvMode).toBe("worktree");
   });
 
   test("removes a key a pack drops, after a backup", async () => {
     const home = temp.make("home-");
     write(home, settingsFile, { theme: "dark" });
-    await seedT3(plan("linux", base), home);
+    await seed(plan("linux", base), home);
     const before = readFileSync(join(home, settingsFile), "utf8");
-    const result = await seedT3(plan("linux", base.slice(0, 2)), home);
+    const result = await seed(plan("linux", base.slice(0, 2)), home);
     expect(read(home, settingsFile)).toEqual({ theme: "dark", defaultThreadEnvMode: "worktree", sidebarAutoSettleAfterDays: 3 });
     expect(result.actions).toEqual([{ target: settingsFile, operation: "replace", reason: "remove storageCleanup" }]);
     const latest = backups(home).sort().at(-1)!;
@@ -243,17 +248,17 @@ describe("seedT3", () => {
   test("sets the nightly update channel in desktop-settings.json on the Mac only", async () => {
     const mac = temp.make("home-");
     write(mac, desktopFile, { mainWindowBounds: { x: 0, y: 0, width: 800, height: 600 }, updateChannel: "latest", updateChannelConfiguredByUser: false });
-    await seedT3(plan("darwin", base), mac);
+    await seed(plan("darwin", base), mac);
     expect(read(mac, desktopFile)).toEqual({ mainWindowBounds: { x: 0, y: 0, width: 800, height: 600 }, updateChannel: "nightly", updateChannelConfiguredByUser: true });
     const linux = temp.make("home-");
-    await seedT3(plan("linux", base), linux);
+    await seed(plan("linux", base), linux);
     expect(existsSync(join(linux, desktopFile))).toBe(false);
   });
 
   test("keeps an update channel the user picked in T3 Code", async () => {
     const home = temp.make("home-");
     write(home, desktopFile, { updateChannel: "latest", updateChannelConfiguredByUser: true });
-    const result = await seedT3(plan("darwin", []), home);
+    const result = await seed(plan("darwin", []), home);
     expect(read(home, desktopFile)).toEqual({ updateChannel: "latest", updateChannelConfiguredByUser: true });
     expect(result.findings).toEqual([{ id: `kept:${desktopFile}`, pack: "engine", say: `Kept your updateChannel in ${desktopFile}. Run fleet apply --adopt ${desktopFile} to take Fleet's value.` }]);
   });
@@ -261,7 +266,7 @@ describe("seedT3", () => {
   test("keeps a channel the user picked when T3 leaves the build's default channel out", async () => {
     const home = temp.make("home-");
     write(home, desktopFile, { updateChannelConfiguredByUser: true });
-    const result = await seedT3(plan("darwin", []), home);
+    const result = await seed(plan("darwin", []), home);
     expect(read(home, desktopFile)).toEqual({ updateChannelConfiguredByUser: true });
     expect(result.actions).toEqual([]);
   });
@@ -269,24 +274,24 @@ describe("seedT3", () => {
   test("keeps T3's sparse copy of an owned setting while T3 is stopped, since a reset and a stripped default look the same", async () => {
     const home = temp.make("home-");
     const cleanup = (logsAfterDays: number) => entry("storageCleanup", { logsAfterDays, browserArtifactsAfterDays: null });
-    await seedT3(plan("linux", [cleanup(14)]), home);
+    await seed(plan("linux", [cleanup(14)]), home);
     write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
-    const result = await seedT3(plan("linux", [cleanup(7)]), home);
+    const result = await seed(plan("linux", [cleanup(7)]), home);
     expect(read(home, settingsFile).storageCleanup).toEqual({ logsAfterDays: 14 });
     expect(result.findings).toEqual([{ id: `kept:${settingsFile}`, pack: "engine", say: `Kept your storageCleanup in ${settingsFile}. Run fleet apply --adopt ${settingsFile} to take Fleet's value.` }]);
   });
 
   test("adds a nested setting that the file lacks while T3 is stopped", async () => {
     const home = temp.make("home-");
-    await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14 })]), home);
-    const result = await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: true })]), home);
+    await seed(plan("linux", [entry("storageCleanup", { logsAfterDays: 14 })]), home);
+    const result = await seed(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: true })]), home);
     expect(read(home, settingsFile).storageCleanup).toEqual({ logsAfterDays: 14, worktreeOnMerge: true });
     expect(result.actions).toEqual([{ target: settingsFile, operation: "replace", reason: "set storageCleanup" }]);
   });
 
   test("writes no T3 setting through the Provider config record", async () => {
     const home = temp.make("home-");
-    await seedT3(plan("linux", base), home);
+    await seed(plan("linux", base), home);
     expect(existsSync(join(home, ".config/fleet/provider-fields.json"))).toBe(false);
   });
 });
@@ -308,7 +313,7 @@ describe("T3 adapter with a running server", () => {
 
   test("retries a value T3 did not take on the next apply", async () => {
     const home = temp.make("home-");
-    await seedT3(plan("linux", [entry("sidebarAutoSettleAfterDays", 3)]), home);
+    await seed(plan("linux", [entry("sidebarAutoSettleAfterDays", 3)]), home);
     const { server, adapter } = setup({ settings: { sidebarAutoSettleAfterDays: 3 }, ignorePatch: true });
     const refused = await apply(plan("linux", [entry("sidebarAutoSettleAfterDays", 5)]), { home, adapters: [adapter] });
     expect(refused.findings.map((finding) => finding.id)).toContain("t3:settings");
@@ -334,7 +339,7 @@ describe("T3 adapter with a running server", () => {
 
   test("keeps a nested setting the user reset to T3's default, though T3 left it out of the file", async () => {
     const home = temp.make("home-");
-    await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: true })]), home);
+    await seed(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: true })]), home);
     write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
     const { server, adapter } = setup({ settings: { storageCleanup: { worktreeOnMerge: false, logsAfterDays: 14, browserArtifactsAfterDays: 7 } } });
     const report = await apply(plan("linux", [entry("storageCleanup", { logsAfterDays: 7, worktreeOnMerge: true })]), { home, adapters: [adapter] });
@@ -344,7 +349,7 @@ describe("T3 adapter with a running server", () => {
 
   test("treats a default T3 left out of the file as unchanged, and updates the setting", async () => {
     const home = temp.make("home-");
-    await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: false })]), home);
+    await seed(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: false })]), home);
     write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
     const { server, adapter } = setup({ settings: { storageCleanup: { worktreeOnMerge: false, logsAfterDays: 14, browserArtifactsAfterDays: 7 } } });
     const wanted = plan("linux", [entry("storageCleanup", { logsAfterDays: 7, worktreeOnMerge: false })]);
@@ -358,7 +363,7 @@ describe("T3 adapter with a running server", () => {
 
   test("patches a nested setting T3 does not hold yet", async () => {
     const home = temp.make("home-");
-    await seedT3(plan("linux", [entry("storageCleanup", { logsAfterDays: 14 })]), home);
+    await seed(plan("linux", [entry("storageCleanup", { logsAfterDays: 14 })]), home);
     write(home, settingsFile, { storageCleanup: { logsAfterDays: 14 } });
     const { server, adapter } = setup({ settings: { storageCleanup: { worktreeOnMerge: false, logsAfterDays: 14, browserArtifactsAfterDays: 7 } } });
     await apply(plan("linux", [entry("storageCleanup", { logsAfterDays: 14, worktreeOnMerge: true })]), { home, adapters: [adapter] });
@@ -663,6 +668,22 @@ describe("T3 on Linux", () => {
     ]);
     const again = await apply(plan("linux", []), { home, adapters: [adapter] });
     expect(again.actions).toEqual([]);
+  });
+
+  test("writes Fleet's settings before it installs t3 or its service, so T3 Code's first start reads them", async () => {
+    const home = temp.make("home-");
+    const { server, commands } = setup({ up: false }, { t3: false, service: "not installed" });
+    const seen: Array<{ line: string; settings: unknown }> = [];
+    const run: CommandRunner = async (command) => {
+      seen.push({ line: command.join(" "), settings: existsSync(join(home, settingsFile)) ? read(home, settingsFile) : undefined });
+      return commands.run(command);
+    };
+    const watched = t3Adapter({ run, server: server.server, user: "octo" });
+    const report = await apply(plan("linux", base), { home, adapters: [watched] });
+    const starts = seen.filter(({ line }) => line.includes("t3.codes/install.sh") || line === "t3 service install");
+    expect(starts).toHaveLength(2);
+    for (const start of starts) expect(start.settings).toEqual({ defaultThreadEnvMode: "worktree", sidebarAutoSettleAfterDays: 3, storageCleanup: { worktreeOnMerge: true, logsAfterDays: 14 } });
+    expect(report.actions.map((action) => action.target)).toEqual([settingsFile, "t3", "t3 service"]);
   });
 
   test("reports lingering that is off in plain words, and still installs the service", async () => {

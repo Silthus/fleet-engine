@@ -93,16 +93,17 @@ Then, on both systems, `t3_cli` installs the `t3` command from `https://t3.codes
 
 Fleet records what it owns in `~/.config/fleet/t3-settings.json`. On the Mac the adapter never touches a service. T3 Code runs as the desktop app. Projects and scheduled tasks wait for the first `fleet apply` after T3 Code starts. The nightly `fleet-update` job does that apply.
 
-The spec names this phase `seedT3`. `seedT3` exists in `src/adapters/t3/adapter.ts`, but only tests call it. In the product, `t3Adapter().apply` calls the same `reconcileSettings` when no server answers.
+The spec names this phase `seedT3`. In the product, `t3Adapter().apply` does it: when no server answers, it writes the settings files first. On Linux it installs and starts the T3 service only after that, so T3 Code's first start reads Fleet's settings.
 
-**Code.** `src/adapters/t3/adapter.ts` (`t3Adapter`, `seedT3`, `targets`); `src/adapters/t3/settings.ts` (`desktopFields`, `reconcileSettings`, `desktopTarget`).
+**Code.** `src/adapters/t3/adapter.ts` (`t3Adapter`, `targets`); `src/adapters/t3/settings.ts` (`desktopFields`, `reconcileSettings`, `desktopTarget`).
 
 **Tests.**
 
-- `src/adapters/t3/t3.test.ts › seedT3 › sets the nightly update channel in desktop-settings.json on the Mac only`
-- `src/adapters/t3/t3.test.ts › seedT3 › keeps an update channel the user picked in T3 Code`
-- `src/adapters/t3/t3.test.ts › seedT3 › keeps a channel the user picked when T3 leaves the build's default channel out`
+- `src/adapters/t3/t3.test.ts › T3 settings while T3 Code is stopped › sets the nightly update channel in desktop-settings.json on the Mac only`
+- `src/adapters/t3/t3.test.ts › T3 settings while T3 Code is stopped › keeps an update channel the user picked in T3 Code`
+- `src/adapters/t3/t3.test.ts › T3 settings while T3 Code is stopped › keeps a channel the user picked when T3 leaves the build's default channel out`
 - `src/adapters/t3/t3.test.ts › T3 on Linux › does not touch the service on the Mac`
+- `src/adapters/t3/t3.test.ts › T3 on Linux › writes Fleet's settings before it installs t3 or its service, so T3 Code's first start reads them`
 - `src/adapters/t3/t3.test.ts › T3 adapter guards › doctor reports each missing piece and writes nothing` (a `darwin` plan)
 
 **Agent can run.** Yes, against a temporary `HOME`. Two things need a Mac: whether the real T3 Code app reads the seeded files on its first start, and how Fleet finds the app's server. `serverCli` in `src/adapters/t3/session.ts` reads `ps` and the `.app` bundle path on the Mac. It has no test.
@@ -222,7 +223,6 @@ Each step is for a person on a clean macOS user account.
 
 - **Agent CLIs on the Mac, fixed here.** The Base pack's `claude-cli` and `codex-cli` steps ran only on Linux, so a clean Mac stopped at "Sign in to Claude" with "claude is not installed here". Now `claude-cli` runs on every machine. On the Mac, Codex comes from the Homebrew cask: the `codex-cli-mac` step runs `brew install --cask codex`. The Linux `codex-cli` step runs `bun add -g @openai/codex`, and that launcher needs Node, which a clean Mac does not have. Each step's check (`claude --version`, `codex --version`) skips a CLI that is already there. Test: `packs/base/base.test.ts` › `installs the agent CLIs on a Mac too, Codex from its Homebrew cask, so a clean Mac without Node can sign in`. A person still has to prove both installers on a clean Mac (step 6 above).
 - **Spec step 13 is not built.** No T3 Code app sign-in on the Mac, and no T3 Connect on the Mac. With a team pack's devbox there is no T3 link at all.
-- **`seedT3` is unused in the product.** The T3 adapter does the same work through `reconcileSettings` when T3 is not running. Nothing calls `seedT3` outside tests.
 - **No test:** finding the T3 server on the Mac through `ps` and the `.app` bundle (`serverCli` in `src/adapters/t3/session.ts`).
 - **No test:** `open` in place of `xdg-open` on the Mac (`realMachine.openUrl` in `src/setup/commands.ts`). It reads the platform from `node:os`, so a test cannot choose it.
 - **No test:** the skip for an existing `/Applications/T3 Code.app`, and `/opt/homebrew/bin` on `PATH` in `get.sh`. Both use absolute paths that a test cannot make.
