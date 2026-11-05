@@ -12,17 +12,25 @@ point() {
   { ln -s "$2" "$1.new.$$" && mv -T "$1.new.$$" "$1"; } || fail "could not point $1 at $2."
 }
 
+published() {
+  [ -x "$1/bin/codex" ] && "$1/bin/codex" --version >/dev/null 2>&1
+}
+
 case "$(uname -m)" in
   x86_64|amd64) target=x86_64-unknown-linux-musl ;;
   aarch64|arm64) target=aarch64-unknown-linux-musl ;;
   *) fail "no Codex build for $(uname -m). Install Codex from https://github.com/openai/codex." ;;
 esac
 
+command -v flock >/dev/null 2>&1 || fail "needs flock to install Codex safely. Install util-linux or BusyBox, then run fleet apply."
 share="$HOME/.local/share/fleet"
 package="$share/codex"
 releases="$package/releases"
 current="$package/current"
 link="$HOME/.local/bin/codex"
+mkdir -p "$share" || fail "could not create $share."
+exec 9>"$share/codex.lock" || fail "could not open $share/codex.lock."
+flock 9 || fail "could not lock $share/codex.lock."
 if [ -e "$link" ] || [ -L "$link" ]; then
   case "$(readlink "$link" || true)" in
     "$current/bin/codex"|"$package/bin/codex") ;;
@@ -47,7 +55,6 @@ previous=$(readlink "$current" 2>/dev/null || true)
 if [ ! -d "$releases/$tag" ]; then
   base="https://github.com/openai/codex/releases/download/$tag"
   asset="codex-package-$target.tar.gz"
-  mkdir -p "$share"
   work=$(mktemp -d "$share/codex-new.XXXXXX")
   curl -fsSL "$base/codex-package_SHA256SUMS" -o "$work/sums" || fail "could not download the Codex checksums from $base."
   curl -fsSL "$base/$asset" -o "$work/$asset" || fail "could not download $base/$asset."
@@ -58,16 +65,21 @@ if [ ! -d "$releases/$tag" ]; then
   tar -xzf "$work/$asset" -C "$work/package" || fail "could not unpack $asset."
   "$work/package/bin/codex" --version >/dev/null || fail "the downloaded Codex does not run on this machine."
   mkdir -p "$releases"
-  mv "$work/package" "$releases/$tag" || fail "could not move Codex $tag into $releases."
+  mv -T "$work/package" "$releases/$tag" 2>/dev/null || published "$releases/$tag" || fail "could not move Codex $tag into $releases."
 fi
 
 mkdir -p "$(dirname "$link")"
 point "$current" "releases/$tag"
 point "$link" "$current/bin/codex"
 if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
+  running=$(ls -l /proc/[0-9]*/exe 2>/dev/null || true)
   for entry in "$package"/* "$releases"/*; do
     case "$entry" in
-      "$releases"|"$current"|"$package/$previous"|"$releases/$tag") ;;
+      "$releases"|"$current"|"$package/$previous"|"$releases/$tag") continue ;;
+    esac
+    resolved=$(cd "$entry" 2>/dev/null && pwd -P) || resolved=$entry
+    case "$running" in
+      *" -> $resolved/"*) ;;
       *) rm -rf "$entry" ;;
     esac
   done

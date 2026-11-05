@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 
@@ -9,6 +9,7 @@ const onLinux = test.skipIf(process.platform !== "linux");
 const script = join(import.meta.dir, "install-codex.sh");
 const tag = "rust-v9.9.9";
 const realMv = Bun.which("mv") ?? "/bin/mv";
+const realReadlink = Bun.which("readlink") ?? "/bin/readlink";
 
 function stub(bin: string, name: string, body: string) {
   writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${join(bin, "calls.log")}"\n${body}\n`);
@@ -56,7 +57,7 @@ async function machine(arch: string, targets: string[], options: { corrupt?: boo
       'cp "$file" "$out"',
     ].join("\n"),
   );
-  stub(bin, "bun", "exit 0");
+  stub(bin, "bun", 'case "$*" in "remove -g @openai/codex") rm -rf "$HOME/.bun/bin/codex" "$HOME/.bun/install/global/node_modules/@openai/codex" ;; esac');
   return {
     bin,
     home,
@@ -66,7 +67,7 @@ async function machine(arch: string, targets: string[], options: { corrupt?: boo
 }
 
 async function install(box: { bin: string; home: string }, path = `${box.bin}:${box.home}/.local/bin:/usr/bin:/bin`) {
-  const child = Bun.spawn(["sh", script], { env: { HOME: box.home, PATH: path }, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(["/bin/sh", script], { env: { HOME: box.home, PATH: path }, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
@@ -115,9 +116,81 @@ describe("install-codex.sh", () => {
     expect(readdirSync(codexHome(box.home)).sort()).toEqual(["current", "releases"]);
   });
 
+  onLinux("holds one install lock from before it reads the old install until it has pruned", async () => {
+    const box = await machine("x86_64", ["x86_64-unknown-linux-musl"]);
+    expect((await install(box)).code).toBe(0);
+    await box.publish("rust-v10.0.0");
+    expect((await install(box)).code).toBe(0);
+    await box.publish("rust-v10.1.0");
+    const log = join(box.bin, "calls.log");
+    writeFileSync(log, "");
+    const held = (name: string) => `echo "${name} holds $(${realReadlink} /proc/$$/fd/9 2>/dev/null)" >> "${log}"`;
+    stub(box.bin, "flock", `${held("flock")}\nexit 0`);
+    stub(box.bin, "readlink", `${held("readlink")}\nexec ${realReadlink} "$@"`);
+    stub(box.bin, "rm", `${held("rm")}\nexec ${Bun.which("rm") ?? "/bin/rm"} "$@"`);
+    expect((await install(box)).code).toBe(0);
+    const lines = box.calls().split("\n");
+    const lock = join(box.home, ".local/share/fleet/codex.lock");
+    const first = (name: string) => lines.findIndex((line) => line.startsWith(`${name} `));
+    expect(lines[first("flock")]).toBe("flock 9");
+    expect(lines).toContain(`flock holds ${lock}`);
+    expect(first("flock")).toBeLessThan(first("readlink"));
+    expect(first("flock")).toBeLessThan(first("curl"));
+    const pruned = lines.findIndex((line) => line === `rm -rf ${join(codexHome(box.home), "releases", tag)}`);
+    expect(pruned).toBeGreaterThan(-1);
+    expect(lines[pruned + 1]).toBe(`rm holds ${lock}`);
+    expect(lines.filter((line) => line.startsWith("readlink holds ") || line.startsWith("rm holds "))).toSatisfy((held) => held.length > 0 && held.every((line) => line.endsWith(` holds ${lock}`)));
+    expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual(["rust-v10.0.0", "rust-v10.1.0"]);
+  });
+
+  onLinux("refuses to install without flock", async () => {
+    const box = await machine("x86_64", ["x86_64-unknown-linux-musl"]);
+    const result = await install(box, box.bin);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("needs flock");
+    expect(box.calls()).not.toContain("curl");
+  });
+
+  onLinux("takes a release another install already published instead of nesting it", async () => {
+    const box = await machine("x86_64", ["x86_64-unknown-linux-musl"]);
+    const final = join(codexHome(box.home), "releases", tag);
+    stub(
+      box.bin,
+      "mv",
+      `for arg; do case "$arg" in */codex-new.*/package) mkdir -p "${final}/bin" && cp "$arg/bin/codex" "${final}/bin/codex" ;; esac; done\nexec ${realMv} "$@"`,
+    );
+    expect(await install(box)).toMatchObject({ code: 0, stdout: "codex-cli 9.9.9 x86_64-unknown-linux-musl\n" });
+    expect(readdirSync(final)).toEqual(["bin"]);
+    expect(await version(box.home)).toBe("codex-cli 9.9.9 x86_64-unknown-linux-musl");
+    expect(readdirSync(join(box.home, ".local/share/fleet")).filter((name) => name.startsWith("codex-new."))).toEqual([]);
+  });
+
+  onLinux("keeps a release while a session still runs from it", async () => {
+    const box = await machine("x86_64", ["x86_64-unknown-linux-musl"]);
+    expect((await install(box)).code).toBe(0);
+    const old = join(codexHome(box.home), "releases", tag);
+    copyFileSync("/bin/sh", join(old, "bin/codex"));
+    const session = Bun.spawn([join(old, "bin/codex"), "-c", "echo ready; read line"], { stdin: "pipe", stdout: "pipe" });
+    try {
+      const reader = session.stdout.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe("ready\n");
+      await box.publish("rust-v10.0.0");
+      expect((await install(box)).code).toBe(0);
+      await box.publish("rust-v10.1.0");
+      expect((await install(box)).code).toBe(0);
+      expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual(["rust-v10.0.0", "rust-v10.1.0", tag]);
+    } finally {
+      session.kill();
+      await session.exited;
+    }
+    await box.publish("rust-v10.2.0");
+    expect((await install(box)).code).toBe(0);
+    expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual(["rust-v10.1.0", "rust-v10.2.0"]);
+  });
+
   onLinux.each([
     ["the move of the new release", "exit 1"],
-    ["the switch to the new release", `case " $* " in *" -T "*) exit 1 ;; esac; exec ${realMv} "$@"`],
+    ["the switch to the new release", `case "$*" in *"/current.new."*) exit 1 ;; esac; exec ${realMv} "$@"`],
   ])("keeps the old install working when %s fails", async (_step, mvBody) => {
     const box = await machine("x86_64", ["x86_64-unknown-linux-musl"]);
     expect((await install(box)).code).toBe(0);
@@ -135,7 +208,7 @@ describe("install-codex.sh", () => {
     writeFileSync(join(box.bin, "term-on-download"), "");
     const result = await install(box);
     expect(result.code).not.toBe(0);
-    expect(readdirSync(join(box.home, ".local/share/fleet"))).toEqual([]);
+    expect(readdirSync(join(box.home, ".local/share/fleet"))).toEqual(["codex.lock"]);
     expect(existsSync(join(box.home, ".local/bin/codex"))).toBe(false);
   });
 
@@ -195,6 +268,8 @@ describe("install-codex.sh", () => {
     expect(box.calls()).not.toContain("bun remove");
     expect((await install(box, `${box.bin}:${box.home}/.bun/bin:${box.home}/.local/bin:/usr/bin:/bin`)).code).toBe(0);
     expect(box.calls()).toContain("bun remove -g @openai/codex");
+    expect(existsSync(join(box.home, ".bun/bin/codex"))).toBe(false);
+    expect(existsSync(shim)).toBe(false);
     expect(lstatSync(join(box.home, ".local/bin/codex")).isSymbolicLink()).toBe(true);
   });
 });
