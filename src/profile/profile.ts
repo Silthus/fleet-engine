@@ -24,7 +24,7 @@ export async function saveAnswers(dir: string, answers: Partial<ProfileFile>, op
   const current = (await readJson(path)) ?? { schema: 1 };
   if (current.schema !== 1) throw new ProfileError(`${path}: unknown schema ${String(current.schema)}`);
   const settings = { ...(current.settings as Record<string, unknown> | undefined), ...answers.settings };
-  await writeFile(path, JSON.stringify({ ...current, ...answers, settings, schema: 1 }, null, 2) + "\n");
+  await replaceFile(path, JSON.stringify({ ...current, ...answers, settings, schema: 1 }, null, 2) + "\n");
   const added = await run(dir, "git", "add", "--", "fleet.json");
   if (!added.ok) throw new ProfileError(`${dir}: could not stage fleet.json: ${added.stderr}`);
   const changed = await run(dir, "git", "diff", "--cached", "--quiet", "--", "fleet.json");
@@ -76,8 +76,12 @@ export function thisMachine(saved: MachineFile | undefined, platform: NodeJS.Pla
 export async function saveMachine(home: string, machine: MachineFile) {
   const path = machinePath(home);
   await mkdir(dirname(path), { recursive: true });
+  await replaceFile(path, JSON.stringify(machine, null, 2) + "\n");
+}
+
+async function replaceFile(path: string, text: string) {
   const partial = `${path}.${process.pid}.partial`;
-  await writeFile(partial, JSON.stringify(machine, null, 2) + "\n");
+  await writeFile(partial, text);
   await rename(partial, path);
 }
 
