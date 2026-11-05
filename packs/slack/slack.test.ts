@@ -4,10 +4,11 @@ import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
+import { t3CliRunner } from "../base/lib/t3/index.ts";
 import { startT3Stub, type T3Stub } from "../base/lib/t3/testing.ts";
 import { slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
 import type { Run } from "./lib/launch.ts";
-import { manifest } from "./lib/slack.ts";
+import { manifest, serve } from "./lib/slack.ts";
 import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
 
 const temp = tempDirs();
@@ -199,6 +200,22 @@ describe("fleet slack-trigger run", () => {
     expect(slack.method("chat.postEphemeral")[0]!.args.text).toBe("Started <https://app.t3.codes/threads/env-box-7/thread-on-box|Slack: deploy check> on box-7.");
   });
 
+  test("stops while Slack has not yet answered the connection request", async () => {
+    let answer = () => {};
+    let asked = () => {};
+    const requested = new Promise<void>((resolve) => (asked = resolve));
+    const server = Bun.serve({ port: 0, fetch: () => new Promise<Response>((resolve) => ((answer = () => resolve(Response.json({ ok: true, url: "ws://127.0.0.1:1/socket" }))), asked())) });
+    stops.push(() => server.stop(true));
+    const stop = new AbortController();
+    const logged: string[] = [];
+    const serving = serve({ appToken, base: `http://127.0.0.1:${server.port}/api`, log: (line) => logged.push(line), onEvent: () => {}, stop: stop.signal, sleep: async () => {} });
+    await requested;
+    stop.abort();
+    await serving;
+    answer();
+    expect(logged).toEqual([]);
+  });
+
   test("waits for the tokens file instead of exiting, and says why once", async () => {
     const slack = slackStub([]);
     const home = temp.make("home-");
@@ -228,6 +245,7 @@ describe("a launch that fails", () => {
   function rig(launches: Array<Started | { failed: string }>) {
     const replies: string[] = [];
     const titles: string[] = [];
+    const commandIds: string[] = [];
     let now = 1_700_000_000_000;
     const deps: TriggerDeps = {
       owner, now: () => now, log: () => {},
@@ -238,13 +256,13 @@ describe("a launch that fails", () => {
         if (method === "chat.getPermalink") return { permalink: "https://example.slack.com/p1" };
         return {};
       },
-      launch: async (title) => (titles.push(title), launches.shift() ?? { failed: "no more launches" }),
+      launch: async (request) => (titles.push(request.title), commandIds.push(request.commandId), launches.shift() ?? { failed: "no more launches" }),
     };
-    return { deps, replies, titles, later: (ms: number) => void (now += ms) };
+    return { deps, replies, titles, commandIds, later: (ms: number) => void (now += ms) };
   }
 
-  test("retries every minute until it starts, and tells the owner once", async () => {
-    const { deps, replies, titles, later } = rig([{ failed: "T3 did not answer" }, { failed: "T3 did not answer" }, { threadId: "T1", environmentId: "E1", where: "this machine" }]);
+  test("retries every minute until it starts with the same command ID, so T3 starts one thread, and tells the owner once", async () => {
+    const { deps, replies, titles, commandIds, later } = rig([{ failed: "T3 did not answer" }, { failed: "T3 did not answer" }, { threadId: "T1", environmentId: "E1", where: "this machine" }]);
     await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
     later(60_000);
     await retryPending(deps);
@@ -252,7 +270,73 @@ describe("a launch that fails", () => {
     await retryPending(deps);
     await retryPending(deps);
     expect(titles).toEqual(["Slack: why?", "Slack: why?", "Slack: why?"]);
+    expect(new Set(commandIds).size).toBe(1);
     expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day.", "Started <https://app.t3.codes/threads/E1/T1|Slack: why?> on this machine."]);
+  });
+
+  test("keeps a trigger whose Slack thread could not be read, and starts it on the next retry", async () => {
+    const { deps, titles } = rig([{ threadId: "T1", where: "this machine" }]);
+    const slack = deps.slack;
+    let outage = true;
+    deps.slack = async (method, args) => {
+      if (outage && method === "conversations.replies") throw new Error("conversations.replies: ratelimited");
+      return slack(method, args);
+    };
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    expect(titles).toEqual([]);
+    outage = false;
+    await retryPending(deps);
+    await retryPending(deps);
+    expect(titles).toEqual(["Slack: why?"]);
+  });
+
+  test("a failed trigger that waits on its reply does not undo a trigger that started meanwhile", async () => {
+    const { deps, titles } = rig([{ failed: "down" }, { threadId: "T2", where: "this machine" }]);
+    const slack = deps.slack;
+    let release = () => {};
+    let replying = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const waiting = new Promise<void>((resolve) => (replying = resolve));
+    deps.slack = async (method, args) => {
+      if (method === "conversations.replies") return { messages: [{ user: ownerId, ts: args.ts, thread_ts: args.ts, text: `task ${args.ts} :t3code:` }] };
+      if (method === "chat.postEphemeral" && args.text?.startsWith("Could not")) replying(), await held;
+      return slack(method, args);
+    };
+    const failing = handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    await waiting;
+    await handleTrigger({ kind: "message", channel: "C1", ts: "2.2" }, deps);
+    release();
+    await failing;
+    const state = JSON.parse(readFileSync(deps.statePath, "utf8"));
+    expect(Object.keys(state.handled)).toEqual(["C1:2.2"]);
+    expect(Object.keys(state.pending)).toEqual(["C1:1.1"]);
+    expect(titles).toEqual(["Slack: task 1.1", "Slack: task 2.2"]);
+  });
+
+  test("never takes another message as the owner's task: it finds the exact reply in a long thread, or starts nothing", async () => {
+    const parent = { user: "U0OTHER", ts: "1.0", thread_ts: "1.0", text: "delete everything" };
+    const reply = { user: ownerId, ts: "1.9", thread_ts: "1.0", text: "find the bug :t3code:" };
+    const run = async (exact: boolean) => {
+      const { deps, titles } = rig([{ threadId: "T1", where: "this machine" }]);
+      const prompts: string[] = [];
+      const launch = deps.launch;
+      deps.launch = (request) => (prompts.push(request.prompt), launch(request));
+      deps.slack = async (method, args) => {
+        if (method === "conversations.replies" && args.limit === "1" && args.oldest) return { messages: exact ? [reply] : [] };
+        if (method === "conversations.replies" && args.limit === "1") return { messages: [{ ...reply }] };
+        if (method === "conversations.replies") return { messages: [parent] };
+        if (method === "chat.getPermalink") return { permalink: "https://example.slack.com/p1" };
+        return {};
+      };
+      await handleTrigger({ kind: "message", channel: "C1", ts: "1.9" }, deps);
+      return { titles, prompts, state: JSON.parse(readFileSync(deps.statePath, "utf8")) };
+    };
+    const found = await run(true);
+    expect(found.titles).toEqual(["Slack: find the bug"]);
+    expect(found.prompts[0]).toContain("It is your task:\n\n> find the bug :t3code:");
+    const missing = await run(false);
+    expect(missing.titles).toEqual([]);
+    expect(missing.state.pending).toEqual({});
   });
 
   test("gives up after a day", async () => {
@@ -321,10 +405,21 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
 
   test("launch starts a thread on this machine from standard input and prints its ids", async () => {
     const t3 = await t3Server();
-    const deps = commandDeps(temp.make("home-"), { t3: { home: t3.home }, readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it." }) });
+    const deps = commandDeps(temp.make("home-"), { t3: { home: t3.home }, readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }) });
     expect(await slackTrigger(["launch"], deps)).toBe(0);
     expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1", environmentId: "env-here" });
-    expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")?.payload).toMatchObject({ title: "Slack: hi", initialMessage: { text: "Do it." } });
+    expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")?.payload).toMatchObject({ commandId: "command-1", title: "Slack: hi", initialMessage: { text: "Do it." } });
+  });
+
+  test("a thread that started counts as started when revoking its T3 session fails", async () => {
+    const t3 = await t3Server();
+    const runCli = t3CliRunner();
+    const deps = commandDeps(temp.make("home-"), {
+      t3: { home: t3.home, runCli: (server, args) => (args.slice(0, 3).join(" ") === "auth session revoke" ? { status: 1, stdout: "", stderr: "revoke failed" } : runCli(server, args)) },
+      readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }),
+    });
+    expect(await slackTrigger(["launch"], deps)).toBe(0);
+    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1", environmentId: "env-here" });
   });
 });
 
@@ -346,6 +441,11 @@ describe("where the trigger runs", () => {
     expect(runsHere(resolve({ packs: ["slack", "hub"] }, { schema: 1, role: "hub" }))).toBe(true);
     expect(runsHere(resolve({ packs: ["slack", "hub"] }, mac))).toBe(false);
     expect(runsHere(resolve({ packs: ["slack", "hub"] }, devbox))).toBe(false);
+  });
+
+  test("never runs on a devbox without a hub, even when the devbox lists no devboxes of its own", () => {
+    expect(runsHere(resolve({ packs: ["slack"] }, devbox))).toBe(false);
+    expect(runsHere(resolve({ packs: ["slack"] }, { schema: 1, role: "linux" }))).toBe(true);
   });
 
   test("runs nowhere without a hub when the profile has devboxes", () => {

@@ -49,7 +49,7 @@ export type T3Task = {
   project?: string;
 };
 
-/** Limits an item to some machines, plans, or one workflow. An item without a field fits every value. The role solo fits the only machine: the Hub pack is off and the profile lists no devboxes. */
+/** Limits an item to some machines, plans, or one workflow. An item without a field fits every value. The role solo fits the only machine: it is not a devbox, the Hub pack is off, and the profile lists no devboxes. */
 export type Scope = { on?: Os[]; roles?: Array<MachineRole | "solo">; plans?: AiPlan[]; workflow?: string };
 
 export type TimerSchedule = { every: "5m" | "15m" | "1h" | "1d"; at?: string };

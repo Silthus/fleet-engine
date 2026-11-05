@@ -16,12 +16,12 @@ export class GatewayClientError extends Error {}
 
 export const clientPath = (home: string) => join(home, ".config/fleet/mcphub.client.json");
 
-export function devboxGatewayUrl(settings: GatewaySettings) {
+export function browserGatewayUrl(settings: GatewaySettings) {
   return settings.httpsHost ? `https://${settings.httpsHost}:${settings.relayPort}/mcphub` : localGatewayUrl;
 }
 
 export function isGatewayUrl(url: string, settings: GatewaySettings) {
-  return url === localGatewayUrl || url === devboxGatewayUrl(settings);
+  return url === localGatewayUrl || url === browserGatewayUrl(settings);
 }
 
 export const gatewayEndpoint = (client: GatewayClient) => `${client.baseUrl}/mcp/${gatewayGroup}`;
@@ -85,5 +85,5 @@ export async function checkGateway(home: string, settings: GatewaySettings, fetc
   const health = await fetch(new URL("/health", client.baseUrl).href, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
   return health?.ok
     ? { ok: true, line: `The MCP gateway at ${client.baseUrl} answers.` }
-    : { ok: false, line: `The MCP gateway at ${client.baseUrl} does not answer. On the hub, run: fleet mcphub doctor` };
+    : { ok: false, line: `The MCP gateway at ${client.baseUrl} does not answer. ${client.baseUrl === localGatewayUrl ? "On the hub, run: fleet mcphub doctor" : `A devbox reaches it at ${localGatewayUrl} through its tunnel. ${grantHint}`}` };
 }

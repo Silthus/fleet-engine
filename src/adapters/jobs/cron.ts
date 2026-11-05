@@ -12,7 +12,8 @@ export function cronLine(id: string, expression: string, script: string) {
 
 export type CronChanges = { text: string; added: string[]; changed: string[]; removed: string[] };
 
-export function reconcileCrontab(current: string, wanted: Map<string, string>, keepOthers = false): CronChanges {
+export function reconcileCrontab(current: string, wanted: Map<string, string>, keepOthers: boolean | Set<string> = false): CronChanges {
+  const keeps = (id: string) => keepOthers === true || (keepOthers instanceof Set && keepOthers.has(id));
   const lines = current.split("\n");
   if (lines.at(-1) === "") lines.pop();
   const seen = new Set<string>();
@@ -20,7 +21,7 @@ export function reconcileCrontab(current: string, wanted: Map<string, string>, k
   const kept = lines.flatMap((line) => {
     const id = line.match(markedLine)?.[1];
     if (id === undefined) return [line];
-    const next = wanted.get(id) ?? (keepOthers && !seen.has(id) ? line : undefined);
+    const next = wanted.get(id) ?? (keeps(id) && !seen.has(id) ? line : undefined);
     if (next === undefined || seen.has(id)) {
       result.removed.push(id);
       return [];

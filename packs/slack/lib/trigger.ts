@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { Launched } from "../../base/lib/t3/index.ts";
+import type { LaunchRequest } from "./launch.ts";
 import type { SlackApi } from "./slack.ts";
 
 export const triggerEmoji = "t3code";
@@ -12,15 +13,16 @@ const keepFor = 31 * day;
 export type Owner = { name: string; slackUserId: string };
 export type Trigger = { kind: "message" | "reaction"; channel: string; ts: string };
 type Message = { user?: string; text?: string; ts: string; thread_ts?: string };
-type State = { handled: Record<string, number>; pending: Record<string, { trigger: Trigger; since: number }> };
-export type Started = Launched & { where: string };
+type Pending = { trigger: Trigger; since: number; commandId: string; told?: true };
+type State = { handled: Record<string, number>; pending: Record<string, Pending> };
+export type Started = { threadId: string; environmentId?: string; where: string };
 export type TriggerDeps = {
   owner: Owner;
   statePath: string;
   now: () => number;
   log: (line: string) => void;
   slack: SlackApi;
-  launch: (title: string, prompt: string) => Promise<Started | { failed: string }>;
+  launch: (request: LaunchRequest) => Promise<Started | { failed: string }>;
 };
 
 export function triggerOf(event: Record<string, any>, owner: Owner): Trigger | undefined {
@@ -42,7 +44,33 @@ export async function handleTrigger(trigger: Trigger, deps: TriggerDeps): Promis
   if (readState(deps.statePath).handled[key] || inFlight.has(key)) return;
   inFlight.add(key);
   try {
-    await start(trigger, key, deps);
+    const pending = updateState(deps.statePath, (state) => (state.pending[key] ??= { trigger, since: deps.now(), commandId: randomUUID() }));
+    const outcome: Outcome = await start(trigger, key, pending.commandId, deps).catch((error: Error): Outcome => ({ failed: error.message }));
+    if ("gone" in outcome) {
+      updateState(deps.statePath, (state) => void delete state.pending[key]);
+      return deps.log(`${key}: ${outcome.gone}`);
+    }
+    if ("failed" in outcome) {
+      deps.log(`${key}: launch failed: ${outcome.failed}`);
+      const tell = updateState(deps.statePath, (state) => {
+        const entry = state.pending[key];
+        if (!entry || entry.told) return false;
+        entry.told = true;
+        return true;
+      });
+      if (tell) await reply(trigger, key, outcome.thread, deps, "Could not start a T3 thread. Fleet retries every minute for a day.");
+      return;
+    }
+    updateState(deps.statePath, (state) => {
+      for (const [old, at] of Object.entries(state.handled)) if (deps.now() - at > keepFor) delete state.handled[old];
+      state.handled[key] = deps.now();
+      delete state.pending[key];
+    });
+    const { started, name, thread } = outcome;
+    deps.log(`${key}: started ${started.threadId} on ${started.where}`);
+    await deps.slack("reactions.add", { channel: trigger.channel, timestamp: trigger.ts, name: ackEmoji }).catch((error) => deps.log(`${key}: :${ackEmoji}: failed: ${error}`));
+    const link = started.environmentId ? `<https://app.t3.codes/threads/${started.environmentId}/${started.threadId}|${slackText(name)}>` : `${slackText(name)} (thread ${started.threadId})`;
+    await reply(trigger, key, thread, deps, `Started ${link} on ${slackText(started.where)}.`);
   } finally {
     inFlight.delete(key);
   }
@@ -54,41 +82,38 @@ export async function retryPending(deps: TriggerDeps): Promise<void> {
       await handleTrigger(trigger, deps);
       continue;
     }
-    const state = readState(deps.statePath);
-    delete state.pending[key];
-    writeState(deps.statePath, state);
+    updateState(deps.statePath, (state) => void delete state.pending[key]);
     deps.log(`${key}: gave up after a day of failed launches`);
   }
 }
 
-async function start(trigger: Trigger, key: string, deps: TriggerDeps): Promise<void> {
+type Outcome = { started: Started; name: string; thread?: string } | { failed: string; thread?: string } | { gone: string };
+
+async function start(trigger: Trigger, key: string, commandId: string, deps: TriggerDeps): Promise<Outcome> {
   const first = (await deps.slack("conversations.replies", { channel: trigger.channel, ts: trigger.ts, limit: "1" })).messages?.[0] as Message | undefined;
-  if (!first) return deps.log(`${key}: message not found`);
-  const messages = await readMessages(deps.slack, trigger.channel, first.thread_ts ?? first.ts);
-  const message = messages.find((candidate) => candidate.ts === trigger.ts) ?? first;
-  const [thread, permalink] = await Promise.all([
-    formatThread(deps.slack, messages),
+  if (!first) return { gone: "message not found" };
+  const threadTs = first.thread_ts ?? first.ts;
+  const messages = await readMessages(deps.slack, trigger.channel, threadTs);
+  const message = messages.find((candidate) => candidate.ts === trigger.ts) ?? (await exactMessage(deps.slack, trigger, threadTs));
+  if (!message) return { gone: "message not found in its thread" };
+  if (trigger.kind === "message" && message.user !== deps.owner.slackUserId) return { gone: "the message is not the owner's" };
+  const thread = message.thread_ts;
+  const [context, permalink] = await Promise.all([
+    formatThread(deps.slack, messages.some((candidate) => candidate.ts === message.ts) ? messages : [...messages, message]),
     deps.slack("chat.getPermalink", { channel: trigger.channel, message_ts: trigger.ts }).then((result) => String(result.permalink)),
   ]);
   const name = title(message.text ?? "");
-  const launched = await deps.launch(name, prompt(deps.owner, trigger, message.text ?? "", permalink, thread));
-  const reply = (text: string) => deps.slack("chat.postEphemeral", { channel: trigger.channel, user: deps.owner.slackUserId, text, thread_ts: message.thread_ts }).catch((error) => deps.log(`${key}: ephemeral reply failed: ${error}`));
-  const state = readState(deps.statePath);
-  if ("failed" in launched) {
-    deps.log(`${key}: launch failed: ${launched.failed}`);
-    if (!state.pending[key]) await reply("Could not start a T3 thread. Fleet retries every minute for a day.");
-    state.pending[key] ??= { trigger, since: deps.now() };
-    writeState(deps.statePath, state);
-    return;
-  }
-  for (const [old, at] of Object.entries(state.handled)) if (deps.now() - at > keepFor) delete state.handled[old];
-  state.handled[key] = deps.now();
-  delete state.pending[key];
-  writeState(deps.statePath, state);
-  deps.log(`${key}: started ${launched.threadId} on ${launched.where}`);
-  await deps.slack("reactions.add", { channel: trigger.channel, timestamp: trigger.ts, name: ackEmoji }).catch((error) => deps.log(`${key}: :${ackEmoji}: failed: ${error}`));
-  const link = launched.environmentId ? `<https://app.t3.codes/threads/${launched.environmentId}/${launched.threadId}|${slackText(name)}>` : `${slackText(name)} (thread ${launched.threadId})`;
-  await reply(`Started ${link} on ${slackText(launched.where)}.`);
+  const launched = await deps.launch({ title: name, prompt: prompt(deps.owner, trigger, message.text ?? "", permalink, context), commandId });
+  return "failed" in launched ? { failed: launched.failed, thread } : { started: launched, name, thread };
+}
+
+async function exactMessage(slack: SlackApi, trigger: Trigger, threadTs: string): Promise<Message | undefined> {
+  const page = await slack("conversations.replies", { channel: trigger.channel, ts: threadTs, oldest: trigger.ts, latest: trigger.ts, inclusive: "true", limit: "1" });
+  return (page.messages as Message[] | undefined)?.find((candidate) => candidate.ts === trigger.ts);
+}
+
+function reply(trigger: Trigger, key: string, thread: string | undefined, deps: TriggerDeps, text: string) {
+  return deps.slack("chat.postEphemeral", { channel: trigger.channel, user: deps.owner.slackUserId, text, thread_ts: thread }).catch((error) => deps.log(`${key}: ephemeral reply failed: ${error}`));
 }
 
 async function readMessages(slack: SlackApi, channel: string, threadTs: string): Promise<Message[]> {
@@ -139,6 +164,13 @@ function writeState(path: string, state: State): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(`${path}.tmp`, `${JSON.stringify(state)}\n`, { mode: 0o600 });
   renameSync(`${path}.tmp`, path);
+}
+
+function updateState<T>(path: string, change: (state: State) => T): T {
+  const state = readState(path);
+  const result = change(state);
+  writeState(path, state);
+  return result;
 }
 
 function readState(path: string): State {

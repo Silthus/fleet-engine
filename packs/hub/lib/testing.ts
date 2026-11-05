@@ -40,6 +40,7 @@ export function fakeMachine(home: string, fields: Partial<Machine> = {}) {
     sleep: async (ms) => void (now += ms),
     freePort: () => 21000,
     environmentId: async () => "env-box",
+    linkEnvironment: async (input) => void calls.push(`link ${[input.url, ...input.alternateUrls].join(" ")} with ${input.access} access`),
     print: (line) => lines.push(line),
     say: (line) => lines.push(line),
     ...fields,

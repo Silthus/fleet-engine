@@ -59,7 +59,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   };
   const names = new Set(order.map((pack) => pack.manifest.name));
   const active = activateWorkflows(profile, machine, order, names, plan);
-  const solo = !names.has("hub") && !profile.devboxes?.length && !machine.devboxes?.length;
+  const solo = machine.role !== "devbox" && !names.has("hub") && !profile.devboxes?.length && !machine.devboxes?.length;
   const fits = (pack: string, item: Scope, label: string) => {
     const reason =
       item.on && !item.on.includes(os) ? `not on ${os}`

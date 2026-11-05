@@ -34,12 +34,16 @@ export type ServeOptions = { appToken: string; onEvent: (event: Record<string, a
 
 export async function serve({ appToken, onEvent, log, base = slackApiBase, sleep = Bun.sleep, stop }: ServeOptions): Promise<void> {
   const open = slackApi(appToken, base, sleep);
+  const stopped = new Promise<void>((resolve) => (stop?.aborted ? resolve() : stop?.addEventListener("abort", () => resolve(), { once: true })));
+  const unlessStopped = <T>(work: Promise<T>) => Promise.race([work, stopped.then(() => undefined)]);
   for (let failures = 0; !stop?.aborted; ) {
     try {
-      const { url } = await open("apps.connections.open", {});
+      const opened = await unlessStopped(open("apps.connections.open", {}));
+      if (!opened || stop?.aborted) return;
       await new Promise<void>((resolve) => {
-        const socket = new WebSocket(String(url));
-        stop?.addEventListener("abort", () => socket.close(), { once: true });
+        const socket = new WebSocket(String(opened.url));
+        const close = () => socket.close();
+        stop?.addEventListener("abort", close, { once: true });
         socket.onmessage = (message) => {
           const envelope = JSON.parse(String(message.data)) as Record<string, any>;
           if (envelope.envelope_id) socket.send(JSON.stringify({ envelope_id: envelope.envelope_id }));
@@ -50,7 +54,10 @@ export async function serve({ appToken, onEvent, log, base = slackApiBase, sleep
           if (envelope.type === "disconnect") socket.close();
           if (envelope.type === "events_api" && envelope.payload?.event) onEvent(envelope.payload.event);
         };
-        socket.onclose = () => resolve();
+        socket.onclose = () => {
+          stop?.removeEventListener("abort", close);
+          resolve();
+        };
         socket.onerror = () => socket.close();
       });
     } catch (error) {
@@ -58,7 +65,7 @@ export async function serve({ appToken, onEvent, log, base = slackApiBase, sleep
     }
     if (stop?.aborted) return;
     failures++;
-    await sleep(Math.min(30_000, 1000 * 2 ** Math.min(failures, 5)));
+    await unlessStopped(sleep(Math.min(30_000, 1000 * 2 ** Math.min(failures, 5))));
   }
 }
 
