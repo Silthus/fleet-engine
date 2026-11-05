@@ -124,10 +124,17 @@ export type PackManifest = {
   checks?: PackCheck[];
   files?: PackFile[];
   t3ProjectScripts?: T3ProjectScript[];
+  handlers?: PackHandler[];
   models?: Partial<Record<AiPlan, ModelRow[]>>;
 };
 
 export type PackCheck = Scope & { id: string; run: string[]; say: string };
+
+export const handlerSeams = ["review-bot"] as const;
+export type HandlerSeam = (typeof handlerSeams)[number];
+
+/** A script of the pack that a command of another pack hands its work to, such as the review bot behind fleet pr review. */
+export type PackHandler = Scope & { seam: HandlerSeam; path: string };
 
 export type SourceRef = { name: string; repo: string; ref: string };
 
@@ -181,6 +188,7 @@ export type Plan = {
   checks: Array<Owned<PackCheck>>;
   t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
   commands: Record<string, { pack: string; path: string }>;
+  handlers: Partial<Record<HandlerSeam, { pack: string; path: string }>>;
   models: ModelRow[];
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];

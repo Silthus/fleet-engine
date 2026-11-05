@@ -36,12 +36,19 @@ cat "${replies}/$reply.json"
 `);
   chmodSync(join(bin, "gh"), 0o755);
   const reply = (name: string, value: unknown) => writeFileSync(join(replies, `${name}.json`), JSON.stringify(value));
+  const env: Record<string, string> = { FLEET_HANDLERS: "{}", FLEET_SETTINGS: "{}" };
   const run = (...args: string[]) => {
-    const result = Bun.spawnSync(["bun", command, ...args], { cwd: root, env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}` } });
+    const result = Bun.spawnSync(["bun", command, ...args], { cwd: root, env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ...env } });
     return { code: result.exitCode, out: result.stdout.toString().trim(), err: result.stderr.toString().trim() };
   };
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []);
-  return { home, reply, run, calls };
+  const reviewBot = (exitCode: number) => {
+    const path = join(root, "review-bot.ts");
+    writeFileSync(path, `await Bun.write(${JSON.stringify(join(root, "bot-args.json"))}, JSON.stringify(Bun.argv.slice(2)));\nconsole.log("bot says hi");\nprocess.exit(${exitCode});\n`);
+    env.FLEET_HANDLERS = JSON.stringify({ "review-bot": path });
+  };
+  const botArgs = () => JSON.parse(readFileSync(join(root, "bot-args.json"), "utf8"));
+  return { home, env, reply, run, calls, reviewBot, botArgs };
 }
 
 const user = (login: string) => ({ __typename: "User", login });
@@ -205,9 +212,37 @@ test("blockers --record exits 3 when a new head still has the same blockers", ()
   expect(ledger.map((record) => [record.head, record.signature])).toEqual([[head1, "failing:test"], [head1, "failing:test"], [head2, "failing:test"]]);
 });
 
+test("review hands its parsed arguments to the review-bot handler and exits with the handler's code", () => {
+  const box = sandbox();
+  box.reviewBot(1);
+  const result = box.run("review", "--pr", "12", "--deep", "--repo", "acme/widgets");
+  expect(box.botArgs()).toEqual(["review", "--repo", "acme/widgets", "--pr", "12", "--minutes", "15", "--deep"]);
+  expect(result.out).toBe("bot says hi");
+  expect(result.code).toBe(1);
+});
+
+test("stamp hands its parsed arguments to the review-bot handler", () => {
+  const box = sandbox();
+  box.reviewBot(0);
+  const result = box.run("stamp", "--repo", "acme/widgets", "--pr", "12", "--minutes", "5");
+  expect(box.botArgs()).toEqual(["stamp", "--repo", "acme/widgets", "--pr", "12", "--minutes", "5"]);
+  expect(result.code).toBe(0);
+});
+
+test("without a review-bot handler, review and stamp print the fallback the settings name and exit 2", () => {
+  const box = sandbox();
+  box.env.FLEET_SETTINGS = JSON.stringify({ "pull-requests.reviewFallback": "Comment `review please` on {repo}#{pr}.", "pull-requests.stampFallback": "Add the `approve-me` label to {repo}#{pr}." });
+  expect(box.run("review", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Comment `review please` on acme/widgets#12.", err: "" });
+  expect(box.run("stamp", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Add the `approve-me` label to acme/widgets#12.", err: "" });
+  box.env.FLEET_SETTINGS = "{}";
+  expect(box.run("review", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Ask for a review the way the repo's docs say.", err: "" });
+  expect(box.run("stamp", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Ask for an approval the way the repo's docs say.", err: "" });
+  expect(box.calls()).toEqual([]);
+});
+
 test("wrong arguments print the usage and exit 1", () => {
   const box = sandbox();
-  for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"]]) {
+  for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"], ["review", "--repo", "acme/widgets"], ["review", "--repo", "acme/widgets", "--pr", "1", "--minutes", "0"], ["stamp", "--repo", "acme/widgets", "--pr", "1", "--deep"]]) {
     const result = box.run(...args);
     expect(result.code).toBe(1);
     expect(result.err).toStartWith("fleet pr: Usage: fleet pr ");
@@ -215,10 +250,12 @@ test("wrong arguments print the usage and exit 1", () => {
   expect(box.calls()).toEqual([]);
 });
 
-test("help lists both subcommands", () => {
+test("help lists every subcommand", () => {
   const box = sandbox();
   const result = box.run("--help");
   expect(result.code).toBe(0);
   expect(result.out).toContain("fleet pr bot-threads --repo <owner/repo> --pr <number> [--resolve]");
   expect(result.out).toContain("fleet pr blockers --repo <owner/repo> --pr <number> [--record]");
+  expect(result.out).toContain("fleet pr review --repo <owner/repo> --pr <number> [--deep] [--minutes <n>]");
+  expect(result.out).toContain("fleet pr stamp --repo <owner/repo> --pr <number> [--minutes <n>]");
 });

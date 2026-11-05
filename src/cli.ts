@@ -134,9 +134,13 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   }
   const child = Bun.spawn(["bun", command.path, ...args], {
     stdio: ["inherit", "inherit", "inherit"],
-    env: { ...Bun.env, HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models) },
+    env: { ...Bun.env, HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) },
   });
   return child.exited;
+}
+
+function handlerPaths(plan: Plan) {
+  return Object.fromEntries(Object.entries(plan.handlers).map(([seam, handler]) => [seam, handler.path]));
 }
 
 async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {

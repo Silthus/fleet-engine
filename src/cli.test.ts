@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { main } from "./cli.ts";
 import { tempDirs } from "./testing/git.ts";
@@ -221,6 +221,17 @@ describe("fleet routing", () => {
     expect((await fleet(["apply", "--profile", profile], home, engine)).code).toBe(0);
     expect((await fleet(["hello"], home, engine)).code).toBe(0);
     expect(JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"))).toMatchObject({ "tools.slots": 2, "tools.name": "mine" });
+  });
+
+  test("gives a pack command the handlers that enabled packs declare", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithCommands();
+    writeFileSync(join(engine, "packs/rival/pack.json"), JSON.stringify({ schema: 1, name: "rival", summary: "rival pack.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] }));
+    writeFileSync(join(engine, "packs/tools/commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", Bun.env.FLEET_HANDLERS ?? "none");\n`);
+    rmSync(join(engine, "packs/rival/commands/hello.ts"));
+    expect((await fleet(["apply", "--profile", profileDir(["tools", "rival"])], home, engine)).code).toBe(0);
+    expect((await fleet(["hello"], home, engine)).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"))).toEqual({ "review-bot": join(engine, "packs/rival/lib/bot.ts") });
   });
 
   test("gives a pack command the model table of the user's AI plan", async () => {

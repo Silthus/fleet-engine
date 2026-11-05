@@ -125,6 +125,15 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, human: [{ ...coder, command: "coder login", interactive: "yes" }] } }))).rejects.toThrow("human coder: interactive must be true when set");
   });
 
+  test("accepts a handler only for a seam the engine knows, with a path", async () => {
+    const handler = { seam: "review-bot", path: "lib/review-bot.ts" };
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, seam: "deploy-bot" }] } }))).rejects.toThrow("handlers deploy-bot: seam must be one of review-bot");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, path: "" }] } }))).rejects.toThrow("handlers review-bot: needs a path");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, workflow: "nope" }] } }))).rejects.toThrow("handlers review-bot names unknown workflow nope");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler, handler] } }))).rejects.toThrow("handlers review-bot is declared twice");
+  });
+
   test("accepts a job that runs always only without a time, a T3 runner, or a task", async () => {
     const service = { id: "listen", command: ["fleet", "listen"], schedule: { every: "always" as const } };
     const task = { prompt: "Listen.", projectSetting: "base.project", modelRole: "worker", workspaceStrategy: "worktree", runtimeMode: "auto" };

@@ -2,16 +2,22 @@ import { join } from "node:path";
 import { runGh } from "./gh.ts";
 import { parseBlockerArgs, prBlockers } from "./pr-blockers.ts";
 import { botThreads, parsePrArgs } from "./pr-threads.ts";
+import { askReviewBot, parseReviewBotArgs } from "./review-bot.ts";
 
-export const help = `fleet pr: review threads and blockers of a pull request
+export const help = `fleet pr: review threads, blockers, and review bots of a pull request
 
   fleet pr bot-threads --repo <owner/repo> --pr <number> [--resolve]
                      List a PR's unresolved review threads as bot or human; resolve answered bot threads
   fleet pr blockers --repo <owner/repo> --pr <number> [--record]
-                     List what blocks a PR; with --record, exit 3 when a fix left the same blockers`;
+                     List what blocks a PR; with --record, exit 3 when a fix left the same blockers
+  fleet pr review --repo <owner/repo> --pr <number> [--deep] [--minutes <n>]
+                     Ask the review bot to review the PR's head and print its findings; exit 1 on findings, 2 without a bot
+  fleet pr stamp --repo <owner/repo> --pr <number> [--minutes <n>]
+                     Ask the review bot to approve the PR and print its verdict; exit 0 only when it approved, 2 without a bot`;
 
 export async function prCommand(args: string[], home: string): Promise<number> {
   if (args[0] === "help" || args[0] === "--help") return console.log(help), 0;
+  if (args[0] === "review" || args[0] === "stamp") return askReviewBot(parseReviewBotArgs(args[0], args.slice(1)));
   const report = args[0] === "blockers"
     ? await prBlockers(parseBlockerArgs(args.slice(1)), runGh, join(home, ".local/state/fleet/pr-blockers"), new Date())
     : await botThreads(parsePrArgs(args), runGh);

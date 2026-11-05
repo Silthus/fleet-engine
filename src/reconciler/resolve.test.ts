@@ -193,6 +193,18 @@ describe("resolve", () => {
     expect(() => plan({ packs: ["hub", "rival"] }, mac, [engine, clash])).toThrow("command box is shipped by both hub and rival");
   });
 
+  test("collects the handlers of enabled packs by seam, and rejects two for one seam", () => {
+    const bots = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] }, { "lib/bot.ts": "export {};\n" });
+    expect(plan().handlers).toEqual({});
+    expect(plan({ packs: ["bots"] }, mac, [engine, bots]).handlers).toEqual({ "review-bot": { pack: "bots", path: join(bots.dir, "packs/bots/lib/bot.ts") } });
+    const linuxOnly = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib/bot.ts", on: ["linux"] }] });
+    expect(plan({ packs: ["bots"] }, mac, [engine, linuxOnly]).handlers).toEqual({});
+    const rival = withPack({ schema: 1, name: "rival", summary: "Rival.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] });
+    expect(() => plan({ packs: ["bots", "rival"] }, mac, [engine, bots, rival])).toThrow("the review-bot handler is declared by both bots and rival");
+    const leak = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "../../../outside.ts" }] });
+    expect(() => plan({ packs: ["bots"] }, mac, [engine, leak])).toThrow("bots: path ../../../outside.ts leaves its pack");
+  });
+
   test("marks a pack of an unreachable source as unavailable", () => {
     const result = plan({ packs: ["team"] }, mac, [engine, agentSkills, { ref: { name: "team", repo: "org/team", ref: "v1" }, error: "offline" }]);
     expect(result.packs).toContainEqual({ name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" });

@@ -1,6 +1,6 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { needValues, type LoadedPack, type ModelRow, type PackManifest } from "./types.ts";
+import { handlerSeams, needValues, type LoadedPack, type ModelRow, type PackManifest } from "./types.ts";
 
 export class PackError extends Error {}
 
@@ -35,7 +35,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
   if (typeof raw.name !== "string" || !packName.test(raw.name)) return fail("name must be lowercase words joined by dashes");
   if (raw.title !== undefined && !filled(raw.title)) return fail("title must be the name people read");
   if (typeof raw.summary !== "string" || raw.summary === "") return fail("summary must be one plain sentence");
-  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "t3ProjectScripts"]) {
+  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "t3ProjectScripts", "handlers"]) {
     if (raw[field] !== undefined && !Array.isArray(raw[field])) fail(`${field} must be a list`);
   }
   checkShapes(raw, fail);
@@ -82,7 +82,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   const each = (field: string, check: (item: Record<string, unknown>, label: string) => void) => {
     ((raw[field] as unknown[] | undefined) ?? []).forEach((item, index) => {
       if (!isRecord(item)) return fail(`${field}[${index}] must be an object`);
-      const name = typeof item.id === "string" ? item.id : typeof item.key === "string" ? item.key : `[${index}]`;
+      const name = typeof item.id === "string" ? item.id : typeof item.key === "string" ? item.key : typeof item.seam === "string" ? item.seam : `[${index}]`;
       check(item, `${field} ${name}`);
     });
   };
@@ -163,6 +163,11 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need((item.projects as string[]).every((path) => path.startsWith("/") || path.startsWith("~/")), `${label}: each project must be an absolute path or start with ~/`);
     filters(item, label);
   });
+  each("handlers", (item, label) => {
+    need((handlerSeams as readonly unknown[]).includes(item.seam), `${label}: seam must be one of ${handlerSeams.join(", ")}`);
+    need(filled(item.path), `${label}: needs a path`);
+    filters(item, label);
+  });
   each("checks", (item, label) => {
     need(typeof item.id === "string" && isStrings(item.run) && typeof item.say === "string", `${label}: needs an id, a run list, and a say`);
     filters(item, label);
@@ -206,16 +211,19 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
       if (!(needValues as readonly string[]).includes(need)) fail(`workflow ${workflow.id} has unknown need ${need}`);
     }
   }
-  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, t3ProjectScripts: manifest.t3ProjectScripts };
+  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, t3ProjectScripts: manifest.t3ProjectScripts, handlers: manifest.handlers };
   for (const [field, items] of Object.entries(tied)) {
     for (const item of items ?? []) {
-      const label = "id" in item ? item.id : "key" in item ? item.key : item.target;
+      const label = "id" in item ? item.id : "key" in item ? item.key : "seam" in item ? item.seam : item.target;
       if (item.workflow !== undefined && !ids.has(item.workflow)) fail(`${field} ${label} names unknown workflow ${item.workflow}`);
     }
   }
   for (const job of manifest.jobs ?? []) {
     if (job.runner === "t3" && !job.task) fail(`job ${job.id} runs on t3 but has no task`);
   }
+  const seams = manifest.handlers?.map((handler) => handler.seam) ?? [];
+  const twice = seams.find((seam, index) => seams.indexOf(seam) !== index);
+  if (twice) fail(`handlers ${twice} is declared twice`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

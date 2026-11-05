@@ -27,6 +27,7 @@ function plan(os: "darwin" | "linux", jobs: Array<PackJob & { pack?: string }>):
     steps: [],
     checks: [],
     commands: {},
+    handlers: {},
     settings: {},
     unanswered: [],
     ask: [],
