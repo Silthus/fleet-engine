@@ -6,6 +6,12 @@ fail() {
   exit 1
 }
 
+point() {
+  [ "$(readlink "$1" 2>/dev/null || true)" != "$2" ] || return 0
+  rm -f "$1.new.$$"
+  { ln -s "$2" "$1.new.$$" && mv -T "$1.new.$$" "$1"; } || fail "could not point $1 at $2."
+}
+
 case "$(uname -m)" in
   x86_64|amd64) target=x86_64-unknown-linux-musl ;;
   aarch64|arm64) target=aarch64-unknown-linux-musl ;;
@@ -14,13 +20,21 @@ esac
 
 share="$HOME/.local/share/fleet"
 package="$share/codex"
+releases="$package/releases"
+current="$package/current"
 link="$HOME/.local/bin/codex"
 if [ -e "$link" ] || [ -L "$link" ]; then
   case "$(readlink "$link" || true)" in
-    "$package"/*) ;;
+    "$current/bin/codex"|"$package/bin/codex") ;;
     *) fail "$link exists and Fleet did not install it. Move it away, then run fleet apply." ;;
   esac
 fi
+
+work=""
+trap 'rm -rf "$work"; rm -f "$current.new.$$" "$link.new.$$"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 latest=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://github.com/openai/codex/releases/latest) || fail "could not find the latest Codex release."
 tag=${latest##*/}
@@ -28,24 +42,36 @@ case "$tag" in
   rust-v*) ;;
   *) fail "could not read the latest Codex release from $latest." ;;
 esac
-base="https://github.com/openai/codex/releases/download/$tag"
-asset="codex-package-$target.tar.gz"
 
-mkdir -p "$share" "$(dirname "$link")"
-work=$(mktemp -d "$share/codex-new.XXXXXX")
-trap 'rm -rf "$work"' EXIT
-curl -fsSL "$base/codex-package_SHA256SUMS" -o "$work/sums" || fail "could not download the Codex checksums from $base."
-curl -fsSL "$base/$asset" -o "$work/$asset" || fail "could not download $base/$asset."
-want=$(awk -v asset="$asset" '$2 == asset { print $1 }' "$work/sums")
-[ -n "$want" ] || fail "the Codex $tag checksums do not list $asset."
-[ "$(sha256sum "$work/$asset" | awk '{ print $1 }')" = "$want" ] || fail "$asset does not match its checksum."
-mkdir "$work/package"
-tar -xzf "$work/$asset" -C "$work/package" || fail "could not unpack $asset."
-"$work/package/bin/codex" --version >/dev/null || fail "the downloaded Codex does not run on this machine."
+previous=$(readlink "$current" 2>/dev/null || true)
+if [ ! -d "$releases/$tag" ]; then
+  base="https://github.com/openai/codex/releases/download/$tag"
+  asset="codex-package-$target.tar.gz"
+  mkdir -p "$share"
+  work=$(mktemp -d "$share/codex-new.XXXXXX")
+  curl -fsSL "$base/codex-package_SHA256SUMS" -o "$work/sums" || fail "could not download the Codex checksums from $base."
+  curl -fsSL "$base/$asset" -o "$work/$asset" || fail "could not download $base/$asset."
+  want=$(awk -v asset="$asset" '$2 == asset { print $1 }' "$work/sums")
+  [ -n "$want" ] || fail "the Codex $tag checksums do not list $asset."
+  [ "$(sha256sum "$work/$asset" | awk '{ print $1 }')" = "$want" ] || fail "$asset does not match its checksum."
+  mkdir "$work/package"
+  tar -xzf "$work/$asset" -C "$work/package" || fail "could not unpack $asset."
+  "$work/package/bin/codex" --version >/dev/null || fail "the downloaded Codex does not run on this machine."
+  mkdir -p "$releases"
+  mv "$work/package" "$releases/$tag" || fail "could not move Codex $tag into $releases."
+fi
 
-rm -rf "$package"
-mv "$work/package" "$package"
-ln -sfn "$package/bin/codex" "$link"
+mkdir -p "$(dirname "$link")"
+point "$current" "releases/$tag"
+point "$link" "$current/bin/codex"
+if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
+  for entry in "$package"/* "$releases"/*; do
+    case "$entry" in
+      "$releases"|"$current"|"$package/$previous"|"$releases/$tag") ;;
+      *) rm -rf "$entry" ;;
+    esac
+  done
+fi
 
 if [ "$(command -v codex || true)" = "$HOME/.bun/bin/codex" ] && command -v bun >/dev/null 2>&1; then
   bun remove -g @openai/codex >/dev/null 2>&1 || fail "$HOME/.bun/bin/codex comes before $link on PATH. Run bun remove -g @openai/codex."

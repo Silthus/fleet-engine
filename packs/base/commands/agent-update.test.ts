@@ -23,8 +23,11 @@ test("updates the agent CLIs that Fleet installed", async () => {
   expect(calls).toContain("bun add -g @openai/codex@latest");
 });
 
-test("updates the Codex that Fleet installed from its release package", async () => {
-  const { run, calls } = stub({ [fleetCodex]: { code: 0, out: "/home/me/.local/share/fleet/codex/bin/codex\n" }, [`sh ${codexInstaller}`]: { code: 0, out: "" }, "bun pm ls -g": { code: 0, out: "" } });
+test.each([
+  ["through its current release", "/home/me/.local/share/fleet/codex/current/bin/codex\n"],
+  ["from the earlier single-folder layout", "/home/me/.local/share/fleet/codex/bin/codex\n"],
+])("updates the Codex that Fleet installed from its release package %s", async (_layout, target) => {
+  const { run, calls } = stub({ [fleetCodex]: { code: 0, out: target }, [`sh ${codexInstaller}`]: { code: 0, out: "" }, "bun pm ls -g": { code: 0, out: "" } });
   expect((await updateAgents(run)).lines).toEqual(["Claude Code: not installed by Fleet, skipped.", "Codex: up to date.", "Codex from Bun: not installed by Fleet, skipped."]);
   expect(calls).toContain(`sh ${codexInstaller}`);
   expect(codexInstaller).toEndWith("packs/base/lib/install-codex.sh");
