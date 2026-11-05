@@ -89,7 +89,7 @@ function hubDisks(context: DiskWatchContext, local: string, sweepBelowGigabytes:
     const shownFree = `${(free / gigabyte).toFixed(1)}G`;
     const look = `df -h ~; ${remoteFleet("prune --dry-run --no-fetch --min-idle-hours 1")}`;
     const prompt = `${box} has ${shownFree} free, below ${alertBelowGigabytes}G, though a cleanup sweep ran within the hour. A full disk crashes T3 and every lane on the box.
-The sweep ran T3's storage cleanup, fleet prune, and the package managers' own cache cleaners, and removed nothing else. Its report from this pass ends with the largest folders under $HOME:
+The sweep ran fleet prune and the pnpm, uv and Go cache cleaners, and removed nothing else. Its report from this pass ends with the largest folders under $HOME:
 
 ${report}
 

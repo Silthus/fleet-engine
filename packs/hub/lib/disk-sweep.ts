@@ -2,25 +2,21 @@ import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { freeBytes } from "../../base/lib/disk.ts";
 import { numberSetting } from "../../base/lib/settings.ts";
-import { withT3Session, type T3SessionOptions } from "../../base/lib/t3/index.ts";
 import type { Env, Result } from "./coder.ts";
 import { spawnText } from "./hub-job.ts";
 
 const gigabyte = 1024 ** 3;
 const minute = 60_000;
-const t3CleanupMinutes = 20;
 const cleanerMinutes = 10;
 const duMinutes = 5;
 const largestCount = 10;
 const usage = "Usage: fleet disk-sweep [--dry-run] [--floor <gigabytes>] [--alert-floor <gigabytes>]";
 
-export type CleanupReport = { counts: { removed: number; kept: number; failed: number }; bytesFreed: number };
 export type Cleaner = { name: string; tool: string; argv: string[] };
 
 export type DiskSweepOptions = {
   home: string; dryRun: boolean; floorGigabytes: number; alertGigabytes: number;
   free: () => number;
-  cleanup: () => Promise<CleanupReport>;
   cleaners: Cleaner[];
   installed: (tool: string) => boolean;
   run: (argv: string[], timeoutMs: number) => Promise<Result>;
@@ -32,7 +28,6 @@ export function sweepCleaners(home: string, env: Env): Cleaner[] {
   const launcher = join(env.FLEET_ENGINE_DIR ?? join(home, ".local/share/fleet/engine"), "fleet");
   return [
     { name: "fleet prune --auto", tool: launcher, argv: ["sh", launcher, "prune", "--auto"] },
-    { name: "bun pm cache rm", tool: "bun", argv: ["bun", "pm", "cache", "rm"] },
     { name: "pnpm store prune", tool: "pnpm", argv: ["pnpm", "store", "prune"] },
     { name: "uv cache prune", tool: "uv", argv: ["uv", "cache", "prune"] },
     { name: "go clean -cache", tool: "go", argv: ["go", "clean", "-cache"] },
@@ -46,15 +41,14 @@ const lastLine = (text: string) => text.trim().split("\n").at(-1) ?? "";
 export async function diskSweep(options: DiskSweepOptions): Promise<number> {
   const shownFree = () => `${shownGigabytes(options.free())} free`;
   options.log(`Sweep${options.dryRun ? " (dry run)" : ""}: ${shownFree()}, floor ${options.floorGigabytes}G.`);
-  const t3Cleanup = { name: "T3 storage cleanup", tool: "", argv: [] };
-  for (const cleaner of [t3Cleanup, ...options.cleaners]) {
+  for (const cleaner of options.cleaners) {
     if (cleaner.tool && !options.installed(cleaner.tool)) { options.log(`Skipped ${cleaner.name}: ${cleaner.tool} is not installed.`); continue; }
     if (options.dryRun) { options.log(`Would run ${cleaner.name}.`); continue; }
     if (options.free() >= options.floorGigabytes * gigabyte) {
       options.log(`${shownFree()}, above the ${options.floorGigabytes}G floor, so the sweep stops.`);
       return 0;
     }
-    options.log(`${cleaner === t3Cleanup ? await runT3Step(options) : await runCleaner(cleaner, options)} ${shownFree()}.`);
+    options.log(`${await runCleaner(cleaner, options)} ${shownFree()}.`);
   }
   if (options.dryRun) return 0;
   if (options.free() >= options.floorGigabytes * gigabyte) {
@@ -66,15 +60,6 @@ export async function diskSweep(options: DiskSweepOptions): Promise<number> {
     options.print(await largestFolders(options));
   }
   return 0;
-}
-
-async function runT3Step(options: DiskSweepOptions): Promise<string> {
-  try {
-    const { counts: { removed, kept, failed }, bytesFreed } = await options.cleanup();
-    return `T3 storage cleanup: removed ${removed}, kept ${kept}, failed ${failed}, freed ${shownGigabytes(bytesFreed)}.`;
-  } catch (error) {
-    return `T3 storage cleanup failed: ${errorText(error)}.`;
-  }
 }
 
 async function runCleaner(cleaner: Cleaner, options: DiskSweepOptions): Promise<string> {
@@ -98,13 +83,6 @@ async function largestFolders(options: DiskSweepOptions): Promise<string> {
   return ["The largest folders under $HOME, for you to decide:", ...folders.map((folder) => `${shownGigabytes(folder.bytes)} ${folder.path}`), ...note].join("\n");
 }
 
-export function runT3Cleanup(session: T3SessionOptions = {}): Promise<CleanupReport> {
-  return withT3Session(
-    (client) => client.call<CleanupReport>("server.runStorageCleanup", {}, t3CleanupMinutes * minute),
-    { ttl: `${t3CleanupMinutes + 5}m`, scopes: ["orchestration:read", "access:read", "settings:write"], ...session },
-  );
-}
-
 type SweepArgs = { dryRun: boolean; floor?: number; alertFloor?: number };
 
 function parseSweepArgs(args: string[]): SweepArgs {
@@ -121,7 +99,7 @@ function parseSweepArgs(args: string[]): SweepArgs {
 
 export type DiskSweepContext = {
   home: string; env: Env;
-  log?: (line: string) => void; print?: (line: string) => void; cleanup?: () => Promise<CleanupReport>;
+  log?: (line: string) => void; print?: (line: string) => void;
 };
 
 export async function diskSweepCommand(args: string[], context: DiskSweepContext): Promise<number> {
@@ -131,7 +109,6 @@ export async function diskSweepCommand(args: string[], context: DiskSweepContext
   return diskSweep({
     home, dryRun: parsed.dryRun, floorGigabytes, alertGigabytes: parsed.alertFloor ?? floorGigabytes,
     free: () => freeBytes(home),
-    cleanup: context.cleanup ?? (() => runT3Cleanup({ home })),
     cleaners: sweepCleaners(home, env),
     installed: (tool) => (isAbsolute(tool) ? existsSync(tool) : Boolean(Bun.which(tool, { PATH: env.PATH ?? "" }))),
     run: (argv, timeoutMs) => spawnText(argv, env, { timeoutMs, cwd: home }),

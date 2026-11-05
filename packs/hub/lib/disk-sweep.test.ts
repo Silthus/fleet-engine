@@ -3,15 +3,11 @@ import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import type { Result } from "./coder.ts";
-import { diskSweep, diskSweepCommand, runT3Cleanup, sweepCleaners, type DiskSweepOptions } from "./disk-sweep.ts";
+import { diskSweep, diskSweepCommand, sweepCleaners, type DiskSweepOptions } from "./disk-sweep.ts";
 
 const gigabyte = 1024 ** 3;
 const temp = tempDirs();
-const servers: Array<{ stop(force: boolean): unknown }> = [];
-afterEach(() => {
-  for (const server of servers.splice(0)) server.stop(true);
-  temp.cleanup();
-});
+afterEach(() => temp.cleanup());
 
 const home = "/home/me";
 const launcher = "/home/me/.local/share/fleet/engine/fleet";
@@ -21,11 +17,9 @@ function sweep(fields: Partial<DiskSweepOptions> = {}, freed: Record<string, num
   const logged: string[] = [];
   const printed: string[] = [];
   const ran: string[] = [];
-  let cleaned = 0;
   let free = 4 * gigabyte;
   const options: DiskSweepOptions = {
     home, dryRun: false, floorGigabytes: 15, alertGigabytes: 10, free: () => free,
-    cleanup: async () => ((cleaned++, free += gigabyte), { counts: { removed: 3, kept: 1, failed: 0 }, bytesFreed: gigabyte }),
     cleaners: sweepCleaners(home, {}),
     installed: () => true,
     run: async (argv) => {
@@ -36,7 +30,7 @@ function sweep(fields: Partial<DiskSweepOptions> = {}, freed: Record<string, num
     log: (line) => logged.push(line), print: (line) => printed.push(line),
     ...fields,
   };
-  return { options, logged, printed, ran, cleaned: () => cleaned };
+  return { options, logged, printed, ran };
 }
 
 const sizes: Array<[number, string]> = [
@@ -45,10 +39,9 @@ const sizes: Array<[number, string]> = [
 ];
 const duOutput = sizes.map(([gigabytes, path]) => `${gigabytes * 1024 * 1024}\t${path ? `${home}/${path}` : home}`).join("\n");
 
-test("the cleaners are T3's storage cleanup, then fleet prune the way the base pack runs it, then each package cache's own cleaner, in this order, and never docker", async () => {
+test("the cleaners are fleet prune the way the base pack runs it, then the pnpm, uv and Go cache cleaners, in this order, and never T3's storage cleanup, Bun's cache, or docker", async () => {
   expect(sweepCleaners(home, {}).map((cleaner) => cleaner.argv)).toEqual([
     ["sh", launcher, "prune", "--auto"],
-    ["bun", "pm", "cache", "rm"],
     ["pnpm", "store", "prune"],
     ["uv", "cache", "prune"],
     ["go", "clean", "-cache"],
@@ -56,56 +49,53 @@ test("the cleaners are T3's storage cleanup, then fleet prune the way the base p
   expect(sweepCleaners(home, { FLEET_ENGINE_DIR: "/opt/engine" })[0]!.argv).toEqual(["sh", "/opt/engine/fleet", "prune", "--auto"]);
   const run = sweep();
   expect(await diskSweep(run.options)).toBe(0);
-  expect(run.cleaned()).toBe(1);
-  expect(run.ran).toEqual([`sh ${launcher} prune --auto`, "bun pm cache rm", "pnpm store prune", "uv cache prune", "go clean -cache", `du -x -k -d 2 ${home}`]);
-  expect(run.ran.some((line) => line.includes("docker"))).toBe(false);
+  expect(run.ran).toEqual([`sh ${launcher} prune --auto`, "pnpm store prune", "uv cache prune", "go clean -cache", `du -x -k -d 2 ${home}`]);
+  expect(run.ran.some((line) => /docker|bun|runStorageCleanup/.test(line))).toBe(false);
+  expect(run.logged.some((line) => line.includes("T3"))).toBe(false);
 });
 
 test("a cleaner whose tool is not installed is skipped", async () => {
   const run = sweep({ installed: (tool) => tool !== "pnpm" && tool !== "go" });
   await diskSweep(run.options);
-  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune --auto`, "bun pm cache rm", "uv cache prune"]);
+  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune --auto`, "uv cache prune"]);
   expect(run.logged).toContain("Skipped pnpm store prune: pnpm is not installed.");
   expect(run.logged).toContain("Skipped go clean -cache: go is not installed.");
 });
 
-test("a failing or hanging cleaner, or a failing T3 cleanup, is logged, and the next one runs", async () => {
+test("a failing or hanging cleaner is logged, and the next one runs", async () => {
   const run = sweep({
-    cleanup: async () => { throw new Error("T3 is not running on this machine"); },
     run: async (argv) => {
       run.ran.push(argv.join(" "));
-      if (argv[0] === "bun") return { code: 1, stdout: "", stderr: "bun: something broke\nerror: cache is locked" };
+      if (argv[0] === "uv") return { code: 1, stdout: "", stderr: "uv: something broke\nerror: cache is locked" };
       if (argv[0] === "pnpm") return { code: 124, stdout: "", stderr: "" };
       return argv[0] === "du" ? { code: 0, stdout: duOutput, stderr: "" } : done;
     },
   });
   expect(await diskSweep(run.options)).toBe(0);
-  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune --auto`, "bun pm cache rm", "pnpm store prune", "uv cache prune", "go clean -cache"]);
+  expect(run.ran.slice(0, -1)).toEqual([`sh ${launcher} prune --auto`, "pnpm store prune", "uv cache prune", "go clean -cache"]);
   expect(run.logged).toEqual([
     "Sweep: 4.0G free, floor 15G.",
-    "T3 storage cleanup failed: T3 is not running on this machine. 4.0G free.",
     "fleet prune --auto: done. 4.0G free.",
-    "bun pm cache rm failed with exit 1: error: cache is locked. 4.0G free.",
     "pnpm store prune stopped at its 10 minute limit. 4.0G free.",
-    "uv cache prune: done. 4.0G free.",
+    "uv cache prune failed with exit 1: error: cache is locked. 4.0G free.",
     "go clean -cache: done. 4.0G free.",
     "Still 4.0G free, below the 10G alert floor. Nothing else is removed.",
   ]);
 });
 
 test("the sweep stops once free space is back above the floor", async () => {
-  const run = sweep({}, { bun: 6, pnpm: 6 });
+  const run = sweep({}, { fleet: 6, pnpm: 6 });
   expect(await diskSweep(run.options)).toBe(0);
-  expect(run.ran).toEqual([`sh ${launcher} prune --auto`, "bun pm cache rm", "pnpm store prune"]);
-  expect(run.logged.slice(-2)).toEqual(["pnpm store prune: done. 17.0G free.", "17.0G free, above the 15G floor, so the sweep stops."]);
+  expect(run.ran).toEqual([`sh ${launcher} prune --auto`, "pnpm store prune"]);
+  expect(run.logged.slice(-2)).toEqual(["pnpm store prune: done. 16.0G free.", "16.0G free, above the 15G floor, so the sweep stops."]);
   expect(run.printed).toEqual([]);
   const roomy = sweep({ free: () => 40 * gigabyte });
   await diskSweep(roomy.options);
-  expect([roomy.cleaned(), roomy.ran]).toEqual([0, []]);
+  expect(roomy.ran).toEqual([]);
 });
 
 test("above the alert floor nothing is listed; below it, the report ends with the ten largest folders under $HOME from a read-only du", async () => {
-  const between = sweep({}, { fleet: 7 });
+  const between = sweep({}, { fleet: 8 });
   await diskSweep(between.options);
   expect(between.ran.at(-1)).toBe("go clean -cache");
   expect(between.printed).toEqual([]);
@@ -125,12 +115,10 @@ test("above the alert floor nothing is listed; below it, the report ends with th
 test("a dry run lists the cleaners it would run, and runs none", async () => {
   const run = sweep({ dryRun: true, installed: (tool) => tool !== "go" });
   expect(await diskSweep(run.options)).toBe(0);
-  expect([run.cleaned(), run.ran, run.printed]).toEqual([0, [], []]);
+  expect([run.ran, run.printed]).toEqual([[], []]);
   expect(run.logged).toEqual([
     "Sweep (dry run): 4.0G free, floor 15G.",
-    "Would run T3 storage cleanup.",
     "Would run fleet prune --auto.",
-    "Would run bun pm cache rm.",
     "Would run pnpm store prune.",
     "Would run uv cache prune.",
     "Skipped go clean -cache: go is not installed.",
@@ -140,9 +128,8 @@ test("a dry run lists the cleaners it would run, and runs none", async () => {
 function stubTools(dir: string) {
   mkdirSync(dir, { recursive: true });
   const script = (name: string, body: string) => (writeFileSync(join(dir, name), `#!/bin/sh\necho "${name} $*" >> "${dir}/calls.log"\n${body}\n`), chmodSync(join(dir, name), 0o755));
-  script("bun", "exit 1");
   script("pnpm", "");
-  script("uv", "");
+  script("uv", "exit 1");
   for (const tool of ["sh", "du"]) symlinkSync(`/usr/bin/${tool}`, join(dir, tool));
   return dir;
 }
@@ -155,41 +142,12 @@ test("fleet disk-sweep runs the installed cleaners from PATH and the engine laun
   mkdirSync(join(sandbox, "data/inner"), { recursive: true });
   const env = { HOME: sandbox, PATH: bin, FLEET_ENGINE_DIR: join(sandbox, "engine"), FLEET_SETTINGS: JSON.stringify({ "base.diskFloorGigabytes": 10 }) };
   const lines: string[] = [];
-  const code = await diskSweepCommand(["--floor", "1000000", "--alert-floor", "1000000"], { home: sandbox, env, log: (line) => lines.push(line), print: (line) => lines.push(line), cleanup: async () => { throw new Error("no T3"); } });
+  const code = await diskSweepCommand(["--floor", "1000000", "--alert-floor", "1000000"], { home: sandbox, env, log: (line) => lines.push(line), print: (line) => lines.push(line) });
   expect(code).toBe(0);
-  expect(readFileSync(join(bin, "calls.log"), "utf8").trim().split("\n")).toEqual(["fleet prune --auto", "bun pm cache rm", "pnpm store prune", "uv cache prune"]);
+  expect(readFileSync(join(bin, "calls.log"), "utf8").trim().split("\n")).toEqual(["fleet prune --auto", "pnpm store prune", "uv cache prune"]);
   expect(lines).toContain("Skipped go clean -cache: go is not installed.");
-  expect(lines.some((line) => line.startsWith("bun pm cache rm failed with exit 1"))).toBe(true);
+  expect(lines.some((line) => line.startsWith("uv cache prune failed with exit 1"))).toBe(true);
   expect(lines.at(-1)).toContain(`${sandbox}/data/inner`);
-});
-
-test("T3's storage cleanup runs over a session allowed to change settings, with a 20 minute limit", async () => {
-  const tags: Array<[string, unknown]> = [];
-  const server = Bun.serve({
-    port: 0,
-    fetch: (request, server) => (server.upgrade(request) ? undefined : new Response(null, { status: 400 })),
-    websocket: {
-      message(socket, raw) {
-        const message = JSON.parse(String(raw));
-        if (message._tag !== "Request") return;
-        tags.push([message.tag, message.payload]);
-        socket.send(JSON.stringify({ _tag: "Exit", requestId: message.id, exit: { _tag: "Success", value: { counts: { removed: 1, kept: 0, failed: 0 }, bytesFreed: 2 * gigabyte } } }));
-      },
-    },
-  });
-  servers.push(server);
-  const origin = `http://127.0.0.1:${server.port}`;
-  const cli: string[][] = [];
-  const deadlines: string[] = [];
-  const report = await runT3Cleanup({
-    server: { origin, wsUrl: `${origin.replace("http:", "ws:")}/ws`, cli: { command: "t3", args: [] } },
-    runCli: (_server, args) => (cli.push(args), { status: 0, stdout: JSON.stringify({ sessionId: "s", token: "t" }) }),
-    deadline: (what, ms) => (deadlines.push(`${what} ${ms}`), () => {}),
-  });
-  expect(report).toEqual({ counts: { removed: 1, kept: 0, failed: 0 }, bytesFreed: 2 * gigabyte });
-  expect(tags).toEqual([["server.runStorageCleanup", {}]]);
-  expect(cli[0]).toEqual(["auth", "session", "issue", "--json", "--ttl", "25m", "--label", "fleet", "--subject", "fleet", "--scope", "orchestration:read", "--scope", "access:read", "--scope", "settings:write"]);
-  expect(deadlines).toContain("server.runStorageCleanup 1200000");
 });
 
 test("fleet disk-sweep takes only --dry-run and its two floors", async () => {
@@ -197,4 +155,11 @@ test("fleet disk-sweep takes only --dry-run and its two floors", async () => {
   await expect(diskSweepCommand(["--all"], { home: "/nowhere", env: {} })).rejects.toThrow(usage);
   await expect(diskSweepCommand(["--floor"], { home: "/nowhere", env: {} })).rejects.toThrow(usage);
   await expect(diskSweepCommand(["--floor", "lots"], { home: "/nowhere", env: {} })).rejects.toThrow(usage);
+});
+
+test("the Disk watch risk text names every removal that cannot be undone, and no cleaner the sweep does not run", () => {
+  const manifest = JSON.parse(readFileSync(join(import.meta.dir, "../pack.json"), "utf8")) as { workflows: Array<{ id: string; risk?: string }> };
+  const risk = manifest.workflows.find((workflow) => workflow.id === "disk-watch")!.risk!;
+  expect(risk).toContain("boot log");
+  expect(risk).not.toMatch(/T3, Bun|Bun,/);
 });
