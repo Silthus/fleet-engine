@@ -148,13 +148,13 @@ async function askUser(home: string, identity: ProofIdentity, now: Date, stop: s
 }
 
 export type CapturedBy = "fleet" | "author";
-export type ReviewRequest = { scope: string; base?: string; override?: string; standing?: string; hear?: Hear; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; capturedBy?: CapturedBy; now?: Date };
+export type ReviewRequest = { scope: string; base?: string; from?: string; override?: string; standing?: string; hear?: Hear; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; capturedBy?: CapturedBy; now?: Date };
 type Reserved = { round: number | "final"; id: string; directory: string };
 type Decision = { override: string; answer: HeardAnswer } | { standing: StandingDecision } | undefined;
 type StandingDecision = { reason: string; rule: string; until: string };
 type Permit = { arbiter: Arbiter; limits: ReviewLimits; now: Date };
 
-async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: Decision, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, capturedBy: CapturedBy): Promise<Reserved> {
+async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: Decision, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {
   if (base === undefined) throw new Error("A final read needs --base with the latest reviewed commit");
   if (base === identity.commit) throw new Error("HEAD is already reviewed. Skip the final read.");
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
@@ -172,7 +172,7 @@ async function startFinalRead(home: string, identity: ProofIdentity, base: strin
     let read = 1;
     while (started.includes(finalReadPrefix + read)) read++;
     const name = finalReadPrefix + read;
-    if (await reserve(reviews, name, { ...identity, round: "final", read, scope: "final", base, phase, ...decision, arbiter: verdict, capturedBy })) return { round: "final", id: name, directory: join(reviews, name) };
+    if (await reserve(reviews, name, { ...identity, round: "final", read, scope: "final", base, from, phase, ...decision, arbiter: verdict, capturedBy })) return { round: "final", id: name, directory: join(reviews, name) };
   }
   throw new Error("Final read limit exceeded");
 }
@@ -183,6 +183,7 @@ const isDatedQuote = (text: string) => /\b\d{4}-\d{2}-\d{2}\b/.test(text) && /["
 
 export async function startReview(home: string, identity: ProofIdentity, request: ReviewRequest): Promise<Reserved> {
   const { scope, base, phase, hear = withoutThread, cleanBaseMerge = () => undefined, capturedBy = "author", now = new Date() } = request;
+  const from = request.from ?? base;
   const permit = { arbiter: request.arbiter, limits: request.limits, now };
   if (!["full", "fixes", "final"].includes(scope)) throw new Error("Review scope must be full, fixes, or final");
   if (phase !== undefined && scope !== "final") throw new Error("--phase applies only to final reads");
@@ -194,17 +195,17 @@ export async function startReview(home: string, identity: ProofIdentity, request
   let release: (() => Promise<void>) | undefined;
   try {
     if (decision && "override" in decision) release = await claimAnswer(home, identity, decision.answer);
-    if (scope === "final") return await startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, capturedBy);
-    return await startRound(home, identity, reviews, { scope, base, decision, permit, cleanBaseMerge, capturedBy });
+    if (scope === "final") return await startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, capturedBy, from);
+    return await startRound(home, identity, reviews, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy });
   } catch (error) {
     await release?.();
     throw error;
   }
 }
 
-type RoundStart = { scope: string; base?: string; decision: Decision; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
+type RoundStart = { scope: string; base?: string; from?: string; decision: Decision; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
 
-async function startRound(home: string, identity: ProofIdentity, reviews: string, { scope, base, decision, permit, cleanBaseMerge, capturedBy }: RoundStart): Promise<Reserved> {
+async function startRound(home: string, identity: ProofIdentity, reviews: string, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy }: RoundStart): Promise<Reserved> {
   for (let round = 1; round <= 100; round++) {
     const directory = join(reviews, String(round));
     try { await access(directory); continue; }
@@ -214,7 +215,7 @@ async function startRound(home: string, identity: ProofIdentity, reviews: string
     const { free, ceiling } = permit.limits;
     const stop = round > ceiling ? `The loop did not converge: ${ceiling} panel rounds done.` : undefined;
     const verdict = await permitReview(home, identity, round > free, stop, decision, permit);
-    if (await reserve(reviews, String(round), { ...identity, round, scope, base, ...decision, arbiter: verdict, capturedBy })) return { round, id: String(round), directory };
+    if (await reserve(reviews, String(round), { ...identity, round, scope, base, from, ...decision, arbiter: verdict, capturedBy })) return { round, id: String(round), directory };
   }
   throw new Error("Review limit exceeded");
 }
@@ -311,7 +312,7 @@ function requireChoice(answer: HeardAnswer, lead: string, [accept, decline]: [st
   if (![accept, `${accept} (Recommended)`].map(normalized).includes(normalized(answer.words))) throw new Error(`The user chose "${answer.words}", not "${accept}". ${refused}`);
 }
 
-type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; capturedBy?: CapturedBy; reviewer?: string };
+type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; from?: string; capturedBy?: CapturedBy; reviewer?: string };
 
 export type RoundId = number | `final-${number}`;
 
@@ -789,7 +790,7 @@ export async function reviewOfCommit(home: string, identity: ProofIdentity) {
   const review = (await finishedReviews(home, identity)).filter((finished) => finished.commit === identity.commit).at(-1);
   if (!review) return undefined;
   const reservation = await readJson<Reservation | undefined>(join(pullRequestDirectory(home, identity), "reviews", review.name, "round.json"), undefined);
-  return { label: reviewLabel(review.name), scope: reservation?.scope ?? "full", base: reservation?.base, reviewer: review.reviewer };
+  return { label: reviewLabel(review.name), scope: reservation?.scope ?? "full", from: reservation?.from ?? reservation?.base, reviewer: review.reviewer };
 }
 
 export const judgeDirectory = (home: string, identity: ProofIdentity) => join(pullRequestDirectory(home, identity), "judge");

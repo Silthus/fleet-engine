@@ -1,10 +1,13 @@
 import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
+import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
 import { askModel, family, familyOf, modelLabel, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge } from "./proof-judge.ts";
-import { lensBrief, lensLog, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, type Lens, type PanelGuide, type PanelIO } from "./proof-panel.ts";
+import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO } from "./proof-panel.ts";
+import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
+import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { anchorCheck } from "./finding-anchors.ts";
@@ -91,8 +94,9 @@ again after you change the repository's access.`,
     usage: "require (--kinds <kind,kind> | --none --reason <why>) [--author claude|gpt]",
     summary: `Record the proof kinds the PR owes. Repeated calls add kinds. A PR that owes none records --none with the
 reason. The gate fails until one of them is recorded. The first call also records the model family that wrote the
-PR, from the Claude Code or Codex session that runs it; pass --author only outside such a session. The recorded
-family does not change.`,
+PR, from the Claude Code or Codex session that runs it; pass --author only outside such a session. fleet proof review
+and the judge pick their model from it: the review row of the model table for a PR that Claude wrote, and the
+review-codex row for one that Codex wrote when the table has one. The recorded family does not change.`,
     examples: ["fleet proof require --kinds live-run,ui-walk", "fleet proof require --none --reason 'Docs only'"],
     options: ["--kinds", "--reason", "--author"], flags: ["--none"],
     run: async ({ options, flags }, identity, { print, home, env }) => {
@@ -243,6 +247,61 @@ FLEET_PROOF_JUDGE_MODEL its model.`,
       return judged.code;
     },
   },
+  miss: {
+    usage: `miss --source ${missSources.join("|")} --finding <what the reviewer should have flagged> [--file <path> [--line <number>]] [--url <link>]`,
+    summary: `Record a reviewer miss: a problem that a human reviewer, a review bot, CI, a rollback, or a revert found after
+fleet proof review read the commit and said nothing about it. --commit is the reviewed commit that already held the
+problem. --finding says in one or two sentences what the reviewer should have flagged; record only a problem a
+person has checked. The CLI refuses a commit that no finished review of the PR read, because then no reviewer
+missed it. Each case keeps the diff range the review read, the PR title and description, and the source, as one
+JSON line in ${missesPath("~")}. fleet proof eval reruns the reviewer on every case.`,
+    examples: [
+      "fleet proof miss --source human --finding 'The retry loop sends the email twice when the first send times out' --file src/send.ts --line 42 --url https://github.com/owner/name/pull/7#discussion_r1",
+      "fleet proof miss --pr 7 --commit 1a2b3c4 --source revert --finding 'The migration drops the index the dashboard query needs'",
+    ],
+    options: ["--source", "--finding", "--file", "--line", "--url"],
+    run: async ({ options }, identity, context) => {
+      const { home, print, run, now } = context;
+      const source = missSource(required(options, "--source", "miss"));
+      const finding = required(options, "--finding", "miss");
+      const line = options.has("--line") ? positive(options.get("--line")!, "--line", "miss") : undefined;
+      if (line !== undefined && !options.has("--file")) throw usageError("miss", "--line needs --file");
+      const head = identity();
+      const review = await reviewOfCommit(home, head);
+      if (!review) throw new Error(`No finished review of ${head.repository}#${head.pr} read ${short(head.commit)}, so no reviewer missed it there. Pass --commit with the reviewed commit that held the problem`);
+      const base = review.from ?? mergeBase(head, run);
+      if (base === head.commit) throw new Error(`Cannot rebuild the diff the review read: the base of ${head.repository}#${head.pr} already contains ${short(head.commit)}`);
+      const pr = pullRequestDetails(head, run);
+      const miss = await recordMiss(home, {
+        repo: head.repository, pr: head.pr, commit: head.commit, source, finding, file: options.get("--file"), line, url: options.get("--url"),
+        base, head: head.commit, scope: review.scope, round: review.label, reviewer: review.reviewer, title: pr.title, body: pr.body,
+      }, now?.() ?? new Date());
+      print(JSON.stringify({ id: miss.id, repo: miss.repo, pr: miss.pr, commit: miss.commit, source: miss.source, round: miss.round, path: missesPath(home) }));
+      return 0;
+    },
+  },
+  eval: {
+    usage: "eval [--checkout <owner/name>=<path>]... [--case <id>]... [--limit <number>]",
+    summary: `Rerun the reviewer of fleet proof review on every recorded miss and score it. For each case, fleet checks out
+the reviewed commit in a temporary worktree of the case's repository, builds the same prompt from the diff the
+review read, and runs the reviewer that fleet proof review picks for that PR. A cheap judge, the lookup row of the
+model table, answers whether the findings name the known problem: caught or missed. The current checkout serves
+the repository its remotes point at; --checkout names a checkout of another one. A case without a checkout, or
+whose commits the checkout lacks, is skipped and listed. At most pull-requests.panelSlots reviewers run at once on
+this machine, shared with panels.
+fleet prints recall per source and overall, and compares it with the previous run on the cases both runs scored.
+It appends the run to ${evalsPath("~")}: the date, the reviewer and judge models, a hash of the prompt template, a
+hash of PANEL.md, the coding standards, and the skill references, and each case's verdict. FLEET_PROOF_REVIEWER
+and FLEET_PROOF_REVIEWER_MODEL score a candidate reviewer; FLEET_PROOF_EVAL_JUDGE and FLEET_PROOF_EVAL_JUDGE_MODEL
+change the judge. Exit 1 when no case was scored.`,
+    examples: [
+      "fleet proof eval --limit 3",
+      "fleet proof eval --checkout owner/name=$HOME/name",
+      "FLEET_PROOF_REVIEWER_MODEL=candidate-model fleet proof eval --case 1a2b3c4d5e",
+    ],
+    options: ["--limit"], repeatable: ["--checkout", "--case"],
+    run: async ({ options, lists }, _, context) => runEval(options, lists, context),
+  },
   "review-start": {
     usage: "review-start [--scope full|fixes|final] [--base <reviewed-sha>] [--phase review|babysit] [--override <dated quote> --thread <id> | --standing <reason>]",
     summary: `Reserve a review round before you dispatch its reviewers. Round 1 is --scope full and takes no --base. A later
@@ -256,7 +315,8 @@ ${overrideHelp}`,
     run: async ({ options }, identity, context) => {
       const head = identity();
       const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-      context.print(JSON.stringify(await startReview(context.home, head, { scope: options.get("--scope") ?? "full", base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
+      const scope = options.get("--scope") ?? "full";
+      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
       return 0;
     },
   },
@@ -287,9 +347,9 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const pending = await unfinishedFleetReview(home, head);
   if (pending && await readPlan(pending.directory)) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
   const reserved = pending
-    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base }
+    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
     : await reserveFleetReview(options, head, context);
-  const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
+  const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const rules = reviewRules(changedFilesOf(from, head.commit, run), baseTip(head, run), run);
   const diff = diffOf(from, head.commit, run);
@@ -312,9 +372,12 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   const scope = options.get("--scope") ?? "full";
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-  const reserved = await startReview(context.home, head, { scope, base, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
-  return { ...reserved, scope, base };
+  const from = rangeStart(scope, base, head, context.run);
+  const reserved = await startReview(context.home, head, { scope, base, from, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
+  return { ...reserved, scope, from };
 }
+
+const rangeStart = (scope: string, base: string | undefined, head: ProofIdentity, run: Run) => scope === "full" ? mergeBase(head, run) : base;
 
 const waitPolls = 108;
 const pollInterval = 5_000;
@@ -361,7 +424,7 @@ async function reservePanel(options: Map<string, string>, head: ProofIdentity, l
   const { home, cwd, env, run } = context;
   const rubric = await readRubric(home);
   const reserved = await reserveFleetReview(options, head, context);
-  const from = reserved.scope === "full" ? mergeBase(head, run) : reserved.base!;
+  const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const owed = await readOwed(home, head);
   const settled = (await reviewRecords(home, head)).filter((review) => review.responses).map((review) => `${review.label}:\n${review.responses!.trim()}`).join("\n\n");
@@ -413,6 +476,60 @@ async function waitForReview(options: Map<string, string>, head: ProofIdentity, 
   if (code === 1) context.print("A lens failed, and the round stays unfinished. Run the same fleet proof review --lens command to rerun the failed lenses.");
   if (code === 2) context.print("Lenses still run. Run fleet proof review --wait again.");
   return code;
+}
+
+const evalJudgeLimit = 180_000;
+
+async function runEval(options: Map<string, string>, lists: Map<string, string[]>, context: CommandContext) {
+  const { home, env, print, now } = context;
+  const limit = options.has("--limit") ? positive(options.get("--limit")!, "--limit", "eval") : undefined;
+  const wanted = lists.get("--case");
+  const recorded = await readMisses(home);
+  if (!recorded.length) throw new Error(`No misses are recorded in ${missesPath(home)}. Record one with fleet proof miss`);
+  const unknown = wanted?.find((id) => !recorded.some((miss) => miss.id === id));
+  if (unknown) throw usageError("eval", `No recorded case ${unknown}`);
+  const cases = recorded.filter((miss) => !wanted || wanted.includes(miss.id)).slice(0, limit);
+  const rubric = await readRubric(home);
+  const references = skillReferences(home);
+  const judgeRow = modelFor("lookup", env);
+  const reviewLimitMs = reviewLimit(env);
+  const reviewerOf = async (miss: { repo: string; pr: number; commit: string }) => {
+    const author = await authorOf(home, { repository: miss.repo, pr: miss.pr, commit: miss.commit });
+    return { author, row: reviewerRow(author, env) };
+  };
+  const io: EvalIO = {
+    checkoutOf: checkoutsOf(lists.get("--checkout") ?? [], context), runIn: (cwd) => runIn(cwd, env),
+    crossFamily: async (miss) => { const { author, row } = await reviewerOf(miss); return familyOf(row) !== author; },
+    review: async (miss, prompt, cwd, readable) => askModel("reviewer", (await reviewerOf(miss)).row, { prompt, cwd, readable: [join(home, ".agents/skills"), readable] }, env, reviewLimitMs),
+    judge: (prompt) => askModel("eval-judge", judgeRow, { prompt, cwd: tmpdir() }, env, evalJudgeLimit),
+    slot: (work) => withSlot(panelIO(context), work), rubric, references,
+  };
+  const results = await scoreCases(cases, io);
+  const inputs = [rubric, (await panelGuideText(home))?.text ?? "", ...await Promise.all(references.map((path) => readFile(path, "utf8").catch(() => "")))];
+  const reviewers = [...new Set(results.flatMap((result) => result.reviewer ? [result.reviewer] : []))];
+  const evaluation = { at: (now?.() ?? new Date()).toISOString(), reviewer: reviewers.join(", ") || "none", judge: modelLabel("eval-judge", judgeRow, env), promptHash: promptTemplateHash(), inputsHash: hashOf(inputs), cases: results };
+  const previous = (await readRuns(home)).at(-1);
+  for (const line of reportLines(evaluation, previous)) print(line);
+  if (!results.some((result) => result.outcome === "caught" || result.outcome === "missed")) return 1;
+  await saveRun(home, evaluation);
+  print(`saved: ${evalsPath(home)}`);
+  return 0;
+}
+
+function checkoutsOf(values: string[], { cwd, run }: CommandContext) {
+  const named = new Map(values.map((value) => {
+    const match = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)=(.+)$/.exec(value);
+    if (!match) throw usageError("eval", `--checkout takes <owner/name>=<path>, not ${value}`);
+    return [match[1]!.toLowerCase(), resolve(cwd, match[2]!)] as const;
+  }));
+  const here = topLevel(run);
+  return (repository: string) => named.get(repository.toLowerCase()) ?? (here && remotesOf(repository, run).length ? here : undefined);
+}
+
+function positive(value: string, option: string, name: string) {
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 1) throw usageError(name, `${option} takes a positive whole number, not ${value}`);
+  return number;
 }
 
 type Gate = Awaited<ReturnType<typeof proofGate>>;
