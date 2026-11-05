@@ -100,16 +100,10 @@ describe("the Hub pack", () => {
     expect(boxes(resolveEngine([...sources, coderTeam()], { packs: ["hub", "posthog"], settings: answers }, devbox))).toBe(true);
   });
 
-  test("never asks for the Slack member ID, so a team pack that already asks for it is not asked twice", () => {
-    const withTrigger = plan({ packs: ["hub"], workflows: { "slack-trigger": true } });
-    expect(withTrigger.ask.map((setting) => setting.key)).not.toContain("hub.slackUserId");
-    expect(withTrigger.unanswered.map((setting) => setting.key)).toEqual([]);
-  });
-
   test("declares every value the old hub code hardcoded as a setting with no default value", async () => {
     const manifest = sources[0]!.packs.find((pack) => pack.manifest.name === "hub")!.manifest;
     const declared = Object.fromEntries((manifest.settings ?? []).map((setting) => [setting.key, setting]));
-    for (const key of ["hub.alias", "hub.coderUrl", "hub.boxTemplate", "hub.slackUserId", "hub.httpsHost", "hub.boxWarmCommand"]) {
+    for (const key of ["hub.alias", "hub.coderUrl", "hub.boxTemplate", "hub.httpsHost", "hub.boxWarmCommand"]) {
       expect([key, key in declared, declared[key]?.default]).toEqual([key, true, undefined]);
     }
     const listed = new Set((manifest.workflows ?? []).flatMap((workflow) => workflow.settings ?? []));
@@ -120,7 +114,7 @@ describe("the Hub pack", () => {
     const hub: MachineFile = { schema: 1, role: "hub" };
     const items = (machine: MachineFile, fields: Partial<Profile> = {}) => {
       const result = withBoxes(fields, machine);
-      return { jobs: result.jobs.filter((job) => job.pack === "hub").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub").map((step) => step.id) };
+      return { jobs: result.jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub" && step.workflow === "boxes").map((step) => step.id) };
     };
     expect(items(hub)).toEqual({
       jobs: ["box-sweep: fleet box sweep every 15m", "box-nightly: fleet box nightly every 1d at 02:47", "box-restore: fleet box restore every 5m"],
@@ -129,7 +123,23 @@ describe("the Hub pack", () => {
     expect(items(devbox)).toEqual({ jobs: ["box-restore: fleet box restore every 5m"], human: [] });
     expect(items(mac)).toEqual({ jobs: [], human: [] });
     expect(items(hub, { workflows: { boxes: false } })).toEqual({ jobs: [], human: [] });
-    expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub")).toEqual([]);
+    expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes")).toEqual([]);
+  });
+
+  test("plans the disk watch job only on the hub and only while Disk watch is on, and the threads' folder defaults to home", () => {
+    const hub: MachineFile = { schema: 1, role: "hub" };
+    const items = (machine: MachineFile, workflows: Record<string, boolean> = {}) => {
+      const result = plan({ packs: ["hub"], workflows }, machine);
+      return [
+        ...result.jobs.filter((job) => job.pack === "hub" && job.workflow === "disk-watch").map((job) => `job ${job.id}: ${job.command.join(" ")} every ${job.schedule.every}`),
+        ...result.checks.filter((check) => check.pack === "hub" && check.workflow === "disk-watch").map((check) => `check ${check.id}: ${check.run.join(" ")}`),
+      ];
+    };
+    expect(items(hub)).toEqual(["job disk-watch: fleet disk-watch every 15m"]);
+    expect(items(hub, { "disk-watch": false })).toEqual([]);
+    expect(items(devbox)).toEqual([]);
+    expect(items(mac)).toEqual([]);
+    expect(plan({ packs: ["hub"], workflows: { "mcp-gateway": false, "linked-hub": false } }).settings).toMatchObject({ "hub.threadFolder": "~" });
   });
 
   test("the Boxes workflow's settings reach its commands, the relay port for a box's hub forward included", () => {

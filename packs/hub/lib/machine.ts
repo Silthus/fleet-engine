@@ -2,8 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
+import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Capture, type Env, type Result } from "./coder.ts";
 import { writePrivateFile } from "./mcphub/client.ts";
+import { isBoxName } from "./names.ts";
 import type { Clock } from "./pool.ts";
 
 export type BoxSettings = {
@@ -11,27 +13,28 @@ export type BoxSettings = {
   idleHours: number; reapDays: number; keepDirs: string[]; relayPort: number; httpsHost?: string; warmCommand?: string;
 };
 
-export type Machine = Clock & {
+export type PeerLinkInput = { url: string; alternateUrls: string[]; pairingCode: string; access: "full-access" };
+
+export type PeerMachine = Clock & {
   home: string;
   self: string;
-  workspace: string;
-  isHub: boolean;
   peers: string[];
   devboxes: string[];
-  codex: boolean;
-  settings: BoxSettings;
   onPeer(alias: string, command: string, stdin?: string): Promise<Result>;
-  toHub(args: string[]): Promise<number>;
   run(argv: string[], stdin?: string): Promise<Result>;
   freePort(): number;
   environmentId(url: string, timeoutMs: number): Promise<string | undefined>;
+  linkEnvironment(input: PeerLinkInput): Promise<void>;
   print(line: string): void;
   say(line: string): void;
 };
 
+export type Machine = PeerMachine & { workspace: string; isHub: boolean; codex: boolean; settings: BoxSettings; toHub(args: string[]): Promise<number> };
+
 export const shellLimitMs = 5 * 60_000;
 export const hubCallLimitMs = 3 * 3_600_000;
 export const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+export const peerSsh = (alias: string, command: string) => ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`];
 export const remoteFleet = (args: string) => `sh "$HOME/.local/share/fleet/engine/fleet" ${args}`;
 const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
 
@@ -122,36 +125,50 @@ function savedDevboxes(home: string): string[] {
   return Array.isArray(saved) ? saved.filter((host): host is string => typeof host === "string") : [];
 }
 
+function namesOfThisMachine(home: string, hub: string): string[] {
+  const machine = readMachineFile(home);
+  return [...(machine?.role === "hub" ? [hub] : []), ...(typeof machine?.name === "string" ? [machine.name] : [])];
+}
+
+export function devboxesOf(env: Env, home: string): string[] {
+  return [...new Set([...readProfile(env).devboxes, ...savedDevboxes(home)])];
+}
+
 export function shellsWith(run: Capture, hub: string): Pick<Machine, "onPeer" | "toHub" | "run"> {
   const input = (stdin?: string) => (stdin === undefined ? {} : { stdin });
-  const ssh = (alias: string, command: string) => ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`];
   return {
-    onPeer: (alias, command, stdin) => run(ssh(alias, command), { ...input(stdin), timeoutMs: shellLimitMs }),
-    toHub: async (args) => (await run(ssh(hub, remoteFleet(args.map(quote).join(" "))), { timeoutMs: hubCallLimitMs, inherit: true })).code,
+    onPeer: (alias, command, stdin) => run(peerSsh(alias, command), { ...input(stdin), timeoutMs: shellLimitMs }),
+    toHub: async (args) => (await run(peerSsh(hub, remoteFleet(args.map(quote).join(" "))), { timeoutMs: hubCallLimitMs, inherit: true })).code,
     run: (argv, stdin) => run(argv, { ...input(stdin), timeoutMs: shellLimitMs }),
+  };
+}
+
+export function peerMachine(env: Env = Bun.env, home = homedir(), self = hostname(), label = "Fleet box"): PeerMachine {
+  const devboxes = devboxesOf(env, home);
+  const hub = stringSetting("hub.alias", env);
+  const ownNames = namesOfThisMachine(home, hub);
+  const { onPeer, run } = shellsWith(capture, hub);
+  return {
+    home,
+    self,
+    peers: peersOf(hub, devboxes, self).filter((alias) => !ownNames.includes(alias) && !isBoxName(alias)),
+    devboxes,
+    onPeer,
+    run,
+    now: Date.now,
+    sleep: (ms) => Bun.sleep(ms),
+    freePort,
+    environmentId,
+    linkEnvironment: async (input) => void (await withT3Session((client) => client.call("peerLinks.link", input), { home, scopes: ["access:read", "access:write"] })),
+    print: (line) => console.log(line),
+    say: (line) => console.error(`${label}: ${line}`),
   };
 }
 
 export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
   const settings = readBoxSettings(env);
-  const profile = readProfile(env);
-  const devboxes = [...new Set([...profile.devboxes, ...savedDevboxes(home)])];
-  const self = hostname();
-  return {
-    home,
-    self,
-    workspace: env.CODER_WORKSPACE_NAME ?? self,
-    isHub: readRole(home) === "hub",
-    peers: peersOf(settings.alias, devboxes, self),
-    devboxes,
-    codex: profile.plan === "codex" || profile.plan === "both",
-    settings,
-    ...shellsWith(capture, settings.alias),
-    now: Date.now,
-    sleep: (ms) => Bun.sleep(ms),
-    freePort,
-    environmentId,
-    print: (line) => console.log(line),
-    say: (line) => console.error(`Fleet box: ${line}`),
-  };
+  const here = peerMachine(env, home);
+  const plan = readProfile(env).plan;
+  const { toHub } = shellsWith(capture, settings.alias);
+  return { ...here, workspace: env.CODER_WORKSPACE_NAME ?? here.self, isHub: readRole(home) === "hub", codex: plan === "codex" || plan === "both", settings, toHub };
 }
