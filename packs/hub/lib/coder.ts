@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 
@@ -24,12 +24,22 @@ export function slugFor(name: string): string {
 }
 
 export const timedOut = 124;
-const limited = (timeoutMs?: number) => (timeoutMs === undefined ? {} : { timeout: Math.max(1, Math.ceil(timeoutMs)), killSignal: "SIGKILL" as const });
+const limited = (timeoutMs?: number) => (timeoutMs === undefined ? {} : { timeout: Math.max(1, Math.ceil(timeoutMs)), killSignal: "SIGKILL" as const, detached: true });
+const timeoutResult = (timeoutMs?: number, stdout = ""): Result => ({ code: timedOut, stdout, stderr: `timed out after ${timeoutMs} ms` });
+
+function killGroup(leader: number): void {
+  try {
+    process.kill(-leader, "SIGKILL");
+  } catch {
+    return;
+  }
+}
 
 export const capture: Capture = (argv, options = {}) => {
   const child = Bun.spawnSync(argv, { env: options.env as Record<string, string> | undefined, stdin: options.stdin === undefined ? "ignore" : Buffer.from(options.stdin), stdout: "pipe", stderr: "pipe", ...limited(options.timeoutMs) });
-  if (child.exitedDueToTimeout) return { code: timedOut, stdout: child.stdout.toString(), stderr: `timed out after ${options.timeoutMs} ms` };
-  return { code: child.exitCode ?? 1, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
+  if (!child.exitedDueToTimeout) return { code: child.exitCode ?? 1, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
+  killGroup(child.pid);
+  return timeoutResult(options.timeoutMs, child.stdout.toString());
 };
 
 export class Coder {
@@ -57,24 +67,40 @@ export class Coder {
   }
 
   get binary(): string {
-    this.found ??= Bun.which("coder", { PATH: this.env.PATH ?? "" }) ?? this.download();
+    const found = this.resolve();
+    if (!found) throw new Error("Cannot download the coder CLI: it timed out");
+    return found;
+  }
+
+  private resolve(timeoutMs?: number): string | undefined {
+    this.found ??= Bun.which("coder", { PATH: this.env.PATH ?? "" }) ?? this.download(timeoutMs);
     return this.found;
   }
 
-  private download(): string {
+  private download(timeoutMs?: number): string | undefined {
     const target = join(this.home, ".local/bin/coder");
     if (existsSync(target)) return target;
     if (!this.env.CODER_URL) throw new Error("No coder CLI and no Coder address. Set hub.coderUrl with fleet set.");
     const arch = process.arch === "arm64" ? "arm64" : "amd64";
     mkdirSync(dirname(target), { recursive: true });
-    const fetched = this.capture(["curl", "-fsSL", "-o", target, `${this.env.CODER_URL}/bin/coder-linux-${arch}`]);
-    if (fetched.code !== 0) throw new Error(`Cannot download the coder CLI: ${fetched.stderr.trim()}`);
-    if (existsSync(target)) chmodSync(target, 0o755);
+    const partial = `${target}.${process.pid}.partial`;
+    const fetched = this.capture(["curl", "-fsSL", "-o", partial, `${this.env.CODER_URL}/bin/coder-linux-${arch}`], { env: this.env, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    if (fetched.code !== 0 || !existsSync(partial)) {
+      rmSync(partial, { force: true });
+      if (fetched.code === timedOut) return undefined;
+      throw new Error(`Cannot download the coder CLI: ${fetched.stderr.trim()}`);
+    }
+    chmodSync(partial, 0o755);
+    renameSync(partial, target);
     return target;
   }
 
   private call(args: string[], stdin?: string, timeoutMs?: number): Result {
-    return this.capture([this.binary, ...args], { env: this.env, ...(stdin === undefined ? {} : { stdin }), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    const began = Date.now();
+    const binary = this.resolve(timeoutMs);
+    const left = timeoutMs === undefined ? undefined : timeoutMs - (Date.now() - began);
+    if (!binary || (left !== undefined && left <= 0)) return timeoutResult(timeoutMs);
+    return this.capture([binary, ...args], { env: this.env, ...(stdin === undefined ? {} : { stdin }), ...(left === undefined ? {} : { timeoutMs: left }) });
   }
 
   private must(args: string[], timeoutMs?: number): string {
@@ -148,26 +174,26 @@ export class Coder {
     this.must(["delete", "-y", name]);
   }
 
-  private sshTo(wait: "yes" | "no", name: string, command: string): string[] {
-    return [this.binary, "ssh", "--disable-autostart", `--wait=${wait}`, name, "--", command];
+  private sshArgs(wait: "yes" | "no", name: string, command: string): string[] {
+    return ["ssh", "--disable-autostart", `--wait=${wait}`, name, "--", command];
   }
 
   sshAfterStartup(name: string, command: string, timeoutMs?: number): Result {
-    return this.capture(this.sshTo("yes", name, command), { env: this.env, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    return this.call(this.sshArgs("yes", name, command), undefined, timeoutMs);
   }
 
   run(name: string, command: string): number {
-    return Bun.spawnSync(this.sshTo("no", name, command), { env: this.env as Record<string, string>, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1;
+    return Bun.spawnSync([this.binary, ...this.sshArgs("no", name, command)], { env: this.env as Record<string, string>, stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exitCode ?? 1;
   }
 
   async sshLater(name: string, command: string): Promise<Result> {
-    const child = Bun.spawn(this.sshTo("no", name, command), { env: this.env as Record<string, string>, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn([this.binary, ...this.sshArgs("no", name, command)], { env: this.env as Record<string, string>, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
     return { code: await child.exited, stdout, stderr };
   }
 
   ssh(name: string, command: string, stdin?: string, timeoutMs?: number): Result {
-    return this.capture(this.sshTo("no", name, command), { env: this.env, ...(stdin === undefined ? {} : { stdin }), ...(timeoutMs === undefined ? {} : { timeoutMs }) });
+    return this.call(this.sshArgs("no", name, command), stdin, timeoutMs);
   }
 
   token(args: string[]): string {

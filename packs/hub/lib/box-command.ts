@@ -30,15 +30,14 @@ const usage = `Usage: fleet box spawn [<name>] [--new]
        fleet box pool [list | refresh]
                                    The hub's pool of stopped boxes; refresh starts, cleans, warms and stops
                                    each free box. Spawn, start and release use its other subcommands over
-                                   SSH: claim, own, reserve, hold, unhold, give and drop (hub)
+                                   SSH: claim, own, hold, renew, unhold, give and drop (hub)
        fleet box grant <devbox> [--if-expiring]
                                    Mint a Coder token on the hub and give it to a devbox (hub)
        fleet box nightly           Reap, grant each devbox a token that expires soon, and refresh the pool (hub, nightly)`;
 
 const hubOnly = ["sweep", "reap", "pool", "grant", "nightly"];
-const poolArity: Record<string, [number, number]> = { list: [0, 0], claim: [0, 0], refresh: [0, 0], own: [2, 2], reserve: [1, 1], hold: [2, 3], unhold: [2, 2], give: [2, 2], drop: [1, 1] };
-const reserveCodes = { reserved: 0, held: 3, busy: 4 };
-const holdCodes = { held: 0, stale: 3, unowned: 4 };
+const poolArity: Record<string, [number, number]> = { list: [0, 0], claim: [0, 0], refresh: [0, 0], own: [2, 2], hold: [2, 3], renew: [2, 2], unhold: [2, 2], give: [2, 2], drop: [2, 2] };
+const holdCodes = { held: 0, stale: 3, unowned: 4, busy: 5 };
 const option = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
 
 function valid(args: string[]): boolean {
@@ -71,7 +70,7 @@ function valid(args: string[]): boolean {
 
 async function poolCommand(coder: () => CommandCoder, here: Machine, [verb = "list", box = "", value = "", claim]: string[]): Promise<number> {
   const file = registry.poolFile(here.home);
-  const pool = poolAt(file, here.settings.poolSize);
+  const pool = poolAt(file, here.settings.poolSize, here);
   switch (verb) {
     case "own": return here.print(await pool.own(box, value)), 0;
     case "claim": {
@@ -79,19 +78,15 @@ async function poolCommand(coder: () => CommandCoder, here: Machine, [verb = "li
       if (claimed) here.print(`${claimed.box} ${claimed.id} ${claimed.claim}`);
       return claimed ? 0 : 3;
     }
-    case "reserve": {
-      const reserved = await pool.reserve(box);
-      if (reserved.state === "reserved") here.print(reserved.claim);
-      return reserveCodes[reserved.state];
-    }
     case "hold": {
       const held = await pool.hold(box, value, claim);
-      if (held.state === "held") here.print(held.token);
+      if (held.state === "held") here.print(held.claim ? `${held.token} ${held.claim}` : held.token);
       return holdCodes[held.state];
     }
+    case "renew": return (await pool.renew(box, value)) ? 0 : 3;
     case "unhold": return await pool.unhold(box, value), 0;
     case "give": return (await pool.give(box, value)) ? 0 : 3;
-    case "drop": return await pool.drop(box), 0;
+    case "drop": return await pool.drop(box, value), 0;
     case "refresh": return refreshPool(coder(), here);
     default:
       for (const name of registry.pooled(file)) here.print(name);

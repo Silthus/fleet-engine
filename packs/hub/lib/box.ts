@@ -7,15 +7,7 @@ import type { Box, Result } from "./coder.ts";
 import { quote, remoteFleet, type Machine } from "./machine.ts";
 import * as registry from "./pool.ts";
 
-export type PoolClient = {
-  own(box: string, id: string): Promise<string>;
-  claim(): Promise<registry.Claimed | undefined>;
-  reserve(box: string): Promise<registry.Reserve>;
-  hold(box: string, id: string, claim?: string): Promise<registry.Hold>;
-  unhold(box: string, token: string): Promise<void>;
-  give(box: string, token: string): Promise<boolean>;
-  drop(box: string): Promise<void>;
-};
+export type PoolClient = registry.PoolClient;
 export type BoxHooks = { stopping?(box: string): void };
 
 const readyLimitMs = 15 * 60_000;
@@ -32,31 +24,36 @@ const restartT3 = [
   `for i in $(seq 60); do curl -fs http://127.0.0.1:${t3Port}/.well-known/t3/environment > /dev/null && break; sleep 1; done`,
   `curl -fs http://127.0.0.1:${t3Port}/.well-known/t3/environment > /dev/null || exit 1`,
 ];
+const straight = `straight() {
+  path=$HOME rest=\${1#"$HOME"/}
+  while [ -n "$rest" ]; do
+    path=$path/\${rest%%/*}
+    case $rest in */*) rest=\${rest#*/} ;; *) rest= ;; esac
+    if [ -L "$path" ]; then echo "Fleet box: will not $2: $path is a symlink" >&2; return 1; fi
+  done
+}`;
 const claudeSignIn = [
+  straight,
   `token="$HOME/${claudeTokenPath}" dir="$HOME/.config/systemd/user/t3code.service.d" changed=`,
+  'conf="$dir/claude-token.conf" refusal="write the Claude token"',
   'if [ -s "$token" ]; then',
-  '  if [ -L "$dir" ]; then echo "Fleet box: will not write the Claude token: $dir is a symlink" >&2; exit 1; fi',
+  '  straight "$dir" "$refusal" || exit 1',
   '  (umask 077 && mkdir -p "$dir") || exit 1',
+  '  straight "$conf" "$refusal" || exit 1',
+  '  if [ -d "$conf" ]; then echo "Fleet box: will not $refusal: $conf is a folder" >&2; exit 1; fi',
   '  new=$(mktemp "$dir/.claude-token.XXXXXX") || exit 1',
   String.raw`  { printf '[Service]\nEnvironment="CLAUDE_CODE_OAUTH_TOKEN='; tr -d '\n' < "$token"; printf '"\n'; } > "$new" || { rm -f "$new"; exit 1; }`,
-  '  if cmp -s "$new" "$dir/claude-token.conf"; then rm -f "$new"; else mv -f "$new" "$dir/claude-token.conf" && systemctl --user daemon-reload && changed=1; fi',
+  '  if [ -f "$conf" ] && cmp -s "$new" "$conf"; then rm -f "$new"; else mv -fT "$new" "$conf" && systemctl --user daemon-reload && changed=1; fi',
   "fi",
 ];
 
 export const setUpScript = (claim: string) => [claimRecord(claim), ...claudeSignIn, ...restartT3].join("\n");
 export const claimScript = (claim: string) => [claimRecord(claim), ...claudeSignIn, 'if [ -n "$changed" ]; then', ...restartT3, "fi"].join("\n");
 
-const clearHelpers = `straight() {
-  path=$HOME rest=\${1#"$HOME"/}
-  while [ -n "$rest" ]; do
-    path=$path/\${rest%%/*}
-    case $rest in */*) rest=\${rest#*/} ;; *) rest= ;; esac
-    if [ -L "$path" ]; then echo "Fleet box: will not clear $1: $path is a symlink" >&2; return 1; fi
-  done
-}
+const clearHelpers = `${straight}
 clear_in() {
   root=$1; shift
-  straight "$root" || return 1
+  straight "$root" "clear $root" || return 1
   [ -d "$root" ] || return 0
   real=$(cd -P -- "$root" && pwd -P) || return 1
   for entry in "$root"/*; do
@@ -75,7 +72,7 @@ export function recycleScript(keepDirs: string[]): string {
     clearHelpers,
     "failed=0",
     'clear_in "$HOME/.t3/scratch" || failed=1',
-    'if straight "$HOME/.t3/worktrees"; then',
+    'if straight "$HOME/.t3/worktrees" "clear $HOME/.t3/worktrees"; then',
     '  for project in "$HOME"/.t3/worktrees/*; do',
     '    if [ -L "$project" ]; then rm -f -- "$project"; elif [ -d "$project" ]; then clear_in "$project" || failed=1; fi',
     "  done",
@@ -160,20 +157,12 @@ export function ownership(boxes: Box[], here: Machine): { owned: Box[]; skipped:
 
 const skippedLine = (box: string) => `${box}: skipped, not a box this pool made`;
 
-export function poolAt(file: string, size: number): PoolClient {
-  return {
-    own: (box, id) => registry.own(file, box, id),
-    claim: () => registry.claim(file),
-    reserve: (box) => registry.reserve(file, box),
-    hold: (box, id, claim) => registry.hold(file, box, id, claim),
-    unhold: (box, token) => registry.unhold(file, box, token),
-    give: (box, token) => registry.give(file, box, token, size),
-    drop: (box) => registry.drop(file, box),
-  };
-}
+export const poolAt = registry.poolAt;
+
+const holdStates: Record<number, registry.Held["state"]> = { 3: "stale", 4: "unowned", 5: "busy" };
 
 export function poolOn(here: Machine): PoolClient {
-  if (here.isHub) return poolAt(registry.poolFile(here.home), here.settings.poolSize);
+  if (here.isHub) return poolAt(registry.poolFile(here.home), here.settings.poolSize, here);
   const ask = (verb: string, ...args: string[]) => here.onPeer(here.settings.alias, remoteFleet(["box pool", verb, ...args.map(quote)].join(" ")));
   const unanswered = (verb: string, answer: Result) => new Error(`the hub did not answer about the pool (${verb}, exit ${answer.code}: ${(answer.stderr || answer.stdout).trim()})`);
   return {
@@ -187,17 +176,18 @@ export function poolOn(here: Machine): PoolClient {
       const [box, id, claim] = answer.code === 0 ? answer.stdout.trim().split(/\s+/) : [];
       return box && id && claim ? { box, id, claim } : undefined;
     },
-    reserve: async (box) => {
-      const answer = ask("reserve", box);
-      if (answer.code === 0) return { state: "reserved", claim: answer.stdout.trim() };
-      if (answer.code === 3 || answer.code === 4) return { state: answer.code === 3 ? "held" : "busy" };
-      throw unanswered("reserve", answer);
-    },
     hold: async (box, id, claim) => {
       const answer = ask("hold", box, id, ...(claim === undefined ? [] : [claim]));
-      if (answer.code === 0) return { state: "held", token: answer.stdout.trim() };
-      if (answer.code === 3 || answer.code === 4) return { state: answer.code === 3 ? "stale" : "unowned" };
+      const [token, fresh] = answer.stdout.trim().split(/\s+/);
+      if (answer.code === 0 && token) return { state: "held", token, ...(fresh ? { claim: fresh } : {}) };
+      const state = holdStates[answer.code];
+      if (state && state !== "held") return { state };
       throw unanswered("hold", answer);
+    },
+    renew: async (box, token) => {
+      const answer = ask("renew", box, token);
+      if (answer.code === 0 || answer.code === 3) return answer.code === 0;
+      throw unanswered("renew", answer);
     },
     unhold: async (box, token) => void ask("unhold", box, token),
     give: async (box, token) => {
@@ -205,7 +195,7 @@ export function poolOn(here: Machine): PoolClient {
       if (answer.code === 0 || answer.code === 3) return answer.code === 0;
       throw new Error(`the hub did not answer about the pool (exit ${answer.code}); ${box} stays stopped. Run fleet box release ${box} again later`);
     },
-    drop: async (box) => void ask("drop", box),
+    drop: async (box, key) => void ask("drop", box, key),
   };
 }
 
@@ -219,7 +209,7 @@ async function claimFromPool(coder: BoxCoder, here: Machine, label: string, pool
   for (let claimed = await pool.claim(); claimed; claimed = await pool.claim()) {
     const { box } = claimed;
     const live = coder.boxes().find((candidate) => candidate.name === box);
-    if (!live) await pool.drop(box);
+    if (!live) await pool.drop(box, claimed.claim);
     if (!live || live.id !== claimed.id || live.template !== here.settings.template) {
       here.say(`${skippedLine(box)}; it leaves the pool`);
       continue;
@@ -379,16 +369,21 @@ export function sweep(coder: BoxCoder, here: Machine, hooks: BoxHooks = {}): num
 
 export async function startBox(coder: BoxCoder, here: Machine, box: string, pool: PoolClient): Promise<number> {
   assertBox(box);
-  const reserved = await pool.reserve(box);
-  if (reserved.state === "busy") {
-    here.say(`${box} is busy: the pool is refreshing it, or a release holds it. Try again in a few minutes.`);
+  const id = ownedId(coder, here, box);
+  const held: registry.Held = id ? await pool.hold(box, id) : { state: "unowned" };
+  if (held.state === "busy" || held.state === "stale") {
+    here.say(`${box} is busy: the pool is refreshing it, or a release or another start holds it. Try again in a few minutes.`);
     return 1;
   }
-  await coder.start(box);
-  await waitReady(coder, here, box);
-  if (reserved.state === "reserved") {
-    const recorded = coder.ssh(box, claimRecord(claimLine(here, "fleet box start", reserved.claim)));
-    if (recorded.code !== 0) throw new Error(`Cannot record the claim on ${box}: ${recorded.stderr.trim()}`);
+  try {
+    await coder.start(box);
+    await waitReady(coder, here, box);
+    if (held.state === "held" && held.claim) {
+      const recorded = coder.ssh(box, claimRecord(claimLine(here, "fleet box start", held.claim)));
+      if (recorded.code !== 0) throw new Error(`Cannot record the claim on ${box}: ${recorded.stderr.trim()}`);
+    }
+  } finally {
+    if (held.state === "held") await pool.unhold(box, held.token);
   }
   const unit = `${unitOf(box, "t3")}.service`;
   here.run(["systemctl", "--user", "try-restart", unit]);
@@ -411,53 +406,57 @@ function claimOn(coder: BoxCoder, box: string, force: boolean): string | undefin
   return claim || (force ? undefined : "");
 }
 
-async function holdFor(coder: BoxCoder, here: Machine, box: string, force: boolean, pool?: PoolClient): Promise<registry.Hold> {
+async function holdFor(coder: BoxCoder, here: Machine, box: string, force: boolean, pool?: PoolClient): Promise<registry.Held> {
   const id = pool && ownedId(coder, here, box);
   return pool && id ? pool.hold(box, id, claimOn(coder, box, force)) : { state: "unowned" };
 }
 
 export async function release(coder: BoxCoder, here: Machine, box: string, { force = false, stillDoomed = () => true, pool, recycle = true, hooks = {} }: ReleaseOptions = {}): Promise<number> {
   assertBox(box);
-  const keep = force ? undefined : unfinishedWorkOn(coder, box);
-  if (keep) {
-    here.say(`kept ${box}: ${keep}, or release it with --force.`);
-    return 1;
-  }
+  const kept = (reason: string) => (here.say(`kept ${box}: ${reason}`), 1);
+  const status = force ? "running" : statusOf(coder, box);
+  if (status !== "running") return kept(`it is ${status}, so its threads cannot be checked. Start it with fleet box start ${box} first, or release it with --force.`);
   const held = await holdFor(coder, here, box, force, pool);
-  if (held.state === "stale") {
-    here.say(`kept ${box}: it was claimed again since this release read its claim, or another release or the pool refresh holds it. Nothing changed.`);
-    return 1;
-  }
+  if (held.state === "stale") return kept("it was claimed again since this release read its claim. Nothing changed.");
+  if (held.state === "busy") return kept("the pool refresh, a start, or another release holds it. Try again in a few minutes.");
   const token = held.state === "held" ? held.token : undefined;
-  const spare = async () => {
-    if (pool && token) await pool.unhold(box, token);
-    here.say(`kept ${box}: it started again while it was being released. Link it again with fleet box link ${box}.`);
-    return 1;
-  };
-  if (!force) hooks.stopping?.(box);
-  const hub = `${unitOf(box, "hub")}.service`;
-  if (pool && recycle && !token) here.say(`${box} is not a box this pool made, so it is deleted instead of pooled`);
-  if (pool && recycle && token) {
-    onEveryPeer(here, `systemctl --user stop ${hub} 2>/dev/null; true`);
-    stopUnit(here, unitOf(box, "hub"));
-    if (!stillDoomed()) return spare();
-    if (statusOf(coder, box) === "running") coder.stop(box);
-    if (!stillDoomed()) return spare();
-    if (await pool.give(box, token)) {
-      here.say(`returned ${box} to the pool and stopped it; the next spawn claims it`);
-      return 0;
+  let holding = !!token;
+  const ours = async () => stillDoomed() && (!pool || !token || (await pool.renew(box, token)));
+  const spare = () => kept(`it started again, or another operation took it over, while it was being released. Link it again with fleet box link ${box}.`);
+  try {
+    const keep = force ? undefined : unfinishedWorkOn(coder, box);
+    if (keep) return kept(`${keep}, or release it with --force.`);
+    if (!force) hooks.stopping?.(box);
+    const hub = `${unitOf(box, "hub")}.service`;
+    if (pool && recycle && !token) here.say(`${box} is not a box this pool made, so it is deleted instead of pooled`);
+    if (pool && recycle && token) {
+      onEveryPeer(here, `systemctl --user stop ${hub} 2>/dev/null; true`);
+      stopUnit(here, unitOf(box, "hub"));
+      if (!(await ours())) return spare();
+      if (statusOf(coder, box) === "running") coder.stop(box);
+      if (!stillDoomed()) return spare();
+      if (await pool.give(box, token)) {
+        holding = false;
+        here.say(`returned ${box} to the pool and stopped it; the next spawn claims it`);
+        return 0;
+      }
     }
+    const linked = onEveryPeer(here, `${remoteFleet(`box unlink ${box}`)}; unlinked=$?; systemctl --user stop ${hub} 2>/dev/null; exit $unlinked`);
+    if (!unlink(here, box)) linked.push(here.self);
+    stopUnit(here, unitOf(box, "hub"));
+    if (!(await ours())) return spare();
+    coder.remove(box);
+    if (pool && token) {
+      await pool.drop(box, token);
+      holding = false;
+    }
+    here.say(`deleted ${box}`);
+    if (!linked.length) return 0;
+    here.say(`still linked on ${linked.join(", ")}; run fleet box unlink ${box} there`);
+    return 1;
+  } finally {
+    if (holding && pool && token) await pool.unhold(box, token).catch(() => undefined);
   }
-  const linked = onEveryPeer(here, `${remoteFleet(`box unlink ${box}`)}; unlinked=$?; systemctl --user stop ${hub} 2>/dev/null; exit $unlinked`);
-  if (!unlink(here, box)) linked.push(here.self);
-  stopUnit(here, unitOf(box, "hub"));
-  if (!stillDoomed()) return spare();
-  if (pool && token) await pool.drop(box);
-  coder.remove(box);
-  here.say(`deleted ${box}`);
-  if (!linked.length) return 0;
-  here.say(`still linked on ${linked.join(", ")}; run fleet box unlink ${box} there`);
-  return 1;
 }
 
 export function list(coder: BoxCoder, here: Machine): number {
@@ -479,7 +478,7 @@ export async function refreshPool(coder: BoxCoder, here: Machine): Promise<numbe
     let usable = false;
     try {
       const live = coder.boxes().find((candidate) => candidate.name === box);
-      if (!live) await registry.drop(file, box);
+      if (!live) await registry.withPool(file, (pool) => registry.forget(pool, box), here);
       if (!live || recorded[box]?.id !== live.id || live.template !== here.settings.template) {
         here.print(`${skippedLine(box)}; it leaves the pool`);
         return true;

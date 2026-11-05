@@ -1,8 +1,9 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Result } from "./coder.ts";
 import type { CommandCoder } from "./box-command.ts";
 import { readBoxSettings, type Machine } from "./machine.ts";
+import { poolFile, type Entry, type Pool } from "./pool.ts";
 
 export const boxSettings = {
   "hub.alias": "my-hub", "hub.coderUrl": "https://coder.example.com", "hub.boxTemplate": "linux-box", "hub.boxDiskGigabytes": 120,
@@ -47,8 +48,14 @@ export function fakeMachine(home: string, fields: Partial<Machine> = {}) {
 export const box = (name: string, status = "running", fields: { id?: string; template?: string; lastUsedAt?: string } = {}) =>
   ({ name, id: `ws-${name}`, template: "linux-box", status, lastUsedAt: "2026-10-28T07:00:00Z", ...fields });
 
-export function writePool(home: string, pool: { free?: string[]; refreshing?: string[]; boxes: Record<string, { id: string; claim?: string; holding?: string }> }) {
+export function writePool(home: string, pool: { free?: string[]; refreshing?: string[]; boxes: Record<string, Entry> }) {
   writeHome(home, { ".config/fleet/box-pool.json": JSON.stringify({ free: [], refreshing: [], ...pool }) });
+}
+
+export function changePoolNow(home: string, step: (pool: Pool) => void) {
+  const pool = JSON.parse(readFileSync(poolFile(home), "utf8")) as Pool;
+  step(pool);
+  writeFileSync(poolFile(home), JSON.stringify(pool));
 }
 
 export type SshCall = { box: string; command: string; stdin?: string };

@@ -1,13 +1,23 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-export type Entry = { id: string; claim?: string; holding?: string };
+export type Hold = { token: string; until: number };
+export type Entry = { id: string; claim?: string; hold?: Hold };
 export type Pool = { free: string[]; refreshing: string[]; boxes: Record<string, Entry> };
 export type Claimed = { box: string; id: string; claim: string };
-export type Hold = { state: "held"; token: string } | { state: "stale" } | { state: "unowned" };
-export type Reserve = { state: "reserved"; claim: string } | { state: "held" } | { state: "busy" };
+export type Held = { state: "held"; token: string; claim?: string } | { state: "stale" } | { state: "busy" } | { state: "unowned" };
 export type Clock = { now(): number; sleep(ms: number): Promise<void> };
+export type PoolClient = {
+  own(box: string, id: string): Promise<string>;
+  claim(): Promise<Claimed | undefined>;
+  hold(box: string, id: string, claim?: string): Promise<Held>;
+  renew(box: string, token: string): Promise<boolean>;
+  unhold(box: string, token: string): Promise<void>;
+  give(box: string, token: string): Promise<boolean>;
+  drop(box: string, key: string): Promise<void>;
+};
 
+export const holdMs = 30 * 60_000;
 const lockStaleMs = 2 * 60_000;
 const lockWaitMs = 60_000;
 const realClock: Clock = { now: Date.now, sleep: (ms) => Bun.sleep(ms) };
@@ -47,70 +57,84 @@ export async function withPool<T>(file: string, change: (pool: Pool) => T, clock
   }
 }
 
-const newClaim = () => crypto.randomUUID();
+const newId = () => crypto.randomUUID();
 const without = (names: string[], box: string) => names.filter((name) => name !== box);
+const heldBy = (entry: Entry | undefined, token: string): entry is Entry & { hold: Hold } => entry?.hold?.token === token;
 
-export const own = (file: string, box: string, id: string) =>
-  withPool(file, (pool) => {
-    const claim = newClaim();
-    pool.boxes[box] = { id, claim };
-    return claim;
-  });
+export function own(pool: Pool, box: string, id: string): string {
+  const claim = newId();
+  pool.boxes[box] = { id, claim };
+  return claim;
+}
 
-export const claim = (file: string) =>
-  withPool(file, (pool): Claimed | undefined => {
-    for (let box = pool.free.shift(); box; box = pool.free.shift()) {
-      const entry = pool.boxes[box];
-      if (!entry) continue;
-      entry.claim = newClaim();
-      return { box, id: entry.id, claim: entry.claim };
-    }
-    return undefined;
-  });
-
-export const reserve = (file: string, box: string) =>
-  withPool(file, (pool): Reserve => {
+export function claim(pool: Pool): Claimed | undefined {
+  for (let box = pool.free.shift(); box; box = pool.free.shift()) {
     const entry = pool.boxes[box];
-    if (pool.refreshing.includes(box) || entry?.holding) return { state: "busy" };
-    if (!entry || !pool.free.includes(box)) return { state: "held" };
+    if (!entry) continue;
+    entry.claim = newId();
+    return { box, id: entry.id, claim: entry.claim };
+  }
+  return undefined;
+}
+
+export function hold(pool: Pool, now: number, box: string, id: string, claim?: string): Held {
+  const entry = pool.boxes[box];
+  if (!entry || entry.id !== id) return { state: "unowned" };
+  if (pool.refreshing.includes(box) || (entry.hold && entry.hold.until > now)) return { state: "busy" };
+  const free = pool.free.includes(box);
+  if (claim !== undefined && (free || entry.claim !== claim)) return { state: "stale" };
+  if (free) {
     pool.free = without(pool.free, box);
-    entry.claim = newClaim();
-    return { state: "reserved", claim: entry.claim };
-  });
+    entry.claim = newId();
+  }
+  entry.hold = { token: newId(), until: now + holdMs };
+  return { state: "held", token: entry.hold.token, ...(free ? { claim: entry.claim } : {}) };
+}
 
-export const hold = (file: string, box: string, id: string, claim?: string) =>
-  withPool(file, (pool): Hold => {
-    const entry = pool.boxes[box];
-    if (!entry || entry.id !== id) return { state: "unowned" };
-    const free = pool.free.includes(box);
-    if (entry.holding || pool.refreshing.includes(box) || (claim !== undefined && (free || entry.claim !== claim))) return { state: "stale" };
-    pool.free = without(pool.free, box);
-    entry.holding = newClaim();
-    return { state: "held", token: entry.holding };
-  });
+export function renew(pool: Pool, now: number, box: string, token: string): boolean {
+  const entry = pool.boxes[box];
+  if (!heldBy(entry, token)) return false;
+  entry.hold.until = now + holdMs;
+  return true;
+}
 
-export const unhold = (file: string, box: string, token: string) =>
-  withPool(file, (pool) => {
-    const entry = pool.boxes[box];
-    if (entry?.holding === token) delete entry.holding;
-  });
+export function unhold(pool: Pool, box: string, token: string): void {
+  const entry = pool.boxes[box];
+  if (entry?.hold?.token === token) delete entry.hold;
+}
 
-export const give = (file: string, box: string, token: string, size: number) =>
-  withPool(file, (pool) => {
-    const entry = pool.boxes[box];
-    if (!entry || entry.holding !== token) throw new Error(`${box} is no longer held by this release`);
-    if (pool.free.length + pool.refreshing.length >= size) return false;
-    pool.boxes[box] = { id: entry.id };
-    pool.free.push(box);
-    return true;
-  });
+export function give(pool: Pool, box: string, token: string, size: number): boolean {
+  const entry = pool.boxes[box];
+  if (!heldBy(entry, token)) throw new Error(`${box} is no longer held by this release`);
+  if (pool.free.length + pool.refreshing.length >= size) return false;
+  pool.boxes[box] = { id: entry.id };
+  pool.free.push(box);
+  return true;
+}
 
-export const drop = (file: string, box: string) =>
-  withPool(file, (pool) => {
-    pool.free = without(pool.free, box);
-    pool.refreshing = without(pool.refreshing, box);
-    delete pool.boxes[box];
-  });
+export function forget(pool: Pool, box: string): void {
+  pool.free = without(pool.free, box);
+  pool.refreshing = without(pool.refreshing, box);
+  delete pool.boxes[box];
+}
+
+export function drop(pool: Pool, box: string, key: string): void {
+  const entry = pool.boxes[box];
+  if (heldBy(entry, key) || (entry?.claim !== undefined && entry.claim === key)) forget(pool, box);
+}
+
+export function poolAt(file: string, size: number, clock: Clock = realClock): PoolClient {
+  const change = <T>(step: (pool: Pool, now: number) => T) => withPool(file, (pool) => step(pool, clock.now()), clock);
+  return {
+    own: (box, id) => change((pool) => own(pool, box, id)),
+    claim: () => change(claim),
+    hold: (box, id, claimed) => change((pool, now) => hold(pool, now, box, id, claimed)),
+    renew: (box, token) => change((pool, now) => renew(pool, now, box, token)),
+    unhold: (box, token) => change((pool) => unhold(pool, box, token)),
+    give: (box, token) => change((pool) => give(pool, box, token, size)),
+    drop: (box, key) => change((pool) => drop(pool, box, key)),
+  };
+}
 
 export const pooled = (file: string) => {
   const pool = read(file);

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { capture as realCapture, Coder, grant, reap, type Box, type Capture } from "./coder.ts";
@@ -42,15 +42,20 @@ test("without a Coder URL in the environment or a session file, the hub.coderUrl
   expect(coder.env.CODER_URL).toBe("https://coder.example.com");
 });
 
-test("without a coder CLI on PATH, it downloads one from the Coder address only when a command needs it", () => {
+test("without a coder CLI on PATH, it downloads one from the Coder address only when a command needs it, and installs it only once complete", () => {
   const home = homeWith({});
-  const { calls, capture } = recording();
+  const { calls, capture: record } = recording();
+  const capture: Capture = (argv, options) => {
+    if (argv[0] === "curl") writeFileSync(argv[3]!, "coder binary");
+    return record(argv, options);
+  };
   const coder = new Coder({ ...settings, home, env: { PATH: join(home, "empty") }, capture });
   expect(calls).toEqual([]);
   coder.stop("box-lane");
   const arch = process.arch === "arm64" ? "arm64" : "amd64";
-  expect(calls[0]).toEqual(["curl", "-fsSL", "-o", join(home, ".local/bin/coder"), `https://coder.example.com/bin/coder-linux-${arch}`]);
+  expect(calls[0]).toEqual(["curl", "-fsSL", "-o", `${join(home, ".local/bin/coder")}.${process.pid}.partial`, `https://coder.example.com/bin/coder-linux-${arch}`]);
   expect(calls[1]).toEqual([join(home, ".local/bin/coder"), "stop", "-y", "box-lane"]);
+  expect(readFileSync(join(home, ".local/bin/coder"), "utf8")).toBe("coder binary");
 });
 
 test("a new box starts from the hub.boxTemplate template with the spawning devbox's parameters and the configured disk", async () => {
@@ -155,16 +160,58 @@ test("a command with a time limit is killed when it hangs, and reports the timeo
   expect(result.stderr).toContain("timed out");
 });
 
+function sandboxBin(scripts: Record<string, string>) {
+  const bin = temp.make("fleet-bin-");
+  for (const [name, script] of Object.entries(scripts)) {
+    writeFileSync(join(bin, name), `#!/bin/sh\n${script}\n`);
+    chmodSync(join(bin, name), 0o755);
+  }
+  return bin;
+}
+
 test("the readiness calls pass their time limit down to the coder process", () => {
   const limits: Array<number | undefined> = [];
   const capture: Capture = (argv, options) => {
     limits.push(options?.timeoutMs);
     return { ...ok, stdout: argv.includes("list") ? "[]" : "" };
   };
-  const coder = new Coder({ ...settings, home: homeWith({}), env: { PATH: "/nowhere", CODER_SESSION_TOKEN: "t" }, capture });
-  Object.defineProperty(coder, "binary", { value: "coder" });
+  const bin = sandboxBin({ coder: "exit 0" });
+  const coder = new Coder({ ...settings, home: homeWith({}), env: { PATH: bin, CODER_SESSION_TOKEN: "t" }, capture });
   coder.sshAfterStartup("box-lane", "true", 4000);
   coder.ssh("box-lane", "test -f x", undefined, 3000);
   coder.boxes(2000);
-  expect(limits).toEqual([4000, 3000, 2000]);
+  expect(limits).toHaveLength(3);
+  for (const [index, limit] of [4000, 3000, 2000].entries()) {
+    expect(limits[index]).toBeLessThanOrEqual(limit);
+    expect(limits[index]).toBeGreaterThan(limit - 500);
+  }
+});
+
+test("downloading the coder CLI counts against the call's time limit, so a hanging download cannot outlast a readiness wait", () => {
+  const bin = sandboxBin({ curl: "exec /bin/sleep 3" });
+  const home = homeWith({});
+  const coder = new Coder({ ...settings, home, env: { PATH: bin, CODER_SESSION_TOKEN: "t" } });
+  const began = Date.now();
+  const result = coder.sshAfterStartup("box-lane", "true", 50);
+  expect(Date.now() - began).toBeLessThan(1000);
+  expect(result.code).toBe(124);
+  expect(existsSync(join(home, ".local/bin/coder"))).toBe(false);
+  expect(existsSync(`${join(home, ".local/bin/coder")}.${process.pid}.partial`)).toBe(false);
+});
+
+test("a timeout kills the whole process group, including a child the shell started without exec", async () => {
+  const pidFile = join(temp.make("fleet-pid-"), "child.pid");
+  const bin = sandboxBin({ spawner: `/bin/sleep 3 &\necho $! > ${pidFile}\nwait` });
+  expect(realCapture([join(bin, "spawner")], { timeoutMs: 50 }).code).toBe(124);
+  const child = Number(readFileSync(pidFile, "utf8"));
+  const alive = () => {
+    try {
+      process.kill(child, 0);
+      return !readFileSync(`/proc/${child}/stat`, "utf8").split(") ")[1]?.startsWith("Z");
+    } catch {
+      return false;
+    }
+  };
+  for (let tries = 0; alive() && tries < 20; tries += 1) await Bun.sleep(2);
+  expect(alive()).toBe(false);
 });

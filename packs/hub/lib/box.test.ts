@@ -7,9 +7,9 @@ import {
   claimScript, isIdle, nightly, nightlySteps, poolAt, poolOn, recycleScript, refreshPool, release, saveToken, setUpScript, spawn, startBox, sweep, unfinishedThreads, type PoolClient,
 } from "./box.ts";
 import { boxCommand } from "./box-command.ts";
-import { poolFile, pooled } from "./pool.ts";
+import { claim, give, hold, holdMs, poolFile, pooled } from "./pool.ts";
 import { link } from "./links.ts";
-import { box, fakeCoder, fakeMachine, linkedHere, ok, start, stubBin, writeHome, writePool } from "./testing.ts";
+import { box, changePoolNow, fakeCoder, fakeMachine, linkedHere, ok, start, stubBin, writeHome, writePool } from "./testing.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -20,11 +20,11 @@ function poolClient(room: boolean) {
   const client: PoolClient = {
     own: async () => "c-1",
     claim: async () => undefined,
-    reserve: async () => ({ state: "held" }),
     hold: async (box) => (calls.push(`hold ${box}`), { state: "held", token: "t-1" }),
+    renew: async (box) => (calls.push(`renew ${box}`), true),
     unhold: async (box) => void calls.push(`unhold ${box}`),
     give: async (box) => (calls.push(`give ${box}`), room),
-    drop: async (box) => void calls.push(`drop ${box}`),
+    drop: async (box, key) => void calls.push(`drop ${box} ${key}`),
   };
   return { client, calls };
 }
@@ -118,19 +118,21 @@ test("release returns a box to the pool: it stops the box and its hub forwards, 
     return giveBack(box, token);
   };
   expect(await release(coder, machine, "box-lane", { pool: client })).toBe(0);
-  expect(asked).toEqual(["hold box-lane", "give box-lane"]);
+  expect(asked).toEqual(["hold box-lane", "renew box-lane", "give box-lane"]);
   expect(done).toEqual(["stop box-lane"]);
   expect(existsSync(record)).toBe(true);
   expect(calls.filter((call) => call.includes("unlink"))).toEqual([]);
   expect(calls).toContain("run systemctl --user stop fleet-box-box-lane-hub.service");
 });
 
-test("release deletes the box and drops it from the pool when the pool is full", async () => {
+test("release deletes the box when the pool is full, and drops it from the pool only after the delete", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
   const { coder, done } = fakeCoder();
   const { client, calls: asked } = poolClient(false);
+  const remove = coder.remove;
+  coder.remove = (box) => (asked.push(`remove ${box}`), remove(box));
   expect(await release(coder, machine, "box-lane", { pool: client })).toBe(0);
-  expect(asked).toEqual(["hold box-lane", "give box-lane", "drop box-lane"]);
+  expect(asked).toEqual(["hold box-lane", "renew box-lane", "give box-lane", "renew box-lane", "remove box-lane", "drop box-lane t-1"]);
   expect(done).toEqual(["stop box-lane", "remove box-lane"]);
 });
 
@@ -162,12 +164,12 @@ test("the hub keeps the pool in its own file, sized by hub.boxPoolSize", async (
   expect(pooled(poolFile(home))).toEqual(["box-b", "box-c", "box-d"]);
 });
 
-test("release keeps a busy box out of the pool", async () => {
+test("release keeps a busy box out of the pool: it checks the threads while it holds the box, then lets go", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
-  const { coder, done } = fakeCoder({ ssh: () => ({ ...ok, stdout: "Lane A (runs)\n" }) });
+  const { coder, done } = fakeCoder({ ssh: (_box, command) => ({ ...ok, stdout: command.includes("box threads") ? "Lane A (runs)\n" : "c-1\n" }) });
   const { client, calls: asked } = poolClient(true);
   expect(await release(coder, machine, "box-lane", { pool: client })).toBe(1);
-  expect(asked).toEqual([]);
+  expect(asked).toEqual(["hold box-lane", "unhold box-lane"]);
   expect(done).toEqual([]);
 });
 
@@ -528,7 +530,8 @@ function hubHome() {
   return home;
 }
 
-const registryOf = (home: string) => JSON.parse(readFileSync(poolFile(home), "utf8")) as { free: string[]; refreshing: string[]; boxes: Record<string, { id: string; claim?: string }> };
+const registryOf = (home: string) => JSON.parse(readFileSync(poolFile(home), "utf8")) as { free: string[]; refreshing: string[]; boxes: Record<string, { id: string; claim?: string; hold?: unknown }> };
+const claimOnBox = (claim: string) => (_box: string, command: string) => ({ ...ok, stdout: command.includes("box-claim") ? `${claim}\n` : "" });
 
 test("an unrelated box-* workspace under the same Coder account survives sweep, spawn and reap, and is listed as skipped", async () => {
   const home = hubHome();
@@ -610,4 +613,173 @@ test("a reaped box that turns active while it is being released is neither stopp
   expect(pooled(poolFile(home))).toEqual([]);
   expect(registryOf(home).boxes["box-old"]).toEqual({ id: "ws-box-old", claim: "c-1" });
   expect(lines.join("\n")).toContain("kept box-old");
+});
+
+test("a release holds the claim it read before it checks for unfinished work, so a lane that claimed the box in between is never pooled unchecked", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-old" } } });
+  const { machine } = fakeMachine(home, { isHub: true });
+  let onBox = "c-old";
+  let work = "";
+  let interleaved = false;
+  let spawnClaim: string | undefined;
+  const otherReleaseThenSpawn = () => {
+    interleaved = true;
+    changePoolNow(home, (pool) => {
+      const other = hold(pool, machine.now(), "box-lane", "ws-box-lane", "c-old");
+      if (other.state !== "held") return;
+      give(pool, "box-lane", other.token, 4);
+      spawnClaim = claim(pool)?.claim;
+      onBox = spawnClaim!;
+      work = "New lane (runs)\n";
+    });
+  };
+  const { coder, done } = fakeCoder({
+    ssh: (_box, command) => {
+      const answer = { ...ok, stdout: command.includes("box-claim") ? `${onBox}\n` : command.includes("box threads") ? work : "" };
+      if (!interleaved) otherReleaseThenSpawn();
+      return answer;
+    },
+  });
+  expect(await release(coder, machine, "box-lane", { pool: poolOn(machine) })).toBe(1);
+  expect(done).toEqual([]);
+  expect(pooled(poolFile(home))).toEqual([]);
+  expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: spawnClaim });
+});
+
+test("fleet box start on a box a lane holds keeps a release out until the box is up, and a release's hold keeps a start out", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1" } } });
+  const { machine, lines } = fakeMachine(home, { isHub: true });
+  let duringStart: number | undefined;
+  const { coder, done } = fakeCoder({
+    ssh: claimOnBox("c-1"),
+    start: async (name) => {
+      duringStart = await release(coder, machine, name, { pool: poolOn(machine) });
+      done.push(`start ${name}`);
+    },
+  });
+  expect(await startBox(coder, machine, "box-lane", poolOn(machine))).toBe(0);
+  expect(duringStart).toBe(1);
+  expect(done).toEqual(["start box-lane"]);
+  expect(pooled(poolFile(home))).toEqual([]);
+  expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-1" });
+  expect(lines.join("\n")).toContain("a start, or another release holds it");
+
+  const releasing = await poolOn(machine).hold("box-lane", "ws-box-lane", "c-1");
+  expect(releasing.state).toBe("held");
+  expect(await startBox(coder, machine, "box-lane", poolOn(machine))).toBe(1);
+  expect(done).toEqual(["start box-lane"]);
+});
+
+test("a release lets go of its hold when a step fails, so the next release runs", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1" } } });
+  const { machine } = fakeMachine(home, { isHub: true });
+  let stops = 0;
+  const { coder, done } = fakeCoder({
+    ssh: claimOnBox("c-1"),
+    stop: (name) => {
+      if (stops++ === 0) throw new Error("coder stop failed");
+      done.push(`stop ${name}`);
+    },
+  });
+  await expect(release(coder, machine, "box-lane", { pool: poolOn(machine) })).rejects.toThrow("coder stop failed");
+  expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-1" });
+  expect(await release(coder, machine, "box-lane", { pool: poolOn(machine) })).toBe(0);
+  expect(pooled(poolFile(home))).toEqual(["box-lane"]);
+});
+
+test("a release that dies in the middle leaves a hold that blocks the box only until it expires; the takeover fences the dead release out", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1" } } });
+  const { machine, lines } = fakeMachine(home, { isHub: true });
+  const hub = poolOn(machine);
+  let dead = "";
+  const lostHub: PoolClient = {
+    ...hub,
+    hold: async (name, id, claim) => {
+      const held = await hub.hold(name, id, claim);
+      if (held.state === "held") dead = held.token;
+      return held;
+    },
+    unhold: async () => {
+      throw new Error("the hub did not answer");
+    },
+  };
+  const dying = fakeCoder({
+    ssh: claimOnBox("c-1"),
+    stop: () => {
+      throw new Error("the box went away mid-stop");
+    },
+  });
+  await expect(release(dying.coder, machine, "box-lane", { pool: lostHub })).rejects.toThrow("mid-stop");
+  expect(dead).not.toBe("");
+
+  const { coder, done } = fakeCoder({ boxes: () => [box("box-lane", "stopped")] });
+  expect(await release(coder, machine, "box-lane", { force: true, pool: hub })).toBe(1);
+  expect(lines.at(-1)).toContain("holds it");
+  await machine.sleep(holdMs);
+  expect(await release(coder, machine, "box-lane", { force: true, pool: hub })).toBe(0);
+  expect(pooled(poolFile(home))).toEqual(["box-lane"]);
+  expect(await hub.renew("box-lane", dead)).toBe(false);
+  await expect(hub.give("box-lane", dead)).rejects.toThrow("no longer held");
+  await hub.drop("box-lane", dead);
+  expect(pooled(poolFile(home))).toEqual(["box-lane"]);
+  expect(done).toEqual([]);
+});
+
+test("a release whose delete fails keeps the box's record and lets go of its hold, so sweep, reap and the next release still own it", async () => {
+  const home = hubHome();
+  writePool(home, { boxes: { "box-lane": { id: "ws-box-lane", claim: "c-1" } } });
+  const { machine } = fakeMachine(home, { isHub: true });
+  let deletes = 0;
+  const { coder, done } = fakeCoder({
+    ssh: claimOnBox("c-1"),
+    remove: (name) => {
+      if (deletes++ === 0) throw new Error("coder delete failed");
+      done.push(`remove ${name}`);
+    },
+  });
+  await expect(release(coder, machine, "box-lane", { pool: poolOn(machine), recycle: false })).rejects.toThrow("coder delete failed");
+  expect(registryOf(home).boxes["box-lane"]).toEqual({ id: "ws-box-lane", claim: "c-1" });
+  expect(await release(coder, machine, "box-lane", { pool: poolOn(machine), recycle: false })).toBe(0);
+  expect(done).toEqual(["remove box-lane"]);
+  expect(registryOf(home).boxes["box-lane"]).toBeUndefined();
+});
+
+test("the token drop-in refuses a destination that is a folder or a symlink to one, and a symlink anywhere below the home folder", () => {
+  const bin = stubBin(temp.make("fleet-bin-"), ["systemctl", "curl", "sleep"]);
+  const dropIn = ".config/systemd/user/t3code.service.d";
+  const homeWithToken = () => {
+    const home = temp.make("fleet-box-");
+    writeHome(home, { ".config/fleet/box-claude-token": "sk-test-token\n" });
+    return home;
+  };
+  const refuses = (home: string) => {
+    const run = runOnBox(setUpScript("claim"), home, bin);
+    expect(run.exitCode).not.toBe(0);
+    expect(run.stderr.toString()).toContain("will not write the Claude token");
+  };
+
+  const linkedConf = homeWithToken();
+  const folder = temp.make("fleet-elsewhere-");
+  mkdirSync(join(linkedConf, dropIn), { recursive: true });
+  symlinkSync(folder, join(linkedConf, dropIn, "claude-token.conf"));
+  refuses(linkedConf);
+  expect(readdirSync(folder)).toEqual([]);
+
+  const folderConf = homeWithToken();
+  mkdirSync(join(folderConf, dropIn, "claude-token.conf"), { recursive: true });
+  refuses(folderConf);
+  expect(readdirSync(join(folderConf, dropIn, "claude-token.conf"))).toEqual([]);
+
+  for (const ancestor of [".config/systemd/user", ".config/systemd"]) {
+    const linkedAncestor = homeWithToken();
+    const target = temp.make("fleet-elsewhere-");
+    mkdirSync(join(linkedAncestor, ancestor, ".."), { recursive: true });
+    symlinkSync(target, join(linkedAncestor, ancestor));
+    refuses(linkedAncestor);
+    expect(readdirSync(target)).toEqual([]);
+  }
 });
