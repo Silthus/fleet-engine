@@ -87,8 +87,11 @@ export async function startUnit(coder: Pick<Coder, "binary" | "env">, here: Mach
   if (started.code !== 0) throw new Error(`Cannot start ${unit}: ${started.stderr.trim()}`);
 }
 
-export async function stopUnit(here: Pick<Machine, "run">, unit: string): Promise<void> {
-  await here.run(["systemctl", "--user", "stop", `${unit}.service`]);
+const unitNotLoaded = 5;
+
+export async function stopUnit(here: Pick<Machine, "run">, unit: string): Promise<string | undefined> {
+  const stopped = await here.run(["systemctl", "--user", "stop", `${unit}.service`]);
+  return stopped.code === 0 || stopped.code === unitNotLoaded ? undefined : (stopped.stderr || stopped.stdout).trim() || `exit ${stopped.code}`;
 }
 
 const reverse = (port: number) => ["-R", `${port}:127.0.0.1:${port}`];

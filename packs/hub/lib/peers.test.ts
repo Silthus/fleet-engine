@@ -472,6 +472,26 @@ test("a peer that left the list keeps its record when T3 cannot unlink it or Fle
   expect(lines).toContain(`Keep ${peerRecord(home, "devbox-4")}: Fleet did not write it`);
 });
 
+test("a peer that left the list keeps its record and its T3 link when its forward does not stop, and an absent forward counts as stopped", async () => {
+  for (const [stopCode, kept] of [[1, true], [5, false]] as const) {
+    const home = temp.make("fleet-peers-");
+    writeHome(home, { ".config/fleet/peer-links/devbox-3.json": JSON.stringify({ environmentId: "env-devbox-3", port: 23000 }) });
+    const { machine, calls, lines } = fakeMachine(home, {
+      peers: ["devbox-2"],
+      run: async (argv) => {
+        calls.push(`run ${argv.join(" ")}`);
+        if (argv[2] === "is-active") return { ...ok, code: 3 };
+        if (argv[2] === "stop") return { ...ok, code: stopCode, stderr: stopCode === 5 ? "Unit not loaded." : "Access denied" };
+        return ok;
+      },
+    });
+    expect(await restorePeers(machine)).toBe(kept ? 1 : 0);
+    expect(existsSync(peerRecord(home, "devbox-3"))).toBe(kept);
+    expect(calls.includes(`run ${t3(home)} environment unlink env-devbox-3`)).toBe(!kept);
+    if (kept) expect(lines).toContain("could not stop fleet-peer-devbox-3-t3: Access denied");
+  }
+});
+
 test("a box in the devbox list is not a peer, and fleet peers says so once", async () => {
   const home = temp.make("fleet-peers-");
   const { machine, lines } = fakeMachine(home, { devboxes: ["devbox-1", "devbox-2", "box-lane"] });

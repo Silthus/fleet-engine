@@ -107,8 +107,13 @@ async function relink(here: PeerHere, alias: string, urls: string[]): Promise<vo
 async function forgetLeaver(here: PeerHere, alias: string): Promise<boolean> {
   const record = recordOf(here, alias);
   readRecord(record);
-  await stopUnit(here, peerUnitOf(alias));
-  if (!(await forget(here, record, peerUnitOf(alias)))) return false;
+  const unit = peerUnitOf(alias);
+  const stopFailure = await stopUnit(here, unit);
+  if (stopFailure) {
+    here.say(`could not stop ${unit}: ${stopFailure}`);
+    return false;
+  }
+  if (!(await forget(here, record, unit))) return false;
   here.say(`${alias} left the peer list: stopped its forward and forgot its link`);
   return true;
 }
