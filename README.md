@@ -8,6 +8,11 @@ same setup.
 This repository is the **engine**: the `fleet` command, the bootstrap script,
 and the public packs. It is a work in progress and not ready to use yet.
 
+Read [A day with Fleet](https://silthus.github.io/fleet-engine/) to see what
+each pack does for you during a workday, pick yours, and copy the one command
+that sets them up. The page is `page/index.html`, generated from the pack data
+by `bun scripts/build-page.ts`.
+
 ## Develop
 
 ```sh
