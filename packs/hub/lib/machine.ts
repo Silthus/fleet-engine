@@ -122,6 +122,10 @@ function savedDevboxes(home: string): string[] {
   return Array.isArray(saved) ? saved.filter((host): host is string => typeof host === "string") : [];
 }
 
+export function devboxesOf(env: Env, home: string): string[] {
+  return [...new Set([...readProfile(env).devboxes, ...savedDevboxes(home)])];
+}
+
 export function shellsWith(run: Capture, hub: string): Pick<Machine, "onPeer" | "toHub" | "run"> {
   const input = (stdin?: string) => (stdin === undefined ? {} : { stdin });
   const ssh = (alias: string, command: string) => ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`];
@@ -135,7 +139,7 @@ export function shellsWith(run: Capture, hub: string): Pick<Machine, "onPeer" | 
 export function thisMachine(env: Env = Bun.env, home = homedir()): Machine {
   const settings = readBoxSettings(env);
   const profile = readProfile(env);
-  const devboxes = [...new Set([...profile.devboxes, ...savedDevboxes(home)])];
+  const devboxes = devboxesOf(env, home);
   const self = hostname();
   return {
     home,
