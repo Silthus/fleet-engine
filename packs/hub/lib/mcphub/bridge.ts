@@ -1,8 +1,23 @@
 import { gatewayEndpoint, grantHint, type Fetch, type GatewayClient } from "./client.ts";
 
-export type BridgeOptions = { client: GatewayClient; stdin: ReadableStream<Uint8Array>; write: (line: string) => void; fail: (line: string) => void; fetch: Fetch };
+export type Write = (line: string) => void | Promise<void>;
+export type BridgeOptions = { client: GatewayClient; stdin: ReadableStream<Uint8Array>; write: Write; fail: (line: string) => void; fetch: Fetch };
 
-type Message = { id?: string | number | null; method?: string; result?: { protocolVersion?: unknown } };
+type Id = string | number;
+type Message = { id?: Id | null; method?: string; result?: { protocolVersion?: unknown } };
+
+const endedEarly = "The MCP gateway ended its answer early.";
+const lostSession = "The MCP gateway lost this session and could not start a new one. Restart this MCP server, and on the hub, run: fleet mcphub doctor";
+
+export function lineWriter(stream: { write(chunk: string): boolean; once(event: "drain", listener: () => void): unknown }): Write {
+  return (line) => {
+    if (stream.write(`${line}\n`)) return;
+    return new Promise<void>((resolve) => { stream.once("drain", resolve); });
+  };
+}
+
+const requestIds = (messages: Message[]) => messages.flatMap((message) => (message.method !== undefined && message.id !== undefined && message.id !== null ? [message.id] : []));
+const background = (work: Promise<unknown>) => { work.catch(() => {}); };
 
 export async function bridge({ client, stdin, write, fail, fetch }: BridgeOptions): Promise<number> {
   const endpoint = gatewayEndpoint(client);
@@ -10,6 +25,9 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
   const reader = stdin.getReader();
   let session: string | undefined;
   let protocol: string | undefined;
+  let handshake: string[] = [];
+  let ready: Promise<unknown> = Promise.resolve();
+  let renewing: Promise<boolean> = Promise.resolve(true);
   let stop!: (line: string) => void;
   const stopped = new Promise<number>((resolve) => {
     stop = (line) => {
@@ -21,59 +39,106 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     };
   });
 
-  const headers = (body: boolean): Record<string, string> => ({
+  const headers = (body: boolean, initializing = false): Record<string, string> => ({
     authorization: `Bearer ${client.token}`,
     accept: "application/json, text/event-stream",
     ...(body ? { "content-type": "application/json" } : {}),
-    ...(session ? { "mcp-session-id": session } : {}),
-    ...(protocol ? { "mcp-protocol-version": protocol } : {}),
+    ...(session && !initializing ? { "mcp-session-id": session } : {}),
+    ...(protocol && !initializing ? { "mcp-protocol-version": protocol } : {}),
   });
 
-  async function call(method: "POST" | "GET", body?: string) {
+  async function call(method: "POST" | "GET", body?: string, initializing = false) {
     let response: Response;
-    try { response = await fetch(endpoint, { method, headers: headers(body !== undefined), body, signal: closing.signal }); }
+    try { response = await fetch(endpoint, { method, headers: headers(body !== undefined, initializing), body, signal: closing.signal }); }
     catch { return stop(`Cannot reach the MCP gateway at ${client.baseUrl}. On the hub, run: fleet mcphub doctor`), undefined; }
     if (response.status === 401 || response.status === 403) return stop(`The MCP gateway refused this machine's key. ${grantHint}`), undefined;
     return response;
   }
 
-  function deliver(text: string) {
-    let message: Message;
-    try { message = JSON.parse(text); } catch { return; }
-    if (typeof message.result?.protocolVersion === "string" && !protocol) protocol = message.result.protocolVersion;
-    write(JSON.stringify(message));
+  async function answerLeft(waiting: Set<Id>, reason: string) {
+    if (closing.signal.aborted) return;
+    for (const id of waiting) await write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32603, message: reason } }));
   }
 
-  function relay(response: Response) {
-    const type = response.headers.get("content-type") ?? "";
-    const done = type.includes("text/event-stream")
-      ? (async () => { for await (const data of events(response.body!)) deliver(data); })()
-      : type.includes("application/json")
-        ? response.json().then((body: unknown) => { for (const message of [body].flat()) deliver(JSON.stringify(message)); })
-        : response.body?.cancel();
-    Promise.resolve(done).catch(() => {});
-  }
-
-  async function send(line: string) {
-    let message: Message;
-    try { message = JSON.parse(line); }
-    catch { return write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })); }
-    const response = await call("POST", line);
-    if (!response) return;
-    if (message.method === "initialize") session = response.headers.get("mcp-session-id") ?? undefined;
-    if (!response.ok) {
-      await response.body?.cancel();
-      if (message.method !== undefined && message.id !== undefined) write(JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: `The MCP gateway answered HTTP ${response.status}.` } }));
-      return;
+  async function deliver(text: string, waiting: Set<Id>) {
+    let parsed: Message | Message[];
+    try { parsed = JSON.parse(text); } catch { return; }
+    for (const message of [parsed].flat()) {
+      if (typeof message.result?.protocolVersion === "string" && !protocol) protocol = message.result.protocolVersion;
+      if (message.method === undefined && message.id !== undefined && message.id !== null) waiting.delete(message.id);
+      await write(JSON.stringify(message));
     }
-    relay(response);
-    if (message.method === "notifications/initialized") await listen();
+  }
+
+  async function relay(response: Response, waiting: Set<Id>) {
+    const type = response.headers.get("content-type") ?? "";
+    try {
+      if (type.includes("text/event-stream")) { for await (const data of events(response.body!)) await deliver(data, waiting); }
+      else if (type.includes("application/json")) await deliver(await response.text(), waiting);
+      else await response.body?.cancel();
+    } catch {}
+    await answerLeft(waiting, endedEarly);
   }
 
   async function listen() {
     const response = await call("GET");
-    if (response?.ok) relay(response);
+    if (response?.ok) await relay(response, new Set());
     else await response?.body?.cancel();
+  }
+
+  async function replay(line: string, initializing: boolean) {
+    const response = await fetch(endpoint, { method: "POST", headers: headers(true, initializing), body: line, signal: closing.signal }).catch(() => undefined);
+    await response?.body?.cancel().catch(() => {});
+    return response?.ok ? response : undefined;
+  }
+
+  async function startSession() {
+    const [initialize, ...rest] = handshake;
+    const fresh = initialize ? (await replay(initialize, true))?.headers.get("mcp-session-id") : undefined;
+    if (!fresh) return false;
+    session = fresh;
+    for (const line of rest) if (!(await replay(line, false))) return false;
+    background(listen());
+    return true;
+  }
+
+  function renew(stale: string) {
+    if (session === stale) {
+      session = undefined;
+      renewing = startSession().then((started) => started || (stop(lostSession), false));
+    }
+    return renewing;
+  }
+
+  async function post(line: string, messages: Message[], retried = false): Promise<void> {
+    if (!(await renewing)) return;
+    const sentWith = session;
+    const initializing = messages.some((message) => message.method === "initialize");
+    const response = await call("POST", line, initializing);
+    if (!response) return;
+    if (response.status === 404 && sentWith && !retried && !initializing) {
+      await response.body?.cancel();
+      if (await renew(sentWith)) return post(line, messages, true);
+      return;
+    }
+    const waiting = new Set(requestIds(messages));
+    if (!response.ok) {
+      await response.body?.cancel();
+      return answerLeft(waiting, `The MCP gateway answered HTTP ${response.status}.`);
+    }
+    if (initializing) session = response.headers.get("mcp-session-id") ?? undefined, handshake = [line];
+    if (messages.some((message) => message.method === "notifications/initialized")) handshake.push(line), background(listen());
+    background(relay(response, waiting));
+  }
+
+  function dispatch(line: string) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(line); }
+    catch { return background(Promise.resolve(write(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } })))); }
+    const messages = [parsed].flat() as Message[];
+    const sent = ready.then(() => post(line, messages));
+    background(sent);
+    if (messages.some((message) => message.method === "initialize" || message.method === "notifications/initialized")) ready = sent.catch(() => {});
   }
 
   async function pump() {
@@ -86,13 +151,12 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
       for (let newline = buffer.indexOf("\n"); newline >= 0; newline = buffer.indexOf("\n")) {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
-        if (line) await send(line);
-        if (closing.signal.aborted) return 1;
+        if (line) dispatch(line);
       }
     }
     if (closing.signal.aborted) return 1;
-    if (session) await fetch(endpoint, { method: "DELETE", headers: headers(false), signal: AbortSignal.timeout(2000) }).catch(() => undefined);
     closing.abort();
+    if (session) await fetch(endpoint, { method: "DELETE", headers: headers(false), signal: AbortSignal.timeout(2000) }).catch(() => undefined);
     return 0;
   }
 

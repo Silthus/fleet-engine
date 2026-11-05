@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { devboxGatewayUrl, gatewayGroup, isGatewayUrl, localGatewayUrl, refuseLinks, saveGatewayClient, type Fetch, type GatewaySettings } from "./client.ts";
+import { devboxGatewayUrl, gatewayGroup, isGatewayUrl, localGatewayUrl, refuseLinks, saveGatewayClient, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type Run = (command: string[], options?: { cwd?: string; input?: string }) => Promise<RunResult>;
@@ -24,6 +24,9 @@ export type Hub = {
 type BearerKey = { id: string; name?: string; token: string; enabled: boolean; accessType?: string; allowedGroups?: string[] };
 type McpHubSettings = { mcpServers: Record<string, { oauth?: { pendingAuthorization?: { authorizationUrl?: string } } }>; systemConfig: { install: { baseUrl: string } }; bearerKeys: BearerKey[] };
 
+export type Container = { Config: { Labels?: Record<string, string>; Env?: string[] }; Image: string; State: { Running: boolean } };
+
+export const container = "fleet-mcphub";
 const loopback = "http://127.0.0.1:3317";
 const acceptCommand = 'sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcphub accept';
 const secret = () => randomBytes(32).toString("base64url");
@@ -42,10 +45,42 @@ export async function requireHub(hub: Pick<Hub, "home">, mode: string) {
   if (machine?.role !== "hub") throw new Error(`Run fleet mcphub ${mode} on the hub.`);
 }
 
-async function createPrivateFile(path: string, content: string) {
-  try { await writeFile(path, content, { flag: "wx", mode: 0o600 }); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-  await chmod(path, 0o600);
+export async function ownedContainer(hub: Pick<Hub, "run">) {
+  const inspection = await hub.run(["docker", "container", "inspect", container]);
+  const current = inspection.code === 0 ? (JSON.parse(inspection.stdout) as Container[])[0] : undefined;
+  if (current && current.Config.Labels?.["org.fleet.service"] !== "mcphub") throw new Error(`Keep unmanaged Docker container ${container}. Review it before installation.`);
+  return current;
+}
+
+async function reconcilePrivateFile(path: string, next: (existing: string | undefined) => string) {
+  const existing = await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error; });
+  const content = next(existing);
+  if (content === existing) await chmod(path, 0o600);
+  else await writePrivateFile(path, content);
+}
+
+function settingsFor(existing: string | undefined, baseUrl: string) {
+  if (existing === undefined) {
+    return `${JSON.stringify({
+      mcpServers: {},
+      users: [],
+      systemConfig: { install: { baseUrl }, routing: { enableBearerAuth: true, skipAuth: false }, oauthServer: { enabled: false } },
+      bearerKeys: [{ id: "fleet-management", name: "Fleet local management", token: secret(), enabled: true, kind: "system", accessType: "all" }],
+      prompts: [],
+      resources: [],
+    }, null, 2)}\n`;
+  }
+  const settings = JSON.parse(existing) as { systemConfig?: { install?: { baseUrl?: string } } };
+  if (settings.systemConfig?.install?.baseUrl === baseUrl) return existing;
+  settings.systemConfig = { ...settings.systemConfig, install: { ...settings.systemConfig?.install, baseUrl } };
+  return `${JSON.stringify(settings, null, 2)}\n`;
+}
+
+function environmentFor(existing: string | undefined, baseUrl: string) {
+  const values = new Map((existing ?? "").split("\n").filter((line) => line.includes("=")).map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)] as const));
+  for (const name of ["JWT_SECRET", "ADMIN_PASSWORD"]) if (!values.get(name)) values.set(name, secret());
+  for (const [name, value] of Object.entries({ MCPHUB_SETTING_PATH: "/app/data/mcp_settings.json", BASE_PATH: "/mcphub", INSTALL_BASE_URL: baseUrl, NODE_ENV: "production" })) values.set(name, value);
+  return [...values].map(([name, value]) => `${name}=${value}\n`).join("");
 }
 
 export async function prepareMcpHub(home: string, baseUrl: string, gateway: GatewaySettings) {
@@ -58,15 +93,8 @@ export async function prepareMcpHub(home: string, baseUrl: string, gateway: Gate
   }
   const settings = settingsPath(home);
   const environment = join(directory, "runtime.env");
-  await createPrivateFile(settings, `${JSON.stringify({
-    mcpServers: {},
-    users: [],
-    systemConfig: { install: { baseUrl }, routing: { enableBearerAuth: true, skipAuth: false }, oauthServer: { enabled: false } },
-    bearerKeys: [{ id: "fleet-management", name: "Fleet local management", token: secret(), enabled: true, kind: "system", accessType: "all" }],
-    prompts: [],
-    resources: [],
-  }, null, 2)}\n`);
-  await createPrivateFile(environment, `JWT_SECRET=${secret()}\nADMIN_PASSWORD=${secret()}\nMCPHUB_SETTING_PATH=/app/data/mcp_settings.json\nBASE_PATH=/mcphub\nINSTALL_BASE_URL=${baseUrl}\nNODE_ENV=production\n`);
+  await reconcilePrivateFile(settings, (existing) => settingsFor(existing, baseUrl));
+  await reconcilePrivateFile(environment, (existing) => environmentFor(existing, baseUrl));
   return { directory, settings, environment };
 }
 
@@ -170,19 +198,23 @@ export async function links(hub: Hub) {
   await requireHub(hub, "links");
   const settings = await installedSettings(hub);
   const signin = join(dataDir(hub.home), "signin");
+  await refuseLinks(hub.home, signin, "sign-in page path");
   await mkdir(signin, { recursive: true, mode: 0o700 });
   for (const [name, config] of Object.entries(settings.mcpServers)) {
     const url = config.oauth?.pendingAuthorization?.authorizationUrl;
     if (!url) continue;
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`Invalid upstream server name: ${name}`);
     const page = `<!doctype html><meta charset="utf-8"><title>Authorize ${name}</title><script>location.replace(${JSON.stringify(url).replaceAll("<", "\\u003c")})</script>`;
-    await writeFile(join(signin, `${name}.html`), page, { mode: 0o600 });
+    const path = join(signin, `${name}.html`);
+    await refuseLinks(hub.home, path, "sign-in page path");
+    await writePrivateFile(path, page);
     hub.print(`${name}: ${new URL(`/mcphub-signin/${name}.html`, settings.systemConfig.install.baseUrl)}`);
   }
 }
 
 export async function restart(hub: Hub) {
   await requireHub(hub, "restart");
-  await must(hub, ["docker", "restart", "fleet-mcphub"]);
+  if (!(await ownedContainer(hub))) throw new Error("MCPHub is not installed. Run: fleet mcphub install");
+  await must(hub, ["docker", "restart", container]);
   hub.print("MCPHub restarted. Upstream sign-ins stay on disk.");
 }

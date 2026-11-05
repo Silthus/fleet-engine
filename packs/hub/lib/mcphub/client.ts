@@ -1,5 +1,6 @@
-import { chmod, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { basename, dirname, join, relative } from "node:path";
 
 export type GatewayClient = { baseUrl: string; token: string };
 export type GatewaySettings = { httpsHost?: string; relayPort: number };
@@ -49,13 +50,25 @@ export async function refuseLinks(home: string, target: string, what: string) {
   }
 }
 
+export async function writePrivateFile(path: string, content: string) {
+  const temporary = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}`);
+  const file = await open(temporary, "wx", 0o600);
+  try {
+    await file.writeFile(content);
+    await file.sync();
+  } finally {
+    await file.close();
+  }
+  try { await rename(temporary, path); }
+  catch (error) { await rm(temporary, { force: true }); throw error; }
+}
+
 export async function saveGatewayClient(home: string, value: unknown, settings: GatewaySettings) {
   const client = validClient(value, settings);
   const path = clientPath(home);
   await refuseLinks(home, path, "MCP gateway key path");
   await mkdir(join(home, ".config/fleet"), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(client)}\n`, { mode: 0o600 });
-  await chmod(path, 0o600);
+  await writePrivateFile(path, `${JSON.stringify(client)}\n`);
 }
 
 export async function checkGateway(home: string, settings: GatewaySettings, fetch: Fetch): Promise<{ ok: boolean; line: string }> {

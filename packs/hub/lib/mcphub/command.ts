@@ -1,9 +1,9 @@
-import { bridge } from "./bridge.ts";
+import { bridge, type Write } from "./bridge.ts";
 import { checkGateway, GatewayClientError, grantHint, readGatewayClient, saveGatewayClient } from "./client.ts";
 import { doctor, grant, links, reconnect, restart, type Hub } from "./hub.ts";
 import { install } from "./install.ts";
 
-export type McphubDeps = Hub & { stdin: ReadableStream<Uint8Array>; write: (line: string) => void; fail: (line: string) => void };
+export type McphubDeps = Hub & { stdin: ReadableStream<Uint8Array>; write: Write; fail: (line: string) => void };
 
 const usage = "Use fleet mcphub install|doctor|restart|links|check|connect, fleet mcphub reconnect <server>, or fleet mcphub grant <machine>.";
 const plain = ["install", "doctor", "restart", "links", "check", "connect", "accept"];

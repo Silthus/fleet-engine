@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../../src/testing/git.ts";
 import { checkGateway, clientPath, devboxGatewayUrl, localGatewayUrl, readGatewayClient, saveGatewayClient } from "./client.ts";
@@ -50,6 +50,19 @@ test("saves a key as a private file, replacing an older one", async () => {
   await saveGatewayClient(dir, { baseUrl: "https://hub.internal.example.com:60001/mcphub", token }, secure);
   expect(JSON.parse(readFileSync(clientPath(dir), "utf8"))).toEqual({ baseUrl: "https://hub.internal.example.com:60001/mcphub", token });
   expect(statSync(clientPath(dir)).mode & 0o777).toBe(0o600);
+});
+
+test("replaces a world-readable key file with a new private file, and never writes the old one", async () => {
+  const dir = home({ baseUrl: localGatewayUrl, token: "old-token" });
+  chmodSync(clientPath(dir), 0o644);
+  const old = join(dir, "old-key-inode");
+  linkSync(clientPath(dir), old);
+  await saveGatewayClient(dir, { baseUrl: localGatewayUrl, token }, secure);
+  expect(readFileSync(old, "utf8")).not.toContain(token);
+  expect(statSync(old).mode & 0o777).toBe(0o644);
+  expect(statSync(clientPath(dir)).ino).not.toBe(statSync(old).ino);
+  expect(statSync(clientPath(dir)).mode & 0o777).toBe(0o600);
+  expect(readdirSync(join(dir, ".config/fleet")).sort()).toEqual(["mcphub.client.json"]);
 });
 
 test("refuses to save a key through a linked config folder or to an address that is not the hub's", async () => {

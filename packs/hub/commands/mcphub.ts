@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../base/lib/command.ts";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
+import { lineWriter } from "../lib/mcphub/bridge.ts";
 import { runMcphub } from "../lib/mcphub/command.ts";
 
 async function run(command: string[], options: { cwd?: string; input?: string } = {}) {
@@ -30,7 +31,7 @@ await runCommand(() => runMcphub(Bun.argv.slice(2), {
   fetch,
   sleep: (ms) => Bun.sleep(ms),
   print: (line) => console.log(line),
-  write: (line) => process.stdout.write(`${line}\n`),
+  write: lineWriter(process.stdout),
   fail: (line) => console.error(line),
   stdin: Bun.stdin.stream(),
 }), "fleet mcphub");

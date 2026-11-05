@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../../src/testing/git.ts";
 import { clientPath, localGatewayUrl } from "./client.ts";
@@ -154,10 +154,50 @@ test("links writes a private redirect page for each pending sign-in and prints i
   expect(hub.printed).toEqual(["tickets: https://hub.internal.example.com:60001/mcphub-signin/tickets.html"]);
 });
 
+test("links refuses a linked sign-in page or a linked sign-in folder, and leaves their targets alone", async () => {
+  const pending = { oauth: { pendingAuthorization: { authorizationUrl: "https://auth.example.com/authorize" } } };
+  const page = (home: string) => join(home, ".local/share/fleet-mcphub/signin/tickets.html");
+  const linkedPage = hubHome({ mcpServers: { tickets: pending } });
+  const target = join(linkedPage, "target");
+  writeFileSync(target, "keep");
+  mkdirSync(join(page(linkedPage), ".."));
+  symlinkSync(target, page(linkedPage));
+  await expect(links(fakeHub(linkedPage))).rejects.toThrow("linked");
+  expect(readFileSync(target, "utf8")).toBe("keep");
+  const linkedFolder = hubHome({ mcpServers: { tickets: pending } });
+  const outside = join(linkedFolder, "outside");
+  mkdirSync(outside);
+  symlinkSync(outside, join(page(linkedFolder), ".."));
+  await expect(links(fakeHub(linkedFolder))).rejects.toThrow("linked");
+  expect(existsSync(join(outside, "tickets.html"))).toBe(false);
+});
+
+test("links replaces an old sign-in page with a new private file", async () => {
+  const pending = { oauth: { pendingAuthorization: { authorizationUrl: "https://auth.example.com/authorize?state=new" } } };
+  const home = hubHome({ mcpServers: { tickets: pending } });
+  const page = join(home, ".local/share/fleet-mcphub/signin/tickets.html");
+  mkdirSync(join(page, ".."));
+  writeFileSync(page, "old");
+  chmodSync(page, 0o644);
+  linkSync(page, join(home, "old-page"));
+  await links(fakeHub(home));
+  expect(readFileSync(join(home, "old-page"), "utf8")).toBe("old");
+  expect(readFileSync(page, "utf8")).toContain("state=new");
+  expect(statSync(page).mode & 0o777).toBe(0o600);
+});
+
+const ownContainer = (call: { command: string[] }) => call.command[1] === "container" ? { stdout: JSON.stringify([{ Config: { Labels: { "org.fleet.service": "mcphub" } } }]) } : {};
+
 test("restart restarts the container and keeps the grants on disk", async () => {
-  const { calls, run } = fakeRun();
+  const { calls, run } = fakeRun(ownContainer);
   const hub = fakeHub(hubHome(), { run });
   await restart(hub);
-  expect(calls.map((call) => call.command)).toEqual([["docker", "restart", "fleet-mcphub"]]);
+  expect(calls.map((call) => call.command)).toEqual([["docker", "container", "inspect", "fleet-mcphub"], ["docker", "restart", "fleet-mcphub"]]);
   expect(hub.printed).toEqual(["MCPHub restarted. Upstream sign-ins stay on disk."]);
+});
+
+test("restart keeps a container named fleet-mcphub that Fleet did not make", async () => {
+  const { calls, run } = fakeRun((call) => call.command[1] === "container" ? { stdout: JSON.stringify([{ Config: { Labels: {} } }]) } : {});
+  await expect(restart(fakeHub(hubHome(), { run }))).rejects.toThrow("Keep unmanaged Docker container fleet-mcphub. Review it before installation.");
+  expect(calls.map((call) => call.command[1])).toEqual(["container"]);
 });
