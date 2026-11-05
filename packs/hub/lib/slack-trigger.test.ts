@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { slackMember, slackTriggerCommand, watchSlack, type SlackTriggerContext } from "./slack-trigger.ts";
+import { reactionDays, slackMember, slackTriggerCommand, watchSlack, type SlackTriggerContext } from "./slack-trigger.ts";
 import { writeHome } from "./testing.ts";
 
 const temp = tempDirs();
@@ -28,20 +28,24 @@ ${text}
 
 type Slack = { messages: string; reactions: string; reactors: string };
 
-function pass(slack: Slack, statePath = join(temp.make("slack-state-"), "state.json")) {
+type Launch = (box: string, title: string, prompt: string) => Promise<boolean>;
+
+function pass(slack: Slack, statePath = join(temp.make("slack-state-"), "state.json"), launch?: (record: () => void) => Launch) {
   const launched: string[] = [];
   const calls: string[] = [];
+  const logged: string[] = [];
+  const recording: Launch = async (box, _title, prompt) => (launched.push(`${box} ${prompt.split("\n")[0]}`), true);
   const run = () => watchSlack({
-    statePath, boxes: ["box-a", "box-b"], member: me, emoji: "t3code", now: () => now, log: () => {},
+    statePath, boxes: ["box-a", "box-b"], member: me, emoji: "t3code", now: () => now, log: (line) => logged.push(line),
     slack: async (tool, args) => {
       calls.push(tool);
       if (tool === "slack_search_public_and_private") return String(args.filters).startsWith("from:") ? slack.messages : slack.reactions;
       if (tool === "slack_get_reactions") return `Reactions on message:\n\n${slack.reactors}`;
       return "thread";
     },
-    launch: async (box, _title, prompt) => (launched.push(`${box} ${prompt.split("\n")[0]}`), true),
+    launch: launch ? launch(() => launched.push("launched")) : recording,
   });
-  return { launched, calls, run, statePath };
+  return { launched, calls, logged, run, statePath };
 }
 
 test("only the person's own trigger message or reaction starts a thread, once, on the devboxes in turn", async () => {
@@ -75,6 +79,28 @@ test("one message found by both searches starts one thread, and a later pass wit
   await again.run();
   expect(again.launched).toEqual([]);
   expect(JSON.parse(readFileSync(slack.statePath, "utf8")).handled).toEqual({ "C1:1.5": now });
+});
+
+const mine = { messages: result(me, "1.6", "look :t3code:"), reactions: "", reactors: "" };
+
+test("a crash after the launch and before the save starts the thread once in total, and the next pass marks it handled with one line", async () => {
+  const crashed = pass(mine, undefined, (record) => async () => { record(); throw new Error("killed"); });
+  await crashed.run();
+  const after = pass(mine, crashed.statePath, (record) => async () => (record(), true));
+  await after.run();
+  await after.run();
+  expect([...crashed.launched, ...after.launched]).toEqual(["launched"]);
+  expect(after.logged).toEqual(["C1:1.6: a launch began in an earlier pass and was not confirmed, so its thread may not have started. It is not launched again."]);
+  expect(JSON.parse(readFileSync(crashed.statePath, "utf8")).handled).toEqual({ "C1:1.6": now });
+});
+
+test("a lost SSH answer after the launch starts the thread once in total", async () => {
+  const lost = pass(mine, undefined, (record) => async () => (record(), false));
+  await lost.run();
+  const after = pass(mine, lost.statePath, (record) => async () => (record(), true));
+  await after.run();
+  expect([...lost.launched, ...after.launched]).toEqual(["launched"]);
+  expect(readdirSync(dirname(lost.statePath))).toEqual(["state.json"]);
 });
 
 test("the member ID is hub.slackUserId, else a team pack's slackUserId, else none", () => {
@@ -114,7 +140,7 @@ const slackTools = ["slack_search_public_and_private", "slack_get_reactions", "s
 
 function stubSsh(dir: string) {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "ssh"), `#!/bin/sh\necho "$5" >> "${dir}/calls.log"\ncat > "${dir}/prompt-$5.txt"\n`);
+  writeFileSync(join(dir, "ssh"), `#!/bin/sh\necho "$5" >> "${dir}/calls.log"\nprintf '%s\\n' "$@" >> "${dir}/argv.log"\ncat > "${dir}/prompt-$5.txt"\n`);
   chmodSync(join(dir, "ssh"), 0o755);
   return dir;
 }
@@ -140,7 +166,7 @@ function hub(settings: Record<string, unknown>, gateway: ReturnType<typeof fakeG
 
 test("through the MCP gateway, a pass reads Slack as the team pack's member, starts the thread on a devbox over SSH, and acknowledges it", async () => {
   const gateway = fakeGateway(slackTools.map((tool) => `chat-${tool}`), (name, args) => {
-    if (name === "chat-slack_search_public_and_private") return JSON.stringify({ results: String(args.filters) === "from:<@U0TEAM>" ? result("U0TEAM", "1.2", "fix it :t3code:") : "" });
+    if (name === "chat-slack_search_public_and_private") return JSON.stringify({ results: String(args.filters) === "from:<@U0TEAM>" ? result("U0TEAM", "1.2", "mend zebrafish quokka :t3code:") : "" });
     if (name === "chat-slack_read_thread") return JSON.stringify({ messages: "the whole thread" });
     return "ok";
   });
@@ -148,7 +174,10 @@ test("through the MCP gateway, a pass reads Slack as the team pack's member, sta
   expect(await slackTriggerCommand([], here.context)).toBe(0);
   expect(readFileSync(join(here.bin, "calls.log"), "utf8")).toBe("box-a\n");
   const prompt = readFileSync(join(here.bin, "prompt-box-a.txt"), "utf8");
-  expect(prompt).toContain("> fix it :t3code:");
+  expect(prompt).toContain("> mend zebrafish quokka :t3code:");
+  const argv = readFileSync(join(here.bin, "argv.log"), "utf8");
+  expect(argv).toContain("--title '\\''Slack C1 1.2'\\''");
+  for (const word of ["mend", "zebrafish", "quokka"]) expect(argv).not.toMatch(new RegExp(`\\b${word}\\b`));
   expect(prompt).toContain("the whole thread");
   expect(gateway.calls.filter((call) => call.method === "tools/call").map((call) => call.name)).toEqual([
     "chat-slack_search_public_and_private", "chat-slack_search_public_and_private", "chat-slack_read_thread", "chat-slack_add_reaction",
@@ -180,10 +209,15 @@ test("the check passes only when the gateway lists the Slack server's tools, and
 test("a second trigger that finds the lock of a running one does nothing, and only --dry-run or check is taken", async () => {
   const gateway = fakeGateway(slackTools.map((tool) => `chat-${tool}`), () => "");
   const here = hub({ "hub.slackUserId": me }, gateway);
-  writeHome(here.home, { ".local/state/fleet/slack-trigger.lock/pid": String(process.pid) });
+  writeHome(here.home, { ".local/state/fleet/slack-trigger.lock/owner": JSON.stringify({ pid: process.pid, token: "running" }) });
   expect(await slackTriggerCommand([], here.context)).toBe(0);
   expect(here.lines).toEqual(["Another Slack trigger runs, so this one ends."]);
   expect(gateway.calls).toEqual([]);
   await expect(slackTriggerCommand(["--now"], here.context)).rejects.toThrow("Usage: fleet slack-trigger [--dry-run | check]");
   expect(existsSync(join(here.home, ".local/state/fleet/slack-trigger.json"))).toBe(false);
+});
+
+test("the workflow tells the person that only reactions on messages from the reaction window count", async () => {
+  const manifest = await Bun.file(join(import.meta.dir, "../pack.json")).json() as { workflows: Array<{ id: string; sentence: string }> };
+  expect(manifest.workflows.find((workflow) => workflow.id === "slack-trigger")!.sentence).toContain(`from the last ${reactionDays} days`);
 });

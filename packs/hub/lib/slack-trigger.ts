@@ -1,22 +1,22 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import type { Env } from "./coder.ts";
-import { modelOr, requireHubRole, spawnText, sshArgv, stateDir, threadScript, underLock, type JobContext } from "./hub-job.ts";
+import { threadModel, requireHubRole, spawnText, sshArgv, stateDir, threadScript, underLock, writeStateFile, type JobContext } from "./hub-job.ts";
 import { devboxesOf, quote } from "./machine.ts";
 import { grantHint, readGatewayClient, type Fetch } from "./mcphub/client.ts";
 import { openGatewayTools } from "./mcphub/tools.ts";
 
 const ackEmoji = "eyes";
 const day = 86_400_000;
-const reactionDays = 30;
+export const reactionDays = 30;
 const keepDays = reactionDays + 1;
-const threadModel = "claude-opus-5-5";
+const fallbackThreadModel = "claude-opus-5-5";
 const slackTools = ["slack_search_public_and_private", "slack_get_reactions", "slack_read_thread", "slack_add_reaction"];
 const noMember = "The Slack trigger has no Slack member ID. Run: fleet set hub.slackUserId <id>";
 
 export type Trigger = { kind: "message" | "reaction"; channel: string; ts: string; threadTs: string; permalink: string; text: string; from?: string };
-type State = { since: number; handled: Record<string, number>; next: number };
+type State = { since: number; handled: Record<string, number>; launching: Record<string, number>; next: number };
 type Slack = (tool: string, args: Record<string, unknown>) => Promise<string>;
 
 export type SlackTriggerOptions = {
@@ -34,12 +34,14 @@ export function slackMember(settings: Record<string, unknown>): string | undefin
 
 export async function watchSlack(options: SlackTriggerOptions): Promise<void> {
   const state = readState(options.statePath, options.now());
-  if (!options.dryRun) writeState(options.statePath, state);
+  if (!options.dryRun) writeStateFile(options.statePath, state);
   const found = [
     ...parseSearch(await search(options, `from:<@${options.member}>`, [`:${options.emoji}:`], Math.max(state.since, options.now() - keepDays * day)), "message"),
     ...parseSearch(await search(options, `hasmy::${options.emoji}:`, [], options.now() - reactionDays * day), "reaction"),
   ];
-  for (const key of Object.keys(state.handled)) if (options.now() - state.handled[key]! > keepDays * day) delete state.handled[key];
+  for (const records of [state.handled, state.launching]) {
+    for (const key of Object.keys(records)) if (options.now() - records[key]! > keepDays * day) delete records[key];
+  }
   for (const trigger of found) {
     const key = `${trigger.channel}:${trigger.ts}`;
     if (state.handled[key]) continue;
@@ -47,15 +49,30 @@ export async function watchSlack(options: SlackTriggerOptions): Promise<void> {
   }
 }
 
+function markHandled(key: string, state: State, options: SlackTriggerOptions): void {
+  delete state.launching[key];
+  state.handled[key] = options.now();
+  writeStateFile(options.statePath, state);
+}
+
 async function start(trigger: Trigger, key: string, state: State, options: SlackTriggerOptions): Promise<void> {
+  if (state.launching[key] !== undefined) {
+    options.log(`${key}: a launch began in an earlier pass and was not confirmed, so its thread may not have started. It is not launched again.`);
+    if (!options.dryRun) markHandled(key, state, options);
+    return;
+  }
   if (!(await isOwn(trigger, options))) { options.log(`${key}: not from you, skipped`); return; }
   const box = options.boxes[state.next % options.boxes.length]!;
   if (options.dryRun) { options.log(`${key}: would start a ${trigger.kind} thread on ${box}`); return; }
   const thread = await options.slack("slack_read_thread", { channel_id: trigger.channel, message_ts: trigger.threadTs });
-  if (!(await options.launch(box, title(trigger, options.emoji), prompt(trigger, thread, options.emoji)))) { options.log(`${key}: launch on ${box} failed`); return; }
-  state.handled[key] = options.now();
+  state.launching[key] = options.now();
+  writeStateFile(options.statePath, state);
+  if (!(await options.launch(box, `Slack ${trigger.channel} ${trigger.ts}`, prompt(trigger, thread, options.emoji)))) {
+    options.log(`${key}: launch on ${box} failed or lost its answer, so it is not retried`);
+    return;
+  }
   state.next++;
-  writeState(options.statePath, state);
+  markHandled(key, state, options);
   options.log(`${key}: started a ${trigger.kind} thread on ${box}`);
   await options.slack("slack_add_reaction", { channel_id: trigger.channel, message_ts: trigger.ts, emoji: ackEmoji });
 }
@@ -100,11 +117,6 @@ function unwrap(text: string): string {
   } catch { return text; }
 }
 
-function title(trigger: Trigger, emoji: string): string {
-  const words = trigger.text.replaceAll(`:${emoji}:`, "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-  return `Slack: ${words.slice(0, 60) || "look at this"}`;
-}
-
 export function prompt(trigger: Trigger, thread: string, emoji: string): string {
   const ask = trigger.kind === "message"
     ? `You wrote this Slack message with :${emoji}: in it. It is your task:\n\n> ${trigger.text.replaceAll("\n", "\n> ")}`
@@ -122,17 +134,12 @@ ${thread.replaceAll("```", "'''")}
 Use the Slack tools to read more context when you need it. Investigate first and report what you found. Ask your user before anything other people see: Slack messages, GitHub comments, pushes, or PRs.`;
 }
 
-function writeState(path: string, state: State): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(state)}\n`);
-}
-
 function readState(path: string, now: number): State {
   try {
     const state = JSON.parse(readFileSync(path, "utf8")) as Partial<State>;
-    if (typeof state.since === "number") return { since: state.since, handled: state.handled ?? {}, next: state.next ?? 0 };
+    if (typeof state.since === "number") return { since: state.since, handled: state.handled ?? {}, launching: state.launching ?? {}, next: state.next ?? 0 };
   } catch {}
-  return { since: now, handled: {}, next: 0 };
+  return { since: now, handled: {}, launching: {}, next: 0 };
 }
 
 export type SlackTriggerContext = JobContext & { print(line: string): void; fetch: Fetch };
@@ -162,7 +169,7 @@ async function checkTrigger(context: SlackTriggerContext, member: string, server
 
 function launcher(env: Env) {
   const folder = stringSetting("hub.threadFolder", env);
-  const model = modelOr("implementation", threadModel, env);
+  const model = threadModel("implementation", fallbackThreadModel, env);
   return async (box: string, title: string, text: string) => {
     const launched = await spawnText(sshArgv(box, `bash -lc ${quote(threadScript(folder, title, model))}`), env, { stdin: text, timeoutMs: 300_000 });
     if (launched.code !== 0) console.error(launched.stderr.trim().split("\n").slice(-5).join("\n"));

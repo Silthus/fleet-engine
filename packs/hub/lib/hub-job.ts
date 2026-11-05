@@ -1,10 +1,11 @@
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { modelFor } from "../../base/lib/models.ts";
 import type { Env, Result } from "./coder.ts";
 import { quote, readRole } from "./machine.ts";
 
-export type JobContext = { home: string; env: Env; self: string; now(): number; log(line: string): void; pid?: number; alive?(pid: number): boolean };
+export type JobContext = { home: string; env: Env; self: string; now(): number; log(line: string): void; pid?: number; alive?(pid: number): boolean; beforeTakeover?(): void };
 
 const unclaimedLockMs = 60_000;
 
@@ -30,25 +31,61 @@ const isAlive = (pid: number) => {
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 };
 
-function lockHolder(dir: string): number | undefined {
-  try { return Number(readFileSync(join(dir, "pid"), "utf8")); }
+type LockOwner = { pid?: number; token?: string };
+
+const errorCode = (error: unknown) => (error as NodeJS.ErrnoException).code;
+
+function readOwner(dir: string): LockOwner | undefined {
+  try { return JSON.parse(readFileSync(join(dir, "owner"), "utf8")) as LockOwner; }
   catch { return undefined; }
+}
+
+function placeLock(dir: string, owner: LockOwner): boolean {
+  const partial = `${dir}.${owner.token}.partial`;
+  mkdirSync(partial);
+  writeFileSync(join(partial, "owner"), JSON.stringify(owner));
+  try {
+    renameSync(partial, dir);
+    return true;
+  } catch (error) {
+    rmSync(partial, { recursive: true, force: true });
+    if (errorCode(error) === "EEXIST" || errorCode(error) === "ENOTEMPTY") return false;
+    throw error;
+  }
+}
+
+function releaseLock(dir: string, token: string): void {
+  if (readOwner(dir)?.token === token) rmSync(dir, { recursive: true, force: true });
+}
+
+function isClaimed(dir: string, holder: LockOwner | undefined, context: JobContext): boolean | undefined {
+  if (holder?.pid !== undefined) return (context.alive ?? isAlive)(holder.pid);
+  const madeAt = statSync(dir, { throwIfNoEntry: false })?.mtimeMs;
+  return madeAt === undefined ? undefined : context.now() - madeAt < unclaimedLockMs;
 }
 
 function takeLock(dir: string, context: JobContext): (() => void) | undefined {
   mkdirSync(dirname(dir), { recursive: true });
+  const mine = { pid: context.pid ?? process.pid, token: randomUUID() };
   for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      mkdirSync(dir);
-      writeFileSync(join(dir, "pid"), String(context.pid ?? process.pid));
-      return () => rmSync(dir, { recursive: true, force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    }
-    const holder = lockHolder(dir);
-    const claimed = holder === undefined ? context.now() - statSync(dir).mtimeMs < unclaimedLockMs : (context.alive ?? isAlive)(holder);
+    if (placeLock(dir, mine)) return () => releaseLock(dir, mine.token);
+    const holder = readOwner(dir);
+    const claimed = isClaimed(dir, holder, context);
     if (claimed) return undefined;
-    rmSync(dir, { recursive: true, force: true });
+    if (claimed === undefined) continue;
+    context.beforeTakeover?.();
+    const aside = `${dir}.${mine.token}.stale`;
+    try { renameSync(dir, aside); }
+    catch (error) {
+      if (errorCode(error) === "ENOENT") continue;
+      throw error;
+    }
+    if (readOwner(aside)?.token !== holder?.token) {
+      try { renameSync(aside, dir); }
+      catch { rmSync(aside, { recursive: true, force: true }); }
+      return undefined;
+    }
+    rmSync(aside, { recursive: true, force: true });
   }
   return undefined;
 }
@@ -63,20 +100,33 @@ export async function underLock(context: JobContext, name: string, label: string
   finally { release(); }
 }
 
-export function modelOr(role: string, fallback: string, env: Env): string {
-  try { return modelFor(role, env).model; }
-  catch { return fallback; }
+export type ThreadModel = { provider: string; model: string };
+
+const t3Providers = { claude: "claudeAgent", codex: "codex" } as const;
+
+export function threadModel(role: string, fallback: string, env: Env): ThreadModel {
+  try {
+    const row = modelFor(role, env);
+    return { provider: t3Providers[row.provider], model: row.model };
+  } catch { return { provider: t3Providers.claude, model: fallback }; }
+}
+
+export function writeStateFile(path: string, value: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const partial = `${path}.${randomUUID()}.partial`;
+  writeFileSync(partial, `${JSON.stringify(value)}\n`, { flag: "wx" });
+  renameSync(partial, path);
 }
 
 const shellPath = (path: string) => (path === "~" ? `"$HOME"` : path.startsWith("~/") ? `"$HOME"/${quote(path.slice(2))}` : quote(path));
 
-export function threadScript(folder: string, title: string, model: string): string {
+export function threadScript(folder: string, title: string, choice: ThreadModel): string {
   return [
     `prompt=$(mktemp) || exit 1`,
     `trap 'rm -f "$prompt"' EXIT`,
     `cat > "$prompt"`,
     `folder=${shellPath(folder)}`,
-    `start() { t3 thread start --title ${quote(title)} --model ${quote(model)} "$folder" - < "$prompt"; }`,
+    `start() { t3 thread start --title ${quote(title)} --provider ${quote(choice.provider)} --model ${quote(choice.model)} "$folder" - < "$prompt"; }`,
     `start || { t3 project add "$folder" >/dev/null && start; }`,
   ].join("\n");
 }

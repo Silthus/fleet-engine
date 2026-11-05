@@ -119,7 +119,7 @@ test("on the hub, fleet disk-watch reads each devbox over SSH, sweeps it with th
   expect(await diskWatchCommand([], hub.context)).toBe(0);
   const calls = hub.calls();
   expect(calls).toContain(`ssh -o BatchMode=yes -o ConnectTimeout=10 box-1 sh "$HOME/.local/share/fleet/engine/fleet" disk-sweep 2>&1`);
-  expect(calls.filter((call) => call.startsWith("t3 "))).toEqual(["t3 thread start --title box-2: 4.0G free --model small-model /tmp/notes -".replace("/tmp/notes", join(hub.home, "notes"))]);
+  expect(calls.filter((call) => call.startsWith("t3 "))).toEqual(["t3 thread start --title box-2: 4.0G free --provider claudeAgent --model small-model /tmp/notes -".replace("/tmp/notes", join(hub.home, "notes"))]);
   const prompt = readFileSync(join(hub.bin, "prompt.txt"), "utf8");
   expect(prompt).toContain("box-2 has 4.0G free, below 10G");
   expect(prompt).toContain("swept box-2");
@@ -131,16 +131,16 @@ test("the hub sweeps its own disk with its own launcher, without SSH", async () 
   const hub = await hubHere({});
   hub.context.localFree = () => 8 * gigabyte;
   expect(await diskWatchCommand([], hub.context)).toBe(0);
-  expect(hub.calls()).toEqual(["local disk-sweep", "t3 thread start --title my-hub: 8.0G free --model small-model " + join(hub.home, "notes") + " -"]);
+  expect(hub.calls()).toEqual(["local disk-sweep", "t3 thread start --title my-hub: 8.0G free --provider claudeAgent --model small-model " + join(hub.home, "notes") + " -"]);
 });
 
 test("a second disk watch that finds the lock of a running one does nothing, so the same machine is not alerted twice; a dead run's lock is taken over", async () => {
   const hub = await hubHere({ "box-2": [4, 4] });
-  writeHome(hub.home, { ".local/state/fleet/disk-watch.lock/pid": String(process.pid) });
+  writeHome(hub.home, { ".local/state/fleet/disk-watch.lock/owner": JSON.stringify({ pid: process.pid, token: "running" }) });
   expect(await diskWatchCommand([], hub.context)).toBe(0);
   expect(hub.calls()).toEqual([]);
   expect(hub.lines).toEqual(["Another disk watch runs, so this one ends."]);
-  writeHome(hub.home, { ".local/state/fleet/disk-watch.lock/pid": String(2 ** 22 + 1) });
+  writeHome(hub.home, { ".local/state/fleet/disk-watch.lock/owner": JSON.stringify({ pid: 2 ** 22 + 1, token: "dead" }) });
   expect(await diskWatchCommand([], hub.context)).toBe(0);
   expect(hub.calls().filter((call) => call.startsWith("t3 ")).length).toBe(1);
   expect(existsSync(join(hub.home, ".local/state/fleet/disk-watch.lock"))).toBe(false);

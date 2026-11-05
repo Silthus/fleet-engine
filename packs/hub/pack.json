@@ -242,7 +242,7 @@
         "hub.httpsHost",
         "hub.relayPort"
       ],
-      "sentence": "An emoji on your Slack message, or your reaction to someone else's, starts a T3 thread about it.",
+      "sentence": "An emoji on your Slack message, or your reaction to someone else's message from the last 30 days, starts a T3 thread about it.",
       "moment": {
         "time": "13:40",
         "title": "A thread from a Slack emoji",

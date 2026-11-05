@@ -1,9 +1,9 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { freeBytes } from "../../base/lib/disk.ts";
 import { numberSetting, stringSetting } from "../../base/lib/settings.ts";
 import type { Env } from "./coder.ts";
-import { modelOr, requireHubRole, spawnText, sshArgv, stateDir, threadScript, underLock, type JobContext } from "./hub-job.ts";
+import { threadModel, requireHubRole, spawnText, sshArgv, stateDir, threadScript, underLock, writeStateFile, type JobContext } from "./hub-job.ts";
 import { devboxesOf, remoteFleet } from "./machine.ts";
 
 const gigabyte = 1024 ** 3;
@@ -26,9 +26,7 @@ type WatchState = Record<string, { sweptAt?: number; alertedAt?: number }>;
 export async function watchDisks(options: DiskWatchOptions): Promise<void> {
   const state = readState(options.statePath);
   await Promise.all(options.boxes.map((box) => watchDisk(box, state, options)));
-  if (options.dryRun) return;
-  mkdirSync(dirname(options.statePath), { recursive: true });
-  writeFileSync(options.statePath, `${JSON.stringify(state)}\n`);
+  if (!options.dryRun) writeStateFile(options.statePath, state);
 }
 
 async function watchDisk(box: string, state: WatchState, options: DiskWatchOptions): Promise<void> {
@@ -95,7 +93,7 @@ ${report}
 
 Check what is left, read-only: run \`${box === local ? look : `ssh ${box} '${look}'`}\`.
 Delete nothing and start no lanes. Reply in at most 10 lines: the free space, what holds it, and what your user must decide to free it.`;
-    const script = threadScript(stringSetting("hub.threadFolder", env), `${box}: ${shownFree} free`, modelOr("lookup", alertModel, env));
+    const script = threadScript(stringSetting("hub.threadFolder", env), `${box}: ${shownFree} free`, threadModel("lookup", alertModel, env));
     return (await spawnText(onBox(local, script), env, { stdin: prompt, timeoutMs: 600_000 })).code === 0;
   };
   return { read, sweep, alert, sweepBelowGigabytes };
