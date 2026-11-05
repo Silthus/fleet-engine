@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { BoxBusy, boxLocks, lockBox, withBoxLock } from "./box-lock.ts";
+import { LockBusy, boxLocks, lockBox, withBoxLock } from "./box-lock.ts";
 import { capture, orphanGraceSeconds } from "./coder.ts";
 import { appeared } from "./testing.ts";
 
@@ -36,7 +36,7 @@ test("an operation that holds a box's lock in one process makes an operation in 
   const holder = holderIn(home, "box-a");
   await holder.ready;
   const ran: string[] = [];
-  await expect(withBoxLock(home, "box-a", { waitMs: 0 }, async () => void ran.push("skipped one ran"))).rejects.toThrow(new BoxBusy("box-a is busy: another fleet box operation on it still runs. Try again in a few minutes."));
+  await expect(withBoxLock(home, "box-a", { waitMs: 0 }, async () => void ran.push("skipped one ran"))).rejects.toThrow(new LockBusy("box-a is busy: another fleet box operation on it still runs. Try again in a few minutes."));
   expect(await withBoxLock(home, "box-b", { waitMs: 0 }, async () => "another box is free")).toBe("another box is free");
   const waited = withBoxLock(home, "box-a", {
     waitMs: 60_000,
@@ -56,7 +56,7 @@ test("a crashed operation lets go of its lock by dying, so the next operation on
   const home = temp.make("fleet-lock-");
   const holder = holderIn(home, "box-a");
   await holder.ready;
-  await expect(withBoxLock(home, "box-a", { waitMs: 0 }, async () => 1)).rejects.toBeInstanceOf(BoxBusy);
+  await expect(withBoxLock(home, "box-a", { waitMs: 0 }, async () => 1)).rejects.toBeInstanceOf(LockBusy);
   holder.child.kill("SIGKILL");
   expect(await holder.child.exited).not.toBe(0);
   expect(await withBoxLock(home, "box-a", { waitMs: 0 }, async () => "ran")).toBe("ran");
@@ -97,7 +97,7 @@ await withBoxLock(${JSON.stringify(home)}, "box-a", { waitMs: 0 }, async () => {
     expect(readFileSync(`/proc/${holderOfAct}/cmdline`, "utf8").split("\0").slice(0, 4)).toEqual(["timeout", "-s", "KILL", String(600 + orphanGraceSeconds)]);
     holder.kill("SIGKILL");
     expect(await holder.exited).not.toBe(0);
-    await expect(lockBox(home, "box-a", { waitMs: 0 })).rejects.toBeInstanceOf(BoxBusy);
+    await expect(lockBox(home, "box-a", { waitMs: 0 })).rejects.toBeInstanceOf(LockBusy);
     process.kill(pids[1]!, "SIGKILL");
     const unlock = await lockBox(home, "box-a", { waitMs: 60_000 });
     expect(alive(pids[0]!)).toBe(true);
@@ -121,7 +121,7 @@ test("two operations in one process exclude each other too, and a step that thro
   const order: string[] = [];
   await withBoxLock(home, "box-a", { waitMs: 0 }, async () => {
     order.push("first");
-    await expect(withBoxLock(home, "box-a", { waitMs: 0 }, async () => void order.push("nested"))).rejects.toBeInstanceOf(BoxBusy);
+    await expect(withBoxLock(home, "box-a", { waitMs: 0 }, async () => void order.push("nested"))).rejects.toBeInstanceOf(LockBusy);
   });
   await expect(withBoxLock(home, "box-a", { waitMs: 0 }, async () => { throw new Error("step failed"); })).rejects.toThrow("step failed");
   const unlock = await lockBox(home, "box-a", { waitMs: 0 });

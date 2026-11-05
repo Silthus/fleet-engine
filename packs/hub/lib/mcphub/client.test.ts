@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../../src/testing/git.ts";
-import { checkGateway, clientPath, devboxGatewayUrl, localGatewayUrl, readGatewayClient, saveGatewayClient, writePrivateFile } from "./client.ts";
+import { browserGatewayUrl, checkGateway, clientPath, localGatewayUrl, readGatewayClient, saveGatewayClient, writePrivateFile } from "./client.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -19,13 +19,13 @@ function home(client?: unknown) {
   return dir;
 }
 
-test("a devbox reaches the gateway over HTTPS when the hub has a host name, and through the SSH tunnel otherwise", () => {
-  expect(devboxGatewayUrl(secure)).toBe("https://hub.internal.example.com:60001/mcphub");
-  expect(devboxGatewayUrl(tunnelled)).toBe(localGatewayUrl);
+test("a browser opens the gateway over HTTPS when the hub has a host name, and through the tunnel address otherwise", () => {
+  expect(browserGatewayUrl(secure)).toBe("https://hub.internal.example.com:60001/mcphub");
+  expect(browserGatewayUrl(tunnelled)).toBe(localGatewayUrl);
   expect(localGatewayUrl).toBe("http://127.0.0.1:3317/mcphub");
 });
 
-test("the client file accepts exactly the hub's HTTPS address and the loopback address", async () => {
+test("the client file accepts exactly the hub's HTTPS address, which older grants wrote, and the loopback address", async () => {
   for (const baseUrl of [localGatewayUrl, "https://hub.internal.example.com:60001/mcphub"]) {
     expect(await readGatewayClient(home({ baseUrl, token }), secure)).toEqual({ baseUrl, token });
   }
@@ -95,6 +95,12 @@ test("the check says what to run on the hub when the key is missing or the gatew
   }
   const invalid = await checkGateway(home({ baseUrl: "https://elsewhere.example.com/mcphub", token }), secure, down);
   expect(invalid.line).toBe("~/.config/fleet/mcphub.client.json is not a key from your hub. On the hub, run: fleet mcphub grant <this machine's SSH name>");
+});
+
+test("a key from an older grant that names the HTTPS address still reads, and when it does not answer the check says to grant again for the tunnel address", async () => {
+  const down = async () => { throw new TypeError("unable to verify the first certificate"); };
+  const result = await checkGateway(home({ baseUrl: "https://hub.internal.example.com:60001/mcphub", token }), secure, down);
+  expect(result).toEqual({ ok: false, line: `The MCP gateway at https://hub.internal.example.com:60001/mcphub does not answer. A devbox reaches it at ${localGatewayUrl} through its tunnel. On the hub, run: fleet mcphub grant <this machine's SSH name>` });
 });
 
 test("leaves no temporary file behind when writing a private file fails", async () => {

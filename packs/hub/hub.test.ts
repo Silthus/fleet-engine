@@ -114,7 +114,7 @@ describe("the Hub pack", () => {
     const hub: MachineFile = { schema: 1, role: "hub" };
     const items = (machine: MachineFile, fields: Partial<Profile> = {}) => {
       const result = withBoxes(fields, machine);
-      return { jobs: result.jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub").map((step) => step.id) };
+      return { jobs: result.jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes").map((job) => `${job.id}: ${job.command.join(" ")} every ${job.schedule.every}${job.schedule.at ? ` at ${job.schedule.at}` : ""}`), human: result.human.filter((step) => step.pack === "hub" && step.workflow === "boxes").map((step) => step.id) };
     };
     expect(items(hub)).toEqual({
       jobs: ["box-sweep: fleet box sweep every 15m", "box-nightly: fleet box nightly every 1d at 02:47", "box-restore: fleet box restore every 5m"],
@@ -131,8 +131,8 @@ describe("the Hub pack", () => {
     const items = (machine: MachineFile, workflows: Record<string, boolean> = {}) => {
       const result = plan({ packs: ["hub"], workflows }, machine);
       return [
-        ...result.jobs.filter((job) => job.pack === "hub").map((job) => `job ${job.id}: ${job.command.join(" ")} every ${job.schedule.every}`),
-        ...result.checks.filter((check) => check.pack === "hub" && check.id !== "mcphub-client").map((check) => `check ${check.id}: ${check.run.join(" ")}`),
+        ...result.jobs.filter((job) => job.pack === "hub" && job.workflow === "disk-watch").map((job) => `job ${job.id}: ${job.command.join(" ")} every ${job.schedule.every}`),
+        ...result.checks.filter((check) => check.pack === "hub" && check.workflow === "disk-watch").map((check) => `check ${check.id}: ${check.run.join(" ")}`),
       ];
     };
     expect(items(hub)).toEqual(["job disk-watch: fleet disk-watch every 15m"]);
