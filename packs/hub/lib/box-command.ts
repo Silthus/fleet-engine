@@ -1,7 +1,7 @@
 import { boxPrefix, grant, reap, type Coder } from "./coder.ts";
 import { assertBox, link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
 import { quote, requireHub, type Machine } from "./machine.ts";
-import { BoxBusy, userWaitMs, withBoxLock } from "./box-lock.ts";
+import { LockBusy, userWaitMs, withBoxLock } from "./box-lock.ts";
 import { idle, list, lockWait, nightly, nightlySteps, ownership, refreshPool, release, saveToken, spawn, startBox, sweep, threads, type BoxHooks } from "./box.ts";
 import * as registry from "./pool.ts";
 
@@ -96,7 +96,7 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
       try {
         return await release(coder(), here, box, { force: true, stillDoomed: stillStale, hooks: deps.hooks, waitMs: 0 });
       } catch (error) {
-        if (!(error instanceof BoxBusy)) throw error;
+        if (!(error instanceof LockBusy)) throw error;
         here.print(`${box}: another operation holds it; skipped`);
         return 0;
       }

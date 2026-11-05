@@ -78,22 +78,8 @@
       "ask": "never"
     },
     {
-      "key": "hub.slackUserId",
-      "question": "What is your Slack member ID, so only your own messages start threads? In Slack, open your profile, then More, then Copy member ID. Leave it empty to use the member ID a team pack has.",
-      "type": "string",
-      "optional": true,
-      "ask": "never"
-    },
-    {
-      "key": "hub.slackTriggerEmoji",
-      "question": "Which emoji on your Slack message starts a thread, without the colons?",
-      "type": "string",
-      "default": "t3code",
-      "ask": "never"
-    },
-    {
       "key": "hub.httpsHost",
-      "question": "Which private host name do your devboxes use to reach the hub over HTTPS, such as hub.internal.example.com? Leave it empty to reach it over SSH tunnels only.",
+      "question": "Which private host name does a browser on your own computer use to open the hub's sign-in pages over HTTPS, such as hub.internal.example.com? Devboxes always reach the hub through their SSH tunnels. Leave it empty to skip HTTPS.",
       "type": "string",
       "optional": true,
       "ask": "never"
@@ -103,6 +89,13 @@
       "question": "Which port on the hub do the SSH tunnels from your devboxes use?",
       "type": "number",
       "default": 60001,
+      "ask": "never"
+    },
+    {
+      "key": "hub.threadFolder",
+      "question": "Which folder do the hub's threads start in, such as ~/notes? The hub starts its disk alerts there. Fleet adds it as a T3 Code project when T3 does not know it yet.",
+      "type": "string",
+      "default": "~",
       "ask": "never"
     }
   ],
@@ -175,13 +168,15 @@
       "settings": [
         "hub.alias",
         "hub.diskSweepGigabytes",
-        "hub.diskAlertGigabytes"
+        "hub.diskAlertGigabytes",
+        "hub.threadFolder"
       ],
-      "sentence": "The hub cleans a devbox whose disk runs low, and tells you only when the cleanup cannot free enough.",
+      "sentence": "The hub cleans a devbox whose disk runs low with fleet prune and each tool's own cache cleaner, and names the largest folders only when that cannot free enough.",
+      "risk": "The sweep deletes only this. Through fleet prune: worktrees idle for 6 hours, or 24 when no T3 thread or agent owns them, whose commits are on the default branch or in a merged pull request, whose T3 thread is closed, or whose agent has been idle for a day. Their commits stay on their branch, but their lockfile and tool output changes are dropped. Also worktree folders that Git no longer tracks and no open T3 thread uses. Itself: the oldest part of a T3 boot log over 100 MB. Through pnpm store prune, uv cache prune and go clean -cache: caches those tools fill again. It never runs Nix garbage collection and never removes Cargo build output, the uv cache folder, old T3 versions, Docker data or Bun's cache, which projects can link into. It deletes no other file. For the rest, you decide.",
       "moment": {
         "time": "15:10",
         "title": "A full disk you never saw",
-        "body": "A devbox dropped under its free-space floor after a big build. The hub cleaned old caches and worktrees on it, so your threads kept running.",
+        "body": "A devbox dropped under its free-space floor after a big build. The hub ran fleet prune, trimmed the T3 boot log, and ran the pnpm, uv and Go cache cleaners on it, so your threads kept running.",
         "words": [
           "hub",
           "devbox",
@@ -212,29 +207,6 @@
           "T3 Code"
         ]
       }
-    },
-    {
-      "id": "slack-trigger",
-      "name": "Slack trigger",
-      "default": false,
-      "needs": [
-        "hub"
-      ],
-      "settings": [
-        "hub.slackUserId",
-        "hub.slackTriggerEmoji"
-      ],
-      "sentence": "An emoji on your Slack message, or your reaction to someone else's, starts a T3 thread about it.",
-      "moment": {
-        "time": "13:40",
-        "title": "A thread from a Slack emoji",
-        "body": "A teammate reports a bug in Slack. You react with one emoji, and a thread starts on a devbox to find the cause.",
-        "words": [
-          "hub",
-          "thread"
-        ]
-      },
-      "risk": "Your Slack messages and the threads they belong to become agent prompts. Only your own messages and reactions start a thread."
     }
   ],
   "config": [
@@ -319,6 +291,53 @@
         "hub"
       ],
       "workflow": "boxes"
+    },
+    {
+      "id": "peers-renew",
+      "command": [
+        "fleet",
+        "peers",
+        "renew"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "03:07"
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "peers-restore",
+      "command": [
+        "fleet",
+        "peers",
+        "restore"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "disk-watch",
+      "command": [
+        "fleet",
+        "disk-watch"
+      ],
+      "schedule": {
+        "every": "15m"
+      },
+      "roles": [
+        "hub"
+      ],
+      "workflow": "disk-watch"
     }
   ],
   "human": [
@@ -336,6 +355,19 @@
         "hub"
       ],
       "workflow": "boxes"
+    },
+    {
+      "id": "hub-https-trust",
+      "say": "Trust the hub's private certificate on this computer, so your browser opens the hub's sign-in pages over HTTPS. On the hub, run fleet hub-https ca, save the certificate it prints as hub-ca.crt on this Mac, open it in Keychain Access, and set it to Always Trust. Fleet skips this step while hub.httpsHost is empty.",
+      "probe": [
+        "fleet",
+        "hub-https",
+        "trusted"
+      ],
+      "roles": [
+        "mac"
+      ],
+      "workflow": "linked-hub"
     }
   ],
   "steps": [
@@ -355,6 +387,76 @@
         "hub"
       ],
       "workflow": "mcp-gateway"
+    },
+    {
+      "id": "hub-https",
+      "run": [
+        "fleet",
+        "hub-https",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "hub-https",
+        "doctor"
+      ],
+      "roles": [
+        "hub"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "ssh-tunnels",
+      "run": [
+        "fleet",
+        "ssh-tunnels",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "ssh-tunnels",
+        "doctor"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "peers",
+      "run": [
+        "fleet",
+        "peers",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "peers",
+        "doctor"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "linked-hub"
+    },
+    {
+      "id": "hub-tunnel",
+      "run": [
+        "fleet",
+        "hub-tunnel",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "hub-tunnel",
+        "doctor"
+      ],
+      "roles": [
+        "mac"
+      ],
+      "workflow": "linked-hub"
     }
   ],
   "checks": [

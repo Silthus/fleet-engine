@@ -42,7 +42,8 @@ test("link forwards the box's T3 here, pairs with a one-time code made on the bo
   const { machine, calls } = fakeMachine(home);
   const { coder } = fakeCoder({ ssh: async (_box, command) => ({ ...ok, stdout: command.includes("t3 pair") ? "pair-code\n" : "" }) });
   expect(await link(coder, machine, "box-lane")).toBe("env-box");
-  expect(calls).toContain(`run ${join(home, ".local/bin/t3")} environment link http://127.0.0.1:21000 --pairing-code pair-code --access full-access`);
+  expect(calls).toContain("link http://127.0.0.1:21000 with full-access access");
+  expect(calls.join("\n")).not.toContain("pair-code");
   expect(await Bun.file(join(home, ".config/fleet/boxes/box-lane.json")).json()).toEqual({ environmentId: "env-box", port: 21000 });
 });
 
@@ -138,18 +139,18 @@ test("a forward service gets the Coder session the commands resolved, from the e
 const withSettings = (extra: Record<string, unknown>) => readBoxSettings({ FLEET_SETTINGS: JSON.stringify({ ...boxSettings, ...extra }) });
 const gatewayRoute = "'-R' '3317:127.0.0.1:3317'";
 
-test("round 6, finding 1: the box gets the hub's gateway key at an address it reaches: the HTTPS address with hub.httpsHost, or its own loopback, which the hub forward carries to the hub's gateway", async () => {
-  for (const [extra, baseUrl, routed] of [[{ "hub.httpsHost": "hub.internal.example.com" }, "https://hub.internal.example.com:60001/mcphub", false], [{}, "http://127.0.0.1:3317/mcphub", true]] as const) {
+test("the box gets the hub's gateway key at the tunnel address that grant gives a devbox, its own loopback, which the hub forward carries to the hub's gateway, also when the hub has an HTTPS host", async () => {
+  for (const extra of [{ "hub.httpsHost": "hub.internal.example.com" }, {}]) {
     const home = temp.make("fleet-box-");
     writeHome(home, { ".config/fleet/mcphub.client.json": JSON.stringify({ baseUrl: "http://127.0.0.1:3317/mcphub", token: "hubkey" }) });
     const { machine } = fakeMachine(home, { settings: withSettings(extra), run: async () => ({ ...ok, code: 1 }) });
     const { coder, calls } = fakeCoder();
     await handOver(coder, machine, "box-lane");
     const sent = calls.find((call) => call.command.includes("~/.config/fleet/mcphub.client.json"));
-    expect(JSON.parse(sent?.stdin ?? "{}")).toEqual({ baseUrl, token: "hubkey" });
+    expect(JSON.parse(sent?.stdin ?? "{}")).toEqual({ baseUrl: "http://127.0.0.1:3317/mcphub", token: "hubkey" });
     const forward = hubForward(machine, "box-lane").map((arg) => `'${arg}'`).join(" ");
     expect(forward).toContain("'-R' '60001:127.0.0.1:60001'");
-    expect(forward.includes(gatewayRoute)).toBe(routed);
+    expect(forward).toContain(gatewayRoute);
   }
 });
 
