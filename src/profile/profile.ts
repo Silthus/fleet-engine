@@ -43,10 +43,21 @@ export function bothChanged(dir: string, other: string) {
 async function push(dir: string) {
   const pushed = await run(dir, "git", "push", "-q");
   if (pushed.ok) return;
-  const reason = pushed.stderr.split("\n").map((line) => line.replace(/\s+/g, " ").trim()).find((line) => line && !line.startsWith("To ") && !line.startsWith("hint:"));
+  const reason = pushed.stderr.split("\n").map((line) => withoutCredentials(line).replace(/\s+/g, " ").trim()).find((line) => line && !line.startsWith("To ") && !line.startsWith("hint:"));
   const behind = /\((fetch first|non-fast-forward)\)/.test(pushed.stderr);
   const recovery = behind ? ` ${bothChanged(dir, "its remote")} Run git -C ${dir} pull --rebase, then try again.` : reason ? " Fix that, then try again." : "";
   throw new ProfileError(`${dir}: could not push answers${reason ? `: ${reason.replace(/\.$/, "")}.` : "."}${recovery}`);
+}
+
+function withoutCredentials(line: string) {
+  return line.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"]+/gi, (address) => {
+    try {
+      const url = new URL(address);
+      return `${url.protocol}//${url.host}${url.pathname.replace(/\/$/, "")}`;
+    } catch {
+      return "the remote";
+    }
+  });
 }
 
 export function workflowDefaults(packs: PackManifest[]): Record<string, boolean> {

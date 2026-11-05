@@ -134,6 +134,17 @@ describe("saving answers", () => {
     );
   });
 
+  test("a failed push never shows the credentials in the remote's URL", async () => {
+    const dir = profileRepo();
+    git(dir, "remote", "add", "origin", "http://nora:hunter2@127.0.0.1:1/nora/fleet-profile.git?access_token=EXAMPLE_TOKEN");
+    git(dir, "config", "branch.main.remote", "origin");
+    git(dir, "config", "branch.main.merge", "refs/heads/main");
+    const error = await saveAnswers(dir, { plan: "claude" }, { push: true }).catch((caught: Error) => caught);
+    expect(error).toBeInstanceOf(ProfileError);
+    expect((error as Error).message).toContain("http://127.0.0.1:1/nora/fleet-profile.git");
+    expect((error as Error).message).not.toMatch(/hunter2|EXAMPLE_TOKEN|nora:/);
+  });
+
   test("rejects a profile with invalid fields", async () => {
     expect(loadProfile(profileRepo({ ...profile, workflows: { maps: "false" } }))).rejects.toThrow("workflows must map ids to true or false");
     expect(loadProfile(profileRepo({ schema: 1 }))).rejects.toThrow("engine needs a repo");
