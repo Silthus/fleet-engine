@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PackManifest, ProfileFile } from "../pack/types.ts";
-import { saveAnswers } from "../profile/profile.ts";
+import { bothChanged, saveAnswers } from "../profile/profile.ts";
 import type { Machine } from "./commands.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import type { Draft } from "./questions.ts";
@@ -96,7 +96,7 @@ async function checkout(machine: Machine, dir: string, repo: string) {
     const remote = await machine.exec(["git", "-C", dir, "rev-parse", "--verify", "-q", "origin/main"]);
     if (remote.code !== 0) return;
     const merged = await machine.exec(["git", "-C", dir, "merge", "-q", "--ff-only", "origin/main"]);
-    if (merged.code !== 0) throw new Error(`${dir} and ${repo} both have changes the other lacks. Move ${dir} away, then run fleet setup again: it clones ${repo} and saves your answers on top.`);
+    if (merged.code !== 0) throw new Error(`${bothChanged(dir, repo)} Move ${dir} away, then run fleet setup again: it clones ${repo} and saves your answers on top.`);
     return;
   }
   if (existsSync(dir)) throw new Error(`${dir} exists and is not your profile. Move it away, then run fleet setup again.`);
@@ -156,7 +156,7 @@ export function profileGuide(packs: PackManifest[]) {
     .filter((pack) => pack.settings?.length)
     .map((pack) => {
       const rows = pack.settings!.map((setting) => `| \`${setting.key}\` | ${setting.question} | ${setting.default === undefined ? (setting.optional ? "not set" : "asked") : `\`${String(setting.default)}\``} |`);
-      return [`### ${pack.name}`, "", "| Setting | What it is | Default |", "| --- | --- | --- |", ...rows].join("\n");
+      return [`### ${pack.title ?? pack.name}`, "", "| Setting | What it is | Default |", "| --- | --- | --- |", ...rows].join("\n");
     });
   return [
     "# My Fleet profile",

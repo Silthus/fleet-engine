@@ -23,7 +23,7 @@ export async function packsCommand(args: string[], context: ChangeContext): Prom
 
   const packs = [...new Set([...context.profile.packs, ...flags.add])].filter((name) => !flags.remove.includes(name));
   const [unmet] = unmetNeeds(packs, { packs: context.packs });
-  if (unmet) throw new FlagError(`${title(unmet.pack)} needs ${unmet.needs.map(title).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
+  if (unmet) throw new FlagError(`${title(unmet.pack, context.packs)} needs ${unmet.needs.map((name) => title(name, context.packs)).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const elsewhere = Object.fromEntries(Object.entries(context.profile.workflows).filter(([id]) => !Object.hasOwn(defaults, id)));
   const workflows = { ...elsewhere, ...workflowOverrides({ ...activeChoices(context.profile, known), ...flags.workflows }, known) };
   return saveAndApply(context, { packs, workflows, settings }, "your packs");

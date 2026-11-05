@@ -11,6 +11,8 @@ import {
   profileFile,
   questions,
   setSetting,
+  settingAsks,
+  setupAsks,
   togglePack,
   toggleWorkflow,
   type PageData,
@@ -130,7 +132,7 @@ function control(setting: PackSetting, id: string) {
 function markFor(setting: PackSetting, open = questions(data, picks)) {
   const value = picks.settings[setting.key];
   if (value !== undefined && value !== setting.default) return '<span class="mark changed">changed</span>';
-  const asks = open.settings.includes(setting) ? "setup asks" : open.devbox.includes(setting) && !setting.optional ? "your devbox needs it" : undefined;
+  const asks = settingAsks(open, setting);
   return asks ? `<span class="mark">· ${asks}</span>` : "";
 }
 
@@ -174,12 +176,9 @@ function tune() {
 
 function output() {
   const text = tab === "command" ? commandText(data, picks) : JSON.stringify(profileFile(data, picks), null, 2);
-  const { count, devbox } = questions(data, picks);
-  const needed = devbox.filter((setting) => !setting.optional).length;
-  const later = needed ? ` Your devbox also needs ${needed} setting${needed === 1 ? "" : "s"} that setup does not ask: set ${needed === 1 ? "it" : "them"} in Tune it, or later with <code>fleet set</code>.` : "";
   const note =
     tab === "command"
-      ? `Run it in a terminal on your Mac. Setup keeps these picks with one key press, signs you in, and asks ${count} more question${count === 1 ? "" : "s"}.${later}`
+      ? `Run it in a terminal on your Mac. Setup keeps these picks with one key press, signs you in, and ${setupAsks(data, picks)}.`
       : "Setup saves these picks to <code>fleet.json</code> in your private <code>fleet-profile</code> repo. Every machine you set up reads it.";
   return `<div class="out" id="out">
     <div class="out-tabs" role="tablist">
