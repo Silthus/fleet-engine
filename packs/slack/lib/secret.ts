@@ -1,3 +1,4 @@
+export type SecretReader = { read(prompt: string): Promise<string>; close(): void };
 export type ReadSecret = (prompt: string) => Promise<string>;
 
 export class Interrupted extends Error {
@@ -8,49 +9,74 @@ export class Interrupted extends Error {
 
 type Keyboard = NodeJS.ReadStream & { setRawMode?: (raw: boolean) => unknown };
 
-export function secretReader(input: Keyboard = process.stdin, output: NodeJS.WritableStream = process.stdout): ReadSecret {
-  let typed = "";
+export function secretReader(input: Keyboard = process.stdin, output: NodeJS.WritableStream = process.stdout, interrupt: () => void = () => void process.kill(process.pid, "SIGINT")): SecretReader {
+  const decoder = new TextDecoder();
+  let typed: string[] = [];
   let ended = false;
+  let raw = false;
+  let swallowLineFeed = false;
   let waiting: ((line: string | Error) => void) | undefined;
-  const raw = (on: boolean) => input.isTTY && input.setRawMode?.(on);
-  const settle = () => {
-    for (let index = 0; index < typed.length; index++) {
-      const key = typed[index]!;
-      if (key === "\x03") return finish(new Interrupted(), index);
-      if (key === "\r" || key === "\n") return finish(clean(typed.slice(0, index)), index);
-      if (key === "\x04" && index === 0) return finish(new Interrupted(), index);
-    }
-    if (ended) finish(typed ? clean(typed) : new Interrupted(), typed.length);
+  const setRaw = (on: boolean) => {
+    if (raw === on || !input.isTTY || !input.setRawMode) return;
+    input.setRawMode(on);
+    raw = on;
   };
-  const finish = (line: string | Error, index: number) => {
-    typed = typed.slice(typed[index] === "\r" && typed[index + 1] === "\n" ? index + 2 : index + 1);
+  const restore = () => setRaw(false);
+  const finish = (line: string | Error, used: number) => {
+    swallowLineFeed = typed[used - 1] === "\r";
+    typed = typed.slice(used);
     const resolve = waiting;
     waiting = undefined;
-    raw(false);
-    input.pause();
     if (input.isTTY) output.write("\n");
     resolve?.(line);
   };
-  input.on("data", (chunk: Buffer | string) => {
-    typed += chunk.toString();
-    if (waiting) settle();
-  });
-  input.on("end", () => {
+  const settle = () => {
+    if (swallowLineFeed && typed.length) {
+      if (typed[0] === "\n") typed.shift();
+      swallowLineFeed = false;
+    }
+    const stop = typed.indexOf("\x03");
+    const end = typed.findIndex((key) => key === "\r" || key === "\n");
+    if (stop >= 0 && (end < 0 || stop < end)) {
+      typed = [];
+      if (!waiting) return restore(), interrupt();
+      return finish(new Interrupted(), 0);
+    }
+    if (!waiting) return;
+    if (typed[0] === "\x04") return finish(new Interrupted(), 1);
+    if (end >= 0) return finish(clean(typed.slice(0, end)), end + 1);
+    if (ended) finish(typed.length ? clean(typed) : new Interrupted(), typed.length);
+  };
+  const onData = (chunk: Buffer | string) => {
+    typed.push(...(typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true })));
+    settle();
+  };
+  const onEnd = () => {
     ended = true;
-    if (waiting) settle();
-  });
-  return (prompt) =>
-    new Promise<string>((resolve, reject) => {
-      output.write(prompt);
-      waiting = (line) => (line instanceof Error ? reject(line) : resolve(line));
-      raw(true);
-      input.resume();
-      settle();
-    });
+    settle();
+  };
+  process.once("exit", restore);
+  return {
+    read: (prompt) =>
+      new Promise<string>((resolve, reject) => {
+        if (!input.listeners("data").includes(onData)) input.on("data", onData).on("end", onEnd);
+        output.write(prompt);
+        waiting = (line) => (line instanceof Error ? reject(line) : resolve(line));
+        setRaw(true);
+        input.resume();
+        settle();
+      }),
+    close() {
+      restore();
+      input.off("data", onData).off("end", onEnd);
+      input.pause();
+      process.off("exit", restore);
+    },
+  };
 }
 
-function clean(line: string) {
-  let kept = "";
-  for (const key of line) kept = key === "\x7f" || key === "\b" ? kept.slice(0, -1) : kept + key;
-  return kept.trim();
+function clean(keys: string[]) {
+  const kept: string[] = [];
+  for (const key of keys) key === "\x7f" || key === "\b" ? kept.pop() : kept.push(key);
+  return kept.join("").trim();
 }

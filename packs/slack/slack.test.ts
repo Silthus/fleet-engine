@@ -200,6 +200,21 @@ describe("fleet slack-trigger run", () => {
     expect(slack.method("chat.postEphemeral")[0]!.args.text).toBe("Started <https://app.t3.codes/threads/env-box-7/thread-on-box|Slack: deploy check> on box-7.");
   });
 
+  test("ends when its tokens file is replaced, so the service starts again with the new app", async () => {
+    const slack = slackStub([]);
+    const home = homeWithTokens();
+    let minute = () => {};
+    const deps = commandDeps(home, { slackBase: slack.base, run: processes().run, every: (work) => ((minute = work), () => {}) });
+    const running = slackTrigger(["run"], deps);
+    await slack.connected();
+    minute();
+    writeFileSync(join(home, ".config/fleet/slack-app.json"), JSON.stringify({ appToken, userToken: "xoxp-test-new-token" }), { mode: 0o600 });
+    minute();
+    expect(await running).toBe(0);
+    expect(deps.printed.some((line) => line.endsWith("the Slack app changed: stopping, so the service starts again with it"))).toBe(true);
+    expect(deps.printed.join("\n")).not.toContain("xoxp-test-new-token");
+  });
+
   test("stops while Slack has not yet answered the connection request", async () => {
     let answer = () => {};
     let asked = () => {};

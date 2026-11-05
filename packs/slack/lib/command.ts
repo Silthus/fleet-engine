@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { modelFor } from "../../base/lib/models.ts";
 import { optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
@@ -60,12 +60,24 @@ export async function slackTrigger(args: string[], deps: SlackCommandDeps): Prom
   const log = (line: string) => deps.print(`${new Date(now()).toISOString()} ${line}`);
   const tokens = await waitForTokens(deps, log);
   if (!tokens) return 0;
+  const saved = readFileSync(tokensFile(deps.home), "utf8");
+  const replaced = new AbortController();
+  deps.stop?.addEventListener("abort", () => replaced.abort(), { once: true });
+  const watchTokens = () => {
+    const now = (() => { try { return readFileSync(tokensFile(deps.home), "utf8"); } catch { return ""; } })();
+    if (now === saved || replaced.signal.aborted) return;
+    log("the Slack app changed: stopping, so the service starts again with it");
+    replaced.abort();
+  };
   const trigger: TriggerDeps = { owner, now, log, slack: slackApi(tokens.userToken, deps.slackBase, deps.sleep), launch: launcher(deps.env, run, deps.t3), statePath: stateFile(deps.home) };
   const every = deps.every ?? ((work, ms) => { const timer = setInterval(work, ms); return () => clearInterval(timer); });
-  const stopRetries = every(() => void retryPending(trigger).catch((error) => log(`retry failed: ${error}`)), 60_000);
+  const stopRetries = every(() => {
+    watchTokens();
+    if (!replaced.signal.aborted) void retryPending(trigger).catch((error) => log(`retry failed: ${error}`));
+  }, 60_000);
   try {
     await serve({
-      appToken: tokens.appToken, log, base: deps.slackBase, sleep: deps.sleep, stop: deps.stop,
+      appToken: tokens.appToken, log, base: deps.slackBase, sleep: deps.sleep, stop: replaced.signal,
       onEvent: (event) => {
         const found = triggerOf(event, owner);
         if (found) void handleTrigger(found, trigger).catch((error) => log(`${found.channel}:${found.ts}: failed: ${error}`));
@@ -94,34 +106,45 @@ async function waitForTokens(deps: SlackCommandDeps, log: (line: string) => void
 }
 
 async function setUpApp(owner: Owner, deps: SlackCommandDeps): Promise<number> {
-  const read = deps.readSecret ?? secretReader();
+  const reader = deps.readSecret ? { read: deps.readSecret, close: () => {} } : secretReader();
+  try {
+    return await walkThrough(owner, deps, reader.read);
+  } finally {
+    reader.close();
+  }
+}
+
+async function walkThrough(owner: Owner, deps: SlackCommandDeps, read: ReadSecret): Promise<number> {
   const path = tokensFile(deps.home);
   const base = deps.slackBase ?? slackApiBase;
   const say = deps.print;
+  const entered: string[] = [];
   say(`Fleet starts a T3 thread when you, ${owner.slackUserId}, write to your own Slack app. Make that app in four steps.`);
   say("");
   say(`1. Open this link, pick your workspace, and create the app: ${manifestLink(owner.name)}`);
   say("2. Under Basic Information, App-Level Tokens, generate a token with the connections:write scope.");
   try {
-    const appToken = await ask(read, "   Paste the app-level token (xapp-…, hidden): ", "xapp-", async (token) => void (await slackApi(token, base, deps.sleep)("apps.connections.open", {})), say);
+    const appToken = await ask(read, "   Paste the app-level token (xapp-…, hidden): ", "xapp-", async (token) => void (await slackApi(token, base, deps.sleep)("apps.connections.open", {})), say, entered);
     say("3. Under Install App, install the app to your workspace.");
     say("4. Copy the User OAuth Token from the same page.");
     const userToken = await ask(read, "   Paste the user token (xoxp-…, hidden): ", "xoxp-", async (token) => {
       const { user_id } = await slackApi(token, base, deps.sleep)("auth.test", {});
       if (user_id !== owner.slackUserId) throw new Error(`it belongs to ${user_id}, not to slack.userId ${owner.slackUserId}`);
-    }, say);
+    }, say, entered);
     saveTokens(path, { appToken, userToken });
   } catch (error) {
     if (error instanceof Interrupted) return say(`Stopped. Nothing was saved. Run fleet slack-trigger setup again.`), 130;
     throw error;
   }
-  say(`Saved ${path}, readable only by you. The Slack trigger picks the app up within a minute.`);
+  say(`Saved ${path}, readable only by you. The Slack trigger restarts with it within a minute.`);
   return 0;
 }
 
-async function ask(read: ReadSecret, prompt: string, prefix: string, verify: (token: string) => Promise<void>, say: (line: string) => void): Promise<string> {
+async function ask(read: ReadSecret, prompt: string, prefix: string, verify: (token: string) => Promise<void>, say: (line: string) => void, entered: string[]): Promise<string> {
+  const redact = (text: string) => entered.reduce((clean, secret) => clean.replaceAll(secret, "…"), text);
   for (;;) {
     const token = await read(prompt);
+    if (token) entered.push(token);
     if (!token.startsWith(prefix)) {
       say(`   That does not start with ${prefix}. Try again.`);
       continue;
@@ -130,7 +153,7 @@ async function ask(read: ReadSecret, prompt: string, prefix: string, verify: (to
       await verify(token);
       return token;
     } catch (error) {
-      say(`   Slack did not accept it: ${(error as Error).message.replace(token, "…")}. Try again.`);
+      say(`   Slack did not accept it: ${redact((error as Error).message)}. Try again.`);
     }
   }
 }
