@@ -6,7 +6,7 @@ import { loadMachine, loadProfile, saveMachine, thisMachine } from "../profile/p
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
-import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
+import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, waitsForTeams, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { devboxQuestion, devboxSteps, profileForBox, type DevboxContext } from "./devbox.ts";
@@ -67,7 +67,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     ];
     if (reopened.length || Object.entries(fromFlags).some(([key, value]) => saved.settings?.[key] !== value)) reopened.push(...answersChanged);
     progress.done = progress.done.filter((id) => !reopened.some((step) => id === step || id.startsWith(`${step}:`)));
-    if (Object.keys(fromFlags).length) {
+    if (Object.keys(fromFlags).length && !waitsForTeams(flags, catalog)) {
       progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
       await remember();
     }
@@ -102,7 +102,8 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     }
     catalog.teamsKnown = true;
     picksFrom(flags, catalog);
-    settingsFrom(flags, catalog);
+    const fromFlags = settingsFrom(flags, catalog);
+    if (Object.keys(fromFlags).length) await context.answer({ settings: { ...progress.draft.settings, ...fromFlags } });
   };
   const profile = profileStep({
     terminal,

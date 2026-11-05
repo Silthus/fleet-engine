@@ -130,7 +130,7 @@ function control(setting: PackSetting, id: string) {
 function markFor(setting: PackSetting, open = questions(data, picks)) {
   const value = picks.settings[setting.key];
   if (value !== undefined && value !== setting.default) return '<span class="mark changed">changed</span>';
-  const asks = open.settings.includes(setting) ? "setup asks" : open.devbox.includes(setting) ? "the devbox asks" : undefined;
+  const asks = open.settings.includes(setting) ? "setup asks" : open.devbox.includes(setting) && !setting.optional ? "your devbox needs it" : undefined;
   return asks ? `<span class="mark">· ${asks}</span>` : "";
 }
 
@@ -174,10 +174,12 @@ function tune() {
 
 function output() {
   const text = tab === "command" ? commandText(data, picks) : JSON.stringify(profileFile(data, picks), null, 2);
-  const count = questions(data, picks).count;
+  const { count, devbox } = questions(data, picks);
+  const needed = devbox.filter((setting) => !setting.optional).length;
+  const later = needed ? ` Your devbox also needs ${needed} setting${needed === 1 ? "" : "s"} that setup does not ask: set ${needed === 1 ? "it" : "them"} in Tune it, or later with <code>fleet set</code>.` : "";
   const note =
     tab === "command"
-      ? `Run it in a terminal on your Mac. Setup keeps these picks with one key press, signs you in, and asks ${count} more question${count === 1 ? "" : "s"}.`
+      ? `Run it in a terminal on your Mac. Setup keeps these picks with one key press, signs you in, and asks ${count} more question${count === 1 ? "" : "s"}.${later}`
       : "Setup saves these picks to <code>fleet.json</code> in your private <code>fleet-profile</code> repo. Every machine you set up reads it.";
   return `<div class="out" id="out">
     <div class="out-tabs" role="tablist">
@@ -219,15 +221,22 @@ const attr = (name: string, value: string | undefined) => (value === undefined ?
 
 function focusTarget() {
   const active = document.activeElement;
-  if (!(active instanceof HTMLElement) || !active.dataset.act) return undefined;
+  if (!(active instanceof HTMLElement) || !active.dataset.act) return [];
+  const { act, id } = active.dataset;
   const pack = active.closest<HTMLElement>("details[data-pack]");
   const moment = active.closest<HTMLElement>("article[data-workflow]");
   const scope = pack ? `details${attr("data-pack", pack.dataset.pack)}` : moment ? `article${attr("data-workflow", moment.dataset.workflow)}` : active.closest(".packbar") ? ".packbar" : active.closest("#out") ? "#out" : "";
-  return `${scope} ${attr("data-act", active.dataset.act)}${attr("data-id", active.dataset.id)}`;
+  const control = `${attr("data-act", act)}${attr("data-id", id)}`;
+  const owner = data.packs.find((item) => item.workflows.some((workflow) => workflow.id === id))?.name;
+  const steady = act === "pack" ? [`.packbar ${control}`] : act === "wf" ? [`details[data-pack] ${control}`, `details${attr("data-pack", owner)} > summary`] : [];
+  return [`${scope} ${control}`, ...steady];
 }
 
-function restoreFocus(target: string | undefined) {
-  if (target) document.querySelector<HTMLElement>(target)?.focus({ preventScroll: true });
+function restoreFocus(targets: string[]) {
+  for (const target of targets) {
+    document.querySelector<HTMLElement>(target)?.focus({ preventScroll: true });
+    if (document.activeElement?.matches(target)) return;
+  }
 }
 
 function render() {
