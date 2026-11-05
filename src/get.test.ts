@@ -24,6 +24,8 @@ beforeAll(() => {
 
 type SandboxOptions = { without?: string[]; brewInstaller?: string };
 
+const onLinuxHost = test.if(process.platform === "linux");
+
 function sandbox(os: "Linux" | "Darwin", options: SandboxOptions = {}) {
   const root = temp.make("get-");
   const bin = join(root, "bin");
@@ -110,7 +112,7 @@ describe("get.sh", () => {
     expect(existsSync(join(box.home, ".config/fleet/machine.json"))).toBe(false);
   });
 
-  test("on macOS installs Homebrew, gh, and the T3 Code app, then applies the profile", () => {
+  onLinuxHost("on macOS installs Homebrew, gh, and the T3 Code app, then applies the profile", () => {
     const box = sandbox("Darwin");
     const result = getSh(box, ["--ref", "v0.1.0", "--profile", profile()]);
     expect(result.code).toBe(0);
@@ -122,7 +124,7 @@ describe("get.sh", () => {
     expect(result.output).toContain("Applied 13 changes.");
   });
 
-  test("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {
+  onLinuxHost("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {
     const box = sandbox("Darwin");
     const command = `printf 'piped script\\n' | sh ${join(repoRoot, "get.sh")} --ref v0.1.0 --profile ${profile()}`;
     const env = { PATH: box.bin, HOME: box.home, SHELL: "/bin/sh", FLEET_ENGINE_REPO: engineRepo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
@@ -131,7 +133,7 @@ describe("get.sh", () => {
     expect(readFileSync(box.log, "utf8")).toContain("brew installer stdin=tty");
   });
 
-  test("on macOS installs the Command Line Tools first and waits until they are there", () => {
+  onLinuxHost("on macOS installs the Command Line Tools first and waits until they are there", () => {
     const box = sandbox("Darwin");
     const count = join(box.root, "xcode-checks");
     box.stub("xcode-select", `[ "$1" = -p ] || exit 0\nn=$(cat "${count}" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > "${count}"; [ $n -ge 3 ]`);
@@ -141,10 +143,12 @@ describe("get.sh", () => {
     expect(result.output).toContain("Installing the Command Line Tools. Finish the window that opens; this script waits.");
     const calls = result.calls.split("\n");
     expect(calls.slice(0, 5)).toEqual(["uname -s", "xcode-select -p", "xcode-select --install", "xcode-select -p", "sleep 5"]);
-    expect(calls.indexOf("xcode-select -p", 4)).toBeLessThan(calls.findIndex((call) => call.startsWith("curl ")));
+    const passed = calls.indexOf("xcode-select -p", 4);
+    expect(passed).toBeGreaterThanOrEqual(0);
+    expect(passed).toBeLessThan(calls.findIndex((call) => call.startsWith("curl ")));
   });
 
-  test("on macOS with Homebrew present, skips its installer and installs Bun with brew when Bun is missing", () => {
+  onLinuxHost("on macOS with Homebrew present, skips its installer and installs Bun with brew when Bun is missing", () => {
     const box = sandbox("Darwin", { without: ["bun"] });
     box.stub("brew", "exit 0");
     const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
@@ -157,7 +161,7 @@ describe("get.sh", () => {
     expect(calls).toContain("brew install --cask t3-code");
   });
 
-  test("on macOS stops when the Homebrew installer leaves no brew on PATH", () => {
+  onLinuxHost("on macOS stops when the Homebrew installer leaves no brew on PATH", () => {
     const box = sandbox("Darwin", { brewInstaller: "exit 0" });
     const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
     expect(result.code).toBe(1);
@@ -166,7 +170,7 @@ describe("get.sh", () => {
     expect(existsSync(join(box.home, ".local/share/fleet/engine"))).toBe(false);
   });
 
-  test("under curl | sh, hands fleet setup the terminal so it can ask its questions", () => {
+  onLinuxHost("under curl | sh, hands fleet setup the terminal so it can ask its questions", () => {
     const box = sandbox("Darwin");
     const fakeEngine = temp.make("fake-engine-");
     writeFileSync(join(fakeEngine, "fleet"), `if [ -t 0 ]; then where=tty; else where=pipe; fi\necho "fleet $* stdin=$where" >> "${box.log}"\n`);

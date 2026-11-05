@@ -26,7 +26,7 @@ No agent can run a real Mac. Agents work on Linux devboxes. So this document, pl
 - `src/get.test.ts › get.sh › on macOS stops when the Homebrew installer leaves no brew on PATH` (new)
 - `src/get.test.ts › get.sh › passes sh -n`
 
-These tests stub `uname`, `xcode-select`, `curl`, `brew` and `sleep` in a sandbox `PATH` with a temporary `HOME`.
+These tests stub `uname`, `xcode-select`, `curl`, `brew` and `sleep` in a sandbox `PATH` with a temporary `HOME`. They run only on a Linux host: `get.sh` puts the real `/opt/homebrew/bin` first on `PATH`, so on a Mac they could reach the real `brew`. CI runs Linux.
 
 **Agent can run.** Yes, with stubs. The real Command Line Tools window, the real Homebrew installer and the real password prompt need a person on a Mac.
 
@@ -59,10 +59,10 @@ Then, on both systems, `t3_cli` installs the `t3` command from `https://t3.codes
 1. **Install the basics**: checks that `git`, `gh`, `bun` and `t3` are on `PATH`.
 2. **Sign in to GitHub** (section 9).
 3. **Packs**, then **AI plans**.
-4. **Pack settings** marked `ask: setup`. With the PostHog pack, these are the region, with a default from the time zone, and the Slack member ID, which the person can skip.
+4. **Pack settings** marked `ask: setup`. A team pack can add its own, such as a setting with a default from the time zone.
 5. **Profile**: Fleet creates the private profile repo and pushes the answers.
 6. **Set up this Mac**: runs `fleet apply` with the profile. This writes the T3 settings (section 4), the launchd jobs (section 5) and the identity (section 7). It also runs the pack steps for `darwin` (section 8).
-7. **Pack human steps**, such as the PostHog pack's Coder sign-in (section 8).
+7. **Pack human steps**, such as a team pack's sign-in (section 8).
 8. **Your devbox**: without the PostHog pack, setup offers an SSH host from `~/.ssh/config`, or a skip.
 9. **Sign in to Claude**, then **Sign in to ChatGPT**, for the chosen plans only.
 10. **Devbox steps** for a chosen SSH host (section 9).
@@ -131,8 +131,7 @@ For each job:
 - `saves its copy of an agent that already matches, so a later change still applies`
 - `removes the copy and launcher of a dropped job whose agent is already gone`
 - `uses an interval for frequent jobs, reruns without reloading, and removes only its own agents`
-
-Also `src/adapters/jobs/jobs.test.ts › a pack source that cannot be fetched › keeps every fleet cron line, agent, and task until the source is back`.
+- `keeps every agent, launcher, and copy until a pack source that cannot be fetched is back` (new)
 
 **Agent can run.** Yes, with a fake `launchctl`. Real `launchctl` exit codes and a real job firing need a Mac.
 
@@ -165,30 +164,11 @@ Also `src/adapters/jobs/jobs.test.ts › a pack source that cannot be fetched �
 
 **Agent can run.** Yes, with a fake `gh` and `ssh-keygen`. The real key registration and a signed commit on the Mac need a person.
 
-## 8. The PostHog pack: hogli and Coder
+## 8. Team packs
 
-The PostHog pack lives in `PostHog/fleet-posthog`, not in this repo. File names below are in `packs/posthog/` there.
+A team pack, such as the PostHog pack, is not part of this repo. Fleet fetches it only for members of its GitHub org. It adds its own steps, human steps and files to the Mac and the devbox. The team pack's own repo traces those steps and their tests.
 
-**On the Mac** (`"on": ["darwin"]` in `pack.json`):
-
-| Step | Kind | Command | Code |
-| --- | --- | --- | --- |
-| `devbox-checkout` | pack step | `fleet posthog-devbox checkout` | `lib/devbox.ts` `checkout`: reuses `posthog.checkout` or makes a blobless clone |
-| `devbox-hogli-env` | pack step | `fleet posthog-devbox hogli-env` | `lib/devbox.ts` `hogliEnv`: a small Python environment for hogli; installs `uv` with `brew` when it is missing; no Flox |
-| `devbox-config` | pack step | `fleet posthog-devbox config` | `lib/devbox.ts` `config`: saves the profile as dotfiles and the region through hogli's helpers |
-| `coder` | human step, interactive | `fleet posthog-devbox setup` | `lib/devbox.ts` `setup`: runs `hogli devbox:setup` with every switch set, so only Coder's browser sign-in waits; probe is `fleet posthog-devbox signed-in` (`coder whoami`) |
-| `devbox-start` | pack step, after `coder` | `fleet posthog-devbox start` | `lib/devbox.ts` `start`: `hogli devbox:start --region … --disk … --no-start-app`, once |
-
-The Mac also gets the Metabase and Grafana MCP servers for Claude and Codex, through `fleet posthog-mcp`.
-
-**On the devbox** (`"roles": ["devbox", "linux"]`):
-
-- the file `bin/hogli` goes to `~/.local/bin/hogli`. It runs `fleet hogli`, which is `commands/hogli.ts` and `lib/hogli.ts`. That runs the checkout's `hogli` inside Flox, or in Fleet's small environment.
-- the `flox` check reports a missing Flox.
-
-**On both:** the `prepare` T3 project script, `fleet posthog-prepare`, for the PostHog checkout.
-
-**In this engine.** During setup's apply step, `apply` runs the three Mac steps. It skips `devbox-start`, because its human step's probe does not pass yet (`waiter` in `src/reconciler/apply.ts`). Then setup runs the Coder human step in the foreground with the keyboard (`packSignIn` and `withKeyboard` in `src/setup/human.ts`). Its `after` runs `devbox-start`. With the PostHog pack, setup asks no SSH devbox question.
+**In this engine.** During setup's apply step, `apply` runs the team pack's steps for `darwin`. It skips a step whose `after` names a human step whose probe does not pass yet (`waiter` in `src/reconciler/apply.ts`). Then setup runs the pack's human steps. An interactive one runs in the foreground with the keyboard (`packSignIn` and `withKeyboard` in `src/setup/human.ts`). When its probe passes, the waiting steps run. With the PostHog pack, setup asks no SSH devbox question.
 
 **Tests in this engine.**
 
@@ -197,9 +177,7 @@ The Mac also gets the Metabase and Grafana MCP servers for Claude and Codex, thr
 - `src/setup/human.test.ts › … › an interactive one reads the keyboard through a pseudo-terminal while setup's own input is not the terminal`
 - `src/reconciler/resolve.test.ts › … › limits items by os and role`
 
-**Tests in the PostHog pack.** `packs/posthog/lib/devbox.test.ts`: the blocks `the PostHog checkout step`, `the hogli environment step` (with `installs uv with Homebrew when uv is missing`), `the hogli config step`, `the Coder sign-in` and `the devbox start step`. `packs/posthog/lib/hogli.test.ts`: the block `fleet hogli`.
-
-**Agent can run.** Yes, with stubs, in both repos. The real Coder browser sign-in and a real `hogli devbox:start` need a person with a Coder account.
+**Agent can run.** The engine side, yes, with stubs. A team pack's real sign-ins need a person with an account.
 
 ## 9. Sign-ins and T3 Connect
 
@@ -208,14 +186,14 @@ The Mac also gets the Metabase and Grafana MCP servers for Claude and Codex, thr
 | GitHub | `gh auth login --web` with four scopes, or `gh auth refresh` when scopes are missing; then `gh auth setup-git` | `gh auth status` lists the four scopes | `src/setup/signins.ts` `githubSignIn` | `src/setup/human.test.ts`: `GitHub opens the device page, polls every 2 s with no key press, and asks for all four scopes`; `GitHub refreshes a sign-in that lacks scopes, and a run without a person only lists it`; `GitHub sets up Git's credentials before a team pack is fetched, and checks the active account` |
 | Claude | `claude auth login` | `claude auth status` says `loggedIn` | `signins.ts` `claudeSignIn` | `src/setup/human.test.ts`: `Claude and ChatGPT advance on their probes, only for the chosen plans, and the ChatGPT probe is isolated`; `a sign-in command that fails, or is missing, stops setup with what to do instead of waiting` |
 | ChatGPT (Codex) | `codex login` | a real `codex exec` in a temporary folder, 20 s timeout | `signins.ts` `chatgptSignIn` | the same two tests |
-| Coder (PostHog pack) | `fleet posthog-devbox setup` | `fleet posthog-devbox signed-in` | section 8 | section 8 |
+| A team pack's sign-in | the pack's human step | the step's probe | section 8 | section 8 |
 
 A human step opens the browser with `open` on the Mac (`realMachine.openUrl` in `src/setup/commands.ts`). It polls its probe every 2 seconds.
 
 **T3 Code app sign-in and T3 Connect on the Mac.** Spec step 13, "T3 Code app sign-in, then the agent link both ways", was never built for the Mac. No step signs in to the T3 Code app on the Mac, or turns on T3 Connect there. What exists:
 
 - **SSH-host devbox** (no PostHog pack): `devboxSteps` in `src/setup/devbox.ts` runs `t3 up --connect --yes --headless` on the box. Then `linkBothWays` links the box from the Mac with `t3 pair` and `t3 environment link`. The box links back only when T3 Connect is already on the Mac. Otherwise setup prints one line that says how to turn it on. Tests: `src/setup/devbox.test.ts`: `installs Fleet on the chosen host, signs it in with the codes shown here, applies the profile, and links T3 Code both ways`, and `links back from the devbox when T3 Connect is on here, and installs the engine of a tracking profile from main`.
-- **PostHog Coder devbox**: setup has no T3 link step at all.
+- **A team pack's devbox**, such as the PostHog pack's: setup has no T3 link step at all.
 - **Every apply**: `checkLinks` in `src/adapters/t3/adapter.ts` reports expired and unreachable links. Test: `src/adapters/t3/t3.test.ts › T3 adapter with a running server › reports expired and unreachable links without failing the apply`.
 
 **Agent can run.** The setup logic, yes, with a fake machine. Every real sign-in needs a person.
@@ -229,9 +207,9 @@ Each step is for a person on a clean macOS user account.
 3. Type the Mac password once when Homebrew asks for it.
 4. Check that `gh`, `bun`, `t3` and `/Applications/T3 Code.app` exist when `get.sh` ends.
 5. Approve the GitHub device code in the browser that setup opens.
-6. After the step "Set up this Mac", check that `claude --version` and `codex --version` work. The Base pack's `claude-cli` and `codex-cli` steps install them, for the chosen plans only.
+6. After the step "Set up this Mac", check that `claude --version` and `codex --version` work. The Base pack's `claude-cli` step installs Claude, and its `codex-cli-mac` step installs Codex from the Homebrew cask, for the chosen plans only.
 7. Finish `claude auth login` and `codex login` in the browser.
-8. With the PostHog pack: finish the Coder sign-in in the browser and paste the token into setup's terminal. Then check that `coder list` shows one PostHog devbox.
+8. With a team pack: finish its sign-ins. Its own repo lists what to check.
 9. Before you open T3 Code, check that `~/.t3/userdata/desktop-settings.json` holds `"updateChannel": "nightly"`. Then open T3 Code and check that it starts on the nightly channel with the seeded settings.
 10. Run `launchctl print gui/$(id -u)/dev.fleet.fleet-update` and check that the job is loaded. The next day, check `~/.local/state/fleet/jobs/fleet-update.log`.
 11. Make a commit in any repo and run `git verify-commit HEAD`.
@@ -239,8 +217,8 @@ Each step is for a person on a clean macOS user account.
 
 ## Gaps
 
-- **Agent CLIs on the Mac, fixed here.** The Base pack's `claude-cli` and `codex-cli` steps ran only on Linux, so a clean Mac stopped at "Sign in to Claude" with "claude is not installed here". They now run on every machine. Both installers support macOS, and each step's check (`claude --version`, `codex --version`) skips a CLI that is already there. Test: `packs/base/base.test.ts` › `installs the agent CLIs on a Mac too, so a clean Mac can sign in`. A person still has to prove both installers on a clean Mac (step 6 above).
-- **Spec step 13 is not built.** No T3 Code app sign-in on the Mac, and no T3 Connect on the Mac. With the PostHog pack there is no T3 link to the Coder devbox at all.
+- **Agent CLIs on the Mac, fixed here.** The Base pack's `claude-cli` and `codex-cli` steps ran only on Linux, so a clean Mac stopped at "Sign in to Claude" with "claude is not installed here". Now `claude-cli` runs on every machine. On the Mac, Codex comes from the Homebrew cask: the `codex-cli-mac` step runs `brew install --cask codex`. The Linux `codex-cli` step runs `bun add -g @openai/codex`, and that launcher needs Node, which a clean Mac does not have. Each step's check (`claude --version`, `codex --version`) skips a CLI that is already there. Test: `packs/base/base.test.ts` › `installs the agent CLIs on a Mac too, Codex from its Homebrew cask, so a clean Mac without Node can sign in`. A person still has to prove both installers on a clean Mac (step 6 above).
+- **Spec step 13 is not built.** No T3 Code app sign-in on the Mac, and no T3 Connect on the Mac. With a team pack's devbox there is no T3 link at all.
 - **`seedT3` is unused in the product.** The T3 adapter does the same work through `reconcileSettings` when T3 is not running. Nothing calls `seedT3` outside tests.
 - **No test:** finding the T3 server on the Mac through `ps` and the `.app` bundle (`serverCli` in `src/adapters/t3/session.ts`).
 - **No test:** `open` in place of `xdg-open` on the Mac (`realMachine.openUrl` in `src/setup/commands.ts`). It reads the platform from `node:os`, so a test cannot choose it.

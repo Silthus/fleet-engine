@@ -342,6 +342,18 @@ describe("launchd jobs on a Mac", () => {
     expect(existsSync(join(home, ".local/state/fleet/jobs/prune.sh"))).toBe(false);
   });
 
+  test("keeps every agent, launcher, and copy until a pack source that cannot be fetched is back", async () => {
+    const home = temp.make("home-");
+    const mac = launchctl();
+    await apply(plan("darwin", [prune, pull]), { home, adapters: [mac.adapter] });
+    const offline = { ...plan("darwin", [pull]), packs: [{ name: "base", source: "engine", ref: "main", available: true }, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] };
+    await apply(offline, { home, adapters: [mac.adapter] });
+    expect(mac.loaded.has("gui/501/dev.fleet.prune")).toBe(true);
+    expect(existsSync(join(home, "Library/LaunchAgents/dev.fleet.prune.plist"))).toBe(true);
+    expect(existsSync(join(home, ".local/state/fleet/jobs/prune.sh"))).toBe(true);
+    expect(existsSync(join(home, ".local/state/fleet/jobs/prune.plist"))).toBe(true);
+  });
+
   test("uses an interval for frequent jobs, reruns without reloading, and removes only its own agents", async () => {
     const home = temp.make("home-");
     const agents = join(home, "Library/LaunchAgents");

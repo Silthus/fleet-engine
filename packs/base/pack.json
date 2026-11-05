@@ -602,6 +602,29 @@
         "codex",
         "--version"
       ],
+      "on": [
+        "linux"
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "id": "codex-cli-mac",
+      "run": [
+        "brew",
+        "install",
+        "--cask",
+        "codex"
+      ],
+      "check": [
+        "codex",
+        "--version"
+      ],
+      "on": [
+        "darwin"
+      ],
       "plans": [
         "codex",
         "both"
