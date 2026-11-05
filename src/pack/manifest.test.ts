@@ -125,6 +125,15 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, human: [{ ...coder, command: "coder login", interactive: "yes" }] } }))).rejects.toThrow("human coder: interactive must be true when set");
   });
 
+  test("accepts a job that runs always only without a time, a T3 runner, or a task", async () => {
+    const service = { id: "listen", command: ["fleet", "listen"], schedule: { every: "always" as const } };
+    const task = { prompt: "Listen.", projectSetting: "base.project", modelRole: "worker", workspaceStrategy: "worktree", runtimeMode: "auto" };
+    expect((await loadPacks(sourceWith({ base: { ...base, jobs: [service] } })))[0]?.manifest.jobs?.[0]).toEqual(service);
+    expect(loadPacks(sourceWith({ base: { ...base, jobs: [{ ...service, schedule: { every: "always", at: "03:00" } }] } }))).rejects.toThrow("jobs listen: a job that runs always has no schedule.at");
+    expect(loadPacks(sourceWith({ base: { ...base, jobs: [{ ...service, runner: "t3", task }] } }))).rejects.toThrow("jobs listen: a job that runs always runs on the machine, not on t3");
+    expect(loadPacks(sourceWith({ base: { ...base, jobs: [{ ...service, schedule: { every: "forever" } }] } }))).rejects.toThrow("jobs listen: schedule.every must be 5m, 15m, 1h, 1d, or always");
+  });
+
   test("rejects a step that runs on machines its human step does not", async () => {
     const human = [{ id: "coder", say: "Sign in to Coder", probe: ["coder", "whoami"], on: ["darwin"] }];
     expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder", on: ["darwin"] }] } }))).resolves.toHaveLength(1);

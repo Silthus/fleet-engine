@@ -10,7 +10,8 @@ import { cronLine, cronSafe, reconcileCrontab } from "./cron.ts";
 import { labelPrefix, plist } from "./launchd.ts";
 import { engineCommand } from "../../reconciler/engine-command.ts";
 import { agentCopyTarget, jobsFolder, launcherScript, launcherTarget, logTarget } from "./launcher.ts";
-import { cronExpression, launchdTimer, t3Schedule, type T3Schedule } from "./schedule.ts";
+import { cronExpression, isService, isTimed, launchdTimer, t3Schedule, type T3Schedule, type TimedJob } from "./schedule.ts";
+import { systemdSafe, unit, unitName, unitTarget } from "./systemd.ts";
 
 export type FleetTask = {
   id: string;
@@ -51,8 +52,12 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       const reconcile = async () => {
         const path = [`${home}/.local/bin`, `${home}/.bun/bin`, ...(plan.os === "darwin" ? ["/opt/homebrew/bin"] : []), "/usr/local/bin", "/usr/bin", "/bin"].join(":");
         const scripts = await launchers(home, osJobs, (job) => launcherScript(command(job), path, inside(home, logTarget(job.id))));
-        if (plan.os === "linux") await reconcileCron(osJobs, scripts, context);
-        else await reconcileLaunchd(osJobs, scripts, { ...context, uid });
+        if (plan.os === "linux") {
+          const services = osJobs.filter(isService);
+          const timed = osJobs.filter(isTimed);
+          await reconcileCron(timed, only(scripts, timed), context, new Set(services.map((job) => job.id)));
+          await reconcileSystemd(services, only(scripts, services), context, new Set(timed.map((job) => job.id)));
+        } else await reconcileLaunchd(osJobs, scripts, { ...context, uid });
         await reconcileTasks(plan, await t3(), context);
         return result;
       };
@@ -75,6 +80,8 @@ async function launchers(home: string, jobs: Array<Owned<PackJob>>, script: (job
   return scripts;
 }
 
+const only = (scripts: Scripts, jobs: Array<Owned<PackJob>>): Scripts => new Map(jobs.map((job) => [job.id, scripts.get(job.id)!]));
+
 const stale = (script: Write | undefined) => script !== undefined && script.before !== script.after;
 
 async function writeLaunchers(home: string, writes: Write[], result: AdapterResult) {
@@ -87,7 +94,7 @@ async function removeLauncher(home: string, id: string) {
   if (!(await linkOnPath(home, launcherTarget(id)))) await rm(inside(home, launcherTarget(id)), { force: true });
 }
 
-async function reconcileCron(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, outage }: Context) {
+async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun, run, result, outage }: Context, keep: Set<string>) {
   const listed = await run(["crontab", "-l"]);
   const empty = listed.code !== 0 && /no crontab/i.test(listed.stderr ?? "");
   if (listed.code !== 0 && !empty) {
@@ -112,7 +119,7 @@ async function reconcileCron(jobs: Array<Owned<PackJob>>, scripts: Scripts, { ho
   const written = await run(["crontab", "-"], { input: changes.text });
   if (written.code !== 0) return void result.findings.push({ id: "jobs:cron", pack: "engine", say: `Could not write your crontab (exit ${written.code}).`, repair: "apply" });
   const kept = new Set([...changes.text.matchAll(/# fleet:([A-Za-z0-9._-]+)$/gm)].map((match) => match[1]!));
-  for (const id of new Set(changes.removed)) if (!kept.has(id)) await removeLauncher(home, id);
+  for (const id of new Set(changes.removed)) if (!kept.has(id) && !keep.has(id)) await removeLauncher(home, id);
   result.actions.push({ target: "crontab", operation: "replace", reason: all.map((finding) => finding.say).join(" ") });
 }
 
@@ -152,10 +159,10 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
     const name = `${label}.plist`;
     const file = join(agents, name);
     const script = scripts.get(job.id)!;
-    const content = plist(job.id, inside(home, script.target), launchdTimer(job.schedule), inside(home, logTarget(job.id)));
+    const content = plist(job.id, inside(home, script.target), isTimed(job) ? launchdTimer(job.schedule) : "always", inside(home, logTarget(job.id)));
     const current = await readFile(file, "utf8").catch(() => undefined);
     if (await foreign(name, job.id, current, content, job.pack)) continue;
-    const reload = current !== content || (await state(label)) !== "loaded";
+    const reload = current !== content || (await state(label)) !== "loaded" || (isService(job) && stale(script));
     if (!dryRun && current === content && (await written(job.id)) !== content) await keepCopy(job.id, content);
     if (!reload && !stale(script)) continue;
     if (dryRun) {
@@ -194,8 +201,81 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   }
 }
 
+const running = ["active", "activating", "reloading"];
+
+async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, outage }: Context, keep: Set<string>) {
+  const copyTarget = (id: string) => `${jobsFolder}/${id}.service`;
+  const read = (target: string) => readState(home, target).catch(() => undefined);
+  const systemctl = (...args: string[]) => run(["systemctl", "--user", ...args]);
+  const reason = (output: { code: number; stderr?: string }) => (output.stderr ?? "").trim().split("\n").at(-1) || `exit ${output.code}`;
+  const copies = (await readdir(inside(home, jobsFolder)).catch(() => [] as string[])).filter((name) => name.endsWith(".service")).map((name) => name.slice(0, -".service".length));
+  const gone = outage ? [] : copies.filter((id) => jobId.test(id) && !jobs.some((job) => job.id === id));
+  if (jobs.length && !systemdSafe(home)) return void result.findings.push({ id: "jobs:systemd", pack: "engine", say: `Left services alone: systemd cannot run scripts from ${JSON.stringify(home)}, which holds a line break.`, repair: "human" });
+  const foreign = (job: { id: string; pack: string } | string) => {
+    const id = typeof job === "string" ? job : job.id;
+    result.findings.push({ id: `job:${id}`, pack: typeof job === "string" ? "engine" : job.pack, say: `Left ${unitTarget(id)} alone: Fleet did not write it, or it changed since. Move it away, then run fleet apply.`, repair: "human" });
+  };
+  const plans: Array<{ job: Owned<PackJob>; script: Write; content: string; current?: string; copy?: string; reload: boolean; restart: boolean; enable: boolean }> = [];
+  for (const job of jobs) {
+    const script = scripts.get(job.id)!;
+    const content = unit(job.id, inside(home, script.target));
+    const [current, copy] = [await read(unitTarget(job.id)), await read(copyTarget(job.id))];
+    if (current !== undefined && current !== content && current !== copy) {
+      foreign(job);
+      continue;
+    }
+    const shown = await systemctl("show", "--property=ActiveState,UnitFileState,NeedDaemonReload", unitName(job.id));
+    if (shown.code !== 0) return void result.findings.push({ id: "jobs:systemd", pack: "engine", say: `Could not reach systemd's user manager (${reason(shown)}), so services were not changed. Log in to this machine in a normal session, then run fleet apply.`, repair: "human" });
+    const state = Object.fromEntries(shown.stdout.split("\n").map((line) => line.split("=", 2) as [string, string]));
+    const changed = current !== content || stale(script) || state.NeedDaemonReload === "yes";
+    plans.push({ job, script, content, current, copy, reload: current !== content || state.NeedDaemonReload === "yes", restart: changed || !running.includes(state.ActiveState ?? ""), enable: state.UnitFileState !== "enabled" });
+  }
+  for (const { job, current, content, restart, enable } of plans) {
+    if (dryRun && (restart || enable)) result.findings.push(needs(job, current === undefined ? "added" : current !== content || stale(scripts.get(job.id)) ? "updated" : "started"));
+  }
+  const leaving: string[] = [];
+  for (const id of gone) {
+    const [current, copy] = [await read(unitTarget(id)), await read(copyTarget(id))];
+    if (current !== undefined && current !== copy) foreign(id);
+    else if (dryRun) result.findings.push(needs(id, "removed"));
+    else leaving.push(id);
+  }
+  if (dryRun) return;
+  const units = plans.filter((item) => item.current !== item.content);
+  await writeLaunchers(home, plans.map((item) => item.script).filter(stale), result);
+  if (units.length) await writeWithBackups(home, units.map((item) => ({ target: unitTarget(item.job.id), before: item.current, after: item.content })));
+  result.actions.push(...units.map((item) => ({ target: unitTarget(item.job.id), operation: item.current === undefined ? ("create" as const) : ("replace" as const) })));
+  await writeWithBackups(home, plans.filter((item) => item.copy !== item.content).map((item) => ({ target: copyTarget(item.job.id), before: item.copy, after: item.content })));
+  let reload = plans.some((item) => item.reload);
+  for (const id of leaving) {
+    if ((await read(unitTarget(id))) !== undefined) {
+      const stopped = await systemctl("disable", "--now", unitName(id));
+      if (stopped.code !== 0) {
+        result.findings.push({ id: `job:${id}`, pack: "engine", say: `systemd did not stop the ${id} job (${reason(stopped)}), so Fleet left its unit as it is.`, repair: "apply" });
+        continue;
+      }
+      await rm(inside(home, unitTarget(id)), { force: true });
+      result.actions.push({ target: unitTarget(id), operation: "remove" });
+      reload = true;
+    }
+    await rm(inside(home, copyTarget(id)), { force: true });
+    if (!keep.has(id)) await removeLauncher(home, id);
+  }
+  if (reload) {
+    const reloaded = await systemctl("daemon-reload");
+    if (reloaded.code !== 0) return void result.findings.push({ id: "jobs:systemd", pack: "engine", say: `systemd did not reload its units (${reason(reloaded)}). Run fleet apply again.`, repair: "apply" });
+  }
+  for (const { job, restart, enable } of plans) {
+    for (const [wanted, verb] of [[enable, "enable"], [restart, "restart"]] as const) {
+      if (!wanted) continue;
+      const done = await systemctl(verb, unitName(job.id));
+      if (done.code !== 0) result.findings.push({ id: `job:${job.id}`, pack: job.pack, say: `systemd did not ${verb === "enable" ? "enable" : "start"} the ${job.id} job (${reason(done)}).`, repair: "apply" });
+    }
+  }
+}
+
 async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun, result, outage }: Context) {
-  const jobs = plan.jobs.filter((job) => job.runner === "t3" && job.task);
+  const jobs = plan.jobs.filter(isTimed).filter((job) => job.runner === "t3" && job.task);
   if (!client) {
     for (const job of jobs) result.findings.push({ id: `task:${job.id}`, pack: job.pack, say: `The ${job.id} task waits for T3 Code to run. The next fleet apply after T3 Code starts adds it.`, repair: "apply" });
     return;

@@ -47,7 +47,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
 
 const oses = ["darwin", "linux"];
 const roles = ["mac", "devbox", "linux", "hub"];
-const intervals = ["5m", "15m", "1h", "1d"];
+const intervals = ["5m", "15m", "1h", "1d", "always"];
 const runtimeModes = ["full-access", "auto", "approval-required"];
 const providers = ["claude", "codex", "t3"];
 const plans = ["claude", "codex", "both"];
@@ -118,10 +118,12 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   });
   each("jobs", (item, label) => {
     need(typeof item.id === "string" && isStrings(item.command), `${label}: needs an id and a command list`);
-    const schedule = isRecord(item.schedule) ? item.schedule : undefined;
-    need(intervals.includes(schedule?.every as string), `${label}: schedule.every must be 5m, 15m, 1h, or 1d`);
-    need(schedule?.at === undefined || /^([01]\d|2[0-3]):[0-5]\d$/.test(String(schedule.at)), `${label}: schedule.at must be HH:MM`);
     need(item.runner === undefined || item.runner === "os" || item.runner === "t3", `${label}: runner must be os or t3`);
+    const schedule = isRecord(item.schedule) ? item.schedule : undefined;
+    need(intervals.includes(schedule?.every as string), `${label}: schedule.every must be 5m, 15m, 1h, 1d, or always`);
+    need(schedule?.at === undefined || /^([01]\d|2[0-3]):[0-5]\d$/.test(String(schedule.at)), `${label}: schedule.at must be HH:MM`);
+    need(schedule?.every !== "always" || schedule.at === undefined, `${label}: a job that runs always has no schedule.at`);
+    need(schedule?.every !== "always" || (item.runner !== "t3" && item.task === undefined), `${label}: a job that runs always runs on the machine, not on t3`);
     filters(item, label);
     if (item.task === undefined) return;
     const task = isRecord(item.task) ? item.task : fail(`${label}: task must be an object`);

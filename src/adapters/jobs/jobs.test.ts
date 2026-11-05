@@ -473,3 +473,260 @@ describe("T3 scheduled tasks", () => {
     expect(report.findings).toContainEqual({ id: "task:quality-loop", pack: "base", say: "The quality-loop task waits for T3 Code to run. The next fleet apply after T3 Code starts adds it.", repair: "apply" });
   });
 });
+
+describe("service jobs", () => {
+  const trigger: PackJob = { id: "slack-trigger", command: ["fleet", "slack-trigger", "run"], schedule: { every: "always" } };
+  const unitPath = (home: string, id = "slack-trigger") => join(home, ".config/systemd/user", `fleet-${id}.service`);
+
+  function systemd(options: { manager?: boolean; refuse?: string } = {}) {
+    const calls: string[][] = [];
+    const units = new Map<string, { active: boolean; enabled: boolean }>();
+    const cron = { text: "" };
+    const manager = { stale: false };
+    const run: CommandRunner = async (command, runOptions) => {
+      calls.push(command);
+      if (command.join(" ") === "crontab -l") return { code: 0, stdout: cron.text };
+      if (command.join(" ") === "crontab -") return (cron.text = runOptions?.input ?? ""), { code: 0, stdout: "" };
+      if (command[0] !== "systemctl" || command[1] !== "--user") return { code: 127, stdout: "" };
+      if (options.manager === false) return { code: 1, stdout: "", stderr: "Failed to connect to bus\n" };
+      const [verb, ...rest] = command.slice(2);
+      const unit = rest.at(-1)!;
+      if (verb === options.refuse) return { code: 1, stdout: "", stderr: `Failed to ${verb}\n` };
+      const state = units.get(unit) ?? { active: false, enabled: false };
+      if (verb === "show") return { code: 0, stdout: `ActiveState=${state.active ? "active" : "inactive"}\nUnitFileState=${state.enabled ? "enabled" : ""}\nNeedDaemonReload=${manager.stale ? "yes" : "no"}\n` };
+      if (verb === "daemon-reload") manager.stale = false;
+      if (verb === "enable") units.set(unit, { ...state, enabled: true });
+      if (verb === "restart") units.set(unit, { ...state, active: true });
+      if (verb === "disable") units.set(unit, { active: false, enabled: false });
+      return { code: 0, stdout: "" };
+    };
+    return { calls, units, cron, manager, adapter: jobsAdapter({ run, engineRoot: engine }) };
+  }
+  const changes = (calls: string[][]) => calls.filter((call) => call[0] === "systemctl" && call[2] !== "show");
+
+  test("writes a user unit that keeps the launcher running, enables it, and starts it, with no crontab line", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+
+    const report = await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+
+    const jobs = `${home}/.local/state/fleet/jobs`;
+    expect(readFileSync(unitPath(home), "utf8")).toBe(`[Unit]
+Description=Fleet: slack-trigger
+After=network-online.target
+
+[Service]
+ExecStart=/bin/sh "${jobs}/slack-trigger.sh"
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
+`);
+    expect(readFileSync(join(jobs, "slack-trigger.sh"), "utf8")).toContain(`exec '/bin/sh' '${engine}/fleet' 'slack-trigger' 'run' >>'${jobs}/slack-trigger.log' 2>&1`);
+    expect(changes(linux.calls)).toEqual([
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "enable", "fleet-slack-trigger.service"],
+      ["systemctl", "--user", "restart", "fleet-slack-trigger.service"],
+    ]);
+    expect(linux.calls.some((call) => call.join(" ") === "crontab -")).toBe(false);
+    expect(report.actions).toContainEqual({ target: ".config/systemd/user/fleet-slack-trigger.service", operation: "create" });
+  });
+
+  test("a second apply changes nothing", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    const before = linux.calls.length;
+
+    const report = await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+
+    expect(changes(linux.calls.slice(before))).toEqual([]);
+    expect(report.actions).toEqual([]);
+    expect((await check(plan("linux", [trigger]), { home, adapters: [linux.adapter] })).ok).toBe(true);
+  });
+
+  test("restarts the service when its command changes", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    const before = linux.calls.length;
+    const changed = { ...trigger, command: ["fleet", "slack-trigger", "run", "--verbose"] };
+
+    expect((await check(plan("linux", [changed]), { home, adapters: [linux.adapter] })).findings).toContainEqual({ id: "job:slack-trigger", pack: "base", say: "The slack-trigger job needs to be updated.", repair: "apply" });
+    await apply(plan("linux", [changed]), { home, adapters: [linux.adapter] });
+
+    expect(readFileSync(join(home, ".local/state/fleet/jobs/slack-trigger.sh"), "utf8")).toContain("'--verbose'");
+    expect(changes(linux.calls.slice(before))).toEqual([["systemctl", "--user", "restart", "fleet-slack-trigger.service"]]);
+  });
+
+  test("starts a service that stopped, and enables one that was disabled", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    linux.units.set("fleet-slack-trigger.service", { active: false, enabled: false });
+    const before = linux.calls.length;
+
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+
+    expect(changes(linux.calls.slice(before))).toEqual([
+      ["systemctl", "--user", "enable", "fleet-slack-trigger.service"],
+      ["systemctl", "--user", "restart", "fleet-slack-trigger.service"],
+    ]);
+  });
+
+  test("reloads and restarts a unit that systemd did not load after Fleet wrote it", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    linux.manager.stale = true;
+    const before = linux.calls.length;
+
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+
+    expect(changes(linux.calls.slice(before))).toEqual([
+      ["systemctl", "--user", "daemon-reload"],
+      ["systemctl", "--user", "restart", "fleet-slack-trigger.service"],
+    ]);
+  });
+
+  test("turning the workflow off stops the service and removes its unit, launcher, and copy", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    const before = linux.calls.length;
+
+    expect((await check(plan("linux", []), { home, adapters: [linux.adapter] })).findings).toContainEqual({ id: "job:slack-trigger", pack: "engine", say: "The slack-trigger job needs to be removed.", repair: "apply" });
+    const report = await apply(plan("linux", []), { home, adapters: [linux.adapter] });
+
+    expect(changes(linux.calls.slice(before))).toEqual([
+      ["systemctl", "--user", "disable", "--now", "fleet-slack-trigger.service"],
+      ["systemctl", "--user", "daemon-reload"],
+    ]);
+    expect(existsSync(unitPath(home))).toBe(false);
+    expect(readdirSync(join(home, ".local/state/fleet/jobs")).filter((name) => name.startsWith("slack-trigger.") && name !== "slack-trigger.log")).toEqual([]);
+    expect(report.actions).toContainEqual({ target: ".config/systemd/user/fleet-slack-trigger.service", operation: "remove" });
+  });
+
+  test("keeps the unit when systemd does not stop it", async () => {
+    const home = temp.make("home-");
+    await apply(plan("linux", [trigger]), { home, adapters: [systemd().adapter] });
+
+    const report = await apply(plan("linux", []), { home, adapters: [systemd({ refuse: "disable" }).adapter] });
+
+    expect(existsSync(unitPath(home))).toBe(true);
+    expect(report.findings).toContainEqual({ id: "job:slack-trigger", pack: "engine", say: "systemd did not stop the slack-trigger job (Failed to disable), so Fleet left its unit as it is.", repair: "apply" });
+  });
+
+  test("leaves an unmanaged unit with the same name alone", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
+    writeFileSync(unitPath(home), "[Service]\nExecStart=/opt/mine\n");
+    const linux = systemd();
+
+    const report = await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+
+    expect(readFileSync(unitPath(home), "utf8")).toBe("[Service]\nExecStart=/opt/mine\n");
+    expect(changes(linux.calls)).toEqual([]);
+    expect(report.findings).toContainEqual({ id: "job:slack-trigger", pack: "base", say: "Left .config/systemd/user/fleet-slack-trigger.service alone: Fleet did not write it, or it changed since. Move it away, then run fleet apply.", repair: "human" });
+
+    await apply(plan("linux", []), { home, adapters: [linux.adapter] });
+    expect(readFileSync(unitPath(home), "utf8")).toBe("[Service]\nExecStart=/opt/mine\n");
+    expect(changes(linux.calls)).toEqual([]);
+  });
+
+  test("leaves a unit alone once someone edits the one Fleet wrote, also when its job goes", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    writeFileSync(unitPath(home), readFileSync(unitPath(home), "utf8") + "Nice=5\n");
+    const before = linux.calls.length;
+
+    const kept = await apply(plan("linux", []), { home, adapters: [linux.adapter] });
+
+    expect(readFileSync(unitPath(home), "utf8")).toEndWith("Nice=5\n");
+    expect(changes(linux.calls.slice(before))).toEqual([]);
+    expect(kept.findings.map((finding) => finding.id)).toContain("job:slack-trigger");
+  });
+
+  test("reports a systemd user manager that does not answer, and writes nothing", async () => {
+    const home = temp.make("home-");
+    const report = await apply(plan("linux", [trigger]), { home, adapters: [systemd({ manager: false }).adapter] });
+    expect(existsSync(unitPath(home))).toBe(false);
+    expect(report.findings).toContainEqual({ id: "jobs:systemd", pack: "engine", say: "Could not reach systemd's user manager (Failed to connect to bus), so services were not changed. Log in to this machine in a normal session, then run fleet apply.", repair: "human" });
+  });
+
+  test("doctor reports a missing service without writing", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    const report = await check(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    expect(report.findings).toContainEqual({ id: "job:slack-trigger", pack: "base", say: "The slack-trigger job needs to be added.", repair: "apply" });
+    expect(changes(linux.calls)).toEqual([]);
+    expect(existsSync(unitPath(home))).toBe(false);
+  });
+
+  test("keeps a service while a pack source cannot be fetched", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    const offline = { ...plan("linux", []), packs: [{ name: "base", source: "engine", ref: "main", available: true }, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] };
+    const before = linux.calls.length;
+    await apply(offline, { home, adapters: [linux.adapter] });
+    expect(existsSync(unitPath(home))).toBe(true);
+    expect(changes(linux.calls.slice(before))).toEqual([]);
+  });
+
+  test("quotes a home that systemd would expand", async () => {
+    const home = temp.make("home-50% $USER \"q\" \\-");
+    await apply(plan("linux", [trigger]), { home, adapters: [systemd().adapter] });
+    const quoted = `${home}/.local/state/fleet/jobs/slack-trigger.sh`.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%").replaceAll("$", "$$$$");
+    expect(readFileSync(unitPath(home), "utf8")).toContain(`ExecStart=/bin/sh "${quoted}"\n`);
+  });
+
+  test("runs a scheduled job and a service side by side, and moves a job between them", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    const scheduled: PackJob = { id: "slack-trigger", command: trigger.command, schedule: { every: "5m" } };
+
+    await apply(plan("linux", [scheduled, prune]), { home, adapters: [linux.adapter] });
+    expect(linux.cron.text).toContain("# fleet:slack-trigger");
+
+    await apply(plan("linux", [trigger, prune]), { home, adapters: [linux.adapter] });
+    expect(linux.cron.text).not.toContain("# fleet:slack-trigger");
+    expect(linux.cron.text).toContain("# fleet:prune");
+    expect(existsSync(unitPath(home))).toBe(true);
+    expect(existsSync(join(home, ".local/state/fleet/jobs/slack-trigger.sh"))).toBe(true);
+    expect(linux.units.get("fleet-slack-trigger.service")).toEqual({ active: true, enabled: true });
+  });
+
+  test("on a Mac, a service is a launchd agent that runs at load and is kept alive, and a new command reloads it", async () => {
+    const home = temp.make("home-");
+    const calls: string[][] = [];
+    const loaded = new Set<string>();
+    const run: CommandRunner = async (command) => {
+      calls.push(command);
+      const [, verb, target] = command;
+      if (verb === "print") return { code: loaded.has(target!) ? 0 : 113, stdout: "" };
+      if (verb === "bootstrap") loaded.add(`gui/501/${command[3]!.split("/").at(-1)!.replace(/\.plist$/, "")}`);
+      if (verb === "bootout") loaded.delete(target!);
+      return { code: 0, stdout: "" };
+    };
+    const mac = jobsAdapter({ run, engineRoot: engine, uid: 501 });
+
+    await apply(plan("darwin", [trigger]), { home, adapters: [mac] });
+
+    const text = readFileSync(join(home, "Library/LaunchAgents/dev.fleet.slack-trigger.plist"), "utf8");
+    expect(text).toContain("  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n");
+    expect(text).not.toContain("StartInterval");
+    expect(text).not.toContain("StartCalendarInterval");
+    expect(loaded.has("gui/501/dev.fleet.slack-trigger")).toBe(true);
+
+    const before = calls.length;
+    await apply(plan("darwin", [trigger]), { home, adapters: [mac] });
+    expect(calls.slice(before).filter((call) => call[1] !== "print")).toEqual([]);
+
+    await apply(plan("darwin", [{ ...trigger, command: ["fleet", "slack-trigger", "run", "--verbose"] }]), { home, adapters: [mac] });
+    expect(calls.slice(before).filter((call) => call[1] !== "print").map((call) => call[1])).toEqual(["bootout", "bootstrap"]);
+    expect(readFileSync(join(home, ".local/state/fleet/jobs/slack-trigger.sh"), "utf8")).toContain("'--verbose'");
+  });
+});

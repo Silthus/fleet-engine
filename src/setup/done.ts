@@ -160,6 +160,7 @@ function jobLines(plan: Plan, manifests: PackManifest[]): string[] {
 const everyWords = { "5m": "every 5 minutes", "15m": "every 15 minutes" };
 
 function schedule(job: PackJob) {
+  if (job.schedule.every === "always") return "all the time";
   const { every, at = defaultTime } = job.schedule;
   if (every === "1d") return `every day at ${at}`;
   if (every === "1h") return `every hour at :${at.split(":")[1]}`;
