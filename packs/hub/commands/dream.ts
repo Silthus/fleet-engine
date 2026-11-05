@@ -4,7 +4,7 @@ import { modelFor } from "../../base/lib/models.ts";
 import { optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { launchScratchThread, withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, Coder } from "../lib/coder.ts";
-import { knownDevboxes, quote, shellLimitMs } from "../lib/machine.ts";
+import { devboxesOf, quote, shellLimitMs } from "../lib/machine.ts";
 import { modelAnalyst } from "../lib/dream/analyze.ts";
 import { boundedSpawn } from "../lib/dream/spawn.ts";
 import { dreamCommand, dreamPeers } from "../lib/dream/command.ts";
@@ -27,7 +27,7 @@ await runCommand(() => dreamCommand(Bun.argv.slice(2), {
   now: Date.now,
   print: (text) => void process.stdout.write(text.endsWith("\n") || !text ? text : `${text}\n`),
   say: (line) => console.error(line),
-  peers: () => dreamPeers(stringSetting("hub.alias", env), knownDevboxes(env, home), hostname()),
+  peers: () => dreamPeers(stringSetting("hub.alias", env), devboxesOf(env, home), hostname()),
   onPeer: (alias, command) => capture(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", alias, `bash -lc ${quote(command)}`], { timeoutMs: shellLimitMs }),
   boxes,
   git: (args) => capture(["git", ...args], { timeoutMs: shellLimitMs }),
