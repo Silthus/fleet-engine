@@ -7,7 +7,7 @@ import type { Result } from "../coder.ts";
 import type { Digest } from "./digest.ts";
 import type { ModelRow } from "../../../base/lib/models.ts";
 import { quote } from "../machine.ts";
-import { analystCommand, analystPrompt, analystTimeoutMs, modelAnalyst, render, type Analyst, type Spawn } from "./analyze.ts";
+import { AnalystFailure, analystCommand, analystPrompt, analystTimeoutMs, modelAnalyst, render, type Analyst, type Spawn } from "./analyze.ts";
 import { dreamCommand, dreamPeers, type DreamIo } from "./command.ts";
 
 const temp = tempDirs();
@@ -138,9 +138,9 @@ test("analyze lists an analyst that failed and does not mark its session as seen
   const run = join(home, ".local/state/fleet/dream/2026-11-05");
   mkdirSync(join(run, "digests"), { recursive: true });
   writeFileSync(join(run, "digests", "a.json"), JSON.stringify(digest()));
-  const { io: dream } = io(home, { analyst: () => async () => { throw new Error("analyst exited with 1"); } });
+  const { io: dream } = io(home, { analyst: () => async () => { throw new AnalystFailure("exit 1"); } });
   expect(await dreamCommand(["analyze", run], dream)).toBe(1);
-  expect(readFileSync(join(run, "findings.md"), "utf8")).toContain("Analysts failed on:\n- a.json: analyst exited with 1");
+  expect(readFileSync(join(run, "findings.md"), "utf8")).toContain("Analysts failed on:\n- a.json: exit 1");
   expect(JSON.parse(readFileSync(join(home, ".local/state/fleet/dream/seen.json"), "utf8"))).toEqual({});
 });
 
@@ -234,23 +234,23 @@ function twoDigests(home: string) {
 test("prepare and run exit 1 and start no thread when every analyst fails", async () => {
   for (const command of ["prepare", "run"]) {
     const home = hubHome();
-    const { io: dream, said, launched, printed } = io(home, { onPeer: async () => ok(line(digest())), analyst: () => async () => { throw new Error("analyst exited with 2"); } });
+    const { io: dream, said, launched, printed } = io(home, { onPeer: async () => ok(line(digest())), analyst: () => async () => { throw new AnalystFailure("exit 2"); } });
     expect([command, await dreamCommand([command], dream)]).toEqual([command, 1]);
     expect(launched).toEqual([]);
     expect(printed).toEqual([]);
     expect(said.at(-1)).toContain("every analyst failed");
-    expect(said.at(-1)).toContain("analyst exited with 2");
+    expect(said.at(-1)).toContain(": exit 2. Findings:");
   }
 });
 
 test("run still starts the thread when some analysts fail, and names the failures", async () => {
   const home = hubHome();
   const run = twoDigests(home);
-  const { io: dream, said, launched } = io(home, { onPeer: async () => ok(), analyst: () => async (item) => { if (item.session === "s-a") throw new Error("analyst exited with 1"); return { findings: [] }; } });
+  const { io: dream, said, launched } = io(home, { onPeer: async () => ok(), analyst: () => async (item) => { if (item.session === "s-a") throw new AnalystFailure("exit 1"); return { findings: [] }; } });
   expect(await dreamCommand(["run"], dream)).toBe(0);
   expect(launched.length).toBe(1);
-  expect(said.join("\n")).toContain("analyzed 1 of 2 sessions, 1 failed: a.json: analyst exited with 1");
-  expect(readFileSync(join(run, "findings.md"), "utf8")).toContain("- a.json: analyst exited with 1");
+  expect(said.join("\n")).toContain("analyzed 1 of 2 sessions, 1 failed: a.json: exit 1");
+  expect(readFileSync(join(run, "findings.md"), "utf8")).toContain("- a.json: exit 1");
 });
 
 const lookup = (provider: "claude" | "codex"): ModelRow => ({ role: "lookup", work: "", provider, model: `${provider}-small`, effort: "low" });
@@ -278,7 +278,7 @@ test("every analyst runs with a ten minute limit, and one that hits it fails its
     const limits: number[] = [];
     const spawn: Spawn = async (_argv, options) => (limits.push(options.timeoutMs), { code: 137, stdout: "", timedOut: true });
     const analyst = modelAnalyst(lookup(provider), hubHome(), {}, spawn);
-    await expect(analyst(digest(), "# index", temp.make("fleet-dream-run-"))).rejects.toThrow("analyst stopped at its 10 minute limit");
+    await expect(analyst(digest(), "# index", temp.make("fleet-dream-run-"))).rejects.toThrow("timed out");
     expect(limits).toEqual([600_000]);
   }
 });
@@ -303,4 +303,37 @@ test("final finding 4: collect saves the machines it could not reach in the run,
   const { io: clean } = io(home, { onPeer: async () => ok(line(digest())) });
   expect(await dreamCommand(["prepare"], clean)).toBe(0);
   expect(readFileSync(join(run, "findings.md"), "utf8")).not.toContain("Not reached");
+});
+
+const filesIn = (root: string): string[] => readdirSync(root, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? filesIn(join(root, entry.name)) : [join(root, entry.name)]);
+
+test("recheck finding 4: findings.md and the run name only a fixed failure category for an analyst, never its error text", async () => {
+  const secret = ["PASSWORD=", "fake", "AnalystError", "88993"].join("");
+  const answers: Array<[string, Spawn]> = [
+    ["bad answer", async () => ({ code: 0, stdout: JSON.stringify({ is_error: true, result: secret }) })],
+    ["bad answer", async () => ({ code: 0, stdout: `not json ${secret}` })],
+    ["exit 3", async () => ({ code: 3, stdout: secret })],
+    ["timed out", async () => ({ code: 137, stdout: secret, timedOut: true })],
+    ["not started", async () => { throw new Error(`spawn failed: ${secret}`); }],
+  ];
+  for (const [reason, spawn] of answers) {
+    const home = hubHome();
+    const run = twoDigests(home);
+    const { io: dream, said } = io(home, { onPeer: async () => ok(), analyst: () => modelAnalyst(lookup("claude"), home, {}, spawn) });
+    expect([reason, await dreamCommand(["run"], dream)]).toEqual([reason, 1]);
+    expect(readFileSync(join(run, "findings.md"), "utf8")).toContain(`Analysts failed on:\n- a.json: ${reason}\n- b.json: ${reason}`);
+    const leaked = [...filesIn(join(home, ".local/state/fleet/dream")).filter((path) => readFileSync(path, "utf8").includes("AnalystError")), ...said.filter((text) => text.includes("AnalystError"))];
+    expect([reason, leaked]).toEqual([reason, []]);
+  }
+  const home = hubHome();
+  const run = twoDigests(home);
+  const { io: dream } = io(home, { onPeer: async () => ok(), analyst: () => async () => { throw new Error(secret); } });
+  expect(await dreamCommand(["analyze", run], dream)).toBe(1);
+  expect(readFileSync(join(run, "findings.md"), "utf8")).toContain("- a.json: not started");
+  expect(readFileSync(join(run, "findings.md"), "utf8")).not.toContain("AnalystError");
+});
+
+test("recheck finding 4: a Codex analyst with no answer file fails as a bad answer", async () => {
+  const analyst = modelAnalyst(lookup("codex"), hubHome(), {}, async () => ({ code: 0, stdout: "" }));
+  await expect(analyst(digest(), "# index", temp.make("fleet-dream-run-"))).rejects.toThrow("bad answer");
 });

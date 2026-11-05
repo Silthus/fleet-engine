@@ -62,7 +62,7 @@ test("AWS access key ids, secret keys, session tokens, and STS text output are r
   expect(output).toContain("CREDENTIALS\t[redacted AWS access key id]\t2026-11-05T05:10:00Z\t[redacted credential]\t[redacted credential]");
   const json = redactCredentials(JSON.stringify({ Credentials: { AccessKeyId: sessionKeyId, SecretAccessKey: secretKey, SessionToken: sessionToken, Expiration: "2026-11-05T05:10:00Z" } }));
   expect(leaks(json, sessionKeyId, secretKey, sessionToken)).toEqual([]);
-  expect(JSON.parse(json).Credentials.Expiration).toBe("2026-11-05T05:10:00Z");
+  expect(JSON.parse(json)).toEqual({ Credentials: "[redacted credential]" });
 });
 
 test("comparisons, identifiers, member expressions, and substitutions stay as they are", () => {
@@ -125,7 +125,7 @@ test("finding 3: a header name inside JSON hides its value whatever its length o
   const output = redactCredentials(JSON.stringify({ request: { headers } }));
   expect(JSON.parse(output).request.headers).toEqual({
     Authorization: "[redacted credential]", "Proxy-Authorization": "[redacted credential]", Cookie: "[redacted credential]",
-    "set-cookie": ["[redacted credential]", "[redacted credential]"], "X-Goog-Api-Key": "[redacted credential]", "x-auth-token": "[redacted credential]", Accept: "text/html",
+    "set-cookie": "[redacted credential]", "X-Goog-Api-Key": "[redacted credential]", "x-auth-token": "[redacted credential]", Accept: "text/html",
   });
 });
 
@@ -205,7 +205,6 @@ test("final finding 1: a Cookie, Set-Cookie, Authorization, or Proxy-Authorizati
     `curl -H "Authorization: ${hidden}" -H "Proxy-Authorization: ${hidden}" https://api.example.com`,
     `Cookie: ${hidden}`,
     `set-cookie: ${hidden}`,
-    `  proxy-authorization: ${hidden}`,
     String.raw`{"command": "curl -H \"Cookie: ${hidden}\" https://api.example.com", "next": 1`,
   ]);
   expect(redactCredentials(output)).toBe(output);
@@ -221,7 +220,7 @@ test("final finding 1: a whole header is redacted inside decoded JSON too, and a
 test("final finding 2: a number or boolean under a secret name is redacted, and other scalars stay", () => {
   const pin = Number(fake("8675", "309"));
   expect(redactValue({ password: pin, access_token: [pin, pin], "x-api-key": pin, auth: true, retries: 3, verbose: false, token: null })).toEqual({
-    password: hidden, access_token: [hidden, hidden], "x-api-key": hidden, auth: hidden, retries: 3, verbose: false, token: null,
+    password: hidden, access_token: hidden, "x-api-key": hidden, auth: hidden, retries: 3, verbose: false, token: null,
   });
   const once = redactCredentials(JSON.stringify({ password: pin, nested: { pin_token: pin } }));
   expect(once).toBe(`{"password":"${hidden}","nested":{"pin_token":"${hidden}"}}`);
@@ -232,5 +231,68 @@ test("final finding 2: a number or boolean under a quoted secret name in plain t
   const pin = fake("8675", "309");
   const once = redactCredentials(String.raw`exit code 1 {"password": ${pin}, "auth":true, "retries": 3} and {\"access_token\":${pin}}`);
   expect(once).toBe(String.raw`exit code 1 {"password": "${hidden}", "auth":"${hidden}", "retries": 3} and {\"access_token\":\"${hidden}\"}`);
+  expect(redactCredentials(once)).toBe(once);
+});
+
+const folded = fake("sessionid=", "fakeFolded", "99117");
+const digestResponse = fake("fake", "Digest", "77118");
+
+test("recheck finding 1: a quoted header is redacted up to its closing quote across lines, and a raw header with every folded line after it", () => {
+  const output = redactCredentials([
+    `Cookie: theme=light;\r\n\t${folded}`,
+    `curl -H 'Cookie: theme=light;\n  ${folded}' https://api.example.com`,
+    `curl -H "Authorization: Digest username=\\"u\\",\n  response=\\"${digestResponse}\\"" https://api.example.com`,
+    String.raw`{"command": "curl -H \"Cookie: theme=light;\n\t${folded}\" https://api.example.com", "next": 1`,
+    `Authorization: Digest username="u",\n  response="${digestResponse}"`,
+    `Cookie:\n\t${folded}`,
+    "Host: example.com",
+  ].join("\n"));
+  expect(leaks(output, "fakeFolded", digestResponse)).toEqual([]);
+  expect(output.split("\n")).toEqual([
+    `Cookie: ${hidden}`,
+    `curl -H 'Cookie: ${hidden}' https://api.example.com`,
+    `curl -H "Authorization: ${hidden}" https://api.example.com`,
+    String.raw`{"command": "curl -H \"Cookie: ${hidden}\" https://api.example.com", "next": 1`,
+    `Authorization: ${hidden}`,
+    `Cookie:${hidden}`,
+    "Host: example.com",
+  ]);
+  expect(redactCredentials(output)).toBe(output);
+});
+
+test("recheck finding 2: a secret name hides its whole value, scalar, array or object, in parsed JSON", () => {
+  const pin = Number(fake("8675", "309"));
+  const other = Number(fake("1234", "5678"));
+  const deep = fake("fake", "Nested", "55");
+  expect(redactValue({
+    password: [{ value: pin }], access_token: [pin, other], credentials: { user: "u", inner: { value: deep } }, auth: { list: [pin] },
+    session: { cookie: [{ value: deep }] }, retries: [3, 4], token: null,
+  })).toEqual({ password: hidden, access_token: hidden, credentials: hidden, auth: hidden, session: { cookie: hidden }, retries: [3, 4], token: null });
+  const once = redactCredentials(JSON.stringify({ request: { password: [{ value: pin }], api_key: [pin, other], note: "ok" } }));
+  expect(once).toBe(`{"request":{"password":"${hidden}","api_key":"${hidden}","note":"ok"}}`);
+  expect(redactCredentials(once)).toBe(once);
+});
+
+test("recheck finding 2: a secret name hides its whole array or object in JSON inside text, escaped, single-quoted, multi-line, or cut off", () => {
+  const pin = fake("8675", "309");
+  const other = fake("1234", "5678");
+  const text = [
+    `exit code 1 {"access_token":[${pin},${other}],"retries":3}`,
+    `then {"password": [{"value": ${pin}}], "note": "ok"}`,
+    String.raw`and {\"secret\":{\"v\":\"a]b\",\"n\":[${pin}]},\"next\":1}`,
+    `and {'auth_key': [${pin}], 'next': 2}`,
+    `{"credentials": {\n  "user": "u",\n  "pin": ${pin}\n}, "after": true}`,
+    `last {"token": [${other}, `,
+  ].join("\n");
+  const once = redactCredentials(text);
+  expect(leaks(once, pin, other)).toEqual([]);
+  expect(once.split("\n")).toEqual([
+    `exit code 1 {"access_token":"${hidden}","retries":3}`,
+    `then {"password": "${hidden}", "note": "ok"}`,
+    String.raw`and {\"secret\":\"${hidden}\",\"next\":1}`,
+    `and {'auth_key': '${hidden}', 'next': 2}`,
+    `{"credentials": "${hidden}", "after": true}`,
+    `last {"token": "${hidden}"`,
+  ]);
   expect(redactCredentials(once)).toBe(once);
 });

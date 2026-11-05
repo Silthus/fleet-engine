@@ -92,8 +92,9 @@ function toolText(content: unknown): string {
 }
 
 const claudeEdits = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
-const usageTotal = (usage: Record<string, number> = {}) =>
-  (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.output_tokens ?? 0);
+const count = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+const usageTotal = (usage: Record<string, unknown> = {}) =>
+  count(usage.input_tokens) + count(usage.cache_creation_input_tokens) + count(usage.cache_read_input_tokens) + count(usage.output_tokens);
 
 export function digestClaude(path: string, machine: string, home: string, env: Env): Digest {
   const digest = blank(machine, "claude");
@@ -160,7 +161,7 @@ export function digestCodex(path: string, machine: string, home: string, env: En
     const at: string = typeof line.timestamp === "string" ? line.timestamp : digest.endedAt;
     if (line.type === "session_meta") { digest.session = payload.id ?? digest.session; digest.cwd = payload.cwd ?? digest.cwd; continue; }
     if (line.type === "turn_context" && payload.model) { digest.model = payload.model; continue; }
-    if (line.type === "event_msg" && payload.type === "token_count") { digest.tokens = payload.info?.total_token_usage?.total_tokens ?? digest.tokens; continue; }
+    if (line.type === "event_msg" && payload.type === "token_count") { digest.tokens = count(payload.info?.total_token_usage?.total_tokens ?? digest.tokens); continue; }
     if (line.type !== "response_item") continue;
     if (at) { digest.startedAt ||= at; digest.endedAt = at; }
     if (payload.type === "message" && (payload.role === "user" || payload.role === "assistant")) {
@@ -221,7 +222,8 @@ export function localDigests(home: string, machine: string, since: number, env: 
 
 function redactDigest(item: Digest): Digest {
   const { tokens, effort, ...text } = item;
-  return { ...item, ...(redactValue(text) as Omit<Digest, "tokens" | "effort">), tokens, ...(effort ? { effort } : {}) };
+  const counted = effort && { tokens: count(effort.tokens), toolCalls: count(effort.toolCalls), errors: count(effort.errors), seconds: count(effort.seconds) };
+  return { ...item, ...(redactValue(text) as Omit<Digest, "tokens" | "effort">), tokens: count(tokens), ...(counted ? { effort: counted } : {}) };
 }
 
 export function digestLines(home: string, machine: string, since: number, now: number, env: Env): string {

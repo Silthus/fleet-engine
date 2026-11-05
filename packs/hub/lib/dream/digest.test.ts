@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, utimesSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, utimesSync } from "node:fs";
+import { analyze, render } from "./analyze.ts";
 import { budget } from "./budget.ts";
 import { collect } from "./collect.ts";
 import { join } from "node:path";
@@ -365,4 +366,88 @@ test("final finding 3: with FLEET_MEMORY_DIR set, both parsers record reads and 
   const usage = JSON.parse(readFileSync(join(home, ".local/state/fleet/dream/usage.json"), "utf8"));
   expect(Object.keys(usage).sort()).toEqual(["tech/new.md", "tech/rule.md", "tech/tip.md"]);
   expect(budget(memory, usage, now).filter((problem) => problem.problem.startsWith("stale"))).toEqual([]);
+});
+
+const filesUnder = (root: string): string[] => readdirSync(root).flatMap((name) => statSync(join(root, name)).isDirectory() ? filesUnder(join(root, name)) : [join(root, name)]);
+
+async function collectAndAnalyze(home: string) {
+  const git = async () => ({ code: 0, stdout: "", stderr: "" });
+  const run = await collect("1d", { home, env: {}, self: "devbox-1", now: () => now, peers: [], onPeer: git, boxes: () => undefined, git, say: () => {} });
+  const prompts: string[] = [];
+  await analyze(run, { home, env: {}, limit: 10, jobs: 1, say: () => {}, analyst: async (item) => (prompts.push(render(item)), { taskType: "fix", findings: [] }) });
+  const state = join(home, ".local/state/fleet/dream");
+  return { prompts, stored: filesUnder(state).map((path) => readFileSync(path, "utf8")).join("\n") };
+}
+
+test("recheck finding 1: folded and multi-line quoted headers stay hidden from a tool call and a failed tool's output to the analyst", async () => {
+  const home = temp.make("fleet-dream-");
+  const cwd = join(home, "dev/app");
+  const folded = fake("sessionid=", "fakeFolded", "99117");
+  const response = fake("fake", "Digest", "77118");
+  claudeSession(home, cwd, [
+    user(cwd, "Call the API", 0),
+    assistant(cwd, [{ type: "tool_use", id: "t1", name: "Bash", input: { command: `curl -H 'Cookie: theme=light;\n  ${folded}' https://api.example.com` } }], 1),
+    user(cwd, [{ type: "tool_result", tool_use_id: "t1", is_error: true, content: `exit code 1\n< Cookie: theme=light;\r\n\t${folded}\n< Authorization: Digest username="u",\n  response="${response}"\nnext` }], 2),
+  ]);
+  const codexLines = [
+    { type: "session_meta", payload: { id: "c-1", cwd } },
+    { type: "response_item", timestamp: hourAgo(3), payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Ship it" }] } },
+    { type: "response_item", timestamp: hourAgo(4), payload: { type: "function_call", call_id: "f1", name: "shell", arguments: "{}" } },
+    { type: "response_item", timestamp: hourAgo(5), payload: { type: "function_call_output", call_id: "f1", output: `Process exited with code 1\nCookie: theme=light;\n\t${folded}` } },
+  ];
+  writeHome(home, { ".codex/sessions/2026/11/05/rollout-c-1.jsonl": codexLines.map((line) => JSON.stringify(line)).join("\n") });
+  const output = digestLines(home, "devbox-1", now - 86_400_000, now, {});
+  expect(["fakeFolded", response].filter((secret) => output.includes(secret))).toEqual([]);
+  const error: string = JSON.parse(output.split("\n")[0]!).entries.find((entry: { role: string }) => entry.role === "error").text;
+  expect(error).toBe(`Bash {"command":"curl -H 'Cookie: [redacted credential]' https://api.example.com"} → exit code 1\n< Cookie: [redacted credential]\n< Authorization: [redacted credential]\nnext`);
+  const { prompts, stored } = await collectAndAnalyze(home);
+  expect(prompts.length).toBe(2);
+  expect(["fakeFolded", response].filter((secret) => prompts.join("\n").includes(secret) || stored.includes(secret))).toEqual([]);
+});
+
+test("recheck finding 2: a number array under a secret name in a failed tool's output stays hidden from the analyst", async () => {
+  const home = temp.make("fleet-dream-");
+  const cwd = join(home, "dev/app");
+  const pin = fake("8675", "309");
+  const other = fake("1234", "5678");
+  claudeSession(home, cwd, [
+    user(cwd, "Log in", 0),
+    assistant(cwd, [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "login", password: [{ value: Number(pin) }] } }], 1),
+    user(cwd, [{ type: "tool_result", tool_use_id: "t1", is_error: true, content: `exit code 1 {"access_token":[${pin},${other}],"retries":3}` }], 2),
+  ]);
+  const output = digestLines(home, "devbox-1", now - 86_400_000, now, {});
+  expect([pin, other].filter((secret) => output.includes(secret))).toEqual([]);
+  expect(JSON.parse(output).entries.find((entry: { role: string }) => entry.role === "error").text)
+    .toBe('Bash {"command":"login","password":"[redacted credential]"} → exit code 1 {"access_token":"[redacted credential]","retries":3}');
+  const { prompts, stored } = await collectAndAnalyze(home);
+  expect([pin, other].filter((secret) => prompts.join("\n").includes(secret) || stored.includes(secret))).toEqual([]);
+});
+
+test("recheck finding 3: token counts that are not a finite, non-negative number become 0 in tokens and effort, so nothing else rides along", async () => {
+  const secret = fake("fake", "Token", "88227");
+  const malformed: Array<[string, string]> = [["a string", JSON.stringify(`PASSWORD=${secret}`)], ["an object", JSON.stringify({ password: secret })], ["infinity", "1e999"], ["a negative count", "-5"]];
+  for (const [label, value] of malformed) {
+    const home = temp.make("fleet-dream-");
+    const cwd = join(home, "dev/app");
+    const codexLines = [
+      JSON.stringify({ type: "session_meta", payload: { id: "c-1", cwd } }),
+      JSON.stringify({ type: "response_item", timestamp: hourAgo(0), payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Ship it" }] } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { total_tokens: "VALUE" } } } }).replace('"VALUE"', value),
+      JSON.stringify({ type: "response_item", timestamp: hourAgo(1), payload: { type: "custom_tool_call", call_id: "f1", name: "apply_patch", input: "*** Update File: cart.ts" } }),
+    ];
+    writeHome(home, { ".codex/sessions/2026/11/05/rollout-c-1.jsonl": codexLines.join("\n") });
+    const output = digestLines(home, "devbox-1", now - 86_400_000, now, {});
+    expect([label, output.includes(secret), JSON.parse(output).tokens, JSON.parse(output).effort.tokens]).toEqual([label, false, 0, 0]);
+    const { stored } = await collectAndAnalyze(home);
+    expect([label, stored.includes(secret)]).toEqual([label, false]);
+  }
+  const home = temp.make("fleet-dream-");
+  const cwd = join(home, "dev/app");
+  claudeSession(home, cwd, [
+    user(cwd, "Fix it", 0),
+    assistant(cwd, [{ type: "text", text: "Looking." }], 1, "m-1", { input_tokens: `PASSWORD=${secret}`, cache_read_input_tokens: { password: secret }, output_tokens: 20 }),
+    assistant(cwd, [{ type: "tool_use", id: "t1", name: "Edit", input: { file_path: join(cwd, "a.ts") } }], 2, "m-2", { input_tokens: 5 }),
+  ]);
+  const digest = JSON.parse(digestLines(home, "devbox-1", now - 86_400_000, now, {}));
+  expect([digest.tokens, digest.effort.tokens]).toEqual([25, 25]);
 });

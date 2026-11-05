@@ -99,6 +99,16 @@ export function analystCommand(row: ModelRow, scratch: string): string[] {
     "-C", scratch, "--output-schema", join(scratch, "schema.json"), "-o", join(scratch, "answer.json"), "-"];
 }
 
+export type FailureReason = "timed out" | `exit ${number}` | "bad answer" | "not started";
+
+export class AnalystFailure extends Error {
+  constructor(readonly reason: FailureReason) {
+    super(reason);
+  }
+}
+
+const reasonOf = (error: unknown): FailureReason => error instanceof AnalystFailure ? error.reason : "not started";
+
 export type Spawn = (argv: string[], options: { cwd: string; env: Env; stdin: string; timeoutMs: number }) => Promise<{ code: number; stdout: string; timedOut?: boolean }>;
 
 function claudeEnv(home: string, env: Env): Env {
@@ -108,8 +118,17 @@ function claudeEnv(home: string, env: Env): Env {
 }
 
 function checked(answer: { code: number; timedOut?: boolean }) {
-  if (answer.timedOut) throw new Error(`analyst stopped at its ${analystTimeoutMs / 60_000} minute limit`);
-  if (answer.code !== 0) throw new Error(`analyst exited with ${answer.code}`);
+  if (answer.timedOut) throw new AnalystFailure("timed out");
+  if (answer.code !== 0) throw new AnalystFailure(`exit ${answer.code}`);
+}
+
+function findingsIn(read: () => Findings | undefined): Findings {
+  let found: Findings | undefined;
+  try {
+    found = read();
+  } catch {}
+  if (!found) throw new AnalystFailure("bad answer");
+  return found;
 }
 
 export function modelAnalyst(row: ModelRow, home: string, env: Env, spawn: Spawn): Analyst {
@@ -118,16 +137,17 @@ export function modelAnalyst(row: ModelRow, home: string, env: Env, spawn: Spawn
     if (row.provider === "claude") {
       const answer = await spawn(analystCommand(row, run), { cwd: run, env: claudeEnv(home, env), stdin: input, timeoutMs: analystTimeoutMs });
       checked(answer);
-      const parsed = JSON.parse(answer.stdout) as { is_error?: boolean; structured_output?: Findings; result?: unknown };
-      if (parsed.is_error || !parsed.structured_output) throw new Error(`analyst returned no findings: ${String(parsed.result).slice(0, 200)}`);
-      return parsed.structured_output;
+      return findingsIn(() => {
+        const parsed = JSON.parse(answer.stdout) as { is_error?: boolean; structured_output?: Findings };
+        return parsed.is_error ? undefined : parsed.structured_output;
+      });
     }
     const scratch = mkdtempSync(join(tmpdir(), "fleet-dream-analyst-"));
     try {
       writeFileSync(join(scratch, "schema.json"), JSON.stringify(analystSchema));
       const answer = await spawn(analystCommand(row, scratch), { cwd: scratch, env, stdin: `${analystPrompt}\n\n${input}`, timeoutMs: analystTimeoutMs });
       checked(answer);
-      return JSON.parse(readFileSync(join(scratch, "answer.json"), "utf8")) as Findings;
+      return findingsIn(() => JSON.parse(readFileSync(join(scratch, "answer.json"), "utf8")) as Findings);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -165,7 +185,7 @@ export async function analyze(run: string, io: AnalyzeIo): Promise<string> {
         writeFileSync(join(run, "findings", file), JSON.stringify(await io.analyst(item, index, run)));
         analyzed.push(item);
       } catch (error) {
-        failed.push(`${file}: ${(error as Error).message}`);
+        failed.push(`${file}: ${reasonOf(error)}`);
       }
     }
   }));

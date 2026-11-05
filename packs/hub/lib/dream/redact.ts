@@ -23,10 +23,46 @@ const hideValue = (match: string, before: string, value: string) =>
 const withoutQuotes = (match: string, before: string, value: string) => keepsValue(value) ? match : `${before}${hidden}`;
 
 const credentialStart = String.raw`(?:[a-z]+\s+)?[A-Za-z0-9._~+/=:-]{8,}`;
-const headerValueStart = String.raw`(?:(?<=cookie\s*:[ \t]*)[^\s;="'\\]+=|(?<=authorization\s*:[ \t]*)(?:bearer|basic|digest|token|negotiate)\s+\S|${credentialStart})`;
-const headerName = String.raw`((?:proxy-)?authorization|(?:set-)?cookie)(\s*:[ \t]*)${notRedacted}(?=${headerValueStart})`;
-const headerValueUntil: Array<[string, string]> = [[String.raw`\\"`, String.raw`(?:(?!\\")[^\r\n])*`], ['"', String.raw`[^"\r\n]*`], ["'", String.raw`[^'\r\n]*`], ["", String.raw`[^\r\n]*`]];
+const headerValueStart = String.raw`(?:(?<=cookie\s*:\s*)[^\s;="'\\]+=|(?<=authorization\s*:\s*)(?:bearer|basic|digest|token|negotiate)\s+\S|${credentialStart})`;
+const headerName = String.raw`((?:proxy-)?authorization|(?:set-)?cookie)(\s*:[ \t]*)${notRedacted}(?=(?:\r?\n[ \t]+)?${headerValueStart})`;
+const headerValueUntil: Array<[string, string]> = [
+  [String.raw`\\"`, String.raw`(?:\\\\[\s\S]|(?!\\")[\s\S])*`],
+  ['"', String.raw`(?:[^"\\]|\\[\s\S])*`],
+  ["'", String.raw`[^']*`],
+  ["", String.raw`[^\r\n]*(?:\r?\n[ \t][^\r\n]*)*`],
+];
 const wholeHeaders = headerValueUntil.map(([quote, value]): [RegExp, string] => [new RegExp(String.raw`(?<![\w-])(${quote})${headerName}${value}`, "gi"), `$1$2$3${hidden}`]);
+
+const containerKey = new RegExp(String.raw`${nameStart}(\\?["'])${secretName}\1\s*:\s*(?=[[{])`, "gi");
+
+function containerEnd(text: string, start: number, quote: string): number {
+  const escaped = quote.length > 1;
+  const delimiter = quote.at(-1);
+  let depth = 0;
+  let inString = false;
+  for (let at = start; at < text.length; at++) {
+    const char = escaped && text[at] === "\\" ? text[++at] : text[at];
+    if (inString) {
+      if (char === "\\") at += escaped && text[at + 1] === "\\" ? 2 : 1;
+      else if (char === delimiter) inString = false;
+    } else if (char === delimiter) inString = true;
+    else if (char === "[" || char === "{") depth++;
+    else if ((char === "]" || char === "}") && --depth === 0) return at + 1;
+  }
+  return text.length;
+}
+
+function hideContainers(text: string): string {
+  let result = "";
+  let from = 0;
+  for (const match of text.matchAll(containerKey)) {
+    if (match.index < from) continue;
+    const start = match.index + match[0].length;
+    result += `${text.slice(from, start)}${match[1]}${hidden}${match[1]}`;
+    from = containerEnd(text, start, match[1]!);
+  }
+  return result + text.slice(from);
+}
 
 const privateKey = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g;
 
@@ -51,7 +87,7 @@ const credentials: Array<[RegExp, Replacement]> = [
 
 const redactPlain = (text: string) => credentials.reduce(
   (result, [pattern, replacement]) => typeof replacement === "string" ? result.replace(pattern, replacement) : result.replace(pattern, replacement),
-  redactSecrets(text.replace(privateKey, "[redacted private key]")),
+  hideContainers(redactSecrets(text.replace(privateKey, "[redacted private key]"))),
 );
 
 function decoded(text: string): unknown {
@@ -70,14 +106,12 @@ function redactString(value: string, name: string): string {
   return redactCredentials(value);
 }
 
-const secretScalar = (value: unknown, name: string) =>
-  (typeof value === "number" || typeof value === "boolean") && (headerKey.test(name) || secretKey.test(name));
-
 export function redactValue(value: unknown, name = ""): unknown {
-  if (secretScalar(value, name)) return hidden;
   if (typeof value === "string") return redactString(value, name);
-  if (Array.isArray(value)) return value.map((entry) => redactValue(entry, name));
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redactValue(entry, key)]));
+  if (value === null || value === undefined) return value;
+  if (headerKey.test(name) || secretKey.test(name)) return hidden;
+  if (Array.isArray(value)) return value.map((entry) => redactValue(entry));
+  if (typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redactValue(entry, key)]));
   return value;
 }
 
