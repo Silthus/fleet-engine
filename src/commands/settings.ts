@@ -29,7 +29,7 @@ function listedSettings(manifests: PackManifest[]) {
 
 function shown(setting: PackSetting, context: ChangeContext) {
   const value = context.plan.settings[setting.key];
-  if (value === undefined) return setting.optional ? "not set" : "not set yet, Fleet needs it";
+  if (value === undefined) return context.plan.unanswered.some((item) => item.key === setting.key) ? "not set yet, Fleet needs it" : "not set";
   if (setting.key in context.profile.settings) return String(value);
   return `${String(value)} (default)`;
 }

@@ -131,6 +131,18 @@ describe("fleet settings and fleet set", () => {
     expect(lines).not.toContain("team:");
   });
 
+  test("says Fleet needs an engine setting only when the declaration that wins needs it", async () => {
+    const engine = await engineSource();
+    const signer = { key: "identity.signer", question: "Which key signs?", type: "choice" as const, choices: [{ value: "1password", label: "1Password" }], optional: true as const, ask: "never" as const };
+    const team: AvailableSource = { ref: { name: "team", repo: "team/packs", ref: "main" }, dir: "/team", packs: [{ manifest: { schema: 1, name: "team", summary: "Team rules.", settings: [signer] }, dir: "/team/packs/team" }] };
+    const plan = resolveEngine([engine, team], { packs: ["team"] });
+    expect(plan.settings["identity.signer"]).toBeUndefined();
+    const lines: string[] = [];
+    const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [team.ref], packs: ["team"], plan: "both", settings: {}, workflows: {} } satisfies ProfileFile;
+    settingsCommand([], { profileDir: "/profile", profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line), apply: async () => 0 });
+    expect(lines.filter((line) => line.includes("identity.signer ="))).toEqual(["  identity.signer = not set"]);
+  });
+
   test("checks each value against its type, then pushes and applies it", async () => {
     const { home, pushed } = machineWithProfile();
     const result = await fleet(home, ["set", "pull-requests.freeReviews=4", "--set", "memory.repo=me/notes"]);
