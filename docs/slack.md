@@ -32,8 +32,10 @@ sends each event within a second, and no address is public.
    and the thread asks you before anything other people see.
 3. It reacts with `:eyes:` as you and posts an ephemeral reply, which only you
    see, with the thread's link on `app.t3.codes`.
-4. A failed launch retries every minute for a day. You get one ephemeral reply
-   about it.
+4. A failed launch retries every minute for a day, with the same command ID,
+   so T3 starts one thread even when an answer got lost. On a box, the retries
+   go to the same box, and Fleet releases that box when it gives up. You get
+   one ephemeral reply about it.
 
 `~/.local/state/fleet/slack-trigger.json` keeps the handled messages for 31
 days, so each message starts one thread. The log is

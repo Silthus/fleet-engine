@@ -3,8 +3,10 @@ import { launchScratchThread, withT3Session, type T3HttpClient, type T3SessionOp
 import type { Started } from "./trigger.ts";
 
 export type Run = (argv: string[], input?: string) => Promise<{ code: number; stdout: string; stderr: string }>;
-export type Launch = (request: LaunchRequest) => Promise<Started | { failed: string }>;
-export type LaunchRequest = { title: string; prompt: string; commandId: string };
+export type Claim = { box: string; environmentId?: string };
+export type Failed = { failed: string; claim?: Claim };
+export type LaunchRequest = { title: string; prompt: string; commandId: string; claim?: Claim };
+export type Launch = ((request: LaunchRequest) => Promise<Started | Failed>) & { release?: (claim: Claim) => Promise<void> };
 
 export const launchScopes = ["orchestration:read", "orchestration:operate", "access:read"];
 
@@ -42,17 +44,22 @@ async function environmentOf(client: T3HttpClient): Promise<string | undefined> 
 }
 
 export function launchOnBox(fleet: string, run: Run): Launch {
-  return async (request) => {
-    const spawned = await run([fleet, "box", "spawn"]);
-    if (spawned.code !== 0) return { failed: `fleet box spawn: ${why(spawned)}` };
-    const [box, environmentId] = lastLine(spawned.stdout).split(/\s+/);
-    if (!box) return { failed: "fleet box spawn printed no box" };
-    const ran = await run([fleet, "box", "run", box, "--", "fleet", "slack-trigger", "launch"], JSON.stringify(request));
+  const launch: Launch = async ({ claim: held, ...request }) => {
+    let claim = held;
+    if (!claim) {
+      const spawned = await run([fleet, "box", "spawn"]);
+      if (spawned.code !== 0) return { failed: `fleet box spawn: ${why(spawned)}` };
+      const [box, environmentId] = lastLine(spawned.stdout).split(/\s+/);
+      if (!box) return { failed: "fleet box spawn printed no box" };
+      claim = { box, environmentId };
+    }
+    const ran = await run([fleet, "box", "run", claim.box, "--", "fleet", "slack-trigger", "launch"], JSON.stringify(request));
     const threadId = ran.code === 0 ? threadOf(lastLine(ran.stdout)) : undefined;
-    if (threadId) return { threadId, environmentId, where: box };
-    await run([fleet, "box", "release", box]);
-    return { failed: `fleet slack-trigger launch on ${box}: ${why(ran)}` };
+    if (threadId) return { threadId, environmentId: claim.environmentId, where: claim.box };
+    return { failed: `fleet slack-trigger launch on ${claim.box}: ${why(ran)}`, claim };
   };
+  launch.release = async (claim) => void (await run([fleet, "box", "release", claim.box]));
+  return launch;
 }
 
 function threadOf(line: string): string | undefined {

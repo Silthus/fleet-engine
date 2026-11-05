@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import type { LaunchRequest } from "./launch.ts";
+import type { Claim, Launch } from "./launch.ts";
 import type { SlackApi } from "./slack.ts";
 
 export const triggerEmoji = "t3code";
@@ -13,7 +13,7 @@ const keepFor = 31 * day;
 export type Owner = { name: string; slackUserId: string };
 export type Trigger = { kind: "message" | "reaction"; channel: string; ts: string };
 type Message = { user?: string; text?: string; ts: string; thread_ts?: string };
-type Pending = { trigger: Trigger; since: number; commandId: string; told?: true };
+type Pending = { trigger: Trigger; since: number; commandId: string; told?: true; claim?: Claim };
 type State = { handled: Record<string, number>; pending: Record<string, Pending> };
 export type Started = { threadId: string; environmentId?: string; where: string };
 export type TriggerDeps = {
@@ -22,7 +22,7 @@ export type TriggerDeps = {
   now: () => number;
   log: (line: string) => void;
   slack: SlackApi;
-  launch: (request: LaunchRequest) => Promise<Started | { failed: string }>;
+  launch: Launch;
 };
 
 export function triggerOf(event: Record<string, any>, owner: Owner): Trigger | undefined {
@@ -45,16 +45,18 @@ export async function handleTrigger(trigger: Trigger, deps: TriggerDeps): Promis
   inFlight.add(key);
   try {
     const pending = updateState(deps.statePath, (state) => (state.pending[key] ??= { trigger, since: deps.now(), commandId: randomUUID() }));
-    const outcome: Outcome = await start(trigger, key, pending.commandId, deps).catch((error: Error): Outcome => ({ failed: error.message }));
+    const outcome: Outcome = await start(trigger, key, pending, deps).catch((error: Error): Outcome => ({ failed: error.message }));
     if ("gone" in outcome) {
-      updateState(deps.statePath, (state) => void delete state.pending[key]);
+      await forget(key, deps);
       return deps.log(`${key}: ${outcome.gone}`);
     }
     if ("failed" in outcome) {
       deps.log(`${key}: launch failed: ${outcome.failed}`);
       const tell = updateState(deps.statePath, (state) => {
         const entry = state.pending[key];
-        if (!entry || entry.told) return false;
+        if (!entry) return false;
+        if (outcome.claim) entry.claim = outcome.claim;
+        if (entry.told) return false;
         entry.told = true;
         return true;
       });
@@ -82,14 +84,23 @@ export async function retryPending(deps: TriggerDeps): Promise<void> {
       await handleTrigger(trigger, deps);
       continue;
     }
-    updateState(deps.statePath, (state) => void delete state.pending[key]);
+    await forget(key, deps);
     deps.log(`${key}: gave up after a day of failed launches`);
   }
 }
 
-type Outcome = { started: Started; name: string; thread?: string } | { failed: string; thread?: string } | { gone: string };
+async function forget(key: string, deps: TriggerDeps) {
+  const claim = updateState(deps.statePath, (state) => {
+    const held = state.pending[key]?.claim;
+    delete state.pending[key];
+    return held;
+  });
+  if (claim) await deps.launch.release?.(claim).catch((error) => deps.log(`${key}: could not release ${claim.box}: ${error}`));
+}
 
-async function start(trigger: Trigger, key: string, commandId: string, deps: TriggerDeps): Promise<Outcome> {
+type Outcome = { started: Started; name: string; thread?: string } | { failed: string; thread?: string; claim?: Claim } | { gone: string };
+
+async function start(trigger: Trigger, key: string, { commandId, claim }: Pending, deps: TriggerDeps): Promise<Outcome> {
   const first = (await deps.slack("conversations.replies", { channel: trigger.channel, ts: trigger.ts, limit: "1" })).messages?.[0] as Message | undefined;
   if (!first) return { gone: "message not found" };
   const threadTs = first.thread_ts ?? first.ts;
@@ -103,8 +114,8 @@ async function start(trigger: Trigger, key: string, commandId: string, deps: Tri
     deps.slack("chat.getPermalink", { channel: trigger.channel, message_ts: trigger.ts }).then((result) => String(result.permalink)),
   ]);
   const name = title(message.text ?? "");
-  const launched = await deps.launch({ title: name, prompt: prompt(deps.owner, trigger, message.text ?? "", permalink, context), commandId });
-  return "failed" in launched ? { failed: launched.failed, thread } : { started: launched, name, thread };
+  const launched = await deps.launch({ title: name, prompt: prompt(deps.owner, trigger, message.text ?? "", permalink, context), commandId, claim });
+  return "failed" in launched ? { failed: launched.failed, thread, claim: launched.claim } : { started: launched, name, thread };
 }
 
 async function exactMessage(slack: SlackApi, trigger: Trigger, threadTs: string): Promise<Message | undefined> {
