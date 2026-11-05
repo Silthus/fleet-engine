@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { linkSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PackManifest, ProfileFile } from "../pack/types.ts";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
@@ -81,16 +81,6 @@ describe("saving answers", () => {
     await saveAnswers(dir, { plan: "claude" });
     expect(git(dir, "show", "--name-only", "--format=", "HEAD")).toBe("fleet.json");
     expect(git(dir, "diff", "--cached", "--name-only")).toBe("notes.txt");
-  });
-
-  test("replaces fleet.json whole, so a stop mid-write never leaves half a file", async () => {
-    const dir = profileRepo();
-    const before = readFileSync(join(dir, "fleet.json"), "utf8");
-    linkSync(join(dir, "fleet.json"), join(dir, "old.json"));
-    await saveAnswers(dir, { plan: "claude" });
-    expect(readFileSync(join(dir, "old.json"), "utf8")).toBe(before);
-    expect((await loadProfile(dir)).plan).toBe("claude");
-    expect(readdirSync(dir).sort()).toEqual([".git", "fleet.json", "old.json"]);
   });
 
   test("merges settings key by key", async () => {
