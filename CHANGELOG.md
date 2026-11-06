@@ -8,11 +8,13 @@ packs, and your answers live in your own private profile repo.
 
 ### The command
 
-- `get.sh` installs what Fleet needs, fetches the engine at a pinned ref, puts
-  `fleet` on the login PATH, and starts `fleet setup`. Running it again skips
-  the steps that are done.
-- `fleet setup` asks only the questions that have no default, in plain words.
-  `--preset` and `--non-interactive` run it with no questions.
+- `get.sh` installs what Fleet needs, fetches the engine (`main`, or the tag
+  or commit you give with `--ref`), puts `fleet` on the login PATH, and starts
+  `fleet setup`. Running it again picks up where it stopped.
+- `fleet setup` asks plain-language questions and offers a default wherever a
+  pack has one. `--preset` starts from a preset's packs.
+  `--non-interactive` asks nothing and lists what it still needs, such as
+  sign-ins.
 - `fleet apply` puts your profile's packs onto the machine. `fleet doctor`
   checks the machine against the same plan without changing it. `fleet update`
   moves the engine and your profile forward, then applies.
@@ -53,6 +55,6 @@ you pick.
 
 ### Known gaps
 
-No agent can run these steps, so they are not yet proved: a run on a clean Mac
-user, real GitHub, Claude, and ChatGPT sign-ins, `t3 up --connect`, and a live
-Coder devbox.
+These paths are built but not yet proved end to end, because each needs a
+person's sign-in or machine: a run on a clean Mac user, real GitHub, Claude,
+and ChatGPT sign-ins, `t3 up --connect`, and a live Coder devbox.
