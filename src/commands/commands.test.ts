@@ -81,6 +81,19 @@ describe("fleet packs", () => {
     expect(off.output).not.toContain("Before you use");
   });
 
+  test("shows the terms note when re-adding a pack brings back a workflow that was left on", async () => {
+    const { home, pushed } = machineWithProfile();
+    await fleet(home, ["packs", "--add", "hub", "--workflows", "own-account-balancing=on"]);
+    const removed = await fleet(home, ["packs", "--remove", "hub"]);
+    expect(removed.output).not.toContain("Before you use");
+    expect(pushed()).toMatchObject({ workflows: { "own-account-balancing": true } });
+
+    const readded = await fleet(home, ["packs", "--add", "hub"]);
+    expect(readded.output).toContain("Before you use Own-account balancing: ");
+    const unrelated = await fleet(home, ["packs", "--add", "communication"]);
+    expect(unrelated.output).not.toContain("Before you use");
+  });
+
   test("keeps workflow choices of packs whose source is not on this machine, and takes --set like setup", async () => {
     const { home, pushed } = machineWithProfile();
     const dir = join(home, "profile");

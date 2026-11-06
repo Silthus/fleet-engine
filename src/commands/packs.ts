@@ -26,8 +26,13 @@ export async function packsCommand(args: string[], context: ChangeContext): Prom
   if (unmet) throw new FlagError(`${title(unmet.pack, context.packs)} needs ${unmet.needs.map((name) => title(name, context.packs)).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const elsewhere = Object.fromEntries(Object.entries(context.profile.workflows).filter(([id]) => !Object.hasOwn(defaults, id)));
   const workflows = { ...elsewhere, ...workflowOverrides({ ...activeChoices(context.profile, known), ...flags.workflows }, known) };
-  for (const workflow of known.flatMap((manifest) => manifest.workflows ?? [])) {
-    if (flags.workflows[workflow.id] === true && workflow.risk) context.print(`Before you use ${workflow.name}: ${workflow.risk}`);
+  for (const manifest of known) {
+    for (const workflow of manifest.workflows ?? []) {
+      if (!workflow.risk) continue;
+      const wasOn = context.profile.packs.includes(manifest.name) && (context.profile.workflows[workflow.id] ?? workflow.default);
+      const isOn = packs.includes(manifest.name) && (workflows[workflow.id] ?? workflow.default);
+      if (isOn && (!wasOn || flags.workflows[workflow.id] === true)) context.print(`Before you use ${workflow.name}: ${workflow.risk}`);
+    }
   }
   return saveAndApply(context, { packs, workflows, settings }, "your packs");
 }
