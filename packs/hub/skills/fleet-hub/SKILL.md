@@ -78,8 +78,9 @@ lists it.
 ## Own-account balancing
 
 This workflow is off by default. Read its terms note first:
-`fleet packs` shows it, and only the person turns the workflow on, with
-`fleet packs --workflows own-account-balancing=on`. Balancing is only for
+`fleet packs` lists it while the Hub pack is on, and prints it again when the
+person turns the workflow on with
+`fleet packs --workflows own-account-balancing=on`. Only the person does that. Balancing is only for
 the person's own subscriptions, never for someone else's.
 
 - **The proxy.** On the hub, `fleet apply` runs `fleet cli-proxy install`.

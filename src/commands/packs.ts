@@ -26,6 +26,9 @@ export async function packsCommand(args: string[], context: ChangeContext): Prom
   if (unmet) throw new FlagError(`${title(unmet.pack, context.packs)} needs ${unmet.needs.map((name) => title(name, context.packs)).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const elsewhere = Object.fromEntries(Object.entries(context.profile.workflows).filter(([id]) => !Object.hasOwn(defaults, id)));
   const workflows = { ...elsewhere, ...workflowOverrides({ ...activeChoices(context.profile, known), ...flags.workflows }, known) };
+  for (const workflow of known.flatMap((manifest) => manifest.workflows ?? [])) {
+    if (flags.workflows[workflow.id] === true && workflow.risk) context.print(`Before you use ${workflow.name}: ${workflow.risk}`);
+  }
   return saveAndApply(context, { packs, workflows, settings }, "your packs");
 }
 
@@ -38,6 +41,7 @@ function listPacks(context: ChangeContext) {
     context.print(`  ${mark} ${manifest.name}  ${manifest.summary}`);
     const workflows = context.plan.workflows.filter((workflow) => workflow.pack === manifest.name);
     if (on.has(manifest.name) && workflows.length) context.print(`      Workflows: ${workflows.map((workflow) => `${workflow.id} ${workflow.active ? "on" : "off"}`).join(", ")}`);
+    if (on.has(manifest.name)) for (const workflow of manifest.workflows ?? []) if (workflow.risk) context.print(`      Terms note for ${workflow.id}: ${workflow.risk}`);
   }
   for (const pack of missing) context.print(`  ! ${pack.name}  is in your profile, but ${pack.reason ?? "its source is not here"}`);
   context.print("");

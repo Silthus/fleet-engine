@@ -63,6 +63,24 @@ describe("fleet packs", () => {
     expect(pushed()).toMatchObject({ packs: ["pull-requests"], workflows: { "quality-loop": true } });
   });
 
+  test("shows a workflow's terms note in the list and again when it is turned on", async () => {
+    const { home, pushed } = machineWithProfile();
+    const risk = JSON.parse(await Bun.file(join(engineRoot, "packs/hub/pack.json")).text()).workflows.find((workflow: { id: string }) => workflow.id === "own-account-balancing").risk;
+    expect(risk).toContain("Anthropic");
+    const before = await fleet(home, ["packs"]);
+    expect(before.output).not.toContain("Terms note for own-account-balancing");
+
+    const turnedOn = await fleet(home, ["packs", "--add", "hub", "--workflows", "own-account-balancing=on"]);
+    expect(turnedOn.code).toBe(0);
+    expect(turnedOn.output).toContain(`Before you use Own-account balancing: ${risk}`);
+    expect(pushed()).toMatchObject({ workflows: { "own-account-balancing": true } });
+
+    const listed = await fleet(home, ["packs"]);
+    expect(listed.output).toContain(`      Terms note for own-account-balancing: ${risk}`);
+    const off = await fleet(home, ["packs", "--workflows", "own-account-balancing=off"]);
+    expect(off.output).not.toContain("Before you use");
+  });
+
   test("keeps workflow choices of packs whose source is not on this machine, and takes --set like setup", async () => {
     const { home, pushed } = machineWithProfile();
     const dir = join(home, "profile");
