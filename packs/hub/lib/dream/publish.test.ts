@@ -37,7 +37,7 @@ function dreamWorktree(subtree = "memory") {
 
 const mainOf = (home: string, ...args: string[]) => git(home, "--git-dir", join(home, "origin.git"), ...args);
 
-test.concurrent("publish rebases the Dream's commits onto the memory repo's newer main and pushes them", async () => {
+test("publish rebases the Dream's commits onto the memory repo's newer main and pushes them", async () => {
   const { home, laptop, worktree, prefix, io } = dreamWorktree();
   commit(worktree, "Condense: rule", { "memory/tech/rule.md": note("rule", {}, "Shorter.") });
   commit(worktree, "Report: 2026-11-05", { "dreams/2026-11-05.md": "1 session from hub.\n" });
@@ -53,7 +53,7 @@ test.concurrent("publish rebases the Dream's commits onto the memory repo's newe
   expect(mainOf(home, "show", "main:memory/tech/new.md")).toContain("name: new");
 });
 
-test.concurrent("publish refuses commits outside the memory folder and dreams/, a conflict marker, a binary file, or a secret, even one a later commit removes or one in a commit message, and pushes nothing", async () => {
+test("publish refuses commits outside the memory folder and dreams/, a conflict marker, a binary file, or a secret, even one a later commit removes or one in a commit message, and pushes nothing", async () => {
   const cases: Array<[string, Record<string, string>, string]> = [
     ["outside", { "README.md": "# Changed\n" }, "Fleet dream: the commits change files outside memory/ and dreams/: README.md."],
     ["marker", { "memory/tech/rule.md": "<<<<<<< HEAD\nA\n=======\nB\n>>>>>>> main\n" }, "Fleet dream: the commits add a conflict marker."],
@@ -75,7 +75,7 @@ test.concurrent("publish refuses commits outside the memory folder and dreams/, 
   }
 });
 
-test.concurrent("publish in the flat layout lets the Dream change any file", async () => {
+test("publish in the flat layout lets the Dream change any file", async () => {
   const { home, worktree, io } = dreamWorktree("");
   commit(worktree, "Update: readme", { "README.md": "# Changed\n" });
   const { io: dream } = io();
@@ -85,7 +85,7 @@ test.concurrent("publish in the flat layout lets the Dream change any file", asy
   expect(mainOf(home, "show", "main:README.md")).toBe("# Changed");
 });
 
-test.concurrent("publish stops on a rebase conflict, names the file, and leaves the worktree on its branch", async () => {
+test("publish stops on a rebase conflict, names the file, and leaves the worktree on its branch", async () => {
   const { home, laptop, worktree, io } = dreamWorktree();
   commit(worktree, "Update: rule", { "memory/tech/rule.md": note("rule", {}, "Dream's version.") });
   commit(laptop, "memory: laptop", { "memory/tech/rule.md": note("rule", {}, "Laptop's version.") });
@@ -100,7 +100,7 @@ test.concurrent("publish stops on a rebase conflict, names the file, and leaves 
   expect(mainOf(home, "show", "main:memory/tech/rule.md")).toContain("Laptop's version.");
 });
 
-test.concurrent("publish refuses uncommitted changes, and says when there is nothing to publish", async () => {
+test("publish refuses uncommitted changes, and says when there is nothing to publish", async () => {
   const { worktree, io } = dreamWorktree();
   const first = io();
   expect(await dreamCommand(["publish", worktree], first.io)).toBe(0);
@@ -114,7 +114,7 @@ test.concurrent("publish refuses uncommitted changes, and says when there is not
   expect(existsSync(join(worktree, "memory/tech/draft.md"))).toBe(true);
 });
 
-test.concurrent("publish with no worktree prints its usage and exits 2", async () => {
+test("publish with no worktree prints its usage and exits 2", async () => {
   const { io } = dreamWorktree();
   const { io: dream, said } = io();
 
@@ -123,7 +123,7 @@ test.concurrent("publish with no worktree prints its usage and exits 2", async (
   expect(said).toEqual(["Usage: fleet dream publish <worktree>"]);
 });
 
-test.concurrent("publish refuses what the final tree hides from a commit-by-commit check: a merge that drops main's outside change, a padded name, a secret in a name, a symlink, and a submodule", async () => {
+test("publish refuses what the final tree hides from a commit-by-commit check: a merge that drops main's outside change, a padded name, a secret in a name, a symlink, and a submodule", async () => {
   const cases: Array<[string, (worktree: string, laptop: string) => void, string]> = [
     ["ours", (worktree, laptop) => {
       commit(worktree, "Update: rule", { "memory/tech/rule.md": note("rule", {}, "Dream's version.") });
@@ -158,7 +158,7 @@ test.concurrent("publish refuses what the final tree hides from a commit-by-comm
   }
 });
 
-test.concurrent("publish refuses when a guard's Git command fails, and pushes nothing", async () => {
+test("publish refuses when a guard's Git command fails, and pushes nothing", async () => {
   const { home, worktree, io } = dreamWorktree();
   commit(worktree, "Change: outside", { "README.md": "# Changed\n" });
   const before = mainOf(home, "rev-parse", "main");
@@ -171,7 +171,7 @@ test.concurrent("publish refuses when a guard's Git command fails, and pushes no
   expect(mainOf(home, "rev-parse", "main")).toBe(before);
 });
 
-test.concurrent("publish refuses a worktree paused in a rebase, and leaves it paused", async () => {
+test("publish refuses a worktree paused in a rebase, and leaves it paused", async () => {
   const { home, worktree, io } = dreamWorktree();
   commit(worktree, "Change: one", { "memory/tech/one.md": note("one") });
   commit(worktree, "Change: two", { "memory/tech/two.md": note("two") });
@@ -186,7 +186,7 @@ test.concurrent("publish refuses a worktree paused in a rebase, and leaves it pa
   expect(mainOf(home, "rev-parse", "main")).toBe(before);
 });
 
-test.concurrent("publish refuses a checkout that is not the memory repo's, and pushes nothing", async () => {
+test("publish refuses a checkout that is not the memory repo's, and pushes nothing", async () => {
   const { home, io } = dreamWorktree("");
   const other = join(home, "other.git");
   const project = join(home, "dev/project");
@@ -203,7 +203,7 @@ test.concurrent("publish refuses a checkout that is not the memory repo's, and p
   expect(git(home, "--git-dir", other, "log", "--format=%s", "main")).toBe("Start");
 });
 
-test.concurrent("publish refuses an outside file or a symlink that only an earlier outgoing commit or merge holds", async () => {
+test("publish refuses an outside file or a symlink that only an earlier outgoing commit or merge holds", async () => {
   const cases: Array<[string, (worktree: string, laptop: string) => void, string]> = [
     ["outside", (worktree) => {
       commit(worktree, "Change: readme", { "README.md": "# Private text\n" });
@@ -241,7 +241,7 @@ test.concurrent("publish refuses an outside file or a symlink that only an earli
   }
 });
 
-test.concurrent("publish pushes the commit it checked, not one made in the worktree after the check", async () => {
+test("publish pushes the commit it checked, not one made in the worktree after the check", async () => {
   const { home, worktree, io } = dreamWorktree();
   commit(worktree, "Change: rule", { "memory/tech/rule.md": note("rule", {}, "Checked.") });
   const checked = git(worktree, "rev-parse", "HEAD");
@@ -257,7 +257,7 @@ test.concurrent("publish pushes the commit it checked, not one made in the workt
   expect(printed).toEqual([`Fleet dream: pushed ${checked.slice(0, 7)} to main.`]);
 });
 
-test.concurrent("publish accepts memory.subtree with a trailing slash, as the memory sync does", async () => {
+test("publish accepts memory.subtree with a trailing slash, as the memory sync does", async () => {
   const { home, worktree } = dreamWorktree();
   commit(worktree, "Change: new", { "memory/tech/new.md": note("new") });
   const { io: dream } = quietIo(home, { git: realGit, env: { FLEET_SETTINGS: JSON.stringify({ ...dreamSettings, "memory.subtree": "memory/" }) } });
@@ -267,7 +267,7 @@ test.concurrent("publish accepts memory.subtree with a trailing slash, as the me
   expect(mainOf(home, "show", "main:memory/tech/new.md")).toContain("name: new");
 });
 
-test.concurrent("publish to a memory repo with no main yet says the memory sync creates it", async () => {
+test("publish to a memory repo with no main yet says the memory sync creates it", async () => {
   const home = temp.make("fleet-dream-publish-");
   const checkout = join(home, ".agents/memory");
   git(home, "init", "-q", "--bare", "-b", "main", join(home, "origin.git"));
