@@ -67,6 +67,38 @@
         ]
       },
       "risk": "Git refuses every remote outside the signed list, including other hosts than GitHub. Root, or anyone with sudo, can remove it. It stops mistakes, not a hostile agent: an agent that runs as you can override it with its own Git config, or edit the staged script before you run it with sudo."
+    },
+    {
+      "id": "package-age",
+      "name": "Package age",
+      "default": false,
+      "sentence": "Package installs through pnpm and Bun take only versions at least three days old, unless a project or you set another age.",
+      "moment": {
+        "time": "10:05",
+        "title": "A hijacked release never lands",
+        "body": "A popular package publishes a hijacked version at breakfast. Your agent adds the package before lunch and gets the version from last week, because the new one is not three days old yet.",
+        "words": [
+          "agent"
+        ]
+      }
+    },
+    {
+      "id": "oom-survival",
+      "name": "OOM survival",
+      "default": false,
+      "needs": [
+        "devbox"
+      ],
+      "sentence": "Before memory runs out, earlyoom stops a runaway test or build, and T3's agent threads survive when the kernel kills a process inside them.",
+      "moment": {
+        "time": "17:20",
+        "title": "One test run, every thread alive",
+        "body": "A test run eats all the memory on your devbox. earlyoom stops it, and every other thread carries on.",
+        "words": [
+          "devbox",
+          "thread"
+        ]
+      }
     }
   ],
   "files": [
@@ -74,6 +106,22 @@
       "path": "hooks/guards.ts",
       "target": ".config/fleet/hooks/PreToolUse/guards.ts",
       "workflow": "shell-guards"
+    },
+    {
+      "path": "system/t3-agent-scope-oom.conf",
+      "target": ".config/systemd/user/t3code-.scope.d/90-fleet-oom.conf",
+      "on": [
+        "linux"
+      ],
+      "workflow": "oom-survival"
+    },
+    {
+      "path": "system/earlyoom.sh",
+      "target": ".local/share/fleet/guards/earlyoom.sh",
+      "on": [
+        "linux"
+      ],
+      "workflow": "oom-survival"
     }
   ],
   "human": [
@@ -92,6 +140,48 @@
         "--check"
       ],
       "interactive": true
+    },
+    {
+      "id": "earlyoom",
+      "workflow": "oom-survival",
+      "on": [
+        "linux"
+      ],
+      "say": "Install earlyoom as root, so it stops a test or build at 10% free memory before T3 or the agents. It keeps an earlyoom config you wrote yourself.",
+      "command": "sudo sh ~/.local/share/fleet/guards/earlyoom.sh",
+      "probe": [
+        "systemctl",
+        "is-active",
+        "--quiet",
+        "earlyoom"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "id": "package-age",
+      "run": [
+        "fleet",
+        "package-age"
+      ],
+      "check": [
+        "fleet",
+        "package-age",
+        "--check"
+      ],
+      "workflow": "package-age"
+    },
+    {
+      "id": "oom-scope-reload",
+      "run": [
+        "systemctl",
+        "--user",
+        "daemon-reload"
+      ],
+      "on": [
+        "linux"
+      ],
+      "workflow": "oom-survival"
     }
   ]
 }
