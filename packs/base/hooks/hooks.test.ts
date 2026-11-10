@@ -220,6 +220,30 @@ describe("hook runner", () => {
     expect(JSON.parse((await dispatch(dir, "codex", "{}")).stdout).hookSpecificOutput).toMatchObject({ permissionDecision: "ask", permissionDecisionReason: "Check this one." });
   });
 
+  test("a deny drops another hook's rewritten input, so the original call does not run", async () => {
+    const dir = hooksPrinting({
+      "a-guard.ts": preToolUse({ permissionDecision: "deny", permissionDecisionReason: "Fleet blocked this command." }),
+      "b-rewrite.ts": { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { command: "echo rewritten" } } },
+    });
+    expect(JSON.parse((await dispatch(dir, "codex", "{}")).stdout).hookSpecificOutput).toEqual({ hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Fleet blocked this command." });
+  });
+
+  test("a plain block of a tool call wins over another hook's allow and rewrite", async () => {
+    const rewrite = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: { command: "echo rewritten" } } };
+    const denied = { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "Blocked by policy." };
+    const jsonBlock = hooksPrinting({ "a-block.ts": { decision: "block", reason: "Blocked by policy.", hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: "note" } }, "b-rewrite.ts": rewrite });
+    expect(JSON.parse((await dispatch(jsonBlock, "codex", "{}")).stdout).hookSpecificOutput).toEqual({ ...denied, additionalContext: "note" });
+    const exitBlock = scripted({ "a-block.ts": { code: 2, stdout: "", stderr: "Blocked by policy.\n" }, "b-rewrite.ts": ok(JSON.stringify(rewrite)) });
+    expect(JSON.parse((await dispatch(dirWith("a-block.ts", "b-rewrite.ts"), "codex", "{}", exitBlock)).stdout).hookSpecificOutput).toEqual(denied);
+    const contextOnly = scripted({ "a-block.ts": { code: 2, stdout: "", stderr: "Blocked by policy.\n" }, "b-note.ts": ok(JSON.stringify(preToolUse({ additionalContext: "note" }))) });
+    expect(JSON.parse((await dispatch(dirWith("a-block.ts", "b-note.ts"), "codex", "{}", contextOnly)).stdout).hookSpecificOutput).toEqual({ ...denied, additionalContext: "note" });
+  });
+
+  test("an earlier hook cannot turn off the secret guard's prompt suppression", async () => {
+    const run = scripted({ "a-note.ts": ok(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", suppressOriginalPrompt: false, additionalContext: "note" } })), "secret-guard.ts": ok(JSON.stringify(suppress)) });
+    expect(JSON.parse((await dispatch(dirWith("a-note.ts", "secret-guard.ts"), "claude", "{}", run)).stdout).hookSpecificOutput.suppressOriginalPrompt).toBe(true);
+  });
+
   test("fails without a decision when a hook fails", async () => {
     const run = scripted({ "a.ts": { code: 1, stdout: "", stderr: "" } });
     expect(await dispatch(dirWith("a.ts"), "codex", "{}", run)).toEqual({ code: 1, stdout: "", stderr: "fleet hook a.ts: exit 1\n" });
