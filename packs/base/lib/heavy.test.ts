@@ -7,6 +7,15 @@ const temp = tempDirs();
 afterEach(() => temp.cleanup());
 const onLinux = test.skipIf(process.platform !== "linux");
 
+const systemdRun = `const args = Bun.argv.slice(2);
+const split = args.indexOf("--");
+const setenv = args.slice(0, split).filter((option) => option.startsWith("--setenv=")).map((option) => option.slice("--setenv=".length));
+const given = Object.fromEntries(setenv.map((pair) => (pair.includes("=") ? [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)] : [pair, Bun.env[pair] ?? ""])));
+const manager = { HOME: "/home/manager", PATH: "/usr/bin:/bin" };
+const env = args.includes("--scope") ? Bun.env : { ...manager, ...given };
+process.exit(Bun.spawnSync(args.slice(split + 1), { env, stdio: ["inherit", "inherit", "inherit"] }).exitCode ?? 1);
+`;
+
 function stubs(os = "Linux") {
   const bin = temp.make("bin-");
   const calls = join(bin, "calls.log");
@@ -14,7 +23,8 @@ function stubs(os = "Linux") {
     writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${calls}"\n${body}\n`);
     chmodSync(join(bin, name), 0o755);
   };
-  stub("systemd-run", 'while [ "$1" != -- ]; do shift; done; shift; exec "$@"');
+  writeFileSync(join(bin, "systemd-run.ts"), systemdRun);
+  stub("systemd-run", `exec bun "${join(bin, "systemd-run.ts")}" "$@"`);
   stub("systemctl", "exit 0");
   stub("uname", `echo ${os}`);
   return { bin, calls: () => (existsSync(calls) ? readFileSync(calls, "utf8") : "") };
@@ -38,6 +48,23 @@ onLinux("runs the command in a slot of the capped heavy slice", async () => {
   const { bin, calls } = stubs();
   expect(await heavy(bin, roomy, "--", "sh", "-c", "echo built")).toMatchObject({ code: 0, stdout: "built\n" });
   expect(calls()).toBe("uname -s\nsystemd-run --user --scope --quiet --collect --slice=fleet-heavy.slice -- sh -c echo built\n");
+});
+
+onLinux("runs a leading fleet in the command with this engine's launcher, though no fleet is on PATH", async () => {
+  const { bin } = stubs();
+  const slot = await heavy(bin, roomy, "--", "fleet", "help");
+  expect(slot.code).toBe(0);
+  expect(slot.stdout).toStartWith("Fleet: one setup");
+  const served = await heavy(bin, roomy, "--service", "preview-a", "--", "fleet", "help");
+  expect(served.stdout).toStartWith("Fleet: one setup");
+});
+
+onLinux("gives a service this shell's PATH, HOME, Fleet profile, memory, and XDG folders, though the systemd user manager starts it with its own environment", async () => {
+  const { bin } = stubs();
+  const profile = temp.make("profile-");
+  const folders = { FLEET_PROFILE_DIR: profile, FLEET_MEMORY_DIR: `${profile}/memory`, XDG_STATE_HOME: `${profile}/state`, XDG_CONFIG_HOME: `${profile}/config` };
+  const served = await heavyWith(folders, bin, roomy, "--service", "preview-a", "--", "sh", "-c", 'command -v bun >/dev/null && echo "$HOME" "$FLEET_PROFILE_DIR" "$FLEET_MEMORY_DIR" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME"');
+  expect(served.stdout).toMatch(new RegExp(`^/\\S*home-\\S+ ${Object.values(folders).join(" ")}\n`));
 });
 
 onLinux("refuses to start while the disk is under the floor", async () => {

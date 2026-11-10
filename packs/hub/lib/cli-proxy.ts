@@ -14,7 +14,7 @@ import { isBoxName } from "./names.ts";
 import { must, proxyPort } from "./run.ts";
 
 export { proxyPort, proxyUrl };
-export type ProxyMode = "plan" | "install" | "doctor" | "connect" | "disconnect" | "check" | "route";
+export type ProxyMode = "plan" | "install" | "doctor" | "connect" | "disconnect" | "check";
 export type Release = { version: string; url: string; sha256: string };
 export type ProxyMachine = {
   home: string; uid: number; user: string; accounts?: number; devboxes: string[]; release: Release; run: Run; fetch: Fetch;
@@ -226,7 +226,7 @@ async function readCodex(home: string) {
   const table = providers?.[codexProvider];
   const url = isObject(table) ? table.base_url : undefined;
   const routed = config.model_provider === codexProvider && (url === undefined || url === codexUrl);
-  return { path, text, config, providers, routed, usable: routed && url === codexUrl, untouched: Bun.deepEquals(table, codexProviderTable) };
+  return { path, text, config, providers, routed, untouched: Bun.deepEquals(table, codexProviderTable) };
 }
 
 const readableCodex = (home: string) => readCodex(home).catch(() => undefined);
@@ -242,18 +242,22 @@ async function sendCodexHome(home: string): Promise<boolean> {
   return routed;
 }
 
-async function route(machine: ProxyMachine): Promise<boolean> {
+export type Agent = "claude" | "codex";
+
+async function check(machine: ProxyMachine, agent: Agent): Promise<boolean> {
   const key = await savedKey(machine.home);
   const models = key ? await listModels(machine.fetch, key) : `This machine has no proxy key at ${keyPath(machine.home)}. On the hub, fleet cli-proxy doctor prints the connect command.`;
-  const reached = (agent: string, reason: string | undefined) => (machine.print(reason ? `${reason} ${agent} uses its own sign-in now.` : `${agent} reaches your own-account proxy at ${proxyUrl}.`), !reason);
-  const claude = unserved(models, "claude");
-  if (claude) await sendClaude(machine.home, false);
-  const claudeReached = reached("Claude Code", claude);
-  const codexConfig = await readableCodex(machine.home);
-  if (!codexConfig?.routed) return claudeReached;
-  const codex = codexConfig.usable ? unserved(models, "codex") : `${codexConfig.path} selects the ${codexProvider} provider, but its table has no base_url.`;
-  if (codex) await sendCodexHome(machine.home);
-  return reached("Codex", codex) && claudeReached;
+  const reason = agent === "claude" ? unserved(models, "claude") : await codexUnserved(machine.home, models);
+  const name = agent === "claude" ? "Claude Code" : "Codex";
+  machine.print(reason ? `${reason} fleet apply keeps ${name} on its own sign-in until the proxy serves it.` : `${name} reaches your own-account proxy at ${proxyUrl}.`);
+  return !reason;
+}
+
+async function codexUnserved(home: string, models: string[] | string): Promise<string | undefined> {
+  const config = await readableCodex(home);
+  const table = config?.providers?.[codexProvider];
+  if (table !== undefined && !(isObject(table) && table.base_url === codexUrl)) return `${config!.path} has its own ${codexProvider} provider table, which does not use the proxy's base_url.`;
+  return unserved(models, "codex");
 }
 
 async function connect(machine: ProxyMachine): Promise<void> {
@@ -294,7 +298,7 @@ async function plan(machine: ProxyMachine, paths: Layout): Promise<void> {
   machine.print(`  Add at least ${machine.accounts ?? 2} of your own Claude subscriptions with: ${loginCommand(paths)}`);
 }
 
-export async function cliProxy(mode: ProxyMode, machine: ProxyMachine): Promise<number> {
+export async function cliProxy(mode: ProxyMode, machine: ProxyMachine, agent: Agent = "claude"): Promise<number> {
   if (machine.uid === 0) throw new Error("Run fleet cli-proxy as the person who runs Claude Code, not root.");
   const paths = layout(machine.home);
   if (mode === "install" || mode === "doctor") requireHubRole(machine.home, `cli-proxy ${mode}`);
@@ -303,7 +307,6 @@ export async function cliProxy(mode: ProxyMode, machine: ProxyMachine): Promise<
   if (mode === "doctor") await doctor(machine, paths);
   if (mode === "connect") await connect(machine);
   if (mode === "disconnect") await disconnect(machine);
-  if (mode === "check") return (await route(machine)) ? 0 : 1;
-  if (mode === "route") await route(machine);
+  if (mode === "check") return (await check(machine, agent)) ? 0 : 1;
   return 0;
 }
