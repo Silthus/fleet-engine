@@ -11,9 +11,9 @@ afterEach(() => temp.cleanup());
 
 const repoRoot = join(import.meta.dir, "../..");
 
-function fleetMachine(profileFields: Record<string, unknown> = {}, machineFields: Record<string, unknown> = {}) {
+function fleetMachine(profileFields: Record<string, unknown> = {}, machineFields: Record<string, unknown> = {}, enginePacks: string[] = []) {
   const engine = temp.make("engine-");
-  cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
+  for (const pack of ["base", ...enginePacks]) cpSync(join(repoRoot, "packs", pack), join(engine, "packs", pack), { recursive: true });
   cpSync(join(import.meta.dir, "fixtures/placed"), join(engine, "packs/placed"), { recursive: true });
   const home = temp.make("home-");
   const remote = join(home, "remote.git");
@@ -116,6 +116,12 @@ describe("the profile names the hub", () => {
     expect(machineFile().name).toBe("box-a");
     expect((await fleet(["apply"], "box-b")).code).toBe(0);
     expect(machineFile().name).toBe("box-a");
+  });
+
+  test("the profile's hub wins over the Hub pack's hub.alias, so the pack reaches the hub that fleet hub here named", async () => {
+    const { fleet } = fleetMachine({ packs: ["placed", "hub"], settings: { "hub.alias": "old-hub" } }, {}, ["hub"]);
+    expect((await fleet(["hub", "here", "new-hub"])).code).toBe(0);
+    expect((await fleet(["settings"])).output).toMatch(/hub\.alias\s.*new-hub/);
   });
 
   test("a hub that is not an SSH host name fails to load the profile", async () => {

@@ -1,6 +1,8 @@
 import type { Fleet, Pack, Scope as SdkScope, Setting } from "../sdk/index.ts";
 import type { ConfigEntry, HumanStep, PackCode, PackJob, PackSetting, Scope, ServedService, Workflow } from "./types.ts";
 
+export const isSecretName = (name: string) => /^[a-z0-9][a-z0-9.-]*$/.test(name);
+
 type Declared = { kind: "setting" | "workflow" | "check" | "service"; id: string };
 
 export function recordPack(exported: unknown): { manifest: Record<string, unknown>; code: PackCode } {
@@ -60,6 +62,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
       const command = runnable(id, label);
       if (serve) {
         if (scope.on !== "hub") throw new Error(`${label}: serve needs on: "hub"`);
+        if (!isSecretName(id)) throw new Error(`${label}: a served service's id names its credential, so it is lowercase words joined by dashes or dots`);
         if (!Number.isInteger(serve.port) || serve.port < 1 || serve.port > 65535) throw new Error(`${label}: serve.port must be a port from 1 to 65535`);
         if (typeof serve.health !== "string" || !serve.health.startsWith("/")) throw new Error(`${label}: serve.health must be a path that starts with /`);
         if (typeof serve.credential !== "function") throw new Error(`${label}: serve.credential must be a function`);

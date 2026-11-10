@@ -25,7 +25,7 @@ const finding = (id: string, say: string, repair?: Finding["repair"]): Finding =
  * Adds and removes the Claude MCP servers packs declare through claude mcp, so Claude Code writes ~/.claude.json itself.
  * Claude Code saves that file from several paths, not all of them locked, so no other writer can avoid racing it.
  */
-export async function reconcileServers(plan: Plan, home: string, options: { dryRun: boolean; adopt: boolean; outage: boolean; run: CommandRunner }): Promise<Result> {
+export async function reconcileServers(plan: Plan, home: string, options: { dryRun: boolean; adopt: boolean; outage: boolean; gated: string[]; run: CommandRunner }): Promise<Result> {
   const result: Result = { actions: [], findings: [] };
   const wanted = wantedServers(plan);
   const recordText = await readState(home, serversTarget);
@@ -56,7 +56,7 @@ export async function reconcileServers(plan: Plan, home: string, options: { dryR
   }
   for (const old of previous) {
     if (wanted.some((server) => server.name === old.name)) continue;
-    if (options.outage) next.push(old);
+    if (options.outage && !options.gated.includes(`claude:mcpServers.${old.name}`)) next.push(old);
     else if (same(servers[old.name], old.stored)) remove.push(old.name);
   }
   if (kept.length) result.findings.push(finding(`kept:${claudeJson}`, `Kept your ${kept.join(", ")} in ${claudeJson}. Run fleet apply --adopt ${claudeJson} to take Fleet's value.`));

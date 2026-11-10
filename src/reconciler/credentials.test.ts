@@ -56,7 +56,7 @@ test("a repair that fails leaves the check as a To do, and the hub issues no key
   expect((await fleet("issued", "break")).code).toBe(0);
   const applied = await fleet("apply");
   expect(applied.code).toBe(0);
-  expect(applied.output).toContain("To do: The issued service is not installed. Install it by hand.");
+  expect(applied.output).toContain("To do: The issued service is not installed.\n");
   expect((await fleet("issued", "use")).output).toBe("fleet: issued/issued-api has no credential on this machine yet. Run fleet apply on the hub.");
 });
 

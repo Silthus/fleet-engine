@@ -2,13 +2,12 @@ import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../files/private.ts";
 import { t3Threads } from "../integrations/t3/index.ts";
+import { isSecretName } from "../pack/register.ts";
 import type { PackCode, Plan, Workflow } from "../pack/types.ts";
 import type { Context, Secrets, Setting, Value } from "../sdk/index.ts";
 
 export type Clock = { now(): number; sleep(ms: number): Promise<void> };
 export type ContextOptions = { home: string; plan: Plan; pack: string; code: PackCode; workflows: Workflow[]; print(line: string): void; clock: Clock; stdin?: () => ReadableStream<Uint8Array> };
-
-const secretName = /^[a-z0-9][a-z0-9.-]*$/;
 
 /** The secret that holds this machine's credential for a served service, in the serving pack's store. */
 export const credentialName = (id: string) => `credential.${id}`;
@@ -52,7 +51,7 @@ export async function packContext({ home, plan, pack, code, workflows, print, cl
 export function secretStore(home: string, pack: string): Secrets {
   const dir = join(home, ".config/fleet/secrets", pack);
   const path = (name: string) => {
-    if (!secretName.test(name)) throw new Error(`a secret's name is lowercase words joined by dashes or dots, not ${JSON.stringify(name)}`);
+    if (!isSecretName(name)) throw new Error(`a secret's name is lowercase words joined by dashes or dots, not ${JSON.stringify(name)}`);
     return join(dir, name);
   };
   return {

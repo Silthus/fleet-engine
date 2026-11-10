@@ -29,8 +29,8 @@ const hub: MachineFile = { schema: 1, role: "linux", name: "hub-1" };
 const node: MachineFile = { schema: 1, role: "devbox", coder: true, name: "node-2" };
 const mac: MachineFile = { schema: 1, role: "mac", name: "laptop" };
 
-async function plan(dir: string, machine: MachineFile, fields: { plan?: AiPlan; workflows?: Record<string, boolean>; packs?: string[] } = {}): Promise<Plan> {
-  const profile: Profile = { schema: 1, dir: "/profile", engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: fields.packs ?? ["served"], plan: fields.plan ?? "claude", settings: {}, workflows: fields.workflows ?? {}, hub: "hub-1", devboxes: ["node-2"] };
+async function plan(dir: string, machine: MachineFile, fields: { plan?: AiPlan; workflows?: Record<string, boolean>; packs?: string[]; devboxes?: string[] } = {}): Promise<Plan> {
+  const profile: Profile = { schema: 1, dir: "/profile", engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: fields.packs ?? ["served"], plan: fields.plan ?? "claude", settings: {}, workflows: fields.workflows ?? {}, hub: "hub-1", devboxes: fields.devboxes ?? ["node-2"] };
   return resolve(profile, machine, [{ ref: { name: "engine", repo: "example/engine", ref: "main" }, dir, packs: await loadPacks(dir) }]);
 }
 
@@ -57,6 +57,14 @@ describe("the service catalog", () => {
     expect((await plan(dir, mac, choices)).human.map((step) => step.id)).not.toContain("served-installed");
   });
 
+  test("a workflow that needs a devbox counts as the hub sees it, so a node that is no devbox lists the same catalog", async () => {
+    const dir = engine({ boxed: packSource("boxed", `const boxes = fleet.workflow({ id: "boxed", name: "Boxed", sentence: "The hub serves boxes.", default: true, needs: ["devbox"] }); fleet.service({ on: "hub", id: "boxed-api", when: boxes, serve: { port: 4600, health: "/health", credential: async () => "x" } });`) });
+    const plainNode: MachineFile = { schema: 1, role: "linux", name: "build-3" };
+    const choices = { packs: ["boxed"], devboxes: [] };
+    expect(catalog(await plan(dir, hub, choices))).toEqual(["boxed/boxed-api 4600 /health"]);
+    expect(catalog(await plan(dir, plainNode, choices))).toEqual(["boxed/boxed-api 4600 /health"]);
+  });
+
   test("two packs that claim one port fail at resolve time", async () => {
     const dir = engine({ other: packSource("other", `fleet.service({ on: "hub", id: "other-api", serve: { port: 4555, health: "/health", credential: async () => "x" } });`) });
     await expect(plan(dir, node, { packs: ["served", "other"] })).rejects.toThrow("port 4555 is claimed by both served/served-api and other/other-api");
@@ -73,6 +81,7 @@ describe("register refuses a service it cannot place", () => {
   test("a served service off the hub, a service with neither a process nor serve, and a port out of range", async () => {
     await expect(refused(`fleet.service({ id: "odd-api", serve: { port: 4600, health: "/health", credential: async () => "x" } });`)).rejects.toThrow('service odd-api: serve needs on: "hub"');
     await expect(refused(`fleet.service({ id: "odd-api" } as never);`)).rejects.toThrow("service odd-api needs run, serve, or both");
+    await expect(refused(`fleet.service({ on: "hub", id: "odd_api", serve: { port: 4600, health: "/health", credential: async () => "x" } });`)).rejects.toThrow("service odd_api: a served service's id names its credential, so it is lowercase words joined by dashes or dots");
     await expect(refused(`fleet.service({ on: "hub", id: "odd-api", serve: { port: 70000, health: "/health", credential: async () => "x" } });`)).rejects.toThrow("service odd-api: serve.port must be a port from 1 to 65535");
     await expect(refused(`fleet.service({ on: "hub", id: "odd-api", serve: { port: 4600, health: "health", credential: async () => "x" } });`)).rejects.toThrow("service odd-api: serve.health must be a path that starts with /");
   });

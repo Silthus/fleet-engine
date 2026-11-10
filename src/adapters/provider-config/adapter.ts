@@ -36,10 +36,11 @@ export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Ad
     targets: (plan) => [...configTargets.filter((target) => plan.config.some(ownedBy(target))).map((target) => target.path), ...(wantedServers(plan).length ? [claudeJson] : [])],
     async apply(plan, context) {
       const outage = sourceOutage(plan);
+      const gated = gatedKeys(plan);
       const reconcile = async () => {
-        const { plugins, ...result } = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage);
+        const { plugins, ...result } = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage, gated);
         result.findings.push(...(await reconcilePlugins(plan, context.home, context.dryRun, run, { outage, accepted: plugins })));
-        const servers = await reconcileServers(plan, context.home, { dryRun: context.dryRun, adopt: context.adopt.includes(claudeJson), outage, run });
+        const servers = await reconcileServers(plan, context.home, { dryRun: context.dryRun, adopt: context.adopt.includes(claudeJson), outage, gated, run });
         result.actions.push(...servers.actions);
         result.findings.push(...servers.findings);
         return result;
@@ -51,7 +52,7 @@ export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Ad
   };
 }
 
-async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: string[], outage: boolean): Promise<FilesResult> {
+async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: string[], outage: boolean, gated: string[]): Promise<FilesResult> {
   const previous = await readFieldRecord(home);
   const next: FieldRecord = {};
   const writes: Array<Write & { action: Action }> = [];
@@ -64,7 +65,7 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
     const fields = owned(plan, target);
     let merged: Merged;
     try {
-      merged = merge(target, before, old, fields, adopt.includes(target.path), { outage, configPath: join(home, target.path) });
+      merged = merge(target, before, old, fields, adopt.includes(target.path), { outage, gated: (path) => gated.includes(`${target.provider}:${path.join(".")}`), configPath: join(home, target.path) });
     } catch (error) {
       keepOld();
       result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept ${target.path} as it is: Fleet cannot read it (${(error as Error).message}). Fix the file, then run fleet apply.`, repair: "human" });
@@ -100,7 +101,7 @@ function owned(plan: Plan, target: Target): Field[] {
   return fields;
 }
 
-function merge(target: Target, text: string | undefined, previous: Field[], wanted: Field[], adopt: boolean, options: { outage: boolean; configPath: string }): Merged {
+function merge(target: Target, text: string | undefined, previous: Field[], wanted: Field[], adopt: boolean, options: { outage: boolean; gated: (path: string[]) => boolean; configPath: string }): Merged {
   const current: Document = text === undefined ? {} : target.format.decode(text);
   const original = target.format.encode(current);
   const edited = previous.filter((field) => get(current, field.path) !== undefined && !same(get(current, field.path), field.value));
@@ -143,7 +144,7 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
   const all = [...wanted, ...trust];
   for (const field of previous) {
     if (all.some((item) => overlaps(item.path, field.path))) continue;
-    if (options.outage || keepsEdit(field)) record.push(field);
+    if ((options.outage && !options.gated(field.path)) || keepsEdit(field)) record.push(field);
     else if (get(current, field.path) !== undefined) {
       remove(current, field.path);
       removed.push(field.path.join("."));
@@ -165,6 +166,11 @@ function acceptedPlugins(document: Document) {
 }
 
 const isHookTrust = (field: Field) => field.path[0] === "hooks" && field.path[1] === "state";
+
+/** The provider:key of each config entry the gate dropped because its check fails. An outage never keeps these. */
+function gatedKeys(plan: Plan) {
+  return plan.dropped.flatMap((entry) => (entry.check && entry.item.startsWith("config ") ? [entry.item.slice("config ".length)] : []));
+}
 
 /** True while an enabled pack is missing because its source cannot be fetched. Its settings must not look departed. */
 export function sourceOutage(plan: Plan) {

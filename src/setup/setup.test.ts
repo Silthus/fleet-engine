@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
@@ -42,6 +42,15 @@ describe("fleet setup questions", () => {
     expect(result.output).toContain("  This Mac ");
     expect(machine(home)).toMatchObject({ schema: 1, role: "mac", devboxes: [], setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "chatgpt", "check"] } });
     expect(result.applied).toEqual([profilePath(home)]);
+  });
+
+  test("keeps the name and role that apply saves, though setup writes its progress after apply", async () => {
+    const home = temp.make("home-");
+    const path = join(home, ".config/fleet/machine.json");
+    const placeAsHub = () => writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), name: "hub-1", role: "hub" }));
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "codex"], [], undefined, undefined, 0, "linux", placeAsHub);
+    expect(result.code).toBe(0);
+    expect(machine(home)).toMatchObject({ name: "hub-1", role: "hub" });
   });
 
   test("Ctrl-C keeps every answer, and a rerun picks up at the next question", async () => {
