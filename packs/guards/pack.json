@@ -33,7 +33,7 @@
       "id": "shell-guards",
       "name": "Shell guards",
       "default": false,
-      "sentence": "Agents cannot pipe network code into a shell, run a package the project lacks, or change how Git maps URLs.",
+      "sentence": "Agents cannot pipe network code into a shell, run a package the project lacks, change how Git maps URLs, or use gh outside your GitHub owners.",
       "moment": {
         "time": "13:40",
         "title": "A README asks for curl | sh",

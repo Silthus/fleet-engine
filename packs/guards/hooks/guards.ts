@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { downloadRisk } from "../lib/download.ts";
+import { ghRisk, ownerList } from "../lib/gh.ts";
 
 export type Provider = "claude" | "codex";
 export type ToolCall = { tool_name?: string; tool_input?: Record<string, unknown>; cwd?: string };
@@ -13,9 +14,9 @@ function guardSettings(home: string) {
   try {
     const settings = JSON.parse(readFileSync(join(home, ".local/state/fleet/settings.json"), "utf8"));
     const person = settings["guards.person"];
-    return { person: typeof person === "string" && person.trim() ? person.trim() : fallbackPerson };
+    return { person: typeof person === "string" && person.trim() ? person.trim() : fallbackPerson, owners: ownerList(settings["guards.owners"]) };
   } catch {
-    return { person: fallbackPerson };
+    return { person: fallbackPerson, owners: null };
   }
 }
 
@@ -30,20 +31,21 @@ const deny = (reason: string): Denial => ({ hookSpecificOutput: { hookEventName:
 const uncheckedReason = (error: unknown, person: string) => `Fleet blocked this call: the shell guards could not check it (${error instanceof Error ? error.message : String(error)}). `
   + `Split it into simpler commands, or stop and ask ${person}.`;
 
-function check(call: ToolCall, person: string): string | undefined {
+function check(call: ToolCall, { person, owners }: ReturnType<typeof guardSettings>): string | undefined {
   if (call.tool_name !== "Bash") return undefined;
-  return downloadRisk(shellCommand(call.tool_input), call.cwd ?? "/", person);
+  const command = shellCommand(call.tool_input);
+  return downloadRisk(command, call.cwd ?? "/", person) ?? ghRisk(command, owners, person);
 }
 
 /** The refusal for a tool call that a shell guard stops, naming the person the settings give. A call the guards cannot
  * check is refused too. */
 export function guard(call: ToolCall, home: string): Denial | undefined {
-  const { person } = guardSettings(home);
+  const settings = guardSettings(home);
   try {
-    const risk = check(call, person);
+    const risk = check(call, settings);
     return risk ? deny(risk) : undefined;
   } catch (error) {
-    return deny(uncheckedReason(error, person));
+    return deny(uncheckedReason(error, settings.person));
   }
 }
 
