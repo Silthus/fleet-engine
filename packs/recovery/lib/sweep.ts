@@ -29,7 +29,7 @@ export async function recoverCommand(args: string[], context: RecoverContext): P
 async function continueLimited(sweep: Sweep, thread: StoppedThread) {
   const provider = await availableProvider(sweep, thread);
   if (!provider) return;
-  const sent = await send(sweep, thread, { threadId: thread.id, runId: thread.latestRunId!, commandId: `fleet-limit-resume:${thread.id}:${thread.latestRunId}`, continuesRun: true });
+  const sent = await send(sweep, thread, { threadId: thread.id, runId: thread.latestRunId!, commandId: `fleet-limit-resume:${thread.id}:${thread.latestRunId}`, continuesRun: thread.lastErrorClass === "usage_limit" });
   if (sent) sweep.context.print(`${label(thread)}: continued after a usage limit; ${provider} is available.`);
 }
 

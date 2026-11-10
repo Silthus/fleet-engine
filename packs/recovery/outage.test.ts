@@ -43,8 +43,8 @@ echo thread-alert
 }
 
 async function machine(threads: Record<string, unknown>[], answers: Parameters<typeof fakeProxy>[0]) {
-  const inbox = t3Inbox();
   const shell = { projects: [], threads } as unknown as ShellSnapshot;
+  const inbox = t3Inbox(() => (shell as unknown as { threads: Record<string, unknown>[] }).threads);
   const stub = await startT3Stub({ shell, rpc: inbox.rpc });
   stubs.push(stub);
   const home = recoveryHome(temp.make("home-"));
@@ -102,7 +102,7 @@ test("leaves spent quota to the limit sweep, and held threads and plain failures
     outageThread("tool", { lastError: "The tool call failed" }),
   ], { "claude-test-1": 200 });
   await box.run(at("20:00"));
-  expect(box.inbox.delivered()).toEqual([{ threadId: "quota", text: "Continue where you left off.", continuesRunId: "run-quota" }]);
+  expect(box.inbox.delivered()).toEqual([{ threadId: "quota", text: "Continue where you left off." }]);
 });
 
 test("counts a retry that ran and failed again as a spent try", async () => {
