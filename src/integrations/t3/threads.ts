@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { t3StatePath, t3UserData } from "./server.ts";
 import type { T3Client, T3HttpClient } from "./session.ts";
@@ -52,6 +53,20 @@ async function resolveThreadId(client: T3Client, value: string): Promise<string>
 
 export async function readThread(client: T3Client, value: string): Promise<unknown> {
   return client.call("orchestration.getThreadProjection", { threadId: await resolveThreadId(client, value) });
+}
+
+export type SentMessage = { threadId: string; messageId: string; delivery: "queued" | "started" };
+
+export async function sendMessage(client: T3Client, thread: ShellThread, text: string): Promise<SentMessage> {
+  if (thread.archivedAt) throw new Error(`Thread ${thread.id} is archived. Unarchive it before you send it a message.`);
+  const messageId = `fleet-thread-send:${randomUUID()}`;
+  const delivery = thread.activeRunId ? "queued" : "started";
+  await client.call("orchestration.dispatchCommand", {
+    type: "message.dispatch", commandId: messageId, messageId, threadId: thread.id, text, attachments: [],
+    dispatchMode: { type: delivery === "queued" ? "queue_after_active" : "start_immediately" },
+    createdBy: "agent", creationSource: "server",
+  });
+  return { threadId: thread.id, messageId, delivery };
 }
 
 export function lastActivityAt(thread: ShellThread): string {
