@@ -92,24 +92,29 @@ the person's own subscriptions, never for someone else's.
   `~/.local/share/fleet-cli-proxy/management.env`, both mode 600. Install
   keeps a file that Fleet did not write and stops at a linked path.
 - **Subscriptions.** The person adds each of their own Claude accounts on the
-  hub. `fleet cli-proxy doctor` prints the login command until the proxy holds
-  `hub.proxyAccounts` subscriptions (2 by default). Keep the login URL and
-  callback values out of logs and Git.
+  hub, or their Codex accounts on the `codex` plan. `fleet cli-proxy doctor`
+  prints the login command until the proxy holds `hub.proxyAccounts` of them
+  (2 by default). On the `both` plan it counts Claude subscriptions and names
+  the Codex ones beside them. Keep the login URL and callback values out of
+  logs and Git.
 - **The balancer.** Every 5 minutes, `fleet cli-proxy-balance` reads the weekly
   usage of each subscription and gives the highest priority to the one whose
   weekly quota resets first. A full or unreadable subscription gets priority
   0. It keeps fill-first routing, and session affinity keeps each session on
   one subscription. `fleet cli-proxy-balance --dry-run` prints the ranking and
   changes nothing.
-- **Claude Code.** On the hub and on each devbox, Fleet sets
-  `env.ANTHROPIC_BASE_URL` to the proxy and `apiKeyHelper` to a command that
-  reads the client key file. The key is never in the settings file.
+- **Claude Code.** On the `claude` and `both` plans, on the hub and on each
+  devbox, Fleet sets `env.ANTHROPIC_BASE_URL` to the proxy and `apiKeyHelper`
+  to a command that reads the client key file. The key is never in the
+  settings file.
+- **Codex.** On the `codex` and `both` plans, Fleet sets Codex's
+  `model_provider` to `fleet-proxy`, a provider that reads the same key file.
 - **Devboxes.** The hub's SSH tunnel to each devbox carries port 8317. On the
   hub, `fleet cli-proxy doctor` prints one connect command per devbox; it
   sends the key on standard input. Boxes get the key and connect when the hub
   hands them over.
 - **When the proxy is down.** Fleet's Claude settings wait for
-  `fleet cli-proxy check`, and on the `both` plan its Codex settings wait for
+  `fleet cli-proxy check`, and its Codex settings wait for
   `fleet cli-proxy check codex`. Both checks only read. When the proxy does
   not serve an agent with this machine's key, `fleet apply` leaves that
   agent's settings out and removes Fleet's own values, so the agent uses its
