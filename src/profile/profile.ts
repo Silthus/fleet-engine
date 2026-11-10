@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
 import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
@@ -92,12 +93,13 @@ export function inCoderWorkspace(env: Record<string, string | undefined>) {
   return Boolean(env.CODER_AGENT_URL) || env.CODER === "true";
 }
 
-/** This machine as saved, or its defaults: a Mac, a devbox in a Coder workspace, or a Linux machine. A Coder workspace saved as linux becomes a devbox. */
-export function thisMachine(saved: MachineFile | undefined, platform: NodeJS.Platform, env: Record<string, string | undefined>): MachineFile {
+/** This machine as saved, or its defaults: a Mac, a devbox in a Coder workspace, or a Linux machine. A Coder workspace saved as linux becomes a devbox. Its name is the saved one, or the host name when that is an SSH name. */
+export function thisMachine(saved: MachineFile | undefined, platform: NodeJS.Platform, env: Record<string, string | undefined>, host = hostname()): MachineFile {
   const coder = saved?.coder ?? (platform !== "darwin" && inCoderWorkspace(env) ? true : undefined);
   const fallback = platform === "darwin" ? "mac" : coder ? "devbox" : "linux";
   const role = !saved || (saved.role === "linux" && coder) ? fallback : saved.role;
-  return { ...saved, schema: 1, role, ...(coder ? { coder } : {}) };
+  const name = saved?.name ?? (validHost(host) ? host : undefined);
+  return { ...saved, schema: 1, role, ...(coder ? { coder } : {}), ...(name ? { name } : {}) };
 }
 
 /** A profile that names a hub decides the role: the machine it names is the hub, and a machine saved as the hub that it does not name is a devbox or a Linux machine again. */

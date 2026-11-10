@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { profilePath } from "./profile.ts";
@@ -23,6 +24,7 @@ describe("fleet setup questions", () => {
     expect(machine(home)).toEqual({
       schema: 1,
       role: "linux",
+      name: hostname(),
       profileDir: profilePath(home),
       devboxes: [],
       setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "chatgpt", "check"] },
