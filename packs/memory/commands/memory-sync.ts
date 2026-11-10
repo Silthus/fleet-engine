@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../base/lib/command.ts";
 import { stringSetting } from "../../base/lib/settings.ts";
-import { forgetIdleClaims } from "../lib/notes.ts";
+import { forgetIdleClaims, forgetOldShown } from "../lib/notes.ts";
 import { refreshTriggers } from "../lib/triggers.ts";
 
 export function memoryUrl(repo: string) {
@@ -19,6 +19,7 @@ export async function syncMemory(env: Record<string, string | undefined> = Bun.e
   try {
     refreshTriggers(home);
     forgetIdleClaims(home);
+    forgetOldShown(home);
   } catch (error) {
     console.error(`Memory: cannot refresh the trigger table: ${error instanceof Error ? error.message : error}`);
   }

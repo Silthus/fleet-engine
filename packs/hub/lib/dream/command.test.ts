@@ -51,6 +51,7 @@ function io(home: string, fields: Partial<DreamIo> = {}) {
     boxes: () => undefined,
     git: async () => ok(),
     analyst: () => analyst,
+    checker: () => async () => ({ verdict: "confirmed", reason: "", evidence: "", correction: "" }),
     launch: async (title, prompt) => (launched.push({ title, prompt }), "thread-1"),
     ...fields,
   };
