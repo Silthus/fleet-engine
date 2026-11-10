@@ -34,24 +34,25 @@ async function t3(fixture: Partial<T3Fixture> = {}): Promise<T3Stub> {
 const request = { title: "Slack: the build is red", prompt: "Find out why the build is red.", modelRole: "implementation" };
 
 test("a second start with the same key returns the first thread and its link, and a new key starts a new thread", async () => {
-  const threads = t3Threads(models, { home: (await t3()).home });
+  const stub = await t3();
+  const threads = t3Threads(models, { home: stub.home });
   const first = await threads.start({ ...request, key: "slack-message-1" });
   expect(first).toEqual({ id: "thread-1", url: "https://app.t3.codes/threads/env-1/thread-1" });
   expect(await threads.start({ ...request, key: "slack-message-1" })).toEqual(first);
   expect((await threads.start({ ...request, key: "slack-message-2" })).id).toBe("thread-2");
+  expect(stub.threads.map((thread) => thread.id)).toEqual(["thread-1", "thread-2"]);
 });
 
 test("the model role starts the thread with that row's provider, model, and effort", async () => {
   const stub = await t3();
   await t3Threads(models, { home: stub.home }).start({ ...request, key: "k", modelRole: "lookup" });
-  const launch = stub.rpcCalls.find((call) => call.tag === "orchestration.launchThread");
-  expect(launch?.payload).toMatchObject({ title: request.title, initialMessage: { text: request.prompt }, modelSelection: { instanceId: "codex", model: "gpt-small", options: [{ id: "reasoningEffort", value: "medium" }] } });
+  expect(stub.threads).toEqual([{ id: "thread-1", title: request.title, prompt: request.prompt, modelSelection: { instanceId: "codex", model: "gpt-small", options: [{ id: "reasoningEffort", value: "medium" }] } }]);
 });
 
 test("a role the model table lacks fails with a sentence that names it", async () => {
   const stub = await t3();
   await expect(t3Threads(models, { home: stub.home }).start({ ...request, key: "k", modelRole: "review" })).rejects.toThrow("The model table of your AI plan has no review row");
-  expect(stub.rpcCalls).toEqual([]);
+  expect(stub.threads).toEqual([]);
 });
 
 test("without T3 on the machine, a start fails with a sentence that says T3 is not running", async () => {

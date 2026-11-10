@@ -24,9 +24,12 @@ export type T3Stub = {
   cliCalls(): Promise<string[]>;
   rpcTags: string[];
   rpcCalls: { tag: string; payload: unknown }[];
+  threads: LaunchedThread[];
   toolCalls: { name: string; args: Record<string, unknown> }[];
   stop(): Promise<void>;
 };
+
+export type LaunchedThread = { id: string; title: string; prompt: string; modelSelection: unknown };
 
 export const shellToken = "shell-token";
 export const mcpToken = "mcp-token";
@@ -68,6 +71,7 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
   const rpcCalls: T3Stub["rpcCalls"] = [];
   const toolCalls: T3Stub["toolCalls"] = [];
   const launchReceipts = new Map<string, unknown>();
+  const threads: LaunchedThread[] = [];
   const server = Bun.serve({
     port: 0,
     fetch(request, server) {
@@ -94,7 +98,10 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
         const receipt = message.tag === "orchestration.launchThread" ? launchReceipts.get(message.payload.commandId) : undefined;
         const value = receipt ?? (message.tag === "orchestration.getArchivedShellSnapshot" ? fixture.archived ?? { projects: [], threads: [] }
           : message.tag === "peerLinks.list" ? { links: fixture.links ?? [] } : fixture.rpc?.(message.tag, message.payload));
-        if (message.tag === "orchestration.launchThread" && value) launchReceipts.set(message.payload.commandId, value);
+        if (message.tag === "orchestration.launchThread" && value && !receipt) {
+          launchReceipts.set(message.payload.commandId, value);
+          threads.push({ id: (value as { threadId: string }).threadId, title: message.payload.title, prompt: message.payload.initialMessage?.text, modelSelection: message.payload.modelSelection });
+        }
         const exit = value ? { _tag: "Success", value } : { _tag: "Failure", cause: { _tag: "Fail", error: { _tag: "UnknownMethod" } } };
         socket.send(JSON.stringify({ _tag: "Exit", requestId: message.id, exit }));
       },
@@ -111,6 +118,7 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
     origin,
     rpcTags,
     rpcCalls,
+    threads,
     toolCalls,
     cliCalls: async () => (await readFile(join(home, "cli.log"), "utf8").catch(() => "")).split("\n").filter(Boolean),
     async stop() {
