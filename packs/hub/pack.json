@@ -111,7 +111,7 @@
     },
     {
       "key": "hub.proxyAccounts",
-      "question": "How many of your own Claude subscriptions must the hub's proxy hold before fleet cli-proxy doctor passes?",
+      "question": "How many of your own subscriptions must the hub's proxy hold before fleet cli-proxy doctor passes? They are Claude subscriptions, or Codex ones on the Codex plan.",
       "type": "number",
       "default": 2,
       "ask": "never"
@@ -240,7 +240,7 @@
         "hub.relayPort",
         "hub.proxyAccounts"
       ],
-      "sentence": "The hub holds your own Claude subscriptions in a local proxy, and Claude Code on the hub, your devboxes, and boxes spends the one whose weekly quota resets first.",
+      "sentence": "The hub holds your own Claude or Codex subscriptions in a local proxy, and Claude Code and Codex on the hub, your devboxes, and boxes go through it, spending the Claude subscription whose weekly quota resets first.",
       "moment": {
         "time": "11:30",
         "title": "No weekly quota left unused",
@@ -294,6 +294,7 @@
         "devbox"
       ],
       "plans": [
+        "codex",
         "both"
       ],
       "workflow": "own-account-balancing",
@@ -319,6 +320,7 @@
         "devbox"
       ],
       "plans": [
+        "codex",
         "both"
       ],
       "workflow": "own-account-balancing",
@@ -451,6 +453,7 @@
       "workflow": "own-account-balancing",
       "plans": [
         "claude",
+        "codex",
         "both"
       ]
     }
@@ -574,6 +577,7 @@
       "workflow": "own-account-balancing",
       "plans": [
         "claude",
+        "codex",
         "both"
       ]
     }
@@ -611,6 +615,7 @@
         "devbox"
       ],
       "plans": [
+        "codex",
         "both"
       ],
       "workflow": "own-account-balancing"

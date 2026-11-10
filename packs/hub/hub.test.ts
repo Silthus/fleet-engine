@@ -225,12 +225,19 @@ describe("the Own-account balancing workflow", () => {
     expect(plan(balancing, hub).settings["hub.proxyAccounts"]).toBe(2);
   });
 
-  test("Codex goes through the proxy only on the both plan, where the hub runs the proxy; a Claude plan routes Claude only, and a Codex plan routes nothing yet", () => {
+  test("each plan routes its own agents: Claude on the Claude plan, Codex on the Codex plan, both on both", () => {
     const routed = { jobs: [], steps: [] };
     expect(proxyItems(plan({ ...balancing, plan: "both" }, devbox))).toEqual({ ...routed, checks: ["cli-proxy-client", "cli-proxy-codex"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper", ...codexRoute] });
     expect(proxyItems(plan({ ...balancing, plan: "claude" }, devbox))).toEqual({ ...routed, checks: ["cli-proxy-client"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper"] });
-    for (const machine of [hub, devbox]) expect(proxyItems(plan({ ...balancing, plan: "codex" }, machine))).toEqual(nothing);
+    expect(proxyItems(plan({ ...balancing, plan: "codex" }, devbox))).toEqual({ ...routed, checks: ["cli-proxy-codex"], config: codexRoute });
     for (const ai of ["claude", "codex", "both"] as const) expect(proxyItems(plan({ ...balancing, plan: ai }, mac))).toEqual(nothing);
+  });
+
+  test("the hub runs the proxy and its balancer on every plan, the Codex plan included", () => {
+    for (const ai of ["claude", "codex", "both"] as const) {
+      const items = proxyItems(plan({ ...balancing, plan: ai }, hub));
+      expect([items.steps, items.jobs]).toEqual([["cli-proxy"], ["cli-proxy-balance: fleet cli-proxy-balance every 5m"]]);
+    }
   });
 
   test("the planned Codex provider is the table the route switch recognizes as Fleet's own", () => {

@@ -159,6 +159,41 @@ test("the doctor names the login command while the proxy holds too few subscript
   await expect(cliProxy("doctor", spread.machine)).rejects.toThrow("fleet cli-proxy-balance");
 });
 
+test("on the Codex plan the doctor counts Codex subscriptions and wants a Codex model, and names the Codex login", async () => {
+  const { machine, home } = hubMachine();
+  await cliProxy("install", machine);
+  const codexOnly = { credentials: [{ provider: "codex" }, { provider: "codex" }], models: ["gpt-6.1-sol"] };
+  const passing = hubMachine({ home, plan: "codex" }, codexOnly);
+  expect(await cliProxy("doctor", passing.machine)).toBe(0);
+  expect(passing.printed.join("\n")).toContain("with 2 of your own Codex subscriptions");
+  const few = hubMachine({ home, plan: "codex" }, { credentials: [{ provider: "codex" }, { provider: "claude" }, { provider: "claude" }], models: ["gpt-6.1-sol"] });
+  await expect(cliProxy("doctor", few.machine)).rejects.toThrow(`Add at least 2 of your own Codex subscriptions; found 1. Run: ${join(dataDir(home), "cli-proxy-api")} -config ${join(dataDir(home), "config.yaml")} -codex-login -no-browser`);
+  const noModel = hubMachine({ home, plan: "codex" }, { credentials: codexOnly.credentials });
+  await expect(cliProxy("doctor", noModel.machine)).rejects.toThrow("lists no Codex model");
+});
+
+test("on the both plan the doctor still asks for Claude subscriptions, and counts the Codex ones beside them", async () => {
+  const { machine, home } = hubMachine();
+  await cliProxy("install", machine);
+  const both = hubMachine({ home, plan: "both" }, { credentials: [{ provider: "claude" }, { provider: "claude" }, { provider: "codex" }], models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
+  expect(await cliProxy("doctor", both.machine)).toBe(0);
+  expect(both.printed.join("\n")).toContain("with 2 of your own Claude subscriptions and 1 Codex subscription");
+  const claudeOnly = hubMachine({ home, plan: "claude" }, { credentials: [{ provider: "claude" }, { provider: "claude" }, { provider: "codex" }] });
+  expect(await cliProxy("doctor", claudeOnly.machine)).toBe(0);
+  expect(claudeOnly.printed.join("\n")).toContain("with 2 of your own Claude subscriptions.");
+});
+
+test("connect on a Codex plan checks the proxy for a Codex model and leaves Claude Code alone", async () => {
+  const { machine, home, printed } = client({ plan: "codex" }, { models: ["gpt-6.1-sol"] });
+  expect(await cliProxy("connect", machine)).toBe(0);
+  expect(readFileSync(keyFile(home), "utf8")).toBe(`${clientKey}\n`);
+  expect(existsSync(settingsFile(home))).toBe(false);
+  expect(printed.join("\n")).toContain("Run fleet apply to send Codex to the proxy");
+  const noCodex = client({ plan: "codex" });
+  await expect(cliProxy("connect", noCodex.machine)).rejects.toThrow("lists no Codex model. Add one of your own Codex subscriptions to the hub's proxy. Nothing changed.");
+  expect(existsSync(keyFile(noCodex.home))).toBe(false);
+});
+
 test("the doctor finds a changed unit and a proxy that listens beyond loopback", async () => {
   const { machine, home } = hubMachine();
   await cliProxy("install", machine);

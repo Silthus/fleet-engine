@@ -230,7 +230,7 @@ async function inPack(plan: Plan, loaded: LoadedPack, options: CliOptions, work:
 }
 
 function packEnvironment(plan: Plan, options: CliOptions): Record<string, string | undefined> {
-  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) };
+  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_PLAN: plan.ai, FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) };
 }
 
 function handlerPaths(plan: Plan) {
