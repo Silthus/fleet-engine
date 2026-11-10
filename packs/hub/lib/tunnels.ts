@@ -8,7 +8,8 @@ import { isBoxName, sshName } from "./names.ts";
 import { hostPattern, must, proxyPort, relayPortOf } from "./run.ts";
 
 export type TunnelMode = "plan" | "install" | "doctor";
-export type TunnelMachine = { home: string; devboxes: string[]; relayPort: number; httpsHost?: string; proxy?: boolean; hosts: string; run: Run; print(line: string): void };
+/** dialsHub: the devboxes that the profile names, which reach the hub's served ports through their own forward. */
+export type TunnelMachine = { home: string; devboxes: string[]; dialsHub: string[]; relayPort: number; httpsHost?: string; proxy?: boolean; hosts: string; run: Run; print(line: string): void };
 
 const marker = "# Managed by Fleet hub SSH tunnels.";
 const hostsMarker = " # fleet-hub-tunnel";
@@ -19,14 +20,14 @@ export function tunnelTargets(hub: string, devboxes: string[], self: string): st
   return peersOf(hub, devboxes, self).filter((alias) => alias !== hub);
 }
 
-export function tunnelUnit(alias: string, relayPort: number, proxy = false): string {
+export function tunnelUnit(alias: string, relayPort: number, proxy = false, gateway = false): string {
   return `${marker}
 [Unit]
 Description=Fleet hub SSH tunnel for ${sshName(alias)}
 
 [Service]
 Environment=CODER_SSH_DISABLE_AUTOSTART=true
-ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ConnectTimeout=30 -o ExitOnForwardFailure=yes -o ForwardAgent=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ${loopback(gatewayPort)} ${loopback(relayPortOf(relayPort, proxy))}${proxy ? ` ${loopback(proxyPort)}` : ""} ${alias}
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ConnectTimeout=30 -o ExitOnForwardFailure=yes -o ForwardAgent=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ${gateway ? `${loopback(gatewayPort)} ` : ""}${loopback(relayPortOf(relayPort, proxy))}${proxy ? ` ${loopback(proxyPort)}` : ""} ${alias}
 Restart=always
 RestartSec=5
 
@@ -52,7 +53,7 @@ export async function sshTunnels(mode: TunnelMode, machine: TunnelMachine): Prom
 async function hubTunnels(mode: TunnelMode, machine: TunnelMachine) {
   const directory = join(machine.home, ".config/systemd/user");
   for (const box of machine.devboxes.filter(isBoxName)) machine.print(`${box}: skipped: a box gets the gateway and relay ports from its own box forward`);
-  const units = machine.devboxes.filter((alias) => !isBoxName(alias)).map((alias) => ({ alias, name: unitName(alias), path: join(directory, unitName(alias)), content: tunnelUnit(alias, machine.relayPort, machine.proxy) }));
+  const units = machine.devboxes.filter((alias) => !isBoxName(alias)).map((alias) => ({ alias, name: unitName(alias), path: join(directory, unitName(alias)), content: tunnelUnit(alias, machine.relayPort, machine.proxy, !machine.dialsHub.includes(alias)) }));
   const changed = await changedFiles(machine.home, units, marker, "tunnel");
   const systemctl = (...args: string[]) => must(machine.run, ["systemctl", "--user", ...args]);
   const stale = mode === "plan" ? [] : await staleUnits(machine.home, directory, units.map((unit) => unit.name));

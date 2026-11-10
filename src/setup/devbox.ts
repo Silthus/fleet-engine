@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import type { AiPlan, ModelRow } from "../pack/types.ts";
 import { loadProfile, validHost } from "../profile/profile.ts";
+import { quote } from "../hub/ssh.ts";
 import type { Machine } from "./commands.ts";
 import { engineRepo } from "./defaults.ts";
 import { type HumanContext, humanStep, type SignIn } from "./human.ts";
@@ -27,10 +28,6 @@ export function sshHosts(home: string): string[] {
   return [...new Set(hosts)];
 }
 
-
-export function quote(word: string) {
-  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
-}
 
 /** The devbox as a Machine: its commands run over SSH, while sleeping and the browser stay on this machine. */
 export function overSsh(machine: Machine, host: string): Machine {

@@ -2,7 +2,7 @@ import type { Context, Pack } from "../../src/sdk/index.ts";
 import { gateway as host, gatewayKey } from "./lib/host.ts";
 
 const connect = ["-c", 'exec sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcp-connect'];
-const usage = "usage: fleet mcp-gateway [doctor|sign-in|restart], fleet mcp-gateway reconnect <server>, or fleet mcp-gateway grant <machine>";
+const usage = "usage: fleet mcp-gateway [doctor|sign-in|restart], or fleet mcp-gateway reconnect <server>";
 
 export default {
   sdk: 1,
@@ -45,7 +45,7 @@ export default {
     fleet.check({
       when: flow,
       id: "mcp-gateway-client",
-      say: "This machine cannot reach the MCP gateway. Run fleet run mcp-gateway/mcp-gateway-client to see why. On the hub, fleet mcp-gateway grant <this machine's SSH name> gives it a key.",
+      say: "This machine cannot reach the MCP gateway. Run fleet run mcp-gateway/mcp-gateway-client to see why.",
       test: async (ctx) => {
         const { checkGateway } = await import("./lib/client.ts");
         const result = await checkGateway((await host(ctx)).home, await ctx.secrets.read(gatewayKey), (input, init) => fetch(input, init));
@@ -70,7 +70,8 @@ export default {
       },
     });
     fleet.command("mcp-gateway", {
-      summary: "Check, sign in, reconnect, or restart the MCP gateway on the hub, or give a devbox its key",
+      on: "hub",
+      summary: "Check, sign in, reconnect, or restart the MCP gateway on the hub",
       run: async (args, ctx) => admin(args, ctx),
     });
   },
@@ -78,8 +79,8 @@ export default {
 
 async function admin(args: string[], ctx: Context) {
   const [mode = "doctor", name, ...extra] = args;
-  const plain = ["doctor", "sign-in", "restart", "accept"].includes(mode) && name === undefined;
-  const named = ["reconnect", "grant"].includes(mode) && name !== undefined && !extra.length;
+  const plain = ["doctor", "sign-in", "restart"].includes(mode) && name === undefined;
+  const named = mode === "reconnect" && name !== undefined && !extra.length;
   if (!plain && !named) return ctx.print(usage), 2;
   const hub = await host(ctx);
   const gateway = await import("./lib/hub.ts");
@@ -87,7 +88,5 @@ async function admin(args: string[], ctx: Context) {
   if (mode === "sign-in") await gateway.signIn(hub);
   if (mode === "restart") await gateway.restart(hub);
   if (mode === "reconnect") await gateway.reconnect(name!, hub);
-  if (mode === "grant") await gateway.grant(name!, hub);
-  if (mode === "accept") await (await import("./lib/host.ts")).accept(ctx, hub);
   return 0;
 }
