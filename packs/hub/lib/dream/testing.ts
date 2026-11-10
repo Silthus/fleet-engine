@@ -19,8 +19,9 @@ export function hubWithSubtree(home: string, files: Record<string, string> = {})
 }
 
 export async function realGit(args: string[]) {
-  const answer = Bun.spawnSync(["git", ...args], { env: gitEnv });
-  return { code: answer.exitCode, stdout: answer.stdout.toString(), stderr: answer.stderr.toString() };
+  const child = Bun.spawn(["git", ...args], { env: gitEnv, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { code, stdout, stderr };
 }
 
 export function quietIo(home: string, fields: Partial<DreamIo> = {}) {

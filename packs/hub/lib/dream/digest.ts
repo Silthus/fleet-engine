@@ -3,7 +3,7 @@ import { join, relative, resolve } from "node:path";
 import type { BoxHooks } from "../box.ts";
 import type { Coder, Env } from "../coder.ts";
 import { remoteFleet } from "../machine.ts";
-import { notesShownByTrigger } from "../../../memory/lib/notes.ts";
+import { forgetShownBefore, notesShownByTrigger } from "../../../memory/lib/notes.ts";
 import { redactCredentials, redactValue } from "./redact.ts";
 
 type Entry = { at: string; role: "user" | "assistant" | "error"; text: string };
@@ -19,6 +19,7 @@ const userLimit = 2000;
 const assistantLimit = 800;
 const errorLimit = 400;
 export const dreamSessionsKey = "hub.dreamSessions";
+export const sessionKeepDays = 30;
 export const dreamPromptStart = "Follow the dream skill";
 
 export const stateDir = (home: string, env: Env) => join(env.XDG_STATE_HOME || join(home, ".local/state"), "fleet/dream");
@@ -234,10 +235,11 @@ export function redactDigest(item: Digest): Digest {
 export function digestLines(home: string, machine: string, since: number, now: number, env: Env): string {
   let output = localDigests(home, machine, since, env).map((item) => `${JSON.stringify(redactDigest(item))}\n`).join("");
   const inbox = inboxDir(home, env);
+  forgetShownBefore(home, now - sessionKeepDays * day);
   for (const file of existsSync(inbox) ? readdirSync(inbox).sort() : []) {
     const path = join(inbox, file);
     const modified = statSync(path).mtimeMs;
-    if (modified < now - 14 * day) rmSync(path, { force: true });
+    if (modified < now - sessionKeepDays * day) rmSync(path, { force: true });
     else if (modified >= since) output += readFileSync(path, "utf8");
   }
   return output;

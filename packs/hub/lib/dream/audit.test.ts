@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
 import { existsSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { git, gitEnv, tempDirs } from "../../../../src/testing/git.ts";
@@ -10,7 +10,7 @@ import type { Digest } from "./digest.ts";
 import { note, quietIo, realGit } from "./testing.ts";
 
 const temp = tempDirs();
-afterEach(() => temp.cleanup());
+afterAll(() => temp.cleanup());
 
 function commitAt(dir: string, at: string, message: string, files: Record<string, string | null>) {
   for (const [path, text] of Object.entries(files)) {
@@ -75,7 +75,7 @@ function checker() {
   return { asked, check: async (input: string) => (asked.push(input), verdicts[/^Memory: (.+)$/m.exec(input)![1]!]!) };
 }
 
-test("audit checks each note that the sync changed since the last audit against the session that wrote it, and writes audit.md", async () => {
+test.concurrent("audit checks each note that the sync changed since the last audit against the session that wrote it, and writes audit.md", async () => {
   const { home, run } = hubWithSyncedNotes();
   const { asked, check } = checker();
   const { io, printed } = quietIo(home, { git: realGit, checker: () => check });
@@ -117,7 +117,7 @@ test("audit checks each note that the sync changed since the last audit against 
   expect(asked.find((input) => input.includes("Memory: projects/app/rule.md"))).toContain("[user] We deploy on Tuesdays.");
 });
 
-test("a second audit checks only what the sync changed after the first", async () => {
+test.concurrent("a second audit checks only what the sync changed after the first", async () => {
   const { home, run } = hubWithSyncedNotes();
   const first = checker();
   expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => first.check }).io)).toBe(0);
@@ -132,7 +132,7 @@ test("a second audit checks only what the sync changed after the first", async (
   expect(readFileSync(join(run, "audit.md"), "utf8")).toContain("; 1 checked.");
 });
 
-test("audit lists a check that failed, and checks it again next time", async () => {
+test.concurrent("audit lists a check that failed, and checks it again next time", async () => {
   const { home, run } = hubWithSyncedNotes();
   const failing = async (input: string) => {
     if (input.includes("Memory: tech/trap.md")) throw new AnalystFailure("exit 2");
@@ -147,7 +147,7 @@ test("audit lists a check that failed, and checks it again next time", async () 
   expect(again.asked.some((input) => input.includes("Memory: tech/trap.md"))).toBe(true);
 });
 
-test("audit exits 1 and writes no audit when the memory checkout cannot fetch", async () => {
+test.concurrent("audit exits 1 and writes no audit when the memory checkout cannot fetch", async () => {
   const { home, run } = hubWithSyncedNotes();
   rmSync(join(home, "origin.git"), { recursive: true });
   const { io, said } = quietIo(home, { git: realGit, checker: () => checker().check });
@@ -158,7 +158,7 @@ test("audit exits 1 and writes no audit when the memory checkout cannot fetch", 
   expect(existsSync(join(run, "audit.md"))).toBe(false);
 });
 
-test("prepare collects, analyzes, then audits, and prints the run", async () => {
+test.concurrent("prepare collects, analyzes, then audits, and prints the run", async () => {
   const { home, run } = hubWithSyncedNotes();
   const { check } = checker();
   const analyst = async () => ({ taskType: "fix", findings: [] });
@@ -170,7 +170,7 @@ test("prepare collects, analyzes, then audits, and prints the run", async () => 
   expect(readFileSync(join(run, "audit.md"), "utf8")).toContain("3 notes changed by sessions since");
 });
 
-test("prepare still prints the run when the audit fails, and says why", async () => {
+test.concurrent("prepare still prints the run when the audit fails, and says why", async () => {
   const { home, run } = hubWithSyncedNotes();
   rmSync(join(home, "origin.git"), { recursive: true });
   const analyst = async () => ({ taskType: "fix", findings: [] });
