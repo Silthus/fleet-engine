@@ -1,4 +1,4 @@
-import type { Fleet, Scope as SdkScope } from "../sdk/index.ts";
+import type { Fleet, Scope as SdkScope, Setting } from "../sdk/index.ts";
 import type { HumanStep, PackCode, PackJob, PackSetting, Scope, Workflow } from "./types.ts";
 
 type Declared = { kind: "setting" | "workflow" | "check" | "service"; id: string };
@@ -11,7 +11,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   const workflows: Workflow[] = [];
   const jobs: PackJob[] = [];
   const human: HumanStep[] = [];
-  const code: PackCode = { commands: {}, services: {}, checks: {} };
+  const code: PackCode = { settings: new Map(), commands: {}, services: {}, checks: {} };
 
   const declare = <T>(kind: Declared["kind"], id: string): T => {
     const handle = Object.freeze({});
@@ -41,7 +41,9 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   const fleet: Fleet = {
     setting(def) {
       settings.push(def as PackSetting);
-      return declare("setting", def.key);
+      const handle = declare<Setting<never>>("setting", def.key);
+      code.settings.set(handle, def.key);
+      return handle;
     },
     workflow({ settings: handles, ...def }) {
       workflows.push({ ...def, ...(handles ? { settings: handles.map((handle) => own(handle, "setting", `workflow ${def.id}`)) } : {}) });

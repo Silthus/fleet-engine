@@ -1,6 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
-import { basename, dirname, join, relative } from "node:path";
+import { lstat, mkdir, readFile } from "node:fs/promises";
+import { join, relative } from "node:path";
+import { writePrivateFile } from "../../../../src/files/private.ts";
+
+export { writePrivateFile };
 
 export type GatewayClient = { baseUrl: string; token: string };
 export type GatewaySettings = { httpsHost?: string; relayPort: number };
@@ -48,24 +50,6 @@ export async function refuseLinks(home: string, target: string, what: string) {
     path = join(path, part);
     try { if ((await lstat(path)).isSymbolicLink()) throw new Error(`Keep linked ${what}: ${path}`); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  }
-}
-
-export async function writePrivateFile(path: string, content: string) {
-  const temporary = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}`);
-  const file = await open(temporary, "wx", 0o600);
-  let renamed = false;
-  try {
-    try {
-      await file.writeFile(content);
-      await file.sync();
-    } finally {
-      await file.close();
-    }
-    await rename(temporary, path);
-    renamed = true;
-  } finally {
-    if (!renamed) await rm(temporary, { force: true });
   }
 }
 
