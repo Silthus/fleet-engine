@@ -29,6 +29,8 @@ if ! ssh-keygen -Y verify -f "$signers" -I fleet-allowlist -n fleet-git-allowlis
   exit 1
 fi
 
+ssh_user=git
+
 section() {
   printf '[url "%s"]\n' "$1"
   shift
@@ -37,7 +39,7 @@ section() {
 {
   echo "# Managed by Fleet's Guards pack from the signed Git allowlist. Do not edit."
   printf '[protocol "fleet-blocked"]\n  allow = always\n'
-  for prefix in https:// http:// git:// ssh:// git@ https://github.com/ http://github.com/ git://github.com/ ssh://git@github.com/ git@github.com:; do
+  for prefix in https:// http:// git:// ssh:// git@ https://github.com/ http://github.com/ git://github.com/ ssh://${ssh_user}@github.com/ ${ssh_user}@github.com:; do
     section "fleet-blocked::$prefix" "$prefix"
   done
   while IFS= read -r owner; do
@@ -45,8 +47,8 @@ section() {
       "" | "#"*) continue ;;
       -* | *- | *[!A-Za-z0-9-]*) echo "Git allowlist: $owner is not a GitHub owner name. Nothing changed." >&2; exit 1 ;;
     esac
-    section "ssh://git@ssh.github.com:443/$owner/" "ssh://git@ssh.github.com:443/$owner/"
-    section "git@github.com:$owner/" "git@github.com:$owner/" "ssh://git@github.com/$owner/" "ssh://git@github.com:22/$owner/"
+    section "ssh://${ssh_user}@ssh.github.com:443/$owner/" "ssh://${ssh_user}@ssh.github.com:443/$owner/"
+    section "${ssh_user}@github.com:$owner/" "${ssh_user}@github.com:$owner/" "ssh://${ssh_user}@github.com/$owner/" "ssh://${ssh_user}@github.com:22/$owner/"
     section "https://github.com/$owner/" "https://github.com/$owner/" "https://github.com:443/$owner/" "git://github.com/$owner/"
   done < "$work/git-allowlist"
 } > "$work/git-allowlist.gitconfig"
