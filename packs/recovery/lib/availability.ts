@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { writePrivateFile } from "../../../src/files/private.ts";
 import { modelTable, type ModelRow } from "../../base/lib/models.ts";
 import { proxyUrl } from "../../hub/lib/cli-proxy-balance.ts";
-import type { Fetch } from "../../hub/lib/mcphub/client.ts";
+import type { Fetch } from "../../mcp-gateway/lib/client.ts";
 import { availabilityPath, providers, readAvailability, type Availability, type Provider, type ProviderStatus } from "../../base/lib/t3/index.ts";
 import { isQuotaError } from "./quota.ts";
 

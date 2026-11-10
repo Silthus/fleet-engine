@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tempDirs } from "../../../../src/testing/git.ts";
-import { browserGatewayUrl, checkGateway, clientPath, localGatewayUrl, readGatewayClient, saveGatewayClient, writePrivateFile } from "./client.ts";
+import { tempDirs } from "../../../src/testing/git.ts";
+import { browserGatewayUrl, clientPath, localGatewayUrl, readGatewayClient, saveGatewayClient, writePrivateFile } from "./client.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -72,35 +72,6 @@ test("refuses to save a key through a linked config folder or to an address that
   symlinkSync(outside, join(dir, ".config/fleet"));
   await expect(saveGatewayClient(dir, { baseUrl: localGatewayUrl, token }, secure)).rejects.toThrow("linked");
   await expect(saveGatewayClient(home(), { baseUrl: "https://elsewhere.example.com:60001/mcphub", token }, secure)).rejects.toThrow("is not a key from your hub");
-});
-
-test("the check passes when the key exists and the gateway answers its health endpoint", async () => {
-  const asked: string[] = [];
-  const fetch = async (url: string | URL | Request) => (asked.push(String(url)), new Response("{}", { status: 200 }));
-  const result = await checkGateway(home({ baseUrl: "https://hub.internal.example.com:60001/mcphub", token }), secure, fetch);
-  expect(result).toEqual({ ok: true, line: "The MCP gateway at https://hub.internal.example.com:60001/mcphub answers." });
-  expect(asked).toEqual(["https://hub.internal.example.com:60001/health"]);
-});
-
-test("the check says what to run on the hub when the key is missing or the gateway does not answer, and never shows the key", async () => {
-  const down = async () => { throw new TypeError("connection refused"); };
-  const sick = async () => new Response("", { status: 503 });
-  const missing = await checkGateway(home(), secure, down);
-  expect(missing).toEqual({ ok: false, line: "This machine has no MCP gateway key. On the hub, run: fleet mcphub grant <this machine's SSH name>" });
-  for (const fetch of [down, sick]) {
-    const result = await checkGateway(home({ baseUrl: localGatewayUrl, token }), secure, fetch);
-    expect(result.ok).toBe(false);
-    expect(result.line).toStartWith("The MCP gateway at http://127.0.0.1:3317/mcphub does not answer. On the hub, run: fleet mcphub doctor");
-    expect(result.line).not.toContain(token);
-  }
-  const invalid = await checkGateway(home({ baseUrl: "https://elsewhere.example.com/mcphub", token }), secure, down);
-  expect(invalid.line).toBe("~/.config/fleet/mcphub.client.json is not a key from your hub. On the hub, run: fleet mcphub grant <this machine's SSH name>");
-});
-
-test("a key from an older grant that names the HTTPS address still reads, and when it does not answer the check says to grant again for the tunnel address", async () => {
-  const down = async () => { throw new TypeError("unable to verify the first certificate"); };
-  const result = await checkGateway(home({ baseUrl: "https://hub.internal.example.com:60001/mcphub", token }), secure, down);
-  expect(result).toEqual({ ok: false, line: `The MCP gateway at https://hub.internal.example.com:60001/mcphub does not answer. A devbox reaches it at ${localGatewayUrl} through its tunnel. On the hub, run: fleet mcphub grant <this machine's SSH name>` });
 });
 
 test("leaves no temporary file behind when writing a private file fails", async () => {

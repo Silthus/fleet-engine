@@ -5,7 +5,7 @@ import { tryLockPeer, userWaitMs, withPeerLock } from "./box-lock.ts";
 import { boxMarkerPath, forget, linkTarget, pairWith, readRecord, reviveLink, stopUnit, t3Of, t3Port, type Linker } from "./links.ts";
 import { changedFiles, readIfThere, writeFiles } from "./managed.ts";
 import type { PeerMachine } from "./machine.ts";
-import { refuseLinks, writePrivateFile } from "./mcphub/client.ts";
+import { refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
 import { isBoxName, sshName } from "./names.ts";
 
 export type PeerLink = Pick<LinkedEnvironment, "environmentId" | "label" | "urls" | "status" | "expiresAt">;

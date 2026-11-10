@@ -21,7 +21,7 @@ import { realMachine } from "./setup/commands.ts";
 import { credentialName, packContext, secretStore, type Clock } from "./runner/context.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; fail?: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string; stdin?: () => ReadableStream<Uint8Array> };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -64,7 +64,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
     return await runPackCommand(command, rest, options);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    options.print(`fleet: ${error.message}`);
+    (options.fail ?? options.print)(`fleet: ${error.message}`);
     return 1;
   }
 }
@@ -218,7 +218,7 @@ function loadedPack(sources: FetchedSource[], name: string): LoadedPack | undefi
 
 async function inPack(plan: Plan, loaded: LoadedPack, options: CliOptions, work: (ctx: Awaited<ReturnType<typeof packContext>>) => Promise<number>) {
   const clock = options.clock ?? { now: Date.now, sleep: Bun.sleep };
-  const ctx = await packContext({ home: options.home, plan, pack: loaded.manifest.name, code: loaded.code!, workflows: loaded.manifest.workflows ?? [], print: options.print, clock });
+  const ctx = await packContext({ home: options.home, plan, pack: loaded.manifest.name, code: loaded.code!, workflows: loaded.manifest.workflows ?? [], print: options.print, clock, stdin: options.stdin });
   const environment = packEnvironment(plan, options);
   const saved = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
   const assign = (values: Record<string, string | undefined>) => {
@@ -288,6 +288,6 @@ if (import.meta.main) {
       process.exit(130);
     });
   }
-  const code = await main(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), engineRoot, platform: process.platform, env: Bun.env, print: (line) => console.log(line) });
+  const code = await main(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), engineRoot, platform: process.platform, env: Bun.env, print: (line) => console.log(line), fail: (line) => console.error(line) });
   process.exit(code);
 }

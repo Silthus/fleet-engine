@@ -2,8 +2,8 @@ import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { changedFiles, ownedBy, readIfThere, requireInstalled, writeFiles } from "./managed.ts";
 import { peersOf, readRole } from "./machine.ts";
-import { gatewayPort, refuseLinks } from "./mcphub/client.ts";
-import type { Run } from "./mcphub/hub.ts";
+import { gatewayPort, refuseLinks } from "../../mcp-gateway/lib/client.ts";
+import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { isBoxName, sshName } from "./names.ts";
 import { hostPattern, must, proxyPort, relayPortOf } from "./run.ts";
 

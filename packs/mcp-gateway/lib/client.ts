@@ -1,17 +1,17 @@
 import { lstat, mkdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import { writePrivateFile } from "../../../../src/files/private.ts";
+import { writePrivateFile } from "../../../src/files/private.ts";
 
 export { writePrivateFile };
 
 export type GatewayClient = { baseUrl: string; token: string };
-export type GatewaySettings = { httpsHost?: string; relayPort: number };
+export type GatewaySettings = { httpsHost?: string; relayPort?: number };
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export const gatewayPort = 3317;
 export const localGatewayUrl = `http://127.0.0.1:${gatewayPort}/mcphub`;
 export const gatewayGroup = "fleet";
-export const grantHint = "On the hub, run: fleet mcphub grant <this machine's SSH name>";
+export const grantHint = "On the hub, run: fleet mcp-gateway grant <this machine's SSH name>";
 const invalidClient = `~/.config/fleet/mcphub.client.json is not a key from your hub. ${grantHint}`;
 
 export class GatewayClientError extends Error {}
@@ -19,7 +19,7 @@ export class GatewayClientError extends Error {}
 export const clientPath = (home: string) => join(home, ".config/fleet/mcphub.client.json");
 
 export function browserGatewayUrl(settings: GatewaySettings) {
-  return settings.httpsHost ? `https://${settings.httpsHost}:${settings.relayPort}/mcphub` : localGatewayUrl;
+  return settings.httpsHost && settings.relayPort ? `https://${settings.httpsHost}:${settings.relayPort}/mcphub` : localGatewayUrl;
 }
 
 export function isGatewayUrl(url: string, settings: GatewaySettings) {
@@ -61,13 +61,35 @@ export async function saveGatewayClient(home: string, value: unknown, settings: 
   await writePrivateFile(path, `${JSON.stringify(client)}\n`);
 }
 
-export async function checkGateway(home: string, settings: GatewaySettings, fetch: Fetch): Promise<{ ok: boolean; line: string }> {
-  let client: GatewayClient | undefined;
-  try { client = await readGatewayClient(home, settings); }
-  catch (error) { if (error instanceof GatewayClientError) return { ok: false, line: error.message }; throw error; }
-  if (!client) return { ok: false, line: `This machine has no MCP gateway key. ${grantHint}` };
-  const health = await fetch(new URL("/health", client.baseUrl).href, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
+const fileClient = (home: string) => readGatewayClient(home, {}).catch((error) => { if (error instanceof GatewayClientError) return undefined; throw error; });
+
+/** The key in today's client file, whatever address an older grant wrote beside it. */
+async function fileToken(home: string) {
+  let text: string;
+  try { text = await readFile(clientPath(home), "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  try {
+    const token = (JSON.parse(text) as Partial<GatewayClient> | null)?.token;
+    return typeof token === "string" && /^[A-Za-z0-9_-]+$/.test(token) ? token : undefined;
+  } catch { return undefined; }
+}
+
+/** Keeps today's client file in step with the secret store, because box handover reads the file: a store without a key adopts the file's key, and the file then holds the store's key at loopback. */
+export async function syncClientFile(home: string, stored: string | undefined, store: (token: string) => Promise<void>) {
+  let token = stored;
+  if (token === undefined) {
+    token = await fileToken(home);
+    if (token === undefined) return;
+    await store(token);
+  }
+  if ((await fileClient(home))?.token !== token) await saveGatewayClient(home, { baseUrl: localGatewayUrl, token }, {});
+}
+
+export async function checkGateway(home: string, stored: string | undefined, fetch: Fetch): Promise<{ ok: boolean; line: string }> {
+  if (stored === undefined) return { ok: false, line: `This machine has no MCP gateway key. ${grantHint}` };
+  if ((await fileClient(home))?.token !== stored) return { ok: false, line: "~/.config/fleet/mcphub.client.json does not hold this machine's MCP gateway key. Run: fleet apply" };
+  const health = await fetch(`http://127.0.0.1:${gatewayPort}/health`, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
   return health?.ok
-    ? { ok: true, line: `The MCP gateway at ${client.baseUrl} answers.` }
-    : { ok: false, line: `The MCP gateway at ${client.baseUrl} does not answer. ${client.baseUrl === localGatewayUrl ? "On the hub, run: fleet mcphub doctor" : `A devbox reaches it at ${localGatewayUrl} through its tunnel. ${grantHint}`}` };
+    ? { ok: true, line: `The MCP gateway at ${localGatewayUrl} answers.` }
+    : { ok: false, line: `The MCP gateway at ${localGatewayUrl} does not answer. On the hub, run: fleet mcp-gateway doctor` };
 }

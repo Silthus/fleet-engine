@@ -199,6 +199,8 @@ export type Plan = {
   machine: MachineFile;
   /** The profile's hub, when it names one. */
   hub?: string;
+  /** This machine runs the hub's items: it is the hub, or the only machine. */
+  onHub?: boolean;
   /** The engine whose launcher a leading fleet in a pack's commands runs. */
   engineRoot?: string;
   os: Os;

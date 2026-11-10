@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ModelRow } from "../base/lib/models.ts";
-import type { Fetch } from "../hub/lib/mcphub/client.ts";
+import type { Fetch } from "../mcp-gateway/lib/client.ts";
 
 export const proxyKey = "ab".repeat(32);
 

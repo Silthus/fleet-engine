@@ -59,6 +59,8 @@ export type Context = {
   now(): number;
   sleep(ms: number): Promise<void>;
   threads: Threads;
+  /** The command's standard input. */
+  stdin(): ReadableStream<Uint8Array>;
   /** The loopback URL of a served service of this pack and this machine's credential for it. Fails fast when either is missing. */
   use(service: Service): Promise<{ url: string; credential: string }>;
 };

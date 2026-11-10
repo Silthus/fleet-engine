@@ -1052,16 +1052,16 @@ test("round 6, finding 1: a spawn checks the handed-over gateway key from the bo
     const spawned = spawnCoder(0);
     const ssh = spawned.coder.ssh;
     spawned.coder.ssh = async (name, command, stdin) => {
-      if (!command.includes("mcphub check")) return ssh(name, command, stdin);
+      if (!command.includes("run mcp-gateway/mcp-gateway-client")) return ssh(name, command, stdin);
       spawned.calls.push({ box: name, command });
-      return { ...ok, code, stderr: code ? "The MCP gateway at http://127.0.0.1:3317/mcphub does not answer. On the hub, run: fleet mcphub doctor\n" : "" };
+      return { ...ok, code, stderr: code ? "The MCP gateway at http://127.0.0.1:3317/mcphub does not answer. On the hub, run: fleet mcp-gateway doctor\n" : "" };
     };
     expect(await spawn(spawned.coder, machine, "lane")).toBe(0);
     const commands = spawned.calls.map((call) => call.command);
-    expect(commands.findIndex((command) => command.includes("mcphub check"))).toBeGreaterThan(commands.findIndex((command) => command.includes("mcphub.client.json")));
+    expect(commands.findIndex((command) => command.includes("run mcp-gateway/mcp-gateway-client"))).toBeGreaterThan(commands.findIndex((command) => command.includes("mcphub.client.json")));
     expect(calls.some((call) => call.includes("'-R' '3317:127.0.0.1:3317'"))).toBe(true);
     expect(lines.at(-1)).toBe("box-lane env-box");
-    expect(lines.filter((line) => line.includes("MCP gateway"))).toEqual(code ? ["box-lane cannot reach the hub's MCP gateway yet (The MCP gateway at http://127.0.0.1:3317/mcphub does not answer. On the hub, run: fleet mcphub doctor). Check it with fleet box run box-lane -- fleet mcphub check"] : []);
+    expect(lines.filter((line) => line.includes("MCP gateway"))).toEqual(code ? ["box-lane cannot reach the hub's MCP gateway yet (The MCP gateway at http://127.0.0.1:3317/mcphub does not answer. On the hub, run: fleet mcp-gateway doctor). Check it with fleet box run box-lane -- fleet run mcp-gateway/mcp-gateway-client"] : []);
   }
 });
 

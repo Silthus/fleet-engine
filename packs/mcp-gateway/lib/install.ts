@@ -3,7 +3,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browserGatewayUrl } from "./client.ts";
-import { container, dataDir, must, ownedContainer, prepareMcpHub, requireHub, syncWhenReady, type Hub } from "./hub.ts";
+import { container, dataDir, must, ownedContainer, prepareMcpHub, syncWhenReady, type Hub } from "./hub.ts";
 
 export const mcphubImage = "samanhappy/mcphub@sha256:68228dabac98e22ce3d82e83b6f4f45d1b2b2c2d76342c61dc809b44329b2a58";
 export const mcphubSource = {
@@ -15,7 +15,6 @@ const compiledFiles = ["clients/legacyMcpClient.js", "services/mcpService.js"];
 
 export async function install(hub: Hub) {
   if (hub.platform !== "linux") throw new Error("Install MCPHub on the Linux hub.");
-  await requireHub(hub, "install");
   const baseUrl = browserGatewayUrl(hub.gateway);
   const paths = await prepareMcpHub(hub.home, baseUrl, hub.gateway);
   const image = await buildImage(hub);

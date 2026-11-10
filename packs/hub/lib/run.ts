@@ -1,7 +1,7 @@
 import { capture, type Capture } from "./coder.ts";
 import { shellLimitMs } from "./machine.ts";
-import { gatewayPort } from "./mcphub/client.ts";
-import type { Run } from "./mcphub/hub.ts";
+import { gatewayPort } from "../../mcp-gateway/lib/client.ts";
+import type { Run } from "../../mcp-gateway/lib/hub.ts";
 
 const runtimeDir = () => Bun.env.XDG_RUNTIME_DIR ?? `/run/user/${process.getuid?.() ?? 0}`;
 

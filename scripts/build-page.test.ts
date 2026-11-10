@@ -38,7 +38,7 @@ describe("the page build", () => {
     const html = await buildPage({ audience: "public" });
     expect(html.match(/posthog|hogli|coder|stamphog|reviewhog/gi)).toBeNull();
     const data = await pageData({ audience: "public" });
-    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "guards", "hub", "recovery", "slack"]);
+    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "guards", "hub", "mcp-gateway", "recovery", "slack"]);
     expect(data.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id)).not.toContain("previews");
   });
 
@@ -93,7 +93,7 @@ describe("the page build", () => {
   test("the public build shows the Hub pack without its box workflow and box settings", async () => {
     const data = await pageData({ audience: "public" });
     const hub = data.packs.find((pack) => pack.name === "hub")!;
-    expect(hub.workflows.map((workflow) => workflow.id)).toEqual(["mcp-gateway", "disk-watch", "linked-hub", "dream", "own-account-balancing"]);
+    expect(hub.workflows.map((workflow) => workflow.id)).toEqual(["disk-watch", "linked-hub", "dream", "own-account-balancing"]);
     expect(hub.settings.map((setting) => setting.key).filter((key) => key.startsWith("hub.box"))).toEqual([]);
     expect(data.needPacks).toEqual({ hub: "hub" });
     expect(await buildPage({ audience: "public" })).not.toMatch(/short-lived boxes|box · /);

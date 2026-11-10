@@ -1,6 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { refuseLinks, writePrivateFile } from "./mcphub/client.ts";
+import { refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
 
 export type Managed = { path: string; content: string };
 

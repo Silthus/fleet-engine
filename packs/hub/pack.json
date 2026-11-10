@@ -153,30 +153,6 @@
       }
     },
     {
-      "id": "mcp-gateway",
-      "name": "MCP gateway",
-      "default": true,
-      "needs": [
-        "hub"
-      ],
-      "settings": [
-        "hub.alias",
-        "hub.httpsHost",
-        "hub.relayPort"
-      ],
-      "sentence": "The hub signs in to your MCP servers once, and agents on every machine reach them through it.",
-      "moment": {
-        "time": "09:20",
-        "title": "Every tool, signed in once",
-        "body": "An agent on your laptop reads a Slack thread and an agent on a fresh box queries your analytics, both through the hub. You signed in to each tool once.",
-        "words": [
-          "hub",
-          "agent",
-          "MCP server"
-        ]
-      }
-    },
-    {
       "id": "disk-watch",
       "name": "Disk watch",
       "default": true,
@@ -279,39 +255,6 @@
     }
   ],
   "config": [
-    {
-      "provider": "claude",
-      "key": "mcpServers.fleet-hub",
-      "value": {
-        "type": "stdio",
-        "command": "sh",
-        "args": [
-          "-c",
-          "exec sh \"${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet\" mcphub connect"
-        ]
-      },
-      "plans": [
-        "claude",
-        "both"
-      ],
-      "workflow": "mcp-gateway"
-    },
-    {
-      "provider": "codex",
-      "key": "mcp_servers.fleet-hub",
-      "value": {
-        "command": "sh",
-        "args": [
-          "-c",
-          "exec sh \"${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet\" mcphub connect"
-        ]
-      },
-      "plans": [
-        "codex",
-        "both"
-      ],
-      "workflow": "mcp-gateway"
-    },
     {
       "provider": "claude",
       "key": "env.ANTHROPIC_BASE_URL",
@@ -520,23 +463,6 @@
       "workflow": "own-account-balancing"
     },
     {
-      "id": "mcphub",
-      "run": [
-        "fleet",
-        "mcphub",
-        "install"
-      ],
-      "check": [
-        "fleet",
-        "mcphub",
-        "doctor"
-      ],
-      "roles": [
-        "hub"
-      ],
-      "workflow": "mcp-gateway"
-    },
-    {
       "id": "hub-https",
       "run": [
         "fleet",
@@ -629,16 +555,6 @@
     }
   ],
   "checks": [
-    {
-      "id": "mcphub-client",
-      "run": [
-        "fleet",
-        "mcphub",
-        "check"
-      ],
-      "say": "This machine cannot reach the MCP gateway. Run fleet mcphub check here to see why; on the hub, fleet mcphub grant <this machine's SSH name> gives it a key.",
-      "workflow": "mcp-gateway"
-    },
     {
       "id": "cli-proxy-client",
       "run": [

@@ -2,10 +2,10 @@ import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed } from "./managed.ts";
-import { gatewayPort, refuseLinks, writePrivateFile } from "./mcphub/client.ts";
+import { gatewayPort, refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
 import { peerSsh, readRole, remoteFleet } from "./machine.ts";
-import { dataDir } from "./mcphub/hub.ts";
-import type { Run } from "./mcphub/hub.ts";
+import { dataDir } from "../../mcp-gateway/lib/hub.ts";
+import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { hostPattern, must, relayPortOf } from "./run.ts";
 
 export type HttpsMode = "plan" | "install" | "doctor" | "ca" | "trusted";

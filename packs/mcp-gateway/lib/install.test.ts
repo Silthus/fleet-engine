@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, linkSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tempDirs } from "../../../../src/testing/git.ts";
+import { tempDirs } from "../../../src/testing/git.ts";
 import { buildImage, install, mcphubImage } from "./install.ts";
 import { fakeHub, fakeMcpHub, fakeRun, mcphubFetch, writeMachineFile, type RunCall } from "./testing.ts";
 
@@ -49,9 +49,8 @@ const startCommand = (home: string, image: string) => ["docker", "run", "-d", "-
   "-p", "127.0.0.1:3317:3000", "-v", `${join(home, ".local/share/fleet-mcphub")}/data:/app/data`, "-v", `${join(home, ".local/share/fleet-mcphub")}/logs:/app/logs`,
   "--entrypoint", "node", image, "dist/index.js"];
 
-test("install runs only on the Linux hub", async () => {
+test("install runs only on Linux", async () => {
   await expect(install(fakeHub(hubHome(), { platform: "darwin" }))).rejects.toThrow("Install MCPHub on the Linux hub.");
-  await expect(install(fakeHub(hubHome("devbox")))).rejects.toThrow("Run fleet mcphub install on the hub.");
 });
 
 test("install starts the built image on loopback port 3317 with no secret in argv, then syncs the fleet group once MCPHub answers", async () => {
@@ -69,7 +68,7 @@ test("install starts the built image on loopback port 3317 with no secret in arg
   for (const secret of secrets) expect(JSON.stringify(calls)).not.toContain(secret);
   expect(slept).toEqual([500, 500]);
   expect(api.groups).toEqual([{ id: "group-1", name: "fleet", servers: ["tickets", "calendar"] }]);
-  expect(hub.printed).toEqual(["MCPHub installed: https://hub.internal.example.com:60001/mcphub/"]);
+  expect(hub.printed).toEqual(["MCPHub installed: http://127.0.0.1:3317/mcphub/"]);
 });
 
 test("install keeps a running container of the same image, starts a stopped one, and replaces one of an older image", async () => {
@@ -93,27 +92,27 @@ test("install keeps a running container of the same image, starts a stopped one,
   expect(old.calls.filter((call) => !call.command.includes("inspect")).map((call) => call.command)).toEqual([["docker", "stop", "fleet-mcphub"], ["docker", "rm", "fleet-mcphub"], startCommand(home, image(old.calls))]);
 });
 
-test("installing again after the hub gets an HTTPS host moves MCPHub to that address and keeps every secret", async () => {
+test("installing again on a hub that an older Fleet installed at its HTTPS host moves MCPHub to loopback and keeps every secret", async () => {
   const home = hubHome();
   const docker = fakeRun(dockerHost(home));
-  await install(fakeHub(home, { run: docker.run, gateway: { relayPort: 60001 } }));
+  await install(fakeHub(home, { run: docker.run, gateway: { httpsHost: "hub.internal.example.com", relayPort: 60001 } }));
   const settingsPath = join(home, ".local/share/fleet-mcphub/data/mcp_settings.json");
   const environmentPath = join(home, ".local/share/fleet-mcphub/runtime.env");
   const before = { settings: JSON.parse(readFileSync(settingsPath, "utf8")), environment: environmentOf(home) };
-  expect(before.settings.systemConfig.install.baseUrl).toBe("http://127.0.0.1:3317/mcphub");
+  expect(before.settings.systemConfig.install.baseUrl).toBe("https://hub.internal.example.com:60001/mcphub");
   const oldEnvironment = join(home, "old-runtime-env");
   linkSync(environmentPath, oldEnvironment);
   docker.calls.length = 0;
   const hub = fakeHub(home, { run: docker.run });
   await install(hub);
   const after = { settings: JSON.parse(readFileSync(settingsPath, "utf8")), environment: environmentOf(home) };
-  expect(after.settings.systemConfig.install.baseUrl).toBe("https://hub.internal.example.com:60001/mcphub");
+  expect(after.settings.systemConfig.install.baseUrl).toBe("http://127.0.0.1:3317/mcphub");
   expect(after.settings.bearerKeys).toEqual(before.settings.bearerKeys);
-  expect(after.environment).toEqual(before.environment.map((line: string) => (line.startsWith("INSTALL_BASE_URL=") ? "INSTALL_BASE_URL=https://hub.internal.example.com:60001/mcphub" : line)));
-  expect(readFileSync(oldEnvironment, "utf8")).toContain("INSTALL_BASE_URL=http://127.0.0.1:3317/mcphub");
+  expect(after.environment).toEqual(before.environment.map((line: string) => (line.startsWith("INSTALL_BASE_URL=") ? "INSTALL_BASE_URL=http://127.0.0.1:3317/mcphub" : line)));
+  expect(readFileSync(oldEnvironment, "utf8")).toContain("INSTALL_BASE_URL=https://hub.internal.example.com:60001/mcphub");
   for (const path of [settingsPath, environmentPath]) expect(statSync(path).mode & 0o777).toBe(0o600);
   expect(docker.calls.filter((call) => !call.command.includes("inspect")).map((call) => call.command.slice(0, 2))).toEqual([["docker", "stop"], ["docker", "rm"], ["docker", "run"]]);
-  expect(hub.printed).toEqual(["MCPHub installed: https://hub.internal.example.com:60001/mcphub/"]);
+  expect(hub.printed).toEqual(["MCPHub installed: http://127.0.0.1:3317/mcphub/"]);
   docker.calls.length = 0;
   await install(fakeHub(home, { run: docker.run }));
   expect(docker.calls.filter((call) => !call.command.includes("inspect"))).toEqual([]);
