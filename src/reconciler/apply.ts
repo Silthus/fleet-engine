@@ -122,7 +122,7 @@ async function gate(plan: Plan, run: Runner): Promise<{ plan: Plan; failed: Arra
   const dropped: Plan["dropped"] = [];
   for (const job of plan.jobs) {
     if (!job.after || (await passes(plan.human.find((step) => step.pack === job.pack && step.id === job.after)))) jobs.push(job);
-    else dropped.push({ pack: job.pack, item: `job ${job.id}`, reason: `check ${job.after} does not pass` });
+    else dropped.push({ pack: job.pack, item: `job ${job.id}`, reason: `check ${job.after} does not pass`, check: job.after });
   }
   const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);
   return { plan: { ...plan, jobs, dropped: [...plan.dropped, ...dropped] }, failed };

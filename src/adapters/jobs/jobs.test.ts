@@ -53,9 +53,21 @@ function crontab(initial: string | undefined) {
   return { state, adapter: jobsAdapter({ run, engineRoot: engine }) };
 }
 
-function outageDropping(os: "darwin" | "linux", id: string): Plan {
-  return { ...plan(os, []), packs: [{ name: "base", source: "engine", ref: "main", available: true }, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }], dropped: [{ pack: "base", item: `job ${id}`, reason: "check base-ready does not pass" }] };
+const checkFails = { reason: "check base-ready does not pass", check: "base-ready" };
+const outageHides = { reason: "workflow team-flow is off" };
+
+function outageDropping(os: "darwin" | "linux", id: string, why: { reason: string; check?: string } = checkFails, jobs: PackJob[] = []): Plan {
+  return { ...plan(os, jobs), packs: [{ name: "base", source: "engine", ref: "main", available: true }, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }], dropped: [{ pack: "base", item: `job ${id}`, ...why }] };
 }
+
+function runDueLines(text: string | undefined, home: string) {
+  for (const line of (text ?? "").split("\n").filter((entry) => entry && !entry.startsWith("#"))) {
+    Bun.spawnSync(["/bin/sh", "-c", line.replace(/^(\S+\s+){5}/, "")], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  }
+  return readdirSync(join(home, ".local/state/fleet/jobs")).filter((name) => name.endsWith(".log")).map((name) => name.slice(0, -".log".length)).sort();
+}
+
+const ping = (id: string): PackJob => ({ id, command: ["echo", id], schedule: { every: "5m" } });
 
 describe("cron jobs on Linux", () => {
   test("adds marked lines that run launcher scripts, and keeps foreign lines", async () => {
@@ -135,13 +147,20 @@ describe("cron jobs on Linux", () => {
     expect(existsSync(join(home, ".local/state/fleet/jobs/skills-pull.sh"))).toBe(true);
   });
 
-  test("while a source is out, removes the line of a job the plan drops on purpose and keeps the others", async () => {
+  test("while a source is out, stops running a job whose check fails, and keeps the others running", async () => {
     const home = temp.make("home-");
     const cron = crontab("");
-    await apply(plan("linux", [pull, prune]), { home, adapters: [cron.adapter] });
-    await apply(outageDropping("linux", "skills-pull"), { home, adapters: [cron.adapter] });
-    expect(cron.state.text).toContain("# fleet:prune\n");
-    expect(cron.state.text).not.toContain("# fleet:skills-pull");
+    await apply(plan("linux", [ping("gated"), ping("kept")]), { home, adapters: [cron.adapter] });
+    await apply(outageDropping("linux", "gated", checkFails, [ping("kept")]), { home, adapters: [cron.adapter] });
+    expect(runDueLines(cron.state.text, home)).toEqual(["kept"]);
+  });
+
+  test("while a source is out, keeps running a job that leaves the plan only because of the outage", async () => {
+    const home = temp.make("home-");
+    const cron = crontab("");
+    await apply(plan("linux", [ping("hidden"), ping("kept")]), { home, adapters: [cron.adapter] });
+    await apply(outageDropping("linux", "hidden", outageHides, [ping("kept")]), { home, adapters: [cron.adapter] });
+    expect(runDueLines(cron.state.text, home)).toEqual(["hidden", "kept"]);
   });
 
   test("starts a crontab when the user has none, with no T3 precondition", async () => {
@@ -368,6 +387,14 @@ describe("launchd jobs on a Mac", () => {
     expect(existsSync(join(home, ".local/state/fleet/jobs/prune.plist"))).toBe(true);
   });
 
+  test("while a source is out, unloads an agent whose check fails and keeps one the outage hides", async () => {
+    const home = temp.make("home-");
+    const mac = launchctl();
+    await apply(plan("darwin", [prune, pull]), { home, adapters: [mac.adapter] });
+    await apply({ ...outageDropping("darwin", "prune", checkFails, [pull]), dropped: [{ pack: "base", item: "job prune", ...checkFails }, { pack: "base", item: "job skills-pull", ...outageHides }] }, { home, adapters: [mac.adapter] });
+    expect([mac.loaded.has("gui/501/dev.fleet.prune"), mac.loaded.has("gui/501/dev.fleet.skills-pull")]).toEqual([false, true]);
+  });
+
   test("uses an interval for frequent jobs, reruns without reloading, and removes only its own agents", async () => {
     const home = temp.make("home-");
     const agents = join(home, "Library/LaunchAgents");
@@ -452,6 +479,13 @@ describe("T3 scheduled tasks", () => {
     const t3 = server([wanted, other]);
     await apply(outageDropping("linux", "quality-loop"), { home, adapters: [t3.adapter] });
     expect([t3.tasks.get("fleet:quality-loop")?.enabled, t3.tasks.get("fleet:digest")?.enabled]).toEqual([false, true]);
+  });
+
+  test("while a source is out, keeps a task that leaves the plan only because of the outage", async () => {
+    const home = temp.make("home-");
+    const t3 = server([wanted]);
+    await apply(outageDropping("linux", "quality-loop", outageHides), { home, adapters: [t3.adapter] });
+    expect(t3.tasks.get("fleet:quality-loop")?.enabled).toBe(true);
   });
 
   test("reports a task T3 refuses and still reconciles the others", async () => {
@@ -697,6 +731,14 @@ WantedBy=default.target
     await apply(offline, { home, adapters: [linux.adapter] });
     expect(existsSync(unitPath(home))).toBe(true);
     expect(changes(linux.calls.slice(before))).toEqual([]);
+  });
+
+  test("keeps a service that leaves the plan only because a source cannot be fetched", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    await apply(plan("linux", [trigger]), { home, adapters: [linux.adapter] });
+    await apply(outageDropping("linux", "slack-trigger", outageHides), { home, adapters: [linux.adapter] });
+    expect([existsSync(unitPath(home)), linux.units.get("fleet-slack-trigger.service")]).toEqual([true, { active: true, enabled: true }]);
   });
 
   test("quotes a home that systemd would expand", async () => {
