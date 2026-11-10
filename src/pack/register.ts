@@ -11,7 +11,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   const workflows: Workflow[] = [];
   const jobs: PackJob[] = [];
   const human: HumanStep[] = [];
-  const code: PackCode = { commands: {}, services: {}, checks: {} };
+  const code: PackCode = { commands: Object.create(null), services: Object.create(null), checks: Object.create(null) };
 
   const declare = <T>(kind: Declared["kind"], id: string): T => {
     const handle = Object.freeze({});
