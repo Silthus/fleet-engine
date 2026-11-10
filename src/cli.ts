@@ -139,7 +139,8 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   const code = loadedPack(sources, command.pack)?.code;
   const run = code?.commands[name];
   const exit = run ? await inPack(plan, command.pack, code!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
-  const repairs = plan.human.some((step) => step.pack === command.pack && step.command === ["fleet", name, ...args].join(" "));
+  const typed = ["fleet", name, ...args];
+  const repairs = plan.human.some((step) => step.pack === command.pack && step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
   return exit === 0 && repairs ? applyProfile(plan.machine.profileDir!, options) : exit;
 }
 

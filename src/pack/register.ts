@@ -57,6 +57,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     },
     check({ id, say, test, repair, ...scope }) {
       if (scope.after) throw new Error(`check ${id}: a check cannot wait for another check`);
+      if (repair?.command && /['"\\]/.test(repair.command)) throw new Error(`check ${id}: repair.command must be plain words, without quotes or backslashes, so Fleet knows it when you run it`);
       const ask = repair?.command ? say : [say, repair?.ask].filter(Boolean).join(" ");
       human.push({ id, say: ask, probe: runnable(id, `check ${id}`), ...(repair?.command ? { command: repair.command } : {}), ...(repair?.interactive ? { interactive: true as const } : {}), ...place(scope, `check ${id}`) });
       code.checks[id] = test;

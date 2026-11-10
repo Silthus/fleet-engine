@@ -96,6 +96,11 @@ describe("loading a pack.ts", () => {
     await expect(loadPacks(dir)).rejects.toThrow("service one-run names a check that the one pack did not declare");
   });
 
+  test("refuses a repair command that is more than plain words", async () => {
+    const dir = source({ one: pack("one", `fleet.check({ id: "one-saved", say: "Save it.", test: async () => true, repair: { ask: "Save it.", command: "fleet one 'setup'" } });`) });
+    await expect(loadPacks(dir)).rejects.toThrow("check one-saved: repair.command must be plain words, without quotes or backslashes, so Fleet knows it when you run it");
+  });
+
   test("refuses a recorded manifest that today's validation refuses", async () => {
     const dir = source({ one: pack("one", `fleet.setting({ key: "other.color", type: "string", question: "Which color?" });`) });
     await expect(loadPacks(dir)).rejects.toThrow("setting other.color must start with one.");
