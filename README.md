@@ -52,6 +52,9 @@ then creates the private repo `fleet-profile`
 in your GitHub account, pushes your answers there, and applies your packs to
 this machine. Running `get.sh` again picks up where it stopped.
 
+[Getting started](docs/getting-started.md) walks through it step by step, from
+a new Mac to a linked Coder devbox, with what each sign-in asks.
+
 ## Develop
 
 ```sh
