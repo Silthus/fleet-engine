@@ -62,11 +62,14 @@ describe("the limit sweep", () => {
     expect(lines).toContain("Thread c (c): waits for claude, which is unknown.");
   });
 
-  test("counts a provider error that names spent quota as a usage limit", async () => {
+  test("continues the run of a provider error that names spent quota, and retries a plain outage instead", async () => {
     const cooling = limitedThread("d", { lastErrorClass: "provider_error", lastError: "All credentials for model claude-test-1 are cooling down" });
     const outage = limitedThread("e", { lastErrorClass: "provider_error", lastError: "api_error_500 Internal server error" });
     const { delivered } = await sweep([cooling, outage], { "claude-test-1": 200 });
-    expect(delivered.map((message) => message.threadId)).toEqual(["d"]);
+    expect(delivered).toEqual([
+      { threadId: "d", text: "Continue where you left off.", continuesRunId: "run-d" },
+      { threadId: "e", text: "Continue where you left off." },
+    ]);
   });
 
   test("skips every thread that a person or a block holds", async () => {
