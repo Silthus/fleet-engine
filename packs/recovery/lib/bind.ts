@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readProviderInstances, settingsScopes, upsertProviderInstance, withT3Session, type ProviderInstance, type T3SessionOptions } from "../../base/lib/t3/index.ts";
 
@@ -18,7 +18,7 @@ function read(path: string): string | undefined {
 
 function wrapperInstalled(home: string): boolean {
   const folder = dirname(wrapperPath(home));
-  return wrapperFiles.every(({ name }) => read(join(folder, name)) === read(join(packBin, name)));
+  return wrapperFiles.every(({ name, mode }) => read(join(folder, name)) === read(join(packBin, name)) && (statSync(join(folder, name)).mode & 0o777) === mode);
 }
 
 function installWrapper(home: string) {

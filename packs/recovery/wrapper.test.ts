@@ -78,18 +78,18 @@ describe("the Claude reset wrapper", () => {
     mkdirSync(join(dir, ".claude"), { recursive: true });
     const proxy = limitingProxy("120");
     writeFileSync(join(dir, ".claude/settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: proxy.url }, apiKeyHelper: fleetKeyHelper }));
-    const { lines } = await runWrapper(["--output-format=stream-json"], { HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded) });
+    const { lines } = await runWrapper(["--output-format=stream-json"], { HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded), FLEET_CLI_PROXY_URL: proxy.url });
     expect(lines.map((line) => (JSON.parse(line) as { type: string }).type)).toContain("rate_limit_event");
   });
 
-  test("never sends the Fleet key to an endpoint that Claude reaches with another key helper", async () => {
+  test("sends the Fleet key file only to Fleet's proxy, whatever key helper the settings name", async () => {
     const dir = temp.make("claude-");
     mkdirSync(join(dir, ".config/fleet"), { recursive: true });
     writeFileSync(join(dir, ".config/fleet/cli-proxy.key"), `${key}\n`);
     mkdirSync(join(dir, ".claude"), { recursive: true });
     const other = limitingProxy("120");
-    writeFileSync(join(dir, ".claude/settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: other.url }, apiKeyHelper: "cat ~/.other-key" }));
-    const { lines } = await runWrapper(["--output-format", "stream-json"], { HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded) });
+    writeFileSync(join(dir, ".claude/settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: other.url }, apiKeyHelper: fleetKeyHelper }));
+    const { lines } = await runWrapper(["--output-format", "stream-json", "--settings", '{"apiKeyHelper":"cat ~/.other-key"}'], { HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded) });
     expect(lines).toEqual((await Bun.file(recorded).text()).trim().split("\n"));
     expect(other.asked).toEqual([]);
   });
@@ -173,11 +173,14 @@ describe("fleet claude-wrapper", () => {
     const ran = Bun.spawnSync([t3.wrapperPath, "-p", "go"], { env: { PATH: Bun.env.PATH ?? "", HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded, 0) } });
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout.toString()).toBe(await Bun.file(recorded).text());
-    writeFileSync(join(t3.wrapperPath, "../claude-reset.ts"), "old");
-    expect(await t3.run("check")).toBe(1);
-    expect(t3.lines).toContain("Fleet's Claude wrapper is missing or out of date. Run fleet apply.");
-    expect(await t3.run("bind")).toBe(0);
-    expect(await t3.run("check")).toBe(0);
+    for (const spoil of [() => writeFileSync(join(t3.wrapperPath, "../claude-reset.ts"), "old"), () => chmodSync(t3.wrapperPath, 0o644)]) {
+      spoil();
+      expect(await t3.run("check")).toBe(1);
+      expect(t3.lines).toContain("Fleet's Claude wrapper is missing or out of date. Run fleet apply.");
+      expect(await t3.run("bind")).toBe(0);
+      expect(await t3.run("check")).toBe(0);
+    }
+    expect(Bun.spawnSync([t3.wrapperPath, "-p", "go"], { env: { PATH: Bun.env.PATH ?? "", HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded, 0) } }).exitCode).toBe(0);
   });
 
   test("keeps a custom Claude binary and leaves a disabled instance alone", async () => {
