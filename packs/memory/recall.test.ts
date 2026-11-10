@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { main } from "../../src/cli.ts";
-import { git, gitEnv, tempDirs } from "../../src/testing/git.ts";
+import { git, gitEnv, isolateGit, tempDirs } from "../../src/testing/git.ts";
+
+isolateGit();
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -17,10 +19,10 @@ async function fleet(args: string[], home: string) {
   return main(args, { home, engineRoot, platform: "linux", env: {}, print: () => {}, run: runFleetStepsOnly });
 }
 
-async function machineWithMemory(notes: Record<string, string>) {
+async function machineWithMemory(notes: Record<string, string>, repo = "me/notes") {
   const home = temp.make("home-");
   const profile = temp.make("profile-");
-  const settings = { "memory.repo": "me/notes" };
+  const settings = { "memory.repo": repo };
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [], packs: ["memory"], plan: "both", settings, workflows: {} }));
   expect(await fleet(["apply", "--profile", profile], home)).toBe(0);
   for (const [path, text] of Object.entries(notes)) {
@@ -119,5 +121,124 @@ describe("memory recall at session start", () => {
     expect(await fire(home, "codex", "SessionStart", { session_id: "s1", cwd: home, source: "startup" })).toEqual({ code: 0, stderr: "", context: "" });
     mkdirSync(join(home, ".agents/memory/MEMORY.md"), { recursive: true });
     expect(await fire(home, "codex", "SessionStart", { session_id: "s2", cwd: home, source: "startup" })).toEqual({ code: 0, stderr: "", context: "" });
+  });
+});
+
+describe("memory recall on a tool call", () => {
+  const proofTraps = "---\nname: proof-traps\ntriggers: [fleet proof, \"gh search\"]\n---\n\nPass full SHAs to fleet proof.\n";
+  const flakySync = "---\nname: flaky-sync\nmetadata:\n  triggers:\n    - sync-retry\n---\n\nRetry the sync test once.\n";
+  const notes = { "MEMORY.md": "# Memory index\n", "proof-traps.md": proofTraps, "projects/notes-app/flaky-sync.md": flakySync };
+  const bash = (command: string) => ({ tool_name: "Bash", tool_input: { command } });
+
+  test("shows a note when a call names its trigger, once per session and once per subagent", async () => {
+    const home = await machineWithMemory(notes);
+    const first = await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12 --head abc") });
+    expect(first.code).toBe(0);
+    expect(first.context).toContain("Shared memory proof-traps.md, shown because this call names \"fleet proof\":\nPass full SHAs to fleet proof.");
+    expect(first.context).not.toContain("triggers:");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 13") })).context).toBe("");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", agent_id: "a1", cwd: home, ...bash("fleet proof 13") })).context).toContain("Pass full SHAs");
+    expect((await fire(home, "codex", "PreToolUse", { session_id: "s2", cwd: home, ...bash("gh search prs") })).context).toContain("Pass full SHAs");
+    expect(shownLog(home, "s1")).toEqual([
+      expect.objectContaining({ event: "memoryShown", session: "s1", via: "trigger", note: "proof-traps.md", trigger: "fleet proof" }),
+      expect.objectContaining({ event: "memoryShown", session: "s1", agent: "a1", via: "trigger", note: "proof-traps.md", trigger: "fleet proof" }),
+    ]);
+  });
+
+  test("names a trigger only as a whole word, and stays silent on calls that read the memory itself", async () => {
+    const home = await machineWithMemory(notes);
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proofs") })).context).toBe("");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("subfleet proof") })).context).toBe("");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("grep -r 'fleet proof' ~/.agents/memory") })).context).toBe("");
+  });
+
+  test("shows a repo's note only in a session that works in that repo", async () => {
+    const home = await machineWithMemory(notes);
+    const elsewhere = join(home, "elsewhere");
+    mkdirSync(elsewhere);
+    git(elsewhere, "init", "-q");
+    git(elsewhere, "remote", "add", "origin", "https://github.com/someone/other-app.git");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: elsewhere, ...bash("bun run sync-retry") })).context).toBe("");
+    const cwd = repoCheckout(home, "https://github.com/someone/notes-app.git");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd, ...bash("bun run sync-retry") })).context).toContain("Retry the sync test once.");
+  });
+
+  test("shows a note that another machine added once the sync brings it", async () => {
+    const remoteDir = temp.make("remote-");
+    const remote = join(remoteDir, "notes.git");
+    git(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
+    const other = join(remoteDir, "other");
+    git(remoteDir, "clone", "-q", remote, other);
+    writeFileSync(join(other, "MEMORY.md"), "# Memory index\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "seed");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    const home = await machineWithMemory({}, `file://${remote}`);
+    expect(await fleet(["memory-sync"], home)).toBe(0);
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toBe("");
+
+    writeFileSync(join(other, "proof-traps.md"), proofTraps);
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "a trap");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    expect(await fleet(["memory-sync"], home)).toBe(0);
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Pass full SHAs");
+  });
+
+  test("finds a trigger on any line of a command, and reads a quoted trigger that holds a comma", async () => {
+    const formatTrap = "---\ntriggers: [\"git log --format=%h,%s\", 'deploy-gate', 'it''s,a trap', \"say \\\"hi,there\\\"\"]\n---\n\nUse --oneline.\n";
+    const home = await machineWithMemory({ ...notes, "format-trap.md": formatTrap });
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("echo ready\nfleet proof 12") })).context).toContain("Pass full SHAs");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("git log --format=%h") })).context).toBe("");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("git log --format=%h,%s") })).context).toContain("Use --oneline.");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s2", cwd: home, ...bash("run deploy-gate") })).context).toContain("Use --oneline.");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s3", cwd: home, ...bash("echo a trap; echo there") })).context).toBe("");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s3", cwd: home, ...bash("echo it's,a trap") })).context).toContain("Use --oneline.");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s4", cwd: home, ...bash('say "hi,there"') })).context).toContain("Use --oneline.");
+  });
+
+  test("shows the readable notes when another matching note breaks, and the broken one once it is fixed", async () => {
+    const second = "---\ntriggers: [fleet proof]\n---\n\nSecond note.\n";
+    const home = await machineWithMemory({ ...notes, "second.md": second }, "file:///nowhere/notes.git");
+    await fleet(["memory-sync"], home);
+    rmSync(join(home, ".agents/memory/second.md"));
+    mkdirSync(join(home, ".agents/memory/second.md"));
+    const broken = await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") });
+    expect([broken.code, broken.context]).toEqual([0, expect.stringContaining("Pass full SHAs")]);
+    expect(broken.context).not.toContain("Second note.");
+    rmSync(join(home, ".agents/memory/second.md"), { recursive: true });
+    writeFileSync(join(home, ".agents/memory/second.md"), second);
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Second note.");
+  });
+
+  test("before the first sync, shows a note written since the last call", async () => {
+    const home = await machineWithMemory(notes);
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Pass full SHAs");
+    writeFileSync(join(home, ".agents/memory/deploy.md"), "---\ntriggers: [deploy-gate]\n---\n\nWait for the gate.\n");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("run deploy-gate") })).context).toContain("Wait for the gate.");
+  });
+
+  test("the sync forgets what it showed in sessions idle for a week", async () => {
+    const home = await machineWithMemory(notes, "file:///nowhere/notes.git");
+    await fire(home, "claude", "PreToolUse", { session_id: "old", cwd: home, ...bash("fleet proof 12") });
+    await fire(home, "claude", "PreToolUse", { session_id: "recent", cwd: home, ...bash("fleet proof 12") });
+    const claimed = join(home, ".local/state/fleet/memory/claimed");
+    const weekAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    utimesSync(join(claimed, "old"), weekAgo, weekAgo);
+    await fleet(["memory-sync"], home);
+    expect(readdirSync(claimed)).toEqual(["recent"]);
+  });
+
+  test("shows a note once when parallel calls name its trigger at the same time", async () => {
+    const home = await machineWithMemory(notes);
+    const calls = await Promise.all(Array.from({ length: 6 }, () => fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })));
+    expect(calls.filter((call) => call.context.includes("Pass full SHAs"))).toHaveLength(1);
+    expect(shownLog(home, "s1")).toHaveLength(1);
+  });
+
+  test("lets the call through quietly when the memory checkout is broken", async () => {
+    const home = await machineWithMemory({ "MEMORY.md": "# Memory index\n" });
+    symlinkSync(join(home, "gone.md"), join(home, ".agents/memory/dangling.md"));
+    expect(await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).toEqual({ code: 0, stderr: "", context: "" });
   });
 });
