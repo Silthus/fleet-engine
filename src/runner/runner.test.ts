@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { main } from "../cli.ts";
+import { main, type CliOptions } from "../cli.ts";
 import { startT3Stub } from "../integrations/t3/testing.ts";
 import { tempDirs } from "../testing/git.ts";
 
@@ -15,6 +15,14 @@ afterEach(async () => {
 const repoRoot = join(import.meta.dir, "../..");
 const start = Date.parse("2026-11-10T08:00:00Z");
 
+async function spawned(command: string[], env: Record<string, string>) {
+  try {
+    return await Bun.spawn(command, { env, stdout: "ignore", stderr: "ignore" }).exited;
+  } catch {
+    return 127;
+  }
+}
+
 async function machine(packs = ["kit"], settings: Record<string, string> = {}) {
   const engine = temp.make("engine-");
   cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
@@ -22,11 +30,24 @@ async function machine(packs = ["kit"], settings: Record<string, string> = {}) {
   const profile = temp.make("profile-");
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs, plan: "claude", settings, workflows: {} }));
   const home = temp.make("home-");
+  const bin = temp.make("bin-");
+  writeFileSync(join(bin, "claude"), '#!/bin/sh\n[ "$*" = --version ] && echo "claude 1.0.0"\n');
+  chmodSync(join(bin, "claude"), 0o755);
   let now = start;
   let lines: string[] = [];
+  const engineFleet = join(engine, "fleet");
+  const options: CliOptions = {
+    home,
+    engineRoot: engine,
+    platform: "linux",
+    env: {},
+    print: (line) => lines.push(line),
+    run: async (command) => (command[0] === "/bin/sh" && command[1] === engineFleet ? main(command.slice(2), { ...options, print: () => {} }) : spawned(command, { HOME: home, PATH: `${bin}:/usr/bin:/bin` })),
+    clock: { now: () => now, sleep: async (ms) => void (now += ms) },
+  };
   const fleet = async (...args: string[]) => {
     lines = [];
-    const code = await main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line), run: async () => 0, clock: { now: () => now, sleep: async (ms) => void (now += ms) } });
+    const code = await main(args, options);
     return { code, lines };
   };
   expect((await fleet("apply", "--profile", profile)).code).toBe(0);
