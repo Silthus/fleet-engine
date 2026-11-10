@@ -53,6 +53,10 @@ function crontab(initial: string | undefined) {
   return { state, adapter: jobsAdapter({ run, engineRoot: engine }) };
 }
 
+function outageDropping(os: "darwin" | "linux", id: string): Plan {
+  return { ...plan(os, []), packs: [{ name: "base", source: "engine", ref: "main", available: true }, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }], dropped: [{ pack: "base", item: `job ${id}`, reason: "check base-ready does not pass" }] };
+}
+
 describe("cron jobs on Linux", () => {
   test("adds marked lines that run launcher scripts, and keeps foreign lines", async () => {
     const home = temp.make("home-");
@@ -129,6 +133,15 @@ describe("cron jobs on Linux", () => {
     await apply(offline, { home, adapters: [cron.adapter] });
     expect(cron.state.text).toBe(line);
     expect(existsSync(join(home, ".local/state/fleet/jobs/skills-pull.sh"))).toBe(true);
+  });
+
+  test("while a source is out, removes the line of a job the plan drops on purpose and keeps the others", async () => {
+    const home = temp.make("home-");
+    const cron = crontab("");
+    await apply(plan("linux", [pull, prune]), { home, adapters: [cron.adapter] });
+    await apply(outageDropping("linux", "skills-pull"), { home, adapters: [cron.adapter] });
+    expect(cron.state.text).toContain("# fleet:prune\n");
+    expect(cron.state.text).not.toContain("# fleet:skills-pull");
   });
 
   test("starts a crontab when the user has none, with no T3 precondition", async () => {
@@ -431,6 +444,14 @@ describe("T3 scheduled tasks", () => {
     expect(t3.tasks.get("fleet:quality-loop")?.enabled).toBe(false);
     expect(t3.tasks.get("my-digest")?.enabled).toBe(true);
     expect(t3.calls).toEqual(["enable fleet:quality-loop false"]);
+  });
+
+  test("while a source is out, turns off a task the plan drops on purpose and keeps the others", async () => {
+    const home = temp.make("home-");
+    const other = { ...wanted, id: "fleet:digest" };
+    const t3 = server([wanted, other]);
+    await apply(outageDropping("linux", "quality-loop"), { home, adapters: [t3.adapter] });
+    expect([t3.tasks.get("fleet:quality-loop")?.enabled, t3.tasks.get("fleet:digest")?.enabled]).toEqual([false, true]);
   });
 
   test("reports a task T3 refuses and still reconciles the others", async () => {
