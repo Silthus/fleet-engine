@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
@@ -60,6 +60,52 @@ describe("the package age workflow", () => {
     expect(readFileSync(join(home, ".bunfig.toml"), "utf8")).toBe("[install]\nminimumReleaseAge = 0\n");
   });
 
+  test("keeps a Bun setting written in any TOML form, and leaves a config it cannot edit safely untouched", () => {
+    const cases: Array<[text: string, edited: boolean]> = [
+      ['install = { registry = "https://registry.example" }\n', false],
+      ['["install"]\nregistry = "https://registry.example"\n', true],
+      ['[install]\n"minimumReleaseAge" = 600\n', false],
+      ['[install] # packages\r\nregistry = "https://registry.example"\r\n', true],
+      ["[install\n", false],
+    ];
+    for (const [text, edited] of cases) {
+      const home = temp.make("home-");
+      write(join(home, ".config/pnpm/config.yaml"), "minimumReleaseAge: 4320\n");
+      write(join(home, ".bunfig.toml"), text);
+      const result = fleet(home);
+      const after = readFileSync(join(home, ".bunfig.toml"), "utf8");
+      if (edited) {
+        expect([text, result.code, Bun.TOML.parse(after)]).toEqual([text, 0, expect.objectContaining({ install: expect.objectContaining({ minimumReleaseAge: 259200, registry: "https://registry.example" }) })]);
+      } else {
+        expect([text, after]).toEqual([text, text]);
+        const parsed = (() => { try { return Bun.TOML.parse(text) as { install?: { minimumReleaseAge?: number } }; } catch { return undefined; } })();
+        expect([text, result.code]).toEqual([text, parsed?.install?.minimumReleaseAge === undefined ? 1 : 0]);
+      }
+    }
+  });
+
+  test("keeps Windows line endings when it adds the Bun setting", () => {
+    const home = temp.make("home-");
+    write(join(home, ".bunfig.toml"), '[install]\r\nregistry = "https://registry.example"\r\n');
+    fleet(home);
+    expect(readFileSync(join(home, ".bunfig.toml"), "utf8")).toBe('[install]\r\nminimumReleaseAge = 259200\r\nregistry = "https://registry.example"\r\n');
+  });
+
+  test("keeps a pnpm setting written in any YAML form, and leaves a config it cannot edit safely untouched", () => {
+    const cases: Array<[text: string, code: number]> = [
+      ['"minimumReleaseAge": 10080\n', 0],
+      ["  store-dir: /data/pnpm\n  verify-store-integrity: true\n", 1],
+      ["- not a mapping\n", 1],
+    ];
+    for (const [text, code] of cases) {
+      const home = temp.make("home-");
+      write(join(home, ".bunfig.toml"), "[install]\nminimumReleaseAge = 259200\n");
+      write(join(home, ".config/pnpm/config.yaml"), text);
+      expect([text, fleet(home).code, readFileSync(join(home, ".config/pnpm/config.yaml"), "utf8")]).toEqual([text, code, text]);
+      expect([text, fleet(home, "--check").code]).toEqual([text, code]);
+    }
+  });
+
   test("finds pnpm's config where pnpm reads it on a Mac", () => {
     const home = temp.make("home-");
     expect(packageAgeCommand([], { home, platform: "darwin", print: () => {} })).toBe(0);
@@ -74,10 +120,23 @@ describe("the OOM survival workflow", () => {
     const dropIn = on.files.find((file) => file.target === ".config/systemd/user/t3code-.scope.d/90-fleet-oom.conf");
     expect(dropIn && "source" in dropIn ? readFileSync(dropIn.source, "utf8") : "").toBe("[Scope]\nOOMPolicy=continue\n");
     expect(on.steps.find((step) => step.id === "oom-scope-reload")?.run).toEqual(["systemctl", "--user", "daemon-reload"]);
-    expect(on.human.find((step) => step.id === "earlyoom")).toMatchObject({ command: "sudo sh ~/.local/share/fleet/guards/earlyoom.sh", probe: ["systemctl", "is-active", "--quiet", "earlyoom"] });
+    expect(on.human.find((step) => step.id === "earlyoom")).toMatchObject({ command: "sudo sh ~/.local/share/fleet/guards/earlyoom.sh", probe: ["sh", "-c", 'sh "$HOME/.local/share/fleet/guards/earlyoom.sh" --check'], interactive: true });
     const onMac = plan({ "oom-survival": true }, mac);
     expect(onMac.files.filter((file) => file.target.includes("systemd"))).toEqual([]);
     expect(onMac.human).toEqual([]);
+    expect(onMac.checks).toEqual([]);
+  });
+
+  test("says when systemd is too old to keep T3's agent scopes alive", () => {
+    const check = plan({ "oom-survival": true }).checks.find((item) => item.id === "scope-oom-policy")!;
+    expect(check.say).toContain("systemd 253");
+    const bin = temp.make("bin-");
+    const systemdVersion = (version: string) => {
+      writeFileSync(join(bin, "systemctl"), `#!/bin/sh\necho "systemd ${version} (${version}.1-1)"\necho "+PAM +AUDIT"\n`);
+      chmodSync(join(bin, "systemctl"), 0o755);
+      return Bun.spawnSync(check.run, { env: { PATH: `${bin}:${process.env.PATH}` } }).exitCode;
+    };
+    expect([systemdVersion("252"), systemdVersion("253"), systemdVersion("257")]).toEqual([1, 0, 0]);
   });
 
   const packageDefault = 'EARLYOOM_ARGS="-r 3600"\n';
@@ -95,9 +154,9 @@ describe("the OOM survival workflow", () => {
     stub("apt-get", `touch "${state}/installed"\nmkdir -p "${root}/etc/default"\nprintf '%s' '${packageDefault}' > "${root}/etc/default/earlyoom"`);
     stub("systemctl", `case "$*" in "is-active --quiet earlyoom") [ -e "${state}/active" ] ;; *now*|restart*) [ -e "${state}/broken" ] || touch "${state}/active" ;; esac`);
     const config = join(root, "etc/default/earlyoom");
-    const run = () => {
+    const run = (...args: string[]) => {
       writeFileSync(join(state, "log"), "");
-      const result = Bun.spawnSync(["sh", join(import.meta.dir, "system/earlyoom.sh")], { env: { PATH: `${bin}:${process.env.PATH}`, FLEET_SYSTEM_ROOT: root }, stdout: "pipe", stderr: "pipe" });
+      const result = Bun.spawnSync(["sh", join(import.meta.dir, "system/earlyoom.sh"), ...args], { env: { PATH: `${bin}:${process.env.PATH}`, FLEET_SYSTEM_ROOT: root }, stdout: "pipe", stderr: "pipe" });
       return { code: result.exitCode, stdout: result.stdout.toString().trim(), stderr: result.stderr.toString().trim(), log: readFileSync(join(state, "log"), "utf8").split("\n").filter((line) => /^(apt-get|systemctl) /.test(line)) };
     };
     return { root, state, config, run };
@@ -110,7 +169,7 @@ describe("the OOM survival workflow", () => {
     expect(first.log).toEqual(["apt-get install -y earlyoom", "systemctl enable earlyoom", "systemctl restart earlyoom", "systemctl is-active --quiet earlyoom"]);
     const config = readFileSync(box.config, "utf8");
     expect(config).toStartWith("# Managed by Fleet's Guards pack.");
-    expect(config).toContain("-m 10,7 --prefer ^(node|");
+    expect(config).toContain("-m 10,7 -s 100,100 --prefer ^(node|");
     expect(config).toMatch(/--avoid \^\(t3\|[^)]*claude\|codex/);
 
     expect(box.run().log).toEqual(["systemctl enable --now earlyoom", "systemctl is-active --quiet earlyoom"]);
@@ -134,6 +193,26 @@ describe("the OOM survival workflow", () => {
     writeFileSync(box.config, `# Managed by Fleet's Guards pack. Delete this line to keep your own settings.\nEARLYOOM_ARGS="-m 20"\n`);
     expect(box.run().log).toContain("systemctl restart earlyoom");
     expect(readFileSync(box.config, "utf8")).toContain("-m 10,7");
+  });
+
+  test("its check passes only while earlyoom runs with Fleet's config or one the person wrote, and changes nothing", () => {
+    const box = machine();
+    expect(box.run("--check")).toMatchObject({ code: 1, log: [] });
+    writeFileSync(join(box.state, "installed"), "");
+    mkdirSync(join(box.root, "etc/default"), { recursive: true });
+    writeFileSync(box.config, packageDefault);
+    writeFileSync(join(box.state, "active"), "");
+    expect(box.run("--check").code).toBe(1);
+    expect(readFileSync(box.config, "utf8")).toBe(packageDefault);
+    box.run();
+    expect(box.run("--check")).toMatchObject({ code: 0, log: ["systemctl is-active --quiet earlyoom"] });
+    writeFileSync(box.config, 'EARLYOOM_ARGS="-m 5"\n');
+    expect(box.run("--check").code).toBe(0);
+    writeFileSync(box.config, `# Managed by Fleet's Guards pack. Delete this line to keep your own settings.\nEARLYOOM_ARGS="-m 20"\n`);
+    expect(box.run("--check").code).toBe(1);
+    writeFileSync(box.config, 'EARLYOOM_ARGS="-m 5"\n');
+    rmSync(join(box.state, "active"));
+    expect(box.run("--check").code).toBe(1);
   });
 
   test("fails and says where to look when earlyoom does not start", () => {

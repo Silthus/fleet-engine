@@ -150,11 +150,11 @@
       "say": "Install earlyoom as root, so it stops a test or build at 10% free memory before T3 or the agents. It keeps an earlyoom config you wrote yourself.",
       "command": "sudo sh ~/.local/share/fleet/guards/earlyoom.sh",
       "probe": [
-        "systemctl",
-        "is-active",
-        "--quiet",
-        "earlyoom"
-      ]
+        "sh",
+        "-c",
+        "sh \"$HOME/.local/share/fleet/guards/earlyoom.sh\" --check"
+      ],
+      "interactive": true
     }
   ],
   "steps": [
@@ -182,6 +182,21 @@
         "linux"
       ],
       "workflow": "oom-survival"
+    }
+  ],
+  "checks": [
+    {
+      "id": "scope-oom-policy",
+      "on": [
+        "linux"
+      ],
+      "workflow": "oom-survival",
+      "run": [
+        "sh",
+        "-c",
+        "[ \"$(systemctl --version | sed -n '1s/^systemd \\([0-9]*\\).*/\\1/p')\" -ge 253 ] 2>/dev/null"
+      ],
+      "say": "This machine runs a systemd older than 253, which ignores OOMPolicy=continue on T3's agent scopes. An out-of-memory kill still stops the whole agent thread here. Upgrade the OS to get systemd 253 or newer."
     }
   ]
 }
