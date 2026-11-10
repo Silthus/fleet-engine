@@ -2,7 +2,6 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../../src/testing/git.ts";
-import { logShown } from "../../../memory/lib/notes.ts";
 import { writeHome } from "../testing.ts";
 import { dreamCommand } from "./command.ts";
 import type { Digest } from "./digest.ts";
@@ -91,23 +90,28 @@ test("search with no word prints its usage and exits 2", async () => {
   expect(said).toEqual(["Usage: fleet dream search <word>... [--since 30d] [--repo <repo>]"]);
 });
 
-test("the hub keeps runs, box digests and shown-note logs for 30 days, then drops them", async () => {
+test("the hub keeps runs and box digests for 30 days, then drops them", async () => {
   const home = hubWithRuns();
   const aged = (path: string, days: number) => utimesSync(path, new Date(dreamNow - days * day), new Date(dreamNow - days * day));
   mkdirSync(join(home, state, "2026-10-01"), { recursive: true });
   writeHome(home, { [`${state}/inbox/box-b-1.jsonl`]: "", [`${state}/inbox/box-c-1.jsonl`]: "" });
   aged(join(home, state, "inbox/box-b-1.jsonl"), 20);
   aged(join(home, state, "inbox/box-c-1.jsonl"), 31);
-  logShown(home, { session: "s-recent", via: "trigger", note: "tech/a.md" });
-  logShown(home, { session: "s-gone", via: "trigger", note: "tech/a.md" });
-  aged(join(home, ".local/state/fleet/memory/shown/s-recent.jsonl"), 20);
-  aged(join(home, ".local/state/fleet/memory/shown/s-gone.jsonl"), 31);
   const { io } = quietIo(home, { git: async () => ({ code: 0, stdout: "", stderr: "" }) });
 
   expect(await dreamCommand(["collect"], io)).toBe(0);
 
   expect([existsSync(join(home, state, "2026-10-20")), existsSync(join(home, state, "2026-10-01"))]).toEqual([true, false]);
   expect([existsSync(join(home, state, "inbox/box-b-1.jsonl")), existsSync(join(home, state, "inbox/box-c-1.jsonl"))]).toEqual([true, false]);
-  const shown = join(home, ".local/state/fleet/memory/shown");
-  expect([existsSync(join(shown, "s-recent.jsonl")), existsSync(join(shown, "s-gone.jsonl"))]).toEqual([true, false]);
+});
+
+test("search hides credentials that an older box left in the inbox", async () => {
+  const home = hubWithRuns();
+  writeHome(home, { [`${state}/inbox/box-old-1.jsonl`]: `${JSON.stringify(digest("s-leak", "2026-11-04T10:00:00Z", ["deploy password=pretend-value123"], { machine: "box-old" }))}\n` });
+  const { io, printed } = quietIo(home);
+
+  expect(await dreamCommand(["search", "deploy"], io)).toBe(0);
+
+  expect(printed.join("\n")).toContain("s-leak");
+  expect(printed.join("\n")).not.toContain("pretend-value123");
 });

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { sessionKeepDays, type Digest } from "./digest.ts";
+import { redactDigest, sessionKeepDays, type Digest } from "./digest.ts";
 
 const shownHits = 20;
 const shownLines = 3;
@@ -9,7 +9,7 @@ const snippetLength = 300;
 function readLines(path: string): Digest[] {
   return readFileSync(path, "utf8").split("\n").flatMap((line) => {
     try {
-      return line.trim() ? [JSON.parse(line) as Digest] : [];
+      return line.trim() ? [redactDigest(JSON.parse(line) as Digest)] : [];
     } catch {
       return [];
     }

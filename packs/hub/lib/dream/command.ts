@@ -99,7 +99,7 @@ async function publishWorktree(args: string[], io: DreamIo): Promise<number> {
   const worktree = positional(args);
   if (!worktree) return io.say(publishUsage), 2;
   const subtree = settingsOf(io.env)["memory.subtree"];
-  const answer = await publish(worktree, typeof subtree === "string" ? subtree : "", io.git);
+  const answer = await publish(worktree, typeof subtree === "string" ? subtree : "", memoryCheckout(io.home, io.env), io.git);
   (answer.code ? io.say : io.print)(`Fleet dream: ${answer.message}`);
   return answer.code;
 }

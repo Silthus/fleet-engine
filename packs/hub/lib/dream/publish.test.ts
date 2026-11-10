@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
-import { existsSync, readFileSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { git, tempDirs } from "../../../../src/testing/git.ts";
+import { git, gitEnv, tempDirs } from "../../../../src/testing/git.ts";
 import { writeHome } from "../testing.ts";
 import { dreamCommand } from "./command.ts";
 import { dreamSettings, note, quietIo, realGit } from "./testing.ts";
@@ -121,4 +121,84 @@ test.concurrent("publish with no worktree prints its usage and exits 2", async (
   expect(await dreamCommand(["publish"], dream)).toBe(2);
 
   expect(said).toEqual(["Usage: fleet dream publish <worktree>"]);
+});
+
+test.concurrent("publish refuses what the final tree hides from a commit-by-commit check: a merge that drops main's outside change, a padded name, a secret in a name, a symlink, and a submodule", async () => {
+  const cases: Array<[string, (worktree: string, laptop: string) => void, string]> = [
+    ["ours", (worktree, laptop) => {
+      commit(worktree, "Update: rule", { "memory/tech/rule.md": note("rule", {}, "Dream's version.") });
+      commit(laptop, "Docs: readme", { "README.md": "# Notes, by the laptop\n" });
+      git(laptop, "push", "-q", "origin", "HEAD:main");
+      git(worktree, "fetch", "-q", "origin", "main");
+      git(worktree, "-c", "commit.gpgsign=false", "merge", "-q", "-s", "ours", "--no-edit", "origin/main");
+    }, "Fleet dream: the commits change files outside memory/ and dreams/: README.md."],
+    ["padded", (worktree) => commit(worktree, "Change: padded", { " memory/leak.md": "leak\n" }), "Fleet dream: the commits change files outside memory/ and dreams/:  memory/leak.md."],
+    ["named", (worktree) => commit(worktree, "Change: named", { [`memory/${fakeToken()}.md`]: "harmless\n" }), "Fleet dream: the commits hold a secret (GitHub token), in this or an earlier commit. Remove it and rewrite the commits."],
+    ["symlink", (worktree) => {
+      rmSync(join(worktree, "memory/MEMORY.md"));
+      symlinkSync("../README.md", join(worktree, "memory/MEMORY.md"));
+      commit(worktree, "Change: symlink", {});
+    }, "Fleet dream: the commits add a symlink or a submodule: memory/MEMORY.md. Memory holds plain files only."],
+    ["submodule", (worktree) => {
+      git(worktree, "update-index", "--add", "--cacheinfo", `160000,${git(worktree, "rev-parse", "HEAD")},memory/vendor`);
+      git(worktree, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "Change: submodule");
+      mkdirSync(join(worktree, "memory/vendor"));
+    }, "Fleet dream: the commits add a symlink or a submodule: memory/vendor. Memory holds plain files only."],
+  ];
+  for (const [name, change, refusal] of cases) {
+    const { home, laptop, worktree, io } = dreamWorktree();
+    change(worktree, laptop);
+    const before = mainOf(home, "rev-parse", "main");
+    const { io: dream, said } = io();
+
+    expect([name, await dreamCommand(["publish", worktree], dream)]).toEqual([name, 1]);
+
+    expect([name, said]).toEqual([name, [refusal]]);
+    expect(mainOf(home, "rev-parse", "main")).toBe(before);
+  }
+});
+
+test.concurrent("publish refuses when a guard's Git command fails, and pushes nothing", async () => {
+  const { home, worktree, io } = dreamWorktree();
+  commit(worktree, "Change: outside", { "README.md": "# Changed\n" });
+  const before = mainOf(home, "rev-parse", "main");
+  const { io: dream, said } = io();
+  const failingLog = async (args: string[]) => (args.includes("log") || args.includes("diff") ? { code: 128, stdout: "", stderr: "broken" } : realGit(args));
+
+  expect(await dreamCommand(["publish", worktree], { ...dream, git: failingLog })).toBe(1);
+
+  expect(said[0]).toStartWith("Fleet dream: cannot check the outgoing commits: git ");
+  expect(mainOf(home, "rev-parse", "main")).toBe(before);
+});
+
+test.concurrent("publish refuses a worktree paused in a rebase, and leaves it paused", async () => {
+  const { home, worktree, io } = dreamWorktree();
+  commit(worktree, "Change: one", { "memory/tech/one.md": note("one") });
+  commit(worktree, "Change: two", { "memory/tech/two.md": note("two") });
+  const paused = Bun.spawnSync(["git", "-c", "commit.gpgsign=false", "rebase", "-q", "-i", "HEAD~2"], { cwd: worktree, env: { ...gitEnv, GIT_SEQUENCE_EDITOR: "sed -i -e 1s/^pick/edit/" } });
+  expect(paused.exitCode).toBe(0);
+  const before = mainOf(home, "rev-parse", "main");
+  const { io: dream, said } = io();
+
+  expect(await dreamCommand(["publish", worktree], dream)).toBe(1);
+
+  expect(said).toEqual(["Fleet dream: the worktree is in the middle of a rebase, merge, cherry-pick or revert. Finish or abort it, then publish again."]);
+  expect(mainOf(home, "rev-parse", "main")).toBe(before);
+});
+
+test.concurrent("publish refuses a checkout that is not the memory repo's, and pushes nothing", async () => {
+  const { home, io } = dreamWorktree("");
+  const other = join(home, "other.git");
+  const project = join(home, "dev/project");
+  git(home, "init", "-q", "--bare", "-b", "main", other);
+  git(home, "clone", "-q", other, project);
+  commit(project, "Start", { "README.md": "# Project\n" });
+  git(project, "push", "-q", "origin", "HEAD:main");
+  commit(project, "Change: project", { "src.md": "code\n" });
+  const { io: dream, said } = io();
+
+  expect(await dreamCommand(["publish", project], dream)).toBe(1);
+
+  expect(said).toEqual([`Fleet dream: ${project} is not a worktree of the memory checkout ${join(home, ".agents/memory")}.`]);
+  expect(git(home, "--git-dir", other, "log", "--format=%s", "main")).toBe("Start");
 });

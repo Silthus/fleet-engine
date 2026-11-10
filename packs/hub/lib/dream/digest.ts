@@ -3,7 +3,7 @@ import { join, relative, resolve } from "node:path";
 import type { BoxHooks } from "../box.ts";
 import type { Coder, Env } from "../coder.ts";
 import { remoteFleet } from "../machine.ts";
-import { forgetShownBefore, notesShownByTrigger } from "../../../memory/lib/notes.ts";
+import { notesShownByTrigger } from "../../../memory/lib/notes.ts";
 import { redactCredentials, redactValue } from "./redact.ts";
 
 type Entry = { at: string; role: "user" | "assistant" | "error"; text: string };
@@ -235,7 +235,6 @@ export function redactDigest(item: Digest): Digest {
 export function digestLines(home: string, machine: string, since: number, now: number, env: Env): string {
   let output = localDigests(home, machine, since, env).map((item) => `${JSON.stringify(redactDigest(item))}\n`).join("");
   const inbox = inboxDir(home, env);
-  forgetShownBefore(home, now - sessionKeepDays * day);
   for (const file of existsSync(inbox) ? readdirSync(inbox).sort() : []) {
     const path = join(inbox, file);
     const modified = statSync(path).mtimeMs;
