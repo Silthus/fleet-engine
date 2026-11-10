@@ -21,8 +21,13 @@ export function recallNotes(input: HookInput, home: string): string | undefined 
     if (!term) continue;
     const scope = /^projects\/([^/]+)\//.exec(trigger.note)?.[1];
     if (scope && scope !== (repo ??= repoOf(input.cwd ?? process.cwd()))) continue;
-    if (!existsSync(join(root, trigger.note)) || !claimNote(home, session, input.agent_id, trigger.note)) continue;
-    hits.push({ note: trigger.note, term, text: stripFrontmatter(readFileSync(join(root, trigger.note), "utf8")) });
+    let text: string;
+    try {
+      text = stripFrontmatter(readFileSync(join(root, trigger.note), "utf8"));
+    } catch {
+      continue;
+    }
+    if (claimNote(home, session, input.agent_id, trigger.note)) hits.push({ note: trigger.note, term, text });
   }
   for (const hit of hits) {
     try {

@@ -8,7 +8,12 @@ export const minimumTerm = 4;
 
 const tableFile = (home: string) => join(stateDir(home), "triggers.json");
 const frontmatterOf = (text: string) => /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
-const unquote = (value: string) => value.trim().replace(/^["']|["']$/g, "").trim();
+function unquote(raw: string) {
+  const value = raw.trim();
+  if (/^"[\s\S]*"$/.test(value)) return value.slice(1, -1).replace(/\\(.)/g, "$1").trim();
+  if (/^'[\s\S]*'$/.test(value)) return value.slice(1, -1).replace(/''/g, "'").trim();
+  return value;
+}
 
 export function stripFrontmatter(text: string) {
   const match = frontmatterOf(text);
@@ -18,7 +23,7 @@ export function stripFrontmatter(text: string) {
 export function triggersOf(text: string): string[] {
   const block = frontmatterOf(text)?.[1] ?? "";
   const inline = /^\s*triggers:[ \t]*\[(.*)\][ \t]*$/m.exec(block);
-  if (inline) return [...inline[1]!.matchAll(/\s*("[^"]*"|'[^']*'|[^,]*)\s*(?:,|$)/g)].map((item) => unquote(item[1]!)).filter(Boolean);
+  if (inline) return [...inline[1]!.matchAll(/\s*("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^,]*)\s*(?:,|$)/g)].map((item) => unquote(item[1]!)).filter(Boolean);
   const start = /^\s*triggers:[ \t]*$/m.exec(block);
   if (!start) return [];
   const items: string[] = [];
@@ -42,7 +47,13 @@ export function noteFiles(root: string, prefix = ""): string[] {
 function scanTriggers(home: string): Trigger[] {
   const root = memoryRoot(home);
   return noteFiles(root).flatMap((note) => {
-    const terms = triggersOf(readFileSync(join(root, note), "utf8")).filter((term) => term.length >= minimumTerm);
+    let text: string;
+    try {
+      text = readFileSync(join(root, note), "utf8");
+    } catch {
+      return [];
+    }
+    const terms = triggersOf(text).filter((term) => term.length >= minimumTerm);
     return terms.length ? [{ note, terms }] : [];
   });
 }

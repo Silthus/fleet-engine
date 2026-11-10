@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 export type Provider = "claude" | "codex";
@@ -30,15 +30,26 @@ export function logShown(home: string, shown: Omit<Shown, "at" | "event">) {
   appendFileSync(shownFile(home, shown.session), `${JSON.stringify({ at: new Date().toISOString(), event: "memoryShown", ...shown })}\n`, { mode: 0o600 });
 }
 
+const claimedDir = (home: string) => join(stateDir(home), "claimed");
+const claimIdleDays = 7;
+
 export function claimNote(home: string, session: string, agent: string | undefined, note: string) {
-  const dir = join(stateDir(home), "claimed");
+  const dir = join(claimedDir(home), session.replace(/[^\w-]/g, ""));
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const key = createHash("sha256").update(JSON.stringify([session, agent ?? "", note])).digest("hex");
+  const key = createHash("sha256").update(JSON.stringify([agent ?? "", note])).digest("hex");
   try {
     closeSync(openSync(join(dir, key), "wx", 0o600));
     return true;
   } catch {
     return false;
+  }
+}
+
+export function forgetIdleClaims(home: string, now = Date.now()) {
+  const dir = claimedDir(home);
+  if (!existsSync(dir)) return;
+  for (const session of readdirSync(dir)) {
+    if (now - statSync(join(dir, session)).mtimeMs > claimIdleDays * 24 * 3600 * 1000) rmSync(join(dir, session), { recursive: true, force: true });
   }
 }
 

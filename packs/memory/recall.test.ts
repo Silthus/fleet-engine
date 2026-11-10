@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { main } from "../../src/cli.ts";
@@ -186,12 +186,47 @@ describe("memory recall on a tool call", () => {
   });
 
   test("finds a trigger on any line of a command, and reads a quoted trigger that holds a comma", async () => {
-    const formatTrap = "---\ntriggers: [\"git log --format=%h,%s\", 'deploy-gate']\n---\n\nUse --oneline.\n";
+    const formatTrap = "---\ntriggers: [\"git log --format=%h,%s\", 'deploy-gate', 'it''s,a trap', \"say \\\"hi,there\\\"\"]\n---\n\nUse --oneline.\n";
     const home = await machineWithMemory({ ...notes, "format-trap.md": formatTrap });
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("echo ready\nfleet proof 12") })).context).toContain("Pass full SHAs");
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("git log --format=%h") })).context).toBe("");
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("git log --format=%h,%s") })).context).toContain("Use --oneline.");
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s2", cwd: home, ...bash("run deploy-gate") })).context).toContain("Use --oneline.");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s3", cwd: home, ...bash("echo a trap; echo there") })).context).toBe("");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s3", cwd: home, ...bash("echo it's,a trap") })).context).toContain("Use --oneline.");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s4", cwd: home, ...bash('say "hi,there"') })).context).toContain("Use --oneline.");
+  });
+
+  test("shows the readable notes when another matching note breaks, and the broken one once it is fixed", async () => {
+    const second = "---\ntriggers: [fleet proof]\n---\n\nSecond note.\n";
+    const home = await machineWithMemory({ ...notes, "second.md": second }, "file:///nowhere/notes.git");
+    await fleet(["memory-sync"], home);
+    rmSync(join(home, ".agents/memory/second.md"));
+    mkdirSync(join(home, ".agents/memory/second.md"));
+    const broken = await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") });
+    expect([broken.code, broken.context]).toEqual([0, expect.stringContaining("Pass full SHAs")]);
+    expect(broken.context).not.toContain("Second note.");
+    rmSync(join(home, ".agents/memory/second.md"), { recursive: true });
+    writeFileSync(join(home, ".agents/memory/second.md"), second);
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Second note.");
+  });
+
+  test("before the first sync, shows a note written since the last call", async () => {
+    const home = await machineWithMemory(notes);
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Pass full SHAs");
+    writeFileSync(join(home, ".agents/memory/deploy.md"), "---\ntriggers: [deploy-gate]\n---\n\nWait for the gate.\n");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("run deploy-gate") })).context).toContain("Wait for the gate.");
+  });
+
+  test("the sync forgets what it showed in sessions idle for a week", async () => {
+    const home = await machineWithMemory(notes, "file:///nowhere/notes.git");
+    await fire(home, "claude", "PreToolUse", { session_id: "old", cwd: home, ...bash("fleet proof 12") });
+    await fire(home, "claude", "PreToolUse", { session_id: "recent", cwd: home, ...bash("fleet proof 12") });
+    const claimed = join(home, ".local/state/fleet/memory/claimed");
+    const weekAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000);
+    utimesSync(join(claimed, "old"), weekAgo, weekAgo);
+    await fleet(["memory-sync"], home);
+    expect(readdirSync(claimed)).toEqual(["recent"]);
   });
 
   test("shows a note once when parallel calls name its trigger at the same time", async () => {

@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../base/lib/command.ts";
 import { stringSetting } from "../../base/lib/settings.ts";
+import { forgetIdleClaims } from "../lib/notes.ts";
 import { refreshTriggers } from "../lib/triggers.ts";
 
 export function memoryUrl(repo: string) {
@@ -13,8 +14,10 @@ export async function syncMemory(env: Record<string, string | undefined> = Bun.e
   if (!repo) throw new Error("memory.repo is empty. Set it with fleet set memory.repo=<owner>/<repo>.");
   const child = Bun.spawn(["sh", join(import.meta.dir, "../sync/sync.sh")], { stdio: ["inherit", "inherit", "inherit"], env: { ...env, FLEET_MEMORY_URL: memoryUrl(repo) } });
   const code = await child.exited;
+  const home = env.HOME ?? homedir();
   try {
-    refreshTriggers(env.HOME ?? homedir());
+    refreshTriggers(home);
+    forgetIdleClaims(home);
   } catch (error) {
     console.error(`Memory: cannot refresh the trigger table: ${error instanceof Error ? error.message : error}`);
   }
