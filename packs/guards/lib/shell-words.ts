@@ -333,8 +333,8 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
     }
     const name = texts[index] === undefined ? "" : basename(texts[index]);
     const args = texts.slice(index + 1);
-    if (name === "for" || name === "select") loopDepth++;
     const inLoop = context.inLoop || loopDepth > 0;
+    if (name === "for" || name === "select") loopDepth++;
     if (name === "done") loopDepth = Math.max(0, loopDepth - 1);
     if (name === "export") for (const pair of args.map((arg) => arg.match(assignment))) if (pair) assigned.set(pair[1], pair[2]);
     if (name === "" || name === "export") for (const [key, value] of assigned) env.set(key, value), commandEnv.set(key, value);
@@ -381,6 +381,7 @@ export function shellInput(command: Command): { program: string; index: number }
     }
     if (/^[-+][oO]$/.test(arg) || arg === "--rcfile" || arg === "--init-file") index++;
     else if (/^-[A-Za-z]+$/.test(arg)) {
+      if (arg.includes("n")) return undefined;
       if (arg.includes("c")) inline = true;
       else if (arg.includes("s")) return { stdin: true };
     } else if (!/^(?:--|\+)/.test(arg)) return inline ? { program: arg, index } : { script: arg, index };
