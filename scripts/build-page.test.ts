@@ -38,7 +38,7 @@ describe("the page build", () => {
     const html = await buildPage({ audience: "public" });
     expect(html.match(/posthog|hogli|coder|stamphog|reviewhog/gi)).toBeNull();
     const data = await pageData({ audience: "public" });
-    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "hub", "recovery", "slack"]);
+    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "guards", "hub", "recovery", "slack"]);
     expect(data.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id)).not.toContain("previews");
   });
 
