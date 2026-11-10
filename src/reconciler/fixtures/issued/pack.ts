@@ -27,6 +27,10 @@ export default {
         health: "/health",
         credential: async (ctx, node) => {
           if (await ctx.secrets.read("refuse")) throw new Error("the service said no");
+          if (await ctx.secrets.read("leak")) {
+            ctx.print("fleet: leaked-key");
+            throw new Error("the issue of leaked-key failed");
+          }
           ctx.print(`Issuing a key for ${node}`);
           const count = Number((await ctx.secrets.read("count")) ?? "0") + 1;
           await ctx.secrets.write("count", String(count));
@@ -47,7 +51,8 @@ export default {
           const { url, credential } = await ctx.use(mode === "use" ? api : spare);
           return ctx.print(`${url} ${credential}`), 0;
         }
-        if (mode === "break" || mode === "refuse") return await ctx.secrets.write(mode === "break" ? "broken" : "refuse", "yes"), 0;
+        if (mode === "break") return await ctx.secrets.write("broken", "yes"), 0;
+        if (mode === "refuse" || mode === "leak") return await ctx.secrets.write(mode, "yes"), 0;
         return 2;
       },
     });
