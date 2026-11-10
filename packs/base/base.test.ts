@@ -19,6 +19,8 @@ function plan(ai: AiPlan, machine = mac, settings: Profile["settings"] = {}, sou
   return resolve(profile, machine, sources);
 }
 
+const isAgentCli = (id: string) => /^(claude|codex)-cli/.test(id);
+
 function agents(result: Plan) {
   const file = result.files.find((item) => item.target === ".agents/AGENTS.md");
   if (!file || !("content" in file)) throw new Error("no AGENTS.md");
@@ -76,16 +78,16 @@ describe("the Base pack", () => {
   test("installs Codex hooks, Codex config, and the Codex CLI only when the plan has Codex", () => {
     const codex = (result: Plan) => result.config.filter((entry) => entry.provider === "codex").map((entry) => entry.key);
     expect(codex(plan("claude"))).toEqual([]);
-    expect(codex(plan("codex"))).toEqual(["hooks.UserPromptSubmit", "hooks.PostToolUse", "model", "model_reasoning_effort"]);
-    expect(plan("both", devbox).steps.map((step) => step.id)).toEqual(["claude-cli", "codex-cli"]);
-    expect(plan("claude", devbox).steps.map((step) => step.id)).toEqual(["claude-cli"]);
-    expect(plan("codex", devbox).steps.map((step) => step.id)).toEqual(["codex-cli"]);
+    expect(codex(plan("codex"))).toEqual(["hooks.UserPromptSubmit", "hooks.PreToolUse", "hooks.PostToolUse", "hooks.SessionStart", "model", "model_reasoning_effort"]);
+    expect(plan("both", devbox).steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli", "codex-cli"]);
+    expect(plan("claude", devbox).steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli"]);
+    expect(plan("codex", devbox).steps.map((step) => step.id).filter(isAgentCli)).toEqual(["codex-cli"]);
   });
 
   test("installs the agent CLIs on a Mac too, Codex from its Homebrew cask, so a clean Mac without Node can sign in", () => {
-    expect(plan("both").steps.map((step) => step.id)).toEqual(["claude-cli", "codex-cli-mac"]);
-    expect(plan("claude").steps.map((step) => step.id)).toEqual(["claude-cli"]);
-    expect(plan("codex").steps.map((step) => step.id)).toEqual(["codex-cli-mac"]);
+    expect(plan("both").steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli", "codex-cli-mac"]);
+    expect(plan("claude").steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli"]);
+    expect(plan("codex").steps.map((step) => step.id).filter(isAgentCli)).toEqual(["codex-cli-mac"]);
     expect(plan("both").steps.find((step) => step.id === "codex-cli-mac")).toMatchObject({ run: ["brew", "install", "--cask", "codex"], check: ["codex", "--version"] });
   });
 
