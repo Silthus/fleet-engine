@@ -6,7 +6,7 @@ import type { FetchedSource, SourceRef } from "../pack/types.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { fakeMachine, fleetSetup, machineFile, savedAnswers } from "./testing.ts";
 import type { Machine } from "./commands.ts";
-import { packSignIn } from "./human.ts";
+import { humanStep, packSignIn } from "./human.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -199,6 +199,27 @@ describe("fleet setup sign-ins", () => {
 });
 
 describe("a pack's sign-in", () => {
+  test("waits for its repair command to end once the check passes, so the command's own apply completes", async () => {
+    let saved = false;
+    let stopped = false;
+    let end = (_code: number) => {};
+    const machine = {
+      exec: async (command: string[]) => ({ code: command.at(-1) === "whoami" && saved ? 0 : 1, output: "" }),
+      start: () => ({ stop: () => void (stopped = true), exited: new Promise<number>((resolve) => (end = resolve)) }),
+      sleep: async () => void (saved = true),
+      openUrl: async () => {},
+    } as unknown as Machine;
+    const context = { terminal: { print() {}, ask: async () => "" }, machine, nonInteractive: false };
+    const human = { id: "login", pack: "team", say: "Sign in.", command: "fleet login", probe: ["fleet", "whoami"] };
+    let finished = false;
+    const running = humanStep(packSignIn(human, [], context, "/engine"), context).run().then(() => void (finished = true));
+    for (let tick = 0; tick < 50; tick++) await Promise.resolve();
+    expect([finished, stopped]).toEqual([false, false]);
+    end(0);
+    await running;
+    expect([finished, stopped]).toEqual([true, false]);
+  });
+
   test("runs this engine's launcher for a leading fleet in its probe, command, and steps", async () => {
     const calls: string[] = [];
     let started = false;

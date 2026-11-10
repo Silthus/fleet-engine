@@ -2,22 +2,26 @@ import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../files/private.ts";
 import { t3Threads } from "../integrations/t3/index.ts";
-import type { PackCode, Plan } from "../pack/types.ts";
+import type { PackCode, Plan, Workflow } from "../pack/types.ts";
 import type { Context, Secrets, Setting, Value } from "../sdk/index.ts";
 
 export type Clock = { now(): number; sleep(ms: number): Promise<void> };
-export type ContextOptions = { home: string; plan: Plan; pack: string; code: PackCode; print(line: string): void; clock: Clock };
+export type ContextOptions = { home: string; plan: Plan; pack: string; code: PackCode; workflows: Workflow[]; print(line: string): void; clock: Clock };
 
 const secretName = /^[a-z0-9][a-z0-9.-]*$/;
 
-export async function packContext({ home, plan, pack, code, print, clock }: ContextOptions): Promise<Context> {
+export async function packContext({ home, plan, pack, code, workflows, print, clock }: ContextOptions): Promise<Context> {
   const stateDir = join(home, ".local/state/fleet", pack);
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
+  const threads = t3Threads(plan.models, { home });
   return {
     get: <T extends Value>(setting: Setting<T>) => {
       const key = code.settingKey(setting);
       const value = plan.settings[key];
-      if (value === undefined) throw new Error(`${key} has no value. Set it with fleet set ${key}=<value>.`);
+      if (value === undefined) {
+        const off = workflows.find((workflow) => workflow.settings?.includes(key) && !plan.workflows.some((entry) => entry.id === workflow.id && entry.active));
+        throw new Error(off ? `${key} belongs to the ${off.name} workflow, which is off. Turn it on with fleet packs --workflows ${off.id}=on.` : `${key} has no value. Set it with fleet set ${key}=<value>.`);
+      }
       return value as T;
     },
     secrets: secretStore(home, pack),
@@ -26,7 +30,7 @@ export async function packContext({ home, plan, pack, code, print, clock }: Cont
     log: (line) => print(`${new Date(clock.now()).toISOString()} ${line}`),
     now: clock.now,
     sleep: clock.sleep,
-    threads: t3Threads(plan.models, { home }),
+    threads: { start: (request) => threads.start({ ...request, key: `${pack}:${request.key}` }) },
   };
 }
 

@@ -501,8 +501,8 @@ stores for each Slack message before it starts a thread
 
 How an item runs: `fleet <command>` resolves the plan as today, loads the
 pack that owns the command, and calls `run`. The unit of a service with a
-`run` body runs `fleet run <pack>/<id>`, and the unit of a service with a
-`command` runs that command itself. A person's check loads as today's human
+`run` body runs `fleet run <pack>/<id>`. From step 4, the unit of a service
+with a `command` runs that command itself. A person's check loads as today's human
 step, with `fleet run <pack>/<id>` as its probe.
 
 ## 6. Threads, tasks, and project scripts
@@ -617,8 +617,9 @@ The real machines run the private Fleet, not the engine.
 
 - **The dog-food hub** is a freshly created machine: a devbox with its own
   engine profile and no devboxes in it. It is not a box, because a box
-  leaves within hours (risk 9). The profile names it as the hub (D2), so
-  the Hub pack is not in that profile.
+  leaves within hours (risk 9). In step 1 it is solo, and the Hub pack is
+  not in its profile. Its profile names it as the hub (D2) once step 2
+  brings `fleet hub here`.
 - **The engine is the only Fleet in that home.** The machine is created
   without the private dotfiles installer, because both Fleets write
   `~/.config/fleet` and name the unit `fleet-slack-trigger.service`.

@@ -161,6 +161,18 @@ describe("fetchSource", () => {
     expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v1.", undefined]);
   });
 
+  test("reports a pack.ts that never finishes loading, so apply goes on", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `await new Promise((resolve) => setTimeout(resolve, 3_600_000));\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"), 1);
+    expect(fetched).toMatchObject({ error: expect.stringContaining("did not finish loading within") });
+  });
+
+  test("names the last line a pack.ts printed when it exits as it loads", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `console.error("the team token file is missing");\nprocess.exit(3);\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+    expect(fetched).toMatchObject({ error: expect.stringContaining("the packs exit 3 as they load: the team token file is missing") });
+  });
+
   test("never falls back to a cache of another repository", async () => {
     const cache = temp.make("cache-");
     await fetchSource({ name: "team", repo: packRepo("Old repo."), ref: "v1" }, cache);

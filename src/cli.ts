@@ -132,15 +132,15 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
   const command = plan.commands[name];
   if (!command) {
-    const owner = sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => pack.code?.commands[name] || existsSync(join(pack.dir, "commands", `${name}.ts`)));
+    const owner = sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => existsSync(join(pack.dir, "commands", `${name}.ts`)) || Object.hasOwn(pack.code?.commands ?? {}, name));
     options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }
-  const code = loadedPack(sources, command.pack)?.code;
-  const run = code?.commands[name];
-  const exit = run ? await inPack(plan, command.pack, code!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
+  const loaded = loadedPack(sources, command.pack);
+  const run = loaded?.code?.commands[name];
+  const exit = run ? await inPack(plan, loaded!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
   const typed = ["fleet", name, ...args];
-  const repairs = plan.human.some((step) => step.pack === command.pack && step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
+  const repairs = plan.human.some((step) => step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
   return exit === 0 && repairs ? applyProfile(plan.machine.profileDir!, options) : exit;
 }
 
@@ -154,26 +154,34 @@ async function spawnPackCommand(path: string, args: string[], plan: Plan, option
 
 async function runItem(args: string[], options: CliOptions) {
   const [item = "", ...extra] = args;
-  const [pack = "", id = ""] = item.split("/");
+  const slash = item.indexOf("/");
+  const [pack, id] = slash < 0 ? ["", ""] : [item.slice(0, slash), item.slice(slash + 1)];
   if (!pack || !id || extra.length) return options.print("Usage: fleet run <pack>/<id>"), 2;
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
-  const code = plan.packs.some((entry) => entry.name === pack && entry.available) ? loadedPack(sources, pack)?.code : undefined;
-  const service = plan.jobs.some((job) => job.pack === pack && job.id === id) ? code?.services[id] : undefined;
+  const loaded = plan.packs.some((entry) => entry.name === pack && entry.available) ? loadedPack(sources, pack) : undefined;
+  const code = loaded?.code;
+  const job = plan.jobs.find((entry) => entry.pack === pack && entry.id === id);
+  const service = job ? code?.services[id] : undefined;
   const check = plan.human.some((step) => step.pack === pack && step.id === id) ? code?.checks[id] : undefined;
   if (!service && !check) {
     const dropped = plan.dropped.find((entry) => entry.pack === pack && (entry.item === `job ${id}` || entry.item === `human ${id}`));
     return options.print(dropped ? `fleet run: ${item} does not run here: ${dropped.reason}` : `fleet run: your packs have no service or check ${item}`), 2;
   }
-  return inPack(plan, pack, code!, options, async (ctx) => (service ? (await service(ctx), 0) : (await check!(ctx)) ? 0 : 1));
+  return inPack(plan, loaded!, options, async (ctx) => {
+    if (!service) return (await check!(ctx)) ? 0 : 1;
+    const waits = job?.after ? plan.human.find((step) => step.pack === pack && step.id === job.after) : undefined;
+    if (waits && !(await code!.checks[waits.id]!(ctx))) return options.print(`fleet run: ${item} waits until ${waits.id} passes. ${waits.say}`), 1;
+    return await service(ctx), 0;
+  });
 }
 
 function loadedPack(sources: FetchedSource[], name: string): LoadedPack | undefined {
   return sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => pack.manifest.name === name);
 }
 
-async function inPack(plan: Plan, pack: string, code: PackCode, options: CliOptions, work: (ctx: Awaited<ReturnType<typeof packContext>>) => Promise<number>) {
+async function inPack(plan: Plan, loaded: LoadedPack, options: CliOptions, work: (ctx: Awaited<ReturnType<typeof packContext>>) => Promise<number>) {
   const clock = options.clock ?? { now: Date.now, sleep: Bun.sleep };
-  const ctx = await packContext({ home: options.home, plan, pack, code, print: options.print, clock });
+  const ctx = await packContext({ home: options.home, plan, pack: loaded.manifest.name, code: loaded.code!, workflows: loaded.manifest.workflows ?? [], print: options.print, clock });
   const environment = packEnvironment(plan, options);
   const saved = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
   const assign = (values: Record<string, string | undefined>) => {

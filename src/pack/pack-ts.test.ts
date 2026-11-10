@@ -59,11 +59,17 @@ describe("a pack.ts", () => {
     expect(await without.fleet("apply", "--profile", "<profile>")).toBe(0);
     expect([await without.fleet("toString"), without.lines.at(-1)?.split("\n")[0]]).toEqual([2, "fleet: unknown command toString"]);
   });
+
+  test("names the pack to turn on for a command of a pack.ts that is off", async () => {
+    const { fleet, lines } = machineWith({ one: (dir) => writeFileSync(join(dir, "pack.ts"), `export default { sdk: 1, name: "one", title: "One Tools", summary: "A pack.", register(fleet) { fleet.command("hello", { summary: "Greet.", run: async () => 0 }); } };\n`) }, []);
+    expect(await fleet("apply", "--profile", "<profile>")).toBe(0);
+    expect([await fleet("hello"), lines.at(-1)]).toEqual([2, "fleet hello comes from the One Tools pack, which is off. Turn it on with fleet packs."]);
+  });
 });
 
 const cpTwin = (dir: string) => cpSync(join(fixtures, "twin-ts/packs/twin"), dir, { recursive: true });
 
-function machineWith(packs: Record<string, (dir: string) => void>) {
+function machineWith(packs: Record<string, (dir: string) => void>, enabled = Object.keys(packs)) {
   const engine = temp.make("engine-");
   cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
   for (const [name, write] of Object.entries(packs)) {
@@ -71,7 +77,7 @@ function machineWith(packs: Record<string, (dir: string) => void>) {
     write(join(engine, "packs", name));
   }
   const profile = temp.make("profile-");
-  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: Object.keys(packs), plan: "both", settings: {}, workflows: {} }));
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: enabled, plan: "both", settings: {}, workflows: {} }));
   const home = temp.make("home-");
   const bin = temp.make("bin-");
   for (const agent of ["claude", "codex"]) {
@@ -131,9 +137,25 @@ describe("loading a pack.ts", () => {
     await expect(loadPacks(dir)).rejects.toThrow("service one-run names a check that the one pack did not declare");
   });
 
-  test("refuses a repair command that is more than plain words", async () => {
-    const dir = source({ one: pack("one", `fleet.check({ id: "one-saved", say: "Save it.", test: async () => true, repair: { ask: "Save it.", command: "fleet one 'setup'" } });`) });
-    await expect(loadPacks(dir)).rejects.toThrow("check one-saved: repair.command must be plain words, without quotes or backslashes, so Fleet knows it when you run it");
+  test.each(["fleet one 'setup'", "fleet one setup ~/token", "fleet one setup $TOKEN", "fleet one setup && fleet apply", "one setup"])("refuses a repair command that a shell would change or that is not a fleet command: %s", async (command) => {
+    const dir = source({ one: pack("one", `fleet.check({ id: "one-saved", say: "Save it.", test: async () => true, repair: { ask: "Save it.", command: ${JSON.stringify(command)} } });`) });
+    await expect(loadPacks(dir)).rejects.toThrow("check one-saved: repair.command must be fleet and plain words of letters, digits, and . _ / = : @ -, so a shell passes it as written and Fleet knows it when you run it");
+  });
+
+  test("loads a pack whose register reads the pack's own fields through this", async () => {
+    const dir = source({ one: `export default { sdk: 1, name: "one", summary: "A pack.", register(fleet) { fleet.setting({ key: \`\${this.name}.color\`, type: "string", question: "Which color?" }); } };\n` });
+    const [loaded] = await loadPacks(dir);
+    expect(loaded?.manifest.settings?.map((setting) => setting.key)).toEqual(["one.color"]);
+  });
+
+  test("refuses a register that is async, because what it declares after an await would be lost", async () => {
+    const dir = source({ one: `export default { sdk: 1, name: "one", summary: "A pack.", async register(fleet) { await Promise.resolve(); fleet.setting({ key: "one.color", type: "string", question: "Which color?" }); } };\n` });
+    await expect(loadPacks(dir)).rejects.toThrow("register returned a promise; declare everything before it returns");
+  });
+
+  test("refuses a pack.ts field that the SDK does not name", async () => {
+    const dir = source({ one: `export default { sdk: 1, name: "one", summary: "A pack.", schema: 2, steps: [], register() {} };\n` });
+    await expect(loadPacks(dir)).rejects.toThrow("pack.ts has fields the SDK does not name: schema, steps");
   });
 
   test("refuses a recorded manifest that today's validation refuses", async () => {

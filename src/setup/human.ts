@@ -25,6 +25,8 @@ export type SignIn = {
   command?: string[];
   /** The command reads the keyboard: it runs in the foreground instead, and the probe runs once it ends. */
   interactive?: true;
+  /** The command ends by itself and may still work after the probe passes, such as a repair that applies the profile: setup waits for it instead of stopping it. */
+  finishes?: true;
   url?: string;
   /** Runs once the probe passes, before the step counts as done. */
   after?(): Promise<void>;
@@ -66,8 +68,9 @@ async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive
       if (exit !== undefined && (exit !== 0 || ++pollsAfterExit > graceAfterExit)) throw new Error(ended(signIn, exit));
     }
   } finally {
-    started?.stop();
+    if (!signIn.finishes) started?.stop();
   }
+  if (signIn.finishes && started && exit === undefined) await started.exited;
   terminal.print(`  ✓ ${signIn.title}: done`);
   return signIn.after?.();
 }
@@ -93,7 +96,7 @@ export function packSignIn(step: Owned<HumanStep>, steps: Array<Owned<PackStep>>
     minutes: 2,
     why: `The ${step.pack} pack needs this.`,
     probe: () => passes(step.probe),
-    ...(step.command ? { command: ["sh", "-c", engineShellCommand(step.command, engineRoot)] } : {}),
+    ...(step.command ? { command: ["sh", "-c", engineShellCommand(step.command, engineRoot)], finishes: true as const } : {}),
     ...(step.interactive ? { interactive: true as const } : {}),
     async after() {
       for (const next of steps.filter((item) => item.pack === step.pack && item.after === step.id)) {
