@@ -2,8 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { hubCallLimitMs, peerMachine, peerSsh, peersOf, quote, readBoxSettings, remoteFleet, requireHub, shellLimitMs, shellsWith, thisMachine } from "./machine.ts";
-import type { Capture } from "./coder.ts";
+import { hubCallLimitMs, peerMachine, peerSsh, peersOf, profileDevboxes, quote, readBoxSettings, remoteFleet, requireHub, shellLimitMs, shellsWith, thisMachine } from "./machine.ts";
+import { captureWith, type Capture, type Timer } from "./coder.ts";
+import { appeared } from "./testing.ts";
 import { fakeSsh, type Host } from "../../../src/testing/ssh.ts";
 import { boxSettings } from "./testing.ts";
 
@@ -44,6 +45,19 @@ test("peers and nightly grants cover the devboxes in the profile and those fleet
   expect(machine.peers).toEqual(["devbox-2", "devbox-3"]);
   const withoutProfile = thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings) }, home);
   expect(withoutProfile.devboxes).toEqual(["devbox-3", "devbox-2"]);
+});
+
+test("a profile devbox dials the hub itself only while the profile names a hub, and a box never does", () => {
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ hub: "my-hub", devboxes: ["devbox-2", "box-lane", "my-hub"] }));
+  expect(profileDevboxes({ FLEET_PROFILE_DIR: profile })).toEqual(["devbox-2"]);
+});
+
+test("a profile that names no hub has no devbox that dials the hub, so the hub's tunnels keep the gateway port", () => {
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ devboxes: ["devbox-2"] }));
+  expect(profileDevboxes({ FLEET_PROFILE_DIR: profile })).toEqual([]);
+  expect(profileDevboxes({})).toEqual([]);
 });
 
 test("the peer list needs only hub.alias, so Hub links works without the Boxes settings", () => {
@@ -105,6 +119,17 @@ test("a devbox hands a box operation to the hub in one batch SSH call, with each
   }
 });
 
-test("a hub call may run longer than a shell call", () => {
+test("a hub call runs until the hub deadline, which is longer than a shell call's, and then stops with a timeout", async () => {
+  const bin = temp.make("fleet-bin-");
+  const ready = join(temp.make("fleet-ready-"), "ready");
+  writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho $$ > ${ready}.tmp && /bin/mv ${ready}.tmp ${ready}\nexec /bin/sleep 30\n`, { mode: 0o755 });
+  const pending: Array<{ ms: number; fire(): void }> = [];
+  const timer: Timer = (ms, fire) => (pending.push({ ms, fire }), () => void pending.splice(pending.findIndex((entry) => entry.fire === fire), 1));
+  const inShell: Capture = (argv, options) => captureWith(timer)(argv, { ...options, env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` } });
+  const call = shellsWith(inShell, "my-hub").toHub(["box", "spawn", "lane"]);
+  await appeared(ready);
+  expect(pending.map((entry) => entry.ms)).toEqual([hubCallLimitMs]);
   expect(hubCallLimitMs).toBeGreaterThan(shellLimitMs);
+  pending[0]!.fire();
+  expect(await call).toBe(124);
 });
