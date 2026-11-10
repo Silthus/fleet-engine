@@ -70,6 +70,7 @@ export default {
       },
     });
     fleet.command("mcp-gateway", {
+      on: "hub",
       summary: "Check, sign in, reconnect, or restart the MCP gateway on the hub",
       run: async (args, ctx) => admin(args, ctx),
     });

@@ -237,6 +237,14 @@ describe("on a devbox", () => {
     expect(await fleet(["run", "mcp-gateway/mcp-gateway-client"])).toEqual({ code: 1, output: "This machine has no MCP gateway key. Run fleet apply on this machine to pull its key from the hub." });
   });
 
+  test("fleet mcp-gateway typed on a devbox runs on the hub and prints the hub's answer", async () => {
+    const hub = machine(hubMachine);
+    writeMcpHubSettings(hub.home, { mcpServers: { tickets: { oauth: { pendingAuthorization: { authorizationUrl: "https://auth.example.com/authorize?state=1" } } } } });
+    gatewayServer({ home: hub.home });
+    const { fleet } = machine(nodeMachine, {}, { "hub-1": hub.host });
+    expect(await fleet(["mcp-gateway", "sign-in"])).toEqual({ code: 0, output: "On your computer, keep this running while you sign in: coder port-forward hub-1 --tcp 3317\ntickets: https://auth.example.com/authorize?state=1" });
+  });
+
   test("the hub's install check and the key issue stay off a devbox", async () => {
     const { home, fleet } = machine(nodeMachine);
     const { state } = gatewayServer();

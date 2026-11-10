@@ -404,14 +404,14 @@ function skillDir(pack: string, packDir: string, path: string, sources: FetchedS
 
 function packCommands(order: Candidate[]) {
   const commands: Plan["commands"] = Object.create(null);
-  const add = (name: string, pack: string, path: string) => {
+  const add = (name: string, pack: string, path: string, onHub = false) => {
     if (engineCommands.includes(name)) throw new ResolveError(`${pack}: command ${name} is reserved by the engine`);
     const other = commands[name];
     if (other) throw new ResolveError(`command ${name} is shipped by both ${other.pack} and ${pack}`);
-    commands[name] = { pack, path };
+    commands[name] = { pack, path, ...(onHub ? { on: "hub" as const } : {}) };
   };
   for (const { manifest, dir, code } of order) {
-    for (const name of Object.keys(code?.commands ?? {}).sort()) add(name, manifest.name, join(dir, "pack.ts"));
+    for (const name of Object.keys(code?.commands ?? {}).sort()) add(name, manifest.name, join(dir, "pack.ts"), code!.hubCommands.includes(name));
     const root = join(dir, "commands");
     if (!existsSync(root)) continue;
     for (const file of readdirSync(root).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts")).sort()) {

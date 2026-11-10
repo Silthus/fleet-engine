@@ -26,7 +26,7 @@ export function fakeSsh(home: string, hosts: Record<string, Host | "down">): Com
     const line = command.at(-1)!;
     const target = hosts[host];
     if (!target || target === "down") return { code: 255, stdout: "", stderr: `ssh: connect to host ${host} port 22: Connection refused\n` };
-    const shell = Bun.spawnSync(["sh", "-c", line], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+    const shell = Bun.spawnSync(["sh", "-c", line], { cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
     if (shell.exitCode !== 0) return { code: shell.exitCode, stdout: "", stderr: shell.stderr.toString() };
     return target(shell.stdout.toString().split("\0").slice(0, -1));
   };
