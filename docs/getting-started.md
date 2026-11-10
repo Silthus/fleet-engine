@@ -9,7 +9,10 @@ You need:
 - a Mac, and your login password for it;
 - a GitHub account;
 - a Claude plan, a ChatGPT plan, or both;
-- a Coder workspace that runs Linux, for the devbox. You can add it later.
+- a Coder workspace that runs Linux, for the devbox. You can add it later. It
+  needs the Linux prerequisites in the [README](../README.md#install): `curl`,
+  `git`, `tar`, `sha256sum`, `python3`, cron, and systemd's user manager, with
+  lingering on so T3 Code keeps running after you log out.
 
 ## 1. Run the install line on the Mac
 
@@ -21,8 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | 
 
 `get.sh` installs the Command Line Tools, Homebrew, the GitHub CLI, Bun, and
 T3 Code when they are missing. Then it starts `fleet setup`. Setup asks
-plain-language questions and offers a default for each, so you can press ↵ to
-take it.
+plain-language questions. Where it shows a default, press ↵ to take it.
 
 Setup asks you to sign in. Each sign-in opens a page in your browser, and
 setup goes on by itself when you are done:
@@ -31,7 +33,7 @@ setup goes on by itself when you are done:
 | --- | --- |
 | GitHub | A code from the terminal on `github.com/login/device`, then your approval. Fleet asks for `repo`, `read:org`, `admin:public_key`, and `admin:ssh_signing_key` once, so it can make your profile repo and add your keys. |
 | Claude | Your Claude account, in the browser. Only when your plan includes Claude. |
-| ChatGPT | Your ChatGPT account, in the browser. Only when your plan includes Codex. Setup then sends one real request, because a stale sign-in still looks signed in. |
+| ChatGPT | Your ChatGPT account, in the browser. Only when your plan includes Codex. Setup checks the sign-in with a real request, because a stale sign-in still looks signed in. |
 
 Setup creates the private repo `fleet-profile` in your GitHub account and saves
 your answers there. Then it applies your packs to the Mac and checks the result
@@ -40,6 +42,10 @@ by itself.
 
 If you stop, or a step fails, run the same line again. Every step skips what is
 done.
+
+When setup ends, open a new terminal window. `get.sh` added `fleet` and the
+other tools to your `PATH` in your login file, and only a new terminal reads
+it.
 
 ## 2. Turn on T3 Connect on the Mac
 
