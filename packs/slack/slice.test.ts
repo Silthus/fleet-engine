@@ -1,11 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { jobsAdapter } from "../../src/adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../../src/cli.ts";
 import { startT3Stub } from "../../src/integrations/t3/testing.ts";
 import { filesAdapter } from "../../src/reconciler/apply.ts";
+import { secretStore } from "../../src/runner/context.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { fakeSystemd } from "../../src/testing/systemd.ts";
 import { startSlackStub } from "./testing.ts";
@@ -39,6 +40,21 @@ function typed(...lines: string[]) {
   Object.defineProperty(process, "stdin", { value: keyboard, configurable: true });
   Object.defineProperty(process, "stdout", { value: new PassThrough().resume(), configurable: true });
   return () => (Object.defineProperty(process, "stdin", real.stdin), Object.defineProperty(process, "stdout", real.stdout));
+}
+
+async function logged(path: string) {
+  let changed = () => {};
+  const watcher = watch(dirname(path), () => changed());
+  try {
+    for (;;) {
+      const next = new Promise<void>((resolve) => (changed = resolve));
+      const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+      if (text.endsWith("\n")) return text;
+      await next;
+    }
+  } finally {
+    watcher.close();
+  }
 }
 
 async function hub() {
@@ -130,8 +146,12 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   expect((await restarted).code).toBe(0);
   mkdirSync(join(home, ".bun/bin"), { recursive: true });
   symlinkSync(process.execPath, join(home, ".bun/bin/bun"));
-  const launched = Bun.spawnSync(["/bin/sh", join(home, ".local/state/fleet/jobs/slack-trigger.sh")], { env: { HOME: home } });
-  expect([launched.exitCode, readFileSync(join(home, ".local/state/fleet/jobs/slack-trigger.log"), "utf8")]).toEqual([1, "fleet: no Slack app is saved. Run fleet slack-trigger setup\n"]);
+  const launched = Bun.spawn(["/bin/sh", join(home, ".local/state/fleet/jobs/slack-trigger.sh")], { env: { HOME: home } });
+  stops.push(() => launched.kill());
+  expect(await logged(join(home, ".local/state/fleet/jobs/slack-trigger.log"))).toBe(`fleet run: slack/slack-trigger waits until slack-app passes. ${todo}\n`);
+  launched.kill();
+  await launched.exited;
+  expect(launched.signalCode).toBe("SIGTERM");
   expect((await fleet("apply")).lines.join("\n")).toContain(todo);
   expect(trigger()).toBe("gone");
 });
@@ -141,4 +161,16 @@ test("fleet slack-trigger names the Slack pack when the pack is off", async () =
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: [], plan: "claude", settings: {}, workflows: {} }));
   await fleet("apply", "--profile", profile);
   expect(await fleet("slack-trigger", "check")).toEqual({ code: 2, lines: ["fleet slack-trigger comes from the Slack pack, which is off. Turn it on with fleet packs."] });
+});
+
+test("the Slack app check fails for a saved app that the trigger cannot use, so apply keeps the To do", async () => {
+  const { home, profile, fleet } = await hub();
+  await fleet("apply", "--profile", profile);
+  const store = secretStore(home, "slack");
+  for (const saved of ["{", JSON.stringify({ appToken: "wrong", userToken }), JSON.stringify({ appToken: firstApp })]) {
+    await store.write("app", saved);
+    expect((await fleet("run", "slack/slack-app")).code).toBe(1);
+  }
+  await store.write("app", JSON.stringify({ appToken: firstApp, userToken }));
+  expect((await fleet("run", "slack/slack-app")).code).toBe(0);
 });

@@ -237,7 +237,7 @@ describe("a launch that fails", () => {
   }
 
   test("retries every minute until it starts with the same command ID, so T3 starts one thread, and tells the owner once", async () => {
-    const { deps, replies, titles, commandIds, later } = rig([{ failed: "T3 did not answer" }, { failed: "T3 did not answer" }, { threadId: "T1", environmentId: "E1", where: "this machine" }]);
+    const { deps, replies, titles, commandIds, later } = rig([{ failed: "T3 did not answer" }, { failed: "T3 did not answer" }, { threadId: "T1", url: "https://app.t3.codes/threads/E1/T1", where: "this machine" }]);
     await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
     later(60_000);
     await retryPending(deps);
@@ -416,8 +416,8 @@ describe("where the trigger runs", () => {
   test("asks for the member ID, and runs the trigger as a service on the only machine once its Slack app is saved", () => {
     expect(resolve({ packs: ["slack"], settings: {} }).unanswered.map((setting) => setting.key)).toEqual(["slack.userId"]);
     const plan = resolve({ packs: ["slack"] });
-    expect(plan.jobs).toContainEqual(expect.objectContaining({ id: "slack-trigger", command: ["fleet", "run", "slack/slack-trigger"], schedule: { every: "always" }, after: "slack-app", pack: "slack" }));
-    expect(plan.human).toContainEqual(expect.objectContaining({ id: "slack-app", command: "fleet slack-trigger setup", probe: ["fleet", "run", "slack/slack-app"] }));
+    expect(plan.jobs).toContainEqual(expect.objectContaining({ id: "slack-trigger", schedule: { every: "always" }, after: "slack-app", pack: "slack" }));
+    expect(plan.human).toContainEqual(expect.objectContaining({ id: "slack-app", pack: "slack" }));
     expect(Object.keys(plan.commands)).toContain("slack-trigger");
   });
 

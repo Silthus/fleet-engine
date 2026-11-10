@@ -208,7 +208,10 @@ nothing else. Where an interface names one node, the field is `node`.
   secret, and `route` reads the network. Today's lazy `waiter` stays for
   steps only. A gate test is local: it runs no command on another node.
   When a pack command exits 0 and its words equal a check's
-  `repair.command`, the engine applies in the same process.
+  `repair.command`, the engine applies in the same process. A service whose
+  gate fails while its unit is still installed waits: `fleet run` prints the
+  To do once and tests the gate every minute, until it passes or the next
+  apply removes the unit.
 
 ### 4.2 How a node uses a service on the hub
 

@@ -72,7 +72,10 @@ launches it already started, stops, and the service starts it again with the
 new tokens. `fleet setup --non-interactive` skips this step and lists it as
 still needed.
 
-`fleet doctor` lists the setup as a To do until the Slack app is saved.
+`fleet doctor` lists the setup as a To do until a Slack app that the trigger
+can use is saved. When you remove the saved app, the trigger stops, writes the
+To do once to its log, and waits until a Slack app is saved again. The next
+`fleet apply` removes the trigger.
 `fleet slack-trigger check` checks with Slack that the saved user token is
 yours. `fleet slack-trigger manifest` prints the manifest itself.
 

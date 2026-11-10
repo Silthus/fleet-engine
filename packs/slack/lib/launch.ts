@@ -1,3 +1,4 @@
+import { threadUrl } from "../../../src/integrations/t3/index.ts";
 import type { Threads } from "../../../src/sdk/index.ts";
 import type { Started } from "./trigger.ts";
 
@@ -43,7 +44,7 @@ export function launchOnBox(fleet: string, run: Run): Launch {
     }
     const ran = await run([fleet, "box", "run", claim.box, "--", "fleet", "slack-trigger", "launch"], JSON.stringify(request));
     const threadId = ran.code === 0 ? threadOf(lastLine(ran.stdout)) : undefined;
-    if (threadId) return { threadId, environmentId: claim.environmentId, where: claim.box };
+    if (threadId) return { threadId, url: claim.environmentId ? threadUrl(claim.environmentId, threadId) : undefined, where: claim.box };
     return { failed: `fleet slack-trigger launch on ${claim.box}: ${why(ran)}`, claim };
   };
   launch.release = async (claim) => void (await run([fleet, "box", "release", claim.box]));

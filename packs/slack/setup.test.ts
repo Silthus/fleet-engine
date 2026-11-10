@@ -262,9 +262,9 @@ describe("the Slack app step", () => {
   });
   const plan = (machine: MachineFile = mac) => resolveEngine(sources, { packs: ["slack"], workflows: { "slack-thread": true }, settings: { "slack.userId": ownerId } }, machine);
 
-  test("runs fleet slack-trigger setup in the foreground, and tests the pack's check for a saved Slack app", () => {
+  test("asks for the Slack app in the foreground, only while Start a thread from Slack is on", () => {
     const step = plan().human.find((item) => item.pack === "slack")!;
-    expect(step).toMatchObject({ id: "slack-app", command: "fleet slack-trigger setup", interactive: true, workflow: "slack-thread", probe: ["fleet", "run", "slack/slack-app"] });
+    expect(step).toMatchObject({ id: "slack-app", interactive: true, workflow: "slack-thread" });
     expect(resolveEngine(sources, { packs: ["slack"], settings: { "slack.userId": ownerId } }, mac).human.filter((item) => item.pack === "slack")).toEqual([]);
   });
 

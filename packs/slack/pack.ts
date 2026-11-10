@@ -41,7 +41,15 @@ export default {
       ...hub,
       id: "slack-app",
       say: "Make your own Slack app for Start a thread from Slack, then paste its two tokens. Fleet keeps them where only you can read them.",
-      test: async (ctx) => (await ctx.secrets.read("app")) !== undefined,
+      test: async (ctx) => {
+        const [{ appSecret }, { slackApp }] = await Promise.all([import("./lib/command.ts"), import("./lib/slack.ts")]);
+        const saved = await ctx.secrets.read(appSecret);
+        try {
+          return slackApp(saved), true;
+        } catch {
+          return false;
+        }
+      },
       repair: { ask: "Run this command and follow its steps.", command: "fleet slack-trigger setup", interactive: true },
     });
     fleet.command("slack-trigger", {
