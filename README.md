@@ -36,8 +36,10 @@ Read [`get.sh`](get.sh) first if you want to know what runs. It:
 
 - installs what Fleet needs if it is missing: the GitHub CLI, Bun, and T3
   Code. On a Mac it first installs the Command Line Tools and Homebrew if
-  needed. On Linux, install `curl`, `git`, `tar`, `sha256sum`, and `python3`
-  first.
+  needed. On Linux, install `curl`, `git`, `tar`, `sha256sum`, `python3`, and
+  cron first. Linux also needs systemd's user manager, so T3 Code can run as a
+  service. To keep it running after you log out, an administrator runs
+  `sudo loginctl enable-linger <your user>` once.
 - fetches the engine into `~/.local/share/fleet/engine` and puts `fleet` in
   `~/.local/bin`.
 - adds one line to your shell's login file, so `~/.local/bin` and
