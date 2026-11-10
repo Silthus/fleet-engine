@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, relative, resolve, sep } from "node:path";
@@ -57,7 +57,8 @@ async function load(dir: string): Promise<{ packs: LoadedPack[] } | { error: str
   if (await hasPackTs(dir)) {
     const error = await loadsElsewhere(dir);
     if (error) return { error };
-    for (const loaded of Object.keys(loadedModules)) if (loaded.startsWith(resolve(dir) + sep)) delete loadedModules[loaded];
+    const folders = [resolve(dir), realpathSync(dir)].map((folder) => folder + sep);
+    for (const loaded of Object.keys(loadedModules)) if (folders.some((folder) => loaded.startsWith(folder))) delete loadedModules[loaded];
   }
   try {
     return { packs: await loadPacks(dir) };
