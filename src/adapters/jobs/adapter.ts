@@ -48,7 +48,7 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       const skipped = skipOtherHome("jobs", "your scheduled jobs", home, options);
       if (skipped) return skipped;
       const command = (job: PackJob) => engineCommand(job.command, engineRoot);
-      const context = { home, dryRun, run, result, outage: sourceOutage(plan) };
+      const context = { home, dryRun, run, result, outage: sourceOutage(plan), dropped: new Set(plan.dropped.filter((entry) => entry.item.startsWith("job ")).map((entry) => entry.item.slice("job ".length))) };
       const reconcile = async () => {
         const path = [`${home}/.local/bin`, `${home}/.bun/bin`, ...(plan.os === "darwin" ? ["/opt/homebrew/bin"] : []), "/usr/local/bin", "/usr/bin", "/bin"].join(":");
         const scripts = await launchers(home, osJobs, (job) => launcherScript(command(job), path, inside(home, logTarget(job.id))));
@@ -68,7 +68,7 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
   };
 }
 
-type Context = { home: string; dryRun: boolean; run: CommandRunner; result: AdapterResult; outage: boolean };
+type Context = { home: string; dryRun: boolean; run: CommandRunner; result: AdapterResult; outage: boolean; dropped: Set<string> };
 type Scripts = Map<string, Write>;
 
 function needs(job: { id: string; pack: string } | string, what: string, kind = "job"): Finding {
@@ -126,7 +126,7 @@ async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun,
   return true;
 }
 
-async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, uid, outage }: Context & { uid: number }) {
+async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, uid, outage, dropped }: Context & { uid: number }) {
   const agents = join(home, "Library/LaunchAgents");
   const domain = `gui/${uid}`;
   const present = (await readdir(agents).catch(() => [] as string[])).filter((name) => name.startsWith(labelPrefix) && name.endsWith(".plist"));
@@ -184,7 +184,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   for (const name of present) {
     const label = name.slice(0, -".plist".length);
     const id = label.slice(labelPrefix.length);
-    if (outage || jobs.some((job) => `${labelPrefix}${job.id}` === label)) continue;
+    if ((outage && !dropped.has(id)) || jobs.some((job) => `${labelPrefix}${job.id}` === label)) continue;
     if (await foreign(name, id, await readFile(join(agents, name), "utf8").catch(() => undefined))) continue;
     if (dryRun) {
       result.findings.push(needs(id, "removed"));
@@ -207,7 +207,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
 const running = ["active", "activating", "reloading"];
 type Systemd = { running: Set<string>; removeMoved(): Promise<void> };
 
-async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, outage }: Context, moving: Set<string>): Promise<Systemd> {
+async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, outage, dropped }: Context, moving: Set<string>): Promise<Systemd> {
   const copyTarget = (id: string) => `${jobsFolder}/${id}.service`;
   const restartTarget = (id: string) => `${jobsFolder}/${id}.restart`;
   const read = (target: string): Promise<string | undefined | null> => readState(home, target).catch(() => null);
@@ -220,7 +220,7 @@ async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   const unreachable = (output: { code: number; stderr?: string }) => (result.findings.push({ id: "jobs:systemd", pack: "engine", say: `Could not reach systemd's user manager (${reason(output)}), so services were not changed. Log in to this machine in a normal session, then run fleet apply.`, repair: "human" }), done);
   const linked = Boolean(await linkOnPath(home, jobsFolder));
   const copies = linked ? [] : (await readdir(inside(home, jobsFolder)).catch(() => [] as string[])).filter((name) => name.endsWith(".service")).map((name) => name.slice(0, -".service".length));
-  const gone = outage ? [] : copies.filter((id) => jobId.test(id) && !jobs.some((job) => job.id === id));
+  const gone = copies.filter((id) => jobId.test(id) && !jobs.some((job) => job.id === id) && (!outage || dropped.has(id)));
   if (jobs.length && !systemdSafe(home)) return result.findings.push({ id: "jobs:systemd", pack: "engine", say: `Left services alone: systemd cannot run scripts from ${JSON.stringify(home)}, which holds a line break.`, repair: "human" }), done;
   const plans: Array<{ job: Owned<PackJob>; script: Write; content: string; current?: string; copy?: string; reload: boolean; restart: boolean; enable: boolean; pending: boolean; marked?: string }> = [];
   for (const job of jobs) {

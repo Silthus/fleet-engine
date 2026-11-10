@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { main } from "../cli.ts";
 import { tempDirs } from "../testing/git.ts";
 import { engineSource, resolveEngine } from "../testing/packs.ts";
@@ -68,6 +68,11 @@ describe("loading a pack.ts", () => {
   }
   const pack = (name: string, register: string) => `export default { sdk: 1, name: "${name}", summary: "A pack.", register(fleet) { ${register} } };\n`;
 
+  test("loads from a source path relative to the working directory", async () => {
+    const packs = await loadPacks(relative(process.cwd(), join(fixtures, "twin-ts")));
+    expect(packs.map((loaded) => loaded.manifest.summary)).toEqual(["The hub greets you once you pick a greeting."]);
+  });
+
   test("fails when a directory has both a pack.ts and a pack.json", async () => {
     const dir = source({ one: pack("one", "") }, { one: JSON.stringify({ schema: 1, name: "one", summary: "A pack." }) });
     await expect(loadPacks(dir)).rejects.toThrow(`${join(dir, "packs/one")}: has both pack.json and pack.ts; keep one`);
@@ -89,6 +94,11 @@ describe("loading a pack.ts", () => {
   test("refuses a handle of another kind than the field takes", async () => {
     const dir = source({ one: pack("one", `const flow = fleet.workflow({ id: "one-flow", name: "One", sentence: "One.", default: false }); fleet.service({ after: flow, id: "one-run", run: async () => {} });`) });
     await expect(loadPacks(dir)).rejects.toThrow("service one-run names a check that the one pack did not declare");
+  });
+
+  test("refuses a repair command that is more than plain words", async () => {
+    const dir = source({ one: pack("one", `fleet.check({ id: "one-saved", say: "Save it.", test: async () => true, repair: { ask: "Save it.", command: "fleet one 'setup'" } });`) });
+    await expect(loadPacks(dir)).rejects.toThrow("check one-saved: repair.command must be plain words, without quotes or backslashes, so Fleet knows it when you run it");
   });
 
   test("refuses a recorded manifest that today's validation refuses", async () => {

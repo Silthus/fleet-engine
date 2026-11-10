@@ -139,7 +139,8 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   const code = loadedPack(sources, command.pack)?.code;
   const run = code?.commands[name];
   const exit = run ? await inPack(plan, command.pack, code!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
-  const repairs = plan.human.some((step) => step.pack === command.pack && step.command === ["fleet", name, ...args].join(" "));
+  const typed = ["fleet", name, ...args];
+  const repairs = plan.human.some((step) => step.pack === command.pack && step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
   return exit === 0 && repairs ? applyProfile(plan.machine.profileDir!, options) : exit;
 }
 
@@ -157,9 +158,12 @@ async function runItem(args: string[], options: CliOptions) {
   if (!pack || !id || extra.length) return options.print("Usage: fleet run <pack>/<id>"), 2;
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
   const code = plan.packs.some((entry) => entry.name === pack && entry.available) ? loadedPack(sources, pack)?.code : undefined;
-  const service = code?.services[id];
-  const check = code?.checks[id];
-  if (!service && !check) return options.print(`fleet run: your packs have no service or check ${item}`), 2;
+  const service = plan.jobs.some((job) => job.pack === pack && job.id === id) ? code?.services[id] : undefined;
+  const check = plan.human.some((step) => step.pack === pack && step.id === id) ? code?.checks[id] : undefined;
+  if (!service && !check) {
+    const dropped = plan.dropped.find((entry) => entry.pack === pack && (entry.item === `job ${id}` || entry.item === `human ${id}`));
+    return options.print(dropped ? `fleet run: ${item} does not run here: ${dropped.reason}` : `fleet run: your packs have no service or check ${item}`), 2;
+  }
   return inPack(plan, pack, code!, options, async (ctx) => (service ? (await service(ctx), 0) : (await check!(ctx)) ? 0 : 1));
 }
 
