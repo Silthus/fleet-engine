@@ -1,8 +1,43 @@
 {
   "schema": 1,
   "name": "recovery",
-  "summary": "Fleet tells you and your agents whether Claude and Codex have capacity, so work goes to a provider that answers.",
-  "day": "You and your agents ask fleet providers whether Claude and Codex answer through the hub's proxy before you start work on them.",
-  "cost": "One small request per provider through the hub's proxy, at most every five minutes.",
-  "risk": "Low: fleet providers only reads, and spends one tiny request per provider."
+  "summary": "Threads that stop on a usage limit continue once the provider answers again, and fleet providers says which provider has capacity.",
+  "day": "A thread that hits your plan's usage limit at night goes on by itself once your provider has capacity again.",
+  "cost": "One small request per provider through the hub's proxy, at most every five minutes, while a thread waits on a limit.",
+  "risk": "Fleet sends continue messages to stopped threads without you in the room.",
+  "workflows": [
+    {
+      "id": "provider-recovery",
+      "name": "Provider recovery",
+      "default": false,
+      "needs": [
+        "hub"
+      ],
+      "sentence": "Threads that stop on a usage limit continue by themselves once the provider answers again.",
+      "moment": {
+        "time": "03:00",
+        "title": "A usage limit does not end the night",
+        "body": "A thread hits your plan's usage limit in the middle of the night. Once the hub's proxy serves its provider again, Fleet sends it one continue message and the work goes on.",
+        "night": true
+      },
+      "risk": "Sends continue messages to stopped threads without you in the room."
+    }
+  ],
+  "jobs": [
+    {
+      "id": "recover",
+      "command": [
+        "fleet",
+        "recover"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "provider-recovery"
+    }
+  ]
 }
