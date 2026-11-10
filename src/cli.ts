@@ -151,7 +151,7 @@ async function runItem(args: string[], options: CliOptions) {
   const slash = item.indexOf("/");
   const [pack, id] = slash < 0 ? ["", ""] : [item.slice(0, slash), item.slice(slash + 1)];
   if (!pack || !id || extra.length) return options.print("Usage: fleet run <pack>/<id>"), 2;
-  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true });
   const loaded = plan.packs.some((entry) => entry.name === pack && entry.available) ? loadedPack(sources, pack) : undefined;
   const code = loaded?.code;
   const job = plan.jobs.find((entry) => entry.pack === pack && entry.id === id);

@@ -304,6 +304,40 @@ describe("fleet routing", () => {
     expect(JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")).profileDir).toBe(remembered);
   });
 
+  test("doctor --profile runs a pack.ts check against that profile, not the remembered one", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithCommands();
+    cpSync(join(repoRoot, "src"), join(engine, "src"), { recursive: true });
+    cpSync(join(repoRoot, "fleet"), join(engine, "fleet"));
+    symlinkSync(join(repoRoot, "node_modules"), join(engine, "node_modules"));
+    const base = JSON.parse(readFileSync(join(engine, "packs/base/pack.json"), "utf8"));
+    writeFileSync(join(engine, "packs/base/pack.json"), JSON.stringify({ ...base, steps: [] }));
+    mkdirSync(join(engine, "packs/probe"));
+    writeFileSync(
+      join(engine, "packs/probe/pack.ts"),
+      `export default { sdk: 1, name: "probe", summary: "probe pack.", register(fleet) {
+  const greeting = fleet.setting({ key: "probe.greeting", type: "string", question: "Which greeting?" });
+  fleet.check({ id: "probe-greeted", say: "Greet with the chosen profile.", test: async (ctx) => ctx.get(greeting) === "chosen" });
+} };\n`,
+    );
+    const named = (name: string) => {
+      const dir = profileDir(["probe"]);
+      const file = JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8"));
+      writeFileSync(join(dir, "fleet.json"), JSON.stringify({ ...file, settings: { "probe.greeting": name } }));
+      return dir;
+    };
+    const lines: string[] = [];
+    const run = (args: string[]) => main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line) });
+    await run(["apply", "--profile", named("remembered")]);
+    lines.length = 0;
+    await run(["doctor"]);
+    expect(lines).toContain("To do: Greet with the chosen profile.");
+
+    lines.length = 0;
+    await run(["doctor", "--profile", named("chosen")]);
+    expect(lines).not.toContain("To do: Greet with the chosen profile.");
+  });
+
   test("reports a command that two enabled packs ship", async () => {
     const home = temp.make("home-");
     const result = await fleet(["apply", "--profile", profileDir(["tools", "rival"])], home, engineWithCommands());
