@@ -10,6 +10,7 @@ export default {
       summary: "Use the context",
       run: async ([mode, ...rest], ctx) => {
         if (mode === "greet") return ctx.print(`${ctx.get(greeting)} ${rest.join(" ")}`), 0;
+        if (mode === "note") return ctx.print(ctx.get(note)), 0;
         if (mode === "stray") return ctx.print(String(ctx.get({} as typeof greeting))), 0;
         if (mode === "save") return await ctx.secrets.write(rest[0]!, rest[1]!), 0;
         if (mode === "show") return ctx.print((await ctx.secrets.read(rest[0]!)) ?? "no secret"), 0;
@@ -32,8 +33,10 @@ export default {
         await Bun.write(`${ctx.stateDir}/ticked`, String(ctx.now()));
       },
     });
-    const extra = fleet.workflow({ id: "kit-extra", name: "Kit extra", sentence: "The kit runs one more service.", default: false });
+    const note = fleet.setting({ key: "kit.note", type: "string", question: "Which note?" });
+    const extra = fleet.workflow({ id: "kit-extra", name: "Kit extra", sentence: "The kit runs one more service.", default: false, settings: [note] });
     fleet.service({ id: "kit-extra-run", when: extra, run: async (ctx) => ctx.print("ran") });
-    fleet.check({ id: "kit-saved", say: "Save the token.", test: async (ctx) => (await ctx.secrets.read("token")) !== undefined });
+    const saved = fleet.check({ id: "kit-saved", say: "Save the token.", test: async (ctx) => (await ctx.secrets.read("token")) !== undefined });
+    fleet.service({ id: "kit-sender", after: saved, run: async (ctx) => ctx.print("sent") });
   },
 } satisfies Pack;

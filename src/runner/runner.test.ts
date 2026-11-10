@@ -23,10 +23,14 @@ async function spawned(command: string[], env: Record<string, string>) {
   }
 }
 
-async function machine(packs = ["kit"], settings: Record<string, string> = {}) {
+async function machine(packs = ["kit"], settings: Record<string, string> = {}, files: Record<string, string> = {}) {
   const engine = temp.make("engine-");
   cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
   cpSync(join(import.meta.dir, "fixtures/kit"), join(engine, "packs/kit"), { recursive: true });
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(join(engine, path, ".."), { recursive: true });
+    writeFileSync(join(engine, path), text);
+  }
   const profile = temp.make("profile-");
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs, plan: "claude", settings, workflows: {} }));
   const home = temp.make("home-");
@@ -109,6 +113,23 @@ test("fleet run tests a check: it exits 1 until the check passes, then 0", async
   expect((await fleet("run", "kit/kit-saved")).code).toBe(0);
 });
 
+test("fleet run runs a service only once the check it waits for passes", async () => {
+  const { fleet } = await machine();
+  expect(await fleet("run", "kit/kit-sender")).toEqual({ code: 1, lines: ["fleet run: kit/kit-sender waits until kit-saved passes. Save the token."] });
+  await fleet("kit", "save", "token", "value");
+  expect(await fleet("run", "kit/kit-sender")).toEqual({ code: 0, lines: ["sent"] });
+});
+
+test("fleet run takes everything after the first slash as the id", async () => {
+  const { fleet } = await machine();
+  expect(await fleet("run", "kit/kit-saved/extra")).toEqual({ code: 2, lines: ["fleet run: your packs have no service or check kit/kit-saved/extra"] });
+});
+
+test("ctx.get names the workflow that is off when a setting only that workflow uses has no value here", async () => {
+  const { fleet } = await machine(["kit"], { "kit.note": "remember" });
+  expect(await fleet("kit", "note")).toEqual({ code: 1, lines: ["fleet: kit.note belongs to the Kit extra workflow, which is off. Turn it on with fleet packs --workflows kit-extra=on."] });
+});
+
 test("fleet run refuses an item that no pack you turned on declares", async () => {
   const { fleet } = await machine([]);
   expect(await fleet("run", "kit/kit-ticker")).toEqual({ code: 2, lines: ["fleet run: your packs have no service or check kit/kit-ticker"] });
@@ -152,5 +173,25 @@ test("ctx.threads starts a T3 thread from the plan's model table, once per key",
   cpSync(join(t3.home, ".t3/userdata/server-runtime.json"), join(home, ".t3/userdata/server-runtime.json"));
   expect((await fleet("kit", "start", "key-1")).lines).toEqual(["https://app.t3.codes/threads/env-1/thread-1"]);
   expect((await fleet("kit", "start", "key-1")).lines).toEqual(["https://app.t3.codes/threads/env-1/thread-1"]);
-  expect(t3.threads).toEqual([expect.objectContaining({ id: "thread-1", modelSelection: expect.objectContaining({ instanceId: "claudeAgent" }) })]);
+  expect(t3.threads).toEqual([{ id: "thread-1", title: "Kit", prompt: "Say hello.", modelSelection: { instanceId: "claudeAgent", model: "claude-opus-5-5", options: [{ id: "effort", value: "high" }] } }]);
+});
+
+test("ctx.threads keeps the keys of two packs apart, so each pack gets its own thread", async () => {
+  let launched = 0;
+  const t3 = await startT3Stub({
+    shell: { projects: [], threads: [] },
+    environmentId: "env-1",
+    rpc(tag) {
+      if (tag === "projects.ensureScratch") return { projectId: "scratch" };
+      if (tag === "orchestration.launchThread") return { threadId: `thread-${++launched}` };
+    },
+  });
+  stops.push(() => t3.stop());
+  const kin = `export default { sdk: 1, name: "kin", summary: "A second pack.", register(fleet) { fleet.command("kin", { summary: "Start", run: async ([key], ctx) => (ctx.print((await ctx.threads.start({ key, title: "Kin", prompt: "Say hi.", modelRole: "implementation" })).id), 0) }); } };\n`;
+  const { home, fleet } = await machine(["kit", "kin"], {}, { "packs/kin/pack.ts": kin });
+  mkdirSync(join(home, ".t3/userdata"), { recursive: true });
+  cpSync(join(t3.home, ".t3/userdata/server-runtime.json"), join(home, ".t3/userdata/server-runtime.json"));
+  await fleet("kit", "start", "same-key");
+  await fleet("kin", "same-key");
+  expect(t3.threads.map((thread) => thread.title)).toEqual(["Kit", "Kin"]);
 });
