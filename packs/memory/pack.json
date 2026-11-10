@@ -64,6 +64,11 @@
         "both"
       ],
       "workflow": "shared-memory"
+    },
+    {
+      "path": "hooks/memory-index.ts",
+      "target": ".config/fleet/hooks/SessionStart/memory-index.ts",
+      "workflow": "shared-memory"
     }
   ],
   "jobs": [
