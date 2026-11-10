@@ -347,6 +347,16 @@ describe("provider config", () => {
     expect(read(home, record)[claude]).toEqual([{ path: ["model"], value: "opus", pack: "team" }]);
   });
 
+  test("while a source is out, removes a setting whose check fails though the pack now owns its parent key", async () => {
+    const home = temp.make("home-");
+    await apply(plan([{ provider: "claude", key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", pack: "hub" }, { provider: "claude", key: "model", value: "opus", pack: "team" }]), { home, adapters: adapters() });
+    const offline = { ...plan(), packs: [...plan().packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }], dropped: [{ pack: "hub", item: "config claude:env", reason: "check proxy-ready does not pass", check: "proxy-ready" }] };
+
+    await apply(offline, { home, adapters: adapters() });
+
+    expect(read(home, claude)).toEqual({ model: "opus" });
+  });
+
   test("keeps the old hook trust while the user's own hook list is kept", async () => {
     const home = temp.make("home-");
     const hook = (command: string) => ({ provider: "codex" as const, key: "hooks.UserPromptSubmit", value: [{ hooks: [{ type: "command", command }] }] });
