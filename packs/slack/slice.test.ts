@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { jobsAdapter } from "../../src/adapters/jobs/adapter.ts";
@@ -7,6 +7,7 @@ import { main, type CliOptions } from "../../src/cli.ts";
 import { startT3Stub } from "../../src/integrations/t3/testing.ts";
 import { filesAdapter } from "../../src/reconciler/apply.ts";
 import { tempDirs } from "../../src/testing/git.ts";
+import { fakeSystemd } from "../../src/testing/systemd.ts";
 import { startSlackStub } from "./testing.ts";
 
 const temp = tempDirs();
@@ -63,6 +64,7 @@ async function hub() {
   const minutes: Array<() => void> = [];
   const engineFleet = join(repoRoot, "fleet");
   let lines: string[] = [];
+  const systemd = fakeSystemd();
   const options: CliOptions = {
     home,
     engineRoot: repoRoot,
@@ -70,7 +72,7 @@ async function hub() {
     env: {},
     print: (line) => lines.push(line),
     run: async (command) => (command[0] === "/bin/sh" && command[1] === engineFleet ? main(command.slice(2), { ...options, print: () => {} }) : 0),
-    adapters: () => [filesAdapter, jobsAdapter({ run: async () => ({ code: 0, stdout: "" }), engineRoot: repoRoot })],
+    adapters: () => [filesAdapter, jobsAdapter({ run: systemd.run, engineRoot: repoRoot })],
     clock: { now: () => Date.parse("2026-11-10T12:00:00Z"), sleep: (ms) => (ms === 60_000 ? new Promise<void>((resolve) => minutes.push(resolve)) : Promise.resolve()) },
   };
   const fleet = async (...args: string[]) => {
@@ -86,23 +88,23 @@ async function hub() {
     }
   };
   const minute = () => minutes.splice(0).forEach((resolve) => resolve());
-  const unit = join(home, ".config/systemd/user/fleet-slack-trigger.service");
-  return { home, profile, slack, liveApps, t3, fleet, setup, minute, unit };
+  const trigger = () => systemd.service(home, "slack-trigger");
+  return { home, profile, slack, liveApps, t3, fleet, setup, minute, trigger };
 }
 
 test("setup installs the trigger, an owner's message starts one thread, and after a lost answer the restarted trigger posts its link once", async () => {
-  const { home, profile, slack, liveApps, t3, fleet, setup, minute, unit } = await hub();
+  const { home, profile, slack, liveApps, t3, fleet, setup, minute, trigger } = await hub();
   const todo = "Make your own Slack app for Start a thread from Slack, then paste its two tokens. Fleet keeps them where only you can read them. Run: fleet slack-trigger setup";
   const saved = "Saved both tokens where only you can read them. A running Slack trigger starts again with them within a minute.";
   const replies = () => slack.method("chat.postEphemeral").map((call) => call.args.text);
 
   const before = await fleet("apply", "--profile", profile);
   expect(before.lines.join("\n")).toContain(todo);
-  expect(existsSync(unit)).toBe(false);
+  expect(trigger()).toBe("gone");
   expect(await setup(firstApp)).toEqual({ code: 0, lines: expect.arrayContaining([saved, expect.stringContaining("T3Code%20-%20Nora%20Example")]) });
-  expect(existsSync(unit)).toBe(true);
+  expect(trigger()).toBe("running");
   await fleet("apply");
-  expect(existsSync(unit)).toBe(true);
+  expect(trigger()).toBe("running");
 
   const serving = fleet("run", "slack/slack-trigger");
   await slack.connected();
@@ -131,7 +133,7 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   const launched = Bun.spawnSync(["/bin/sh", join(home, ".local/state/fleet/jobs/slack-trigger.sh")], { env: { HOME: home } });
   expect([launched.exitCode, readFileSync(join(home, ".local/state/fleet/jobs/slack-trigger.log"), "utf8")]).toEqual([1, "fleet: no Slack app is saved. Run fleet slack-trigger setup\n"]);
   expect((await fleet("apply")).lines.join("\n")).toContain(todo);
-  expect(existsSync(unit)).toBe(false);
+  expect(trigger()).toBe("gone");
 });
 
 test("fleet slack-trigger names the Slack pack when the pack is off", async () => {
