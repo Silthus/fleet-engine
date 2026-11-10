@@ -70,7 +70,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
   const node = plan.onHub ? plan.machine.name : undefined;
   const issue = !context.dryRun && node && options.issue ? (ready: CatalogEntry[]) => options.issue!(ready, node) : undefined;
   const gated = await gate(plan, run, !context.dryRun, issue);
-  report.findings.push(...gated.issued, ...gated.failed.map(humanFinding));
+  report.findings.push(...gated.issued, ...gated.failed.map((step) => humanFinding(step, context.dryRun)));
   for (const adapter of adapters) {
     const result = await adapter.apply(gated.plan, context);
     report.actions.push(...result.actions);
@@ -106,14 +106,14 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
     const reported = report.findings.some((finding) => finding.id === `human:${step.id}` && finding.pack === step.pack);
     if (!reported && (await run(step.probe)) === 0) continue;
     report.humanLeft.push(step);
-    if (!reported) report.findings.push(humanFinding(step));
+    if (!reported) report.findings.push(humanFinding(step, true));
   }
   if (report.findings.some((finding) => finding.repair || finding.id.startsWith("kept:"))) report.ok = false;
   return report;
 }
 
-function humanFinding(step: Owned<HumanStep>): Finding {
-  return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: "human" };
+function humanFinding(step: Owned<HumanStep>, repairStillToRun: boolean): Finding {
+  return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: repairStillToRun && step.repair ? "apply" : "human" };
 }
 
 /** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. It tests the checks that served services wait for first and issues their credentials, so a repair that reads a credential sees it in the same apply. */
