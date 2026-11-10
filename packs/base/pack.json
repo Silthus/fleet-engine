@@ -208,7 +208,7 @@
       "id": "nightly-updates",
       "name": "Nightly updates",
       "default": true,
-      "sentence": "Fleet, your profile, Claude Code, and Codex update themselves every night.",
+      "sentence": "Fleet, your profile, Claude Code, and Codex update themselves every night. A failed update tries again each hour until 05:47 UTC.",
       "moment": {
         "time": "03:17",
         "title": "Everything updates while you sleep",
@@ -600,11 +600,15 @@
       "id": "fleet-update",
       "command": [
         "fleet",
+        "nightly",
+        "fleet-update",
+        "--",
+        "fleet",
         "update"
       ],
       "schedule": {
-        "every": "1d",
-        "at": "03:17"
+        "every": "1h",
+        "at": "00:17"
       },
       "workflow": "nightly-updates"
     },
@@ -612,11 +616,15 @@
       "id": "agent-update",
       "command": [
         "fleet",
+        "nightly",
+        "agent-update",
+        "--",
+        "fleet",
         "agent-update"
       ],
       "schedule": {
-        "every": "1d",
-        "at": "03:47"
+        "every": "1h",
+        "at": "00:47"
       },
       "workflow": "nightly-updates"
     },
