@@ -40,6 +40,15 @@ onLinux("runs the command in a slot of the capped heavy slice", async () => {
   expect(calls()).toBe("uname -s\nsystemd-run --user --scope --quiet --collect --slice=fleet-heavy.slice -- sh -c echo built\n");
 });
 
+onLinux("runs a leading fleet in the command with this engine's launcher, though no fleet is on PATH", async () => {
+  const { bin } = stubs();
+  const slot = await heavy(bin, roomy, "--", "fleet", "help");
+  expect(slot.code).toBe(0);
+  expect(slot.stdout).toStartWith("Fleet: one setup");
+  const served = await heavy(bin, roomy, "--service", "preview-a", "--", "fleet", "help");
+  expect(served.stdout).toStartWith("Fleet: one setup");
+});
+
 onLinux("refuses to start while the disk is under the floor", async () => {
   const { bin, calls } = stubs();
   const result = await heavy(bin, { ...roomy, "base.diskFloorGigabytes": 1e9 }, "--", "sh", "-c", "echo built");

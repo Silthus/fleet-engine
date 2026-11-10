@@ -29,6 +29,10 @@ if [ -n "${FLEET_HEAVY_ROUTE:-}" ] && [ -z "$unit$service" ]; then
   unset FLEET_HEAVY_ROUTE
   FLEET_HEAVY_ROUTED=1 exec bun "$route" "$@"
 fi
+if [ "$1" = fleet ]; then
+  shift
+  set -- /bin/sh "$(CDPATH='' cd -- "$commands/../../.." && pwd -P)/fleet" "$@"
+fi
 disk_has_room() { bun "$commands/disk.ts" >/dev/null || exit 75; }
 disk_has_room
 [ "$(uname -s)" = Linux ] || exec "$@"
