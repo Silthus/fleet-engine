@@ -53,7 +53,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
-    if (command in changes) return await change(command as keyof typeof changes, rest, options);
+    if (Object.hasOwn(changes, command)) return await change(command as keyof typeof changes, rest, options);
     if (command === "devbox") return await devbox(rest, options);
     if (command === "run") return await runItem(rest, options);
     if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });

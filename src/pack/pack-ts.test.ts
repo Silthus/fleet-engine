@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { main } from "../cli.ts";
 import { tempDirs } from "../testing/git.ts";
@@ -40,25 +40,54 @@ describe("a pack.ts", () => {
   }
 
   test("is listed by fleet packs and by the page builder", async () => {
-    const engine = temp.make("engine-");
-    cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
-    cpSync(join(fixtures, "twin-ts/packs/twin"), join(engine, "packs/twin"), { recursive: true });
-    const profile = temp.make("profile-");
-    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["twin"], plan: "both", settings: {}, workflows: {} }));
-    const home = temp.make("home-");
-    const lines: string[] = [];
-    const fleet = (args: string[]) => main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line), run: installedAgents });
-    expect(await fleet(["apply", "--profile", profile])).toBe(0);
-    expect(await fleet(["packs"])).toBe(0);
+    const { fleet, lines } = machineWith({ twin: cpTwin });
+    expect(await fleet("apply", "--profile", "<profile>")).toBe(0);
+    expect(await fleet("packs")).toBe(0);
     expect(lines).toContain("  ✓ twin  The hub greets you once you pick a greeting.");
     const page = await pageData({ audience: "posthog", team: (await twin("ts")).packs });
     expect(page.packs.find((pack) => pack.name === "twin")).toMatchObject({ title: "Twin", summary: "The hub greets you once you pick a greeting." });
   });
+
+  test("ships commands named like properties that every object has, and fleet knows no such command elsewhere", async () => {
+    const named = { one: (dir: string) => writeFileSync(join(dir, "pack.ts"), `export default { sdk: 1, name: "one", summary: "A pack.", register(fleet) { fleet.command("toString", { summary: "Show.", run: async () => 0 }); fleet.command("constructor", { summary: "Build.", run: async () => 0 }); } };\n`) };
+    const withNames = machineWith(named);
+    expect(await withNames.fleet("apply", "--profile", "<profile>")).toBe(0);
+    expect(await withNames.fleet("packs")).toBe(0);
+    expect(withNames.lines).toContain("  ✓ one  A pack.");
+    const without = machineWith({ twin: cpTwin });
+    expect(await without.fleet("apply", "--profile", "<profile>")).toBe(0);
+    expect([await without.fleet("toString"), without.lines.at(-1)?.split("\n")[0]]).toEqual([2, "fleet: unknown command toString"]);
+  });
 });
 
-async function installedAgents(command: string[]) {
-  if (["claude --version", "codex --version"].includes(command.join(" "))) return 0;
-  throw new Error(`this machine runs only claude and codex --version, not ${command.join(" ")}`);
+const cpTwin = (dir: string) => cpSync(join(fixtures, "twin-ts/packs/twin"), dir, { recursive: true });
+
+function machineWith(packs: Record<string, (dir: string) => void>) {
+  const engine = temp.make("engine-");
+  cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
+  for (const [name, write] of Object.entries(packs)) {
+    mkdirSync(join(engine, "packs", name), { recursive: true });
+    write(join(engine, "packs", name));
+  }
+  const profile = temp.make("profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: Object.keys(packs), plan: "both", settings: {}, workflows: {} }));
+  const home = temp.make("home-");
+  const bin = temp.make("bin-");
+  for (const agent of ["claude", "codex"]) {
+    writeFileSync(join(bin, agent), `#!/bin/sh\n[ "$*" = --version ] && echo "${agent} 1.0.0"\n`);
+    chmodSync(join(bin, agent), 0o755);
+  }
+  const lines: string[] = [];
+  const fleet = async (...args: string[]) => {
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      return await main(args.map((arg) => (arg === "<profile>" ? profile : arg)), { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line) });
+    } finally {
+      process.env.PATH = path;
+    }
+  };
+  return { fleet, lines };
 }
 
 describe("loading a pack.ts", () => {
@@ -99,12 +128,6 @@ describe("loading a pack.ts", () => {
   test("refuses a handle of another kind than the field takes", async () => {
     const dir = source({ one: pack("one", `const flow = fleet.workflow({ id: "one-flow", name: "One", sentence: "One.", default: false }); fleet.service({ after: flow, id: "one-run", run: async () => {} });`) });
     await expect(loadPacks(dir)).rejects.toThrow("service one-run names a check that the one pack did not declare");
-  });
-
-  test("takes a command named like a property that every object has", async () => {
-    const dir = source({ one: pack("one", `fleet.command("toString", { summary: "Show.", run: async () => 0 }); fleet.command("constructor", { summary: "Build.", run: async () => 0 });`) });
-    const [loaded] = await loadPacks(dir);
-    expect(Object.keys(loaded!.code!.commands).sort()).toEqual(["constructor", "toString"]);
   });
 
   test("refuses a recorded manifest that today's validation refuses", async () => {
