@@ -10,19 +10,44 @@ const ownerReason = (owner: string, person: string) => `Fleet blocked this comma
 
 type Gh = { group: string; action: string; operands: string[]; flags: Map<string, string[]> };
 
-const valuedFlags: Record<string, string[]> = {
-  any: ["-R", "--repo", "--org", "--owner", "-b", "--body", "-t", "--title", "-B", "--base", "-H", "--head", "-F", "--body-file", "-l", "--label",
-    "-a", "--assignee", "-m", "--milestone", "-r", "--reviewer", "--json", "-q", "--jq", "--template", "-L", "--limit", "-s", "--state", "-A", "--author",
-    "-e", "--env", "--app", "-n", "--notes", "--notes-file", "--target", "-p", "--pattern", "-D", "--dir", "-O", "--output", "--search", "-S",
-    "--branch", "-h", "--hostname", "--visibility", "-o"],
-  repo: ["-R", "--repo", "--org", "-d", "--description", "-h", "--homepage", "-t", "--team", "-p", "--template", "-g", "--gitignore", "-l", "--license",
-    "-s", "--source", "-r", "--remote", "-u", "--upstream-remote-name", "-b", "--branch", "-L", "--limit", "-q", "--jq", "--json", "--visibility",
-    "--language", "--topic", "--add-topic", "--remove-topic", "--default-branch", "--fork-name", "--remote-name"],
-  api: ["-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq", "-t", "--template", "--cache", "-p", "--preview", "--hostname"],
-  gist: ["-d", "--desc", "-f", "--filename", "-R", "--repo"],
+const valuedFlags: Record<string, string> = {
+  other: "-b --body -t --title -B --base -H --head -F --body-file -l --label -a --assignee -m --milestone -r --reviewer --json -q --jq --template -L --limit "
+    + "-s --state -A --author -e --env --app -n --notes --notes-file --target -p --pattern -D --dir -O --output --search -S --branch -h --hostname --visibility -o --org --owner",
+  "pr create": "-a --assignee -B --base -b --body -F --body-file -H --head -l --label -m --milestone -p --project -r --reviewer -T --template -t --title --recover",
+  "pr merge": "-b --body -F --body-file -t --subject --match-head-commit -A --author-email",
+  "pr review": "-b --body -F --body-file",
+  "pr comment": "-b --body -F --body-file",
+  "pr edit": "--add-assignee --add-label --add-project --add-reviewer --remove-assignee --remove-label --remove-project --remove-reviewer -B --base -b --body -F --body-file -m --milestone -t --title",
+  "pr view": "--json -q --jq -t --template",
+  "pr checks": "--json -q --jq -t --template -i --interval",
+  "pr checkout": "-b --branch",
+  "pr close": "-c --comment",
+  "pr reopen": "-c --comment",
+  "pr lock": "-r --reason",
+  "pr diff": "--color",
+  "pr list": "-A --author -a --assignee -B --base -H --head -l --label -L --limit -S --search -s --state --app --json -q --jq -t --template",
+  "issue create": "-a --assignee -b --body -F --body-file -l --label -m --milestone -p --project -T --template -t --title --recover",
+  "issue comment": "-b --body -F --body-file",
+  "issue edit": "--add-assignee --add-label --add-project --remove-assignee --remove-label --remove-project -b --body -F --body-file -m --milestone -t --title",
+  "issue view": "--json -q --jq -t --template",
+  "issue close": "-c --comment -r --reason",
+  "issue reopen": "-c --comment",
+  "issue lock": "-r --reason",
+  "issue develop": "-b --base -n --name --branch-repo",
+  "issue list": "-A --author -a --assignee -l --label -L --limit -S --search -s --state --app --mention -m --milestone --json -q --jq -t --template",
+  "repo create": "--org -d --description -h --homepage -t --team -p --template -g --gitignore -l --license -s --source -r --remote",
+  "repo fork": "--org --remote-name --fork-name",
+  "repo clone": "-u --upstream-remote-name",
+  "repo view": "-b --branch --json -q --jq -t --template",
+  "repo edit": "-d --description -h --homepage --visibility --add-topic --remove-topic --default-branch",
+  "repo list": "-L --limit -l --language --topic --visibility --json -q --jq -t --template",
+  "repo sync": "-b --branch -s --source",
+  api: "-X --method -H --header -f --raw-field -F --field --input -q --jq -t --template --cache -p --preview --hostname",
+  auth: "-h --hostname -p --git-protocol -s --scopes -r --remove-scopes -u --user",
+  "gist create": "-d --desc -f --filename",
 };
+const repoFlags = "-R --repo";
 const aliases: Record<string, string> = { new: "create", ls: "list", rm: "delete", ext: "extension", extensions: "extension" };
-const shortValued = (valued: string[]) => new Set(valued.filter((flag) => /^-[A-Za-z]$/.test(flag)).map((flag) => flag[1]));
 const accountEndpoints = /^(?:user\/(?:keys|ssh_signing_keys|gpg_keys)|authorizations)\b/;
 const repositoryEndpoint = /^repos\/[^/]+\/[^/]+\/?$/;
 const repositoryCreation = /^(?:user\/repos|orgs\/[^/]+\/repos|repos\/[^/]+\/[^/]+\/generate)\/?$/;
@@ -31,27 +56,38 @@ const githubUrl = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)/;
 const repoTargets = new Set(["clone", "view", "fork", "edit", "delete", "sync", "archive", "unarchive", "create", "set-default"]);
 const orgShortFlag = new Set(["secret", "variable", "ruleset"]);
 
-function parseFlags(args: string[], valued: string[]) {
-  const letters = shortValued(valued);
+function parseFlags(args: string[], table: string) {
+  const valued = new Set(`${repoFlags} ${table}`.split(" "));
   const flags = new Map<string, string[]>();
   const operands: string[] = [];
   const add = (name: string, value: string) => flags.set(name, [...(flags.get(name) ?? []), value]);
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
-    const long = arg.match(/^(--[^=]+)=(.*)$/s);
-    if (long) add(long[1], long[2]);
-    else if (/^-[A-Za-z].+/.test(arg) && letters.has(arg[1])) add(arg.slice(0, 2), arg.slice(2));
-    else if (arg.startsWith("-") && arg.length > 1 && arg !== "--") {
-      const value = valued.includes(arg) && !args[index + 1]?.startsWith("-") ? args[++index] : undefined;
-      add(arg, value ?? "");
-    } else if (arg !== "--") operands.push(arg);
+    const long = arg.match(/^(--[^=]+)(?:=(.*))?$/s);
+    if (arg === "--") {
+      operands.push(...args.slice(index + 1));
+      break;
+    } else if (long) add(long[1], long[2] ?? (valued.has(long[1]) ? args[++index] ?? "" : ""));
+    else if (/^-[^-]/.test(arg)) {
+      for (let letter = 1; letter < arg.length; letter++) {
+        const name = `-${arg[letter]}`;
+        if (arg[letter + 1] === "=") add(name, arg.slice(letter + 2));
+        else if (valued.has(name)) add(name, arg.slice(letter + 1) || (args[++index] ?? ""));
+        else {
+          add(name, "");
+          continue;
+        }
+        break;
+      }
+    } else operands.push(arg);
   }
   return { flags, operands };
 }
 
 function parseGh(args: string[]): Gh {
-  const [group = ""] = parseFlags(args, valuedFlags.any).operands;
-  const { flags, operands } = parseFlags(args, valuedFlags[aliases[group] ?? group] ?? valuedFlags.any);
+  const [group = "", action = ""] = parseFlags(args, valuedFlags.other).operands.map((word) => aliases[word] ?? word);
+  const table = valuedFlags[`${group} ${action}`] ?? valuedFlags[group] ?? valuedFlags.other;
+  const { flags, operands } = parseFlags(args, table);
   const [first = "", second = "", ...rest] = operands;
   return { group: aliases[first] ?? first, action: aliases[second] ?? second, operands: rest, flags };
 }
@@ -64,23 +100,34 @@ const repoOwner = (value: string) => {
 };
 const endpointOf = (gh: Gh) => gh.action.replace(/^https?:\/\/[^/]+\/(?:api\/v3\/)?/i, "").replace(/^\//, "");
 
-function apiFields(gh: Gh): Map<string, string> {
+function apiFields(gh: Gh): [string, string][] {
   const fields = values(gh, "-f", "--raw-field", "-F", "--field").map((field) => field.match(/^([^=]*)=(.*)$/s));
-  return new Map(fields.filter((field) => field !== null).map(([, key, value]) => [key.toLowerCase(), value.toLowerCase()]));
+  return fields.filter((field) => field !== null).map(([, key, value]) => [key.toLowerCase(), value.toLowerCase()]);
+}
+
+const fieldName = (key: string) => key.match(/([^[\]]*)\]?$/)?.[1] ?? key;
+const readOnlyQuery = /^\s*(?:query\b|\{)/;
+
+function publishesByGraphql(fields: [string, string][]): boolean {
+  const query = fields.find(([key]) => key === "query")?.[1] ?? "";
+  if (readOnlyQuery.test(query)) return false;
+  return fields.some(([key, value]) => /visibility\s*:\s*\\?"?public\b/.test(value) || (fieldName(key) === "visibility" && value === "public"));
 }
 
 function apiRisk(gh: Gh, person: string): string | undefined {
   const endpoint = endpointOf(gh);
-  const fields = apiFields(gh);
+  const pairs = apiFields(gh);
+  const fields = new Map(pairs);
   const input = gh.flags.has("--input");
   const method = (values(gh, "-X", "--method").at(-1) ?? (fields.size > 0 || input ? "POST" : "GET")).toUpperCase();
-  if (method === "GET") return undefined;
+  if (method === "GET" || method === "HEAD") return undefined;
   if (accountEndpoints.test(endpoint)) return keyReason(person);
-  if (endpoint === "graphql") return [...fields.values()].some((value) => /visibility\s*:\s*\\?"?public\b/.test(value)) || fields.get("visibility") === "public" ? exposureReason(person) : undefined;
+  if (endpoint === "graphql") return publishesByGraphql(pairs) ? exposureReason(person) : undefined;
   const publishes = fields.get("private") === "false" || fields.get("visibility") === "public";
-  const keepsPrivate = fields.get("private") === "true" || fields.get("visibility") === "private" || fields.get("visibility") === "internal";
+  const markedPrivate = fields.get("private") === "true";
+  const keepsPrivate = endpoint.startsWith("orgs/") ? markedPrivate || ["private", "internal"].includes(fields.get("visibility") ?? "") : markedPrivate;
   if (repositoryEndpoint.test(endpoint) && method === "DELETE") return exposureReason(person);
-  if (repositoryCreation.test(endpoint) && method === "POST" && (input || !keepsPrivate)) return exposureReason(person);
+  if (repositoryCreation.test(endpoint) && method === "POST" && (input || publishes || !keepsPrivate)) return exposureReason(person);
   if (repositoryEndpoint.test(endpoint) && method === "PATCH" && (input || publishes)) return exposureReason(person);
   return undefined;
 }
@@ -124,6 +171,7 @@ export function ghRisk(command: string, allowed: ReadonlySet<string> | null, per
   for (const { name, args, env } of commandsIn(command)) {
     if (name !== "gh") continue;
     const gh = parseGh(args);
+    if (gh.flags.has("--help")) continue;
     const risk = exposure(gh, person);
     if (risk) return risk;
     const outside = allowed && owners(gh, env.get("GH_REPO") ?? inheritedRepo).find((owner) => !allowed.has(owner.toLowerCase()));

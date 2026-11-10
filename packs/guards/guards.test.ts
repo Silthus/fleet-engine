@@ -311,7 +311,11 @@ describe("the gh guard", () => {
     writeFileSync(join(home, ".local/state/fleet/settings.json"), JSON.stringify({ "guards.person": "Robin", "guards.owners": owners }));
     return home;
   };
-  const refusal = (command: string, owners: string | null = "acme octo-org") => guard(bash(command), homeAllowing(owners))?.hookSpecificOutput.permissionDecisionReason;
+  const refusal = (command: string, owners: string | null = "acme octo-org") => {
+    const denied = guard(bash(command), homeAllowing(owners))?.hookSpecificOutput;
+    if (denied) expect(denied.permissionDecision).toBe("deny");
+    return denied?.permissionDecisionReason;
+  };
 
   test.each([
     ["gh ssh-key add ~/.ssh/id.pub --title box", "keys on Robin's GitHub account"],
@@ -340,6 +344,13 @@ describe("the gh guard", () => {
     ["gh repo edit acme/app --visibility=PUBLIC --accept-visibility-change-consequences", "makes code public"],
     ["echo $(gh repo delete acme/app --yes)", "makes code public"],
     ["bash -c 'gh auth token'", "the GitHub token"],
+    ["gh auth status -at", "the GitHub token"],
+    ["gh api -iXDELETE repos/acme/app", "makes code public"],
+    ["gh gist create -wp notes.md", "makes code public"],
+    ["gh api graphql -f 'query=mutation($input: CreateRepositoryInput!) { createRepository(input: $input) { repository { url } } }' -f 'input[name]=x' -f 'input[visibility]=PUBLIC'", "makes code public"],
+    ["gh api user/repos -f name=x -f visibility=private", "makes code public"],
+    ["gh api repos/acme/template/generate -f owner=acme -f name=x -f visibility=private", "makes code public"],
+    ["gh api orgs/acme/repos -f name=x -f visibility=private -F private=false", "makes code public"],
   ])("refuses account, token, extension and exposure commands: %s", (command, why) => {
     expect(refusal(command)).toContain(why);
   });
@@ -357,6 +368,11 @@ describe("the gh guard", () => {
     ["gh secret set TOKEN --org other --body x", "other"],
     ["gh variable set VAR -o other --body x", "other"],
     ["gh repo list other", "other"],
+    ["gh pr merge -s https://github.com/other/app/pull/1", "other"],
+    ["gh pr merge -r https://github.com/other/app/pull/1", "other"],
+    ["gh pr merge -dm https://github.com/other/app/pull/1", "other"],
+    ["gh pr review -a https://github.com/other/app/pull/1", "other"],
+    ["gh repo fork --remote https://github.com/other/app", "other"],
   ])("refuses an owner outside guards.owners: %s", (command, owner) => {
     expect(refusal(command)).toContain(`\`${owner}\``);
   });
@@ -382,19 +398,56 @@ describe("the gh guard", () => {
     "gh pr view 1 --repo https://github.com/acme/app",
     "gh pr view 1 -R github.com/Octo-Org/site",
     "gh secret set TOKEN --org acme --body x",
+    "gh api graphql -f query='{ search(query: \"visibility:public\", type: REPOSITORY, first: 10) { repositoryCount } }'",
+    "gh api -X HEAD user/keys",
+    "gh auth token --help",
+    "gh auth status -a",
+    "gh api user/repos -f name=x -f private=true",
+    "gh api orgs/acme/repos -f name=x -f visibility=internal",
+    "gh pr merge -s https://github.com/acme/app/pull/1",
+    "gh pr create -t title -b 'see https://github.com/other/app' -B main",
   ])("allows ordinary work with allowed owners: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
   });
 
   test("refuses gh on the repository that GH_REPO names when the agent inherits it", async () => {
     const home = homeWith(withGuards(), { "guards.person": "Robin", "guards.owners": "acme" });
-    const run = (repo: string) => Bun.spawn(["sh", join(home, ".config/fleet/hooks/run.sh"), "claude", "PreToolUse"], {
-      env: { ...process.env, HOME: home, GH_REPO: repo },
-      stdin: new Blob([JSON.stringify(bash("gh pr create --fill"))]),
-      stdout: "pipe",
-    });
-    expect(await new Response(run("other/app").stdout).text()).toContain("`other` is not one of the GitHub owners");
-    expect(await new Response(run("acme/app").stdout).text()).toBe("");
+    const run = async (repo: string) => {
+      const child = Bun.spawn(["sh", join(home, ".config/fleet/hooks/run.sh"), "claude", "PreToolUse"], {
+        env: { ...process.env, HOME: home, GH_REPO: repo },
+        stdin: new Blob([JSON.stringify(bash("gh pr create --fill"))]),
+        stdout: "pipe",
+      });
+      const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+      return { code, decision: stdout.trim() ? JSON.parse(stdout).hookSpecificOutput?.permissionDecision : undefined, stdout };
+    };
+    const refused = await run("other/app");
+    expect(refused).toMatchObject({ code: 0, decision: "deny" });
+    expect(refused.stdout).toContain("`other` is not one of the GitHub owners");
+    expect(await run("acme/app")).toEqual({ code: 0, decision: undefined, stdout: "" });
+  });
+
+  test("checks the GH_REPO the hook inherits through guard()", () => {
+    const saved = process.env.GH_REPO;
+    try {
+      process.env.GH_REPO = "other/app";
+      expect(guard(bash("gh pr create --fill"), homeAllowing("acme"))?.hookSpecificOutput.permissionDecision).toBe("deny");
+      process.env.GH_REPO = "acme/app";
+      expect(guard(bash("gh pr create --fill"), homeAllowing("acme"))).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env.GH_REPO;
+      else process.env.GH_REPO = saved;
+    }
+  });
+
+  test.each(["{not json", "[]", '{"guards.owners": 7}'])("refuses shell calls while the settings file cannot be read: %s", (content) => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    writeFileSync(join(home, ".local/state/fleet/settings.json"), content);
+    const denied = guard(bash("gh pr create -R other/app --fill"), home);
+    expect(denied?.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(denied?.hookSpecificOutput.permissionDecisionReason).toContain(join(home, ".local/state/fleet/settings.json"));
+    expect(guard(bash("ls"), home)?.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   test("checks no owners when guards.owners is empty", () => {
