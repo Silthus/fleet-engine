@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main, type CliOptions } from "../cli.ts";
 import { filesAdapter } from "../reconciler/apply.ts";
@@ -10,11 +10,13 @@ const repoRoot = join(import.meta.dir, "../..");
 export const hubMachine: MachineFile = { schema: 1, role: "linux", name: "hub-1" };
 export const nodeMachine: MachineFile = { schema: 1, role: "devbox", coder: true, name: "node-2" };
 
-/** A hub and a node on one profile with the issued fixture pack, each on its own temporary home, and an ssh between them that runs its remote line in a shell. */
-export function linkedFleets(temp: ReturnType<typeof tempDirs>) {
+/** A hub and a node on one profile with the issued fixture pack, each on its own temporary home, and an ssh between them that runs its remote line in a shell. port moves the issued service off its fixture port. */
+export function linkedFleets(temp: ReturnType<typeof tempDirs>, port?: number) {
   const engine = temp.make("engine-");
   cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
   cpSync(join(repoRoot, "src/reconciler/fixtures/issued"), join(engine, "packs/issued"), { recursive: true });
+  const pack = join(engine, "packs/issued/pack.ts");
+  if (port) writeFileSync(pack, readFileSync(pack, "utf8").replace("port: 4600,", `port: ${port},`));
   const profile = temp.make("profile-");
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["issued"], plan: "claude", settings: {}, workflows: {}, hub: "hub-1", devboxes: ["node-2"] }));
   const hosts: Record<string, Host | "down"> = {};

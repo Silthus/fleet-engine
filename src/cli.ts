@@ -20,6 +20,7 @@ import { hubCommand } from "./commands/hub.ts";
 import { realMachine } from "./setup/commands.ts";
 import { credentialName, packContext, secretStore, type Clock } from "./runner/context.ts";
 import { onHub } from "./hub/ssh.ts";
+import { drift } from "./reconciler/drift.ts";
 import { spawnRunner, type CommandRunner } from "./adapters/run.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
@@ -82,6 +83,11 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const adapters = (options.adapters ?? engineAdapters)();
   const issue: Issuer = (entries, node) => issueCredentials(entries, node, plan, sources, options);
   const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, adapters, run: options.run, issue });
+  if (doctor) {
+    const drifted = await drift(plan, report.humanLeft);
+    report.findings.push(...drifted);
+    if (drifted.some((finding) => finding.repair)) report.ok = false;
+  }
   const notice = doctor ? await readNotice(options.home) : undefined;
   if (notice) report.findings.push({ id: "update:major", pack: "engine", say: notice });
   printReport(report, command, options.print, flags.dryRun);
@@ -146,6 +152,7 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
     options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }
+  if (command.on === "hub" && !plan.onHub) return runOnHub(name, args, plan, options);
   const loaded = loadedPack(sources, command.pack);
   const run = loaded?.code?.commands[name];
   const exit = run ? await inPack(plan, loaded!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
@@ -153,6 +160,17 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   const repairs = plan.human.some((step) => step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
   return exit === 0 && repairs ? applyProfile(plan.machine.profileDir!, options) : exit;
 }
+
+/** A node of the profile runs a hub command on the hub over the one SSH path, with this terminal. Any other machine is told where it runs. */
+async function runOnHub(name: string, args: string[], plan: Plan, options: CliOptions) {
+  if (!plan.reachesHub) throw new Error(`fleet ${name} runs on the hub${plan.hub ? `, ${plan.hub}` : ""}. Run it there.`);
+  const answer = await (options.capture ?? spawnRunner)(onHub(plan.hub!, [name, ...args]), { inherit: true });
+  for (const line of lines(answer.stdout)) options.print(line);
+  for (const line of lines(answer.stderr ?? "")) (options.fail ?? options.print)(line);
+  return answer.code;
+}
+
+const lines = (text: string) => (text ? text.replace(/\n$/, "").split("\n") : []);
 
 async function spawnPackCommand(path: string, args: string[], plan: Plan, options: CliOptions) {
   const child = Bun.spawn(["bun", path, ...args], { stdio: ["inherit", "inherit", "inherit"], env: { ...Bun.env, ...packEnvironment(plan, options) } });

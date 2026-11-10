@@ -316,8 +316,9 @@ and Fleet does not wrap it in a unit.
 fleet.command("box", { on: "hub", summary: "Borrow, run on, and return boxes", run });
 ```
 
-On the hub the engine runs it. On another node the engine runs
-`ssh <hub> fleet box ...`, from step 3 on. Resolve collects every command
+On the hub the engine runs it. On a node that the profile names the engine
+runs `ssh <hub> fleet box ...` with this terminal and returns the hub's exit
+code. Any other machine is told to run it on the hub. Resolve collects every command
 before it filters items for the local machine, as `packCommands` does today
 (`resolve.ts:360`), so every node knows the name. `on` only selects where
 the command runs. Pack code no longer calls `requireHub` or builds
@@ -349,9 +350,9 @@ directly, not a page that only Caddy serves, and tells the person to run
 the gateway at loopback without private HTTPS. Apply tests the checks that
 served services wait for first and issues their credentials, so the client
 check's repair writes today's client file from the new key in the same
-apply. Until step 3 pulls keys, `fleet mcp-gateway grant <devbox>` and its
-`accept` stay, and the client check's repair moves a key from today's
-client file into the store. A profile that lists the Hub pack gets this
+apply. A node pulls its key from the hub at every apply, and the client
+check's repair moves a key from today's client file into the store once.
+`fleet mcp-gateway` runs on the hub, also when you type it on a node. A profile that lists the Hub pack gets this
 pack too, until it turns the `mcp-gateway` workflow off.
 
 **The Slack trigger** (pack `slack`, section 5.3) serves nothing: it opens
@@ -705,8 +706,12 @@ Ranked, most important first.
 
 1. **Profile drift between nodes.** Nothing sends the catalog (D11). Two
    nodes at different profile commits compute different catalogs, and a
-   stale profile can name an old hub. *Plan:* `fleet doctor` tests each
-   catalog entry's health path at loopback and names the profile commit.
+   stale profile can name an old hub. *Plan, in step 3:* `fleet doctor`
+   tests each catalog entry's health path at loopback and names the profile
+   commit, so two nodes that show different commits have drifted. The hub
+   and its named nodes test the health; a solo machine has no node to
+   drift from. The hub skips an entry whose install check is still left,
+   because doctor names that check already.
 2. **The plugin's skill names.** A skill in a plugin is `source:skill`,
    and instructions, guides, and other skills name skills without a prefix
    today. *Plan:* step 6 moves one skill first. If agents no longer find

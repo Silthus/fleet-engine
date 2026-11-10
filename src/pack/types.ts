@@ -154,6 +154,7 @@ export type PackCode = {
   serviceId(handle: unknown): string;
   repairs: Record<string, (ctx: Context) => Promise<void>>;
   commands: Record<string, (args: string[], ctx: Context) => Promise<number>>;
+  hubCommands: string[];
   services: Record<string, (ctx: Context) => Promise<void>>;
   credentials: Record<string, (ctx: Context, node: string) => Promise<string>>;
   checks: Record<string, (ctx: Context) => Promise<boolean>>;
@@ -219,7 +220,7 @@ export type Plan = {
   /** Every served service of the profile, on every node, with its port. */
   catalog?: CatalogEntry[];
   t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
-  commands: Record<string, { pack: string; path: string }>;
+  commands: Record<string, { pack: string; path: string; on?: "hub" }>;
   handlers: Partial<Record<HandlerSeam, { pack: string; path: string }>>;
   models: ModelRow[];
   settings: Record<string, SettingValue>;
@@ -230,4 +231,4 @@ export type Plan = {
 
 export type Finding = { id: string; pack: string; say: string; repair?: "apply" | "human" };
 
-export type Report = { ok: boolean; actions: Action[]; findings: Finding[]; humanLeft: HumanStep[] };
+export type Report = { ok: boolean; actions: Action[]; findings: Finding[]; humanLeft: Array<Owned<HumanStep>> };
