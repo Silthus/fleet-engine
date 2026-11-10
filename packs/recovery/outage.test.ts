@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ShellSnapshot } from "../../src/integrations/t3/threads.ts";
@@ -18,7 +18,6 @@ const minute = 60_000;
 const at = (time: string) => Date.parse(`2026-11-10T${time}:00Z`);
 const outageThread = (id: string, fields = {}) => limitedThread(id, { lastErrorClass: "provider_error", lastError: "api_error_500: Internal server error", ...fields });
 
-/** The t3 command line as the alert reaches it: it records each thread start with its folder and prompt. */
 function fakeT3(dir: string) {
   const bin = join(dir, "bin");
   const starts = join(dir, "starts");
@@ -27,6 +26,7 @@ function fakeT3(dir: string) {
   writeFileSync(join(bin, "t3"), `#!/bin/sh
 [ "$1 $2" = "project add" ] && exit 0
 [ "$1 $2" = "thread start" ] || exit 1
+[ -e "${dir}/down" ] && exit 1
 out="${starts}/$(date +%s%N)"
 printf '%s\\n' "$@" > "$out.args"
 cat > "$out.prompt"
@@ -35,6 +35,7 @@ echo thread-alert
   chmodSync(join(bin, "t3"), 0o755);
   return {
     path: `${bin}:${Bun.env.PATH}`,
+    down: (down: boolean) => (down ? writeFileSync(join(dir, "down"), "") : rmSync(join(dir, "down"), { force: true })),
     started: () => readdirSync(starts).filter((name) => name.endsWith(".args")).sort().map((name) => ({
       args: readFileSync(join(starts, name), "utf8").trim().split("\n"),
       prompt: readFileSync(join(starts, name.replace(/args$/, "prompt")), "utf8"),
@@ -72,6 +73,31 @@ test("retries a thread stopped on a provider error with a growing wait, four tim
   expect(alerts[0]!.args).toEqual(["thread", "start", "--title", "1 thread keeps failing on provider errors", "--provider", "claudeAgent", "--model", "claude-test-small", join(box.home, "notes"), "-"]);
   expect(alerts[0]!.prompt).toContain("Thread e (e): api_error_500: Internal server error");
   expect(box.lines).toContain("Thread e (e): retried after a provider error, try 4 of 4.");
+});
+
+const spendAllTries = ["20:00", "20:10", "20:30", "21:10"];
+
+test("keeps the spent tries of a thread while it is snoozed, so a snooze never buys it a fifth try", async () => {
+  const box = await machine([outageThread("e")], { "claude-test-1": 200 });
+  for (const time of spendAllTries) await box.run(at(time));
+  box.setThreads([outageThread("e", { snoozedUntil: "2026-11-10T22:30:00.000Z" })]);
+  await box.run(at("22:00"));
+  box.setThreads([outageThread("e")]);
+  for (const time of ["23:00", "23:30"]) await box.run(at(time));
+  expect(box.inbox.delivered().length).toBe(4);
+  expect(box.t3.started().length).toBe(1);
+});
+
+test("tries the alert again on the next sweep when it could not start", async () => {
+  const box = await machine([outageThread("e")], { "claude-test-1": 200 });
+  for (const time of spendAllTries) await box.run(at(time));
+  box.t3.down(true);
+  expect(await box.run(at("22:00"))).toBe(1);
+  expect(box.t3.started()).toEqual([]);
+  box.t3.down(false);
+  expect(await box.run(at("22:05"))).toBe(0);
+  expect(await box.run(at("22:10"))).toBe(0);
+  expect(box.t3.started().length).toBe(1);
 });
 
 test("spends no try while the provider does not answer", async () => {
