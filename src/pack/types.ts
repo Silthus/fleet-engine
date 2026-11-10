@@ -81,6 +81,7 @@ export type PackStep = Scope & {
   check?: string[];
   /** The id of a human step of the same pack that must pass before this step runs. */
   after?: string;
+  undo?: string[];
 };
 
 /**
@@ -216,6 +217,7 @@ export type Plan = {
   jobs: Array<Owned<PackJob>>;
   human: Array<Owned<HumanStep>>;
   steps: Array<Owned<PackStep>>;
+  undo?: Array<Owned<PackStep> & { prerequisite?: string[] }>;
   checks: Array<Owned<PackCheck>>;
   /** Every served service of the profile, on every node, with its port. */
   catalog?: CatalogEntry[];

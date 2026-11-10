@@ -189,6 +189,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("steps", (item, label) => {
     need(typeof item.id === "string" && isStrings(item.run), `${label}: needs an id and a run list`);
     need(item.check === undefined || isStrings(item.check), `${label}: check must be a command list`);
+    need(item.undo === undefined || (isStrings(item.undo) && item.undo.length > 0), `${label}: undo must be a command list`);
+    need(item.undo === undefined || (isStrings(item.check) && item.check.length > 0), `${label}: undo needs a check`);
     waitsWithin(item, label);
     filters(item, label);
   });
