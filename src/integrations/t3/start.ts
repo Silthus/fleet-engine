@@ -1,10 +1,7 @@
 import type { ModelRow } from "../../pack/types.ts";
+import type { StartedThread, Threads } from "../../sdk/index.ts";
 import { launchScratchThread } from "./launch.ts";
 import { withT3Session, type T3HttpClient, type T3SessionOptions } from "./session.ts";
-
-export type ThreadStart = { key: string; title: string; prompt: string; modelRole: string };
-export type StartedThread = { id: string; url?: string };
-export type Threads = { start(def: ThreadStart): Promise<StartedThread> };
 
 const startScopes = ["orchestration:read", "orchestration:operate", "access:read"];
 

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "name": "twin",
+  "title": "Twin",
+  "summary": "The hub greets you once you pick a greeting.",
+  "risk": "None.",
+  "settings": [{ "key": "twin.greeting", "type": "string", "question": "Which greeting?" }],
+  "workflows": [{ "id": "twin-hello", "name": "Greet", "sentence": "The hub greets you.", "default": false, "settings": ["twin.greeting"] }],
+  "jobs": [
+    { "id": "twin-greeter", "command": ["fleet", "run", "twin/twin-greeter"], "schedule": { "every": "always" }, "roles": ["hub", "solo"], "workflow": "twin-hello", "after": "twin-picked" },
+    { "id": "twin-linux", "command": ["fleet", "run", "twin/twin-linux"], "schedule": { "every": "always" }, "on": ["linux"], "plans": ["claude"] }
+  ],
+  "human": [
+    { "id": "twin-picked", "say": "Pick a greeting.", "probe": ["fleet", "run", "twin/twin-picked"], "command": "fleet twin-hello setup", "interactive": true, "roles": ["hub", "solo"], "workflow": "twin-hello" }
+  ]
+}
