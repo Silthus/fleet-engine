@@ -1,5 +1,5 @@
 import {
-  findThread, readLinkedThread, readThread, sendLinkedMessage, sendMessage, T3ToolError, withT3Session,
+  listLinkedThreads, readLinkedThread, readSnapshots, readThread, sendLinkedMessage, sendMessage, T3ToolError, withT3Session,
   type ShellThread, type T3HttpClient, type T3SessionOptions,
 } from "../../base/lib/t3/index.ts";
 import { runActivity } from "./activity.ts";
@@ -23,7 +23,7 @@ export async function runThread(args: string[], io: ThreadIo): Promise<number> {
   const { host, threadId, words } = parseTarget(rest, action);
   const text = action === "send" ? await readMessage(words, io) : "";
   const result = await withT3Session(async (client) => {
-    const { machine, place } = await placeThread(client, io.host, threadId, host);
+    const { machine, place } = await placeThread(client, io.host, threadId, host, action);
     if (action === "read") {
       return { host: machine, thread: "local" in place ? await readThread(client, place.local.id) : await readLinkedThread(client, place.environmentId, { threadId: place.threadId }) };
     }
@@ -35,16 +35,14 @@ export async function runThread(args: string[], io: ThreadIo): Promise<number> {
 
 function parseTarget(args: string[], action: "read" | "send") {
   let host: string | undefined;
-  const positional: string[] = [];
   const rest = [...args];
-  while (rest.length) {
-    const arg = rest.shift()!;
-    if (arg !== "--host") { positional.push(arg); continue; }
+  while (rest[0] === "--host") {
+    rest.shift();
     host = rest.shift();
     if (!host) throw new Error(usage);
   }
-  const [threadId, ...words] = positional;
-  if (!threadId || (action === "read" && words.length)) throw new Error(usage);
+  const [threadId, ...words] = rest;
+  if (!threadId || threadId.startsWith("-") || (action === "read" && words.length)) throw new Error(usage);
   if (!threadIdPattern.test(threadId)) throw new Error("Invalid thread id.");
   return { host, threadId, words };
 }
@@ -55,25 +53,39 @@ async function readMessage(words: string[], io: ThreadIo): Promise<string> {
   return text;
 }
 
-async function placeThread(client: T3HttpClient, thisHost: string, threadId: string, host?: string): Promise<{ machine: string; place: Place }> {
+async function placeThread(client: T3HttpClient, thisHost: string, value: string, host: string | undefined, action: "read" | "send"): Promise<{ machine: string; place: Place }> {
   const machines = await readMachines(client, thisHost);
   const reports = await readEachMachine<{ place?: Place }>(
     host ? [pickMachine(machines, host)] : machines,
     async () => {
-      const local = await findThread(client, threadId);
-      return { place: local && !local.deletedAt ? { local } : undefined };
+      const threads = (await readSnapshots(client)).flatMap((snapshot) => snapshot.threads).filter((thread) => !thread.deletedAt);
+      const id = pickId(threads.map((thread) => thread.id), value, thisHost);
+      const local = threads.find((thread) => thread.id === id);
+      return { place: local ? { local } : undefined };
     },
     async (environmentId) => {
-      const read = await readLinkedThread(client, environmentId, { threadId, limit: 1 }).catch((error: unknown) => {
-        if (error instanceof T3ToolError && error.code === "thread_not_found") return undefined;
-        throw error;
-      });
-      return { place: read ? { environmentId, threadId: read.thread.threadId } : undefined };
+      const listed = await listLinkedThreads(client, environmentId, { allProjects: true, includeSubagents: true });
+      const id = pickId(listed.map((thread) => thread.threadId), value, machines.find((machine) => machine.environment?.environmentId === environmentId)!.host)
+        ?? (await readLinkedThread(client, environmentId, { threadId: value, limit: 1 }).catch((error: unknown) => {
+          if (error instanceof T3ToolError && error.code === "thread_not_found") return undefined;
+          throw error;
+        }))?.thread.threadId;
+      return { place: id ? { environmentId, threadId: id } : undefined };
     },
   );
   const found = reports.flatMap((report) => (report.error === undefined && report.place ? [{ machine: report.host, place: report.place }] : []));
+  const silent = reports.flatMap((report) => (report.error === undefined ? [] : [`${report.host} could not be checked (${report.error})`]));
+  if (found.length > 1) throw new Error(`Thread ${value} is on ${found.map((each) => each.machine).join(", ")}. Choose one with --host.`);
+  if (found.length === 1 && action === "send" && !host && silent.length) {
+    throw new Error(`Thread ${value} is on ${found[0]!.machine}, but ${silent.join("; ")}. Choose the machine with --host.`);
+  }
   if (found.length === 1) return found[0]!;
-  if (found.length > 1) throw new Error(`Thread ${threadId} is on ${found.map((each) => each.machine).join(", ")}. Choose one with --host.`);
-  const silent = reports.flatMap((report) => (report.error === undefined ? [] : [`${report.host}: ${report.error}`]));
-  throw new Error([`No machine has thread ${threadId}.`, ...silent].join("\n"));
+  throw new Error([`No machine has thread ${value}.`, ...reports.flatMap((report) => (report.error === undefined ? [] : [`${report.host}: ${report.error}`]))].join("\n"));
+}
+
+function pickId(ids: string[], value: string, machine: string): string | undefined {
+  if (ids.includes(value)) return value;
+  const fits = ids.filter((id) => id.endsWith(`:${value}`));
+  if (fits.length > 1) throw new Error(`On ${machine}, ${value} fits ${fits.join(", ")}. Give the full id.`);
+  return fits[0];
 }

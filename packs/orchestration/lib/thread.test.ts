@@ -16,6 +16,7 @@ const linkedThreads: LinkedThreadFixture[] = [
   linkedThread("mcp:linked-done", { status: "completed", updatedAt: minutesAgo(90), items: [linkedItem("user_message", "Ship it"), linkedItem("assistant_message", "Shipped.")] }),
   linkedThread("mcp:linked-conductor", { status: "idle", runtimeMode: "full-access" }),
   linkedThread("mcp:everywhere"),
+  linkedThread("mcp:remote-only"),
 ];
 
 function fixture(links = [linkedEnvironment], threads = linkedThreads): T3Fixture {
@@ -26,6 +27,8 @@ function fixture(links = [linkedEnvironment], threads = linkedThreads): T3Fixtur
         shellThread("mcp:local-busy", { status: "running", activeRunId: "run-1", latestRunStartedAt: minutesAgo(2) }),
         shellThread("mcp:local-idle", { status: "completed", latestRunCompletedAt: minutesAgo(30) }),
         shellThread("mcp:everywhere"),
+        shellThread("one:twin"),
+        shellThread("two:twin"),
       ],
     },
     archived: { projects: [], threads: [shellThread("mcp:local-archived", { archivedAt: minutesAgo(100) })] },
@@ -110,6 +113,35 @@ test("T3's refusal of a linked send is shown as T3 words it", async () => {
   await expect(thread(t3, ["send", "--host", "devbox-2", "mcp:linked-conductor", "Hi"])).rejects.toThrow("Thread mcp:linked-conductor runs in full-access mode, above this caller's.");
 });
 
+test("words after the thread id are the message, even when they look like flags", async () => {
+  const t3 = await stub();
+  const { code, output } = await thread(t3, ["send", "--host", "this-box", "mcp:everywhere", "Explain", "--host", "devbox-2"]);
+
+  expect(code).toBe(0);
+  expect(JSON.parse(output)).toMatchObject({ host: "this-box", threadId: "mcp:everywhere" });
+  expect(dispatched(t3)).toEqual([expect.objectContaining({ threadId: "mcp:everywhere", text: "Explain --host devbox-2" })]);
+  expect(sends(t3)).toEqual([]);
+});
+
+test("a short id finds a linked thread the same way it finds a local one, and an id that fits two threads is refused", async () => {
+  const t3 = await stub();
+  const { code, output } = await thread(t3, ["send", "remote-only", "Hi"]);
+
+  expect(code).toBe(0);
+  expect(JSON.parse(output)).toMatchObject({ host: "devbox-2", threadId: "mcp:remote-only" });
+  await expect(thread(t3, ["send", "twin", "Hi"])).rejects.toThrow("On this-box, twin fits one:twin, two:twin. Give the full id.");
+  expect(dispatched(t3)).toEqual([]);
+});
+
+test("an unqualified send waits for every machine to answer, so a copy on a silent machine is never skipped", async () => {
+  const t3 = await stub(fixture([linkedEnvironment, { ...linkedEnvironment, environmentId: "env-down", label: "devbox-3", status: "unreachable", lastError: "connection refused" }]));
+
+  await expect(thread(t3, ["send", "mcp:local-idle", "Hi"])).rejects.toThrow("Thread mcp:local-idle is on this-box, but devbox-3 could not be checked (did not answer: connection refused). Choose the machine with --host.");
+  expect(dispatched(t3)).toEqual([]);
+  const { code } = await thread(t3, ["send", "--host", "this-box", "mcp:local-idle", "Hi"]);
+  expect(code).toBe(0);
+});
+
 test("fleet thread read finds a linked thread and prints its messages", async () => {
   const t3 = await stub();
   const { code, output } = await thread(t3, ["read", "mcp:linked-done"]);
@@ -128,8 +160,8 @@ test("fleet thread list lists the threads of this machine and each linked enviro
 
   expect(code).toBe(0);
   expect(reports.map((report: { host: string; threads: { id: string }[] }) => [report.host, report.threads.map((listed) => listed.id)])).toEqual([
-    ["this-box", ["mcp:local-busy", "mcp:local-idle", "mcp:everywhere", "mcp:local-archived"]],
-    ["devbox-2", ["mcp:linked-busy", "mcp:linked-done", "mcp:everywhere", "mcp:linked-conductor"]],
+    ["this-box", ["mcp:local-busy", "mcp:local-idle", "mcp:everywhere", "mcp:local-archived", "one:twin", "two:twin"]],
+    ["devbox-2", ["mcp:linked-busy", "mcp:linked-done", "mcp:everywhere", "mcp:linked-conductor", "mcp:remote-only"]],
   ]);
 });
 
