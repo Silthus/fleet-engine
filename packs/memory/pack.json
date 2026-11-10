@@ -18,6 +18,13 @@
       "question": "Which private GitHub repo holds your agent memory, such as you/agent-notes?",
       "type": "string",
       "ask": "setup"
+    },
+    {
+      "key": "memory.subtree",
+      "question": "Which folder of the memory repo holds the memory? Leave it empty when the memory is the whole repo.",
+      "type": "string",
+      "default": "",
+      "ask": "never"
     }
   ],
   "workflows": [
@@ -29,7 +36,8 @@
         "gh"
       ],
       "settings": [
-        "memory.repo"
+        "memory.repo",
+        "memory.subtree"
       ],
       "sentence": "Agents on every machine read and write one private memory repo, which syncs every five minutes.",
       "moment": {
@@ -68,6 +76,11 @@
     {
       "path": "hooks/memory-index.ts",
       "target": ".config/fleet/hooks/SessionStart/memory-index.ts",
+      "workflow": "shared-memory"
+    },
+    {
+      "path": "hooks/memory-recall.ts",
+      "target": ".config/fleet/hooks/PreToolUse/memory-recall.ts",
       "workflow": "shared-memory"
     }
   ],
