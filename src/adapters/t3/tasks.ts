@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ModelRow, PackJob, Plan } from "../../pack/types.ts";
 import { taskPrefix, type FleetTask, type T3Tasks } from "../jobs/adapter.ts";
@@ -35,6 +36,14 @@ export async function activeProjects(rpc: T3Rpc): Promise<ShellProject[]> {
 }
 
 export const expandHome = (home: string, path: string) => (path === "~" || path.startsWith("~/") ? join(home, path.slice(1)) : path);
+
+export function realPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
 
 export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; run: CommandRunner }): T3Tasks {
   const jobs = new Map<string, NonNullable<PackJob["task"]>>(options.plan.jobs.flatMap((job) => (job.task ? [[`${taskPrefix}${job.id}`, job.task]] : [])));

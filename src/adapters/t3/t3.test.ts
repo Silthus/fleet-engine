@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConfigEntry, ModelRow, Owned, PackJob, Plan, T3ProjectScript } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
@@ -531,6 +531,24 @@ describe("T3 project scripts", () => {
     expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [ours] } });
     await apply(withScripts([named]), { home, adapters: [adapter] });
     expect(commands.calls.filter((line) => line.startsWith("t3 project add")).length).toBe(1);
+  });
+
+  test("knows a script folder reached through a symlink as the project T3 lists under the other path", async () => {
+    for (const [named, listed] of [["app", "real-app"], ["real-app", "app"]] as const) {
+      const home = temp.make("home-");
+      mkdirSync(join(home, "real-app"));
+      symlinkSync(join(home, "real-app"), join(home, "app"));
+      const { server, commands, adapter } = setup({ projects: [join(home, listed)], settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
+      await apply(withScripts([{ ...prepare, projects: [`~/${named}`] }]), { home, adapters: [adapter] });
+      expect(commands.calls.filter((line) => line.startsWith("t3 project add"))).toEqual([]);
+      expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [ours] } });
+    }
+    const home = temp.make("home-");
+    mkdirSync(join(home, "real-app"));
+    symlinkSync(join(home, "real-app"), join(home, "app"));
+    const { commands, adapter } = setup({ settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
+    await apply(withScripts([{ ...prepare, projects: ["~/app", "~/real-app"] }]), { home, adapters: [adapter] });
+    expect(commands.calls.filter((line) => line.startsWith("t3 project add"))).toEqual([`t3 project add ${home}/real-app`]);
   });
 
   test("waits while T3 Code is not running, and doctor names the missing script without writing", async () => {
