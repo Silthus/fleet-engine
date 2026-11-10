@@ -113,9 +113,29 @@ async function hasPackTs(dir: string) {
 }
 
 async function loadsElsewhere(dir: string, limitMs: number): Promise<string | undefined> {
-  const child = Bun.spawn([process.execPath, join(import.meta.dir, "load-source.ts"), dir], { env: process.env, stdout: "pipe", stderr: "pipe", timeout: limitMs });
-  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  const started = performance.now();
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "load-source.ts"), dir], { env: process.env, stdout: "ignore", stderr: "pipe", timeout: limitMs, killSignal: "SIGKILL" });
+  const stderr = readUntilQuiet(child.stderr);
+  const code = await child.exited;
   if (code === 0) return undefined;
-  if (child.signalCode) return `the packs did not finish loading within ${limitMs / 1000} seconds`;
-  return out.trim() || [`the packs exit ${code} as they load`, err.trim().split("\n").at(-1)].filter(Boolean).join(": ");
+  if (performance.now() - started >= limitMs) return `the packs did not finish loading within ${limitMs / 1000} seconds`;
+  const lastLine = (await stderr()).trim().split("\n").at(-1);
+  const how = child.signalCode ? `stop on ${child.signalCode}` : `exit ${code}`;
+  return [`the packs ${how} as they load`, lastLine].filter(Boolean).join(": ");
+}
+
+const drainMs = 100;
+
+function readUntilQuiet(stream: ReadableStream<Uint8Array>) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  const done = (async () => {
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) text += decoder.decode(chunk.value, { stream: true });
+  })().catch(() => {});
+  return async () => {
+    const drained = await Promise.race([done.then(() => true), Bun.sleep(drainMs).then(() => false)]);
+    if (!drained) await reader.cancel().catch(() => {});
+    return text;
+  };
 }

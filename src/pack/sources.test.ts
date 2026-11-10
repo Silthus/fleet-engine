@@ -167,6 +167,37 @@ describe("fetchSource", () => {
     expect(fetched).toMatchObject({ error: expect.stringContaining("did not finish loading within") });
   });
 
+  test("reports a pack.ts that ignores SIGTERM and never finishes loading", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `process.on("SIGTERM", () => {});\nawait new Promise((resolve) => setTimeout(resolve, 3_600_000));\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"), 200);
+    expect(fetched).toMatchObject({ error: expect.stringContaining("did not finish loading within 0.2 seconds") });
+  });
+
+  test("names the signal, not the time limit, when a pack.ts crashes as it loads", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `process.kill(process.pid, "SIGKILL");\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+    if (!("error" in fetched)) throw new Error("the crashed pack loaded");
+    expect(fetched.error).toContain("the packs stop on SIGKILL as they load");
+    expect(fetched.error).not.toContain("within");
+  });
+
+  test("names the exit code and the thrown error when a pack.ts prints progress and then throws", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `console.log("loading team rules");\nthrow new Error("broken on load");\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+    expect(fetched).toMatchObject({ error: expect.stringMatching(/the packs exit 1 as they load: \S+pack\.ts: broken on load$/) });
+  });
+
+  test("returns promptly when a pack.ts leaves a process holding its output open and then throws", async () => {
+    const pidFile = join(temp.make("sleeper-"), "pid");
+    const repo = tsRepo({ "packs/team/pack.ts": `const sleeper = Bun.spawn(["sleep", "30"], { stdout: "inherit", stderr: "inherit" });\nawait Bun.write(${JSON.stringify(pidFile)}, String(sleeper.pid));\nthrow new Error("broken after spawn");\n` });
+    try {
+      const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+      expect(fetched).toMatchObject({ error: expect.stringMatching(/the packs exit 1 as they load: \S+pack\.ts: broken after spawn$/) });
+    } finally {
+      if (existsSync(pidFile)) process.kill(Number(await Bun.file(pidFile).text()), "SIGKILL");
+    }
+  });
+
   test("names the last line a pack.ts printed when it exits as it loads", async () => {
     const repo = tsRepo({ "packs/team/pack.ts": `console.error("the team token file is missing");\nprocess.exit(3);\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
     const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));

@@ -1,4 +1,4 @@
-import type { Fleet, Scope as SdkScope, Setting } from "../sdk/index.ts";
+import type { Fleet, Pack, Scope as SdkScope, Setting } from "../sdk/index.ts";
 import type { HumanStep, PackCode, PackJob, PackSetting, Scope, Workflow } from "./types.ts";
 
 type Declared = { kind: "setting" | "workflow" | "check" | "service"; id: string };
@@ -74,7 +74,8 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   return { manifest: { schema: 1, ...fields, settings, workflows, jobs, human }, code };
 }
 
-const packFields = ["name", "summary", "title", "day", "cost", "risk", "requires"];
+const namedFields: Record<Exclude<keyof Pack, "sdk" | "register">, true> = { name: true, summary: true, title: true, day: true, cost: true, risk: true, requires: true };
+const packFields = Object.keys(namedFields);
 
 function isPack(value: unknown): value is { sdk: 1; name: string; register(fleet: Fleet): void } & Record<string, unknown> {
   const pack = value as Record<string, unknown> | undefined;
