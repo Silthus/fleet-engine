@@ -1,16 +1,25 @@
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { redactSecrets } from "./secret-guard.ts";
 
 export type HookResult = { code: number; stdout: string; stderr: string };
 export type RunHook = (path: string, provider: string, input: string) => Promise<HookResult>;
 
-type Decision = { decision?: string; reason?: string; hookSpecificOutput?: unknown };
+type Specific = { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string; [key: string]: unknown };
+type Decision = { decision?: string; reason?: string; hookSpecificOutput?: Specific };
+
+const strictness = ["allow", "ask", "deny"];
 
 /**
  * Runs every hook in name order and picks one answer. A JSON block wins, then an exit-2 block, then a
- * JSON answer that redacts or suppresses, then the first other output. A block keeps the first
- * redaction or suppression, so another hook can never undo the secret guard. A failing hook only reports.
+ * JSON answer with hook-specific output, then the first other output. Every hook's hook-specific output
+ * is merged into one: the strictest permission decision wins (deny, then ask, then allow), the contexts
+ * are joined, and any other field keeps its first value, so another hook can never undo the secret guard.
+ * A deny drops any rewritten input, a block turns a tool call's answer into a deny, and prompt suppression
+ * stays on once any hook asks for it. A permission request's deny wins over its allow. Codex cannot ask the
+ * person, so an ask becomes a deny there. The joined context is redacted, so no hook can echo a secret back.
+ * A failing hook only reports.
  */
 export async function dispatch(dir: string, provider: string, input: string, run: RunHook = runWithBun): Promise<HookResult> {
   const results: Array<HookResult & { name: string; json?: Decision }> = [];
@@ -20,15 +29,48 @@ export async function dispatch(dir: string, provider: string, input: string, run
   }
   const problems = results.filter((result) => result.code !== 0 && result.code !== 2).map((result) => `fleet hook ${result.name}: ${result.stderr.trim() || `exit ${result.code}`}\n`).join("");
   const blockJson = results.find((result) => result.json?.decision === "block")?.json;
-  const protect = results.find((result) => result.json?.hookSpecificOutput)?.json?.hookSpecificOutput;
+  const protect = mergeSpecific(provider, results.flatMap((result) => (result.json?.hookSpecificOutput ? [result.json.hookSpecificOutput] : [])));
   const blocked = results.find((result) => result.code === 2);
   const answer = (decision: Decision): HookResult => ({ code: 0, stdout: `${JSON.stringify(decision)}\n`, stderr: problems });
-  if (blockJson) return answer({ ...blockJson, hookSpecificOutput: blockJson.hookSpecificOutput ?? protect });
-  if (blocked && protect) return answer({ decision: "block", reason: blocked.stderr.trim(), hookSpecificOutput: protect });
+  if (blockJson) return answer({ ...blockJson, hookSpecificOutput: denying(protect, blockJson.reason ?? "") });
+  if (blocked && protect) return answer({ decision: "block", reason: blocked.stderr.trim(), hookSpecificOutput: denying(protect, blocked.stderr.trim()) });
   if (blocked) return { code: 2, stdout: "", stderr: problems + blocked.stderr };
-  if (protect) return answer({ ...results.find((result) => result.json?.hookSpecificOutput)!.json });
+  if (protect) return answer({ ...results.find((result) => result.json?.hookSpecificOutput)!.json, hookSpecificOutput: protect });
   const first = results.find((result) => result.code === 0 && result.stdout.trim());
   return { code: first || !problems ? 0 : 1, stdout: first?.stdout ?? "", stderr: problems };
+}
+
+const permissionVerdict = (output: Specific) => (typeof output.decision === "object" && output.decision !== null ? (output.decision as { behavior?: unknown }) : undefined);
+
+function mergeSpecific(provider: string, outputs: Specific[]): Specific | undefined {
+  if (outputs.length === 0) return undefined;
+  const merged: Specific = Object.assign({}, ...[...outputs].reverse());
+  const decided = outputs.filter((output) => strictness.includes(output.permissionDecision ?? ""));
+  const strictest = decided.reduce<Specific | undefined>((best, output) => (!best || strictness.indexOf(output.permissionDecision!) > strictness.indexOf(best.permissionDecision!) ? output : best), undefined);
+  if (strictest) {
+    merged.permissionDecision = strictest.permissionDecision;
+    merged.permissionDecisionReason = strictest.permissionDecisionReason;
+  }
+  if (provider === "codex" && merged.permissionDecision === "ask") {
+    merged.permissionDecision = "deny";
+    merged.permissionDecisionReason = `This call needs the person's approval, and Codex cannot ask for it here. ${merged.permissionDecisionReason ?? ""}`.trim();
+  }
+  if (merged.permissionDecision === "deny") delete merged.updatedInput;
+  const verdicts = outputs.map(permissionVerdict).filter((verdict) => verdict?.behavior === "allow" || verdict?.behavior === "deny");
+  const verdict = verdicts.find((item) => item?.behavior === "deny") ?? verdicts[0];
+  if (verdict) merged.decision = verdict;
+  if (outputs.some((output) => output.suppressOriginalPrompt === true)) merged.suppressOriginalPrompt = true;
+  const contexts = outputs.map((output) => output.additionalContext).filter((context): context is string => typeof context === "string" && context.length > 0);
+  if (contexts.length > 0) merged.additionalContext = redactSecrets(contexts.join("\n\n"));
+  return merged;
+}
+
+function denying(specific: Specific | undefined, reason: string): Specific | undefined {
+  if (!specific || (specific.hookEventName !== "PreToolUse" && specific.permissionDecision === undefined)) return specific;
+  const kept = specific.permissionDecision === "deny" ? specific.permissionDecisionReason?.trim() : undefined;
+  const denied: Specific = { ...specific, permissionDecision: "deny", permissionDecisionReason: reason.trim() || kept || "A Fleet hook blocked this tool call." };
+  delete denied.updatedInput;
+  return denied;
 }
 
 function parseDecision(stdout: string): Decision | undefined {

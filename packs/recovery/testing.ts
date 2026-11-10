@@ -19,7 +19,6 @@ export function recoveryHome(home: string): string {
 
 type Answer = number | [number, string];
 
-/** The hub's proxy as Claude and Codex reach it: one answer per model, and a refused connection for a model it does not know. */
 export function fakeProxy(answers: Record<string, Answer>) {
   const calls: string[] = [];
   const fetch: Fetch = async (input, init) => {
@@ -27,7 +26,10 @@ export function fakeProxy(answers: Record<string, Answer>) {
     const headers = new Headers(init?.headers);
     if (url.origin !== "http://127.0.0.1:8317") throw new TypeError(`fetch failed: ${url.origin}`);
     if (headers.get("authorization") !== `Bearer ${proxyKey}`) return new Response("unauthorized", { status: 401 });
-    const { model } = JSON.parse(String(init?.body)) as { model: string };
+    if (init?.method !== "POST") return new Response("method not allowed", { status: 405 });
+    const request = JSON.parse(String(init.body)) as { model?: unknown; messages?: unknown; max_tokens?: unknown; input?: unknown };
+    if (!wellFormed(url.pathname, request)) return new Response('{"error":{"type":"invalid_request_error"}}', { status: 400 });
+    const model = String(request.model);
     calls.push(`${url.pathname} ${model}`);
     const answer = answers[model];
     if (answer === undefined) throw new TypeError("fetch failed: connection refused");
@@ -35,6 +37,13 @@ export function fakeProxy(answers: Record<string, Answer>) {
     return new Response(text, { status });
   };
   return { fetch, calls };
+}
+
+function wellFormed(path: string, request: { model?: unknown; messages?: unknown; max_tokens?: unknown; input?: unknown }): boolean {
+  if (typeof request.model !== "string") return false;
+  if (path === "/v1/messages") return Array.isArray(request.messages) && request.messages.length > 0 && typeof request.max_tokens === "number";
+  if (path === "/v1/responses") return typeof request.input === "string" || Array.isArray(request.input);
+  return false;
 }
 
 function bodyFor(code: number): string {
