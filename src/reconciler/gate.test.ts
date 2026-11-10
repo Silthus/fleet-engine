@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { jobsAdapter } from "../adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../cli.ts";
@@ -34,7 +34,7 @@ function machine() {
     return { code: await main(args, options), lines };
   };
   const unit = join(home, ".config/systemd/user/fleet-gated-worker.service");
-  return { home, profile, fleet, unit };
+  return { profile, fleet, unit };
 }
 
 const todo = "The gated service needs its token. Run: fleet gated setup";
@@ -50,11 +50,11 @@ test("a service whose check fails gets no unit, and its setup command installs i
 });
 
 test("a check that stops passing removes the unit, and doctor names the check as a To do once", async () => {
-  const { home, profile, fleet, unit } = machine();
+  const { profile, fleet, unit } = machine();
   await fleet("apply", "--profile", profile);
   await fleet("gated", "setup");
   expect(existsSync(unit)).toBe(true);
-  rmSync(join(home, ".config/fleet/secrets/gated/token"));
+  expect((await fleet("gated", "forget")).code).toBe(0);
   const doctor = await fleet("doctor");
   expect(doctor.code).toBe(1);
   expect(doctor.lines.join("\n").split(todo).length).toBe(2);
@@ -64,10 +64,9 @@ test("a check that stops passing removes the unit, and doctor names the check as
 });
 
 test("a setup command that fails applies nothing, even when it saved the token", async () => {
-  const { home, profile, fleet, unit } = machine();
+  const { profile, fleet, unit } = machine();
   await fleet("apply", "--profile", profile);
-  mkdirSync(join(home, ".config/fleet/secrets/gated"), { recursive: true });
-  writeFileSync(join(home, ".config/fleet/secrets/gated/broken"), "yes");
+  expect((await fleet("gated", "break")).code).toBe(0);
   expect((await fleet("gated", "setup")).code).toBe(1);
   expect(existsSync(unit)).toBe(false);
 });
