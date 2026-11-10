@@ -106,3 +106,34 @@ test("sign-in runs Codex's device sign-in in the bridge's own Codex home, then r
   expect(await slackBridgeSignedIn(hub)).toBe(true);
   expect(api.calls.filter((call) => call.method !== "GET").map((call) => `${call.method} ${call.path}`)).toEqual(["POST servers/slack/reload"]);
 });
+
+test("a bridge already in the gateway still counts as missing while the gateway runs an older image, and registering moves the gateway to the bridge's image", async () => {
+  const { api, docker, hub } = hubWith({ servers: ["tickets", "calendar", "slack"], configs: { slack: stored } });
+  expect(await slackBridgeRegistered(hub)).toBe(false);
+  await registerSlackBridge(hub);
+  expect(docker.container()!.Mounts).toContainEqual({ Destination: "/opt/fleet-codex" });
+  expect(await slackBridgeRegistered(hub)).toBe(true);
+  expect(writes(api)).toEqual([]);
+});
+
+test("a turned-off bridge counts as missing, and registering turns it back on", async () => {
+  const { api, hub } = hubWith();
+  await registerSlackBridge(hub);
+  api.configs.slack = { ...stored, enabled: false };
+  expect(await slackBridgeRegistered(hub)).toBe(false);
+  await registerSlackBridge(hub);
+  expect(api.configs.slack.enabled).toBe(true);
+  expect(await slackBridgeRegistered(hub)).toBe(true);
+});
+
+test("a slack server that someone adds while the gateway image builds is kept", async () => {
+  const theirs = { type: "stdio", command: "npx", args: ["some-slack-mcp"] };
+  const { api, hub, home } = hubWith();
+  const docker = dockerHost(home, olderGateway);
+  const run = fakeRun((call) => {
+    if (call.command[1] === "run") api.servers.push("slack"), (api.configs.slack = theirs);
+    return docker(call);
+  }).run;
+  await expect(registerSlackBridge({ ...hub, run })).rejects.toThrow("Keep the MCP gateway's slack server: Fleet did not add it.");
+  expect(api.configs.slack).toEqual(theirs);
+});

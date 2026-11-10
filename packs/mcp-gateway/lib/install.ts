@@ -48,11 +48,25 @@ export async function bridgeBundle(root: string) {
   return Buffer.from(await build.outputs[0]!.arrayBuffer());
 }
 
-export async function buildImage(hub: Hub, source = mcphubSource) {
-  const patchPath = join(hub.root, "mcphub/1.1.0-elicitation.patch");
-  const sdkRoot = join(hub.root, "mcphub/sdk");
-  const [patch, sdkManifest, sdkLock, bridge] = await Promise.all([readFile(patchPath), readFile(join(sdkRoot, "package.json")), readFile(join(sdkRoot, "pnpm-lock.yaml")), bridgeBundle(hub.root)]);
+async function imageParts(root: string) {
+  const patchPath = join(root, "mcphub/1.1.0-elicitation.patch");
+  const sdkRoot = join(root, "mcphub/sdk");
+  const [patch, sdkManifest, sdkLock, bridge] = await Promise.all([readFile(patchPath), readFile(join(sdkRoot, "package.json")), readFile(join(sdkRoot, "pnpm-lock.yaml")), bridgeBundle(root)]);
   const image = `fleet-mcphub:1.1.0-${createHash("sha256").update(patch).update(sdkManifest).update(sdkLock).update(bridge).digest("hex").slice(0, 12)}`;
+  return { patchPath, sdkManifest, sdkLock, bridge, image };
+}
+
+/** Whether the running gateway container is Fleet's, of the image this engine builds, with Fleet's Codex mounted. */
+export async function gatewayCurrent(hub: Hub) {
+  const { image } = await imageParts(hub.root);
+  const built = await hub.run(["docker", "image", "inspect", image]);
+  const running = await ownedContainer(hub).catch(() => undefined);
+  if (built.code || !running?.State.Running) return false;
+  return running.Image === (JSON.parse(built.stdout) as Array<{ Id: string }>)[0]!.Id && Boolean(running.Mounts?.some((mount) => mount.Destination === codexMount));
+}
+
+export async function buildImage(hub: Hub, source = mcphubSource) {
+  const { patchPath, sdkManifest, sdkLock, bridge, image } = await imageParts(hub.root);
   if ((await hub.run(["docker", "image", "inspect", image])).code === 0) return image;
   const response = await hub.fetch(source.url, { signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`MCPHub source download failed: ${response.status}`);

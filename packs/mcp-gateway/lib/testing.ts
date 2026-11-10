@@ -58,6 +58,8 @@ export function mcphubFetch(state: FakeMcpHub) {
     if (method === "POST" && path === "auth/keys") return Response.json({ success: true, data: { id: "key-new", token: "mcphub_new-machine-token", ...body } }, { status: 201 });
     if (method === "PUT" && path.startsWith("auth/keys/")) return Response.json({ success: true, data: body });
     if (method === "POST" && /^servers\/[^/]+\/reload$/.test(path)) return Response.json({ success: true });
+    const toggle = path.match(/^servers\/([^/]+)\/toggle$/);
+    if (method === "POST" && toggle) return (state.configs[decodeURIComponent(toggle[1]!)]!.enabled = body!.enabled), Response.json({ success: true });
     const server = path.match(/^servers\/([^/]+)$/);
     const name = server ? decodeURIComponent(server[1]!) : String(body?.name);
     const stored = (config: Record<string, any>) => {
