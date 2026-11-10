@@ -48,7 +48,7 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       const skipped = skipOtherHome("jobs", "your scheduled jobs", home, options);
       if (skipped) return skipped;
       const command = (job: PackJob) => engineCommand(job.command, engineRoot);
-      const context = { home, dryRun, run, result, outage: sourceOutage(plan), dropped: new Set(plan.dropped.filter((entry) => entry.item.startsWith("job ")).map((entry) => entry.item.slice("job ".length))) };
+      const context = { home, dryRun, run, result, outage: sourceOutage(plan), gated: new Set(plan.dropped.filter((entry) => entry.check && entry.item.startsWith("job ")).map((entry) => entry.item.slice("job ".length))) };
       const reconcile = async () => {
         const path = [`${home}/.local/bin`, `${home}/.bun/bin`, ...(plan.os === "darwin" ? ["/opt/homebrew/bin"] : []), "/usr/local/bin", "/usr/bin", "/bin"].join(":");
         const scripts = await launchers(home, osJobs, (job) => launcherScript(command(job), path, inside(home, logTarget(job.id))));
@@ -68,7 +68,7 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
   };
 }
 
-type Context = { home: string; dryRun: boolean; run: CommandRunner; result: AdapterResult; outage: boolean; dropped: Set<string> };
+type Context = { home: string; dryRun: boolean; run: CommandRunner; result: AdapterResult; outage: boolean; gated: Set<string> };
 type Scripts = Map<string, Write>;
 
 function needs(job: { id: string; pack: string } | string, what: string, kind = "job"): Finding {
@@ -96,7 +96,7 @@ async function removeLauncher(home: string, id: string) {
   if (!(await linkOnPath(home, launcherTarget(id)))) await rm(inside(home, launcherTarget(id)), { force: true });
 }
 
-async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun, run, result, outage, dropped }: Context, keep: Set<string> = new Set(), hold: Set<string> = new Set()): Promise<boolean> {
+async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun, run, result, outage, gated }: Context, keep: Set<string> = new Set(), hold: Set<string> = new Set()): Promise<boolean> {
   const listed = await run(["crontab", "-l"]);
   const empty = listed.code !== 0 && /no crontab/i.test(listed.stderr ?? "");
   if (listed.code !== 0 && !empty) {
@@ -110,7 +110,7 @@ async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun,
     return false;
   }
   const wanted = new Map(jobs.map((job) => [job.id, cronLine(job.id, cronExpression(job.schedule), inside(home, launcherTarget(job.id)))]));
-  const changes = reconcileCrontab(empty ? "" : listed.stdout, wanted, (id) => (outage && !dropped.has(id)) || hold.has(id));
+  const changes = reconcileCrontab(empty ? "" : listed.stdout, wanted, (id) => (outage && !gated.has(id)) || hold.has(id));
   const owner = (id: string) => jobs.find((job) => job.id === id) ?? id;
   const rewritten = jobs.filter((job) => stale(scripts.get(job.id)) && !changes.added.includes(job.id) && !changes.changed.includes(job.id)).map((job) => job.id);
   const all = [...changes.added.map((id) => needs(owner(id), "added")), ...[...changes.changed, ...rewritten].map((id) => needs(owner(id), "updated")), ...changes.removed.map((id) => needs(id, "removed"))];
@@ -126,7 +126,7 @@ async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun,
   return true;
 }
 
-async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, uid, outage, dropped }: Context & { uid: number }) {
+async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, uid, outage, gated }: Context & { uid: number }) {
   const agents = join(home, "Library/LaunchAgents");
   const domain = `gui/${uid}`;
   const present = (await readdir(agents).catch(() => [] as string[])).filter((name) => name.startsWith(labelPrefix) && name.endsWith(".plist"));
@@ -184,7 +184,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   for (const name of present) {
     const label = name.slice(0, -".plist".length);
     const id = label.slice(labelPrefix.length);
-    if ((outage && !dropped.has(id)) || jobs.some((job) => `${labelPrefix}${job.id}` === label)) continue;
+    if ((outage && !gated.has(id)) || jobs.some((job) => `${labelPrefix}${job.id}` === label)) continue;
     if (await foreign(name, id, await readFile(join(agents, name), "utf8").catch(() => undefined))) continue;
     if (dryRun) {
       result.findings.push(needs(id, "removed"));
@@ -207,7 +207,7 @@ async function reconcileLaunchd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
 const running = ["active", "activating", "reloading"];
 type Systemd = { running: Set<string>; removeMoved(): Promise<void> };
 
-async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, outage, dropped }: Context, moving: Set<string>): Promise<Systemd> {
+async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, { home, dryRun, run, result, outage, gated }: Context, moving: Set<string>): Promise<Systemd> {
   const copyTarget = (id: string) => `${jobsFolder}/${id}.service`;
   const restartTarget = (id: string) => `${jobsFolder}/${id}.restart`;
   const read = (target: string): Promise<string | undefined | null> => readState(home, target).catch(() => null);
@@ -220,7 +220,7 @@ async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   const unreachable = (output: { code: number; stderr?: string }) => (result.findings.push({ id: "jobs:systemd", pack: "engine", say: `Could not reach systemd's user manager (${reason(output)}), so services were not changed. Log in to this machine in a normal session, then run fleet apply.`, repair: "human" }), done);
   const linked = Boolean(await linkOnPath(home, jobsFolder));
   const copies = linked ? [] : (await readdir(inside(home, jobsFolder)).catch(() => [] as string[])).filter((name) => name.endsWith(".service")).map((name) => name.slice(0, -".service".length));
-  const gone = copies.filter((id) => jobId.test(id) && !jobs.some((job) => job.id === id) && (!outage || dropped.has(id)));
+  const gone = copies.filter((id) => jobId.test(id) && !jobs.some((job) => job.id === id) && (!outage || gated.has(id)));
   if (jobs.length && !systemdSafe(home)) return result.findings.push({ id: "jobs:systemd", pack: "engine", say: `Left services alone: systemd cannot run scripts from ${JSON.stringify(home)}, which holds a line break.`, repair: "human" }), done;
   const plans: Array<{ job: Owned<PackJob>; script: Write; content: string; current?: string; copy?: string; reload: boolean; restart: boolean; enable: boolean; pending: boolean; marked?: string }> = [];
   for (const job of jobs) {
@@ -304,7 +304,7 @@ async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   return done;
 }
 
-async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun, result, outage, dropped }: Context) {
+async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun, result, outage, gated }: Context) {
   const jobs = plan.jobs.filter(isTimed).filter((job) => job.runner === "t3" && job.task);
   if (!client) {
     for (const job of jobs) result.findings.push({ id: `task:${job.id}`, pack: job.pack, say: `The ${job.id} task waits for T3 Code to run. The next fleet apply after T3 Code starts adds it.`, repair: "apply" });
@@ -339,7 +339,7 @@ async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun,
     result.actions.push({ target: `t3 task ${wanted.id}`, operation: current ? "replace" : "create" });
   }
   for (const task of existing) {
-    if ((outage && !dropped.has(task.id.slice(taskPrefix.length))) || !task.id.startsWith(taskPrefix) || !task.enabled || jobs.some((job) => `${taskPrefix}${job.id}` === task.id)) continue;
+    if ((outage && !gated.has(task.id.slice(taskPrefix.length))) || !task.id.startsWith(taskPrefix) || !task.enabled || jobs.some((job) => `${taskPrefix}${job.id}` === task.id)) continue;
     if (dryRun) {
       result.findings.push(needs(task.id.slice(taskPrefix.length), "turned off", "task"));
       continue;
