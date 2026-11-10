@@ -19,7 +19,6 @@ export function recoveryHome(home: string): string {
 
 type Answer = number | [number, string];
 
-/** The hub's proxy as Claude and Codex reach it: one answer per model, and a refused connection for a model it does not know. */
 export function fakeProxy(answers: Record<string, Answer>) {
   const calls: string[] = [];
   const fetch: Fetch = async (input, init) => {
@@ -27,7 +26,10 @@ export function fakeProxy(answers: Record<string, Answer>) {
     const headers = new Headers(init?.headers);
     if (url.origin !== "http://127.0.0.1:8317") throw new TypeError(`fetch failed: ${url.origin}`);
     if (headers.get("authorization") !== `Bearer ${proxyKey}`) return new Response("unauthorized", { status: 401 });
-    const { model } = JSON.parse(String(init?.body)) as { model: string };
+    if (init?.method !== "POST") return new Response("method not allowed", { status: 405 });
+    const request = JSON.parse(String(init.body)) as { model?: unknown; messages?: unknown; max_tokens?: unknown; input?: unknown };
+    if (!wellFormed(url.pathname, request)) return new Response('{"error":{"type":"invalid_request_error"}}', { status: 400 });
+    const model = String(request.model);
     calls.push(`${url.pathname} ${model}`);
     const answer = answers[model];
     if (answer === undefined) throw new TypeError("fetch failed: connection refused");
@@ -37,14 +39,22 @@ export function fakeProxy(answers: Record<string, Answer>) {
   return { fetch, calls };
 }
 
+function wellFormed(path: string, request: { model?: unknown; messages?: unknown; max_tokens?: unknown; input?: unknown }): boolean {
+  if (typeof request.model !== "string") return false;
+  if (path === "/v1/messages") return Array.isArray(request.messages) && request.messages.length > 0 && typeof request.max_tokens === "number";
+  if (path === "/v1/responses") return typeof request.input === "string" || Array.isArray(request.input);
+  return false;
+}
+
 function bodyFor(code: number): string {
   return code === 200 ? "{}" : code === 429 ? '{"error":{"type":"rate_limit_error"}}' : "error";
 }
 
+type ThreadFields = Record<string, unknown>;
+
 export type DeliveredMessage = { threadId: string; text: string; continuesRunId?: string };
 
-/** T3's dispatchCommand as the sweep reaches it: it checks the message's shape and keeps one message per command id. */
-export function t3Inbox() {
+export function t3Inbox(threads: () => ThreadFields[] = () => []) {
   const byCommand = new Map<string, DeliveredMessage>();
   const rpc = (tag: string, payload: unknown) => {
     if (tag !== "orchestration.dispatchCommand") return undefined;
@@ -53,6 +63,7 @@ export function t3Inbox() {
       && typeof message.threadId === "string" && typeof message.text === "string" && Array.isArray(message.attachments)
       && (message.dispatchMode as { type?: string })?.type === "start_immediately";
     if (!shaped) return undefined;
+    if (message.manualContinuationOfRunId !== undefined && !resumable(threads().find((thread) => thread.id === message.threadId), message.manualContinuationOfRunId)) return undefined;
     if (!byCommand.has(message.commandId as string)) {
       byCommand.set(message.commandId as string, {
         threadId: message.threadId as string, text: message.text as string,
@@ -64,7 +75,11 @@ export function t3Inbox() {
   return { rpc, delivered: () => [...byCommand.values()] };
 }
 
-type ThreadFields = Record<string, unknown>;
+
+function resumable(thread: ThreadFields | undefined, runId: unknown): boolean {
+  if (!thread || thread.latestRunId !== runId || thread.archivedAt || thread.deletedAt || thread.pendingRuntimeRequest) return false;
+  return thread.status === "interrupted" || (thread.status === "failed" && thread.lastErrorClass === "usage_limit");
+}
 
 export function limitedThread(id: string, fields: ThreadFields = {}): ThreadFields {
   return {

@@ -20,7 +20,7 @@ const start = Date.parse("2026-11-10T20:00:00Z");
 const codexThread = (id: string, fields = {}) => limitedThread(id, { providerInstanceId: "codex", modelSelection: { instanceId: "codex", model: "gpt-test-1" }, ...fields });
 
 async function sweep(threads: Record<string, unknown>[], answers: Parameters<typeof fakeProxy>[0], runs = 1) {
-  const inbox = t3Inbox();
+  const inbox = t3Inbox(() => threads);
   const stub = await startT3Stub({ shell: { projects: [], threads } as unknown as ShellSnapshot, rpc: inbox.rpc });
   stubs.push(stub);
   const home = recoveryHome(temp.make("home-"));
@@ -62,12 +62,13 @@ describe("the limit sweep", () => {
     expect(lines).toContain("Thread c (c): waits for claude, which is unknown.");
   });
 
-  test("continues the run of a provider error that names spent quota, and retries a plain outage instead", async () => {
+  test("continues a provider error that names spent quota with a new message, since T3 resumes only a usage-limit run, and retries a plain outage", async () => {
     const cooling = limitedThread("d", { lastErrorClass: "provider_error", lastError: "All credentials for model claude-test-1 are cooling down" });
     const outage = limitedThread("e", { lastErrorClass: "provider_error", lastError: "api_error_500 Internal server error" });
-    const { delivered } = await sweep([cooling, outage], { "claude-test-1": 200 });
+    const { codes, delivered } = await sweep([cooling, outage], { "claude-test-1": 200 });
+    expect(codes).toEqual([0]);
     expect(delivered).toEqual([
-      { threadId: "d", text: "Continue where you left off.", continuesRunId: "run-d" },
+      { threadId: "d", text: "Continue where you left off." },
       { threadId: "e", text: "Continue where you left off." },
     ]);
   });

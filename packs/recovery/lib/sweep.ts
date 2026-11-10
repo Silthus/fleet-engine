@@ -29,7 +29,7 @@ export async function recoverCommand(args: string[], context: RecoverContext): P
 async function continueLimited(sweep: Sweep, thread: StoppedThread) {
   const provider = await availableProvider(sweep, thread);
   if (!provider) return;
-  const sent = await send(sweep, thread, { threadId: thread.id, runId: thread.latestRunId!, commandId: `fleet-limit-resume:${thread.id}:${thread.latestRunId}`, continuesRun: true });
+  const sent = await send(sweep, thread, { threadId: thread.id, runId: thread.latestRunId!, commandId: `fleet-limit-resume:${thread.id}:${thread.latestRunId}`, continuesRun: thread.lastErrorClass === "usage_limit" });
   if (sent) sweep.context.print(`${label(thread)}: continued after a usage limit; ${provider} is available.`);
 }
 
@@ -40,7 +40,7 @@ async function sweepOutages(sweep: Sweep, threads: StoppedThread[], now: number)
   const ranOut: StoppedThread[] = [];
   for (const thread of threads) {
     const entry = state.threads[thread.id];
-    if (thread.activeRunId && entry) next.threads[thread.id] = entry;
+    if (entry && held(thread, now)) next.threads[thread.id] = entry;
     if (!stoppedByOutage(thread, now)) continue;
     const kept: OutageEntry = entry ?? { tries: 0 };
     next.threads[thread.id] = kept;
@@ -56,9 +56,9 @@ async function sweepOutages(sweep: Sweep, threads: StoppedThread[], now: number)
     if (sent) sweep.context.print(`${label(thread)}: retried after a provider error, try ${tries} of ${maxOutageTries}.`);
   }
   if (ranOut.length) {
-    for (const thread of ranOut) next.threads[thread.id] = { ...next.threads[thread.id]!, alerted: true };
     const started = await alertOutages(ranOut.map((thread) => ({ name: label(thread), error: thread.lastError ?? thread.lastErrorCode ?? "provider error" })), sweep.context.env);
-    sweep.context.print(started ? `Started an alert thread for ${ranOut.length} threads out of tries.` : "Could not start the alert thread; it is not tried again for these threads.");
+    if (started) for (const thread of ranOut) next.threads[thread.id] = { ...next.threads[thread.id]!, alerted: true };
+    sweep.context.print(started ? `Started an alert thread for ${ranOut.length} threads out of tries.` : "Could not start the alert thread; the next sweep tries again.");
     if (!started) sweep.failed = true;
   }
   await saveOutageState(home, next);
