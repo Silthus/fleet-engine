@@ -13,4 +13,4 @@ export {
   type ShellProject, type ShellPullRequest, type ShellSnapshot, type ShellThread, type ThreadWord, type TurnItem,
 } from "./threads.ts";
 export { launchScratchThread, type ThreadLaunch } from "./launch.ts";
-export { t3Threads, threadUrl, type StartedThread, type ThreadStart, type Threads } from "./start.ts";
+export { t3Threads, threadUrl } from "./start.ts";

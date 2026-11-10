@@ -50,7 +50,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
-    if (command in changes) return await change(command as keyof typeof changes, rest, options);
+    if (Object.hasOwn(changes, command)) return await change(command as keyof typeof changes, rest, options);
     if (command === "devbox") return await devbox(rest, options);
     if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
     return await runPackCommand(command, rest, options);
@@ -128,7 +128,7 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
   const command = plan.commands[name];
   if (!command) {
-    const owner = sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => existsSync(join(pack.dir, "commands", `${name}.ts`)));
+    const owner = sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => existsSync(join(pack.dir, "commands", `${name}.ts`)) || Object.hasOwn(pack.code?.commands ?? {}, name));
     options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }

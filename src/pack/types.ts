@@ -61,6 +61,7 @@ export type PackJob = Scope & {
   schedule: TimerSchedule | { every: "always"; at?: undefined };
   runner?: "os" | "t3";
   task?: T3Task;
+  after?: string;
 };
 
 export type HumanStep = Scope & {
@@ -138,7 +139,13 @@ export type PackHandler = Scope & { seam: HandlerSeam; path: string };
 
 export type SourceRef = { name: string; repo: string; ref: string };
 
-export type LoadedPack = { manifest: PackManifest; dir: string };
+export type PackCode = {
+  commands: Record<string, (args: string[], ctx: Context) => Promise<number>>;
+  services: Record<string, (ctx: Context) => Promise<void>>;
+  checks: Record<string, (ctx: Context) => Promise<boolean>>;
+};
+
+export type LoadedPack = { manifest: PackManifest; dir: string; code?: PackCode };
 
 export type AvailableSource = { ref: SourceRef; dir: string; packs: LoadedPack[]; stale?: string };
 
@@ -164,6 +171,7 @@ export type SetupProgress = { done: string[]; draft?: Partial<ProfileFile> };
 export type MachineFile = { schema: 1; role: MachineRole; coder?: true; profileDir?: string; devboxes?: string[]; setup?: SetupProgress };
 
 import type { Action, DesiredFile } from "../files/install.ts";
+import type { Context } from "../sdk/index.ts";
 
 export type { Action, DesiredFile };
 

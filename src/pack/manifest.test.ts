@@ -149,6 +149,14 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, human, steps: [{ id: "start", run: ["start"], after: "coder" }] } }))).rejects.toThrow("steps start: runs where its human step coder does not; give it the same on");
   });
 
+  test("rejects a job that waits for a human step the pack does not declare, or runs where that step does not", async () => {
+    const human = [{ id: "token", say: "Save the token", probe: ["check-token"], roles: ["hub", "solo"] }];
+    const job = { id: "listen", command: ["listen"], schedule: { every: "always" }, after: "token", roles: ["hub", "solo"] };
+    await expect(loadPacks(sourceWith({ base: { ...base, human, jobs: [job] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, human, jobs: [{ ...job, after: "github" }] } }))).rejects.toThrow("jobs listen: after must name a human step of this pack");
+    await expect(loadPacks(sourceWith({ base: { ...base, human, jobs: [{ ...job, roles: ["hub", "solo", "devbox"] }] } }))).rejects.toThrow("jobs listen: runs where its human step token does not; give it the same roles");
+  });
+
   test("rejects malformed nested items with a clear error", async () => {
     const setting = base.settings[0];
     const row = { role: "review", work: "Review", provider: "codex", model: "m", effort: "high" };
