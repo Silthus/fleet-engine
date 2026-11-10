@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelRow } from "../../pack/types.ts";
-import { t3Threads } from "./index.ts";
+import { t3CliRunner, t3Threads } from "./index.ts";
 import { startT3Stub, type T3Fixture, type T3Stub } from "./testing.ts";
 
 const cleanups: (() => unknown)[] = [];
@@ -63,4 +63,11 @@ test("without T3 on the machine, a start fails with a sentence that says T3 is n
 test("a thread without a known environment has no link", async () => {
   const stub = await t3({ environmentId: undefined });
   expect(await t3Threads(models, { home: stub.home }).start({ ...request, key: "k" })).toEqual({ id: "thread-1" });
+});
+
+test("a thread that started counts as started when revoking its T3 session fails", async () => {
+  const stub = await t3();
+  const runCli = t3CliRunner();
+  const threads = t3Threads(models, { home: stub.home, runCli: (server, args) => (args.slice(0, 3).join(" ") === "auth session revoke" ? { status: 1, stdout: "", stderr: "revoke failed" } : runCli(server, args)) });
+  expect(await threads.start({ ...request, key: "slack-message-1" })).toEqual({ id: "thread-1", url: "https://app.t3.codes/threads/env-1/thread-1" });
 });

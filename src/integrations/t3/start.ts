@@ -13,11 +13,18 @@ export function t3Threads(models: ModelRow[], session: T3SessionOptions = {}): T
     async start({ key, title, prompt, modelRole }) {
       const row = models.find((candidate) => candidate.role === modelRole);
       if (!row) throw new Error(`The model table of your AI plan has no ${modelRole} row, so Fleet cannot start the thread.`);
-      return withT3Session(async (client) => {
-        const id = await launchScratchThread(client, { title, prompt, row, commandId: key });
-        const environment = await environmentOf(client);
-        return environment ? { id, url: threadUrl(environment, id) } : { id };
-      }, { ...session, scopes: startScopes });
+      let started: StartedThread | undefined;
+      try {
+        return await withT3Session(async (client) => {
+          started = { id: await launchScratchThread(client, { title, prompt, row, commandId: key }) };
+          const environment = await environmentOf(client);
+          if (environment) started.url = threadUrl(environment, started.id);
+          return started;
+        }, { ...session, scopes: startScopes });
+      } catch (error) {
+        if (started) return started;
+        throw error;
+      }
     },
   };
 }
