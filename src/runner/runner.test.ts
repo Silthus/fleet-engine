@@ -39,7 +39,7 @@ async function machine(packs = ["kit"], settings: Record<string, string> = {}, f
   writeFileSync(join(bin, "claude"), '#!/bin/sh\n[ "$*" = --version ] && echo "claude 1.0.0"\n');
   chmodSync(join(bin, "claude"), 0o755);
   let now = start;
-  let asleep = async (_ms: number) => {};
+  let asleep = async (_now: number) => {};
   let lines: string[] = [];
   const engineFleet = join(engine, "fleet");
   const options: CliOptions = {
@@ -49,7 +49,7 @@ async function machine(packs = ["kit"], settings: Record<string, string> = {}, f
     env: {},
     print: (line) => lines.push(line),
     run: async (command) => (command[0] === "/bin/sh" && command[1] === engineFleet ? main(command.slice(2), { ...options, print: () => {} }) : spawned(command, { HOME: home, PATH: `${bin}:/usr/bin:/bin` })),
-    clock: { now: () => now, sleep: async (ms) => ((now += ms), await asleep(ms)) },
+    clock: { now: () => now, sleep: async (ms) => ((now += ms), await asleep(now)) },
   };
   const fleet = async (...args: string[]) => {
     lines = [];
@@ -57,7 +57,7 @@ async function machine(packs = ["kit"], settings: Record<string, string> = {}, f
     return { code, lines };
   };
   expect((await fleet("apply", "--profile", profile)).code).toBe(0);
-  return { home, engine, fleet, whileAsleep: (work: (ms: number) => Promise<void>) => (asleep = work) };
+  return { home, engine, fleet, whileAsleep: (work: (now: number) => Promise<void>) => (asleep = work) };
 }
 
 test("a pack.ts command runs in the engine with the pack's settings", async () => {
@@ -117,14 +117,11 @@ test("fleet run tests a check: it exits 1 until the check passes, then 0", async
 
 test("fleet run holds a service quietly until the check it waits for passes, testing it every minute", async () => {
   const { home, fleet, whileAsleep } = await machine();
-  const naps: number[] = [];
-  whileAsleep(async (ms) => {
-    naps.push(ms);
-    if (naps.length === 3) await secretStore(home, "kit").write("token", "value");
+  whileAsleep(async (now) => {
+    if (now >= start + 150_000) await secretStore(home, "kit").write("token", "value");
   });
-  expect(await fleet("run", "kit/kit-sender")).toEqual({ code: 0, lines: ["fleet run: kit/kit-sender waits until kit-saved passes. Save the token.", "sent"] });
-  expect(naps).toEqual([60_000, 60_000, 60_000]);
-  expect(await fleet("run", "kit/kit-sender")).toEqual({ code: 0, lines: ["sent"] });
+  expect(await fleet("run", "kit/kit-sender")).toEqual({ code: 0, lines: ["fleet run: kit/kit-sender waits until kit-saved passes. Save the token.", "sent at 2026-11-10T08:03:00.000Z"] });
+  expect(await fleet("run", "kit/kit-sender")).toEqual({ code: 0, lines: ["sent at 2026-11-10T08:03:00.000Z"] });
 });
 
 test("fleet run takes everything after the first slash as the id", async () => {
