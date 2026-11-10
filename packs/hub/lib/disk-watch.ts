@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { freeBytes } from "../../base/lib/disk.ts";
+import { dirname, join } from "node:path";
+import { freeBytes, freeMapFile } from "../../base/lib/disk.ts";
 import { numberSetting, stringSetting } from "../../base/lib/settings.ts";
 import type { Env } from "./coder.ts";
 import { threadModel, requireHubRole, spawnText, sshArgv, stateDir, threadScript, underLock, writeStateFile, type JobContext } from "./hub-job.ts";
@@ -27,8 +27,16 @@ type WatchState = Record<string, { sweptAt?: number; alertedAt?: number }>;
 export async function watchDisks(options: DiskWatchOptions): Promise<void> {
   const state = readState(options.statePath);
   const save = () => { if (!options.dryRun) writeStateFile(options.statePath, state); };
-  const passes = await Promise.allSettled(options.boxes.map((box) => watchDisk(box, state, options, save)));
+  const boxes: Record<string, number> = {};
+  const checkedAt = new Date(options.now()).toISOString();
+  const read = async (box: string) => {
+    const free = await options.read(box);
+    if (free !== null) boxes[box] = free;
+    return free;
+  };
+  const passes = await Promise.allSettled(options.boxes.map((box) => watchDisk(box, state, { ...options, read }, save)));
   save();
+  if (!options.dryRun) writeStateFile(join(dirname(options.statePath), freeMapFile), { checkedAt, boxes: Object.fromEntries(Object.entries(boxes).sort()) });
   const failed = passes.find((pass) => pass.status === "rejected");
   if (failed) throw failed.reason;
 }

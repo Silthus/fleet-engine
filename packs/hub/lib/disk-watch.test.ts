@@ -105,6 +105,16 @@ test("a box that does not answer is logged, and a dry run sweeps, alerts, and sa
   expect(existsSync(run.options.statePath)).toBe(false);
 });
 
+test("each pass leaves the free space of every box that answered next to its state, for fleet disk --start", async () => {
+  const run = watch({ "box-1": [40], "box-2": [12, 30] });
+  run.options.boxes = ["box-1", "box-2", "box-gone"];
+  const read = run.options.read;
+  run.options.read = async (box) => (box === "box-gone" ? null : read(box));
+  await watchDisks(run.options);
+  const map = JSON.parse(readFileSync(join(run.options.statePath, "../disk-free.json"), "utf8"));
+  expect(map).toEqual({ checkedAt: new Date(start).toISOString(), boxes: { "box-1": 40 * gigabyte, "box-2": 30 * gigabyte } });
+});
+
 test("the targets are the hub here plus the devboxes of the profile and of machine.json, once each and without this machine", () => {
   const home = temp.make("disk-home-");
   writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub", devboxes: ["box-3", "box-1", "my-hub"] }) });
