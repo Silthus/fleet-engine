@@ -176,6 +176,23 @@ describe("check", () => {
     expect(report.findings).toEqual([{ id: "human:github", pack: "base", say: "Sign in to GitHub. Run: gh auth login --web", repair: "human" }]);
   });
 
+  test("names a failing check that Fleet can repair as a Fix for apply, even when nothing waits for it", async () => {
+    const human = [{ id: "gateway", say: "The gateway is not installed.", probe: ["gateway-installed"], repair: ["gateway-installed", "--repair"], pack: "hub" }];
+    const home = temp.make("home-");
+    await apply(plan(), { home });
+    const report = await check(plan({ human }), { home, run: exitCodes({ "gateway-installed": 1 }) });
+    expect(report.ok).toBe(false);
+    expect(report.findings).toEqual([{ id: "human:gateway", pack: "hub", say: "The gateway is not installed.", repair: "apply" }]);
+  });
+
+  test("keeps a failing check as a To do when its fix still needs a person's command, even with a Fleet repair", async () => {
+    const human = [{ id: "service", say: "Sign in to the service.", command: "service login", interactive: true as const, probe: ["service-ready"], repair: ["service-ready", "--repair"], pack: "base" }];
+    const home = temp.make("home-");
+    await apply(plan(), { home });
+    const report = await check(plan({ human }), { home, run: exitCodes({ "service-ready": 1 }) });
+    expect(report.findings).toEqual([{ id: "human:service", pack: "base", say: "Sign in to the service. Run: service login", repair: "human" }]);
+  });
+
   test("runs each step's check", async () => {
     const steps = [{ id: "proxy", run: ["start-proxy"], check: ["proxy-health"], pack: "base" }];
     const home = temp.make("home-");
