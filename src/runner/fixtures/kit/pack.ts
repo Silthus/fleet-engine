@@ -13,6 +13,7 @@ export default {
         if (mode === "stray") return ctx.print(String(ctx.get({} as typeof greeting))), 0;
         if (mode === "save") return await ctx.secrets.write(rest[0]!, rest[1]!), 0;
         if (mode === "show") return ctx.print((await ctx.secrets.read(rest[0]!)) ?? "no secret"), 0;
+        if (mode === "fail") throw new Error("kit failed");
         if (mode === "env") return ctx.print(`${process.env.HOME} ${process.env.FLEET_ENGINE_DIR} ${process.env.FLEET_SETTINGS}`), 0;
         if (mode === "start") {
           const thread = await ctx.threads.start({ key: rest[0]!, title: "Kit", prompt: "Say hello.", modelRole: "implementation" });
@@ -31,6 +32,8 @@ export default {
         await Bun.write(`${ctx.stateDir}/ticked`, String(ctx.now()));
       },
     });
+    const extra = fleet.workflow({ id: "kit-extra", name: "Kit extra", sentence: "The kit runs one more service.", default: false });
+    fleet.service({ id: "kit-extra-run", when: extra, run: async (ctx) => ctx.print("ran") });
     fleet.check({ id: "kit-saved", say: "Save the token.", test: async (ctx) => (await ctx.secrets.read("token")) !== undefined });
   },
 } satisfies Pack;

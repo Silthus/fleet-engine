@@ -94,6 +94,27 @@ test("fleet run refuses an item that no pack you turned on declares", async () =
   expect((await fleet("run", "kit")).code).toBe(2);
 });
 
+test("fleet run refuses an item that does not run on this machine, and a name that only every object has", async () => {
+  const { fleet } = await machine();
+  expect(await fleet("run", "kit/kit-extra-run")).toEqual({ code: 2, lines: ["fleet run: kit/kit-extra-run does not run here: workflow kit-extra is off"] });
+  expect(await fleet("run", "kit/toString")).toEqual({ code: 2, lines: ["fleet run: your packs have no service or check kit/toString"] });
+});
+
+test("a pack.ts command leaves the engine's environment as it found it, also when it fails", async () => {
+  const { fleet } = await machine();
+  const saved = { settings: process.env.FLEET_SETTINGS, handlers: process.env.FLEET_HANDLERS };
+  process.env.FLEET_SETTINGS = "before";
+  delete process.env.FLEET_HANDLERS;
+  try {
+    expect((await fleet("kit", "env")).code).toBe(0);
+    expect([process.env.FLEET_SETTINGS, process.env.FLEET_HANDLERS]).toEqual(["before", undefined]);
+    expect(await fleet("kit", "fail")).toEqual({ code: 1, lines: ["fleet: kit failed"] });
+    expect([process.env.FLEET_SETTINGS, process.env.FLEET_HANDLERS]).toEqual(["before", undefined]);
+  } finally {
+    for (const [key, value] of [["FLEET_SETTINGS", saved.settings], ["FLEET_HANDLERS", saved.handlers]] as const) value === undefined ? delete process.env[key] : (process.env[key] = value);
+  }
+});
+
 test("ctx.threads starts a T3 thread from the plan's model table, once per key", async () => {
   let launched = 0;
   const t3 = await startT3Stub({
