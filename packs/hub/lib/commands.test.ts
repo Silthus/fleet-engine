@@ -20,14 +20,11 @@ async function hubProfile() {
   return home;
 }
 
-test("through fleet, sweep refuses on a machine that is not the hub, and fleet hub here makes it the hub", async () => {
+test("through fleet, sweep refuses on a machine that is not the hub", async () => {
   const home = await hubProfile();
   const refused = await runFleet(["box", "sweep"], { HOME: home });
   expect(refused.code).toBe(1);
   expect(refused.stderr).toContain("fleet box sweep runs only on the hub. This machine's role is linux. Run fleet hub here on the hub");
-  expect((await runFleet(["hub", "here"], { HOME: home })).code).toBe(0);
-  const status = await runFleet(["hub", "status"], { HOME: home });
-  expect(status).toEqual({ stdout: "This machine's role: hub\nhub.alias: my-hub\n", stderr: "", code: 0 });
 });
 
 test("through fleet, dream refuses without the Memory pack, and dream digest prints this machine's sessions without their tokens", async () => {

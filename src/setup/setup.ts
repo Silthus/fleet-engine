@@ -127,6 +127,8 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       if (!machine.profileDir || !options.apply) throw new Error("no profile to apply yet");
       terminal.print(`▶ ${applyStep.title}: fleet apply installs your packs`);
       if ((await options.apply(machine.profileDir)) !== 0) throw new Error("fleet apply could not set up this machine. Fix what it says above, then run fleet setup again.");
+      const applied = await loadMachine(options.home);
+      if (applied) Object.assign(machine, { role: applied.role }, applied.name ? { name: applied.name } : {});
     },
   };
   const question = devboxQuestion({

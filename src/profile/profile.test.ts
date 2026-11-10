@@ -171,10 +171,10 @@ describe("machine file", () => {
 
   test("a new Mac is a mac and never a Coder devbox, even with Coder's variables set", () => {
     const coder = { CODER_AGENT_URL: "https://coder.example", CODER: "true" };
-    expect(thisMachine(undefined, "darwin", {})).toEqual({ schema: 1, role: "mac" });
-    expect(thisMachine(undefined, "darwin", coder)).toEqual({ schema: 1, role: "mac" });
-    expect(thisMachine({ schema: 1, role: "mac", profileDir: "/Users/octo/fleet-profile" }, "darwin", coder)).toEqual({ schema: 1, role: "mac", profileDir: "/Users/octo/fleet-profile" });
-    expect(thisMachine(undefined, "linux", coder)).toEqual({ schema: 1, role: "devbox", coder: true });
+    expect(thisMachine(undefined, "darwin", {}, "laptop")).toEqual({ schema: 1, role: "mac", name: "laptop" });
+    expect(thisMachine(undefined, "darwin", coder, "laptop")).toEqual({ schema: 1, role: "mac", name: "laptop" });
+    expect(thisMachine({ schema: 1, role: "mac", name: "octo-mac", profileDir: "/Users/octo/fleet-profile" }, "darwin", coder, "laptop")).toEqual({ schema: 1, role: "mac", name: "octo-mac", profileDir: "/Users/octo/fleet-profile" });
+    expect(thisMachine(undefined, "linux", coder, "not a host")).toEqual({ schema: 1, role: "devbox", coder: true });
   });
 
   test("rejects a schema it does not know", async () => {

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
@@ -16,11 +16,12 @@ import type { ChangeContext } from "./commands/change.ts";
 import { packsCommand } from "./commands/packs.ts";
 import { setCommand, settingsCommand } from "./commands/settings.ts";
 import { devboxCommand } from "./commands/devbox.ts";
+import { hubCommand } from "./commands/hub.ts";
 import { realMachine } from "./setup/commands.ts";
 import { packContext, type Clock } from "./runner/context.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[] };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -40,6 +41,9 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
                      Change settings
   fleet devbox [add <ssh host>]
                      List your devboxes, or make an SSH host one
+  fleet hub here [<ssh name>]
+                     Make this machine the hub of your profile
+  fleet hub status   Show this machine's name and the hub
   fleet run <pack>/<id>
                      Run a pack's service, or test one of its checks
   fleet <command>    Run a command that one of your packs ships`;
@@ -53,7 +57,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
-    if (Object.hasOwn(changes, command)) return await change(command as keyof typeof changes, rest, options);
+    if (Object.hasOwn(changes, command) || command === "hub") return await change(command as keyof typeof changes | "hub", rest, options);
     if (command === "devbox") return await devbox(rest, options);
     if (command === "run") return await runItem(rest, options);
     if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
@@ -94,7 +98,7 @@ function applyProfile(dir: string, options: CliOptions) {
   return options.apply ? options.apply(dir) : reconcile("apply", ["--profile", dir], options);
 }
 
-async function change(command: keyof typeof changes, args: string[], options: CliOptions) {
+async function change(command: keyof typeof changes | "hub", args: string[], options: CliOptions) {
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
   const profileDir = plan.machine.profileDir!;
   const context: ChangeContext = {
@@ -106,7 +110,7 @@ async function change(command: keyof typeof changes, args: string[], options: Cl
     apply: () => applyProfile(profileDir, options),
   };
   try {
-    return await changes[command](args, context);
+    return await (command === "hub" ? hubCommand(args, { ...context, home: options.home }) : changes[command](args, context));
   } catch (error) {
     if (!(error instanceof FlagError)) throw error;
     options.print(`fleet ${command}: ${error.message}`);
@@ -210,14 +214,14 @@ async function loadPlan(options: CliOptions, profileFlag: string | undefined, mo
   const inherited = mode.inherit && !profileFlag ? options.env?.FLEET_PROFILE_DIR : undefined;
   const profileDir = profileFlag ? resolvePath(profileFlag) : inherited ? resolvePath(inherited) : saved?.profileDir;
   if (!profileDir) throw new Error("no profile on this machine. Run get.sh, or pass --profile <dir>.");
-  const machine: MachineFile = { ...thisMachine(saved, options.platform, options.env ?? {}), profileDir };
+  const machine: MachineFile = { ...thisMachine(saved, options.platform, options.env ?? {}, (options.hostname ?? hostname)()), profileDir };
   const profile = await loadProfile(profileDir);
   const cache = join(options.home, ".local", "share", "fleet", "sources");
   const engine: AvailableSource = { ref: { name: "engine", repo: profile.engine.repo, ref: profile.engine.ref }, dir: options.engineRoot, packs: await loadPacks(options.engineRoot) };
   const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => (mode.fetch ? fetchSource(ref, cache) : cachedSource(ref, cache)))))];
   const plan = resolve(profile, machine, sources);
-  const changed = saved?.profileDir !== profileDir || saved.role !== machine.role || saved.coder !== machine.coder;
-  if (mode.remember && changed) await saveMachine(options.home, machine);
+  const changed = saved?.profileDir !== profileDir || saved.role !== plan.machine.role || saved.coder !== plan.machine.coder || saved.name !== plan.machine.name;
+  if (mode.remember && changed) await saveMachine(options.home, plan.machine);
   return { plan, sources };
 }
 

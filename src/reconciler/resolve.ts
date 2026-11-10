@@ -21,23 +21,31 @@ import type {
 } from "../pack/types.ts";
 import { signerSetting } from "../adapters/identity/signers.ts";
 import { engineSettings } from "../pack/manifest.ts";
+import { placedMachine } from "../profile/profile.ts";
 
 export class ResolveError extends Error {}
 
-export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "run"];
+const hubAlias = "hub.alias";
+
+export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "hub", "run"];
+
+/** Why a machine leaves out an item of the hub while a profile with devboxes names no hub. */
+export const hublessReason = "your profile names no hub. Run fleet hub here on the machine that should be the hub.";
 
 /** Guide names the engine writes itself. */
 const engineGuides = ["skill-settings"];
 
 type Candidate = LoadedPack & { source: AvailableSource };
 
-export function resolve(profile: Profile, machine: MachineFile, sources: FetchedSource[]): Plan {
+export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSource[]): Plan {
+  const machine = placedMachine(saved, profile.hub);
   const os: Os = machine.role === "mac" ? "darwin" : "linux";
   const { order, packs } = choosePacks(profile, sources);
   checkUniqueIds(order);
   const engine = sources.find((source): source is AvailableSource => source.ref.name === "engine" && !("error" in source));
   const plan: Plan = {
     machine,
+    ...(profile.hub ? { hub: profile.hub } : {}),
     ...(engine ? { engineRoot: engine.dir } : {}),
     os,
     ai: profile.plan,
@@ -60,11 +68,12 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   };
   const names = new Set(order.map((pack) => pack.manifest.name));
   const active = activateWorkflows(profile, machine, order, names, plan);
-  const solo = machine.role !== "devbox" && !names.has("hub") && !profile.devboxes?.length && !machine.devboxes?.length;
+  const solo = !profile.hub && machine.role !== "devbox" && !names.has("hub") && !profile.devboxes?.length && !machine.devboxes?.length;
+  const hubless = !profile.hub && Boolean(profile.devboxes?.length);
   const fits = (pack: string, item: Scope, label: string) => {
     const reason =
       item.on && !item.on.includes(os) ? `not on ${os}`
-      : item.roles && !item.roles.includes(machine.role) && !(solo && item.roles.includes("solo")) ? `not on a ${machine.role}`
+      : item.roles && !item.roles.includes(machine.role) && !(solo && item.roles.includes("solo")) ? (hubless && item.roles.includes("hub") ? hublessReason : `not on a ${machine.role}`)
       : item.plans && !item.plans.includes(profile.plan) ? `not for plan ${profile.plan}`
       : item.workflow && !active.has(item.workflow) ? `workflow ${item.workflow} is off`
       : undefined;
@@ -111,7 +120,7 @@ export function resolve(profile: Profile, machine: MachineFile, sources: Fetched
   }
 
   const settings = machineDefaults(activeSettings(order, active), machine);
-  plan.settings = settingValues(settings, profile.settings);
+  plan.settings = settingValues(settings, profile.hub && settings.some((setting) => setting.key === hubAlias) ? { ...profile.settings, [hubAlias]: profile.hub } : profile.settings);
   plan.unanswered = settings.filter((setting) => plan.settings[setting.key] === undefined && !setting.optional && setting.ask !== "never");
   plan.ask = settings.filter((setting) => setting.ask === "setup" || (setting.ask !== "never" && setting.default === undefined)).map(({ pack: _, ...setting }) => setting);
   for (const job of plan.models.length ? plan.jobs : []) {

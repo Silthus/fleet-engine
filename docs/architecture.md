@@ -70,16 +70,21 @@ flowchart LR
   *Reason:* today most hub items say `roles: ["hub", "devbox"]`. One rule,
   "the hub is a node", removes that list from a ported pack.
 - **D2. The profile names the hub.** `fleet.json` gets one field,
-  `hub: "<node name>"`. `fleet hub here`, an engine command from step 2
-  (section 8.3), writes it. The nodes that the profile names are the hub
-  plus today's `devboxes`. Setup stores the machine's own name once in the
-  machine file. A machine is the hub when `profile.hub` is its name, and
-  its schema 1 role is then `hub`, derived and no longer saved.
+  `hub: "<node name>"`. `fleet hub here`, an engine command since step 2
+  (section 8.3), writes it, and `fleet hub status` shows it. The nodes that
+  the profile names are the hub plus today's `devboxes`. The machine file
+  stores the machine's own name, its SSH name, once: `fleet apply` saves
+  the host name when none is saved, and `fleet hub here <ssh name>` saves
+  another one. A machine is the hub when `profile.hub` is its name, and
+  `resolve` derives its schema 1 role `hub` from that. While a schema 1
+  pack loads, the machine file keeps `role` (D22): `fleet hub here` saves
+  `role: "hub"`, `profile.hub` wins when the two disagree, and apply saves
+  the derived role.
   *Until the profile names a hub,* `on: "hub"` keeps today's predicate: the
   saved role is `hub`, or the machine is solo (`resolve.ts:63`). A profile
   that lists devboxes makes no machine solo, so a machine without the
-  saved role drops its hub items, with a finding that names
-  `fleet hub here`. So such a profile never gets several Slack triggers.
+  saved role drops its hub items, with a note that names
+  `fleet hub here`. A profile that names a hub makes no machine solo. So such a profile never gets several Slack triggers.
   *Reasons:* "You can define where the hub runs" becomes one line that
   every node reads from the same profile. Today the role sits in each
   machine file and the hub's name in the `hub.alias` setting, so they can
@@ -399,12 +404,13 @@ export type FleetLater = {
 };
 /** Step 2: service takes serve?: Serve and can omit its process, and Repair takes { run(ctx) }. Step 3: command takes on?: "hub".
     Step 4: Process takes { command: string[] }, the unit's own process, as PackJob.command is today, for cli-proxy.
-    Scope takes on?: "nodes" when a pack first needs it. */
-export type Serve = { port: number; health?: string; credential?(ctx: Context, node: string): Promise<string> };
-export type Service = { id: string; url: string; credentialCommand: string };
+    Scope takes on?: "nodes" when a pack first needs it. In steps 1 to 3 all three Serve fields are required,
+    and Service stays an opaque handle: its url and credentialCommand come with cli-proxy in step 4. */
+export type Serve = { port: number; health: string; credential(ctx: Context, node: string): Promise<string> };
+export type Service = { id: string; url: string; credentialCommand: string };                                     // url, credentialCommand: 4
 export type ContextLater = {
-  node: { name: string; os: Os; isHub: boolean };                                                                  // 2
-  use(service: Service): Promise<{ url: string; credential?: string }>;                                            // 2
+  node: { name: string; os: Os; isHub: boolean };                                                                  // its first user
+  use(service: Service): Promise<{ url: string; credential: string }>;                                             // 2
   run(argv: string[], options?: { input?: string; timeoutMs?: number }): Promise<{ code: number; stdout: string; stderr: string }>; // 4
   seam<T>(seam: Seam<T>): Promise<T | undefined>;                                                                  // 5
 };
@@ -638,9 +644,10 @@ The real machines run the private Fleet, not the engine.
 ### 8.3 Later steps
 
 2. **One served hub service, on loopback.** The step holds what it uses:
-   `fleet hub here` and the reading of `profile.hub` (D2), `serve`, the service catalog, `ctx.use`, `ctx.node`,
+   `fleet hub here` and the reading of `profile.hub` (D2), `serve`, the service catalog, `ctx.use`,
    `config`, a repair that Fleet runs, and credential issue and storage on
-   the hub itself. The MCP gateway becomes its own pack on the dog-food
+   the hub itself. `ctx.node`, `Service.url`, `credentialCommand`, and the
+   optional `serve` fields wait for their first users. The MCP gateway becomes its own pack on the dog-food
    hub, and Docker keeps supervising it. Proof: another node's plan holds
    the gateway in its catalog, the hub's bridge uses a key that the hub
    issued to itself, and one sign-in completes through the Mac's forward.

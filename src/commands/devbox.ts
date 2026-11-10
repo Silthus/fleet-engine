@@ -1,7 +1,7 @@
 import type { MachineFile, Plan } from "../pack/types.ts";
-import { saveMachine } from "../profile/profile.ts";
+import { saveMachine, validHost } from "../profile/profile.ts";
 import type { Machine } from "../setup/commands.ts";
-import { devboxSteps, profileForBox, validHost } from "../setup/devbox.ts";
+import { devboxSteps, profileForBox } from "../setup/devbox.ts";
 import { FlagError } from "../setup/flags.ts";
 import { runSteps } from "../setup/runner.ts";
 import { Stopped, type Terminal } from "../setup/terminal.ts";

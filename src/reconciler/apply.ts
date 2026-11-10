@@ -1,6 +1,7 @@
 import { install, plan as planFiles } from "../files/install.ts";
 import type { Action, Finding, HumanStep, Owned, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
+import { hublessReason } from "./resolve.ts";
 
 export type AdapterContext = { home: string; dryRun: boolean; adopt: string[] };
 export type AdapterResult = { actions: Action[]; findings: Finding[] };
@@ -57,7 +58,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
   const unknown = context.adopt.filter((target) => !adoptable.has(target));
   if (unknown.length) throw new Error(`nothing to adopt at ${unknown.join(", ")}: no part of your profile writes it`);
   const report: Report = { ok: true, actions: [], findings: [], humanLeft: [] };
-  report.findings.push(...packFindings(plan));
+  report.findings.push(...packFindings(plan), ...hubFindings(plan));
   if (plan.unanswered.length) {
     report.ok = false;
     report.findings.push(...plan.unanswered.map((setting) => ({ id: `unanswered:${setting.key}`, pack: setting.key.split(".")[0] ?? "", say: `${setting.question} Answer it with fleet set ${setting.key}=<value>.`, repair: "human" as const })));
@@ -153,6 +154,13 @@ function packFindings(plan: Plan): Finding[] {
   return plan.packs
     .filter((pack) => !pack.available || pack.reason)
     .map((pack) => ({ id: `pack:${pack.name}`, pack: pack.name, say: pack.available ? `The ${pack.name} pack uses its last fetched files: ${pack.reason}` : `The ${pack.name} pack is not applied: ${pack.reason}` }));
+}
+
+function hubFindings(plan: Plan): Finding[] {
+  const left = plan.dropped.filter((item) => item.reason === hublessReason).length;
+  if (!left) return [];
+  const items = left === 1 ? "1 item that runs" : `${left} items that run`;
+  return [{ id: "hubless", pack: "engine", say: `Your profile lists devboxes but names no hub, so this machine leaves out ${items} on the hub. Run fleet hub here on the machine that should be the hub.` }];
 }
 
 function viaEngine(plan: Plan, run: Runner): Runner {
