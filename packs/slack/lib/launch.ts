@@ -1,5 +1,5 @@
-import type { ModelRow } from "../../base/lib/models.ts";
-import { launchScratchThread, withT3Session, type T3HttpClient, type T3SessionOptions } from "../../base/lib/t3/index.ts";
+import { threadUrl } from "../../../src/integrations/t3/index.ts";
+import type { Threads } from "../../../src/sdk/index.ts";
 import type { Started } from "./trigger.ts";
 
 export type Run = (argv: string[], input?: string) => Promise<{ code: number; stdout: string; stderr: string }>;
@@ -8,11 +8,9 @@ export type Failed = { failed: string; claim?: Claim };
 export type LaunchRequest = { title: string; prompt: string; commandId: string; claim?: Claim };
 export type Launch = ((request: LaunchRequest) => Promise<Started | Failed>) & { release?: (claim: Claim) => Promise<void> };
 
-export const launchScopes = ["orchestration:read", "orchestration:operate", "access:read"];
-
 export const spawnRun: Run = async (argv, input) => {
   try {
-    const child = Bun.spawn(argv, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn(argv, { env: process.env, stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { code, stdout, stderr };
   } catch (error) {
@@ -23,24 +21,15 @@ export const spawnRun: Run = async (argv, input) => {
 const lastLine = (text: string) => text.trim().split("\n").at(-1)?.trim() ?? "";
 const why = (result: { code: number; stderr: string; stdout: string }) => lastLine(result.stderr) || lastLine(result.stdout) || `exit ${result.code}`;
 
-export function launchHere(row: ModelRow, session: T3SessionOptions = {}): Launch {
+export function launchHere(threads: Threads): Launch {
   return async ({ title, prompt, commandId }) => {
-    let started: Started | undefined;
     try {
-      await withT3Session(async (client) => {
-        started = { threadId: await launchScratchThread(client, { title, prompt, row, commandId }), where: "this machine" };
-        started.environmentId = await environmentOf(client);
-      }, { ...session, scopes: launchScopes });
+      const { id, url } = await threads.start({ key: commandId, title, prompt, modelRole: "implementation" });
+      return { threadId: id, url, where: "this machine" };
     } catch (error) {
-      if (!started) return { failed: (error as Error).message };
+      return { failed: (error as Error).message };
     }
-    return started!;
   };
-}
-
-async function environmentOf(client: T3HttpClient): Promise<string | undefined> {
-  const answer = await client.get<{ environmentId?: unknown }>("/.well-known/t3/environment").catch(() => undefined);
-  return typeof answer?.environmentId === "string" ? answer.environmentId : undefined;
 }
 
 export function launchOnBox(fleet: string, run: Run): Launch {
@@ -55,7 +44,7 @@ export function launchOnBox(fleet: string, run: Run): Launch {
     }
     const ran = await run([fleet, "box", "run", claim.box, "--", "fleet", "slack-trigger", "launch"], JSON.stringify(request));
     const threadId = ran.code === 0 ? threadOf(lastLine(ran.stdout)) : undefined;
-    if (threadId) return { threadId, environmentId: claim.environmentId, where: claim.box };
+    if (threadId) return { threadId, url: claim.environmentId ? threadUrl(claim.environmentId, threadId) : undefined, where: claim.box };
     return { failed: `fleet slack-trigger launch on ${claim.box}: ${why(ran)}`, claim };
   };
   launch.release = async (claim) => void (await run([fleet, "box", "release", claim.box]));
