@@ -61,8 +61,10 @@ export function mcphubFetch(state: FakeMcpHub) {
     const server = path.match(/^servers\/([^/]+)$/);
     const name = server ? decodeURIComponent(server[1]!) : String(body?.name);
     const stored = (config: Record<string, any>) => {
-      const { startOnDemand, ...rest } = config;
-      state.configs[name] = state.keepsConfig ? { ...rest, type: "stdio", options: { ...rest.options, ...(startOnDemand && { startOnDemand: true }) } } : { type: "stdio" };
+      const { startOnDemand, options, ...rest } = config;
+      const kept = { ...options };
+      delete kept.startOnDemand;
+      state.configs[name] = state.keepsConfig ? { ...rest, type: "stdio", ...(Object.keys(kept).length && { options: kept }), ...(startOnDemand === true && { startOnDemand: true }) } : { type: "stdio" };
     };
     if (method === "POST" && path === "servers") {
       if (state.servers.includes(name)) return new Response(null, { status: 400 });
@@ -122,4 +124,27 @@ export function fakeHub(home: string, fields: Partial<Hub> = {}): Hub & { printe
     printed,
     ...fields,
   };
+}
+
+export const environmentOf = (home: string) => readFileSync(join(home, ".local/share/fleet-mcphub/runtime.env"), "utf8").split("\n").filter(Boolean);
+const mounts = (command: string[]) => command.flatMap((arg, index) => (command[index - 1] === "-v" ? [{ Destination: arg.split(":")[1]! }] : []));
+
+export type FakeContainer = { Config: { Labels: Record<string, string>; Env: string[] }; Image: string; State: { Running: boolean }; Mounts: Array<{ Destination: string }> };
+
+export function dockerHost(home: string, start?: FakeContainer) {
+  let container = start;
+  const answer = (call: RunCall) => {
+    const [tool, noun, verb] = call.command;
+    if (tool !== "docker") return {};
+    if (noun === "container" && verb === "inspect") return container ? { stdout: JSON.stringify([container]) } : { code: 1, stderr: "No such container" };
+    if (noun === "image" && verb === "inspect") return { stdout: JSON.stringify([{ Id: `sha256:${call.command[3]}` }]) };
+    if (noun === "run") {
+      const labels = Object.fromEntries(call.command.flatMap((arg, index) => (call.command[index - 1] === "--label" ? [arg.split("=")] : [])));
+      container = { Config: { Labels: { ...labels, "org.fleet.patch": "1.1.0-elicitation" }, Env: [...environmentOf(home), "PATH=/usr/local/bin"] }, Image: `sha256:${call.command.at(-2)}`, State: { Running: true }, Mounts: mounts(call.command) };
+    }
+    if (noun === "stop") container!.State.Running = false;
+    if (noun === "rm") container = undefined;
+    return {};
+  };
+  return Object.assign(answer, { container: () => container });
 }

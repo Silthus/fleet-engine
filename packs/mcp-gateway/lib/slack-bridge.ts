@@ -1,7 +1,7 @@
 import { chmod, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { dataDir, managementApi, syncGatewayGroup, type Api, type Hub } from "./hub.ts";
-import { bridgeFile, codexMount, codexPackage } from "./install.ts";
+import { bridgeFile, codexMount, codexPackage, install } from "./install.ts";
 
 export const slackServer = "slack";
 const containerHome = "/app/data/slack-codex";
@@ -13,7 +13,8 @@ const wanted = {
   command: "node",
   args: [bridgeFile],
   env: { HOME: containerHome, CODEX_HOME: containerHome, FLEET_CODEX_BIN: `${codexMount}/current/bin/codex` },
-  options: { timeout: 300000, startOnDemand: true },
+  startOnDemand: true,
+  options: { timeout: 300000 },
 };
 
 type Config = Record<string, unknown>;
@@ -42,13 +43,14 @@ export async function slackBridgeSignedIn(hub: Pick<Hub, "home">) {
 export async function registerSlackBridge(hub: Hub) {
   if (!(await exists(hubCodex(hub.home)))) throw new Error("The Slack bridge runs Codex, and this hub has no Codex from Fleet. Run: fleet install-codex");
   const call = await managementApi(hub);
+  const theirs = await current(call);
+  if (theirs && !ours(theirs)) throw new Error(`Keep the MCP gateway's ${slackServer} server: Fleet did not add it. Remove it in the gateway's dashboard to use the Slack bridge.`);
+  await install(hub);
   const config = await current(call);
-  if (config && !ours(config)) throw new Error(`Keep the MCP gateway's ${slackServer} server: Fleet did not add it. Remove it in the gateway's dashboard to use the Slack bridge.`);
   await mkdir(bridgeHome(hub.home), { recursive: true, mode: 0o700 });
   await chmod(bridgeHome(hub.home), 0o700);
-  const body = { ...wanted, startOnDemand: true };
-  if (!config) await call("servers", "POST", { name: slackServer, config: body });
-  else if (!keeps(config)) await call(`servers/${slackServer}`, "PUT", { config: body });
+  if (!config) await call("servers", "POST", { name: slackServer, config: wanted });
+  else if (!keeps(config)) await call(`servers/${slackServer}`, "PUT", { config: wanted });
   await syncGatewayGroup(call);
   if (!keeps((await current(call)) ?? {})) throw new Error("The MCP gateway did not keep the Slack bridge's settings. Run: fleet mcp-gateway doctor");
   hub.print("The Slack bridge is in the MCP gateway.");
@@ -59,5 +61,9 @@ export async function signInSlackBridge(hub: Hub) {
   if (!(await exists(hubCodex(hub.home)))) throw new Error("The Slack bridge runs Codex, and this hub has no Codex from Fleet. Run: fleet install-codex");
   await mkdir(bridgeHome(hub.home), { recursive: true, mode: 0o700 });
   hub.print("Sign in with the ChatGPT account whose Slack app the bridge should use. This sign-in stays in the bridge's own Codex home.");
-  return Bun.spawn([hubCodex(hub.home), "login", "--device-auth"], { env: { ...process.env, CODEX_HOME: bridgeHome(hub.home) }, stdio: ["inherit", "inherit", "inherit"] }).exited;
+  const code = await Bun.spawn([hubCodex(hub.home), "login", "--device-auth"], { env: { ...process.env, CODEX_HOME: bridgeHome(hub.home) }, stdio: ["inherit", "inherit", "inherit"] }).exited;
+  if (code || !(await slackBridgeRegistered(hub))) return code;
+  await (await managementApi(hub))(`servers/${slackServer}/reload`, "POST");
+  hub.print("The Slack bridge is signed in. Agents reach Slack through the gateway now.");
+  return 0;
 }

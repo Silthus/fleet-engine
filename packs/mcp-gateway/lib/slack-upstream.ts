@@ -24,6 +24,7 @@ let active: Id | undefined;
 const cancelled = new Set<Id>();
 let queue: Promise<unknown> = Promise.resolve();
 let catalog = new Map<string, Tool>();
+let thread: Promise<string> | undefined;
 
 const reply = (message: Record<string, unknown>) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
 const tell = (message: Record<string, unknown>) => backend.stdin.write(`${JSON.stringify(message)}\n`);
@@ -92,13 +93,14 @@ async function invoke(id: Id, params: { name: string; arguments?: Record<string,
   if (cancelled.delete(id)) throw new Error("The agent cancelled this Slack call.");
   active = id;
   try {
-    const thread = await call("thread/start", { cwd: "/app/data", ephemeral: true });
-    const { structuredContent, ...result } = await call("mcpServer/tool/call", { threadId: thread.thread.id, server: "codex_apps", tool: `${slackApp.prefix}${params.name}`, arguments: params.arguments ?? {} });
+    thread ??= call("thread/start", { cwd: "/app/data", ephemeral: true }).then((started) => started.thread.id as string, (error) => { thread = undefined; throw error; });
+    const { structuredContent, ...result } = await call("mcpServer/tool/call", { threadId: await thread, server: "codex_apps", tool: `${slackApp.prefix}${params.name}`, arguments: params.arguments ?? {} });
     return structuredContent == null ? result : { ...result, structuredContent };
   } finally { active = undefined; }
 }
 
 async function handle(message: Message) {
+  await ready;
   const params = message.params ?? {};
   if (message.method === "initialize") return { protocolVersion: versions.includes(params.protocolVersion) ? params.protocolVersion : versions[0], capabilities: { tools: {} }, serverInfo: { name: "fleet-slack", version: "1" } };
   if (message.method === "ping") return {};
@@ -111,8 +113,7 @@ async function handle(message: Message) {
   throw Object.assign(new Error(`Method not found: ${message.method}`), { code: -32601 });
 }
 
-await call("initialize", { clientInfo: { name: "fleet-slack-bridge", version: "1" }, capabilities: { experimentalApi: true } });
-tell({ method: "initialized", params: {} });
+const ready = call("initialize", { clientInfo: { name: "fleet-slack-bridge", version: "1" }, capabilities: { experimentalApi: true } }).then(() => tell({ method: "initialized", params: {} }));
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   let message: Message;

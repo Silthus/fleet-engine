@@ -25,7 +25,7 @@ afterAll(() => rmSync(join(bundled, ".."), { recursive: true, force: true }));
 const runtimes = { "the source under Bun": () => [process.execPath, join(import.meta.dir, "slack-upstream.ts")], "the image's bundle under Node": () => [node!, bundled] };
 let launch = runtimes["the source under Bun"];
 
-function upstream(config = "") {
+function upstream(config = "", backendEnv: Record<string, string> = {}) {
   const home = temp.make("slack-codex-");
   writeFileSync(join(home, "config.toml"), config);
   const codex = join(home, "codex");
@@ -33,7 +33,7 @@ function upstream(config = "") {
   chmodSync(codex, 0o755);
   const log = join(home, "codex.log");
   const child = Bun.spawn(launch(), {
-    env: { PATH: process.env.PATH, CODEX_HOME: home, FLEET_CODEX_BIN: codex, FAKE_CODEX_LOG: log },
+    env: { PATH: process.env.PATH, CODEX_HOME: home, FLEET_CODEX_BIN: codex, FAKE_CODEX_LOG: log, ...backendEnv },
     stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   running.push(child);
@@ -60,7 +60,7 @@ function upstream(config = "") {
   });
   const backend = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line) as { argv?: string[]; method?: string; params?: any; approval?: unknown }) : []);
   const called = () => backend().filter((entry) => entry.method === "mcpServer/tool/call").map((entry) => entry.params.tool as string);
-  return { request, backend, called, asked, answer: (fn: typeof answer) => { answer = fn; }, initialize: () => request("initialize", { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "test", version: "1" } }) };
+  return { request, backend, called, asked, close: () => child.stdin.end(), exited: child.exited, answer: (fn: typeof answer) => { answer = fn; }, initialize: () => request("initialize", { protocolVersion: "2025-06-18", capabilities: { elicitation: {} }, clientInfo: { name: "test", version: "1" } }) };
 }
 
 for (const [runtime, command] of Object.entries(runtimes)) describe.skipIf(!node && command === runtimes["the image's bundle under Node"])(runtime, () => {
@@ -98,6 +98,20 @@ for (const [runtime, command] of Object.entries(runtimes)) describe.skipIf(!node
       "-c", 'plugins."slack@openai-curated-remote".enabled=true', "-c", 'plugins."gmail@openai-curated-remote".enabled=false',
       "app-server", "--stdio",
     ]);
+  });
+
+  test("every Slack call of one bridge runs in the same Codex thread, so calls do not pile up threads in the backend", async () => {
+    const bridge = upstream();
+    await bridge.initialize();
+    for (const message of ["one", "two", "three"]) await bridge.request("tools/call", { name: "slack_send_message_draft", arguments: { message } });
+    expect(bridge.called()).toHaveLength(3);
+    expect(bridge.backend().filter((entry) => entry.method === "thread/start")).toHaveLength(1);
+  });
+
+  test("the bridge ends when the gateway closes it, even while the Codex backend has not answered yet", async () => {
+    const bridge = upstream("", { FAKE_CODEX_SILENT: "1" });
+    bridge.close();
+    expect(await bridge.exited).toBe(0);
   });
 
   test("an approval the Slack app asks for goes to the calling agent, and its answer goes back", async () => {

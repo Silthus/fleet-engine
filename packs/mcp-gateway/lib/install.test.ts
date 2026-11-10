@@ -4,7 +4,7 @@ import { existsSync, linkSync, mkdirSync, readFileSync, statSync, writeFileSync 
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { bridgeBundle, buildImage, install, mcphubImage } from "./install.ts";
-import { fakeHub, fakeMcpHub, fakeRun, mcphubFetch, writeMachineFile, type RunCall } from "./testing.ts";
+import { dockerHost, environmentOf, fakeHub, fakeMcpHub, fakeRun, mcphubFetch, writeMachineFile, type RunCall } from "./testing.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -25,30 +25,10 @@ function docker(container?: Record<string, unknown>) {
   };
 }
 
-const environmentOf = (home: string) => readFileSync(join(home, ".local/share/fleet-mcphub/runtime.env"), "utf8").split("\n").filter(Boolean);
-
-function dockerHost(home: string) {
-  let container: { Config: { Labels: Record<string, string>; Env: string[] }; Image: string; State: { Running: boolean }; Mounts: Array<{ Destination: string }> } | undefined;
-  return (call: RunCall) => {
-    const [tool, noun, verb] = call.command;
-    if (tool !== "docker") return {};
-    if (noun === "container" && verb === "inspect") return container ? { stdout: JSON.stringify([container]) } : { code: 1, stderr: "No such container" };
-    if (noun === "image" && verb === "inspect") return { stdout: JSON.stringify([{ Id: `sha256:${call.command[3]}` }]) };
-    if (noun === "run") {
-      const labels = Object.fromEntries(call.command.flatMap((arg, index) => (call.command[index - 1] === "--label" ? [arg.split("=")] : [])));
-      container = { Config: { Labels: { ...labels, "org.fleet.patch": "1.1.0-elicitation" }, Env: [...environmentOf(home), "PATH=/usr/local/bin"] }, Image: `sha256:${call.command.at(-2)}`, State: { Running: true }, Mounts: mounts(call.command) };
-    }
-    if (noun === "stop") container!.State.Running = false;
-    if (noun === "rm") container = undefined;
-    return {};
-  };
-}
-
 const startCommand = (home: string, image: string) => ["docker", "run", "-d", "--name", "fleet-mcphub", "--label", "org.fleet.service=mcphub", "--restart", "unless-stopped",
   "--user", "1000:1000", "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--env-file", join(home, ".local/share/fleet-mcphub/runtime.env"),
   "-p", "127.0.0.1:3317:3000", "-v", `${join(home, ".local/share/fleet-mcphub")}/data:/app/data`, "-v", `${join(home, ".local/share/fleet-mcphub")}/logs:/app/logs`,
   "-v", `${join(home, ".local/share/fleet/codex")}:/opt/fleet-codex:ro`, "--entrypoint", "node", image, "dist/index.js"];
-const mounts = (command: string[]) => command.flatMap((arg, index) => (command[index - 1] === "-v" ? [{ Destination: arg.split(":")[1]! }] : []));
 const codexMounted = [{ Destination: "/opt/fleet-codex" }];
 
 test("install runs only on Linux", async () => {

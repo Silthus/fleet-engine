@@ -21,7 +21,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   log({ method: message.method, params: message.params });
   if (message.id === undefined) return;
   const reply = (result: unknown) => send({ id: message.id, result });
-  if (message.method === "initialize") return reply({ userAgent: "fake" });
+  if (message.method === "initialize") return process.env.FAKE_CODEX_SILENT ? undefined : reply({ userAgent: "fake" });
   if (message.method === "mcpServerStatus/list") return reply({ data: [{ name: "codex_apps", tools }] });
   if (message.method === "thread/start") return reply({ thread: { id: "thread-1" } });
   if (message.method !== "mcpServer/tool/call") return send({ id: message.id, error: { code: -32601, message: "unknown" } });
