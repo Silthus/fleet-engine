@@ -30,6 +30,15 @@ export type T3Stub = {
   stop(): Promise<void>;
 };
 
+const isText = (value: unknown) => typeof value === "string" && value !== "";
+
+function isModelSelection(value: unknown) {
+  if (typeof value !== "object" || value === null) return false;
+  const { instanceId, model, options, ...rest } = value as Record<string, unknown>;
+  const option = (entry: unknown) => typeof entry === "object" && entry !== null && Object.keys(entry).sort().join() === "id,value" && isText((entry as { id: unknown }).id) && isText((entry as { value: unknown }).value);
+  return isText(instanceId) && isText(model) && Object.keys(rest).length === 0 && (options === undefined || (Array.isArray(options) && options.every(option)));
+}
+
 export type LaunchedThread = { id: string; title: string; prompt: string; modelSelection: unknown };
 
 export const shellToken = "shell-token";
@@ -97,7 +106,8 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
         rpcTags.push(message.tag);
         rpcCalls.push({ tag: message.tag, payload: message.payload });
         const receipt = message.tag === "orchestration.launchThread" ? launchReceipts.get(message.payload.commandId) : undefined;
-        const value = receipt ?? (message.tag === "orchestration.getArchivedShellSnapshot" ? fixture.archived ?? { projects: [], threads: [] }
+        const refused = message.tag === "orchestration.launchThread" && !isModelSelection(message.payload.modelSelection);
+        const value = refused ? undefined : receipt ?? (message.tag === "orchestration.getArchivedShellSnapshot" ? fixture.archived ?? { projects: [], threads: [] }
           : message.tag === "peerLinks.list" ? { links: fixture.links ?? [] } : fixture.rpc?.(message.tag, message.payload));
         if (message.tag === "orchestration.launchThread" && value && !receipt) {
           launchReceipts.set(message.payload.commandId, value);
