@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, join, posix, relative, resolve } from "node:path";
 import { minimumTerm, triggersOf } from "../../../memory/lib/triggers.ts";
 
 export const memoryLimits = {
@@ -23,22 +23,45 @@ export function markdownFiles(root: string, depth = 6): string[] {
 
 export const isIndex = (file: string) => basename(file) === "MEMORY.md" || basename(file) === "INDEX.md";
 
+export function memoryRootIn(folder: string, subtree: unknown): string {
+  if (typeof subtree !== "string" || !subtree) return folder;
+  const root = resolve(folder, subtree);
+  return root.startsWith(`${resolve(folder)}/`) && existsSync(join(root, "MEMORY.md")) ? root : folder;
+}
+
 export function homeCheckouts(home: string): RepoCheckout {
   return (repo) => [join(home, "dev", repo), join(home, repo)].find((path) => existsSync(join(path, ".git")));
 }
 
-export function frontmatterField(text: string, name: string) {
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "";
-  return new RegExp(`^\\s*${name}:[ \\t]*"?([^"\\n]*)`, "m").exec(frontmatter)?.[1]?.trim() || undefined;
+type Frontmatter = Record<string, unknown> & { metadata?: Record<string, unknown> };
+
+function frontmatterOf(text: string): Frontmatter {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1];
+  try {
+    const parsed = block ? Bun.YAML.parse(block) : undefined;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Frontmatter : {};
+  } catch {
+    return {};
+  }
 }
 
-const namedPaths = (text: string) => [...new Set([...text.matchAll(/`([\w@.-]+(?:\/[\w@.-]+)+\.[a-z]{1,5})`/g)].map((match) => match[1]!).filter((path) => !path.includes("..")))];
+export function frontmatterField(text: string, name: string): string | undefined {
+  const frontmatter = frontmatterOf(text);
+  const metadata = frontmatter.metadata && typeof frontmatter.metadata === "object" ? frontmatter.metadata : {};
+  const value = frontmatter[name] ?? metadata[name];
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() || undefined : undefined;
+}
+
+export const lineCount = (text: string) => text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+
+const namedPaths = (text: string) => [...new Set([...text.matchAll(/`([\w@.-]+(?:\/[\w@.-]+)+\.[a-z]{1,5})`/g)].map((match) => posix.normalize(match[1]!)).filter((path) => !path.startsWith("../") && !path.startsWith("/")))];
 const wikiLinks = (text: string) => [...new Set([...text.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)].map((match) => match[1]!.trim()))];
+const withoutMd = (name: string) => name.replace(/\.md$/, "");
 
 function indexProblems(index: string, text: string): Problem[] {
   const main = index === "MEMORY.md";
   const [lineLimit, byteLimit] = main ? [memoryLimits.indexLines, memoryLimits.indexBytes] : [memoryLimits.repoIndexLines, memoryLimits.repoIndexBytes];
-  const lines = text.split("\n").length;
+  const lines = lineCount(text);
   const bytes = Buffer.byteLength(text);
   const advice = main ? "Shorten its lines or move a section into an INDEX.md" : "Shorten its lines or move notes into topic notes";
   return [
@@ -49,7 +72,7 @@ function indexProblems(index: string, text: string): Problem[] {
 
 function noteProblems(file: string, text: string, names: Set<string>, now: number, checkouts: RepoCheckout): string[] {
   const problems: string[] = [];
-  for (const name of wikiLinks(text)) if (!names.has(name)) problems.push(`links [[${name}]], which no memory is; repoint it, write that memory, or drop the link`);
+  for (const name of wikiLinks(text)) if (!names.has(withoutMd(name))) problems.push(`links [[${name}]], which no memory is; repoint it, write that memory, or drop the link`);
   const status = frontmatterField(text, "status");
   const modified = Date.parse(frontmatterField(text, "modified") ?? "");
   if (status && status !== "confirmed" && status !== "unconfirmed") problems.push(`status ${status}; use confirmed or unconfirmed`);
@@ -69,7 +92,7 @@ export function budget(memory: string, usage: Record<string, string>, now: numbe
   const files = markdownFiles(memory).map((path) => relative(memory, path));
   const indexes = files.filter(isIndex);
   const memories = files.filter((file) => !isIndex(file) && file !== "README.md");
-  const names = new Set(memories.map((file) => basename(file, ".md")));
+  const names = new Set(memories.flatMap((file) => [basename(file, ".md"), withoutMd(file)]));
   const linked = new Set<string>();
   for (const index of indexes) {
     const text = readFileSync(join(memory, index), "utf8");
@@ -86,9 +109,9 @@ export function budget(memory: string, usage: Record<string, string>, now: numbe
     const bytes = Buffer.byteLength(text);
     total += bytes;
     if (!linked.has(file)) problems.push({ file, problem: "no index links it" });
-    const lineCount = text.split("\n").length;
-    if (lineCount > memoryLimits.fileLines || bytes > memoryLimits.fileBytes) problems.push({ file, problem: `${lineCount} lines, ${bytes} bytes; condense it below ${memoryLimits.fileLines} lines and ${memoryLimits.fileBytes} bytes` });
-    for (const name of ["name", "description", "type"]) if (!new RegExp(`^\\s*${name}:`, "m").test(text)) problems.push({ file, problem: `frontmatter has no ${name}` });
+    const lines = lineCount(text);
+    if (lines > memoryLimits.fileLines || bytes > memoryLimits.fileBytes) problems.push({ file, problem: `${lines} lines, ${bytes} bytes; condense it below ${memoryLimits.fileLines} lines and ${memoryLimits.fileBytes} bytes` });
+    for (const name of ["name", "description", "type"]) if (!frontmatterField(text, name)) problems.push({ file, problem: `frontmatter has no ${name}` });
     problems.push(...noteProblems(file, text, names, now, checkouts).map((problem) => ({ file, problem })));
     const touched = ["modified", "verified"].map((name) => Date.parse(frontmatterField(text, name) ?? "")).filter((at) => !Number.isNaN(at));
     const last = Math.max(0, ...touched, Date.parse(usage[file] ?? "") || 0);
