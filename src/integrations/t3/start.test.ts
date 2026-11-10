@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelRow } from "../../pack/types.ts";
@@ -79,4 +79,26 @@ test("a thread that started counts as started when revoking its T3 session fails
   const runCli = t3CliRunner();
   const threads = t3Threads(models, { home: stub.home, runCli: (server, args) => (args.slice(0, 3).join(" ") === "auth session revoke" ? { status: 1, stdout: "", stderr: "revoke failed" } : runCli(server, args)) });
   expect(await threads.start({ ...request, key: "slack-message-1" })).toEqual({ id: "thread-1", url: "https://app.t3.codes/threads/env-1/thread-1" });
+});
+
+function writeReport(home: string, providers: Record<string, string>, checkedAt = new Date().toISOString()) {
+  mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+  writeFileSync(join(home, ".local/state/fleet/provider-availability.json"), JSON.stringify({ checkedAt, providers }));
+}
+
+test("a start whose model role maps to an exhausted provider is refused with a sentence, and the other provider still starts", async () => {
+  const stub = await t3();
+  writeReport(stub.home, { claude: "exhausted", codex: "available" });
+  const threads = t3Threads(models, { home: stub.home });
+  await expect(threads.start({ ...request, key: "k" })).rejects.toThrow(/^Fleet did not start "Slack: the build is red": claude, the provider of the implementation model claude-big, has spent its quota \(fleet providers checked .*\)\. Wait until fleet providers says claude is available, or start it on another model\.$/);
+  expect(stub.threads).toEqual([]);
+  expect((await threads.start({ ...request, key: "k2", modelRole: "lookup" })).id).toBe("thread-1");
+});
+
+test("a report over five minutes old, or one that says unknown, refuses nothing", async () => {
+  const stub = await t3();
+  writeReport(stub.home, { claude: "exhausted", codex: "exhausted" }, new Date(Date.now() - 6 * 60_000).toISOString());
+  expect((await t3Threads(models, { home: stub.home }).start({ ...request, key: "k" })).id).toBe("thread-1");
+  writeReport(stub.home, { claude: "unknown", codex: "unknown" });
+  expect((await t3Threads(models, { home: stub.home }).start({ ...request, key: "k2" })).id).toBe("thread-2");
 });

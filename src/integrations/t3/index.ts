@@ -18,3 +18,4 @@ export {
   continueText, listLocalThreads, readProviderInstances, recoveryScopes, sendContinue, settingsScopes, upsertProviderInstance,
   type ContinueMessage, type ProviderInstance, type StoppedThread,
 } from "./recovery.ts";
+export { availabilityPath, exhaustedRefusal, providers, readAvailability, type Availability, type Provider, type ProviderStatus } from "./availability.ts";

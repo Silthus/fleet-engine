@@ -5,20 +5,15 @@ import { writePrivateFile } from "../../../src/files/private.ts";
 import { modelTable, type ModelRow } from "../../base/lib/models.ts";
 import { proxyUrl } from "../../hub/lib/cli-proxy-balance.ts";
 import type { Fetch } from "../../hub/lib/mcphub/client.ts";
+import { availabilityPath, providers, readAvailability, type Availability, type Provider, type ProviderStatus } from "../../base/lib/t3/index.ts";
 import { isQuotaError } from "./quota.ts";
 
-export type Provider = ModelRow["provider"];
-export type Status = "available" | "exhausted" | "unknown";
-export type Availability = { checkedAt: string; providers: Record<Provider, Status> };
+export type { Availability, Provider } from "../../base/lib/t3/index.ts";
 export type ProbeContext = { home: string; env: Record<string, string | undefined>; fetch: Fetch; now: () => number };
 export type ProvidersContext = ProbeContext & { print: (line: string) => void };
 
-const providers: Provider[] = ["claude", "codex"];
-const reuseMs = 5 * 60_000;
 const probeTimeoutMs = 10_000;
 const keyPattern = /^([0-9a-f]{64})\n?$/;
-
-export const availabilityPath = (home: string) => join(home, ".local/state/fleet/provider-availability.json");
 
 export async function providersCommand(args: string[], context: ProvidersContext): Promise<number> {
   const json = args.length === 1 && args[0] === "--json";
@@ -30,7 +25,7 @@ export async function providersCommand(args: string[], context: ProvidersContext
 }
 
 export async function currentAvailability(context: ProbeContext): Promise<Availability> {
-  const saved = readAvailability(availabilityPath(context.home), context.now());
+  const saved = readAvailability(context.home, context.now());
   if (saved) return saved;
   const key = proxyKey(context.home);
   const rows = modelTable(context.env);
@@ -40,18 +35,6 @@ export async function currentAvailability(context: ProbeContext): Promise<Availa
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   await writePrivateFile(path, `${JSON.stringify(report)}\n`);
   return report;
-}
-
-export function readAvailability(path: string, now: number): Availability | undefined {
-  try {
-    const report = JSON.parse(readFileSync(path, "utf8")) as Availability;
-    const age = now - Date.parse(report.checkedAt);
-    if (!(age >= 0 && age < reuseMs)) return undefined;
-    if (!providers.every((provider) => ["available", "exhausted", "unknown"].includes(report.providers?.[provider]))) return undefined;
-    return { checkedAt: report.checkedAt, providers: { claude: report.providers.claude, codex: report.providers.codex } };
-  } catch {
-    return undefined;
-  }
 }
 
 function proxyKey(home: string): string | undefined {
@@ -64,7 +47,7 @@ function probeModel(rows: ModelRow[], provider: Provider): string | undefined {
   return (own.find((row) => row.role === "implementation") ?? own[0])?.model;
 }
 
-async function probe(fetch: Fetch, key: string | undefined, model: string | undefined, provider: Provider): Promise<Status> {
+async function probe(fetch: Fetch, key: string | undefined, model: string | undefined, provider: Provider): Promise<ProviderStatus> {
   if (!key || !model) return "unknown";
   const codex = provider === "codex";
   try {
