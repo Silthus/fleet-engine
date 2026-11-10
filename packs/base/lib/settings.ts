@@ -23,7 +23,7 @@ function typed(key: string, type: "number" | "string" | "boolean", env: Env) {
   return value;
 }
 
-function resolvedSettings(env: Env): Record<string, unknown> {
+export function resolvedSettings(env: Env = Bun.env): Record<string, unknown> {
   if (!env.FLEET_SETTINGS) throw new Error("run this command as fleet <command>, so it gets your settings");
   return JSON.parse(env.FLEET_SETTINGS);
 }
