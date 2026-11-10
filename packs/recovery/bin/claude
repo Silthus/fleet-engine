@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+here=$(dirname "$(readlink -f "$0")")
+for candidate in "$HOME/.bun/bin/bun" /opt/homebrew/bin/bun /usr/local/bin/bun; do
+  [ -x "$candidate" ] && bun_binary=$candidate && break
+done
+bun_binary=${bun_binary:-$(command -v bun || true)}
+if [ -z "$bun_binary" ]; then
+  echo "Fleet's Claude wrapper needs Bun, and it is not installed. Install it from https://bun.sh, then try again." >&2
+  exit 127
+fi
+FLEET_CLAUDE_CWD=$(pwd)
+export FLEET_CLAUDE_CWD
+cd "$here"
+exec "$bun_binary" "$here/claude-reset.ts" "$@"

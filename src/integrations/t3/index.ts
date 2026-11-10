@@ -14,4 +14,8 @@ export {
 } from "./threads.ts";
 export { launchScratchThread, type ThreadLaunch } from "./launch.ts";
 export { t3Threads, threadUrl } from "./start.ts";
-export { continueText, listLocalThreads, recoveryScopes, sendContinue, type ContinueMessage, type StoppedThread } from "./recovery.ts";
+export {
+  continueText, listLocalThreads, readProviderInstances, recoveryScopes, sendContinue, settingsScopes, upsertProviderInstance,
+  type ContinueMessage, type ProviderInstance, type StoppedThread,
+} from "./recovery.ts";
+export { availabilityPath, exhaustedRefusal, providers, readAvailability, type Availability, type Provider, type ProviderStatus } from "./availability.ts";
