@@ -111,7 +111,9 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       const signIn = (remote === undefined ? name : `box:${name}`) as SignInName;
       started.add(signIn);
       const exit = options.exits?.[signIn];
-      return { stop: () => {}, exited: exit === undefined ? new Promise<number>(() => {}) : Promise.resolve(exit) };
+      if (exit !== undefined) return { stop: () => {}, exited: Promise.resolve(exit) };
+      let kill = () => {};
+      return { stop: () => kill(), exited: new Promise<number>((resolve) => (kill = () => resolve(143))) };
     },
     async run(command, run = {}) {
       runs.push({ command, input: run.input ?? false });

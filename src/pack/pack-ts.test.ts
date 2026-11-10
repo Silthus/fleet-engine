@@ -140,6 +140,11 @@ describe("loading a pack.ts", () => {
     await expect(loadPacks(dir)).rejects.toThrow("service one-run names a check that the one pack did not declare");
   });
 
+  test.each(["fleet one 'setup'", "fleet one setup ~/token", "fleet one setup $TOKEN", "fleet one setup && fleet apply", "one setup", "fleet one\nsetup", "fleet one  setup", "fleet one\tsetup"])("refuses a repair command that a shell would change or that is not a fleet command: %s", async (command) => {
+    const dir = source({ one: pack("one", `fleet.check({ id: "one-saved", say: "Save it.", test: async () => true, repair: { ask: "Save it.", command: ${JSON.stringify(command)} } });`) });
+    await expect(loadPacks(dir)).rejects.toThrow("check one-saved: repair.command must be fleet and plain words of letters, digits, and . _ / = : @ -, with one space between words, so a shell passes it as written and Fleet knows it when you run it");
+  });
+
   test("loads a pack whose register reads the pack's own fields through this", async () => {
     const dir = source({ one: `export default { sdk: 1, name: "one", summary: "A pack.", register(fleet) { fleet.setting({ key: \`\${this.name}.color\`, type: "string", question: "Which color?" }); } };\n` });
     const [loaded] = await loadPacks(dir);
