@@ -1,4 +1,4 @@
-import type { T3Client } from "./session.ts";
+import { readT3Settings, type T3Client } from "./session.ts";
 
 export type StoppedThread = {
   id: string;
@@ -46,4 +46,16 @@ export async function sendContinue(client: Pick<T3Client, "call">, message: Cont
     createdBy: "user",
     creationSource: "server",
   });
+}
+
+export type ProviderInstance = { driver: string; enabled?: boolean; config?: Record<string, unknown>; [field: string]: unknown };
+
+export const settingsScopes: string[] = [];
+
+export async function readProviderInstances(client: Pick<T3Client, "call">): Promise<Record<string, ProviderInstance>> {
+  return (await readT3Settings<{ providerInstances?: Record<string, ProviderInstance> }>(client)).providerInstances ?? {};
+}
+
+export async function upsertProviderInstance(client: Pick<T3Client, "call">, instanceId: string, instance: ProviderInstance): Promise<void> {
+  await client.call("server.updateSettings", { patch: {}, providerInstanceMutation: { operation: "upsert", instanceId, instance } });
 }

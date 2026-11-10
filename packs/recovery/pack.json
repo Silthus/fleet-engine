@@ -39,5 +39,29 @@
       ],
       "workflow": "provider-recovery"
     }
+  ],
+  "steps": [
+    {
+      "id": "claude-wrapper",
+      "run": [
+        "fleet",
+        "claude-wrapper",
+        "bind"
+      ],
+      "check": [
+        "fleet",
+        "claude-wrapper",
+        "check"
+      ],
+      "workflow": "provider-recovery",
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "roles": [
+        "hub",
+        "devbox"
+      ]
+    }
   ]
 }

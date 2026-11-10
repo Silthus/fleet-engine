@@ -1,5 +1,7 @@
+import { homedir } from "node:os";
 import type { ModelRow } from "../../pack/types.ts";
 import type { StartedThread, Threads } from "../../sdk/index.ts";
+import { exhaustedRefusal } from "./availability.ts";
 import { launchScratchThread } from "./launch.ts";
 import { withT3Session, type T3HttpClient, type T3SessionOptions } from "./session.ts";
 
@@ -10,6 +12,8 @@ export function t3Threads(models: ModelRow[], session: T3SessionOptions = {}): T
     async start({ key, title, prompt, modelRole }) {
       const row = models.find((candidate) => candidate.role === modelRole);
       if (!row) throw new Error(`The model table of your AI plan has no ${modelRole} row, so Fleet cannot start the thread.`);
+      const refusal = exhaustedRefusal(session.home ?? homedir(), row, title, Date.now());
+      if (refusal) throw new Error(refusal);
       let started: StartedThread | undefined;
       try {
         return await withT3Session(async (client) => {
