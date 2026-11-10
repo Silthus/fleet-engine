@@ -95,11 +95,12 @@ test("a free map older than an hour, or none, names no other devbox", async () =
   expect((await start({ settings: { "base.startFloorGigabytes": huge } })).stderr).toContain("Fleet knows no devbox with room");
 });
 
-test("never sends a thread to this machine under another of its names", async () => {
-  const map = freshMap({ "devbox-saved": room(5 * huge), [hostname()]: room(4 * huge), "my-hub": room(3 * huge) });
-  const below = { "base.startFloorGigabytes": huge };
+test("never sends a thread to this machine under another of its names, or under the alias the hub reaches it by", async () => {
+  const map = { ...freshMap({ "compute-alias": room(6 * huge), "devbox-saved": room(5 * huge), [hostname()]: room(4 * huge), "my-hub": room(3 * huge) }), hosts: { "compute-alias": "devbox-here", "my-hub": "hub-host" } };
+  const below = { "base.startFloorGigabytes": huge, "hub.alias": "my-hub" };
   const devbox = await start({ settings: below, map, machine: { schema: 1, role: "devbox", name: "devbox-saved" } });
   expect(devbox.stderr).toContain("my-hub has");
+  expect(devbox.stderr).not.toContain("compute-alias has");
   expect(devbox.stderr).not.toContain("devbox-saved has");
   expect(devbox.stderr).not.toContain(`${hostname()} has`);
   const hub = await start({ settings: { ...below, "hub.alias": "my-hub" }, env: { CODER_WORKSPACE_NAME: "hub-workspace" }, map: freshMap({ "my-hub": room(3 * huge) }), machine: { schema: 1, role: "hub" } });
