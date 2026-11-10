@@ -86,12 +86,11 @@ async function hub() {
   };
   const minute = () => minutes.splice(0).forEach((resolve) => resolve());
   const unit = join(home, ".config/systemd/user/fleet-slack-trigger.service");
-  const launches = () => t3.rpcCalls.filter((call) => call.tag === "orchestration.launchThread").map((call) => (call.payload as { commandId: string }).commandId);
-  return { home, profile, slack, fleet, setup, minute, unit, launches, threadsStarted: () => launched };
+  return { home, profile, slack, t3, fleet, setup, minute, unit };
 }
 
 test("setup installs the trigger, an owner's message starts one thread, and after a lost answer the restarted trigger posts its link once", async () => {
-  const { home, profile, slack, fleet, setup, minute, unit, launches, threadsStarted } = await hub();
+  const { home, profile, slack, t3, fleet, setup, minute, unit } = await hub();
   const todo = "Make your own Slack app for Start a thread from Slack, then paste its two tokens. Fleet keeps them where only you can read them. Run: fleet slack-trigger setup";
   const replies = () => slack.method("chat.postEphemeral").map((call) => call.args.text);
 
@@ -109,7 +108,7 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   slack.send({ type: "message", user: ownerId, channel: "C1", ts: "100.1", text: "the build is red :t3code:" });
   await slack.until(() => replies().length === 1);
   expect(replies()).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day."]);
-  expect(launches()).toHaveLength(1);
+  expect(t3.threads.map((thread) => thread.title)).toEqual(["Slack: the build is red"]);
   expect(slack.method("apps.connections.open").at(-1)!.token).toBe(`Bearer ${firstApp}`);
 
   expect((await setup(secondApp)).code).toBe(0);
@@ -121,8 +120,7 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   minute();
   await slack.until(() => replies().length === 2);
   expect(replies()[1]).toBe("Started <https://app.t3.codes/threads/env-hub/thread-1|Slack: the build is red> on this machine.");
-  expect(launches()).toEqual([launches()[0]!, launches()[0]!]);
-  expect(threadsStarted()).toBe(1);
+  expect(t3.threads.map((thread) => thread.id)).toEqual(["thread-1"]);
 
   rmSync(join(home, ".config/fleet/secrets/slack/app"));
   minute();
