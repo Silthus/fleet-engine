@@ -159,9 +159,10 @@ export async function withT3Session<T>(run: (client: T3HttpClient) => Promise<T>
     },
     async callTool<R>(name: string, args: Record<string, unknown>) {
       mcp ??= Promise.resolve().then(() => {
-        const reader = issueSession(server, runCli, ["--ttl", ttl, "--label", sessionLabel, "--subject", "mcp-client", "--scope", "orchestration:read"]);
-        issued.push(reader);
-        return openMcp(server.origin, reader.token, timeoutMs, deadline);
+        const mcpScopes = ["orchestration:read", ...scopes.filter((scope) => scope === "orchestration:operate")];
+        const client = issueSession(server, runCli, ["--ttl", ttl, "--label", sessionLabel, "--subject", "mcp-client", ...mcpScopes.flatMap((scope) => ["--scope", scope])]);
+        issued.push(client);
+        return openMcp(server.origin, client.token, timeoutMs, deadline);
       });
       return (await mcp).callTool<R>(name, args);
     },
