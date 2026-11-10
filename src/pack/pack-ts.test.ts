@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { main } from "../cli.ts";
 import { tempDirs } from "../testing/git.ts";
 import { engineSource, resolveEngine } from "../testing/packs.ts";
@@ -67,6 +67,11 @@ describe("loading a pack.ts", () => {
     return dir;
   }
   const pack = (name: string, register: string) => `export default { sdk: 1, name: "${name}", summary: "A pack.", register(fleet) { ${register} } };\n`;
+
+  test("loads from a source path relative to the working directory", async () => {
+    const packs = await loadPacks(relative(process.cwd(), join(fixtures, "twin-ts")));
+    expect(packs.map((loaded) => loaded.manifest.summary)).toEqual(["The hub greets you once you pick a greeting."]);
+  });
 
   test("fails when a directory has both a pack.ts and a pack.json", async () => {
     const dir = source({ one: pack("one", "") }, { one: JSON.stringify({ schema: 1, name: "one", summary: "A pack." }) });

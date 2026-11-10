@@ -76,6 +76,26 @@ describe("fetchSource", () => {
     }
   });
 
+  test("keeps the last good pack.ts and the files it imports when a fetched ref does not load", async () => {
+    const repo = temp.make("pack-repo-");
+    git(repo, "init", "-q", "-b", "main");
+    mkdirSync(join(repo, "packs", "team"), { recursive: true });
+    writeFileSync(join(repo, "packs", "team", "pack.ts"), `import { summary } from "./summary.ts";\nexport default { sdk: 1, name: "team", summary, register() {} };\n`);
+    writeFileSync(join(repo, "packs", "team", "summary.ts"), `export const summary = "Team rules v1.";\n`);
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "v1");
+    git(repo, "tag", "v1");
+    const cache = temp.make("cache-");
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    writeFileSync(join(repo, "packs", "team", "summary.ts"), `export const summary = "";\n`);
+    git(repo, "commit", "-q", "-am", "v2");
+    git(repo, "tag", "v2");
+    const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect(fetched.packs[0]?.manifest.summary).toBe("Team rules v1.");
+    expect(fetched.stale).toContain("does not load");
+  });
+
   test("never falls back to a cache of another repository", async () => {
     const cache = temp.make("cache-");
     await fetchSource({ name: "team", repo: packRepo("Old repo."), ref: "v1" }, cache);
