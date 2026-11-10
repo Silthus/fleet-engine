@@ -109,13 +109,15 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
       check(item, `${field} ${name}`);
     });
   };
-  const waitsWithin = (item: Record<string, unknown>, label: string) => {
-    const human = Array.isArray(raw.human) ? (raw.human as Array<Record<string, unknown>>) : [];
-    const waited = human.find((step) => step.id === item.after);
-    need(item.after === undefined || (typeof item.after === "string" && waited !== undefined), `${label}: after must name a human step of this pack`);
+  const listed = (field: string) => (Array.isArray(raw[field]) ? (raw[field] as Array<Record<string, unknown>>) : []);
+  const waitsWithin = (item: Record<string, unknown>, label: string, orCheck = false) => {
+    const human = listed("human").find((step) => step.id === item.after);
+    const check = orCheck && !human ? listed("checks").find((step) => step.id === item.after) : undefined;
+    const waited = human ?? check;
+    need(item.after === undefined || (typeof item.after === "string" && waited !== undefined), `${label}: after must name a human step${orCheck ? " or a check" : ""} of this pack`);
     for (const scope of ["on", "roles", "plans", "workflow"]) {
       const wider = waited?.[scope] !== undefined && (Array.isArray(waited[scope]) ? !(Array.isArray(item[scope]) && (item[scope] as unknown[]).every((value) => (waited[scope] as unknown[]).includes(value))) : item[scope] !== waited[scope]);
-      need(!wider, `${label}: runs where its human step ${String(item.after)} does not; give it the same ${scope}`);
+      need(!wider, `${label}: runs where its ${check ? "check" : "human step"} ${String(item.after)} does not; give it the same ${scope}`);
     }
   };
   const filters = (item: Record<string, unknown>, label: string) => {
@@ -132,7 +134,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("config", (item, label) => {
     const problem = configEntryProblem(item);
     if (problem) fail(`${label}: ${problem}`);
-    waitsWithin(item, label);
+    waitsWithin(item, label, true);
   });
   each("served", (item, label) => {
     need(typeof item.id === "string" && Number.isInteger(item.port) && typeof item.health === "string", `${label}: needs an id, a port, and a health path`);
@@ -187,6 +189,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("steps", (item, label) => {
     need(typeof item.id === "string" && isStrings(item.run), `${label}: needs an id and a run list`);
     need(item.check === undefined || isStrings(item.check), `${label}: check must be a command list`);
+    need(item.undo === undefined || (isStrings(item.undo) && item.undo.length > 0), `${label}: undo must be a command list`);
+    need(item.undo === undefined || (isStrings(item.check) && item.check.length > 0), `${label}: undo needs a check`);
     waitsWithin(item, label);
     filters(item, label);
   });

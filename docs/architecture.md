@@ -297,7 +297,10 @@ and Fleet does not wrap it in a unit.
     pack owns only the probe, a check. The config items say `after: route`.
   - *Apply while the proxy does not answer:* the gate fails, the two items
     leave the plan, and the adapter removes its own values. Claude Code
-    uses its own sign-in.
+    uses its own sign-in. A key that holds exactly the pack's value also
+    goes when no apply recorded it, as after `fleet cli-proxy connect`,
+    and while a pack source cannot be fetched. The items that wait for
+    one check go together, so they all stay when one holds another value.
   - *Until recovery:* each `fleet apply` and `fleet doctor` reports the
     failed check. The first apply whose probe passes writes both keys
     again. Between applies nothing changes the route.

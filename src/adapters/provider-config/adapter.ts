@@ -65,7 +65,7 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
     const fields = owned(plan, target);
     let merged: Merged;
     try {
-      merged = merge(target, before, old, fields, adopt.includes(target.path), { outage, gated: gatedPath(gated, target.provider), configPath: join(home, target.path) });
+      merged = merge(target, before, old, fields, adopt.includes(target.path), { outage, gated: gatedPath(gated, target.provider), dropped: gatedFields(plan, target), configPath: join(home, target.path) });
     } catch (error) {
       keepOld();
       result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept ${target.path} as it is: Fleet cannot read it (${(error as Error).message}). Fix the file, then run fleet apply.`, repair: "human" });
@@ -101,7 +101,7 @@ function owned(plan: Plan, target: Target): Field[] {
   return fields;
 }
 
-function merge(target: Target, text: string | undefined, previous: Field[], wanted: Field[], adopt: boolean, options: { outage: boolean; gated: (path: string[]) => boolean; configPath: string }): Merged {
+function merge(target: Target, text: string | undefined, previous: Field[], wanted: Field[], adopt: boolean, options: { outage: boolean; gated: (path: string[]) => boolean; dropped: GatedField[]; configPath: string }): Merged {
   const current: Document = text === undefined ? {} : target.format.decode(text);
   const original = target.format.encode(current);
   const edited = previous.filter((field) => get(current, field.path) !== undefined && !same(get(current, field.path), field.value));
@@ -150,7 +150,12 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
       removed.push(field.path.join("."));
     }
   }
-  for (const path of stale) {
+  const untouched = (field: GatedField) => get(current, field.path) === undefined || same(get(current, field.path), field.value);
+  const unrecorded = options.dropped
+    .filter((field) => options.dropped.every((other) => other.check !== field.check || other.pack !== field.pack || untouched(other)))
+    .filter((field) => !all.some((item) => overlaps(item.path, field.path)))
+    .map((field) => field.path);
+  for (const path of [...stale, ...unrecorded]) {
     if (get(current, path) === undefined) continue;
     remove(current, path);
     removed.push(path.join("."));
@@ -170,6 +175,17 @@ const isHookTrust = (field: Field) => field.path[0] === "hooks" && field.path[1]
 /** The provider:key of each config entry the gate dropped because its check fails. An outage never keeps these. */
 function gatedKeys(plan: Plan) {
   return plan.dropped.flatMap((entry) => (entry.check && entry.item.startsWith("config ") ? [entry.item.slice("config ".length)] : []));
+}
+
+type GatedField = Field & { check: string };
+
+/** The config entries of this target that the gate dropped, with Fleet's value. Entries that wait for the same check leave together, even during an outage and without a record, unless one of them holds another value. */
+function gatedFields(plan: Plan, target: Target): GatedField[] {
+  return plan.dropped.flatMap((entry) => {
+    if (!entry.check || entry.value === undefined || !entry.item.startsWith(`config ${target.provider}:`)) return [];
+    const path = keyPath(entry.item.slice(`config ${target.provider}:`.length));
+    return target.owns(path) ? [{ path, value: entry.value, pack: entry.pack, check: entry.check }] : [];
+  });
 }
 
 /** Whether a path overlaps a config key of this provider that the gate dropped, so an outage does not keep it. */

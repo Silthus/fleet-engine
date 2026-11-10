@@ -81,6 +81,7 @@ export type PackStep = Scope & {
   check?: string[];
   /** The id of a human step of the same pack that must pass before this step runs. */
   after?: string;
+  undo?: string[];
 };
 
 /**
@@ -93,7 +94,7 @@ export type PackStep = Scope & {
 export type T3ProjectScript = Scope & { id: string; name: string; command: string; projects: string[]; projectSetting?: string };
 
 export type Provider = "claude" | "codex" | "t3";
-/** after: the id of a human step of the same pack that must pass before the entry is written. */
+/** after: the id of a human step or a check of the same pack that must pass before the entry is written. */
 export type ConfigEntry = Scope & { provider: Provider; key: string; value: unknown; after?: string };
 
 /** A service that every node reaches at 127.0.0.1:port; only a pack.ts declares one, because its credential is code. */
@@ -216,6 +217,7 @@ export type Plan = {
   jobs: Array<Owned<PackJob>>;
   human: Array<Owned<HumanStep>>;
   steps: Array<Owned<PackStep>>;
+  undo?: Array<Owned<PackStep> & { prerequisite?: string[] }>;
   checks: Array<Owned<PackCheck>>;
   /** Every served service of the profile, on every node, with its port. */
   catalog?: CatalogEntry[];
@@ -226,7 +228,7 @@ export type Plan = {
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];
   ask: PackSetting[];
-  dropped: Array<{ pack: string; item: string; reason: string; check?: string }>;
+  dropped: Array<{ pack: string; item: string; reason: string; check?: string; value?: unknown }>;
 };
 
 export type Finding = { id: string; pack: string; say: string; repair?: "apply" | "human" };
