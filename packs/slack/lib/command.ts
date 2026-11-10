@@ -1,114 +1,112 @@
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { modelFor } from "../../base/lib/models.ts";
-import { optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
-import type { T3SessionOptions } from "../../base/lib/t3/index.ts";
+import { join } from "node:path";
+import { optionalStringSetting } from "../../base/lib/settings.ts";
+import type { Secrets, Threads } from "../../../src/sdk/index.ts";
 import { launchHere, launchOnBox, spawnRun, type Launch, type LaunchRequest, type Run } from "./launch.ts";
-import { manifest, manifestLink, readSlackApp, readTokens, serve, slackApi, slackApiBase, type SlackApp, type Sleep, type Tokens } from "./slack.ts";
+import { manifest, manifestLink, serve, slackApi, slackApiBase, slackApp, type Sleep } from "./slack.ts";
 import { Interrupted, secretReader, type ReadSecret } from "./secret.ts";
 import { handleTrigger, retryPending, triggerOf, type Owner, type TriggerDeps } from "./trigger.ts";
 
 type Env = Record<string, string | undefined>;
+export type Every = (work: () => void, ms: number) => () => void;
 
 export type SlackCommandDeps = {
   env: Env;
-  home: string;
+  slackUserId: () => string;
+  secrets: Secrets;
+  stateDir: string;
+  threads: Threads;
   print: (line: string) => void;
   readStdin: () => Promise<string>;
+  every: Every;
   readSecret?: ReadSecret;
   run?: Run;
   slackBase?: string;
   sleep?: Sleep;
   now?: () => number;
   stop?: AbortSignal;
-  t3?: T3SessionOptions;
-  every?: (work: () => void, ms: number) => () => void;
 };
 
-export const usage = "Usage: fleet slack-trigger manifest | setup | run | check | launch";
+export const usage = "Usage: fleet slack-trigger manifest | setup | check | launch";
 
-export const tokensFile = (home: string) => join(home, ".config/fleet/slack-app.json");
-export const stateFile = (home: string) => join(home, ".local/state/fleet/slack-trigger.json");
+export const appSecret = "app";
 const memberId = /^[UW][A-Z0-9]+$/;
 
-export async function ownerOf(env: Env, run: Run): Promise<Owner> {
-  const slackUserId = stringSetting("slack.userId", env);
+export function everyOn(sleep: Sleep): Every {
+  return (work, ms) => {
+    let on = true;
+    void (async () => {
+      while (on) {
+        await sleep(ms);
+        if (on) work();
+      }
+    })();
+    return () => void (on = false);
+  };
+}
+
+export async function ownerOf(deps: Pick<SlackCommandDeps, "slackUserId">, run: Run): Promise<Owner> {
+  const slackUserId = deps.slackUserId();
   if (!memberId.test(slackUserId)) throw new Error(`slack.userId is ${JSON.stringify(slackUserId)}, not a Slack member ID such as U012ABCDEF. Set it with fleet set slack.userId=<your member ID>.`);
   const name = (await run(["git", "config", "--get", "user.name"])).stdout.trim();
   if (!name) throw new Error("Git has no user.name, which names your Slack app. Run fleet apply after gh auth login, so Fleet sets your Git identity.");
   return { name, slackUserId };
 }
 
-export function launcher(env: Env, run: Run, t3: T3SessionOptions = {}): Launch {
+export function launcher(env: Env, run: Run, threads: Threads): Launch {
   if (optionalStringSetting("hub.boxTemplate", env) !== undefined) return launchOnBox(join(env.FLEET_ENGINE_DIR ?? "", "fleet"), run);
-  return launchHere(modelFor("implementation", env), t3);
+  return launchHere(threads);
 }
 
 export async function slackTrigger(args: string[], deps: SlackCommandDeps): Promise<number> {
   const [mode = "", ...rest] = args;
-  if (rest.length || !["manifest", "setup", "run", "check", "launch"].includes(mode)) return deps.print(usage), 2;
+  if (rest.length || !["manifest", "setup", "check", "launch"].includes(mode)) return deps.print(usage), 2;
   const run = deps.run ?? spawnRun;
   if (mode === "launch") return launchFromStdin(deps);
-  const owner = await ownerOf(deps.env, run);
+  const owner = await ownerOf(deps, run);
   if (mode === "manifest") {
     deps.print(`Create the app: ${manifestLink(owner.name)}\n\n${JSON.stringify(manifest(owner.name), null, 2)}`);
     return 0;
   }
   if (mode === "check") return checkApp(owner, deps);
-  if (mode === "setup") return setUpApp(owner, deps);
+  return setUpApp(owner, deps);
+}
+
+export async function listen(deps: SlackCommandDeps): Promise<void> {
+  const run = deps.run ?? spawnRun;
+  const owner = await ownerOf(deps, run);
   const now = deps.now ?? Date.now;
   const log = (line: string) => deps.print(`${new Date(now()).toISOString()} ${line}`);
-  const app = await waitForTokens(deps, log);
-  if (!app) return 0;
-  const { tokens, text: saved } = app;
+  const saved = await deps.secrets.read(appSecret);
+  const { appToken, userToken } = slackApp(saved);
   const replaced = new AbortController();
   const stop = deps.stop ? AbortSignal.any([deps.stop, replaced.signal]) : replaced.signal;
-  const watchTokens = () => {
-    const now = (() => { try { return readFileSync(tokensFile(deps.home), "utf8"); } catch { return ""; } })();
-    if (now === saved || stop.aborted) return;
-    log("the Slack app changed: stopping, so the service starts again with it");
-    replaced.abort();
-  };
-  const trigger: TriggerDeps = { owner, now, log, slack: slackApi(tokens.userToken, deps.slackBase, deps.sleep), launch: launcher(deps.env, run, deps.t3), statePath: stateFile(deps.home) };
+  const trigger: TriggerDeps = { owner, now, log, slack: slackApi(userToken, deps.slackBase, deps.sleep), launch: launcher(deps.env, run, deps.threads), statePath: join(deps.stateDir, "slack-trigger.json") };
   const active = new Set<Promise<void>>();
   const track = (work: Promise<void>, failed: (error: unknown) => void) => {
     const tracked = work.catch(failed).finally(() => active.delete(tracked));
     active.add(tracked);
   };
-  const every = deps.every ?? ((work, ms) => { const timer = setInterval(work, ms); return () => clearInterval(timer); });
-  const stopRetries = every(() => {
-    watchTokens();
-    if (!stop.aborted) track(retryPending(trigger), (error) => log(`retry failed: ${error}`));
-  }, 60_000);
+  const minute = async () => {
+    if (stop.aborted) return;
+    if ((await deps.secrets.read(appSecret)) !== saved) {
+      log("the Slack app changed: stopping, so the service starts again with it");
+      return replaced.abort();
+    }
+    await retryPending(trigger);
+  };
+  const stopMinutes = deps.every(() => track(minute(), (error) => log(`retry failed: ${error}`)), 60_000);
   try {
     await serve({
-      appToken: tokens.appToken, log, base: deps.slackBase, sleep: deps.sleep, stop,
+      appToken, log, base: deps.slackBase, sleep: deps.sleep, stop,
       onEvent: (event) => {
         const found = triggerOf(event, owner);
         if (found) track(handleTrigger(found, trigger), (error) => log(`${found.channel}:${found.ts}: failed: ${error}`));
       },
     });
   } finally {
-    stopRetries();
+    stopMinutes();
     while (active.size) await Promise.all(active);
   }
-  return 0;
-}
-
-async function waitForTokens(deps: SlackCommandDeps, log: (line: string) => void): Promise<SlackApp | undefined> {
-  const sleep = deps.sleep ?? Bun.sleep;
-  let said = "";
-  while (!deps.stop?.aborted) {
-    try {
-      return readSlackApp(tokensFile(deps.home));
-    } catch (error) {
-      const message = (error as Error).message;
-      if (message !== said) log(`waiting for the Slack app: ${message}. Run fleet slack-trigger setup to set it up.`);
-      said = message;
-    }
-    await sleep(60_000);
-  }
-  return undefined;
 }
 
 async function setUpApp(owner: Owner, deps: SlackCommandDeps): Promise<number> {
@@ -121,7 +119,6 @@ async function setUpApp(owner: Owner, deps: SlackCommandDeps): Promise<number> {
 }
 
 async function walkThrough(owner: Owner, deps: SlackCommandDeps, read: ReadSecret): Promise<number> {
-  const path = tokensFile(deps.home);
   const base = deps.slackBase ?? slackApiBase;
   const say = deps.print;
   const entered: string[] = [];
@@ -137,12 +134,12 @@ async function walkThrough(owner: Owner, deps: SlackCommandDeps, read: ReadSecre
       const { user_id } = await slackApi(token, base, deps.sleep)("auth.test", {});
       if (user_id !== owner.slackUserId) throw new Error(`it belongs to ${user_id}, not to slack.userId ${owner.slackUserId}`);
     }, say, entered);
-    saveTokens(path, { appToken, userToken });
+    await deps.secrets.write(appSecret, `${JSON.stringify({ appToken, userToken }, null, 2)}\n`);
   } catch (error) {
     if (error instanceof Interrupted) return say(`Stopped. Nothing was saved. Run fleet slack-trigger setup again.`), 130;
     throw error;
   }
-  say(`Saved ${path}, readable only by you. The Slack trigger restarts with it within a minute.`);
+  say("Saved both tokens where only you can read them. A running Slack trigger starts again with them within a minute.");
   return 0;
 }
 
@@ -167,19 +164,11 @@ async function ask(read: ReadSecret, prompt: string, prefix: string, verify: (to
   }
 }
 
-function saveTokens(path: string, tokens: Tokens) {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const draft = `${path}.${process.pid}.tmp`;
-  writeFileSync(draft, `${JSON.stringify(tokens, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(draft, 0o600);
-  renameSync(draft, path);
-}
-
 async function checkApp(owner: Owner, deps: SlackCommandDeps): Promise<number> {
   try {
-    const tokens = readTokens(tokensFile(deps.home));
-    const answer = await slackApi(tokens.userToken, deps.slackBase ?? slackApiBase, deps.sleep)("auth.test", {});
-    if (answer.user_id !== owner.slackUserId) return deps.print(`The user token in ${tokensFile(deps.home)} belongs to ${answer.user_id}, not to slack.userId ${owner.slackUserId}.`), 1;
+    const { userToken } = slackApp(await deps.secrets.read(appSecret));
+    const answer = await slackApi(userToken, deps.slackBase ?? slackApiBase, deps.sleep)("auth.test", {});
+    if (answer.user_id !== owner.slackUserId) return deps.print(`The saved user token belongs to ${answer.user_id}, not to slack.userId ${owner.slackUserId}.`), 1;
     deps.print(`The Slack app answers for ${owner.slackUserId}.`);
     return 0;
   } catch (error) {
@@ -191,8 +180,8 @@ async function checkApp(owner: Owner, deps: SlackCommandDeps): Promise<number> {
 async function launchFromStdin(deps: SlackCommandDeps): Promise<number> {
   const request = JSON.parse(await deps.readStdin()) as Partial<LaunchRequest>;
   if (typeof request.title !== "string" || typeof request.prompt !== "string" || typeof request.commandId !== "string") throw new Error("fleet slack-trigger launch reads {\"title\", \"prompt\", \"commandId\"} as JSON on standard input");
-  const launched = await launchHere(modelFor("implementation", deps.env), deps.t3)({ title: request.title, prompt: request.prompt, commandId: request.commandId });
+  const launched = await launchHere(deps.threads)({ title: request.title, prompt: request.prompt, commandId: request.commandId });
   if ("failed" in launched) return deps.print(launched.failed), 1;
-  deps.print(JSON.stringify({ threadId: launched.threadId, environmentId: launched.environmentId }));
+  deps.print(JSON.stringify({ threadId: launched.threadId }));
   return 0;
 }

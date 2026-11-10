@@ -37,6 +37,6 @@ export default {
     const extra = fleet.workflow({ id: "kit-extra", name: "Kit extra", sentence: "The kit runs one more service.", default: false, settings: [note] });
     fleet.service({ id: "kit-extra-run", when: extra, run: async (ctx) => ctx.print("ran") });
     const saved = fleet.check({ id: "kit-saved", say: "Save the token.", test: async (ctx) => (await ctx.secrets.read("token")) !== undefined });
-    fleet.service({ id: "kit-sender", after: saved, run: async (ctx) => ctx.print("sent") });
+    fleet.service({ id: "kit-sender", after: saved, run: async (ctx) => ctx.print(`sent at ${new Date(ctx.now()).toISOString()}`) });
   },
 } satisfies Pack;

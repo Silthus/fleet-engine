@@ -15,7 +15,7 @@ export type Trigger = { kind: "message" | "reaction"; channel: string; ts: strin
 type Message = { user?: string; text?: string; ts: string; thread_ts?: string };
 type Pending = { trigger: Trigger; since: number; commandId: string; told?: true; claim?: Claim };
 type State = { handled: Record<string, number>; pending: Record<string, Pending> };
-export type Started = { threadId: string; environmentId?: string; where: string };
+export type Started = { threadId: string; url?: string; where: string };
 export type TriggerDeps = {
   owner: Owner;
   statePath: string;
@@ -71,7 +71,7 @@ export async function handleTrigger(trigger: Trigger, deps: TriggerDeps): Promis
     const { started, name, thread } = outcome;
     deps.log(`${key}: started ${started.threadId} on ${started.where}`);
     await deps.slack("reactions.add", { channel: trigger.channel, timestamp: trigger.ts, name: ackEmoji }).catch((error) => deps.log(`${key}: :${ackEmoji}: failed: ${error}`));
-    const link = started.environmentId ? `<https://app.t3.codes/threads/${started.environmentId}/${started.threadId}|${slackText(name)}>` : `${slackText(name)} (thread ${started.threadId})`;
+    const link = started.url ? `<${started.url}|${slackText(name)}>` : `${slackText(name)} (thread ${started.threadId})`;
     await reply(trigger, key, thread, deps, `Started ${link} on ${slackText(started.where)}.`);
   } finally {
     inFlight.delete(key);

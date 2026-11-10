@@ -1,15 +1,18 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
-import { t3CliRunner } from "../base/lib/t3/index.ts";
-import { startT3Stub, type T3Stub } from "../base/lib/t3/testing.ts";
-import { slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
+import { t3CliRunner, t3Threads } from "../../src/integrations/t3/index.ts";
+import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
+import type { ModelRow } from "../../src/pack/types.ts";
+import { secretStore } from "../../src/runner/context.ts";
+import { listen, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
 import { launchOnBox, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
 import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
+import { startSlackStub, type Message } from "./testing.ts";
 
 const temp = tempDirs();
 const stops: Array<() => Promise<void> | void> = [];
@@ -22,16 +25,17 @@ const ownerId = "U0OWNER";
 const owner = { name: "Nora Example", slackUserId: ownerId };
 const appToken = "xapp-1-test-app-token";
 const userToken = "xoxp-test-user-token";
-const models = JSON.stringify([{ role: "implementation", work: "Build", provider: "claude", model: "claude-opus-5-5", effort: "high" }]);
+const models: ModelRow[] = [{ role: "implementation", work: "Build", provider: "claude", model: "claude-opus-5-5", effort: "high" }];
 const settings = (extra: Record<string, unknown> = {}) => JSON.stringify({ "slack.userId": ownerId, ...extra });
 
-function homeWithTokens(mode = 0o600, tokens: Record<string, string> = { appToken, userToken }) {
+async function homeWithTokens(tokens: Record<string, string> = { appToken, userToken }) {
   const home = temp.make("home-");
-  mkdirSync(join(home, ".config/fleet"), { recursive: true });
-  writeFileSync(join(home, ".config/fleet/slack-app.json"), JSON.stringify(tokens));
-  chmodSync(join(home, ".config/fleet/slack-app.json"), mode);
+  await saveApp(home, tokens);
   return home;
 }
+
+const saveApp = (home: string, tokens: Record<string, string>) => secretStore(home, "slack").write("app", JSON.stringify(tokens));
+const statePath = (home: string) => join(home, ".local/state/fleet/slack/slack-trigger.json");
 
 function processes(answers: (argv: string[], input?: string) => { code: number; stdout: string; stderr?: string } | undefined = () => undefined) {
   const calls: Array<{ argv: string[]; input?: string }> = [];
@@ -44,67 +48,10 @@ function processes(answers: (argv: string[], input?: string) => { code: number; 
   return { calls, run };
 }
 
-type Envelope = Record<string, unknown>;
-
-function slackStub(thread: Array<{ user: string; ts: string; text: string }>) {
-  const calls: Array<{ method: string; args: Record<string, string>; token: string | null }> = [];
-  const acked: string[] = [];
-  const sockets: Array<{ send(text: string): void; close(): void }> = [];
-  const waiters: Array<{ until: () => boolean; resolve: () => void }> = [];
-  const settle = () => waiters.splice(0).forEach((waiter) => (waiter.until() ? waiter.resolve() : waiters.push(waiter)));
-  const server = Bun.serve({
-    port: 0,
-    async fetch(request, server) {
-      const url = new URL(request.url);
-      if (url.pathname === "/socket") return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
-      const method = url.pathname.replace(/^\/api\//, "");
-      const args = Object.fromEntries(new URLSearchParams(await request.text()));
-      calls.push({ method, args, token: request.headers.get("authorization") });
-      queueMicrotask(settle);
-      if (method === "apps.connections.open") return Response.json({ ok: true, url: `ws://127.0.0.1:${server.port}/socket` });
-      if (method === "auth.test") return Response.json({ ok: true, user_id: ownerId });
-      if (method === "conversations.replies") {
-        const found = thread.filter((message) => args.limit === "1" ? message.ts === args.ts : true).map((message) => ({ ...message, thread_ts: thread[0]!.ts }));
-        return Response.json({ ok: true, messages: found });
-      }
-      if (method === "chat.getPermalink") return Response.json({ ok: true, permalink: `https://example.slack.com/archives/${args.channel}/p${args.message_ts}` });
-      if (method === "users.info") return Response.json({ ok: true, user: { real_name: args.user === ownerId ? "Nora" : "Sam" } });
-      return Response.json({ ok: true });
-    },
-    websocket: {
-      open(socket) {
-        sockets.push(socket);
-        socket.send(JSON.stringify({ type: "hello" }));
-        queueMicrotask(settle);
-      },
-      message(_socket, raw) {
-        acked.push(JSON.parse(String(raw)).envelope_id);
-        settle();
-      },
-    },
-  });
-  stops.push(() => server.stop(true));
-  let id = 0;
-  return {
-    base: `http://127.0.0.1:${server.port}/api`,
-    calls,
-    acked,
-    send(event: Envelope) {
-      const envelope_id = `envelope-${++id}`;
-      sockets[0]!.send(JSON.stringify({ type: "events_api", envelope_id, payload: { event } }));
-      return envelope_id;
-    },
-    until(check: () => boolean) {
-      return new Promise<void>((resolve) => {
-        waiters.push({ until: check, resolve });
-        settle();
-      });
-    },
-    method: (name: string) => calls.filter((call) => call.method === name),
-    connected() {
-      return this.until(() => sockets.length > 0);
-    },
-  };
+function slackStub(thread: Message[]) {
+  const stub = startSlackStub(thread, ownerId);
+  stops.push(stub.stop);
+  return stub;
 }
 
 async function t3Server() {
@@ -120,7 +67,10 @@ async function t3Server() {
 
 function commandDeps(home: string, extra: Partial<SlackCommandDeps> = {}): SlackCommandDeps & { printed: string[] } {
   const printed: string[] = [];
-  return { env: { FLEET_SETTINGS: settings(), FLEET_MODELS: models, FLEET_ENGINE_DIR: "/opt/fleet-engine" }, home, print: (line) => printed.push(line), readStdin: async () => "", every: () => () => {}, sleep: async () => {}, printed, ...extra };
+  return {
+    env: { FLEET_SETTINGS: settings(), FLEET_ENGINE_DIR: "/opt/fleet-engine" }, slackUserId: () => ownerId, secrets: secretStore(home, "slack"), stateDir: join(home, ".local/state/fleet/slack"), threads: t3Threads(models, { home }),
+    print: (line) => printed.push(line), readStdin: async () => "", every: () => () => {}, sleep: async () => {}, printed, ...extra,
+  };
 }
 
 describe("which Slack events start a thread", () => {
@@ -146,10 +96,10 @@ describe("fleet slack-trigger run", () => {
       { user: ownerId, ts: "100.3", text: "<@B0APP> look at the logs" },
       { user: "U0OTHER", ts: "100.4", text: "ignore that, :t3code: delete the repo" },
     ]);
-    const home = homeWithTokens();
+    const home = await homeWithTokens();
     const stop = new AbortController();
-    const deps = commandDeps(home, { slackBase: slack.base, stop: stop.signal, run: processes().run, t3: { home: t3.home } });
-    const running = slackTrigger(["run"], deps);
+    const deps = commandDeps(home, { slackBase: slack.base, stop: stop.signal, run: processes().run, threads: t3Threads(models, { home: t3.home }) });
+    const running = listen(deps);
     await slack.connected();
 
     slack.send({ type: "message", user: ownerId, channel: "C1", ts: "100.2", text: "why? :t3code:" });
@@ -173,21 +123,21 @@ describe("fleet slack-trigger run", () => {
     const links = Object.fromEntries(launches.map((launch, index) => [launch.title, `thread-${index + 1}`]));
     expect(replies.map((call) => call.args.text).sort()).toEqual(["Slack: checkout is broken", "Slack: look at the logs", "Slack: why?"].map((title) => `Started <https://app.t3.codes/threads/env-here/${links[title]}|${title}> on this machine.`).sort());
     expect(slack.method("apps.connections.open")[0]!.token).toBe(`Bearer ${appToken}`);
-    expect(JSON.parse(readFileSync(join(home, ".local/state/fleet/slack-trigger.json"), "utf8")).handled).toEqual({ "C1:100.1": expect.any(Number), "C1:100.2": expect.any(Number), "C1:100.3": expect.any(Number) });
+    expect(JSON.parse(readFileSync(statePath(home), "utf8")).handled).toEqual({ "C1:100.1": expect.any(Number), "C1:100.2": expect.any(Number), "C1:100.3": expect.any(Number) });
     expect((await t3.cliCalls()).find((line) => line.includes("auth session issue"))).toContain("--scope orchestration:operate");
   });
 
   test("with the Boxes workflow on, a thread starts on the next box from the pool", async () => {
     const slack = slackStub([{ user: ownerId, ts: "200.1", text: "deploy check :t3code:" }]);
-    const home = homeWithTokens();
+    const home = await homeWithTokens();
     const stop = new AbortController();
     const fleet = processes((argv) => {
       if (argv.slice(1).join(" ") === "box spawn") return { code: 0, stdout: "claimed box-7 from the pool\nbox-7 env-box-7\n" };
       if (argv.slice(1, 4).join(" ") === "box run box-7") return { code: 0, stdout: `${JSON.stringify({ threadId: "thread-on-box" })}\n` };
       return undefined;
     });
-    const deps = commandDeps(home, { slackBase: slack.base, stop: stop.signal, run: fleet.run, env: { FLEET_SETTINGS: settings({ "hub.boxTemplate": "devbox" }), FLEET_MODELS: models, FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
-    const running = slackTrigger(["run"], deps);
+    const deps = commandDeps(home, { slackBase: slack.base, stop: stop.signal, run: fleet.run, env: { FLEET_SETTINGS: settings({ "hub.boxTemplate": "devbox" }), FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
+    const running = listen(deps);
     await slack.connected();
     slack.send({ type: "message", user: ownerId, channel: "C1", ts: "200.1", text: "deploy check :t3code:" });
     await slack.until(() => slack.method("chat.postEphemeral").length === 1);
@@ -200,24 +150,24 @@ describe("fleet slack-trigger run", () => {
     expect(slack.method("chat.postEphemeral")[0]!.args.text).toBe("Started <https://app.t3.codes/threads/env-box-7/thread-on-box|Slack: deploy check> on box-7.");
   });
 
-  test("ends when its tokens file is replaced, so the service starts again with the new app", async () => {
+  test("ends when its saved Slack app is replaced, so the service starts again with the new app", async () => {
     const slack = slackStub([]);
-    const home = homeWithTokens();
+    const home = await homeWithTokens();
     let minute = () => {};
     const deps = commandDeps(home, { slackBase: slack.base, run: processes().run, every: (work) => ((minute = work), () => {}) });
-    const running = slackTrigger(["run"], deps);
+    const running = listen(deps);
     await slack.connected();
     minute();
-    writeFileSync(join(home, ".config/fleet/slack-app.json"), JSON.stringify({ appToken, userToken: "xoxp-test-new-token" }), { mode: 0o600 });
+    await saveApp(home, { appToken, userToken: "xoxp-test-new-token" });
     minute();
-    expect(await running).toBe(0);
+    await running;
     expect(deps.printed.some((line) => line.endsWith("the Slack app changed: stopping, so the service starts again with it"))).toBe(true);
     expect(deps.printed.join("\n")).not.toContain("xoxp-test-new-token");
   });
 
   test("on a new Slack app, finishes the launch it already started before it ends", async () => {
     const slack = slackStub([{ user: ownerId, ts: "300.1", text: "slow box :t3code:" }]);
-    const home = homeWithTokens();
+    const home = await homeWithTokens();
     let minute = () => {};
     let boxAsked = () => {};
     const asked = new Promise<void>((resolve) => (boxAsked = resolve));
@@ -230,17 +180,17 @@ describe("fleet slack-trigger run", () => {
       await boxAnswer;
       return { code: 0, stdout: `${JSON.stringify({ threadId: "thread-on-box" })}\n`, stderr: "" };
     };
-    const deps = commandDeps(home, { slackBase: slack.base, run, every: (work) => ((minute = work), () => {}), env: { FLEET_SETTINGS: settings({ "hub.boxTemplate": "devbox" }), FLEET_MODELS: models, FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
-    const running = slackTrigger(["run"], deps);
+    const deps = commandDeps(home, { slackBase: slack.base, run, every: (work) => ((minute = work), () => {}), env: { FLEET_SETTINGS: settings({ "hub.boxTemplate": "devbox" }), FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
+    const running = listen(deps);
     await slack.connected();
     slack.send({ type: "message", user: ownerId, channel: "C1", ts: "300.1", text: "slow box :t3code:" });
     await asked;
-    writeFileSync(join(home, ".config/fleet/slack-app.json"), JSON.stringify({ appToken, userToken: "xoxp-test-new-token" }), { mode: 0o600 });
+    await saveApp(home, { appToken, userToken: "xoxp-test-new-token" });
     minute();
     answerBox();
-    expect(await running).toBe(0);
+    await running;
     expect(slack.method("chat.postEphemeral").map((call) => call.args.text)).toEqual(["Started <https://app.t3.codes/threads/env-box-7/thread-on-box|Slack: slow box> on box-7."]);
-    expect(JSON.parse(readFileSync(join(home, ".local/state/fleet/slack-trigger.json"), "utf8")).pending).toEqual({});
+    expect(JSON.parse(readFileSync(statePath(home), "utf8")).pending).toEqual({});
   });
 
   test("stops while Slack has not yet answered the connection request", async () => {
@@ -259,29 +209,11 @@ describe("fleet slack-trigger run", () => {
     expect(logged).toEqual([]);
   });
 
-  test("waits for the tokens file instead of exiting, and says why once", async () => {
-    const slack = slackStub([]);
-    const home = temp.make("home-");
-    const stop = new AbortController();
-    let naps = 0;
-    const deps = commandDeps(home, {
-      slackBase: slack.base, stop: stop.signal, run: processes().run,
-      sleep: async () => {
-        naps++;
-        if (naps === 2) {
-          mkdirSync(join(home, ".config/fleet"), { recursive: true });
-          writeFileSync(join(home, ".config/fleet/slack-app.json"), JSON.stringify({ appToken, userToken }), { mode: 0o600 });
-        }
-      },
-    });
-    const running = slackTrigger(["run"], deps);
-    await slack.connected();
-    stop.abort();
-    await running;
-    expect(naps).toBe(2);
-    expect(deps.printed.filter((line) => line.includes("waiting for the Slack app"))).toHaveLength(1);
-    expect(deps.printed.join("\n")).not.toContain(userToken);
+  test("refuses to start without a saved Slack app, and names the command that saves one", async () => {
+    const deps = commandDeps(temp.make("home-"), { run: processes().run });
+    await expect(listen(deps)).rejects.toThrow("no Slack app is saved. Run fleet slack-trigger setup");
   });
+
 });
 
 describe("a launch that fails", () => {
@@ -305,7 +237,7 @@ describe("a launch that fails", () => {
   }
 
   test("retries every minute until it starts with the same command ID, so T3 starts one thread, and tells the owner once", async () => {
-    const { deps, replies, titles, commandIds, later } = rig([{ failed: "T3 did not answer" }, { failed: "T3 did not answer" }, { threadId: "T1", environmentId: "E1", where: "this machine" }]);
+    const { deps, replies, titles, commandIds, later } = rig([{ failed: "T3 did not answer" }, { failed: "T3 did not answer" }, { threadId: "T1", url: "https://app.t3.codes/threads/E1/T1", where: "this machine" }]);
     await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
     later(60_000);
     await retryPending(deps);
@@ -434,35 +366,32 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
   });
 
   test("refuses a member ID that is not one", async () => {
-    const deps = commandDeps(temp.make("home-"), { run: processes().run, env: { FLEET_SETTINGS: JSON.stringify({ "slack.userId": "nora" }), FLEET_MODELS: models } });
+    const deps = commandDeps(temp.make("home-"), { run: processes().run, slackUserId: () => "nora" });
     expect(slackTrigger(["manifest"], deps)).rejects.toThrow('slack.userId is "nora", not a Slack member ID');
   });
 
-  test("check passes for a private tokens file whose user token is the owner's", async () => {
+  test("check passes for a saved Slack app whose user token is the owner's", async () => {
     const slack = slackStub([]);
-    const deps = commandDeps(homeWithTokens(), { slackBase: slack.base, run: processes().run });
+    const deps = commandDeps(await homeWithTokens(), { slackBase: slack.base, run: processes().run });
     expect(await slackTrigger(["check"], deps)).toBe(0);
     expect(slack.method("auth.test")[0]!.token).toBe(`Bearer ${userToken}`);
     expect(deps.printed.join("\n")).not.toContain(userToken);
   });
 
-  test("check fails for a tokens file others can read, a missing one, or another person's token", async () => {
+  test("check fails for a missing Slack app or another person's token", async () => {
     const slack = slackStub([]);
-    const open = commandDeps(homeWithTokens(0o644), { slackBase: slack.base, run: processes().run });
-    expect(await slackTrigger(["check"], open)).toBe(1);
-    expect(open.printed.join("\n")).toContain("must be readable only by you: chmod 600");
     const missing = commandDeps(temp.make("home-"), { slackBase: slack.base, run: processes().run });
     expect(await slackTrigger(["check"], missing)).toBe(1);
-    const someoneElse = commandDeps(homeWithTokens(), { slackBase: slack.base, run: processes().run, env: { FLEET_SETTINGS: settings({ "slack.userId": "U0SOMEONE" }), FLEET_MODELS: models } });
+    const someoneElse = commandDeps(await homeWithTokens(), { slackBase: slack.base, run: processes().run, slackUserId: () => "U0SOMEONE" });
     expect(await slackTrigger(["check"], someoneElse)).toBe(1);
     expect(someoneElse.printed.join("\n")).toContain("belongs to U0OWNER, not to slack.userId U0SOMEONE");
   });
 
   test("launch starts a thread on this machine from standard input and prints its ids", async () => {
     const t3 = await t3Server();
-    const deps = commandDeps(temp.make("home-"), { t3: { home: t3.home }, readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }) });
+    const deps = commandDeps(temp.make("home-"), { threads: t3Threads(models, { home: t3.home }), readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }) });
     expect(await slackTrigger(["launch"], deps)).toBe(0);
-    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1", environmentId: "env-here" });
+    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1" });
     expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")?.payload).toMatchObject({ commandId: "command-1", title: "Slack: hi", initialMessage: { text: "Do it." } });
   });
 
@@ -470,11 +399,11 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
     const t3 = await t3Server();
     const runCli = t3CliRunner();
     const deps = commandDeps(temp.make("home-"), {
-      t3: { home: t3.home, runCli: (server, args) => (args.slice(0, 3).join(" ") === "auth session revoke" ? { status: 1, stdout: "", stderr: "revoke failed" } : runCli(server, args)) },
+      threads: t3Threads(models, { home: t3.home, runCli: (server, args) => (args.slice(0, 3).join(" ") === "auth session revoke" ? { status: 1, stdout: "", stderr: "revoke failed" } : runCli(server, args)) }),
       readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }),
     });
     expect(await slackTrigger(["launch"], deps)).toBe(0);
-    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1", environmentId: "env-here" });
+    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1" });
   });
 });
 
@@ -484,11 +413,11 @@ describe("where the trigger runs", () => {
   const resolve = (fields: Record<string, unknown>, machine = mac) => resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { workflows: { "slack-thread": true }, settings: { "slack.userId": ownerId }, ...fields }, machine);
   const runsHere = (plan: ReturnType<typeof resolve>) => plan.jobs.some((job) => job.id === "slack-trigger");
 
-  test("asks for the member ID, and runs the trigger and its check as a service on the only machine", () => {
+  test("asks for the member ID, and runs the trigger as a service on the only machine once its Slack app is saved", () => {
     expect(resolve({ packs: ["slack"], settings: {} }).unanswered.map((setting) => setting.key)).toEqual(["slack.userId"]);
     const plan = resolve({ packs: ["slack"] });
-    expect(plan.jobs).toContainEqual(expect.objectContaining({ id: "slack-trigger", command: ["fleet", "slack-trigger", "run"], schedule: { every: "always" }, pack: "slack" }));
-    expect(plan.checks.map((check) => check.id)).toContain("slack-app");
+    expect(plan.jobs).toContainEqual(expect.objectContaining({ id: "slack-trigger", schedule: { every: "always" }, after: "slack-app", pack: "slack" }));
+    expect(plan.human).toContainEqual(expect.objectContaining({ id: "slack-app", pack: "slack" }));
     expect(Object.keys(plan.commands)).toContain("slack-trigger");
   });
 
