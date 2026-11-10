@@ -3,6 +3,7 @@ import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { parse, stringify } from "smol-toml";
 import { management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
 import { requireHubRole } from "./hub-job.ts";
 import { quote, readRole, remoteFleet } from "./machine.ts";
@@ -139,13 +140,25 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
 
 const silent = `The proxy at ${proxyUrl} does not answer.`;
 
-async function probe(fetch: Fetch, key: string): Promise<string | undefined> {
+async function listModels(fetch: Fetch, key: string): Promise<string[] | string> {
   const response = await fetch(`${proxyUrl}/v1/models`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(5000) }).catch(() => undefined);
   if (!response) return silent;
   if (!response.ok) return `The proxy at ${proxyUrl} refuses this machine's key (HTTP ${response.status}).`;
-  const models = ((await response.json().catch(() => ({}))) as { data?: Array<{ id?: string }> }).data ?? [];
-  return models.some((model) => model.id?.includes("claude")) ? undefined : `The proxy at ${proxyUrl} lists no Claude model. On the hub, run fleet cli-proxy doctor.`;
+  return (((await response.json().catch(() => ({}))) as { data?: Array<{ id?: string }> }).data ?? []).flatMap((model) => (typeof model.id === "string" ? [model.id] : []));
 }
+
+const servedModel = { claude: (id: string) => id.includes("claude"), codex: (id: string) => id.startsWith("gpt-") };
+const missingModel = {
+  claude: `The proxy at ${proxyUrl} lists no Claude model. On the hub, run fleet cli-proxy doctor.`,
+  codex: `The proxy at ${proxyUrl} lists no Codex model. Add one of your own Codex subscriptions to the hub's proxy.`,
+};
+
+function unserved(models: string[] | string, provider: "claude" | "codex"): string | undefined {
+  if (typeof models === "string") return models;
+  return models.some(servedModel[provider]) ? undefined : missingModel[provider];
+}
+
+const probe = async (fetch: Fetch, key: string) => unserved(await listModels(fetch, key), "claude");
 
 async function answered(machine: ProxyMachine, key: string): Promise<string | undefined> {
   let reason = await probe(machine.fetch, key);
@@ -180,28 +193,64 @@ export async function claudeRoute(home: string, on: boolean): Promise<(() => Pro
     if (settings.apiKeyHelper === keyHelper) delete settings.apiKeyHelper;
   }
   if (JSON.stringify(settings) === before) return async () => {};
-  return async () => {
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    const partial = `${path}.${randomUUID()}.partial`;
-    await writeFile(partial, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-    try {
-      if ((existsSync(path) ? readFileSync(path, "utf8") : undefined) !== text) throw new Error(`${path} changed while Fleet wrote it. Run this again.`);
-      renameSync(partial, path);
-    } finally {
-      rmSync(partial, { force: true });
-    }
-  };
+  return () => replaceUnchanged(path, text, `${JSON.stringify(settings, null, 2)}\n`);
+}
+
+async function replaceUnchanged(path: string, before: string | undefined, after: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const partial = `${path}.${randomUUID()}.partial`;
+  await writeFile(partial, after, { mode: 0o600, flag: "wx" });
+  try {
+    if ((existsSync(path) ? readFileSync(path, "utf8") : undefined) !== before) throw new Error(`${path} changed while Fleet wrote it. Run this again.`);
+    renameSync(partial, path);
+  } finally {
+    rmSync(partial, { force: true });
+  }
 }
 
 const sendClaude = async (home: string, on: boolean) => (await claudeRoute(home, on))?.();
 
+export const codexProvider = "fleet-proxy";
+const codexUrl = `${proxyUrl}/v1`;
+
+async function readCodex(home: string) {
+  const path = join(home, ".codex/config.toml");
+  await refuseLinks(home, path, "Codex config path");
+  const text = await readIfThere(path);
+  let config: unknown = {};
+  try { if (text !== undefined) config = parse(text); }
+  catch { config = undefined; }
+  if (!isObject(config) || (config.model_providers !== undefined && !isObject(config.model_providers))) throw new Error(`${path} is not a Codex config. Fix it, then run this again.`);
+  const providers = config.model_providers as Record<string, unknown> | undefined;
+  const fleet = providers?.[codexProvider];
+  const ours = isObject(fleet) && fleet.base_url === codexUrl;
+  return { path, text, config, providers, ours, routed: ours && config.model_provider === codexProvider };
+}
+
+const codexRouted = async (home: string) => (await readCodex(home)).routed;
+
+/** Sends Codex back to its own sign-in. Fleet's config entries send it to the proxy again on apply. */
+async function sendCodexHome(home: string): Promise<boolean> {
+  const { path, text, config, providers, ours, routed } = await readCodex(home);
+  if (!ours) return false;
+  if (routed) delete config.model_provider;
+  delete providers![codexProvider];
+  if (!Object.keys(providers!).length) delete config.model_providers;
+  await replaceUnchanged(path, text, Object.keys(config).length ? `${stringify(config)}\n` : "");
+  return routed;
+}
+
 async function route(machine: ProxyMachine): Promise<boolean> {
   const key = await savedKey(machine.home);
-  const reason = key ? await probe(machine.fetch, key) : `This machine has no proxy key at ${keyPath(machine.home)}. On the hub, fleet cli-proxy doctor prints the connect command.`;
-  if (!reason) return machine.print(`Claude Code reaches your own-account proxy at ${proxyUrl}.`), true;
-  await sendClaude(machine.home, false);
-  machine.print(`${reason} Claude Code uses its own sign-in now.`);
-  return false;
+  const models = key ? await listModels(machine.fetch, key) : `This machine has no proxy key at ${keyPath(machine.home)}. On the hub, fleet cli-proxy doctor prints the connect command.`;
+  const reached = (agent: string, reason: string | undefined) => (machine.print(reason ? `${reason} ${agent} uses its own sign-in now.` : `${agent} reaches your own-account proxy at ${proxyUrl}.`), !reason);
+  const claude = unserved(models, "claude");
+  if (claude) await sendClaude(machine.home, false);
+  const claudeReached = reached("Claude Code", claude);
+  if (!(await codexRouted(machine.home))) return claudeReached;
+  const codex = unserved(models, "codex");
+  if (codex) await sendCodexHome(machine.home);
+  return reached("Codex", codex) && claudeReached;
 }
 
 async function connect(machine: ProxyMachine): Promise<void> {
@@ -221,9 +270,11 @@ async function connect(machine: ProxyMachine): Promise<void> {
 async function disconnect(machine: ProxyMachine): Promise<void> {
   if (readRole(machine.home) === "hub") throw new Error("On the hub, turn the workflow off instead: fleet packs --workflows own-account-balancing=off");
   await sendClaude(machine.home, false);
+  const codex = await sendCodexHome(machine.home);
   await refuseLinks(machine.home, keyPath(machine.home), `${what} path`);
   await rm(keyPath(machine.home), { force: true });
   machine.print("Claude Code no longer uses the proxy. To sign in again, run claude and enter /login, then restart open Claude Code sessions.");
+  if (codex) machine.print("Codex no longer uses the proxy. To sign in again, run codex login, then restart open Codex sessions.");
   machine.print("fleet apply keeps this machine on its own sign-in while it has no proxy key.");
 }
 

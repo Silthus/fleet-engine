@@ -282,6 +282,45 @@
         "both"
       ],
       "workflow": "own-account-balancing"
+    },
+    {
+      "provider": "codex",
+      "key": "model_provider",
+      "value": "fleet-proxy",
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ],
+      "workflow": "own-account-balancing"
+    },
+    {
+      "provider": "codex",
+      "key": "model_providers.fleet-proxy",
+      "value": {
+        "name": "Fleet CLI proxy",
+        "base_url": "http://127.0.0.1:8317/v1",
+        "wire_api": "responses",
+        "auth": {
+          "command": "/bin/sh",
+          "args": [
+            "-c",
+            "cat \"$HOME/.config/fleet/cli-proxy.key\""
+          ]
+        }
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ],
+      "workflow": "own-account-balancing"
     }
   ],
   "jobs": [
@@ -458,6 +497,7 @@
       ],
       "plans": [
         "claude",
+        "codex",
         "both"
       ],
       "workflow": "own-account-balancing"
@@ -562,13 +602,14 @@
         "cli-proxy",
         "check"
       ],
-      "say": "Claude Code cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check here to see why.",
+      "say": "Claude Code or Codex cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check here to see why.",
       "roles": [
         "hub",
         "devbox"
       ],
       "plans": [
         "claude",
+        "codex",
         "both"
       ],
       "workflow": "own-account-balancing"

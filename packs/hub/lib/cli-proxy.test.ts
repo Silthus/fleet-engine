@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parse, stringify } from "smol-toml";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { claudeRoute, cliProxy, keyHelper, proxyUrl, type ProxyMachine } from "./cli-proxy.ts";
 import { fakeRun, modeOf, roleHome } from "./run-testing.ts";
@@ -17,6 +18,15 @@ const keyFile = (home: string) => join(home, ".config/fleet/cli-proxy.key");
 const settingsFile = (home: string) => join(home, ".claude/settings.json");
 const unitFile = (home: string) => join(home, ".config/systemd/user/fleet-cli-proxy.service");
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+const codexFile = (home: string) => join(home, ".codex/config.toml");
+const readCodex = (home: string) => parse(readFileSync(codexFile(home), "utf8"));
+const fleetProxy = { name: "Fleet CLI proxy", base_url: `${proxyUrl}/v1`, wire_api: "responses", auth: { command: "/bin/sh", args: ["-c", 'cat "$HOME/.config/fleet/cli-proxy.key"'] } };
+const mine = { model: "gpt-6.1-sol", model_providers: { work: { name: "Work gateway", base_url: "https://gateway.example.com/v1" } } };
+
+function codexRouted(home: string, config: Record<string, unknown> = { ...mine, model_provider: "fleet-proxy", model_providers: { ...mine.model_providers, "fleet-proxy": fleetProxy } }) {
+  mkdirSync(join(home, ".codex"), { recursive: true });
+  writeFileSync(codexFile(home), stringify(config));
+}
 
 type Proxy = { strategy?: string; credentials?: Array<{ provider: string; disabled?: boolean }>; models?: string[]; down?: boolean };
 
@@ -349,4 +359,84 @@ test("an install that stops after it replaced the binary restarts the proxy on t
   calls.length = 0;
   expect(await cliProxy("install", machine)).toBe(0);
   expect(calls).toContain("systemctl --user restart fleet-cli-proxy.service");
+});
+
+test("the check keeps Codex on the proxy while the proxy lists a Codex model, and says so", async () => {
+  const { machine, home, printed } = client({}, { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
+  connected(home);
+  codexRouted(home);
+  expect(await cliProxy("check", machine)).toBe(0);
+  expect(readCodex(home)).toMatchObject({ model_provider: "fleet-proxy", model_providers: { "fleet-proxy": fleetProxy } });
+  expect(printed).toEqual([`Claude Code reaches your own-account proxy at ${proxyUrl}.`, `Codex reaches your own-account proxy at ${proxyUrl}.`]);
+});
+
+test("an unreachable proxy sends Codex back to its own sign-in too, keeping your other Codex settings", async () => {
+  const { machine, home, printed } = client({}, { down: true });
+  connected(home);
+  codexRouted(home);
+  expect(await cliProxy("check", machine)).toBe(1);
+  expect(readCodex(home)).toEqual(mine);
+  expect(printed.join("\n")).toContain("Codex uses its own sign-in now.");
+});
+
+test("a proxy that lists no Codex model sends only Codex back, and the check fails while route does not", async () => {
+  const check = client();
+  connected(check.home);
+  codexRouted(check.home);
+  expect(await cliProxy("check", check.machine)).toBe(1);
+  expect(readCodex(check.home)).toEqual(mine);
+  expect(readJson(settingsFile(check.home)).env.ANTHROPIC_BASE_URL).toBe(proxyUrl);
+  expect(check.printed.join("\n")).toContain(`The proxy at ${proxyUrl} lists no Codex model.`);
+
+  const route = client();
+  connected(route.home);
+  codexRouted(route.home);
+  expect(await cliProxy("route", route.machine)).toBe(0);
+  expect(readCodex(route.home)).toEqual(mine);
+});
+
+test("without a saved key, the check sends Codex back to its own sign-in", async () => {
+  const { machine, home } = client();
+  codexRouted(home);
+  expect(await cliProxy("check", machine)).toBe(1);
+  expect(readCodex(home)).toEqual(mine);
+});
+
+test("Codex that does not use Fleet's proxy is left alone, and does not fail the check", async () => {
+  const own = client();
+  connected(own.home);
+  codexRouted(own.home, { ...mine, model_provider: "work" });
+  expect(await cliProxy("check", own.machine)).toBe(0);
+  expect(readCodex(own.home)).toEqual({ ...mine, model_provider: "work" });
+  expect(own.printed).toEqual([`Claude Code reaches your own-account proxy at ${proxyUrl}.`]);
+
+  const edited = client({}, { down: true });
+  connected(edited.home);
+  codexRouted(edited.home, { model_provider: "fleet-proxy", model_providers: { "fleet-proxy": { ...fleetProxy, base_url: "https://gateway.example.com/v1" } } });
+  expect(await cliProxy("check", edited.machine)).toBe(1);
+  expect(readCodex(edited.home)).toEqual({ model_provider: "fleet-proxy", model_providers: { "fleet-proxy": { ...fleetProxy, base_url: "https://gateway.example.com/v1" } } });
+
+  const none = client();
+  connected(none.home);
+  expect(await cliProxy("check", none.machine)).toBe(0);
+  expect(existsSync(codexFile(none.home))).toBe(false);
+});
+
+test("disconnect sends Codex back to its own sign-in too, and says how to sign in again", async () => {
+  const { machine, home, printed } = client();
+  connected(home);
+  codexRouted(home);
+  expect(await cliProxy("disconnect", machine)).toBe(0);
+  expect(readCodex(home)).toEqual(mine);
+  expect(printed.join("\n")).toContain("run codex login");
+});
+
+test("a linked Codex config stops the switch", async () => {
+  const { machine, home } = client({}, { down: true });
+  codexRouted(home);
+  const real = join(temp.make("real-"), "config.toml");
+  writeFileSync(real, readFileSync(codexFile(home)));
+  rmSync(codexFile(home));
+  symlinkSync(real, codexFile(home));
+  await expect(cliProxy("check", machine)).rejects.toThrow("Keep linked Codex config path");
 });
