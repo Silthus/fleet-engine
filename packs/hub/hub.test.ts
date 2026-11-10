@@ -218,17 +218,17 @@ describe("the Own-account balancing workflow", () => {
   });
 
   test("with it on, the hub gets the proxy, its balancer, and the route; a devbox gets only the route; the Mac gets nothing", () => {
-    const route = { checks: ["cli-proxy-client"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper", ...codexRoute] };
-    expect(proxyItems(plan(balancing, hub))).toEqual({ jobs: ["cli-proxy-balance: fleet cli-proxy-balance every 5m"], steps: ["cli-proxy-route", "cli-proxy"], ...route });
-    expect(proxyItems(plan(balancing, devbox))).toEqual({ jobs: [], steps: ["cli-proxy-route"], ...route });
+    const route = { checks: ["cli-proxy-client", "cli-proxy-codex"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper", ...codexRoute] };
+    expect(proxyItems(plan(balancing, hub))).toEqual({ jobs: ["cli-proxy-balance: fleet cli-proxy-balance every 5m"], steps: ["cli-proxy"], ...route });
+    expect(proxyItems(plan(balancing, devbox))).toEqual({ jobs: [], steps: [], ...route });
     expect(proxyItems(plan(balancing, mac))).toEqual(nothing);
     expect(plan(balancing, hub).settings["hub.proxyAccounts"]).toBe(2);
   });
 
   test("Codex goes through the proxy only on the both plan, where the hub runs the proxy; a Claude plan routes Claude only, and a Codex plan routes nothing yet", () => {
-    const routed = { jobs: [], steps: ["cli-proxy-route"], checks: ["cli-proxy-client"] };
-    expect(proxyItems(plan({ ...balancing, plan: "both" }, devbox))).toEqual({ ...routed, config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper", ...codexRoute] });
-    expect(proxyItems(plan({ ...balancing, plan: "claude" }, devbox))).toEqual({ ...routed, config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper"] });
+    const routed = { jobs: [], steps: [] };
+    expect(proxyItems(plan({ ...balancing, plan: "both" }, devbox))).toEqual({ ...routed, checks: ["cli-proxy-client", "cli-proxy-codex"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper", ...codexRoute] });
+    expect(proxyItems(plan({ ...balancing, plan: "claude" }, devbox))).toEqual({ ...routed, checks: ["cli-proxy-client"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper"] });
     for (const machine of [hub, devbox]) expect(proxyItems(plan({ ...balancing, plan: "codex" }, machine))).toEqual(nothing);
     for (const ai of ["claude", "codex", "both"] as const) expect(proxyItems(plan({ ...balancing, plan: ai }, mac))).toEqual(nothing);
   });
@@ -241,7 +241,7 @@ describe("the Own-account balancing workflow", () => {
     const codexConfig = async (machine: MachineFile) => {
       const home = temp.make("fleet-codex-route-");
       const result = plan({ ...balancing, plan: "both" }, machine);
-      const report = await apply({ ...result, config: result.config.filter((entry) => entry.pack === "hub"), steps: [], checks: [], jobs: [], human: [] }, { home, adapters: [providerConfigAdapter()] });
+      const report = await apply({ ...result, config: result.config.filter((entry) => entry.pack === "hub"), steps: [], checks: result.checks.filter((check) => check.pack === "hub"), jobs: [], human: [] }, { home, adapters: [providerConfigAdapter()], run: async () => 0 });
       expect(report.ok).toBe(true);
       return existsSync(join(home, ".codex/config.toml")) ? parse(readFileSync(join(home, ".codex/config.toml"), "utf8")) : undefined;
     };
@@ -260,10 +260,46 @@ describe("the Own-account balancing workflow", () => {
     expect(config.map((entry) => entry.pack)).toEqual(["hub", "hub", "hub", "hub"]);
   });
 
-  test("runs the route before the hub's other steps, so a failed step can never leave Claude Code at a dead proxy", () => {
-    const steps = plan(balancing, hub).steps.filter((step) => step.pack === "hub").map((step) => step.id);
-    expect(steps[0]).toBe("cli-proxy-route");
-    expect(plan(balancing, hub).steps.find((step) => step.id === "cli-proxy-route")).toMatchObject({ run: ["fleet", "cli-proxy", "route"] });
-    expect(plan(balancing, hub).steps.find((step) => step.id === "cli-proxy-route")!.check).toBeUndefined();
+  test("each provider's route waits for its own check, so one provider down never moves the other", () => {
+    const waits = Object.fromEntries(plan({ ...balancing, plan: "both" }, devbox).config.filter((entry) => entry.workflow === "own-account-balancing").map((entry) => [`${entry.provider}:${entry.key}`, entry.after]));
+    expect(waits).toEqual({ "claude:env.ANTHROPIC_BASE_URL": "cli-proxy-client", "claude:apiKeyHelper": "cli-proxy-client", "codex:model_provider": "cli-proxy-codex", "codex:model_providers.fleet-proxy": "cli-proxy-codex" });
+    const checks = plan({ ...balancing, plan: "both" }, devbox).checks.filter((check) => check.workflow === "own-account-balancing");
+    expect(checks.map((check) => check.run.join(" "))).toEqual(["fleet cli-proxy check", "fleet cli-proxy check codex"]);
+  });
+
+  describe("apply while the proxy is down", () => {
+    const routeOnly = (result: Plan): Plan => ({ ...result, config: result.config.filter((entry) => entry.pack === "hub"), checks: result.checks.filter((check) => check.pack === "hub"), steps: [], jobs: [], human: [] });
+    const proxy = (down: string[]) => async (command: string[]) => (down.some((check) => command.join(" ").endsWith(`fleet cli-proxy ${check}`)) ? 1 : 0);
+    const settled = async (down: string[]) => {
+      const home = temp.make("fleet-route-gate-");
+      const options = { home, adapters: [providerConfigAdapter()], run: proxy(down) };
+      const first = await apply(routeOnly(plan({ ...balancing, plan: "both" }, devbox)), options);
+      const second = await apply(routeOnly(plan({ ...balancing, plan: "both" }, devbox)), options);
+      const claude = existsSync(join(home, ".claude/settings.json")) ? JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")) : {};
+      const codex = existsSync(join(home, ".codex/config.toml")) ? parse(readFileSync(join(home, ".codex/config.toml"), "utf8")) : {};
+      return { first, second, claude, codex };
+    };
+
+    test("leaves Claude Code and Codex on their own sign-in, and the next apply changes nothing", async () => {
+      const { first, second, claude, codex } = await settled(["check", "check codex"]);
+      expect(first.ok).toBe(true);
+      expect(claude.apiKeyHelper).toBeUndefined();
+      expect(claude.env?.ANTHROPIC_BASE_URL).toBeUndefined();
+      expect(codex.model_provider).toBeUndefined();
+      expect(second.actions).toEqual([]);
+    });
+
+    test("a proxy that serves Claude but not Codex routes Claude only, and the next apply changes nothing", async () => {
+      const { second, claude, codex } = await settled(["check codex"]);
+      expect(claude.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8317");
+      expect(codex.model_provider).toBeUndefined();
+      expect(second.actions).toEqual([]);
+    });
+
+    test("a proxy that answers routes both", async () => {
+      const { claude, codex } = await settled([]);
+      expect(claude.apiKeyHelper).toBe("cat \"$HOME/.config/fleet/cli-proxy.key\"");
+      expect(codex.model_provider).toBe("fleet-proxy");
+    });
   });
 });

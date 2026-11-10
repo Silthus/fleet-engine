@@ -267,7 +267,8 @@
         "claude",
         "both"
       ],
-      "workflow": "own-account-balancing"
+      "workflow": "own-account-balancing",
+      "after": "cli-proxy-client"
     },
     {
       "provider": "claude",
@@ -281,7 +282,8 @@
         "claude",
         "both"
       ],
-      "workflow": "own-account-balancing"
+      "workflow": "own-account-balancing",
+      "after": "cli-proxy-client"
     },
     {
       "provider": "codex",
@@ -294,7 +296,8 @@
       "plans": [
         "both"
       ],
-      "workflow": "own-account-balancing"
+      "workflow": "own-account-balancing",
+      "after": "cli-proxy-codex"
     },
     {
       "provider": "codex",
@@ -318,7 +321,8 @@
       "plans": [
         "both"
       ],
-      "workflow": "own-account-balancing"
+      "workflow": "own-account-balancing",
+      "after": "cli-proxy-codex"
     }
   ],
   "jobs": [
@@ -483,23 +487,6 @@
   ],
   "steps": [
     {
-      "id": "cli-proxy-route",
-      "run": [
-        "fleet",
-        "cli-proxy",
-        "route"
-      ],
-      "roles": [
-        "hub",
-        "devbox"
-      ],
-      "plans": [
-        "claude",
-        "both"
-      ],
-      "workflow": "own-account-balancing"
-    },
-    {
       "id": "hub-https",
       "run": [
         "fleet",
@@ -599,13 +586,31 @@
         "cli-proxy",
         "check"
       ],
-      "say": "Claude Code or Codex cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check here to see why.",
+      "say": "Claude Code cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check here to see why.",
       "roles": [
         "hub",
         "devbox"
       ],
       "plans": [
         "claude",
+        "both"
+      ],
+      "workflow": "own-account-balancing"
+    },
+    {
+      "id": "cli-proxy-codex",
+      "run": [
+        "fleet",
+        "cli-proxy",
+        "check",
+        "codex"
+      ],
+      "say": "Codex cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check codex here to see why.",
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "plans": [
         "both"
       ],
       "workflow": "own-account-balancing"

@@ -93,7 +93,7 @@ export type PackStep = Scope & {
 export type T3ProjectScript = Scope & { id: string; name: string; command: string; projects: string[]; projectSetting?: string };
 
 export type Provider = "claude" | "codex" | "t3";
-/** after: the id of a human step of the same pack that must pass before the entry is written. */
+/** after: the id of a human step or a check of the same pack that must pass before the entry is written. */
 export type ConfigEntry = Scope & { provider: Provider; key: string; value: unknown; after?: string };
 
 /** A service that every node reaches at 127.0.0.1:port; only a pack.ts declares one, because its credential is code. */

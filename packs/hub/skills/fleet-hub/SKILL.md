@@ -108,10 +108,12 @@ the person's own subscriptions, never for someone else's.
   hub, `fleet cli-proxy doctor` prints one connect command per devbox; it
   sends the key on standard input. Boxes get the key and connect when the hub
   hands them over.
-- **When the proxy is down.** `fleet apply` and `fleet doctor` run
-  `fleet cli-proxy route` and `fleet cli-proxy check`. When the proxy does not
-  answer this machine's key, they remove Fleet's two Claude settings, so Claude
-  Code uses its own sign-in. The next `fleet apply` sends it back to the proxy
-  once the proxy answers again.
+- **When the proxy is down.** Fleet's Claude settings wait for
+  `fleet cli-proxy check`, and on the `both` plan its Codex settings wait for
+  `fleet cli-proxy check codex`. `fleet apply` and `fleet doctor` run both
+  checks. When the proxy does not serve that agent with this machine's key,
+  apply leaves its settings out and removes Fleet's own values, so the agent
+  uses its own sign-in, and the next apply changes nothing. The first apply
+  after the proxy answers again sends it back to the proxy.
 - **Stop on one machine.** `fleet cli-proxy disconnect` removes the settings
   and the key. Then run `claude` and enter `/login`.

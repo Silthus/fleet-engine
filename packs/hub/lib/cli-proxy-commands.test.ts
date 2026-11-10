@@ -29,4 +29,7 @@ test("through fleet, the hub-only modes and the balancer refuse on a devbox, and
   expect(check.code).toBe(1);
   expect(check.stdout).toContain("Claude Code uses its own sign-in now.");
   expect(JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8"))).toEqual({});
+  const codex = await runFleet(["cli-proxy", "check", "codex"], { HOME: home });
+  expect([codex.code, codex.stdout]).toEqual([1, expect.stringContaining("Codex uses its own sign-in now.")]);
+  for (const args of [["check", "claude"], ["route"]]) expect((await runFleet(["cli-proxy", ...args], { HOME: home })).code).toBe(2);
 });

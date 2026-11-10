@@ -1,5 +1,5 @@
 import { install, plan as planFiles } from "../files/install.ts";
-import type { Action, CatalogEntry, Finding, HumanStep, Owned, Plan, Report } from "../pack/types.ts";
+import type { Action, CatalogEntry, Finding, HumanStep, Owned, PackCheck, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
 import { hublessReason } from "./resolve.ts";
 
@@ -116,7 +116,7 @@ function humanFinding(step: Owned<HumanStep>, repairStillToRun: boolean): Findin
   return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: repairStillToRun && step.repair && !step.command ? "apply" : "human" };
 }
 
-/** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. It tests the checks that served services wait for first and issues their credentials, so a repair that reads a credential sees it in the same apply. */
+/** Tests each check once, running a Fleet repair first when a human step's probe fails and repairs are on, then drops the items whose check fails. A config entry may also wait for a pack check, which has no repair. It tests the checks that served services wait for first and issues their credentials, so a repair that reads a credential sees it in the same apply. */
 async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: CatalogEntry[]) => Promise<Finding[]>): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; issued: Finding[] }> {
   const tested = new Map<Owned<HumanStep>, boolean>();
   const probe = async (step: Owned<HumanStep>) => {
@@ -139,9 +139,19 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
     if (!job.after || (await passes(plan.human.find((step) => step.pack === job.pack && step.id === job.after)))) jobs.push(job);
     else dropped.push({ pack: job.pack, item: `job ${job.id}`, reason: `check ${job.after} does not pass`, check: job.after });
   }
+  const checked = new Map<Owned<PackCheck>, boolean>();
+  const checkPasses = async (item: Owned<PackCheck>) => {
+    if (!checked.has(item)) checked.set(item, (await run(item.run)) === 0);
+    return checked.get(item)!;
+  };
+  const waitsFor = (pack: string, id: string) => {
+    const human = checkOf(pack, id);
+    const check = human ? undefined : plan.checks.find((item) => item.pack === pack && item.id === id);
+    return check ? checkPasses(check) : passes(human);
+  };
   const config: Plan["config"] = [];
   for (const entry of plan.config) {
-    if (!entry.after || (await passes(plan.human.find((step) => step.pack === entry.pack && step.id === entry.after)))) config.push(entry);
+    if (!entry.after || (await waitsFor(entry.pack, entry.after))) config.push(entry);
     else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after });
   }
   const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);

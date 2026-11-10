@@ -164,6 +164,28 @@ describe("apply", () => {
   });
 });
 
+describe("a config entry that waits for a pack check", () => {
+  const checks = [{ id: "proxy-up", run: ["proxy-check"], say: "The proxy is down.", pack: "base" }];
+  const config = [
+    { provider: "claude" as const, key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", after: "proxy-up", pack: "base" },
+    { provider: "claude" as const, key: "apiKeyHelper", value: "cat key", after: "proxy-up", pack: "base" },
+  ];
+  const seen = (result: Plan[]) => (adapter: Adapter): Adapter => ({ ...adapter, async apply(given) { result.push(given); return { actions: [], findings: [] }; } });
+
+  test("is written while the check passes, and left out while it fails, running the check once", async () => {
+    for (const [code, kept] of [[0, 2], [1, 0]] as const) {
+      const given: Plan[] = [];
+      const calls: string[] = [];
+      const run = async (command: string[]) => (calls.push(command.join(" ")), code);
+      const report = await apply(plan({ checks, config }), { home: temp.make("home-"), adapters: [seen(given)(filesAdapter)], run });
+      expect(given[0]!.config).toHaveLength(kept);
+      expect(calls).toEqual(["proxy-check"]);
+      expect(report.findings).toEqual([]);
+      if (!kept) expect(given[0]!.dropped).toContainEqual({ pack: "base", item: "config claude:apiKeyHelper", reason: "check proxy-up does not pass", check: "proxy-up" });
+    }
+  });
+});
+
 describe("check", () => {
   test("runs pack checks and human probes, and lists the human steps left", async () => {
     const human = [{ id: "github", say: "Sign in to GitHub.", command: "gh auth login --web", probe: ["gh", "auth", "status"], pack: "base" }];
