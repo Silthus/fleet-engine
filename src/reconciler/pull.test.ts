@@ -50,6 +50,25 @@ test("when the hub connects but never answers, the pull gives up at its deadline
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
 });
 
+test("a pull's finding names the hub's own error and never what the service logged", async () => {
+  const { hub, node, hosts } = linkedFleets(temp);
+  await hub("apply");
+  await node("apply");
+
+  hosts["hub-1"] = async () => ({ code: 137, stdout: "", stderr: "Issuing key-9-for-node-2\n" });
+  const killed = await node("apply");
+  expect(killed.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (exit 137). Kept the one this machine has.");
+  expect(killed.output).not.toContain("key-9");
+
+  hosts["hub-1"] = async () => ({ code: 1, stdout: "", stderr: "Issuing key-9-for-node-2\nfleet: the service said no\nkey-9-for-node-2\n" });
+  const refused = await node("apply");
+  expect(refused.output).toContain("(fleet: the service said no)");
+  expect(refused.output).not.toContain("key-9");
+
+  hosts["hub-1"] = async () => ({ code: 127, stdout: "", stderr: "sh: 1: fleet: not found\n" });
+  expect((await node("apply")).output).toContain("(sh: 1: fleet: not found)");
+});
+
 test("fleet credential on the hub prints only the key for a node that the profile names, and what the service says goes to standard error", async () => {
   const { hub, hubFleet } = linkedFleets(temp);
   await hub("apply");

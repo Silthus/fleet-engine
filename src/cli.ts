@@ -261,11 +261,19 @@ async function pullCredentials(entries: CatalogEntry[], node: string, hub: strin
       if ((await store.read(name)) !== value) await store.write(name, value);
       continue;
     }
-    const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : (answer.stderr ?? "").trim().split("\n").at(-1) || `exit ${answer.code}`;
+    const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : pullError(answer.code, answer.stderr ?? "");
     const kept = (await store.read(name)) ? "Kept the one this machine has." : "Fleet tries again at the next apply.";
     findings.push({ id: `credential:${service}`, pack: entry.pack, say: `Could not pull the credential of ${service} from the hub ${hub} (${reason}). ${kept}`, repair: "apply" });
   }
   return findings;
+}
+
+/** Why a pull failed, without what the service logged on the hub: the hub fleet's own error line, or the line of ssh or the hub's shell when they failed before fleet ran. */
+function pullError(code: number, stderr: string) {
+  const lines = stderr.trim().split("\n");
+  const own = lines.findLast((line) => line.startsWith("fleet: "));
+  if (own) return own;
+  return ([126, 127, 255].includes(code) && lines.at(-1)) || `exit ${code}`;
 }
 
 /** On the hub: the credential that a served service issues for a node of the profile, printed for that node's pull. */
