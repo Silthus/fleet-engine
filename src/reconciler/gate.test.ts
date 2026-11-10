@@ -5,6 +5,7 @@ import { jobsAdapter } from "../adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../cli.ts";
 import type { CommandRunner } from "../adapters/run.ts";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
+import { fakeSystemd } from "../testing/systemd.ts";
 import { filesAdapter } from "./apply.ts";
 
 isolateGit();
@@ -24,23 +25,6 @@ function launchd() {
   return { loaded, run };
 }
 
-function systemd() {
-  const units = new Map<string, { active: boolean; enabled: boolean }>();
-  const run: CommandRunner = async (command) => {
-    if (command[0] !== "systemctl" || command[1] !== "--user") return { code: 127, stdout: "" };
-    const [verb, ...rest] = command.slice(2);
-    const unit = rest.at(-1)!;
-    const state = units.get(unit) ?? { active: false, enabled: false };
-    if (verb === "show") return { code: 0, stdout: `ActiveState=${state.active ? "active" : "inactive"}\nUnitFileState=${state.enabled ? "enabled" : ""}\nNeedDaemonReload=no\n` };
-    if (verb === "enable") units.set(unit, { ...state, enabled: true });
-    if (verb === "restart") units.set(unit, { ...state, active: true });
-    if (verb === "disable") units.set(unit, { active: rest.includes("--now") ? false : state.active, enabled: false });
-    if (verb === "stop") units.set(unit, { ...state, active: false });
-    return { code: 0, stdout: "" };
-  };
-  return { units, run };
-}
-
 function machine(repair = "fleet gated setup", platform: "linux" | "darwin" = "linux", extra: Record<string, string> = {}) {
   const engine = temp.make("engine-");
   cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
@@ -57,7 +41,7 @@ function machine(repair = "fleet gated setup", platform: "linux" | "darwin" = "l
   const engineFleet = join(engine, "fleet");
   let lines: string[] = [];
   const mac = launchd();
-  const linux = systemd();
+  const linux = fakeSystemd();
   const options: CliOptions = {
     home,
     engineRoot: engine,
@@ -72,10 +56,8 @@ function machine(repair = "fleet gated setup", platform: "linux" | "darwin" = "l
     return { code: await main(args, options), lines };
   };
   const service = (id: string) => {
-    const parts =
-      platform === "darwin"
-        ? [existsSync(join(home, `Library/LaunchAgents/dev.fleet.${id}.plist`)), mac.loaded.has(`gui/501/dev.fleet.${id}`)]
-        : [existsSync(join(home, `.config/systemd/user/fleet-${id}.service`)), linux.units.get(`fleet-${id}.service`)?.active === true, linux.units.get(`fleet-${id}.service`)?.enabled === true];
+    if (platform === "linux") return linux.service(home, id);
+    const parts = [existsSync(join(home, `Library/LaunchAgents/dev.fleet.${id}.plist`)), mac.loaded.has(`gui/501/dev.fleet.${id}`)];
     return parts.every(Boolean) ? "running" : parts.some(Boolean) ? "partly removed" : "gone";
   };
   return { profile, home, fleet, service };

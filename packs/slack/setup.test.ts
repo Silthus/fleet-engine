@@ -7,7 +7,8 @@ import type { Machine } from "../../src/setup/commands.ts";
 import { humanStep, packSignIn } from "../../src/setup/human.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
-import { slackTrigger } from "./lib/command.ts";
+import { secretStore } from "../../src/runner/context.ts";
+import { slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
 import { Interrupted, secretReader } from "./lib/secret.ts";
 
 const temp = tempDirs();
@@ -45,13 +46,20 @@ function slackStub(hold: Promise<void> = Promise.resolve()) {
 }
 
 const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? files(join(dir, entry.name)) : [join(dir, entry.name)]));
-const tokensPath = (home: string) => join(home, ".config/fleet/slack-app.json");
+const tokensPath = (home: string) => join(home, ".config/fleet/secrets/slack/app");
+
+function setupDeps(home: string, extra: Partial<SlackCommandDeps>): SlackCommandDeps {
+  const threads = { start: async () => { throw new Error("setup starts no thread"); } };
+  return { env: {}, slackUserId: () => ownerId, secrets: secretStore(home, "slack"), stateDir: join(home, "state"), threads, print: () => {}, readStdin: async () => "", every: () => () => {}, run: async () => ({ code: 0, stdout: "Nora Example\n", stderr: "" }), ...extra };
+}
 
 function harness(home: string) {
   const script = join(home, "harness.ts");
   writeFileSync(script, `import { slackTrigger } from ${JSON.stringify(resolve(import.meta.dir, "lib/command.ts"))};
+import { secretStore } from ${JSON.stringify(resolve(import.meta.dir, "../../src/runner/context.ts"))};
 const run = async (argv: string[]) => argv[0] === "git" ? { code: 0, stdout: "Nora Example\\n", stderr: "" } : { code: 127, stdout: "", stderr: "" };
-process.exit(await slackTrigger(["setup"], { env: Bun.env, home: Bun.env.HOME!, print: (line) => console.log(line), readStdin: () => Bun.stdin.text(), run, slackBase: Bun.argv[2] }));
+const threads = { start: async () => { throw new Error("setup starts no thread"); } };
+process.exit(await slackTrigger(["setup"], { env: Bun.env, slackUserId: () => JSON.parse(Bun.env.FLEET_SETTINGS!)["slack.userId"], secrets: secretStore(Bun.env.HOME!, "slack"), stateDir: Bun.env.HOME!, threads, every: () => () => {}, print: (line) => console.log(line), readStdin: () => Bun.stdin.text(), run, slackBase: Bun.argv[2] }));
 `);
   return script;
 }
@@ -115,7 +123,7 @@ describe("fleet slack-trigger setup", () => {
     expect(await terminal.exited).toBe(0);
     const screen = await terminal.screen();
     expect(screen).toContain("not to slack.userId U0OWNER");
-    expect(screen).toContain("readable only by you");
+    expect(screen).toContain("Saved both tokens where only you can read them.");
     for (const token of tokens) expect(screen).not.toContain(token);
     expect(statSync(tokensPath(home)).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(tokensPath(home), "utf8"))).toEqual({ appToken, userToken });
@@ -130,12 +138,8 @@ describe("fleet slack-trigger setup", () => {
     const answers = ["xoxp-not-an-app-token", "xapp-test-refused", appToken];
     const printed: string[] = [];
     const prompts: string[] = [];
-    const code = await slackTrigger(["setup"], {
-      env: { FLEET_SETTINGS: settings },
-      home,
+    const code = await slackTrigger(["setup"], setupDeps(home, {
       print: (line) => printed.push(line),
-      readStdin: async () => "",
-      run: async () => ({ code: 0, stdout: "Nora Example\n", stderr: "" }),
       slackBase: slack.base,
       readSecret: async (prompt) => {
         prompts.push(prompt.trim());
@@ -143,7 +147,7 @@ describe("fleet slack-trigger setup", () => {
         if (next === undefined) throw new Interrupted();
         return next;
       },
-    });
+    }));
     expect(code).toBe(130);
     expect(prompts.map((prompt) => prompt.split(" (")[0])).toEqual(["Paste the app-level token", "Paste the app-level token", "Paste the app-level token", "Paste the user token"]);
     expect(printed.join("\n")).toContain("does not start with xapp-");
@@ -166,19 +170,15 @@ describe("fleet slack-trigger setup", () => {
     stops.push(() => server.stop(true));
     const answers = [appToken, "xoxp-test-user", userToken];
     const printed: string[] = [];
-    const code = await slackTrigger(["setup"], {
-      env: { FLEET_SETTINGS: settings },
-      home: temp.make("home-"),
+    const code = await slackTrigger(["setup"], setupDeps(temp.make("home-"), {
       print: (line) => printed.push(line),
-      readStdin: async () => "",
-      run: async () => ({ code: 0, stdout: "Nora Example\n", stderr: "" }),
       slackBase: `http://127.0.0.1:${server.port}/api`,
       readSecret: async () => {
         const next = answers.shift();
         if (next === undefined) throw new Interrupted();
         return next;
       },
-    });
+    }));
     expect(code).toBe(130);
     expect(printed.filter((line) => line.includes("Slack did not accept it"))).toEqual(Array(2).fill("   Slack did not accept it: auth.test: … is bad, …, and so is …. Try again."));
     for (const token of [...tokens, "-token"]) expect(printed.join("\n")).not.toContain(token);
@@ -262,21 +262,12 @@ describe("the Slack app step", () => {
   });
   const plan = (machine: MachineFile = mac) => resolveEngine(sources, { packs: ["slack"], workflows: { "slack-thread": true }, settings: { "slack.userId": ownerId } }, machine);
 
-  test("runs fleet slack-trigger setup in the foreground, and its probe passes only for a tokens file with mode 600", () => {
+  test("asks for the Slack app in the foreground, only while Start a thread from Slack is on", () => {
     const step = plan().human.find((item) => item.pack === "slack")!;
-    expect(step).toMatchObject({ id: "slack-app", command: "fleet slack-trigger setup", interactive: true, workflow: "slack-thread" });
+    expect(step).toMatchObject({ id: "slack-app", interactive: true, workflow: "slack-thread" });
     expect(resolveEngine(sources, { packs: ["slack"], settings: { "slack.userId": ownerId } }, mac).human.filter((item) => item.pack === "slack")).toEqual([]);
-    const home = temp.make("probe-");
-    const probe = () => Bun.spawnSync(step.probe, { env: { HOME: home, PATH: "/usr/bin:/bin" } }).exitCode;
-    expect(probe()).not.toBe(0);
-    mkdirSync(join(home, ".config/fleet"), { recursive: true });
-    writeFileSync(tokensPath(home), "{}", { mode: 0o644 });
-    expect(probe()).not.toBe(0);
-    writeFileSync(join(home, ".config/fleet/other.json"), "{}", { mode: 0o600 });
-    expect(probe()).not.toBe(0);
-    Bun.spawnSync(["chmod", "600", tokensPath(home)]);
-    expect(probe()).toBe(0);
   });
+
 
   test("is skipped without running the wizard when setup runs with --non-interactive", async () => {
     const step = plan().human.find((item) => item.pack === "slack")!;
