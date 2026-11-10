@@ -453,24 +453,20 @@ export default {
     });
     fleet.command("slack-trigger", {
       summary: "Set up or check your Slack app",
-      run: async (args, ctx) => (await import("./lib/command.ts")).slackTrigger(args, ctx),
+      run: async (args, ctx) => (await import("./lib/command.ts")).slackTrigger(args, await commandDeps(ctx, userId)),
     });
     fleet.service({
       ...hub, after: app, id: "slack-trigger",
-      run: async (ctx) => {
-        const { listen } = await import("./lib/trigger.ts");
-        await listen({
-          owner: ctx.get(userId), tokens: () => ctx.secrets.read("app"),
-          stateDir: ctx.stateDir, log: ctx.log, now: ctx.now, sleep: ctx.sleep,
-          launchHere: ({ key, title, prompt }) => ctx.threads.start({ key, title, prompt, modelRole: "implementation" }),
-        });
-      },
+      run: async (ctx) => (await import("./lib/command.ts")).listen(await commandDeps(ctx, userId)),
     });
   },
 } satisfies Pack;
 ```
 
-The command and the service keep their names, so the unit stays
+`commandDeps` gives the command and the service the parts of `ctx` that they
+use: the member ID through `ctx.get`, the secret store, the state folder,
+`threads`, the clock, and `print`. The command and the service keep their
+names, so the unit stays
 `fleet-slack-trigger.service`. The `key` is the id that the trigger already
 stores for each Slack message before it starts a thread
 (`packs/slack/lib/trigger.ts:47`). Four points follow from today's code:
