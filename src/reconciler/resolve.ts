@@ -24,7 +24,7 @@ import { engineSettings } from "../pack/manifest.ts";
 
 export class ResolveError extends Error {}
 
-export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox"];
+export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "run"];
 
 /** Guide names the engine writes itself. */
 const engineGuides = ["skill-settings"];

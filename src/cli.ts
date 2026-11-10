@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
-import type { AvailableSource, FetchedSource, MachineFile, Plan, Report } from "./pack/types.ts";
+import type { AvailableSource, FetchedSource, LoadedPack, MachineFile, PackCode, Plan, Report } from "./pack/types.ts";
 import { loadMachine, loadProfile, saveMachine, thisMachine } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
 import { apply, check, type Runner } from "./reconciler/apply.ts";
@@ -17,9 +17,10 @@ import { packsCommand } from "./commands/packs.ts";
 import { setCommand, settingsCommand } from "./commands/settings.ts";
 import { devboxCommand } from "./commands/devbox.ts";
 import { realMachine } from "./setup/commands.ts";
+import { packContext, type Clock } from "./runner/context.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone"> };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -39,6 +40,8 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
                      Change settings
   fleet devbox [add <ssh host>]
                      List your devboxes, or make an SSH host one
+  fleet run <pack>/<id>
+                     Run a pack's service, or test one of its checks
   fleet <command>    Run a command that one of your packs ships`;
 
 const changes = { packs: packsCommand, settings: settingsCommand, set: setCommand };
@@ -52,6 +55,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
     if (command === "update") return await runUpdate(options);
     if (Object.hasOwn(changes, command)) return await change(command as keyof typeof changes, rest, options);
     if (command === "devbox") return await devbox(rest, options);
+    if (command === "run") return await runItem(rest, options);
     if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
     return await runPackCommand(command, rest, options);
   } catch (error) {
@@ -132,14 +136,58 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
     options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }
-  const child = Bun.spawn(["bun", command.path, ...args], {
-    stdio: ["inherit", "inherit", "inherit"],
-    env: { ...Bun.env, HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) },
-  });
+  const loaded = loadedPack(sources, command.pack);
+  const run = loaded?.code?.commands[name];
+  if (run) return inPack(plan, loaded!, options, (ctx) => run(args, ctx));
+  const child = Bun.spawn(["bun", command.path, ...args], { stdio: ["inherit", "inherit", "inherit"], env: { ...Bun.env, ...packEnvironment(plan, options) } });
   const forward = (signal: NodeJS.Signals) => child.kill(signal);
   process.on("SIGINT", forward).on("SIGTERM", forward);
   try { return await child.exited; }
   finally { process.off("SIGINT", forward).off("SIGTERM", forward); }
+}
+
+async function runItem(args: string[], options: CliOptions) {
+  const [item = "", ...extra] = args;
+  const slash = item.indexOf("/");
+  const [pack, id] = slash < 0 ? ["", ""] : [item.slice(0, slash), item.slice(slash + 1)];
+  if (!pack || !id || extra.length) return options.print("Usage: fleet run <pack>/<id>"), 2;
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const loaded = plan.packs.some((entry) => entry.name === pack && entry.available) ? loadedPack(sources, pack) : undefined;
+  const code = loaded?.code;
+  const job = plan.jobs.find((entry) => entry.pack === pack && entry.id === id);
+  const service = job ? code?.services[id] : undefined;
+  const check = plan.human.some((step) => step.pack === pack && step.id === id) ? code?.checks[id] : undefined;
+  if (!service && !check) {
+    const dropped = plan.dropped.find((entry) => entry.pack === pack && (entry.item === `job ${id}` || entry.item === `human ${id}`));
+    return options.print(dropped ? `fleet run: ${item} does not run here: ${dropped.reason}` : `fleet run: your packs have no service or check ${item}`), 2;
+  }
+  return inPack(plan, loaded!, options, async (ctx) => {
+    if (!service) return (await check!(ctx)) ? 0 : 1;
+    const waits = job?.after ? plan.human.find((step) => step.pack === pack && step.id === job.after) : undefined;
+    if (waits && !(await code!.checks[waits.id]!(ctx))) return options.print(`fleet run: ${item} waits until ${waits.id} passes. ${waits.say}`), 1;
+    return await service(ctx), 0;
+  });
+}
+
+function loadedPack(sources: FetchedSource[], name: string): LoadedPack | undefined {
+  return sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => pack.manifest.name === name);
+}
+
+async function inPack(plan: Plan, loaded: LoadedPack, options: CliOptions, work: (ctx: Awaited<ReturnType<typeof packContext>>) => Promise<number>) {
+  const clock = options.clock ?? { now: Date.now, sleep: Bun.sleep };
+  const ctx = await packContext({ home: options.home, plan, pack: loaded.manifest.name, code: loaded.code!, workflows: loaded.manifest.workflows ?? [], print: options.print, clock });
+  const environment = packEnvironment(plan, options);
+  const saved = Object.fromEntries(Object.keys(environment).map((key) => [key, process.env[key]]));
+  const assign = (values: Record<string, string | undefined>) => {
+    for (const [key, value] of Object.entries(values)) value === undefined ? delete process.env[key] : (process.env[key] = value);
+  };
+  assign(environment);
+  try { return await work(ctx); }
+  finally { assign(saved); }
+}
+
+function packEnvironment(plan: Plan, options: CliOptions): Record<string, string | undefined> {
+  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) };
 }
 
 function handlerPaths(plan: Plan) {

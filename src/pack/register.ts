@@ -1,4 +1,4 @@
-import type { Fleet, Pack, Scope as SdkScope } from "../sdk/index.ts";
+import type { Fleet, Pack, Scope as SdkScope, Setting } from "../sdk/index.ts";
 import type { HumanStep, PackCode, PackJob, PackSetting, Scope, Workflow } from "./types.ts";
 
 type Declared = { kind: "setting" | "workflow" | "check" | "service"; id: string };
@@ -13,8 +13,6 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   const workflows: Workflow[] = [];
   const jobs: PackJob[] = [];
   const human: HumanStep[] = [];
-  const code: PackCode = { commands: Object.create(null), services: Object.create(null), checks: Object.create(null) };
-
   const declare = <T>(kind: Declared["kind"], id: string): T => {
     const handle = Object.freeze({});
     declared.set(handle, { kind, id });
@@ -25,6 +23,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     if (found?.kind !== kind) throw new Error(`${label} names a ${kind} that the ${fields.name} pack did not declare`);
     return found.id;
   };
+  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), commands: Object.create(null), services: Object.create(null), checks: Object.create(null) };
   const place = (scope: SdkScope, label: string): Scope & { after?: string } => {
     if (scope.on !== undefined && scope.on !== "hub") throw new Error(`${label}: on takes only "hub"`);
     return {
@@ -43,7 +42,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   const fleet: Fleet = {
     setting(def) {
       settings.push(def as PackSetting);
-      return declare("setting", def.key);
+      return declare<Setting<never>>("setting", def.key);
     },
     workflow({ settings: handles, ...def }) {
       workflows.push({ ...def, ...(handles ? { settings: handles.map((handle) => own(handle, "setting", `workflow ${def.id}`)) } : {}) });

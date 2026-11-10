@@ -140,6 +140,7 @@ export type PackHandler = Scope & { seam: HandlerSeam; path: string };
 export type SourceRef = { name: string; repo: string; ref: string };
 
 export type PackCode = {
+  settingKey(handle: unknown): string;
   commands: Record<string, (args: string[], ctx: Context) => Promise<number>>;
   services: Record<string, (ctx: Context) => Promise<void>>;
   checks: Record<string, (ctx: Context) => Promise<boolean>>;
