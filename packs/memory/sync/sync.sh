@@ -80,13 +80,28 @@ if [ -n "$subtree" ]; then
     [ ! -e "$memory.premove" ] || fail "$memory.premove holds notes from an earlier move, and $memory is a folder again. Move the notes of both into $target; until then nothing syncs."
     mv "$memory" "$memory.premove"
     ln -s "$target" "$memory"
+    if [ ! -L "$memory" ]; then
+      [ ! -L "$memory/$(basename "$target")" ] || rm -f "$memory/$(basename "$target")"
+      fail "$memory is a folder again: something wrote there while the sync linked it. The earlier notes are in $memory.premove. Move the notes of both into $target; until then nothing syncs."
+    fi
   elif [ -e "$memory" ]; then
     fail "$memory is a file. Move it aside; the next sync links $memory to $target."
   else
     ln -s "$target" "$memory"
   fi
   if [ -d "$memory.premove" ]; then
-    cp -R "$memory.premove/." "$target/"
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    (cd "$memory.premove" && find . -type f) | while IFS= read -r path; do
+      path=${path#./}
+      if [ ! -e "$target/$path" ]; then
+        mkdir -p "$(dirname "$target/$path")"
+        cp -p "$memory.premove/$path" "$target/$path"
+      elif ! cmp -s "$memory.premove/$path" "$target/$path"; then
+        mkdir -p "$checkout/$conflicts"
+        cp -p "$memory.premove/$path" "$checkout/$conflicts/$(printf '%s' "$path" | tr '/ ' '__').premove.$stamp.$machine.lost"
+        echo "Memory: kept the version of $path that was set aside, since $target holds a newer one."
+      fi
+    done || fail "cannot move the notes in $memory.premove into $target. They stay there until the next sync."
     rm -rf "$memory.premove"
     echo "Memory: moved the notes in $memory into $target."
   fi

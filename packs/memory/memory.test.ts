@@ -385,6 +385,34 @@ describe("the memory sync", () => {
     expect(existsSync(join(root, "home-laptop/.agents/memory.premove"))).toBe(false);
   });
 
+  test.concurrent("with a subtree, keeps a note written through the new link over the one a stopped move set aside", async () => {
+    const { root, remote } = setup();
+    commitAll(join(root, "seed-main"), "old layout", { "memory/MEMORY.md": "# Memory\n" });
+    const env = { FLEET_MEMORY_SUBTREE: "memory" };
+    const laptop = await sync(root, remote, "laptop", env);
+    write(laptop.checkout, { "note.md": "newer, written through the link\n" });
+    write(join(root, "home-laptop/.agents/memory.premove"), { "note.md": "older, set aside\n", "other.md": "only set aside\n" });
+    expect((await sync(root, remote, "laptop", env)).code).toBe(0);
+    expect(git(root, "--git-dir", remote, "show", "main:memory/note.md")).toBe("newer, written through the link");
+    expect(git(root, "--git-dir", remote, "show", "main:memory/other.md")).toBe("only set aside");
+    const kept = git(root, "--git-dir", remote, "ls-tree", "--name-only", "main:memory/.conflicts");
+    expect(git(root, "--git-dir", remote, "show", `main:memory/.conflicts/${kept}`)).toContain("older, set aside");
+    expect(existsSync(join(root, "home-laptop/.agents/memory.premove"))).toBe(false);
+  });
+
+  test.concurrent("with a subtree, stops and keeps the notes set aside when a folder reappears before the link", async () => {
+    const { root, remote } = setup();
+    commitAll(join(root, "seed-main"), "old layout", { "memory/MEMORY.md": "# Memory\n" });
+    const memory = join(root, "home-laptop/.agents/memory");
+    write(memory, { "early.md": "an early note\n" });
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "ln"), `#!/bin/sh\nmkdir -p "${memory}"\nexec ${Bun.which("ln")} "$@"\n`, { mode: 0o755 });
+    const raced = await sync(root, remote, "laptop", { FLEET_MEMORY_SUBTREE: "memory", PATH: `${bin}:${process.env.PATH}` });
+    expect([raced.code, raced.out]).toEqual([1, expect.stringContaining("is a folder again")]);
+    expect(readFileSync(join(`${memory}.premove`, "early.md"), "utf8")).toBe("an early note\n");
+  });
+
   test.concurrent("keeps the other side when a note written before the first sync replaces one in the repo", async () => {
     const { root, remote } = setup();
     commitAll(join(root, "seed-main"), "notes", { "trap.md": "the trap, as the repo has it\n" });
