@@ -78,11 +78,11 @@ export function requireHub(home: string, command: string): void {
   throw new Error(`fleet box ${command} runs only on the hub. This machine's role is ${role ?? "not set"}. Run fleet hub here on the hub, or run this there.`);
 }
 
-function readProfile(env: Env): { devboxes: string[]; plan?: string } {
+function readProfile(env: Env): { devboxes: string[]; plan?: string; hub?: string } {
   const path = env.FLEET_PROFILE_DIR ? join(env.FLEET_PROFILE_DIR, "fleet.json") : undefined;
   if (!path || !existsSync(path)) return { devboxes: [] };
-  const profile = JSON.parse(readFileSync(path, "utf8")) as { devboxes?: string[]; plan?: string };
-  return { devboxes: profile.devboxes ?? [], ...(profile.plan ? { plan: profile.plan } : {}) };
+  const profile = JSON.parse(readFileSync(path, "utf8")) as { devboxes?: string[]; plan?: string; hub?: string };
+  return { devboxes: profile.devboxes ?? [], ...(profile.plan ? { plan: profile.plan } : {}), ...(typeof profile.hub === "string" ? { hub: profile.hub } : {}) };
 }
 
 function freePort(): number {
@@ -109,7 +109,8 @@ function namesOfThisMachine(home: string, hub: string): string[] {
 }
 
 export function profileDevboxes(env: Env): string[] {
-  return readProfile(env).devboxes;
+  const profile = readProfile(env);
+  return profile.hub ? profile.devboxes.filter((name) => name !== profile.hub && !isBoxName(name)) : [];
 }
 
 export function devboxesOf(env: Env, home: string): string[] {
