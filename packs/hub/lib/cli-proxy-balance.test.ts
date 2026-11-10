@@ -33,13 +33,6 @@ test("a full five-hour or model window makes a subscription exhausted, and a mis
   expect(quotaStatus(credential("a", { usage: weekly(99, 1) }))).toBe("available");
 });
 
-test("a Codex subscription needs only one readable window, and any full window makes it exhausted", () => {
-  const codex = (usage: Credential["usage"]) => quotaStatus(credential("x", { provider: "codex", usage }));
-  expect(codex({ fiveHour: { utilization: 30 }, scoped: [] })).toBe("available");
-  expect(codex({ sevenDay: { utilization: 30 }, scoped: [] })).toBe("available");
-  expect(codex({ fiveHour: { utilization: 30 }, scoped: [{ utilization: 100 }] })).toBe("exhausted");
-  expect(codex({ scoped: [] })).toBe("unknown");
-});
 
 type Call = { method: string; path: string; body?: unknown; auth: string };
 
@@ -77,7 +70,8 @@ function managementApi(state: { strategy?: string; usage?: Record<string, unknow
     if (url.pathname.endsWith("auth-files")) return Response.json({ files });
     if (url.pathname.endsWith("api-call")) {
       expect(body.header.Authorization).toBe("Bearer $TOKEN$");
-      const found = body.url === codexUsageUrl ? codexUsage[body.auth_index] : body.url === "https://api.anthropic.com/api/oauth/usage" ? usage[body.auth_index] : undefined;
+      const account = body.header["Chatgpt-Account-Id"];
+      const found = body.url === codexUsageUrl ? codexUsage[account ? `${body.auth_index}@${account}` : body.auth_index] : body.url === "https://api.anthropic.com/api/oauth/usage" ? usage[body.auth_index] : undefined;
       return Response.json(found ? { status_code: 200, body: JSON.stringify(found) } : { status_code: 401, body: "" });
     }
     return Response.json({});
@@ -160,12 +154,36 @@ test("a Codex subscription that hit its limit stays in its cooldown, and one who
   expect(lines).toContain("free.json: cleared quota cooldown after live usage confirmed capacity");
 });
 
-test("a Codex subscription whose limit is reached is exhausted even when its windows read below 100%", async () => {
-  const files = [{ name: "capped.json", provider: "codex", auth_index: "5", priority: 0, unavailable: true, cooldowns: [{ reason: "quota" }] }];
-  const codexUsage = { "5": { rate_limit: codexLimit(40, 40, { limit_reached: true }) } };
+test("from the raw usage answer, a Codex cooldown clears only while every limit has room and every window reads", async () => {
+  const weeklyOnly = { allowed: true, limit_reached: false, primary_window: { used_percent: 20, limit_window_seconds: 604_800, reset_at: seconds(3) }, secondary_window: null };
+  const cases: Array<[string, unknown, boolean]> = [
+    ["weekly only", { rate_limit: weeklyOnly }, true],
+    ["main limit reached below 100%", { rate_limit: codexLimit(40, 40, { limit_reached: true }) }, false],
+    ["main limit not allowed", { rate_limit: codexLimit(40, 40, { allowed: false }) }, false],
+    ["extra limit full", { rate_limit: codexLimit(10, 10), additional_rate_limits: [{ rate_limit: codexLimit(100, 10) }] }, false],
+    ["extra limit reached", { rate_limit: codexLimit(10, 10), additional_rate_limits: [{ rate_limit: codexLimit(10, 10, { limit_reached: true }) }] }, false],
+    ["extra window malformed", { rate_limit: codexLimit(10, 10), additional_rate_limits: [{ rate_limit: codexLimit(10, 10, { secondary_window: { used_percent: "ten" } }) }] }, false],
+    ["no windows", { rate_limit: { allowed: true, limit_reached: false } }, false],
+  ];
+  for (const [label, answer, clears] of cases) {
+    const files = [{ name: "c.json", provider: "codex", auth_index: "5", priority: 0, unavailable: true, cooldowns: [{ reason: "quota" }] }];
+    const { fetch, calls } = managementApi({ strategy: "fill-first", files, codexUsage: { "5": answer } });
+    await balance({ fetch, managementKey, now, dryRun: false, log: () => {} });
+    expect([label, calls.some((call) => call.path === "reset-quota")]).toEqual([label, clears]);
+  }
+});
+
+test("the Codex usage call names the subscription's ChatGPT account, so a login with several accounts reads its own", async () => {
+  const files = [
+    { name: "work.json", provider: "codex", auth_index: "5", priority: 0, unavailable: true, cooldowns: [{ reason: "quota" }], id_token: { chatgpt_account_id: "acct-work" } },
+    { name: "odd.json", provider: "codex", auth_index: "6", priority: 0, id_token: { chatgpt_account_id: "bad\r\nX-Injected: 1" } },
+  ];
+  const codexUsage = { "5": { rate_limit: codexLimit(100, 100, { limit_reached: true }) }, "5@acct-work": { rate_limit: codexLimit(10, 10) }, "6": { rate_limit: codexLimit(10, 10) } };
   const { fetch, calls } = managementApi({ strategy: "fill-first", files, codexUsage });
   await balance({ fetch, managementKey, now, dryRun: false, log: () => {} });
-  expect(calls.filter((call) => call.path === "reset-quota")).toEqual([]);
+  const headers = calls.filter((call) => call.path === "api-call").map((call) => (call.body as { header: Record<string, string> }).header);
+  expect(headers).toEqual([{ Authorization: "Bearer $TOKEN$", "Chatgpt-Account-Id": "acct-work" }, { Authorization: "Bearer $TOKEN$" }]);
+  expect(calls.filter((call) => call.path === "reset-quota").map((call) => call.body)).toEqual([{ auth_index: "5" }]);
 });
 
 test("unreadable Codex usage is logged as unreadable and clears no cooldown", async () => {
@@ -183,8 +201,11 @@ test("balance reports each blocked credential of either provider on every run, a
     { name: "revoked.json", provider: "claude", auth_index: "2", priority: 2, unavailable: true, status_message: JSON.stringify({ error: { type: "authentication_error", message: "token revoked" } }) },
     { name: "codex.json", provider: "codex", auth_index: "5", priority: 0, unavailable: true, cooldowns: [{ reason: "unauthorized" }] },
     { name: "waiting.json", provider: "codex", auth_index: "6", priority: 0, unavailable: true, cooldowns: [{ reason: "quota" }] },
+    { name: "flaky.json", provider: "codex", auth_index: "7", priority: 0, unavailable: true, cooldowns: [{ reason: "transient_error" }, { reason: "quota" }] },
+    { name: "unpaid.json", provider: "claude", auth_index: "8", priority: 0, unavailable: true, cooldowns: [{ reason: "payment_required" }] },
+    { name: "named.json", provider: "claude", auth_index: "9", priority: 0, unavailable: true, status_message: JSON.stringify({ error: { type: "token_for_alice_was_revoked" } }) },
   ];
-  const codexUsage = { "5": { rate_limit: codexLimit(10, 10) }, "6": { rate_limit: codexLimit(100, 10, { limit_reached: true }) } };
+  const codexUsage = { "5": { rate_limit: codexLimit(10, 10) }, "6": { rate_limit: codexLimit(100, 10, { limit_reached: true }) }, "7": { rate_limit: codexLimit(10, 10) } };
   const { fetch } = managementApi({ strategy: "fill-first", files, codexUsage });
   const runs: string[][] = [[], []];
   for (const lines of runs) await balance({ fetch, managementKey, now, dryRun: false, log: (line) => lines.push(line) });
@@ -192,7 +213,11 @@ test("balance reports each blocked credential of either provider on every run, a
     expect(lines.filter((line) => line.includes("blocked"))).toEqual([
       "revoked.json: blocked (authentication_error). The proxy skips this Claude subscription until you sign it in again on the hub.",
       "codex.json: blocked (unauthorized). The proxy skips this Codex subscription until you sign it in again on the hub.",
+      "flaky.json: blocked (transient_error). The proxy skips this Codex subscription until the block clears.",
+      "unpaid.json: blocked (payment_required). The proxy skips this Claude subscription until its plan's billing is fixed.",
+      "named.json: blocked (unavailable). The proxy skips this Claude subscription until the block clears.",
     ]);
   }
   expect(runs[0]!.join("\n")).not.toContain("token revoked");
+  expect(runs[0]!.join("\n")).not.toContain("alice");
 });

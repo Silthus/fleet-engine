@@ -10,7 +10,7 @@ export type Credential = { name: string; authIndex: string; provider: Provider; 
 export type Balance = { fetch: Fetch; managementKey: string; now: number; dryRun: boolean; log(line: string): void };
 export type BalanceDeps = { home: string; fetch: Fetch; now(): number; log(line: string): void };
 
-type AuthFile = { name: string; provider?: string; disabled?: boolean; priority?: number; auth_index?: string; unavailable?: boolean; status_message?: string; cooldowns?: { reason?: string }[] };
+type AuthFile = { name: string; provider?: string; disabled?: boolean; priority?: number; auth_index?: string; unavailable?: boolean; status_message?: string; cooldowns?: { reason?: string }[]; id_token?: { chatgpt_account_id?: unknown } };
 type RawWindow = { utilization?: number | null; resets_at?: string | null } | null | undefined;
 type CodexWindow = { used_percent?: number; reset_at?: number; limit_window_seconds?: number } | null | undefined;
 type CodexLimit = { allowed?: boolean; limit_reached?: boolean; primary_window?: CodexWindow; secondary_window?: CodexWindow } | undefined;
@@ -23,6 +23,10 @@ export const managementPattern = /^MANAGEMENT_PASSWORD=([0-9a-f]{64})\n$/;
 const usageUrl = "https://api.anthropic.com/api/oauth/usage";
 const codexUsageUrl = "https://chatgpt.com/backend-api/wham/usage";
 const providerNames: Record<Provider, string> = { claude: "Claude", codex: "Codex" };
+const signInBlocks = ["invalid_grant", "unauthorized", "authentication_error", "permission_error"];
+const waitBlocks = ["transient_error", "transient_rate_limit", "cloudflare_challenge", "overloaded_error", "api_error", "model_not_supported", "not_found", "unknown"];
+const knownBlocks = new Set([...signInBlocks, ...waitBlocks, "payment_required"]);
+const accountPattern = /^[A-Za-z0-9_-]{1,128}$/;
 const strategy = "fill-first";
 const hour = 3_600_000;
 
@@ -61,7 +65,7 @@ export async function balance(options: Balance): Promise<void> {
   const enabled = files.filter((file) => (file.provider === "claude" || file.provider === "codex") && !file.disabled && file.auth_index);
   const credentials = await Promise.all(enabled.map(async (file): Promise<Credential> => {
     const provider = file.provider as Provider;
-    const usage = provider === "codex" ? await readCodexUsage(call, file.auth_index!) : await readUsage(call, file.auth_index!);
+    const usage = provider === "codex" ? await readCodexUsage(call, file.auth_index!, codexAccount(file)) : await readUsage(call, file.auth_index!);
     return { name: file.name, authIndex: file.auth_index!, provider, priority: file.priority ?? 0, quotaCooldown: quotaCooldown(file), blocked: blocked(file), usage };
   }));
   const claude = credentials.filter((credential) => credential.provider === "claude");
@@ -72,7 +76,7 @@ export async function balance(options: Balance): Promise<void> {
     for (const credential of credentials) options.log(describe(credential, planned.get(credential.name)!, options.now));
   }
   for (const credential of credentials) {
-    if (credential.blocked) options.log(`${credential.name}: blocked (${credential.blocked}). The proxy skips this ${providerNames[credential.provider]} subscription until you sign it in again on the hub.`);
+    if (credential.blocked) options.log(`${credential.name}: blocked (${credential.blocked}). The proxy skips this ${providerNames[credential.provider]} subscription ${until(credential.blocked)}.`);
   }
   if (options.dryRun) return;
   for (const credential of changed) await call("auth-files/fields", { method: "PATCH", body: JSON.stringify({ name: credential.name, priority: planned.get(credential.name) }) });
@@ -88,22 +92,35 @@ function quotaCooldown(file: AuthFile): boolean {
   return statusType(file) === "rate_limit_error";
 }
 
-function statusType(file: AuthFile): string | undefined {
-  try {
-    const type = JSON.parse(file.status_message ?? "").error?.type;
-    return typeof type === "string" && /^[a-z_]{1,64}$/.test(type) ? type : undefined;
-  } catch { return undefined; }
+function statusType(file: AuthFile): unknown {
+  try { return JSON.parse(file.status_message ?? "").error?.type; }
+  catch { return undefined; }
 }
+
+const knownBlock = (code: unknown) => (typeof code === "string" && knownBlocks.has(code) ? code : "unavailable");
 
 function blocked(file: AuthFile): string | false {
   if (!file.unavailable || quotaCooldown(file)) return false;
-  const reasons = (file.cooldowns ?? []).flatMap(({ reason }) => (typeof reason === "string" && /^[a-z_]{1,64}$/.test(reason) ? [reason] : []));
-  return reasons.length ? [...new Set(reasons)].join(", ") : (statusType(file) ?? "unavailable");
+  const reasons = (file.cooldowns ?? []).filter(({ reason }) => reason !== "quota" && reason !== "credential_quota").map(({ reason }) => knownBlock(reason));
+  return reasons.length ? [...new Set(reasons)].join(", ") : knownBlock(statusType(file));
 }
 
-async function readCodexUsage(call: Call, authIndex: string): Promise<Usage | undefined> {
+function until(codes: string): string {
+  const list = codes.split(", ");
+  if (list.some((code) => signInBlocks.includes(code))) return "until you sign it in again on the hub";
+  if (list.includes("payment_required")) return "until its plan's billing is fixed";
+  return "until the block clears";
+}
+
+function codexAccount(file: AuthFile): string | undefined {
+  const account = file.id_token?.chatgpt_account_id;
+  return typeof account === "string" && accountPattern.test(account) ? account : undefined;
+}
+
+async function readCodexUsage(call: Call, authIndex: string, account: string | undefined): Promise<Usage | undefined> {
   try {
-    const response = (await call("api-call", { method: "POST", body: JSON.stringify({ auth_index: authIndex, method: "GET", url: codexUsageUrl, header: { Authorization: "Bearer $TOKEN$" } }) })) as { status_code: number; body: string };
+    const header = { Authorization: "Bearer $TOKEN$", ...(account ? { "Chatgpt-Account-Id": account } : {}) };
+    const response = (await call("api-call", { method: "POST", body: JSON.stringify({ auth_index: authIndex, method: "GET", url: codexUsageUrl, header }) })) as { status_code: number; body: string };
     if (response.status_code !== 200) return undefined;
     const raw = JSON.parse(response.body) as { rate_limit?: CodexLimit; additional_rate_limits?: { rate_limit?: CodexLimit }[] };
     const usage: Usage = { scoped: [] };
