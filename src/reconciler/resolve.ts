@@ -22,6 +22,7 @@ import type {
 import { signerSetting } from "../adapters/identity/signers.ts";
 import { engineSettings } from "../pack/manifest.ts";
 import { placedMachine } from "../profile/profile.ts";
+import { forwardId, hubForward } from "../hub/ssh.ts";
 
 export class ResolveError extends Error {}
 
@@ -113,6 +114,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
       plan.config.push({ ...entry, pack });
     }
   }
+  if (forwardsToHub(profile, machine, os) && plan.catalog.length) plan.jobs.push(hubForward(profile.hub!, plan.catalog));
   for (const entry of profile.overrides?.config ?? []) {
     if (!fits("profile", entry, `config ${entry.provider}:${entry.key}`)) continue;
     const owner = `${entry.provider}:${entry.key}`;
@@ -153,12 +155,20 @@ function serviceCatalog(order: Candidate[], profile: Profile, active: Set<string
   );
 }
 
+/** A node that the profile names, other than the hub, reaches the hub's services through its own forward. The Mac and boxes keep today's forwards. */
+function forwardsToHub(profile: Profile, machine: MachineFile, os: Os) {
+  return os === "linux" && profile.hub !== undefined && machine.name !== undefined && machine.name !== profile.hub && !boxName.test(machine.name) && Boolean(profile.devboxes?.includes(machine.name));
+}
+
+const boxName = /^box-/;
+
 /** Workflow and job ids are global: the profile and the Jobs adapter key on them alone. */
 function checkUniqueIds(order: Candidate[]) {
   for (const kind of ["workflows", "jobs"] as const) {
     const seen = new Map<string, string>();
     for (const { manifest } of order) {
       for (const { id } of manifest[kind] ?? []) {
+        if (kind === "jobs" && id === forwardId) throw new ResolveError(`${manifest.name}: job ${forwardId} is reserved by the engine`);
         const other = seen.get(id);
         if (other) throw new ResolveError(`${kind === "jobs" ? "job" : "workflow"} ${id} is declared by both ${other} and ${manifest.name}`);
         seen.set(id, manifest.name);
