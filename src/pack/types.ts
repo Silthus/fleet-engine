@@ -201,6 +201,8 @@ export type Plan = {
   hub?: string;
   /** This machine runs the hub's items: it is the hub, or the only machine. */
   onHub?: boolean;
+  /** This machine is a node that the profile names, not the hub: it reaches the hub's services through its forward and pulls its credentials from the hub. */
+  reachesHub?: true;
   /** The engine whose launcher a leading fleet in a pack's commands runs. */
   engineRoot?: string;
   os: Os;

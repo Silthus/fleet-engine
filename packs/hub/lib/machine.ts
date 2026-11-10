@@ -6,6 +6,7 @@ import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Capture, type Env, type Result } from "./coder.ts";
 import { isBoxName } from "./names.ts";
 import type { Clock } from "./pool.ts";
+import { onHub } from "../../../src/hub/ssh.ts";
 
 export type BoxSettings = {
   alias: string; coderUrl: string; template: string; diskGigabytes: number; poolSize: number;
@@ -116,7 +117,7 @@ export function shellsWith(run: Capture, hub: string): Pick<Machine, "onPeer" | 
   const input = (stdin?: string) => (stdin === undefined ? {} : { stdin });
   return {
     onPeer: (alias, command, stdin) => run(peerSsh(alias, command), { ...input(stdin), timeoutMs: shellLimitMs }),
-    toHub: async (args) => (await run(peerSsh(hub, remoteFleet(args.map(quote).join(" "))), { timeoutMs: hubCallLimitMs, inherit: true })).code,
+    toHub: async (args) => (await run(onHub(hub, args), { timeoutMs: hubCallLimitMs, inherit: true })).code,
     run: (argv, stdin) => run(argv, { ...input(stdin), timeoutMs: shellLimitMs }),
   };
 }

@@ -265,11 +265,15 @@ and Fleet does not wrap it in a unit.
   no second direction.
 - **Commands and credentials travel over plain `ssh`, from the node to the
   hub.** A node runs a hub command as `ssh <hub> fleet <command>`, as
-  `toHub` does today (`packs/hub/lib/machine.ts:144`). During its own apply
-  a node pulls each credential the same way:
-  `ssh <hub> fleet credential <pack>/<id> <node>`. The hub answers only for
-  a node that the profile names. The hub runs no command on a node. A machine
-  without plain `ssh` to the hub is outside v1's topology.
+  `toHub` does. During its own apply a node pulls each credential the same
+  way: `ssh <hub> fleet credential <pack>/<id> <node>`, at every apply, so a
+  new key on the hub reaches the node. The hub answers only for a node that
+  the profile names. Every such call goes through one engine path
+  (`src/hub/ssh.ts`): `BatchMode`, a checked host name, each word quoted,
+  and Fleet's launcher at its install path, not the login `PATH`. The hub
+  runs no command on a node, so `fleet mcphub grant` and its accept command
+  are gone. A machine without plain `ssh` to the hub is outside v1's
+  topology.
 - **Each service issues its own credentials (D14).** The engine mints no
   key. A service that needs one declares `serve.credential(ctx, node)`,
   which returns the value for that node. The hub calls it when a node

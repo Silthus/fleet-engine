@@ -91,14 +91,20 @@ test("every call to a peer over SSH and every local command gets an operation ti
   expect(shellLimitMs).toBeGreaterThan(0);
 });
 
-test("a devbox hands a box operation to the hub in one SSH call through the engine launcher, with the output passed through and a time limit", async () => {
+test("a devbox hands a box operation to the hub in one batch SSH call through the engine launcher at its install path, with each word kept whole, the output passed through, and a time limit", async () => {
   const asked: Array<{ argv: string[]; timeoutMs: number; inherit?: boolean }> = [];
   const capture: Capture = async (argv, options) => (asked.push({ argv, timeoutMs: options.timeoutMs, ...(options.inherit ? { inherit: true } : {}) }), { code: 3, stdout: "", stderr: "" });
   const { toHub } = shellsWith(capture, "my-hub");
-  expect(await toHub(["box", "spawn", "Lane 7", "--for", "devbox-1"])).toBe(3);
-  expect(asked.map(({ argv, ...rest }) => ({ argv: argv.slice(0, 8), ...rest }))).toEqual([{ argv: ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", "my-hub"], timeoutMs: hubCallLimitMs, inherit: true }]);
-  const echoed = Bun.spawnSync(["bash", "-c", asked[0]!.argv[8]!.replace("bash -lc", "bash -c")], { env: { HOME: "/home/someone", PATH: "/usr/bin:/bin" }, stdout: "pipe", stderr: "pipe" });
-  expect(echoed.stderr.toString()).toContain("/home/someone/.local/share/fleet/engine/fleet");
-  expect(asked[0]!.argv[8]).toBe(`bash -lc ${quote(`${remoteFleet("")}'box' 'spawn' 'Lane 7' '--for' 'devbox-1'`)}`);
+  expect(await toHub(["box", "spawn", "Lane 7; rm -rf ~", "--for", "devbox-1"])).toBe(3);
+  const [{ argv, ...rest }] = asked as [(typeof asked)[number]];
+  expect(rest).toEqual({ timeoutMs: hubCallLimitMs, inherit: true });
+  expect(argv[0]).toBe("ssh");
+  expect(argv).toContain("BatchMode=yes");
+  expect(argv.at(-2)).toBe("my-hub");
+  const home = temp.make("fleet-remote-");
+  mkdirSync(join(home, ".local/share/fleet/engine"), { recursive: true });
+  writeFileSync(join(home, ".local/share/fleet/engine/fleet"), `printf '%s\\n' "$@"\n`);
+  const remote = Bun.spawnSync(["sh", "-c", argv.at(-1)!], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  expect(remote.stdout.toString()).toBe("box\nspawn\nLane 7; rm -rf ~\n--for\ndevbox-1\n");
   expect(hubCallLimitMs).toBeGreaterThan(shellLimitMs);
 });

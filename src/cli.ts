@@ -19,9 +19,11 @@ import { devboxCommand } from "./commands/devbox.ts";
 import { hubCommand } from "./commands/hub.ts";
 import { realMachine } from "./setup/commands.ts";
 import { credentialName, packContext, secretStore, type Clock } from "./runner/context.ts";
+import { onHub } from "./hub/ssh.ts";
+import { spawnRunner, type CommandRunner } from "./adapters/run.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; fail?: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string; stdin?: () => ReadableStream<Uint8Array> };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; fail?: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string; stdin?: () => ReadableStream<Uint8Array>; capture?: CommandRunner };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -46,6 +48,8 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet hub status   Show this machine's name and the hub
   fleet run <pack>/<id> [--repair]
                      Run a pack's service, test one of its checks, or run its repair
+  fleet credential <pack>/<id> <node>
+                     On the hub, print a served service's credential for a node
   fleet <command>    Run a command that one of your packs ships`;
 
 const changes = { packs: packsCommand, settings: settingsCommand, set: setCommand };
@@ -60,6 +64,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
     if (Object.hasOwn(changes, command) || command === "hub") return await change(command as keyof typeof changes | "hub", rest, options);
     if (command === "devbox") return await devbox(rest, options);
     if (command === "run") return await runItem(rest, options);
+    if (command === "credential") return await credential(rest, options);
     if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
     return await runPackCommand(command, rest, options);
   } catch (error) {
@@ -189,8 +194,9 @@ async function runItem(args: string[], options: CliOptions) {
   });
 }
 
-/** On the hub: asks each served service whose gate passed for this machine's credential when its pack's secret store holds none, and stores the answer. */
+/** Fills this machine's credential for each served service in the list: the hub asks the service when its pack's secret store holds none, and a node pulls its own from the hub at every apply. */
 async function issueCredentials(entries: CatalogEntry[], node: string, plan: Plan, sources: FetchedSource[], options: CliOptions): Promise<Finding[]> {
+  if (plan.reachesHub) return pullCredentials(entries, node, plan.hub!, options);
   const findings: Finding[] = [];
   for (const entry of entries) {
     const loaded = loadedPack(sources, entry.pack);
@@ -200,9 +206,7 @@ async function issueCredentials(entries: CatalogEntry[], node: string, plan: Pla
     try {
       if (await secretStore(options.home, entry.pack).read(name)) continue;
       await inPack(plan, loaded!, options, async (ctx) => {
-        const value = await issue(ctx, node);
-        if (!value) throw new Error("it gave no credential");
-        await ctx.secrets.write(name, value);
+        await ctx.secrets.write(name, await issued(issue(ctx, node)));
         return 0;
       });
     } catch (error) {
@@ -210,6 +214,49 @@ async function issueCredentials(entries: CatalogEntry[], node: string, plan: Pla
     }
   }
   return findings;
+}
+
+async function issued(value: Promise<string>) {
+  const credential = await value;
+  if (!credential) throw new Error("it gave no credential");
+  return credential;
+}
+
+/** Asks the hub for this node's credential of each service and stores the answer. A failed pull keeps what the store holds. */
+async function pullCredentials(entries: CatalogEntry[], node: string, hub: string, options: CliOptions): Promise<Finding[]> {
+  const capture = options.capture ?? spawnRunner;
+  const findings: Finding[] = [];
+  for (const entry of entries) {
+    const service = `${entry.pack}/${entry.id}`;
+    const store = secretStore(options.home, entry.pack);
+    const name = credentialName(entry.id);
+    const answer = await capture(onHub(hub, ["credential", service, node]));
+    const value = answer.stdout.trim();
+    if (answer.code === 0 && value) {
+      if ((await store.read(name)) !== value) await store.write(name, value);
+      continue;
+    }
+    const reason = (answer.stderr ?? "").trim().split("\n").at(-1) || `exit ${answer.code}`;
+    const kept = (await store.read(name)) ? "Kept the one this machine has." : "Fleet tries again at the next apply.";
+    findings.push({ id: `credential:${service}`, pack: entry.pack, say: `Could not pull the credential of ${service} from the hub ${hub} (${reason}). ${kept}`, repair: "apply" });
+  }
+  return findings;
+}
+
+/** On the hub: the credential that a served service issues for a node of the profile, printed for that node's pull. */
+async function credential(args: string[], options: CliOptions) {
+  const [item = "", node, ...extra] = args;
+  const slash = item.indexOf("/");
+  const [pack, id] = slash < 0 ? ["", ""] : [item.slice(0, slash), item.slice(slash + 1)];
+  if (!pack || !id || !node || extra.length) return options.print("Usage: fleet credential <pack>/<id> <node>"), 2;
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  if (!plan.onHub) throw new Error(`fleet credential runs on the hub${plan.hub ? `, ${plan.hub}` : ""}.`);
+  if (!plan.catalog?.some((entry) => entry.pack === pack && entry.id === id)) throw new Error(`the service catalog has no ${item}: its workflow or plan is off in your profile.`);
+  const profile = await loadProfile(plan.machine.profileDir!);
+  if (![profile.hub ?? plan.machine.name, ...(profile.devboxes ?? [])].includes(node)) throw new Error(`${node} is not a node of your profile. Name it in devboxes, or run fleet devbox add ${node}.`);
+  const loaded = loadedPack(sources, pack)!;
+  const issue = loaded.code!.credentials[id]!;
+  return inPack(plan, loaded, options, async (ctx) => (options.print(await issued(issue(ctx, node))), 0));
 }
 
 function loadedPack(sources: FetchedSource[], name: string): LoadedPack | undefined {
