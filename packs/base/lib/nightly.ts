@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { engineCommand } from "../../../src/reconciler/engine-command.ts";
 
@@ -16,10 +16,10 @@ export async function nightlyCommand(args: string[], context: NightlyContext): P
   if (now.getUTCHours() < nightWindowUtc.firstHour || now.getUTCHours() > nightWindowUtc.lastHour) return 0;
   const today = now.toISOString().slice(0, 10);
   const stamp = stampFile(context.home, id);
-  if ((await readFile(stamp, "utf8").catch(() => "")).trim() === today) return 0;
   const lock = `${stamp}.lock`;
   if (!(await claim(lock))) return 0;
   try {
+    if ((await readFile(stamp, "utf8").catch(() => "")).trim() === today) return 0;
     const code = await Bun.spawn(engineCommand(command, context.engineRoot), { stdio: ["ignore", "inherit", "inherit"] }).exited;
     if (code === 0) await writeFile(stamp, `${today}\n`);
     return code;
@@ -37,12 +37,16 @@ async function claim(lock: string) {
 }
 
 async function create(lock: string) {
+  const draft = `${lock}.${process.pid}`;
+  await writeFile(draft, `${process.pid}\n`);
   try {
-    await writeFile(lock, `${process.pid}\n`, { flag: "wx" });
+    await link(draft, lock);
     return true;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
     throw error;
+  } finally {
+    await rm(draft, { force: true });
   }
 }
 
