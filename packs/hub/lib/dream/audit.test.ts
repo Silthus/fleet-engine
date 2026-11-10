@@ -251,3 +251,41 @@ test.concurrent("audit keeps secrets out of what it asks and writes, and flatten
   expect(written).not.toContain(token);
   expect(written.split("\n").filter((line) => line.startsWith("## "))).toEqual(["## no session (1)", "## confirmed (3)", "## Recheck"]);
 });
+
+test("audit starts over from the first commit when main was rewound past its last point", async () => {
+  const { home, run } = hubWithSyncedNotes();
+  const writer = join(home, "writer");
+  expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => checker().check }).io)).toBe(0);
+  const before = git(writer, "rev-parse", "HEAD");
+  commitAt(writer, "2026-11-05T02:00:00Z", "memory: devbox-1", { "memory/tech/trap.md": note("trap", {}, "Run the slow suite once.") });
+  expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => checker().check }).io)).toBe(0);
+  git(writer, "push", "-q", "-f", "origin", `${before}:main`);
+  const after = checker();
+
+  expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => after.check }).io)).toBe(0);
+
+  expect(readFileSync(join(run, "audit.md"), "utf8")).toContain("since the start;");
+  expect(after.asked.some((input) => input.includes("Memory: tech/trap.md") && input.includes("Always run the slow suite twice."))).toBe(true);
+});
+
+test("audit redacts a note and its change before it clips them, so a secret across the cut does not leak", async () => {
+  const { home } = hubWithSyncedNotes();
+  const password = ["pretend", "pass", "9z8y7x"].join("-");
+  const head = note("hook", { originSessionId: "s-2" }, "").length - 1;
+  const long = `${"x".repeat(5990 - head - "https://deploy:".length)}https://deploy:${password}@example.com/hook`;
+  commitAt(join(home, "writer"), "2026-11-04T15:00:00Z", "memory: devbox-2", { "memory/tech/hook.md": note("hook", { originSessionId: "s-2" }, long) });
+  const writer = join(home, "writer");
+  const url = (pad: number) => `${"x".repeat(pad)}https://deploy:${password}@example.com/hook`;
+  commitAt(writer, "2026-11-04T15:10:00Z", "memory: devbox-2", { "memory/tech/diff.md": note("diff", { originSessionId: "s-2" }, url(0)) });
+  const shift = git(writer, "diff", "HEAD~1", "HEAD", "--relative=memory", "--", "memory/tech/diff.md").indexOf("https://deploy:") + "https://deploy:".length;
+  commitAt(writer, "2026-11-04T15:20:00Z", "memory: devbox-2", { "memory/tech/diff.md": note("diff", { originSessionId: "s-2" }, url(5990 - shift)) });
+  const { asked, check } = checker();
+
+  expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => check }).io)).toBe(0);
+
+  for (const memory of ["tech/hook.md", "tech/diff.md"]) {
+    const input = asked.find((text) => text.includes(`Memory: ${memory}`));
+    expect([memory, input === undefined]).toEqual([memory, false]);
+    expect([memory, input?.includes("pretend")]).toEqual([memory, false]);
+  }
+});

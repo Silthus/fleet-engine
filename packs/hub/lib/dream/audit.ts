@@ -90,7 +90,7 @@ async function changedNotes(git: (...args: string[]) => Promise<Result>, since: 
 }
 
 function question(memory: string, change: string, text: string, writer: Digest) {
-  return redactCredentials([`Memory: ${memory}`, `Change since the last check:\n${clip(change, 6000)}`, `Current text:\n${clip(text, 6000)}`, `Session:\n${render(writer)}`].join("\n\n"));
+  return redactCredentials([`Memory: ${memory}`, `Change since the last check:\n${clip(redactCredentials(change), 6000)}`, `Current text:\n${clip(redactCredentials(text), 6000)}`, `Session:\n${render(writer)}`].join("\n\n"));
 }
 
 function recheck(state: string, checkout: string, now: number) {
@@ -132,9 +132,9 @@ export async function audit(run: string, io: AuditIo): Promise<string> {
   if (!head) throw new Error(`the memory repo in ${checkout} has no origin/main`);
   const statePath = join(state, "audit.json");
   const saved = (existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {}) as AuditState;
-  const since = saved.audited !== undefined && (saved.audited === "" || (await git("cat-file", "-e", `${saved.audited}^{commit}`)).code === 0)
-    ? saved.audited
-    : (await git("rev-list", "-1", `--before=${new Date(io.now() - day).toISOString()}`, "origin/main")).stdout.trim();
+  const kept = saved.audited === "" || (saved.audited !== undefined && (await git("merge-base", "--is-ancestor", saved.audited, head)).code === 0);
+  const rewound = saved.audited !== undefined && !kept;
+  const since = kept ? saved.audited! : rewound ? "" : (await git("rev-list", "-1", `--before=${new Date(io.now() - day).toISOString()}`, "origin/main")).stdout.trim();
   const checked = since === saved.audited ? { ...saved.checked } : {};
   const changed = await changedNotes(git, since, head, checked);
   const digests = runDirs(state).flatMap((name) => digestsOf(join(state, name)));
