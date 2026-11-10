@@ -15,11 +15,16 @@ export const spawnRunner: CommandRunner = async (command, options = {}) => {
       stdin: options.inherit ? "inherit" : options.input === undefined ? "ignore" : new TextEncoder().encode(options.input),
       env: Object.fromEntries(Object.entries({ ...Bun.env, ...(options.home === undefined ? {} : { HOME: options.home }) }).filter(([name]) => !options.clearEnv?.includes(name))),
     });
-    if (options.inherit) return { code: await child.exited, stdout: "" };
+    if (options.inherit) {
+      const forward = (signal: NodeJS.Signals) => child.kill(signal);
+      process.on("SIGINT", forward).on("SIGTERM", forward);
+      try { return { code: await child.exited, stdout: "" }; }
+      finally { process.off("SIGINT", forward).off("SIGTERM", forward); }
+    }
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { code, stdout, stderr };
-  } catch {
-    return { code: 127, stdout: "" };
+  } catch (error) {
+    return { code: 127, stdout: "", stderr: `${command[0]} could not start: ${error instanceof Error ? error.message : String(error)}\n` };
   }
 };
 

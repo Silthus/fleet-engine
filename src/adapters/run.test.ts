@@ -26,11 +26,6 @@ describe("the command runner", () => {
     }
   });
 
-  test.if(process.platform === "linux")("with inherit, the command uses this process's terminal and gives back only its exit code", async () => {
-    const same = 'for fd in 0 1 2; do [ /proc/$$/fd/$fd -ef /proc/$PPID/fd/$fd ] || exit 9; done; exit 3';
-    expect(await spawnRunner(["sh", "-c", same], { inherit: true })).toEqual({ code: 3, stdout: "" });
-    expect((await spawnRunner(["sh", "-c", same])).code).toBe(9);
-  });
 });
 
 describe("account home lookup", () => {

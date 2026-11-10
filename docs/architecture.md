@@ -707,8 +707,9 @@ Ranked, most important first.
    stale profile can name an old hub. *Plan, in step 3:* `fleet doctor`
    tests each catalog entry's health path at loopback and names the profile
    commit, so two nodes that show different commits have drifted. The hub
-   skips an entry whose install check is still left, because doctor names
-   that check already.
+   and its named nodes test the health; a solo machine has no node to
+   drift from. The hub skips an entry whose install check is still left,
+   because doctor names that check already.
 2. **The plugin's skill names.** A skill in a plugin is `source:skill`,
    and instructions, guides, and other skills name skills without a prefix
    today. *Plan:* step 6 moves one skill first. If agents no longer find
