@@ -131,6 +131,20 @@ describe("the shell guards through the hook dispatcher", () => {
     expect(guard(call, home)?.hookSpecificOutput.permissionDecisionReason).toContain("`t3_thread_wait`");
   });
 
+  test("lets the first task_status check through when the transcript already holds that call", async () => {
+    const home = homeWith(withGuards());
+    const transcript = join(home, "transcript.jsonl");
+    const lines = [
+      { type: "user", message: { content: "Check the task." } },
+      { type: "assistant", message: { content: [{ type: "tool_use", id: "call-1", name: "mcp__t3-code__task_status", input: { taskId: "task-a" } }] } },
+    ];
+    writeFileSync(transcript, lines.map((line) => JSON.stringify(line)).join("\n"));
+    const call: ToolCall = { tool_name: "mcp__t3-code__task_status", tool_input: { taskId: "task-a" }, tool_use_id: "call-1", transcript_path: transcript };
+    expect(guard(call, home)).toBeUndefined();
+    expect(await preToolUse(home, "claude", call)).toEqual({ code: 0, refusal: undefined });
+    expect(guard({ ...call, tool_use_id: "call-2" }, home)?.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
   test("lets the first task_status check after a new message through", async () => {
     const home = homeWith(withGuards());
     const transcript = join(home, "transcript.jsonl");
@@ -167,7 +181,11 @@ describe("the shell guards through the hook dispatcher", () => {
 });
 
 describe("the wait guard", () => {
-  const refusal = (command: string) => guard(bash(command), temp.make("home-"))?.hookSpecificOutput.permissionDecisionReason;
+  const refusal = (command: string) => {
+    const denied = guard(bash(command), temp.make("home-"))?.hookSpecificOutput;
+    if (denied) expect(denied.permissionDecision).toBe("deny");
+    return denied?.permissionDecisionReason;
+  };
 
   test.each([
     "sleep 60; gh pr checks 12",
@@ -180,6 +198,15 @@ describe("the wait guard", () => {
     "sleep infinity",
     "sleep 5 6 && gh pr checks 12",
     "bash -c 'sleep 30; gh pr checks 12'",
+    'for id in $(sleep 60; gh run list); do echo "$id"; done',
+    "select id in `sleep 60; gh run list`; do break; done",
+    "sleep +60; gh pr checks 12",
+    "sleep inf",
+    "sleep INF && gh pr checks 12",
+    "sleep +1m; gh pr checks 12",
+    'DELAY=60; sleep "$DELAY"; gh pr checks 12',
+    "sleep $(cat delay); gh pr checks 12",
+    "bash -x -c 'sleep 60; gh pr checks 12'",
   ])("refuses a pause over 10 seconds outside a waiting loop: %s", (command) => {
     expect(refusal(command)).toContain("costs a model turn");
   });
@@ -196,6 +223,11 @@ describe("the wait guard", () => {
     "gh run watch 7 --exit-status",
     "rg 'sleep 60' docs",
     "cat > notes.md <<'EOF'\nWait with sleep 60 between checks.\nEOF",
+    "sleep +5 && gh pr checks 12",
+    'while true; do sleep "$INTERVAL"; gh pr checks 12 && break; done',
+    "bash -n -c 'sleep 60; gh pr checks 12'",
+    "bash -nc 'sleep 60; gh pr checks 12'",
+    "sh -n -e -c 'sleep 60; gh pr checks 12'",
   ])("allows a short pause, one blocking wait, or text about sleep: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
   });

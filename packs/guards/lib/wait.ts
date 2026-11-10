@@ -21,8 +21,8 @@ export const repeatedStatusReason = (person: string) => "Fleet blocked this call
   + `If the task looks stuck, stop and ask ${person}.`;
 
 function seconds(operand: string): number {
-  if (operand.toLowerCase() === "infinity") return Infinity;
-  const match = operand.match(/^((?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([smhd]?)$/i);
+  if (/[$`]/.test(operand) || /^\+?inf(?:inity)?[smhd]?$/i.test(operand)) return Infinity;
+  const match = operand.match(/^\+?((?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)([smhd]?)$/i);
   return match ? Number(match[1]) * unitSeconds[match[2].toLowerCase()] : 0;
 }
 
