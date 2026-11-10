@@ -40,3 +40,36 @@ export function fakeProxy(answers: Record<string, Answer>) {
 function bodyFor(code: number): string {
   return code === 200 ? "{}" : code === 429 ? '{"error":{"type":"rate_limit_error"}}' : "error";
 }
+
+export type DeliveredMessage = { threadId: string; text: string; continuesRunId?: string };
+
+/** T3's dispatchCommand as the sweep reaches it: it checks the message's shape and keeps one message per command id. */
+export function t3Inbox() {
+  const byCommand = new Map<string, DeliveredMessage>();
+  const rpc = (tag: string, payload: unknown) => {
+    if (tag !== "orchestration.dispatchCommand") return undefined;
+    const message = payload as Record<string, unknown>;
+    const shaped = message.type === "message.dispatch" && typeof message.commandId === "string" && message.messageId === message.commandId
+      && typeof message.threadId === "string" && typeof message.text === "string" && Array.isArray(message.attachments)
+      && (message.dispatchMode as { type?: string })?.type === "start_immediately";
+    if (!shaped) return undefined;
+    if (!byCommand.has(message.commandId as string)) {
+      byCommand.set(message.commandId as string, {
+        threadId: message.threadId as string, text: message.text as string,
+        ...(typeof message.manualContinuationOfRunId === "string" ? { continuesRunId: message.manualContinuationOfRunId } : {}),
+      });
+    }
+    return { sequence: byCommand.size };
+  };
+  return { rpc, delivered: () => [...byCommand.values()] };
+}
+
+type ThreadFields = Record<string, unknown>;
+
+export function limitedThread(id: string, fields: ThreadFields = {}): ThreadFields {
+  return {
+    id, title: `Thread ${id}`, projectId: "project", status: "failed", lastErrorClass: "usage_limit", lastError: "You've hit your usage limit.",
+    latestRunId: `run-${id}`, latestRunCompletedAt: "2026-11-10T19:00:00.000Z", providerInstanceId: "claudeAgent",
+    modelSelection: { instanceId: "claudeAgent", model: "claude-test-1" }, ...fields,
+  };
+}
