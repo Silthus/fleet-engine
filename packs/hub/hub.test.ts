@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { parse } from "smol-toml";
 import { providerConfigAdapter } from "../../src/adapters/provider-config/adapter.ts";
 import { apply } from "../../src/reconciler/apply.ts";
+import { codexProviderTable } from "./lib/cli-proxy.ts";
 import type { AvailableSource, MachineFile, MachineRole, Plan, Profile } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
@@ -224,18 +225,24 @@ describe("the Own-account balancing workflow", () => {
     expect(plan(balancing, hub).settings["hub.proxyAccounts"]).toBe(2);
   });
 
-  test("on each plan, Claude and Codex go through the proxy only where the plan uses them, and the route and its check cover both", () => {
+  test("Codex goes through the proxy only on the both plan, where the hub runs the proxy; a Claude plan routes Claude only, and a Codex plan routes nothing yet", () => {
     const routed = { jobs: [], steps: ["cli-proxy-route"], checks: ["cli-proxy-client"] };
-    expect(proxyItems(plan({ ...balancing, plan: "codex" }, devbox))).toEqual({ ...routed, config: codexRoute });
+    expect(proxyItems(plan({ ...balancing, plan: "both" }, devbox))).toEqual({ ...routed, config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper", ...codexRoute] });
     expect(proxyItems(plan({ ...balancing, plan: "claude" }, devbox))).toEqual({ ...routed, config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper"] });
+    for (const machine of [hub, devbox]) expect(proxyItems(plan({ ...balancing, plan: "codex" }, machine))).toEqual(nothing);
     for (const ai of ["claude", "codex", "both"] as const) expect(proxyItems(plan({ ...balancing, plan: ai }, mac))).toEqual(nothing);
   });
 
-  test("a Codex-plan devbox gets a Codex config that uses the proxy's Responses route and reads the client key from its private file; a Mac gets none", async () => {
+  test("the planned Codex provider is the table the route switch recognizes as Fleet's own", () => {
+    expect(plan(balancing, devbox).config.find((entry) => entry.key === "model_providers.fleet-proxy")?.value).toEqual(codexProviderTable);
+  });
+
+  test("a devbox on the both plan gets a Codex config that uses the proxy's Responses route and reads the client key from its private file; a Mac gets none", async () => {
     const codexConfig = async (machine: MachineFile) => {
       const home = temp.make("fleet-codex-route-");
-      const result = plan({ ...balancing, plan: "codex" }, machine);
-      await apply({ ...result, config: result.config.filter((entry) => entry.pack === "hub") }, { home, adapters: [providerConfigAdapter()] });
+      const result = plan({ ...balancing, plan: "both" }, machine);
+      const report = await apply({ ...result, config: result.config.filter((entry) => entry.pack === "hub"), steps: [], checks: [], jobs: [], human: [] }, { home, adapters: [providerConfigAdapter()] });
+      expect(report.ok).toBe(true);
       return existsSync(join(home, ".codex/config.toml")) ? parse(readFileSync(join(home, ".codex/config.toml"), "utf8")) : undefined;
     };
     expect(await codexConfig(devbox)).toEqual({

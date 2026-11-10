@@ -292,7 +292,6 @@
         "devbox"
       ],
       "plans": [
-        "codex",
         "both"
       ],
       "workflow": "own-account-balancing"
@@ -317,7 +316,6 @@
         "devbox"
       ],
       "plans": [
-        "codex",
         "both"
       ],
       "workflow": "own-account-balancing"
@@ -497,7 +495,6 @@
       ],
       "plans": [
         "claude",
-        "codex",
         "both"
       ],
       "workflow": "own-account-balancing"
@@ -609,7 +606,6 @@
       ],
       "plans": [
         "claude",
-        "codex",
         "both"
       ],
       "workflow": "own-account-balancing"

@@ -212,6 +212,7 @@ const sendClaude = async (home: string, on: boolean) => (await claudeRoute(home,
 
 export const codexProvider = "fleet-proxy";
 const codexUrl = `${proxyUrl}/v1`;
+export const codexProviderTable = { name: "Fleet CLI proxy", base_url: codexUrl, wire_api: "responses", auth: { command: "/bin/sh", args: ["-c", keyHelper] } };
 
 async function readCodex(home: string) {
   const path = join(home, ".codex/config.toml");
@@ -222,21 +223,18 @@ async function readCodex(home: string) {
   catch { config = undefined; }
   if (!isObject(config) || (config.model_providers !== undefined && !isObject(config.model_providers))) throw new Error(`${path} is not a Codex config. Fix it, then run this again.`);
   const providers = config.model_providers as Record<string, unknown> | undefined;
-  const fleet = providers?.[codexProvider];
-  const ours = isObject(fleet) && fleet.base_url === codexUrl;
-  return { path, text, config, providers, ours, routed: ours && config.model_provider === codexProvider };
+  const table = providers?.[codexProvider];
+  const url = isObject(table) ? table.base_url : undefined;
+  const routed = config.model_provider === codexProvider && (url === undefined || url === codexUrl);
+  return { path, text, config, providers, routed, usable: routed && url === codexUrl, untouched: Bun.deepEquals(table, codexProviderTable) };
 }
 
-const codexRouted = async (home: string) => (await readCodex(home)).routed;
-
-/** Sends Codex back to its own sign-in. Fleet's config entries send it to the proxy again on apply. */
 async function sendCodexHome(home: string): Promise<boolean> {
-  const { path, text, config, providers, ours, routed } = await readCodex(home);
-  if (!ours) return false;
+  const { path, text, config, providers, routed, untouched } = await readCodex(home);
   if (routed) delete config.model_provider;
-  delete providers![codexProvider];
-  if (!Object.keys(providers!).length) delete config.model_providers;
-  await replaceUnchanged(path, text, Object.keys(config).length ? `${stringify(config)}\n` : "");
+  if (untouched) delete providers![codexProvider];
+  if (providers && !Object.keys(providers).length) delete config.model_providers;
+  if (routed || untouched) await replaceUnchanged(path, text, Object.keys(config).length ? `${stringify(config)}\n` : "");
   return routed;
 }
 
@@ -247,8 +245,9 @@ async function route(machine: ProxyMachine): Promise<boolean> {
   const claude = unserved(models, "claude");
   if (claude) await sendClaude(machine.home, false);
   const claudeReached = reached("Claude Code", claude);
-  if (!(await codexRouted(machine.home))) return claudeReached;
-  const codex = unserved(models, "codex");
+  const codexConfig = await readCodex(machine.home);
+  if (!codexConfig.routed) return claudeReached;
+  const codex = codexConfig.usable ? unserved(models, "codex") : `${codexConfig.path} selects the ${codexProvider} provider, but its table has no base_url.`;
   if (codex) await sendCodexHome(machine.home);
   return reached("Codex", codex) && claudeReached;
 }
