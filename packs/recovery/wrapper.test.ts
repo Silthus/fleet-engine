@@ -46,8 +46,8 @@ function fakeClaude(dir: string, stream: string, exit = 1) {
   return path;
 }
 
-async function runWrapper(args: string[], env: Record<string, string>) {
-  const child = Bun.spawn([wrapper, ...args], { env: { PATH: Bun.env.PATH ?? "", ...env }, stdout: "pipe", stderr: "pipe" });
+async function runWrapper(args: string[], env: Record<string, string>, path = wrapper) {
+  const child = Bun.spawn([path, ...args], { env: { PATH: Bun.env.PATH ?? "", ...env }, stdout: "pipe", stderr: "pipe", timeout: 4000 });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { lines: stdout.trim().split("\n"), stderr, code };
 }
@@ -170,9 +170,9 @@ describe("fleet claude-wrapper", () => {
     expect(statSync(t3.wrapperPath).isSymbolicLink()).toBe(false);
     expect(statSync(t3.wrapperPath).mode & 0o111).not.toBe(0);
     const dir = temp.make("claude-");
-    const ran = Bun.spawnSync([t3.wrapperPath, "-p", "go"], { env: { PATH: Bun.env.PATH ?? "", HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded, 0) } });
-    expect(ran.exitCode).toBe(0);
-    expect(ran.stdout.toString()).toBe(await Bun.file(recorded).text());
+    const passThrough = [0, (await Bun.file(recorded).text()).trim().split("\n")];
+    const ran = await runWrapper(["-p", "go"], { HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded, 0) }, t3.wrapperPath);
+    expect([ran.code, ran.lines]).toEqual(passThrough);
     for (const spoil of [() => writeFileSync(join(t3.wrapperPath, "../claude-reset.ts"), "old"), () => chmodSync(t3.wrapperPath, 0o644)]) {
       spoil();
       expect(await t3.run("check")).toBe(1);
@@ -180,7 +180,8 @@ describe("fleet claude-wrapper", () => {
       expect(await t3.run("bind")).toBe(0);
       expect(await t3.run("check")).toBe(0);
     }
-    expect(Bun.spawnSync([t3.wrapperPath, "-p", "go"], { env: { PATH: Bun.env.PATH ?? "", HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded, 0) } }).exitCode).toBe(0);
+    const repaired = await runWrapper(["-p", "go"], { HOME: dir, FLEET_CLAUDE_EXECUTABLE: fakeClaude(dir, recorded, 0) }, t3.wrapperPath);
+    expect([repaired.code, repaired.lines]).toEqual(passThrough);
   });
 
   test("keeps a custom Claude binary and leaves a disabled instance alone", async () => {
