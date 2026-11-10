@@ -50,7 +50,7 @@ export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; r
   const fallback = async (rpc: T3Rpc) => (await readT3Settings(rpc)).defaultModelSelection as ModelSelection | undefined;
   const planned = (role: string) => modelSelection(options.plan.models, role);
   const modelOf = async (rpc: T3Rpc, role: string) => planned(role) ?? (await fallback(rpc));
-  const local = (path: string) => resolve(expandHome(home, path));
+  const local = (path: string) => realPath(expandHome(home, path));
   const strategy = async (root: string) => {
     const base = await baseRef(options.run, root);
     if (!base) throw new Error(`${root} has no main or master branch to start worktrees from. Push one, then run fleet apply.`);
@@ -67,7 +67,7 @@ export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; r
             const job = jobs.get(task.id);
             const root = roots.get(task.projectId);
             const expected = job === undefined ? undefined : (planned(job.modelRole) ?? usual);
-            const project = job?.project !== undefined && root !== undefined && local(job.project) === resolve(root) ? job.project : (root ?? task.projectId);
+            const project = job?.project !== undefined && root !== undefined && local(job.project) === realPath(root) ? job.project : (root ?? task.projectId);
             const wantedStrategy = job === undefined || root === undefined ? undefined : await strategy(root).catch(() => undefined);
             return {
               id: task.id,
@@ -85,7 +85,7 @@ export function t3Tasks(server: T3Server, home: string, options: { plan: Plan; r
       }),
     upsert: (task) =>
       server.session(home, async (rpc) => {
-        const project = (await activeProjects(rpc)).find((item) => resolve(item.workspaceRoot) === local(task.project));
+        const project = (await activeProjects(rpc)).find((item) => realPath(item.workspaceRoot) === local(task.project));
         if (!project) throw new Error(`T3 Code has no project at ${task.project}, so Fleet cannot add the ${task.id} task. Run fleet apply again once T3 Code lists the project.`);
         const modelSelection = await modelOf(rpc, task.modelRole);
         if (!modelSelection) throw new Error(`T3 Code has no default model, so Fleet cannot add the ${task.id} task. Pick a model in T3 Code, then run fleet apply.`);
