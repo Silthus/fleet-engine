@@ -40,34 +40,6 @@
       "workflow": "provider-recovery"
     }
   ],
-  "files": [
-    {
-      "path": "bin/claude",
-      "target": ".config/fleet/recovery/claude",
-      "workflow": "provider-recovery",
-      "plans": [
-        "claude",
-        "both"
-      ],
-      "roles": [
-        "hub",
-        "devbox"
-      ]
-    },
-    {
-      "path": "bin/claude-reset.ts",
-      "target": ".config/fleet/recovery/claude-reset.ts",
-      "workflow": "provider-recovery",
-      "plans": [
-        "claude",
-        "both"
-      ],
-      "roles": [
-        "hub",
-        "devbox"
-      ]
-    }
-  ],
   "steps": [
     {
       "id": "claude-wrapper",
