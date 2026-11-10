@@ -152,6 +152,13 @@
       "ask": "never"
     },
     {
+      "key": "base.startFloorGigabytes",
+      "question": "Below how many free gigabytes should fleet disk --start refuse a new thread or scheduled run?",
+      "type": "number",
+      "default": 25,
+      "ask": "never"
+    },
+    {
       "key": "identity.signer",
       "question": "Which key signs your Git commits? Fleet picks coder in a Coder workspace and ssh everywhere else.",
       "type": "choice",

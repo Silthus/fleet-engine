@@ -7,6 +7,15 @@ const temp = tempDirs();
 afterEach(() => temp.cleanup());
 const onLinux = test.skipIf(process.platform !== "linux");
 
+const systemdRun = `const args = Bun.argv.slice(2);
+const split = args.indexOf("--");
+const setenv = args.slice(0, split).filter((option) => option.startsWith("--setenv=")).map((option) => option.slice("--setenv=".length));
+const given = Object.fromEntries(setenv.map((pair) => (pair.includes("=") ? [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)] : [pair, Bun.env[pair] ?? ""])));
+const manager = { HOME: "/home/manager", PATH: "/usr/bin:/bin" };
+const env = args.includes("--scope") ? Bun.env : { ...manager, ...given };
+process.exit(Bun.spawnSync(args.slice(split + 1), { env, stdio: ["inherit", "inherit", "inherit"] }).exitCode ?? 1);
+`;
+
 function stubs(os = "Linux") {
   const bin = temp.make("bin-");
   const calls = join(bin, "calls.log");
@@ -14,7 +23,8 @@ function stubs(os = "Linux") {
     writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${calls}"\n${body}\n`);
     chmodSync(join(bin, name), 0o755);
   };
-  stub("systemd-run", 'while [ "$1" != -- ]; do shift; done; shift; exec "$@"');
+  writeFileSync(join(bin, "systemd-run.ts"), systemdRun);
+  stub("systemd-run", `exec bun "${join(bin, "systemd-run.ts")}" "$@"`);
   stub("systemctl", "exit 0");
   stub("uname", `echo ${os}`);
   return { bin, calls: () => (existsSync(calls) ? readFileSync(calls, "utf8") : "") };
@@ -38,6 +48,23 @@ onLinux("runs the command in a slot of the capped heavy slice", async () => {
   const { bin, calls } = stubs();
   expect(await heavy(bin, roomy, "--", "sh", "-c", "echo built")).toMatchObject({ code: 0, stdout: "built\n" });
   expect(calls()).toBe("uname -s\nsystemd-run --user --scope --quiet --collect --slice=fleet-heavy.slice -- sh -c echo built\n");
+});
+
+onLinux("runs a leading fleet in the command with this engine's launcher, though no fleet is on PATH", async () => {
+  const { bin } = stubs();
+  const slot = await heavy(bin, roomy, "--", "fleet", "help");
+  expect(slot.code).toBe(0);
+  expect(slot.stdout).toStartWith("Fleet: one setup");
+  const served = await heavy(bin, roomy, "--service", "preview-a", "--", "fleet", "help");
+  expect(served.stdout).toStartWith("Fleet: one setup");
+});
+
+onLinux("gives a service this shell's PATH, HOME, Fleet profile, memory, and XDG folders, though the systemd user manager starts it with its own environment", async () => {
+  const { bin } = stubs();
+  const profile = temp.make("profile-");
+  const folders = { FLEET_PROFILE_DIR: profile, FLEET_MEMORY_DIR: `${profile}/memory`, XDG_STATE_HOME: `${profile}/state`, XDG_CONFIG_HOME: `${profile}/config` };
+  const served = await heavyWith(folders, bin, roomy, "--service", "preview-a", "--", "sh", "-c", 'command -v bun >/dev/null && echo "$HOME" "$FLEET_PROFILE_DIR" "$FLEET_MEMORY_DIR" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME"');
+  expect(served.stdout).toMatch(new RegExp(`^/\\S*home-\\S+ ${Object.values(folders).join(" ")}\n`));
 });
 
 onLinux("refuses to start while the disk is under the floor", async () => {
@@ -75,6 +102,32 @@ onLinux("takes the slot count from FLEET_HEAVY_SLOTS over the setting", async ()
   const result = await heavyWith(env, bin, roomy, "--", "true");
   busy.kill();
   expect(result.stderr).toContain("Fleet heavy: 1 heavy jobs run already");
+});
+
+function routeHandler(bin: string) {
+  const handler = join(bin, "route.ts");
+  const seen = join(bin, "routed.log");
+  writeFileSync(handler, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(seen)}, JSON.stringify({ argv: Bun.argv.slice(2), routed: Bun.env.FLEET_HEAVY_ROUTED }) + "\\n");\nprocess.exit(7);\n`);
+  return { handlers: JSON.stringify({ "heavy-route": handler }), routed: () => (existsSync(seen) ? readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []) };
+}
+
+onLinux("hands a typed heavy command to the heavy-route handler, which decides where it runs", async () => {
+  const { bin, calls } = stubs();
+  const { handlers, routed } = routeHandler(bin);
+  expect(await heavyWith({ FLEET_HANDLERS: handlers }, bin, roomy, "--", "sh", "-c", "echo built")).toMatchObject({ code: 7, stdout: "" });
+  expect(routed()).toEqual([{ argv: ["sh", "-c", "echo built"], routed: "1" }]);
+  expect(calls()).toBe("");
+});
+
+onLinux("runs here when the handler already routed the command, or for a named unit or service, and the command routes its own heavy runs again", async () => {
+  const { bin, calls } = stubs();
+  const { handlers, routed } = routeHandler(bin);
+  expect(await heavyWith({ FLEET_HANDLERS: handlers, FLEET_HEAVY_ROUTED: "1" }, bin, roomy, "--", "sh", "-c", "echo built ${FLEET_HEAVY_ROUTED:-unrouted}")).toMatchObject({ code: 0, stdout: "built unrouted\n" });
+  expect(await heavyWith({ FLEET_HANDLERS: handlers }, bin, roomy, "--unit", "lane-a", "--", "true")).toMatchObject({ code: 0 });
+  expect(await heavyWith({ FLEET_HANDLERS: handlers }, bin, roomy, "--service", "preview-a", "--", "true")).toMatchObject({ code: 0 });
+  expect(routed()).toEqual([]);
+  expect(calls()).toContain("--unit=lane-a");
+  expect(calls()).toContain("--unit=preview-a");
 });
 
 onLinux("refuses a slot count that is not a whole number above 0", async () => {
