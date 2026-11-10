@@ -27,7 +27,7 @@ export function homeCheckouts(home: string): RepoCheckout {
   return (repo) => [join(home, "dev", repo), join(home, repo)].find((path) => existsSync(join(path, ".git")));
 }
 
-function field(text: string, name: string) {
+export function frontmatterField(text: string, name: string) {
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? "";
   return new RegExp(`^\\s*${name}:[ \\t]*"?([^"\\n]*)`, "m").exec(frontmatter)?.[1]?.trim() || undefined;
 }
@@ -50,8 +50,8 @@ function indexProblems(index: string, text: string): Problem[] {
 function noteProblems(file: string, text: string, names: Set<string>, now: number, checkouts: RepoCheckout): string[] {
   const problems: string[] = [];
   for (const name of wikiLinks(text)) if (!names.has(name)) problems.push(`links [[${name}]], which no memory is; repoint it, write that memory, or drop the link`);
-  const status = field(text, "status");
-  const modified = Date.parse(field(text, "modified") ?? "");
+  const status = frontmatterField(text, "status");
+  const modified = Date.parse(frontmatterField(text, "modified") ?? "");
   if (status && status !== "confirmed" && status !== "unconfirmed") problems.push(`status ${status}; use confirmed or unconfirmed`);
   if (status === "unconfirmed" && modified && now - modified > memoryLimits.unconfirmedDays * day) problems.push(`unconfirmed since ${new Date(modified).toISOString().slice(0, 10)}; confirm it against a session or the code, or delete it`);
   for (const term of triggersOf(text)) if (term.length < minimumTerm) problems.push(`trigger "${term}" is shorter than ${minimumTerm} characters and never fires; name the command or tool`);
@@ -90,7 +90,7 @@ export function budget(memory: string, usage: Record<string, string>, now: numbe
     if (lineCount > memoryLimits.fileLines || bytes > memoryLimits.fileBytes) problems.push({ file, problem: `${lineCount} lines, ${bytes} bytes; condense it below ${memoryLimits.fileLines} lines and ${memoryLimits.fileBytes} bytes` });
     for (const name of ["name", "description", "type"]) if (!new RegExp(`^\\s*${name}:`, "m").test(text)) problems.push({ file, problem: `frontmatter has no ${name}` });
     problems.push(...noteProblems(file, text, names, now, checkouts).map((problem) => ({ file, problem })));
-    const touched = ["modified", "verified"].map((name) => Date.parse(field(text, name) ?? "")).filter((at) => !Number.isNaN(at));
+    const touched = ["modified", "verified"].map((name) => Date.parse(frontmatterField(text, name) ?? "")).filter((at) => !Number.isNaN(at));
     const last = Math.max(0, ...touched, Date.parse(usage[file] ?? "") || 0);
     if (last && now - last > memoryLimits.staleDays * day) problems.push({ file, problem: `stale: not written, verified, or read since ${new Date(last).toISOString().slice(0, 10)}; delete it or set verified after checking it` });
   }

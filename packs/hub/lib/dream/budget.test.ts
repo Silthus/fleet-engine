@@ -1,37 +1,24 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../../src/testing/git.ts";
 import { writeHome } from "../testing.ts";
-import { dreamCommand, type DreamIo } from "./command.ts";
+import { dreamCommand } from "./command.ts";
+import { hubWithSubtree, note, quietIo } from "./testing.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
-const now = Date.parse("2026-11-05T04:10:00Z");
-const settings = { "hub.alias": "my-hub", "memory.repo": "me/notes", "memory.subtree": "memory" };
-
-function note(name: string, fields: Record<string, string> = {}, body = "A fact.") {
-  const extra = Object.entries(fields).map(([key, value]) => `${key}: ${value}\n`).join("");
-  return `---\nname: ${name}\ndescription: about ${name}\nmetadata:\n  type: project\n${extra}---\n${body}\n`;
-}
 
 function subtreeHome(files: Record<string, string>) {
   const home = temp.make("fleet-dream-budget-");
-  const prefixed = Object.fromEntries(Object.entries(files).map(([path, text]) => [`.agents/memory-repo/memory/${path}`, text]));
-  writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub" }), ".agents/memory-repo/README.md": "# Notes\n", ...prefixed });
-  symlinkSync(join(home, ".agents/memory-repo/memory"), join(home, ".agents/memory"));
+  hubWithSubtree(home, files);
   return home;
 }
 
-function run(home: string, args: string[]) {
-  const printed: string[] = [];
-  const offline = () => { throw new Error("budget reaches no other machine"); };
-  const dream: DreamIo = {
-    home, env: { FLEET_SETTINGS: JSON.stringify(settings) }, self: "hub-host", now: () => now,
-    print: (text) => void printed.push(text), say: (text) => void printed.push(text),
-    peers: () => [], onPeer: offline, boxes: () => undefined, git: offline, analyst: offline, launch: offline,
-  };
-  return dreamCommand(["budget", ...args], dream).then((code) => ({ code, lines: printed.join("\n").split("\n") }));
+async function run(home: string, args: string[]) {
+  const { io, printed } = quietIo(home);
+  const code = await dreamCommand(["budget", ...args], io);
+  return { code, lines: printed.join("\n").split("\n") };
 }
 
 const fresh = { modified: "2026-11-01" };

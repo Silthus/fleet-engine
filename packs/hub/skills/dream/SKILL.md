@@ -33,9 +33,11 @@ the person reviews change by change and merges.
 1. **Prepare.** When the prompt names a run directory, the hub already
    prepared it; use it as `<run>`. Otherwise run `fleet dream prepare`. It
    reads the hub, the devboxes, and the running boxes, runs one analyst per
-   new session, and prints the run directory. Read `<run>/findings.md`. Its
-   first lines name the machines it could not reach. Done when you have read
-   the whole file.
+   new session, checks each note the sessions wrote against the session that
+   wrote it, and prints the run directory. Read `<run>/findings.md` and
+   `<run>/audit.md`. Their first lines name the machines it could not reach
+   and the checks that failed. When `audit.md` is missing, the audit failed:
+   say so in the report. Done when you have read both files.
 
 2. **Branch.** Work in a worktree, so `<memory>` stays on
    `main` for the sync:
@@ -47,7 +49,19 @@ the person reviews change by change and merges.
 
    Done when `<run>/memory` is on `dream/<date>`.
 
-3. **Learn.** Read `MEMORY.md` and every memory a finding names. Group
+3. **Audit.** Act on every note in `audit.md`:
+   - **wrong**: apply the correction, or delete the note when the correction
+     is empty.
+   - **unsupported** or **no session**: set `status: unconfirmed` under
+     `metadata:`, unless a second session or the code already confirms it.
+   - **confirmed**: set `status: confirmed` under `metadata:`.
+   - **Recheck**: check each listed note against the code or the machines;
+     correct it, delete it, or set `verified: <date>`.
+
+   Done when every note in `audit.md` has a change or a reason in the
+   report.
+
+4. **Learn.** Read `MEMORY.md` and every memory a finding names. Group
    findings that say the same thing, and count their sessions across tonight
    and the runs of the last 14 days (`<run>/../*/findings.md`). Each finding
    carries a `{topic}`; analysts on other nights may name the same lesson with
@@ -66,7 +80,7 @@ the person reviews change by change and merges.
    needs a fix: keep it for the report. Done when every finding is part of a
    change, part of the report, or counted as dismissed.
 
-4. **Prune.** Do this every night, with or without findings. Run
+5. **Prune.** Do this every night, with or without findings. Run
    `fleet dream budget <run>/memory` and fix every line it prints:
    - Condense a long memory to its fact, why, and how to apply it. Link
      detail that a repository holds.
@@ -92,7 +106,7 @@ the person reviews change by change and merges.
    check in **Fix** when wording cannot stop it; sharpen the index line of one
    that recurs unopened; delete one that nobody read.
 
-5. **Commit** each change on its own, with its index line in the same commit:
+6. **Commit** each change on its own, with its index line in the same commit:
 
    ```text
    <Add | Update | Merge | Condense | Move | Delete>: <memory name>
@@ -107,7 +121,7 @@ the person reviews change by change and merges.
    `Topics:` lines, so name a new memory after its main topic. Done when
    `git status` in `<run>/memory` is clean.
 
-6. **Sort** the changes for the person. They decide only two things: whether
+7. **Sort** the changes for the person. They decide only two things: whether
    something enters memory, and whether a problem gets fixed.
    - **Needs your call**: each new rule that enters memory, and each deletion
      of a memory that might still matter. At most 7, the ones with the most
@@ -115,7 +129,7 @@ the person reviews change by change and merges.
    - **Mechanical**: condenses, moves, merges, and budget work.
    - **Fix**: the 3 to 5 tool problems with the most sessions or importance 3.
 
-7. **Report.** Write `dreams/<date>.md` with the body below and commit it
+8. **Report.** Write `dreams/<date>.md` with the body below and commit it
    last. Push the branch and open a draft PR on the memory repo titled
    `Dream <date>` with the same body:
    `gh pr create --draft --repo <memory.repo> --head dream/<date> --title "Dream <date>" --body-file dreams/<date>.md`.
@@ -124,6 +138,7 @@ the person reviews change by change and merges.
 
    ```markdown
    <sessions analyzed> sessions from <machines>. <machines not reached, if any.>
+   <notes audited>: <n> wrong, <n> unconfirmed, <n> confirmed.
 
    ## Needs your call
    - **<n>** <the rule or deletion, in one line> (<sessions> sessions)
@@ -141,7 +156,7 @@ the person reviews change by change and merges.
    sessions line. Done when the PR is open and its body reads in a minute:
    one line per item, no paragraphs.
 
-8. **Reply** with the PR link and the same body.
+9. **Reply** with the PR link and the same body.
 
 ## The person's answer
 
