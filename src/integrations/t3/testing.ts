@@ -15,6 +15,7 @@ export type T3Fixture = {
   links?: LinkedEnvironment[];
   tools?: ToolHandler;
   rpc?: (tag: string, payload: unknown) => unknown;
+  loseAnswer?: (tag: string, payload: unknown) => boolean;
   environmentId?: string;
 };
 
@@ -102,6 +103,7 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
           launchReceipts.set(message.payload.commandId, value);
           threads.push({ id: (value as { threadId: string }).threadId, title: message.payload.title, prompt: message.payload.initialMessage?.text, modelSelection: message.payload.modelSelection });
         }
+        if (fixture.loseAnswer?.(message.tag, message.payload)) return socket.close();
         const exit = value ? { _tag: "Success", value } : { _tag: "Failure", cause: { _tag: "Fail", error: { _tag: "UnknownMethod" } } };
         socket.send(JSON.stringify({ _tag: "Exit", requestId: message.id, exit }));
       },

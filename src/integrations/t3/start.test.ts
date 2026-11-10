@@ -43,6 +43,14 @@ test("a second start with the same key returns the first thread and its link, an
   expect(stub.threads.map((thread) => thread.id)).toEqual(["thread-1", "thread-2"]);
 });
 
+test("after T3 starts a thread but its answer is lost, a retry with the same key returns that thread", async () => {
+  let lost = false;
+  const stub = await t3({ loseAnswer: (tag) => tag === "orchestration.launchThread" && !lost && (lost = true) });
+  await expect(t3Threads(models, { home: stub.home }).start({ ...request, key: "slack-message-1" })).rejects.toThrow();
+  expect(await t3Threads(models, { home: stub.home }).start({ ...request, key: "slack-message-1" })).toEqual({ id: "thread-1", url: "https://app.t3.codes/threads/env-1/thread-1" });
+  expect(stub.threads.map((thread) => thread.id)).toEqual(["thread-1"]);
+});
+
 test("the model role starts the thread with that row's provider, model, and effort", async () => {
   const stub = await t3();
   await t3Threads(models, { home: stub.home }).start({ ...request, key: "k", modelRole: "lookup" });
