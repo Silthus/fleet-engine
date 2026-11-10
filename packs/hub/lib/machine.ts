@@ -108,6 +108,10 @@ function namesOfThisMachine(home: string, hub: string): string[] {
   return [...(machine?.role === "hub" ? [hub] : []), ...(typeof machine?.name === "string" ? [machine.name] : [])];
 }
 
+export function profileDevboxes(env: Env): string[] {
+  return readProfile(env).devboxes;
+}
+
 export function devboxesOf(env: Env, home: string): string[] {
   return [...new Set([...readProfile(env).devboxes, ...savedDevboxes(home)])];
 }

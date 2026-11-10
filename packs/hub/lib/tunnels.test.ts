@@ -15,7 +15,7 @@ function machine(role: string, fields: Partial<TunnelMachine> = {}) {
   writeFileSync(hosts, "127.0.0.1 localhost\n10.0.0.1 unrelated.example\n");
   const fake = fakeRun();
   const printed: string[] = [];
-  const deps: TunnelMachine = { home, devboxes: ["devbox-1", "devbox-2"], relayPort: 60002, httpsHost: host, hosts, run: fake.run, print: (line) => printed.push(line), ...fields };
+  const deps: TunnelMachine = { home, devboxes: ["devbox-1", "devbox-2"], dialsHub: ["devbox-1", "devbox-2"], relayPort: 60002, httpsHost: host, hosts, run: fake.run, print: (line) => printed.push(line), ...fields };
   return { deps, home, hosts, calls: fake.calls, inputs: fake.inputs, printed };
 }
 
@@ -28,6 +28,14 @@ test("a hub tunnel forwards only the relay port to the devbox's loopback, and ne
   for (const option of ["ExitOnForwardFailure=yes", "ForwardAgent=no", "BatchMode=yes", "Restart=always", "Environment=CODER_SSH_DISABLE_AUTOSTART=true"]) expect(unit).toContain(option);
   expect(unit).not.toMatch(/3317|8317|60001| -L |:22\b/);
   expect([...unit.matchAll(/ -R /g)]).toHaveLength(1);
+});
+
+test("a devbox that only the hub's machine file names keeps the gateway port in its hub tunnel, because it does not dial the hub itself", async () => {
+  const { deps, home } = machine("hub", { dialsHub: ["devbox-1"] });
+  expect(await sshTunnels("install", deps)).toBe(0);
+  expect(readFileSync(unitPath(home, "devbox-1"), "utf8")).not.toContain("3317");
+  const kept = readFileSync(unitPath(home, "devbox-2"), "utf8");
+  expect(kept).toContain("-R 127.0.0.1:3317:127.0.0.1:3317 -R 127.0.0.1:60002:127.0.0.1:60002 devbox-2\n");
 });
 
 test("a tunnel refuses an alias that could break its unit, and a relay port that is the gateway's or a system port", () => {
