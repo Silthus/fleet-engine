@@ -9,14 +9,14 @@ const usage = "usage: fleet shell-session [--check]";
 
 export async function shellSessionCommand(args: string[], home: string): Promise<number> {
   if (args.length > 1 || (args.length === 1 && args[0] !== "--check")) throw new Error(usage);
-  const lacking: Array<{ file: string; lines: string[] }> = [];
+  const lacking: Array<{ file: string; text: string }> = [];
   for (const file of [".bashrc", bashLoginFile(home)].map((name) => join(home, name))) {
-    const lines = (await readIfPresent(file)).split("\n");
-    if (lines[0] !== sourceLine) lacking.push({ file, lines });
+    const text = await readIfPresent(file);
+    if (text.split("\n")[0] !== sourceLine) lacking.push({ file, text });
   }
   if (!lacking.length) return 0;
   if (args[0] === "--check") return 1;
-  for (const { file, lines } of lacking) await writeFile(file, [sourceLine, ...lines.filter((line) => line !== sourceLine)].join("\n"));
+  for (const { file, text } of lacking) await writeFile(file, `${sourceLine}\n${text}`);
   return 0;
 }
 

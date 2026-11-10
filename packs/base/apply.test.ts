@@ -120,14 +120,15 @@ describe("the Linux session", () => {
     expect(await shell(home, ["bash", "-lc", 'printf %s "$DBUS_SESSION_BUS_ADDRESS"'])).toBe(userBus);
   });
 
-  test("a source line below an early return moves to the top, so an ssh command still sees the user bus", async () => {
+  test("a source line inside a block below an early return gets a first line too, so an ssh command still sees the user bus", async () => {
     const home = temp.make("home-");
     const ownSourceLine = '[ -r "$HOME/.config/fleet/session.sh" ] && . "$HOME/.config/fleet/session.sh"';
-    writeFileSync(join(home, ".bashrc"), `${ubuntuBashrc}${ownSourceLine}\n`);
+    const bashrc = `${ubuntuBashrc}if true; then\n${ownSourceLine}\nfi\n`;
+    writeFileSync(join(home, ".bashrc"), bashrc);
     expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
     expect(await shell(home, ["bash", "-c", 'printf %s "$DBUS_SESSION_BUS_ADDRESS"'], { SSH_CLIENT: "192.0.2.1 50000 22", SHLVL: "0" })).toBe(userBus);
-    expect(read(home, ".bashrc").split(ownSourceLine)).toHaveLength(2);
-    expect(read(home, ".bashrc")).toContain(ubuntuBashrc);
+    expect(read(home, ".bashrc")).toEndWith(bashrc);
+    expect(Bun.spawnSync(["bash", "-n", join(home, ".bashrc")]).exitCode).toBe(0);
   });
 
   test("a startup file that Fleet cannot read is left as it is", async () => {
