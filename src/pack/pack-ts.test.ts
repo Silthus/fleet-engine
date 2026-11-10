@@ -84,11 +84,14 @@ function machineWith(packs: Record<string, (dir: string) => void>, enabled = Obj
     chmodSync(join(bin, agent), 0o755);
   }
   const lines: string[] = [];
+  const launcher = join(engine, "fleet");
+  const options = { home, engineRoot: engine, platform: "linux" as const, env: {}, print: (line: string) => lines.push(line) };
+  const runFleetStepsOnly = async (command: string[]): Promise<number> => (command[1] === launcher ? await main(command.slice(2), { ...options, print: () => {}, run: runFleetStepsOnly }) : 0);
   const fleet = async (...args: string[]) => {
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
     try {
-      return await main(args.map((arg) => (arg === "<profile>" ? profile : arg)), { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line) });
+      return await main(args.map((arg) => (arg === "<profile>" ? profile : arg)), { ...options, run: runFleetStepsOnly });
     } finally {
       process.env.PATH = path;
     }
