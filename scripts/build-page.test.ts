@@ -109,4 +109,14 @@ describe("the page build", () => {
     expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
     expect(readFileSync(out, "utf8")).toContain('"teamPacks":["posthog"]');
   });
+
+  test("the command line ends once it writes a build, also for a pack.ts whose helper keeps a timer", async () => {
+    const source = temp.make("source-");
+    mkdirSync(join(source, "packs", "team"), { recursive: true });
+    writeFileSync(join(source, "packs", "team", "pack.ts"), `setInterval(() => {}, 3_600_000);\nexport default { sdk: 1, name: "team", summary: "Team rules.", register() {} };\n`);
+    const out = join(temp.make("out-"), "index.html");
+    const run = Bun.spawnSync(["bun", join(root, "scripts/build-page.ts"), "--audience", "posthog", "--source", source, "--out", out], { cwd: root, timeout: 4000 });
+    expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
+    expect(readFileSync(out, "utf8")).toContain('"teamPacks":["team"]');
+  });
 });

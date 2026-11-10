@@ -28,6 +28,11 @@ export function t3UserData(home: string = homedir()): string {
   return join(home, ".t3", "userdata");
 }
 
+export function t3StatePath(userdata: string): string {
+  const current = join(userdata, "statev2.sqlite");
+  return existsSync(current) ? current : join(userdata, "state.sqlite");
+}
+
 export function discoverT3Server(home: string = homedir()): T3Server {
   const userdata = t3UserData(home);
   const runtimePath = join(userdata, "server-runtime.json");
