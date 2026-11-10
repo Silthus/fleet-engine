@@ -226,7 +226,7 @@ sign_in() {
 home_files() {
   find . \( -path ./.t3 -o -path ./.cache -o -path ./.bun -o -path ./.npm -o -path ./.proof \
     -o -path ./.local/share/fleet/sources -o -path ./.local/share/fleet/engine/.git -o -path ./.local/state/fleet/logs \
-    -o -path ./.local/state/fleet/jobs -o -path ./.local/state/fleet/worktree-prune.last -o -path ./.local/state/fleet/worktree-sightings.json \
+    -o -path ./.local/state/fleet/jobs -o -path ./.local/state/fleet/worktree-prune.last -o -path './.local/state/fleet/worktree-sightings.json*' \
     -o -path ./.local/share/claude -o -path ./.local/share/t3code -o -path ./.claude/statsig -o -path ./.claude/todos -o -path ./.codex/tmp \) -prune \
     -o "$@"
 }
