@@ -91,7 +91,14 @@ export type PackStep = Scope & {
 export type T3ProjectScript = Scope & { id: string; name: string; command: string; projects: string[]; projectSetting?: string };
 
 export type Provider = "claude" | "codex" | "t3";
-export type ConfigEntry = Scope & { provider: Provider; key: string; value: unknown };
+/** after: the id of a human step of the same pack that must pass before the entry is written. */
+export type ConfigEntry = Scope & { provider: Provider; key: string; value: unknown; after?: string };
+
+/** A service that every node reaches at 127.0.0.1:port; only a pack.ts declares one, because its credential is code. */
+export type ServedService = Scope & { id: string; port: number; health: string; after?: string };
+
+/** One entry of the service catalog, which every node computes from the same profile. */
+export type CatalogEntry = { pack: string; id: string; port: number; health: string; after?: string };
 
 /** A file from the pack, linked at target under the home directory. */
 export type PackFile = Scope & { path: string; target: string };
@@ -126,6 +133,7 @@ export type PackManifest = {
   files?: PackFile[];
   t3ProjectScripts?: T3ProjectScript[];
   handlers?: PackHandler[];
+  served?: ServedService[];
   models?: Partial<Record<AiPlan, ModelRow[]>>;
 };
 
@@ -143,6 +151,7 @@ export type PackCode = {
   settingKey(handle: unknown): string;
   commands: Record<string, (args: string[], ctx: Context) => Promise<number>>;
   services: Record<string, (ctx: Context) => Promise<void>>;
+  credentials: Record<string, (ctx: Context, node: string) => Promise<string>>;
   checks: Record<string, (ctx: Context) => Promise<boolean>>;
 };
 
@@ -199,6 +208,8 @@ export type Plan = {
   human: Array<Owned<HumanStep>>;
   steps: Array<Owned<PackStep>>;
   checks: Array<Owned<PackCheck>>;
+  /** Every served service of the profile, on every node, with its port. */
+  catalog?: CatalogEntry[];
   t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
   commands: Record<string, { pack: string; path: string }>;
   handlers: Partial<Record<HandlerSeam, { pack: string; path: string }>>;

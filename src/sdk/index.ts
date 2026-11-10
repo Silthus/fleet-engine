@@ -31,6 +31,10 @@ export type Pack = {
 
 export type Command = { summary: string; run(args: string[], ctx: Context): Promise<number> };
 export type Process = { run(ctx: Context): Promise<void> };
+/** A service that every node reaches at http://127.0.0.1:<port>. credential returns the value for one node, by its SSH name. */
+export type Serve = { port: number; health: string; credential(ctx: Context, node: string): Promise<string> };
+export type ServiceDef = Scope & { id: string } & ((Process & { serve?: Serve }) | { serve: Serve; run?: undefined });
+export type ConfigDef = Scope & { provider: "claude" | "codex" | "t3"; key: string; value: unknown };
 export type Repair = { ask: string; command?: string; interactive?: true };
 export type CheckDef = Scope & { id: string; say: string; test(ctx: Context): Promise<boolean>; repair?: Repair };
 
@@ -38,8 +42,9 @@ export type Fleet = {
   setting<K extends SettingType>(def: SettingDef<K>): Setting<ValueOf[K]>;
   workflow(def: WorkflowDef): Workflow;
   command(name: string, def: Command): void;
-  service(def: Scope & { id: string } & Process): Service;
+  service(def: ServiceDef): Service;
   check(def: CheckDef): Check;
+  config(def: ConfigDef): void;
 };
 
 export type Secrets = { read(name: string): Promise<string | undefined>; write(name: string, value: string): Promise<void> };

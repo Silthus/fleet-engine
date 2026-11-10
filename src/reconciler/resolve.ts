@@ -81,6 +81,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
     return !reason;
   };
 
+  plan.catalog = serviceCatalog(order, profile, activeIds(workflowStates(profile, { ...machine, role: "hub" }, order, names)), machine.role === "hub" ? os : "linux");
   const packFiles: DesiredFile[] = [];
   for (const { manifest, dir } of order) {
     const pack = manifest.name;
@@ -134,6 +135,21 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
   plan.files = checkTargets([...instructionFiles(order, profile, plan.models), ...packFiles, ...guideFiles(order, settings, plan.settings), ...skillFiles(order, profile, sources, plan)]);
   plan.commands = packCommands(order);
   return plan;
+}
+
+/** Every served service of the profile, judged the same way on every node: plans and workflows from the profile, the os of the hub (Linux off the hub), and no gate, which only the hub can test. Two services that claim one port fail. */
+function serviceCatalog(order: Candidate[], profile: Profile, active: Set<string>, hubOs: Os) {
+  const ports = new Map<number, string>();
+  return order.flatMap(({ manifest }) =>
+    (manifest.served ?? []).flatMap(({ id, port, health, after, ...scope }) => {
+      if ((scope.on && !scope.on.includes(hubOs)) || (scope.plans && !scope.plans.includes(profile.plan)) || (scope.workflow && !active.has(scope.workflow))) return [];
+      const name = `${manifest.name}/${id}`;
+      const other = ports.get(port);
+      if (other) throw new ResolveError(`port ${port} is claimed by both ${other} and ${name}`);
+      ports.set(port, name);
+      return [{ pack: manifest.name, id, port, health, ...(after ? { after } : {}) }];
+    }),
+  );
 }
 
 /** Workflow and job ids are global: the profile and the Jobs adapter key on them alone. */
@@ -210,6 +226,14 @@ function choosePacks(profile: Profile, sources: FetchedSource[]) {
 }
 
 function activateWorkflows(profile: Profile, machine: MachineFile, order: Candidate[], names: Set<string>, plan: Plan) {
+  const states = workflowStates(profile, machine, order, names);
+  plan.workflows.push(...states);
+  return activeIds(states);
+}
+
+const activeIds = (states: Plan["workflows"]) => new Set(states.filter((state) => state.active).map((state) => state.id));
+
+function workflowStates(profile: Profile, machine: MachineFile, order: Candidate[], names: Set<string>): Plan["workflows"] {
   const devbox = (profile.devboxes?.length ?? 0) > 0 || machine.role === "devbox" || machine.role === "hub";
   const holds: Record<Need, boolean> = {
     gh: true,
@@ -219,17 +243,14 @@ function activateWorkflows(profile: Profile, machine: MachineFile, order: Candid
     coder: names.has("posthog"),
     "posthog-org": names.has("posthog"),
   };
-  const active = new Set<string>();
-  for (const { manifest } of order) {
-    for (const workflow of manifest.workflows ?? []) {
+  return order.flatMap(({ manifest }) =>
+    (manifest.workflows ?? []).map((workflow) => {
       const chosen = profile.workflows[workflow.id] ?? workflow.default;
       const unmet = (workflow.needs ?? []).filter((need) => !holds[need]);
       const reason = !chosen ? "turned off" : unmet.length ? `needs ${unmet.join(", ")}` : undefined;
-      plan.workflows.push({ id: workflow.id, pack: manifest.name, active: !reason, ...(reason ? { reason } : {}) });
-      if (!reason) active.add(workflow.id);
-    }
-  }
-  return active;
+      return { id: workflow.id, pack: manifest.name, active: !reason, ...(reason ? { reason } : {}) };
+    }),
+  );
 }
 
 function activeSettings(order: Candidate[], active: Set<string>): Array<PackSetting & { pack: string }> {
