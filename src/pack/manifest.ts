@@ -1,6 +1,5 @@
 import { readdir } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { dirname, join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { recordPack } from "./register.ts";
 import { handlerSeams, needValues, type LoadedPack, type ModelRow, type PackManifest } from "./types.ts";
 
@@ -38,13 +37,9 @@ async function loadPack(dir: string) {
   return { path: ts, manifest: parseManifest(recorded.manifest, ts), code: recorded.code };
 }
 
-const loadedModules = createRequire(import.meta.url).cache;
-
 async function record(path: string) {
-  const file = resolve(path);
-  for (const loaded of Object.keys(loadedModules)) if (loaded.startsWith(dirname(file) + sep)) delete loadedModules[loaded];
   try {
-    return recordPack((await import(file)).default);
+    return recordPack((await import(resolve(path))).default);
   } catch (error) {
     throw new PackError(`${path}: ${error instanceof Error ? error.message : String(error)}`);
   }

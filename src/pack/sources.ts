@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { join, relative, resolve, sep } from "node:path";
 import { loadPacks } from "./manifest.ts";
 import type { FetchedSource, LoadedPack, SourceRef } from "./types.ts";
 
@@ -50,7 +51,14 @@ async function fallBack(ref: SourceRef, dir: string, repo: string, good: Good | 
   return { ref, dir, packs: loaded.packs, stale: good.ref === ref.ref ? reason : `${reason}; using ${good.ref} instead` };
 }
 
+const loadedModules = createRequire(import.meta.url).cache;
+
 async function load(dir: string): Promise<{ packs: LoadedPack[] } | { error: string }> {
+  if (await hasPackTs(dir)) {
+    const error = await loadsElsewhere(dir);
+    if (error) return { error };
+    for (const loaded of Object.keys(loadedModules)) if (loaded.startsWith(resolve(dir) + sep)) delete loadedModules[loaded];
+  }
   try {
     return { packs: await loadPacks(dir) };
   } catch (error) {
@@ -96,4 +104,15 @@ export async function cachedSource(ref: SourceRef, cacheRoot: string): Promise<F
   const dir = join(cacheRoot, ref.name);
   if (!existsSync(join(dir, ".git"))) return { ref, error: "never fetched; run fleet apply" };
   return { ref, dir, packs: await loadPacks(dir) };
+}
+
+async function hasPackTs(dir: string) {
+  const packs = await readdir(join(dir, "packs")).catch(() => [] as string[]);
+  return packs.some((name) => existsSync(join(dir, "packs", name, "pack.ts")));
+}
+
+async function loadsElsewhere(dir: string): Promise<string | undefined> {
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "load-source.ts"), dir], { env: process.env, stdout: "pipe", stderr: "pipe" });
+  const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  return code === 0 ? undefined : out.trim() || `the packs exit ${code} as they load`;
 }
