@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 import { homedir } from "node:os";
-import { t3StatePath } from "../prune.ts";
-import { t3UserData } from "./server.ts";
+import { t3StatePath, t3UserData } from "./server.ts";
 import type { T3Client, T3HttpClient } from "./session.ts";
 
 export type ShellPullRequest = { repository: string; number: number; url: string };

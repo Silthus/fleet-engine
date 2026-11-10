@@ -3,6 +3,9 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSy
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { freeBytes } from "./disk.ts";
+import { t3StatePath } from "./t3/index.ts";
+
+export { t3StatePath };
 
 export type Facts = {
   path: string;
@@ -120,11 +123,6 @@ export type T3State = { ok: boolean; threads: Map<string, Thread>; projects: str
 type StateRow = {
   path: string; archived: string | null; deleted: string | null; created: string; override: string | null; settled: string | null; messaged: string | null; pending: number; status: string | null; turned: string | null;
 };
-
-export function t3StatePath(userdata: string): string {
-  const current = join(userdata, "statev2.sqlite");
-  return existsSync(current) ? current : join(userdata, "state.sqlite");
-}
 
 function hasTable(db: Database, name: string): boolean {
   return Boolean(db.query("select 1 from sqlite_master where type = 'table' and name = ?").get(name));
