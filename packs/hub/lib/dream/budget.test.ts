@@ -23,11 +23,11 @@ function subtreeHome(files: Record<string, string>) {
   return home;
 }
 
-function run(home: string, args: string[]) {
+function run(home: string, args: string[], extra: Record<string, string> = {}) {
   const printed: string[] = [];
   const offline = () => { throw new Error("budget reaches no other machine"); };
   const dream: DreamIo = {
-    home, env: { FLEET_SETTINGS: JSON.stringify(settings) }, self: "hub-host", now: () => now,
+    home, env: { FLEET_SETTINGS: JSON.stringify({ ...settings, ...extra }) }, self: "hub-host", now: () => now,
     print: (text) => void printed.push(text), say: (text) => void printed.push(text),
     peers: () => [], onPeer: offline, boxes: () => undefined, git: offline, analyst: offline, launch: offline,
   };
@@ -60,7 +60,7 @@ test("budget checks the one memory root of the subtree layout: repo indexes, tri
     "links.md: links [[gone]], which no memory is; repoint it, write that memory, or drop the link",
     "odd.md: status maybe; use confirmed or unconfirmed",
     "old.md: unconfirmed since 2026-10-01; confirm it against a session or the code, or delete it",
-    "projects/app/INDEX.md: 103 lines; the limit is 100",
+    "projects/app/INDEX.md: 102 lines; the limit is 100",
     "projects/app/paths.md: names `src/gone.ts`, which the hub's app checkout lacks; check it, then fix or delete the memory",
     'short.md: trigger "gh" is shorter than 4 characters and never fires; name the command or tool',
   ]);
@@ -105,4 +105,42 @@ test("budget given a dream worktree of the whole memory repo checks its memory.s
 
   expect(await run(home, [])).toEqual({ code: 1, lines: ["stray.md: no index links it"] });
   expect(await run(home, [worktree])).toEqual({ code: 1, lines: ["loose.md: no index links it"] });
+});
+
+test("budget reads frontmatter as YAML: quoted values, comments, and keys under metadata, but not text inside a description", async () => {
+  const home = subtreeHome({
+    "MEMORY.md": "# Memory index\n- [Quoted](quoted.md) — q\n- [Commented](commented.md) — c\n- [Folded](folded.md) — f\n",
+    "quoted.md": "---\nname: quoted\ndescription: q\nmetadata:\n  type: user\n  status: 'confirmed'\nmodified: \"2026-11-01\"\n---\nA fact.\n",
+    "commented.md": "---\nname: commented\ndescription: c\nmetadata:\n  type: user\n  status: unconfirmed # checked later\n  modified: 2026-11-01\n---\nA fact.\n",
+    "folded.md": "---\nname: folded\ndescription: >-\n  status: maybe\nmetadata:\n  type: user\nmodified: 2026-11-01\n---\nA fact.\n",
+  });
+
+  expect(await run(home, [])).toEqual({ code: 0, lines: ["Memory is within budget."] });
+});
+
+test("budget accepts a wiki link by path or with .md, and a ./ path whose first folder the checkout lacks", async () => {
+  const home = subtreeHome({
+    "MEMORY.md": "# Memory index\n- [Other](tech/cli/other.md) — o\n",
+    "tech/cli/other.md": note("other", fresh),
+    "projects/app/INDEX.md": "# app\n- [Links](links.md) — l\n",
+    "projects/app/links.md": note("links", fresh, "See [[tech/cli/other]], [[other.md]] and `./vendor/missing.ts`."),
+  });
+  mkdirSync(join(home, "dev/app/.git"), { recursive: true });
+
+  expect(await run(home, [])).toEqual({ code: 0, lines: ["Memory is within budget."] });
+});
+
+test("budget counts lines as the memory cap does: a repo index of exactly 100 lines passes, 101 fails", async () => {
+  const lines = (count: number) => `${Array.from({ length: count }, (_, index) => `- line ${index}`).join("\n")}\n`;
+  const home = subtreeHome({ "MEMORY.md": "# Memory index\n", "projects/app/INDEX.md": lines(100), "projects/web/INDEX.md": lines(101) });
+
+  expect(await run(home, [])).toEqual({ code: 1, lines: ["projects/web/INDEX.md: 101 lines; the limit is 100"] });
+});
+
+test("budget never leaves the folder it was given for a memory.subtree that climbs out of it", async () => {
+  const home = subtreeHome({ "MEMORY.md": "# Memory index\n" });
+  const worktree = join(home, "run/memory");
+  writeHome(home, { "run/memory/README.md": "# Notes\n", "run/sibling/MEMORY.md": "# Memory index\n", "run/sibling/stray.md": note("stray", fresh) });
+
+  expect(await run(home, [worktree], { "memory.subtree": "../sibling" })).toEqual({ code: 1, lines: ["MEMORY.md: missing"] });
 });
