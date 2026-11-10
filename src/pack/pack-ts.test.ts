@@ -49,11 +49,12 @@ describe("a pack.ts", () => {
   });
 
   test("ships commands named like properties that every object has, and fleet knows no such command elsewhere", async () => {
-    const named = { one: (dir: string) => writeFileSync(join(dir, "pack.ts"), `export default { sdk: 1, name: "one", summary: "A pack.", register(fleet) { fleet.command("toString", { summary: "Show.", run: async () => 0 }); fleet.command("constructor", { summary: "Build.", run: async () => 0 }); } };\n`) };
+    const named = { one: (dir: string) => writeFileSync(join(dir, "pack.ts"), `export default { sdk: 1, name: "one", summary: "A pack.", register(fleet) { fleet.command("toString", { summary: "Show.", run: async () => 3 }); fleet.command("constructor", { summary: "Build.", run: async () => 4 }); } };\n`) };
     const withNames = machineWith(named);
     expect(await withNames.fleet("apply", "--profile", "<profile>")).toBe(0);
     expect(await withNames.fleet("packs")).toBe(0);
     expect(withNames.lines).toContain("  ✓ one  A pack.");
+    expect([await withNames.fleet("toString"), await withNames.fleet("constructor")]).toEqual([3, 4]);
     const without = machineWith({ twin: cpTwin });
     expect(await without.fleet("apply", "--profile", "<profile>")).toBe(0);
     expect([await without.fleet("toString"), without.lines.at(-1)?.split("\n")[0]]).toEqual([2, "fleet: unknown command toString"]);
