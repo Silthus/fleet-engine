@@ -7,6 +7,8 @@ export const managementToken = "management-token";
 export type ApiCall = { method: string; path: string; body?: Record<string, unknown> };
 export type FakeMcpHub = {
   servers: string[];
+  configs: Record<string, Record<string, unknown>>;
+  keepsConfig: boolean;
   groups: Array<{ id: string; name: string; servers: string[] }>;
   calls: ApiCall[];
   healthy: boolean;
@@ -16,7 +18,7 @@ export type FakeMcpHub = {
 };
 
 export function fakeMcpHub(fields: Partial<FakeMcpHub> = {}): FakeMcpHub {
-  return { servers: ["tickets", "calendar"], groups: [], calls: [], healthy: true, openWithoutKey: false, notReadyFor: 0, ...fields };
+  return { servers: ["tickets", "calendar"], configs: {}, keepsConfig: true, groups: [], calls: [], healthy: true, openWithoutKey: false, notReadyFor: 0, ...fields };
 }
 
 function keyOf(state: FakeMcpHub) {
@@ -56,6 +58,20 @@ export function mcphubFetch(state: FakeMcpHub) {
     if (method === "POST" && path === "auth/keys") return Response.json({ success: true, data: { id: "key-new", token: "mcphub_new-machine-token", ...body } }, { status: 201 });
     if (method === "PUT" && path.startsWith("auth/keys/")) return Response.json({ success: true, data: body });
     if (method === "POST" && /^servers\/[^/]+\/reload$/.test(path)) return Response.json({ success: true });
+    const server = path.match(/^servers\/([^/]+)$/);
+    const name = server ? decodeURIComponent(server[1]!) : String(body?.name);
+    const stored = (config: Record<string, any>) => {
+      const { startOnDemand, ...rest } = config;
+      state.configs[name] = state.keepsConfig ? { ...rest, type: "stdio", options: { ...rest.options, ...(startOnDemand && { startOnDemand: true }) } } : { type: "stdio" };
+    };
+    if (method === "POST" && path === "servers") {
+      if (state.servers.includes(name)) return new Response(null, { status: 400 });
+      state.servers.push(name), stored(body!.config as Record<string, unknown>);
+      return Response.json({ success: true }, { status: 201 });
+    }
+    if (!server || !state.servers.includes(name)) return new Response(null, { status: 404 });
+    if (method === "GET") return Response.json({ success: true, data: { name, status: "connected", tools: [], config: state.configs[name] ?? {} } });
+    if (method === "PUT") return stored(body!.config as Record<string, unknown>), Response.json({ success: true });
     return new Response(null, { status: 404 });
   };
 }

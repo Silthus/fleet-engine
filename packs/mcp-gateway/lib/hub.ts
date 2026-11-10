@@ -24,7 +24,7 @@ export type Hub = {
 type BearerKey = { id: string; name?: string; token: string; enabled: boolean; accessType?: string; allowedGroups?: string[] };
 type McpHubSettings = { mcpServers: Record<string, { oauth?: { pendingAuthorization?: { authorizationUrl?: string } } }>; systemConfig: { install: { baseUrl: string } }; bearerKeys: BearerKey[] };
 
-export type Container = { Config: { Labels?: Record<string, string>; Env?: string[] }; Image: string; State: { Running: boolean } };
+export type Container = { Config: { Labels?: Record<string, string>; Env?: string[] }; Image: string; State: { Running: boolean }; Mounts?: Array<{ Destination: string }> };
 
 export const container = "fleet-mcphub";
 const loopback = "http://127.0.0.1:3317";
@@ -117,7 +117,11 @@ function api(hub: Hub, settings: McpHubSettings) {
   };
 }
 
-type Api = ReturnType<typeof api>;
+export type Api = ReturnType<typeof api>;
+
+export async function managementApi(hub: Hub) {
+  return api(hub, await installedSettings(hub));
+}
 type Group = { id: string; name: string; servers: Array<string | { name: string }> };
 
 async function groupGap(call: Api) {

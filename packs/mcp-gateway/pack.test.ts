@@ -53,6 +53,16 @@ describe("the plan", () => {
     for (const key of gatewayKeys) expect(owners[key]).toBe("mcp-gateway");
   });
 
+  test("the Slack bridge stays off until the profile turns it on, and then only the hub registers it and asks for its sign-in", () => {
+    const hub: MachineFile = { schema: 1, role: "hub", name: "hub-1" };
+    const bridgeSteps = (machine: MachineFile, workflows: Record<string, boolean> = {}) =>
+      resolveEngine(sources, { packs: ["mcp-gateway"], hub: "hub-1", workflows }, machine).human.filter((step) => step.workflow === "slack-bridge").map((step) => step.id);
+    expect(bridgeSteps(hub)).toEqual([]);
+    expect(bridgeSteps(hub, { "slack-bridge": true })).toEqual(["slack-bridge", "slack-bridge-sign-in"]);
+    expect(bridgeSteps(devbox, { "slack-bridge": true })).toEqual([]);
+    expect(bridgeSteps(mac, { "slack-bridge": true })).toEqual([]);
+  });
+
   test("a profile that lists the Hub pack keeps the gateway until it turns the mcp-gateway workflow off", () => {
     const hubKeys = (workflows: Record<string, boolean>) => resolveEngine(sources, { packs: ["hub"], settings: hubAnswers, workflows }, devbox).config.filter((entry) => entry.pack === "mcp-gateway").length;
     expect(hubKeys({})).toBe(2);
