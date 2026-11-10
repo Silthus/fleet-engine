@@ -170,7 +170,12 @@ async function runItem(args: string[], options: CliOptions) {
   return inPack(plan, loaded!, options, async (ctx) => {
     if (!service) return (await check!(ctx)) ? 0 : 1;
     const waits = job?.after ? plan.human.find((step) => step.pack === pack && step.id === job.after) : undefined;
-    if (waits && !(await code!.checks[waits.id]!(ctx))) return options.print(`fleet run: ${item} waits until ${waits.id} passes. ${waits.say}`), 1;
+    const ready = async () => !waits || (await code!.checks[waits.id]!(ctx));
+    if (!(await ready())) {
+      options.print(`fleet run: ${item} waits until ${waits!.id} passes. ${waits!.say}${waits!.command ? ` Run: ${waits!.command}` : ""}`);
+      do await ctx.sleep(60_000);
+      while (!(await ready()));
+    }
     return await service(ctx), 0;
   });
 }
