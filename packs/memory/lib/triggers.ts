@@ -18,7 +18,7 @@ export function stripFrontmatter(text: string) {
 export function triggersOf(text: string): string[] {
   const block = frontmatterOf(text)?.[1] ?? "";
   const inline = /^\s*triggers:[ \t]*\[(.*)\][ \t]*$/m.exec(block);
-  if (inline) return inline[1]!.split(",").map(unquote).filter(Boolean);
+  if (inline) return [...inline[1]!.matchAll(/\s*("[^"]*"|'[^']*'|[^,]*)\s*(?:,|$)/g)].map((item) => unquote(item[1]!)).filter(Boolean);
   const start = /^\s*triggers:[ \t]*$/m.exec(block);
   if (!start) return [];
   const items: string[] = [];
@@ -39,12 +39,16 @@ export function noteFiles(root: string, prefix = ""): string[] {
   });
 }
 
-export function refreshTriggers(home: string): Trigger[] {
+function scanTriggers(home: string): Trigger[] {
   const root = memoryRoot(home);
-  const table = noteFiles(root).flatMap((note) => {
+  return noteFiles(root).flatMap((note) => {
     const terms = triggersOf(readFileSync(join(root, note), "utf8")).filter((term) => term.length >= minimumTerm);
     return terms.length ? [{ note, terms }] : [];
   });
+}
+
+export function refreshTriggers(home: string): Trigger[] {
+  const table = scanTriggers(home);
   mkdirSync(stateDir(home), { recursive: true, mode: 0o700 });
   const draft = `${tableFile(home)}.${process.pid}.tmp`;
   writeFileSync(draft, JSON.stringify(table), { mode: 0o600 });
@@ -57,9 +61,15 @@ export function readTriggers(home: string): Trigger[] {
     const table = JSON.parse(readFileSync(tableFile(home), "utf8"));
     if (Array.isArray(table)) return table as Trigger[];
   } catch {}
-  return refreshTriggers(home);
+  return scanTriggers(home);
 }
 
 const escape = (term: string) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-export const names = (term: string, call: string) => new RegExp(`(?<![\\w-])${escape(term)}(?![\\w-])`, "i").test(call);
+export const names = (term: string, text: string) => new RegExp(`(?<![\\w-])${escape(term)}(?![\\w-])`, "i").test(text);
+
+export function textsOf(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (value && typeof value === "object") return Object.values(value).flatMap(textsOf);
+  return [];
+}

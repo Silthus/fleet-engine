@@ -185,6 +185,22 @@ describe("memory recall on a tool call", () => {
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Pass full SHAs");
   });
 
+  test("finds a trigger on any line of a command, and reads a quoted trigger that holds a comma", async () => {
+    const formatTrap = "---\ntriggers: [\"git log --format=%h,%s\", 'deploy-gate']\n---\n\nUse --oneline.\n";
+    const home = await machineWithMemory({ ...notes, "format-trap.md": formatTrap });
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("echo ready\nfleet proof 12") })).context).toContain("Pass full SHAs");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("git log --format=%h") })).context).toBe("");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("git log --format=%h,%s") })).context).toContain("Use --oneline.");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s2", cwd: home, ...bash("run deploy-gate") })).context).toContain("Use --oneline.");
+  });
+
+  test("shows a note once when parallel calls name its trigger at the same time", async () => {
+    const home = await machineWithMemory(notes);
+    const calls = await Promise.all(Array.from({ length: 6 }, () => fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })));
+    expect(calls.filter((call) => call.context.includes("Pass full SHAs"))).toHaveLength(1);
+    expect(shownLog(home, "s1")).toHaveLength(1);
+  });
+
   test("lets the call through quietly when the memory checkout is broken", async () => {
     const home = await machineWithMemory({ "MEMORY.md": "# Memory index\n" });
     symlinkSync(join(home, "gone.md"), join(home, ".agents/memory/dangling.md"));

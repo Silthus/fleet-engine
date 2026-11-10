@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 export type Provider = "claude" | "codex";
@@ -24,21 +25,21 @@ export function repoOf(cwd: string): string | undefined {
   return common ? basename(dirname(common)) : undefined;
 }
 
-export function readShown(home: string, session: string): Shown[] {
-  const file = shownFile(home, session);
-  if (!existsSync(file)) return [];
-  return readFileSync(file, "utf8").split("\n").flatMap((line) => {
-    try {
-      return line.trim() ? [JSON.parse(line) as Shown] : [];
-    } catch {
-      return [];
-    }
-  });
-}
-
 export function logShown(home: string, shown: Omit<Shown, "at" | "event">) {
   mkdirSync(join(stateDir(home), "shown"), { recursive: true, mode: 0o700 });
   appendFileSync(shownFile(home, shown.session), `${JSON.stringify({ at: new Date().toISOString(), event: "memoryShown", ...shown })}\n`, { mode: 0o600 });
+}
+
+export function claimNote(home: string, session: string, agent: string | undefined, note: string) {
+  const dir = join(stateDir(home), "claimed");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const key = createHash("sha256").update(JSON.stringify([session, agent ?? "", note])).digest("hex");
+  try {
+    closeSync(openSync(join(dir, key), "wx", 0o600));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function clip(text: string, limit: number) {
