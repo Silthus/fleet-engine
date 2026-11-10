@@ -229,8 +229,12 @@ async function readCodex(home: string) {
   return { path, text, config, providers, routed, usable: routed && url === codexUrl, untouched: Bun.deepEquals(table, codexProviderTable) };
 }
 
+const readableCodex = (home: string) => readCodex(home).catch(() => undefined);
+
 async function sendCodexHome(home: string): Promise<boolean> {
-  const { path, text, config, providers, routed, untouched } = await readCodex(home);
+  const read = await readableCodex(home);
+  if (!read) return false;
+  const { path, text, config, providers, routed, untouched } = read;
   if (routed) delete config.model_provider;
   if (untouched) delete providers![codexProvider];
   if (providers && !Object.keys(providers).length) delete config.model_providers;
@@ -245,8 +249,8 @@ async function route(machine: ProxyMachine): Promise<boolean> {
   const claude = unserved(models, "claude");
   if (claude) await sendClaude(machine.home, false);
   const claudeReached = reached("Claude Code", claude);
-  const codexConfig = await readCodex(machine.home);
-  if (!codexConfig.routed) return claudeReached;
+  const codexConfig = await readableCodex(machine.home);
+  if (!codexConfig?.routed) return claudeReached;
   const codex = codexConfig.usable ? unserved(models, "codex") : `${codexConfig.path} selects the ${codexProvider} provider, but its table has no base_url.`;
   if (codex) await sendCodexHome(machine.home);
   return reached("Codex", codex) && claudeReached;
