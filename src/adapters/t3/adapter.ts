@@ -1,3 +1,4 @@
+import { existsSync, statSync } from "node:fs";
 import { userInfo } from "node:os";
 import { resolve } from "node:path";
 import type { Finding, Plan } from "../../pack/types.ts";
@@ -76,8 +77,13 @@ function taskProjects(plan: Plan) {
   return [...new Set(plan.jobs.flatMap((job) => (job.runner === "t3" && job.task?.project ? [job.task.project] : [])))];
 }
 
+function scriptProjects(plan: Plan, home: string) {
+  const folder = (path: string) => existsSync(expandHome(home, path)) && statSync(expandHome(home, path)).isDirectory();
+  return (plan.t3ProjectScripts ?? []).flatMap((script) => script.projects).filter(folder);
+}
+
 async function reconcileProjects(rpc: T3Rpc, plan: Plan, home: string, run: CommandRunner, dryRun: boolean, result: AdapterResult) {
-  const wanted = taskProjects(plan);
+  const wanted = [...new Map([...taskProjects(plan), ...scriptProjects(plan, home)].map((path) => [resolve(expandHome(home, path)), path])).values()];
   if (!wanted.length) return;
   const listed = new Set((await activeProjects(rpc)).map((project) => resolve(project.workspaceRoot)));
   for (const path of wanted.filter((item) => !listed.has(resolve(expandHome(home, item))))) {
