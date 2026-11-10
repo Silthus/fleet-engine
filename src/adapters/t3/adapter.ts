@@ -78,7 +78,7 @@ function taskProjects(plan: Plan) {
 }
 
 function scriptProjects(plan: Plan, home: string) {
-  const folder = (path: string) => existsSync(expandHome(home, path)) && statSync(expandHome(home, path)).isDirectory();
+  const folder = (path: string) => !path.includes("*") && existsSync(expandHome(home, path)) && statSync(expandHome(home, path)).isDirectory();
   return (plan.t3ProjectScripts ?? []).flatMap((script) => script.projects).filter(folder);
 }
 

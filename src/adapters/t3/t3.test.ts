@@ -522,6 +522,7 @@ describe("T3 project scripts", () => {
   test("adds each existing folder a script names by plain path as a T3 project, so one apply puts the script on it", async () => {
     const home = temp.make("home-");
     mkdirSync(join(home, "app"), { recursive: true });
+    mkdirSync(join(home, "work/*"), { recursive: true });
     const named = { ...prepare, projects: ["~/app", "~/missing", "~/work/*"] };
     const { server, commands, adapter } = setup({ settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
     const report = await apply(withScripts([named]), { home, adapters: [adapter] });
