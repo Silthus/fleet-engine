@@ -61,17 +61,17 @@ export function guard(call: ToolCall, home: string, root = "/"): Denial | undefi
   }
 }
 
-function answer(input: string, home: string, root: string): Denial | undefined {
+function answer(input: string, home: string): Denial | undefined {
   let call: ToolCall;
   try {
     call = JSON.parse(input);
   } catch {
     return deny(uncheckedReason(new Error("the hook input is not JSON"), guardSettings(home).person));
   }
-  return guard(call, home, root);
+  return guard(call, home);
 }
 
 if (import.meta.main) {
-  const denial = answer(await Bun.stdin.text(), process.env.HOME ?? homedir(), process.env.FLEET_SYSTEM_ROOT || "/");
+  const denial = answer(await Bun.stdin.text(), process.env.HOME ?? homedir());
   if (denial) process.stdout.write(`${JSON.stringify(denial)}\n`);
 }

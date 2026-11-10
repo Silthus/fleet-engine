@@ -32,11 +32,37 @@ function verifyWith(list: ReturnType<typeof signedList>): Verdict {
 
 const readOr = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : undefined);
 
+const probeOwner = "fleet_probe";
+const sshUser = "git";
+const blockedForms = [`https://github.com/${probeOwner}/x`, `${sshUser}@github.com:${probeOwner}/x`, `ssh://${sshUser}@github.com/${probeOwner}/x`, `github.com:${probeOwner}/x`, `https::https://github.com/${probeOwner}/x`];
+
+function remoteFor(root: string, url: string) {
+  const env = { HOME: process.env.HOME ?? "/", PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_CONFIG_SYSTEM: systemPaths(root).gitconfig, GIT_CONFIG_GLOBAL: "/dev/null" };
+  return Bun.spawnSync(["git", "ls-remote", "--get-url", url], { env, stdout: "pipe", stderr: "ignore", timeout: 10_000 }).stdout.toString().trim();
+}
+
+function helperRefuses(helper: string) {
+  try {
+    const refused = Bun.spawnSync([helper, "origin", blockedForms[0]!], { stdout: "ignore", stderr: "pipe", timeout: 10_000 });
+    return refused.exitCode !== 0 && refused.stderr.toString().includes("Fleet blocked Git access");
+  } catch {
+    return false;
+  }
+}
+
 function installedState(root: string, text: string) {
   const paths = systemPaths(root);
-  const includes = Bun.spawnSync(["git", "config", "--file", paths.gitconfig, "--get-all", "include.path"], { stdout: "pipe", stderr: "ignore" }).stdout.toString().split("\n");
-  if (![paths.signers, paths.config, paths.helper].every(existsSync) || !includes.includes(paths.config)) return "not installed";
-  return readOr(paths.list) === text ? "installed" : "installed with another list";
+  const installed = readOr(paths.list);
+  if (installed === undefined) return "not installed";
+  if (installed !== text) return "installed with another list";
+  const signed = verify(installed, paths.signature, paths.signers);
+  if (!signed.ok) return `installed, but the installed list does not verify against ${paths.signers}: ${signed.reason}`;
+  const open = blockedForms.find((url) => remoteFor(root, url) !== `fleet-blocked::${url}`);
+  if (open) return `installed, but Git does not refuse ${open}`;
+  const shut = parseOwners(installed).find((owner) => remoteFor(root, `https://github.com/${owner}/x`) !== `https://github.com/${owner}/x`);
+  if (shut) return `installed, but Git refuses the listed owner ${shut}`;
+  if (!helperRefuses(paths.helper)) return `installed, but the blocked-remote helper ${paths.helper} does not run`;
+  return "installed";
 }
 
 function stage(list: ReturnType<typeof signedList>, folder: string) {

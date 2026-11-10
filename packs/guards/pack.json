@@ -57,7 +57,7 @@
         "guards.owners",
         "guards.signers"
       ],
-      "sentence": "Git refuses any remote whose GitHub owner is not on a list you signed, and gh uses the same list.",
+      "sentence": "Git refuses any remote whose GitHub owner is not on a list you signed. With the shell guards on, gh follows the same list.",
       "moment": {
         "time": "15:05",
         "title": "A clone of the wrong repo stops at Git",
@@ -66,7 +66,7 @@
           "agent"
         ]
       },
-      "risk": "Git refuses every remote outside the signed list, including other hosts than GitHub. Root, or anyone with sudo, can remove it."
+      "risk": "Git refuses every remote outside the signed list, including other hosts than GitHub. Root, or anyone with sudo, can remove it. It stops mistakes, not a hostile agent: an agent that runs as you can override it with its own Git config, or edit the staged script before you run it with sudo."
     }
   ],
   "files": [

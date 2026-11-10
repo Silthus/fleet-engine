@@ -8,6 +8,7 @@ export const signatureNamespace = "fleet-git-allowlist";
 export const systemPaths = (root: string) => ({
   dir: join(root, "etc/fleet"),
   list: join(root, "etc/fleet/git-allowlist"),
+  signature: join(root, "etc/fleet/git-allowlist.sig"),
   signers: join(root, "etc/fleet/git-allowlist-signers"),
   config: join(root, "etc/fleet/git-allowlist.gitconfig"),
   helper: join(root, "usr/local/bin/git-remote-fleet-blocked"),
