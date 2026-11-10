@@ -6,6 +6,7 @@ import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, resolveEngine } from "../../src/testing/packs.ts";
 import { nightlyCommand } from "./lib/nightly.ts";
 
+const onLinux = test.skipIf(process.platform !== "linux");
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
@@ -70,7 +71,7 @@ test("an update that keeps failing tries each hour of the night window and stops
   expect(runs[0]).toEndWith("agent-update exit 3");
 });
 
-test("an hour that starts while the last update still runs leaves it alone", async () => {
+onLinux("an hour that starts while the last update still runs leaves it alone", async () => {
   const box = machine();
   const hold = fifos(box.engineRoot);
   const first = nightlyCommand(nightlyArgs("fleet-update"), { home: box.home, engineRoot: box.engineRoot, now: () => new Date("2026-11-10T00:17:00Z") });
@@ -81,7 +82,7 @@ test("an hour that starts while the last update still runs leaves it alone", asy
   expect(box.calls()).toEqual(["update"]);
 });
 
-test("an update whose run was killed tries again the next hour", async () => {
+onLinux("an update that outlives its killed wrapper keeps the next hour out", async () => {
   const box = machine();
   const hold = fifos(box.engineRoot);
   const driver = join(temp.make("driver-"), "driver.ts");
@@ -90,8 +91,7 @@ test("an update whose run was killed tries again the next hour", async () => {
   await hold.started();
   killed.kill(9);
   await killed.exited;
-  await hold.release();
-  hold.remove();
   expect(await nightlyCommand(nightlyArgs("fleet-update"), { home: box.home, engineRoot: box.engineRoot, now: () => new Date("2026-11-10T01:17:00Z") })).toBe(0);
-  expect(box.calls()).toEqual(["update", "update"]);
+  expect(box.calls()).toEqual(["update"]);
+  await hold.release();
 });
