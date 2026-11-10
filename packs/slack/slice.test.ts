@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { jobsAdapter } from "../../src/adapters/jobs/adapter.ts";
@@ -62,8 +62,6 @@ async function hub() {
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["slack"], plan: "claude", settings: { "slack.userId": ownerId }, workflows: { "slack-thread": true } }));
   const minutes: Array<() => void> = [];
   const engineFleet = join(repoRoot, "fleet");
-  const jobsEngine = temp.make("jobs-engine-");
-  writeFileSync(join(jobsEngine, "fleet"), `#!/bin/sh\nprintf '%s\\n' "$@" > "$HOME/launched"\n`);
   let lines: string[] = [];
   const options: CliOptions = {
     home,
@@ -72,7 +70,7 @@ async function hub() {
     env: {},
     print: (line) => lines.push(line),
     run: async (command) => (command[0] === "/bin/sh" && command[1] === engineFleet ? main(command.slice(2), { ...options, print: () => {} }) : 0),
-    adapters: () => [filesAdapter, jobsAdapter({ run: async () => ({ code: 0, stdout: "" }), engineRoot: jobsEngine })],
+    adapters: () => [filesAdapter, jobsAdapter({ run: async () => ({ code: 0, stdout: "" }), engineRoot: repoRoot })],
     clock: { now: () => Date.parse("2026-11-10T12:00:00Z"), sleep: (ms) => (ms === 60_000 ? new Promise<void>((resolve) => minutes.push(resolve)) : Promise.resolve()) },
   };
   const fleet = async (...args: string[]) => {
@@ -89,17 +87,11 @@ async function hub() {
   };
   const minute = () => minutes.splice(0).forEach((resolve) => resolve());
   const unit = join(home, ".config/systemd/user/fleet-slack-trigger.service");
-  const launch = () => {
-    rmSync(join(home, "launched"), { force: true });
-    const ran = Bun.spawnSync(["/bin/sh", join(home, ".local/state/fleet/jobs/slack-trigger.sh")], { env: { HOME: home } });
-    if (ran.exitCode !== 0) throw new Error(`the launcher exits ${ran.exitCode}`);
-    return fleet(...readFileSync(join(home, "launched"), "utf8").trimEnd().split("\n"));
-  };
-  return { home, profile, slack, liveApps, t3, fleet, setup, minute, unit, launch };
+  return { home, profile, slack, liveApps, t3, fleet, setup, minute, unit };
 }
 
 test("setup installs the trigger, an owner's message starts one thread, and after a lost answer the restarted trigger posts its link once", async () => {
-  const { home, profile, slack, liveApps, t3, fleet, setup, minute, unit, launch } = await hub();
+  const { home, profile, slack, liveApps, t3, fleet, setup, minute, unit } = await hub();
   const todo = "Make your own Slack app for Start a thread from Slack, then paste its two tokens. Fleet keeps them where only you can read them. Run: fleet slack-trigger setup";
   const saved = "Saved both tokens where only you can read them. A running Slack trigger starts again with them within a minute.";
   const replies = () => slack.method("chat.postEphemeral").map((call) => call.args.text);
@@ -112,7 +104,7 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   await fleet("apply");
   expect(existsSync(unit)).toBe(true);
 
-  const serving = launch();
+  const serving = fleet("run", "slack/slack-trigger");
   await slack.connected();
   slack.send({ type: "message", user: ownerId, channel: "C1", ts: "100.1", text: "the build is red :t3code:" });
   await slack.until(() => replies().length === 1);
@@ -124,7 +116,7 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   liveApps.delete(firstApp);
   minute();
   expect((await serving).code).toBe(0);
-  const restarted = launch();
+  const restarted = fleet("run", "slack/slack-trigger");
   await slack.connected(2);
   minute();
   await slack.until(() => replies().length === 2);
@@ -134,6 +126,10 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   rmSync(join(home, ".config/fleet/secrets/slack/app"));
   minute();
   expect((await restarted).code).toBe(0);
+  mkdirSync(join(home, ".bun/bin"), { recursive: true });
+  symlinkSync(process.execPath, join(home, ".bun/bin/bun"));
+  const launched = Bun.spawnSync(["/bin/sh", join(home, ".local/state/fleet/jobs/slack-trigger.sh")], { env: { HOME: home } });
+  expect([launched.exitCode, readFileSync(join(home, ".local/state/fleet/jobs/slack-trigger.log"), "utf8")]).toEqual([1, "fleet: no Slack app is saved. Run fleet slack-trigger setup\n"]);
   expect((await fleet("apply")).lines.join("\n")).toContain(todo);
   expect(existsSync(unit)).toBe(false);
 });
