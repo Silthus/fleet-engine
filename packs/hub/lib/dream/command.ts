@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import type { Env, Result } from "../coder.ts";
 import { readRole } from "../machine.ts";
 import { analyze, type Analyst } from "./analyze.ts";
-import { budget } from "./budget.ts";
+import { budget, homeCheckouts } from "./budget.ts";
 import { collect, dateOf, type DreamBoxes } from "./collect.ts";
 import { digestLines, dreamIsOn, dreamPromptStart, dreamSessionsKey, memoryCheckout, parseSince, stateDir } from "./digest.ts";
 import { scorecardText } from "./scorecard.ts";
@@ -113,8 +113,10 @@ export async function dreamCommand(args: string[], io: DreamIo): Promise<number>
     io.print(await scorecardText(state, checkout, git, io.now()));
     return 0;
   }
+  const subtree = settingsOf(io.env)["memory.subtree"];
+  const root = positional(rest) && typeof subtree === "string" && subtree && existsSync(join(checkout, subtree, "MEMORY.md")) ? join(checkout, subtree) : checkout;
   const usagePath = join(state, "usage.json");
-  const problems = budget(checkout, existsSync(usagePath) ? JSON.parse(readFileSync(usagePath, "utf8")) : {}, io.now());
+  const problems = budget(root, existsSync(usagePath) ? JSON.parse(readFileSync(usagePath, "utf8")) : {}, io.now(), homeCheckouts(io.home));
   if (rest.includes("--json")) io.print(JSON.stringify(problems, null, 2));
   else io.print(problems.length ? problems.map((item) => `${item.file}: ${item.problem}`).join("\n") : "Memory is within budget.");
   return problems.length ? 1 : 0;
