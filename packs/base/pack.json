@@ -312,6 +312,21 @@
       ]
     },
     {
+      "provider": "claude",
+      "key": "hooks.SessionStart",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude SessionStart",
+              "timeout": 30
+            }
+          ]
+        }
+      ]
+    },
+    {
       "provider": "codex",
       "key": "hooks.UserPromptSubmit",
       "value": [
@@ -332,6 +347,25 @@
     },
     {
       "provider": "codex",
+      "key": "hooks.PreToolUse",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex PreToolUse",
+              "timeout": 30
+            }
+          ]
+        }
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
       "key": "hooks.PostToolUse",
       "value": [
         {
@@ -339,6 +373,25 @@
             {
               "type": "command",
               "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex PostToolUse",
+              "timeout": 30
+            }
+          ]
+        }
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "hooks.SessionStart",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex SessionStart",
               "timeout": 30
             }
           ]
@@ -574,6 +627,18 @@
     }
   ],
   "steps": [
+    {
+      "id": "settings-snapshot",
+      "run": [
+        "fleet",
+        "settings-snapshot"
+      ],
+      "check": [
+        "fleet",
+        "settings-snapshot",
+        "--check"
+      ]
+    },
     {
       "id": "claude-cli",
       "run": [
