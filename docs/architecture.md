@@ -12,9 +12,9 @@ Status: proposal. Nobody has approved it yet. Each decision has a number
 - **SDK.** `register(fleet)` declares items, and handlers get `ctx`. A pack
   imports types only, and `pack.json` keeps loading.
 - **T3 interface.** Packs name capabilities: `ctx.threads`, `fleet.task`,
-  `fleet.projectScript`. One engine module holds all T3 knowledge.
-- **First slice.** The Slack pack runs from a `pack.ts` on a spare devbox
-  that is its own hub: setup, event, thread, restart.
+  `fleet.projectScript`. One engine module holds T3's session and RPC code.
+- **First slice.** The Slack pack runs from a `pack.ts` on a freshly
+  created machine that is its own hub: setup, event, thread, restart.
 
 ## 1. The problem
 
@@ -77,10 +77,9 @@ flowchart LR
   its schema 1 role is then `hub`, derived and no longer saved.
   *Until the profile names a hub,* `on: "hub"` keeps today's predicate: the
   saved role is `hub`, or the machine is solo (`resolve.ts:63`). A profile
-  that lists devboxes makes no machine solo. A machine without the saved
-  role then drops its hub items, with a finding that says to run
-  `fleet hub here` on the hub. So a profile with devboxes gets no hub by
-  default, and never several Slack triggers.
+  that lists devboxes makes no machine solo, so a machine without the
+  saved role drops its hub items, with a finding that names
+  `fleet hub here`. So such a profile never gets several Slack triggers.
   *Reasons:* "You can define where the hub runs" becomes one line that
   every node reads from the same profile. Today the role sits in each
   machine file and the hub's name in the `hub.alias` setting, so they can
@@ -200,16 +199,16 @@ nothing else. Where an interface names one node, the field is `node`.
   no list of node names. A handler that must differ reads `ctx.node.isHub`.
   *Reason:* the two values cover every item in today's packs once forwards
   belong to the engine. A third value can come when a pack needs it.
-- **`after` is a readiness gate, in two passes.** `fleet apply` first
-  applies the items without `after` and leaves installed gated items
-  alone. It then tests each gate. Last, it applies the gated items whose
-  gate passed and removes those whose gate failed, a running unit included,
-  with the reason. So a gate can test what the same apply installed, as
-  today's lazy `waiter` allows for steps (`src/reconciler/apply.ts:107`).
-  A gate test is local: it runs no command on another node. A repair
-  command that a person runs ends by running `fleet apply`, so its pack's
-  gated items arrive at once. Today the adapters start a service before
-  its human step passes (`apply.ts:66-80`).
+- **`after` is a readiness gate, tested once.** `fleet apply` tests every
+  gate before the adapters run, drops the items whose gate failed from the
+  plan, with the reason, and runs the adapters once. The adapters do not
+  change (D18): their pruning stops and removes a unit that left the plan
+  (`src/adapters/jobs/adapter.ts`, `provider-config/adapter.ts:133-149`).
+  No v1 gate tests what the same apply installs: the Slack gate reads a
+  secret, and `route` reads the network. Today's lazy `waiter` stays for
+  steps only. A gate test is local: it runs no command on another node.
+  When a pack command exits 0 and its words equal a check's
+  `repair.command`, the engine applies in the same process.
 
 ### 4.2 How a node uses a service on the hub
 
@@ -318,9 +317,10 @@ parent process. The pack writes no unit and no tunnel line.
 served service of section 4.2, one check whose repair Fleet runs (today's
 install step), today's client check, and the `config` MCP entry that
 starts `fleet mcp-gateway connect`, the stdio bridge of today, which calls
-`ctx.use`. Sign-ins stay today's `fleet mcphub links`. Its text tells the
-person to run `coder port-forward <hub> --tcp 3317` on the Mac, so the
-browser reaches the sign-in pages at loopback without private HTTPS.
+`ctx.use`. Its sign-in command prints each upstream authorization URL
+directly, not a page that only Caddy serves (`mcphub/hub.ts:197-211`), and
+tells the person to run `coder port-forward <hub> --tcp 3317` on the Mac.
+So the browser reaches the gateway at loopback without private HTTPS.
 
 **The Slack trigger** (pack `slack`, section 5.3) serves nothing: it opens
 a socket to Slack. Placement on the hub means that one runs. **An API** (a
@@ -476,9 +476,9 @@ stores for each Slack message before it starts a thread
 - **`ctx.threads.start` replaces only `launchHere`.** When `hub.boxTemplate`
   is set, `launcher` picks `launchOnBox` (`packs/slack/lib/command.ts:42-46`,
   `launch.ts:46-66`). That path stays the pack's own code, unchanged, until
-  `boxes` ports in step 4: it claims a box, runs `fleet slack-trigger launch`
-  there, names the box in the reply, and releases it. It reads the setting
-  from `FLEET_SETTINGS`, which the runner keeps setting.
+  `boxes` ports in step 4 (section 7). Until then the runner sets the same
+  environment as `runPackCommand` does today (`FLEET_SETTINGS`,
+  `FLEET_MODELS`, `FLEET_ENGINE_DIR`) for every pack command.
 - **The command has no placement in the slice,** because the `launch`
   subcommand runs on a box, and the dispatch of a hub command over `ssh`
   arrives in step 3.
@@ -498,7 +498,7 @@ stores for each Slack message before it starts a thread
 | Which node runs what, the service catalog, forwards, the credential pull | The port it serves, and issuing and checking its own credentials |
 | Running checks, the readiness gate, the words "To do" and "Fix" | The test, the sentence, the repair |
 | One owner per config key, port, command name, and seam | Its own names |
-| All T3 knowledge | The Fleet-shaped request |
+| The T3 session code and the RPC tags | The Fleet-shaped request |
 | Building and installing the source's plugin | Its skills |
 
 How an item runs: `fleet <command>` resolves the plan as today, loads the
@@ -509,11 +509,11 @@ step, with `fleet run <pack>/<id>` as its probe.
 
 ## 6. Threads, tasks, and project scripts
 
-- **D19. One engine module owns all T3 knowledge.** `src/adapters/t3/`
-  and `packs/base/lib/t3/` merge into `src/integrations/t3/`. Session
-  issue, the socket protocol, RPC tags, snapshot shapes, and the map from
-  provider to T3 instance live there and nowhere else. The first slice
-  moves the thread launcher there. Step 4 moves the rest.
+- **D19. No session code and no RPC tag lives outside one engine module.**
+  The first slice moves `packs/base/lib/t3/` whole into
+  `src/integrations/t3/` and leaves `index.ts` as a re-export. Other packs
+  keep importing its launcher and read functions until a second user needs
+  `threads.read` in `ctx`. Step 4 moves `src/adapters/t3/` there too.
 - **D20. Packs speak Fleet's words, not T3's.** A pack names a model
   *role*, a project *path*, and a schedule `{ every, at }`. The module maps
   them to a model selection, a project id, and a trigger.
@@ -544,7 +544,7 @@ what the port changes. The Hub pack is gone after step 4.
 | Orchestration | `orchestration` | Commands: nodes. Three T3 tasks: hub. | Each task runs once, on the hub. Today it is planned on the hub and on every devbox. |
 | Communication | `communication` | Instructions and skills: nodes. | None |
 | Memory | `memory` | Config, sync job, memory-cap hook: nodes. Dream job and skill: hub. | Dream moves in. Placement was the only reason that it lived in the Hub pack. |
-| Hub: MCP gateway | `mcp-gateway` | Served service under Docker's restart policy, install check with a Fleet repair: hub. Client check, MCP config entries with the bridge: nodes. | Each node pulls its key during apply. `fleet mcphub grant` by hand goes. |
+| Hub: MCP gateway | `mcp-gateway` | Served service under Docker's restart policy, install check with a Fleet repair: hub. Client check, MCP config entries with the bridge: nodes. | Each node pulls its key during apply. `fleet mcphub grant` by hand goes. The sign-in command prints the authorization URL, not a page that Caddy serves. |
 | Hub: own-account balancing | `cli-proxy` | Service with `serve`, balance job: hub. Route check, two gated config keys: Linux nodes. | A Linux node that is not a devbox also gets the route. The route step goes (D15). |
 | Hub: boxes | `boxes` | `fleet box`, sweep and nightly jobs, a token check: hub. Restore job: `os: "linux"`. | `fleet box` on a node runs on the hub over `ssh`. A plain Linux node also gets the restore job. A Mac never does. |
 | Hub: SSH tunnels to devboxes | The engine's forwards, and `peers` | Step 3: one engine unit per devbox with the catalog's ports. `tunnelUnit` keeps the rest (D13). | A devbox has two `ssh -R` units. |
@@ -580,20 +580,21 @@ PRs that merges as one unit, and it holds everything that it uses:
    `pack.ts`, run `register` against a recorder, and emit today's
    `LoadedPack`. `fleet <command>` and `fleet run <pack>/<id>` call handlers
    with a real `Context`. `apply` gets the readiness gate.
-2. **`ctx.threads.start` with a key.** The launcher moves into
-   `src/integrations/t3/`.
+2. **`ctx.threads.start` with a key.** `packs/base/lib/t3/` moves whole
+   into `src/integrations/t3/` and leaves a re-export (D19).
 3. **The Slack port.** `pack.json` goes. The tokens live in the secret
    store only. No machine runs the engine's Slack pack yet, so no token
-   file moves. `on: "hub"` keeps today's predicate (D2), so the port
-   changes no placement and needs no profile change.
+   file moves. Resolve reads `profile.hub` and the machine's name, and a
+   profile without `hub` keeps today's placement (D2).
 
 **Proof, through the CLI only.** One outside-in test uses a temporary home,
 a fake Slack, and a fake T3. The same four steps then run by hand on the
-dog-food hub:
+dog-food hub, with its own Slack app (section 8.2):
 
 1. *Setup.* `fleet apply` with the workflow on and no tokens writes no unit
    and lists the To do. `fleet slack-trigger setup` stores the tokens and
-   ends with an apply that writes and starts the unit.
+   exits 0, so the engine applies and starts the unit. A second apply
+   keeps the service running. An apply without the tokens removes it.
 2. *Event.* The owner's Slack message causes exactly one thread start.
 3. *Thread.* Slack shows the thread's link.
 4. *Restart.* T3's first answer is lost and the service restarts. It sends
@@ -611,34 +612,31 @@ the tokens exist. The rest is the base for step 2, which follows at once.
 
 The real machines run the private Fleet, not the engine.
 
-- **The dog-food hub** is a fresh spare devbox with its own engine profile
-  and no devboxes in it. It is not a box, because a box leaves within hours
-  (risk 9). A devbox is never solo, so `fleet hub here`, today a command of
-  the Hub pack, saves the role `hub`. So that pack is on there, and the
-  profile turns off its default-on workflows:
-  `"workflows": { "mcp-gateway": false, "linked-hub": false, "disk-watch": false }`.
-  `boxes` is off by itself, because its need `coder` does not hold there.
-- **The engine is the only Fleet in that home,** because both Fleets write
+- **The dog-food hub** is a freshly created machine: a devbox with its own
+  engine profile and no devboxes in it. It is not a box, because a box
+  leaves within hours (risk 9). The profile names it as the hub (D2), so
+  the Hub pack is not in that profile.
+- **The engine is the only Fleet in that home.** The machine is created
+  without the private dotfiles installer, because both Fleets write
   `~/.config/fleet` and name the unit `fleet-slack-trigger.service`.
-- **One Slack trigger.** Before the workflow is turned on, the private
-  Fleet's `fleet-slack-trigger.service` on the current hub is stopped,
-  disabled, and taken out of what the private Fleet installs. Two listeners
-  on one Slack app would split the events. Nothing else stops for the slice.
+- **The private Slack trigger stays as it is.** The slice uses a second
+  Slack app in a separate developer sandbox workspace, because the same
+  workspace would show it the same reactions. The real trigger moves in
+  the migration, when the engine starts threads on a guarded coding node.
 - **No existing machine moves in these steps.** Step 3's node is a second
   spare devbox. A machine of the private Fleet moves when engine packs
   cover what it uses, guards and monitors included. That parity is separate
-  work. The old hub moves last, and the private Fleet ends when no machine
-  runs it.
+  work. The private Fleet ends when no machine runs it.
 
 ### 8.3 Later steps
 
 2. **One served hub service, on loopback.** The step holds what it uses:
-   the profile's `hub` and the machine's name (D2), `serve`, the service
-   catalog, `ctx.use`, `ctx.node`, `config`, a repair that Fleet runs, and
-   credential issue and storage on the hub itself. The MCP gateway becomes
-   its own pack on the dog-food hub, and Docker keeps supervising it.
-   Tests: the plan of another node holds the gateway in its catalog, and on
-   the hub the bridge uses a key that the hub issued to itself.
+   `fleet hub here`, `serve`, the service catalog, `ctx.use`, `ctx.node`,
+   `config`, a repair that Fleet runs, and credential issue and storage on
+   the hub itself. The MCP gateway becomes its own pack on the dog-food
+   hub, and Docker keeps supervising it. Proof: another node's plan holds
+   the gateway in its catalog, the hub's bridge uses a key that the hub
+   issued to itself, and one sign-in completes through the Mac's forward.
 3. **Forwards, credential pulls, and hub commands for one topology.**
    Render one forward for each devbox with the catalog's ports, pull
    credentials with `fleet credential`, and run a hub command from a node.
@@ -689,8 +687,9 @@ Ranked, most important first.
    pack on or off rewrites the forward and cuts open connections.
 7. **Commands run inside the engine's process.** A pack can crash the
    CLI or load slowly. *Plan:* handlers import their code lazily.
-8. **Closed: private HTTPS.** The gateway's sign-in needs none in v1
-   (section 4.3). Today's HTTPS code stays in `peers`.
+8. **Open: the direction of the forward.** v1 uses `ssh` both ways
+   (section 4.2). A node's own `ssh -L` could carry the forward and remove
+   the hub's unit for each devbox. Decide before step 3.
 9. **Open: the Mac and boxes as nodes of the engine's forwards.** The hub
    cannot dial a Mac, and a box joins and leaves within hours. Both stay on
    today's code in v1 (D13), so the dog-food hub and its node are devboxes.
