@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { diskStatus } from "./disk.ts";
@@ -32,20 +33,26 @@ test("fleet disk exits 1 while free space is under the floor setting", async () 
 const huge = 1e6;
 const room = (gigabytes: number) => gigabytes * gigabyte;
 
-async function start(options: { settings?: Record<string, unknown>; env?: Record<string, string>; map?: unknown; ssh?: string }, ...args: string[]) {
+async function start(options: { settings?: Record<string, unknown>; env?: Record<string, string>; map?: unknown; ssh?: string | null; machine?: object }, ...args: string[]) {
   const home = temp.make("home-");
   const bin = temp.make("bin-");
   const asked = join(bin, "ssh.log");
-  writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$*" >> "${asked}"\n${options.ssh ?? "exit 255"}\n`);
-  chmodSync(join(bin, "ssh"), 0o755);
+  if (options.ssh !== null) {
+    writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$*" >> "${asked}"\n${options.ssh ?? "exit 255"}\n`);
+    chmodSync(join(bin, "ssh"), 0o755);
+  }
+  if (options.machine) {
+    mkdirSync(join(home, ".config/fleet"), { recursive: true });
+    writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify(options.machine));
+  }
   if (options.map !== undefined) {
     mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
     writeFileSync(join(home, ".local/state/fleet/disk-free.json"), JSON.stringify(options.map));
   }
   const { XDG_STATE_HOME: _, FLEET_START_MIN_FREE_GB: __, ...inherited } = Bun.env;
   const settings = { "base.diskFloorGigabytes": 0, "base.startFloorGigabytes": 25, ...options.settings };
-  const env = { ...inherited, HOME: home, PATH: `${bin}:${Bun.env.PATH}`, CODER_WORKSPACE_NAME: "devbox-here", FLEET_SETTINGS: JSON.stringify(settings), ...options.env };
-  const child = Bun.spawn(["bun", join(import.meta.dir, "../commands/disk.ts"), "--start", ...args], { env, stdout: "pipe", stderr: "pipe" });
+  const env = { ...inherited, HOME: home, PATH: options.ssh === null ? bin : `${bin}:${Bun.env.PATH}`, CODER_WORKSPACE_NAME: "devbox-here", FLEET_SETTINGS: JSON.stringify(settings), ...options.env };
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "../commands/disk.ts"), "--start", ...args], { env, stdout: "pipe", stderr: "pipe" });
   const result = { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
   return { ...result, asked: existsSync(asked) ? readFileSync(asked, "utf8") : "" };
 }
@@ -86,4 +93,20 @@ test("a free map older than an hour, or none, names no other devbox", async () =
   expect(stale.code).toBe(75);
   expect(stale.stderr).toContain("Fleet knows no devbox with room");
   expect((await start({ settings: { "base.startFloorGigabytes": huge } })).stderr).toContain("Fleet knows no devbox with room");
+});
+
+test("never sends a thread to this machine under another of its names", async () => {
+  const map = freshMap({ "devbox-saved": room(5 * huge), [hostname()]: room(4 * huge), "my-hub": room(3 * huge) });
+  const below = { "base.startFloorGigabytes": huge };
+  const devbox = await start({ settings: below, map, machine: { schema: 1, role: "devbox", name: "devbox-saved" } });
+  expect(devbox.stderr).toContain("my-hub has");
+  expect(devbox.stderr).not.toContain("devbox-saved has");
+  expect(devbox.stderr).not.toContain(`${hostname()} has`);
+  const hub = await start({ settings: { ...below, "hub.alias": "my-hub" }, env: { CODER_WORKSPACE_NAME: "hub-workspace" }, map: freshMap({ "my-hub": room(3 * huge) }), machine: { schema: 1, role: "hub" } });
+  expect(hub.stderr).toContain("Fleet knows no devbox with room");
+});
+
+test("without ssh, fleet disk --start still refuses with 75 and its reason", async () => {
+  const result = await start({ settings: { "base.startFloorGigabytes": huge, "hub.alias": "my-hub" }, ssh: null });
+  expect(result).toMatchObject({ code: 75, stderr: expect.stringContaining("Fleet knows no devbox with room") });
 });

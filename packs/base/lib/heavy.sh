@@ -40,6 +40,7 @@ disk_has_room
 if [ -n "$service" ]; then
   systemctl --user stop "$service" 2>/dev/null || true
   systemd-run --user --quiet --collect --unit="$service" --slice=fleet-heavy.slice --working-directory="$PWD" \
+    --setenv=PATH="$PATH" ${FLEET_PROFILE_DIR:+--setenv=FLEET_PROFILE_DIR="$FLEET_PROFILE_DIR"} \
     ${VSCODE_PROXY_URI:+--setenv=VSCODE_PROXY_URI="$VSCODE_PROXY_URI"} -- "$@"
   echo "Fleet heavy: $service serves from $(hostname)."
   exit 0
