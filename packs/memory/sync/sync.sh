@@ -1,18 +1,33 @@
 #!/bin/sh
 # Keeps the memory checkout in step with the user's private memory repo on every machine.
 # Each run commits this machine's changes, rebases them onto main, and pushes.
-# MEMORY.md merges by union. When two machines change the same lines of another file, this machine's
-# version wins and the other stays in history. A conflict marker or a secret in any outgoing commit stops the push.
+# With FLEET_MEMORY_SUBTREE, the checkout sits beside the memory folder, the memory folder links to that
+# folder of the repo, and only that folder is committed and pushed.
+# MEMORY.md and every INDEX.md merge by union. When two machines change the same lines of another file, this
+# machine's version wins and the other goes to .conflicts/ in the memory folder.
+# A conflict marker, a secret, or a change outside the subtree in any outgoing commit stops the push.
 # Every state that stops the sync exits 1, so the job log and fleet doctor see it.
 set -eu
 
 url=${FLEET_MEMORY_URL:?FLEET_MEMORY_URL is not set}
-checkout=${FLEET_MEMORY_DIR:-$HOME/.agents/memory}
+memory=${FLEET_MEMORY_DIR:-$HOME/.agents/memory}
+subtree=$(printf '%s' "${FLEET_MEMORY_SUBTREE:-}" | sed -e 's#^/*##' -e 's#/*$##')
 machine=${CODER_WORKSPACE_NAME:-$(hostname -s)}
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
-lock="$checkout.sync-lock"
-g() { git -C "$checkout" "$@"; }
+g() { git -c core.quotePath=false -C "$checkout" "$@"; }
 fail() { echo "Memory: $*" >&2; exit 1; }
+case "/${subtree:-x}/" in */../* | */./* | *//* | */-* | *[!A-Za-z0-9._/-]*) fail "memory.subtree $subtree must name a folder inside the memory repo, in letters, digits, dots, dashes and underscores." ;; esac
+if [ -n "$subtree" ]; then
+  checkout="$memory-repo"
+  scope=$subtree
+  [ -L "$memory" ] || [ ! -e "$memory/.git" ] || fail "$memory is a memory checkout, but memory.subtree is $subtree. Move that folder aside; the next sync sets up $checkout and links $memory to its $subtree folder."
+else
+  checkout=$memory
+  scope=.
+  [ ! -L "$memory" ] || fail "$memory is a link, but memory.subtree is empty. Remove the link; the next sync sets up a checkout there."
+fi
+conflicts="${subtree:+$subtree/}.conflicts"
+lock="$checkout.sync-lock"
 repo_name() { printf '%s\n' "$1" | sed -e 's#/*$##' -e 's#\.git$##' -e 's#^.*github\.com[:/]##'; }
 
 mkdir -p "$(dirname "$checkout")"
@@ -52,7 +67,45 @@ origin=$(g remote get-url origin 2>/dev/null || true)
 [ "$(repo_name "$origin")" = "$(repo_name "$url")" ] || fail "$checkout syncs with ${origin:-no repo}, but memory.repo is $url. Move that folder aside; the next sync sets up a fresh one."
 
 gitdir=$(g rev-parse --absolute-git-dir)
-grep -qx 'MEMORY.md merge=union' "$gitdir/info/attributes" 2>/dev/null || { mkdir -p "$gitdir/info"; echo 'MEMORY.md merge=union' >> "$gitdir/info/attributes"; }
+for index in MEMORY.md INDEX.md; do
+  grep -qx "$index merge=union" "$gitdir/info/attributes" 2>/dev/null || { mkdir -p "$gitdir/info"; echo "$index merge=union" >> "$gitdir/info/attributes"; }
+done
+
+if [ -n "$subtree" ]; then
+  target="$checkout/$subtree"
+  mkdir -p "$target"
+  if [ -L "$memory" ]; then
+    [ "$(readlink "$memory")" = "$target" ] || ln -sfn "$target" "$memory"
+  elif [ -d "$memory" ]; then
+    [ ! -e "$memory.premove" ] || fail "$memory.premove holds notes from an earlier move, and $memory is a folder again. Move the notes of both into $target; until then nothing syncs."
+    mv "$memory" "$memory.premove"
+    ln -s "$target" "$memory"
+    if [ ! -L "$memory" ]; then
+      [ ! -L "$memory/$(basename "$target")" ] || rm -f "$memory/$(basename "$target")"
+      fail "$memory is a folder again: something wrote there while the sync linked it. The earlier notes are in $memory.premove. Move the notes of both into $target; until then nothing syncs."
+    fi
+  elif [ -e "$memory" ]; then
+    fail "$memory is a file. Move it aside; the next sync links $memory to $target."
+  else
+    ln -s "$target" "$memory"
+  fi
+  if [ -d "$memory.premove" ]; then
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    (cd "$memory.premove" && find . -type f) | while IFS= read -r path; do
+      path=${path#./}
+      if [ ! -e "$target/$path" ]; then
+        mkdir -p "$(dirname "$target/$path")"
+        cp -p "$memory.premove/$path" "$target/$path"
+      elif ! cmp -s "$memory.premove/$path" "$target/$path"; then
+        mkdir -p "$checkout/$conflicts"
+        cp -p "$memory.premove/$path" "$checkout/$conflicts/$(printf '%s' "$path" | tr '/ ' '__').premove.$stamp.$machine.lost"
+        echo "Memory: kept the version of $path that was set aside, since $target holds a newer one."
+      fi
+    done || fail "cannot move the notes in $memory.premove into $target. They stay there until the next sync."
+    rm -rf "$memory.premove"
+    echo "Memory: moved the notes in $memory into $target."
+  fi
+fi
 
 marker="$gitdir/fleet-sync-rebase"
 snapshot="$gitdir/fleet-sync-files.tar"
@@ -86,15 +139,16 @@ if rebasing || [ -f "$gitdir/MERGE_HEAD" ]; then
 fi
 [ "$(g symbolic-ref --short HEAD 2>/dev/null || true)" = main ] || fail "$checkout is not on main. Switch it back to main; until then nothing syncs."
 [ -z "$(g diff --name-only --diff-filter=U)" ] || fail "$checkout has unresolved conflicts. Resolve them; until then nothing syncs."
+[ -z "$subtree" ] || [ -z "$(g status --porcelain --untracked-files=no -- . ":(exclude)$subtree")" ] || fail "$checkout has changes outside $subtree/. Commit them through the repo's own workflow or drop them; until then nothing syncs."
 
-if [ -n "$(g status --porcelain --untracked-files=all)" ]; then
-  g add -A
-  if g diff --cached | grep -q '^+\(<<<<<<<\|>>>>>>>\) '; then
-    g reset --quiet
+if [ -n "$(g status --porcelain --untracked-files=all -- "$scope")" ]; then
+  g add -A -- "$scope"
+  if g diff --cached -- "$scope" | grep -q '^+\(<<<<<<<\|>>>>>>>\) '; then
+    g reset --quiet -- "$scope"
     fail "a memory file holds conflict markers. Fix it; until then nothing syncs."
   fi
-  changes=$(g diff --cached --name-status)
-  g -c commit.gpgsign=false commit --quiet --no-verify -m "memory: $machine" -m "$changes"
+  changes=$(g diff --cached --name-status -- "$scope")
+  g -c commit.gpgsign=false commit --quiet --no-verify -m "memory: $machine" -m "$changes" -- "$scope"
   echo "Memory: committed on $machine:"
   printf '%s\n' "$changes" | sed 's/^/  /'
 fi
@@ -119,6 +173,47 @@ rebase() {
   rm -f "$marker"
 }
 
+at_risk() {
+  base=$1 list=$2
+  : > "$list"
+  [ -n "$base" ] || return 0
+  g diff --no-renames --name-only "$base" HEAD -- "$scope" | sort > "$list.local"
+  g diff --no-renames --name-only "$base" origin/main -- "$scope" | sort > "$list.remote"
+  comm -12 "$list.local" "$list.remote" | grep -v -E '(^|/)(MEMORY|INDEX)\.md$|(^|/)\.conflicts/' > "$list" || true
+  rm -f "$list.local" "$list.remote"
+}
+
+keep_lost() {
+  base=$1 list=$2
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    g cat-file -e "origin/main:$path" 2>/dev/null || continue
+    lost=0
+    if [ ! -f "$checkout/$path" ]; then
+      lost=1
+    else
+      g diff --no-renames -U0 "$base" origin/main -- "$path" | awk '/^@@/ { hunk = 1; next } hunk && /^\+/ { print substr($0, 2) }' > "$list.added"
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        grep -Fxq -- "$line" "$checkout/$path" || { lost=1; break; }
+      done < "$list.added"
+      rm -f "$list.added"
+    fi
+    [ "$lost" = 1 ] || continue
+    mkdir -p "$checkout/$conflicts"
+    id=$(printf '%s' "$path" | g hash-object --stdin | cut -c1-8)
+    kept="$checkout/$conflicts/$(printf '%s' "${path#"$subtree/"}" | tr '/ ' '__').$id.$stamp.$machine.lost"
+    { echo "<!-- The memory sync on $machine at $stamp replaced this version of $path. Merge what it has into that file, then delete this one. -->"; g show "origin/main:$path"; } > "$kept"
+    echo "Memory: kept the other side of a conflict in $path as ${kept#"$checkout/"}."
+  done < "$list"
+  rm -f "$list"
+  if [ -n "$(g status --porcelain --untracked-files=all -- "$conflicts")" ]; then
+    g add -- "$conflicts"
+    g -c commit.gpgsign=false commit --quiet --no-verify -m "memory: $machine kept a sync conflict" -- "$conflicts"
+  fi
+}
+
 remote_has_main() {
   status=0
   g ls-remote --exit-code --heads origin main >/dev/null 2>&1 || status=$?
@@ -141,7 +236,10 @@ while :; do
       fi
       exit 0
     fi
+    parted=$(g merge-base HEAD origin/main 2>/dev/null || g hash-object -t tree /dev/null)
+    at_risk "$parted" "$gitdir/fleet-sync-at-risk"
     rebase || fail "cannot rebase $checkout onto origin/main. Not synced."
+    keep_lost "$parted" "$gitdir/fleet-sync-at-risk"
     base=origin/main
   else
     has_commits || { echo "Memory: $url is empty, and this machine has nothing to share yet."; exit 0; }
@@ -149,6 +247,10 @@ while :; do
   fi
   range=${base:+$base..}HEAD
   [ "$(g rev-list --count "$range")" -gt 0 ] || exit 0
+  if [ -n "$subtree" ]; then
+    outside=$(g log --format= --name-only "$range" -- . ":(exclude)$subtree" | sort -u)
+    [ -z "$outside" ] || fail "commits on this machine change files outside $subtree/: $outside. Move them to the repo's own workflow; until then nothing syncs."
+  fi
   scan=0
   bun "$here/secret-scan.ts" "$checkout" "$range" || scan=$?
   if [ "$scan" -eq 1 ]; then

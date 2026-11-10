@@ -13,9 +13,10 @@ reaction from anyone else starts nothing.
 
 ## How it works
 
-`fleet slack-trigger run` runs all the time as a Fleet job: a systemd user
-service `fleet-slack-trigger` on Linux, or the launchd agent
-`dev.fleet.slack-trigger` on a Mac. It runs on your hub when the Hub pack is
+The trigger runs all the time as a Fleet service, `fleet run
+slack/slack-trigger`: a systemd user service `fleet-slack-trigger` on Linux, or
+the launchd agent `dev.fleet.slack-trigger` on a Mac. Fleet installs it only
+after you save your Slack app. It runs on your hub when the Hub pack is
 on. Without the Hub pack, it runs on your only machine, when your profile lists
 no devboxes and the machine is not a devbox. A profile that two machines share
 without a hub, such as two Macs, runs it on both, and each starts a thread for
@@ -41,7 +42,7 @@ sends each event within a second, and no address is public.
    go to the same box, and Fleet releases that box when it gives up. You get
    one ephemeral reply about it.
 
-`~/.local/state/fleet/slack-trigger.json` keeps the handled messages for 31
+`~/.local/state/fleet/slack/slack-trigger.json` keeps the handled messages for 31
 days, so each message starts one thread. The log is
 `~/.local/state/fleet/jobs/slack-trigger.log`.
 
@@ -63,16 +64,20 @@ runs the trigger:
 4. Copy the **User OAuth Token**, and paste it. It starts with `xoxp-`.
 
 The terminal does not show what you paste. Fleet checks each token with Slack,
-and checks that the user token is yours. Then it writes both tokens to
-`~/.config/fleet/slack-app.json`, readable only by you. The trigger starts
-with the file within a minute: it checks the file every minute. When the file
-changes, it finishes the launches it already started, stops, and the service
-starts it again with the new tokens. `fleet setup --non-interactive` skips
-this step and lists it as still needed.
+and checks that the user token is yours. Then it saves both tokens in the Slack
+pack's secret store, `~/.config/fleet/secrets/slack/app`, readable only by
+you, and applies your profile, which installs the trigger. A running trigger
+checks the saved app every minute. When it changes, the trigger finishes the
+launches it already started, stops, and the service starts it again with the
+new tokens. `fleet setup --non-interactive` skips this step and lists it as
+still needed.
 
-`fleet doctor` runs `fleet slack-trigger check`, which checks that the file is
-private and that the user token is yours. `fleet slack-trigger manifest`
-prints the manifest itself.
+`fleet doctor` lists the setup as a To do until a Slack app that the trigger
+can use is saved. When you remove the saved app, the trigger stops, writes the
+To do once to its log, and waits until a Slack app is saved again. The next
+`fleet apply` removes the trigger.
+`fleet slack-trigger check` checks with Slack that the saved user token is
+yours. `fleet slack-trigger manifest` prints the manifest itself.
 
 To mention the app in a channel, invite it there first. Messages and reactions
 work in every channel you are in, without the app.
