@@ -133,6 +133,23 @@ test("a short id finds a linked thread the same way it finds a local one, and an
   expect(dispatched(t3)).toEqual([]);
 });
 
+test("an archived linked thread named by its full id wins over a live thread whose id ends with it", async () => {
+  const t3 = await stub(fixture([linkedEnvironment], [...linkedThreads, linkedThread("target", { archived: true }), linkedThread("mcp:target")]));
+  const { code, output } = await thread(t3, ["send", "--host", "devbox-2", "target", "Hi"]);
+
+  expect(code).toBe(0);
+  expect(JSON.parse(output)).toMatchObject({ host: "devbox-2", threadId: "target" });
+  expect(sends(t3)).toEqual([expect.objectContaining({ threadId: "target" })]);
+});
+
+test("a short id that fits two threads on a linked machine is refused, even when this machine has one match", async () => {
+  const t3 = await stub(fixture([linkedEnvironment], [...linkedThreads, linkedThread("one:local-idle"), linkedThread("two:local-idle")]));
+
+  await expect(thread(t3, ["read", "local-idle"])).rejects.toThrow("On devbox-2, local-idle fits one:local-idle, two:local-idle. Give the full id.");
+  await expect(thread(t3, ["send", "local-idle", "Hi"])).rejects.toThrow("On devbox-2, local-idle fits one:local-idle, two:local-idle. Give the full id.");
+  expect(dispatched(t3)).toEqual([]);
+});
+
 test("an unqualified send waits for every machine to answer, so a copy on a silent machine is never skipped", async () => {
   const t3 = await stub(fixture([linkedEnvironment, { ...linkedEnvironment, environmentId: "env-down", label: "devbox-3", status: "unreachable", lastError: "connection refused" }]));
 
