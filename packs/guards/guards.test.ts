@@ -323,6 +323,23 @@ describe("the gh guard", () => {
     ["gh api -X DELETE repos/acme/app", "makes code public"],
     ["gh repo edit acme/app --visibility public --accept-visibility-change-consequences", "makes code public"],
     ["gh gist create --public notes.md", "makes code public"],
+    ["gh auth status --show-token", "the GitHub token"],
+    ["gh auth status -t", "the GitHub token"],
+    ["gh api user/repos -f name=x -F private=false", "makes code public"],
+    ["gh api user/repos -f name=x", "makes code public"],
+    ["gh api orgs/acme/repos -f name=x -f visibility=public", "makes code public"],
+    ["gh api -X PATCH repos/acme/app -F private=false", "makes code public"],
+    ["gh api --method=PATCH repos/acme/app --input body.json", "makes code public"],
+    ["gh api graphql -f query='mutation { createRepository(input: {name: \"x\", visibility: PUBLIC}) { repository { url } } }'", "makes code public"],
+    ["gh api -X DELETE https://api.github.com/repos/acme/app", "makes code public"],
+    ["gh api -XDELETE repos/acme/app", "makes code public"],
+    ["gh api -H Accept:application/vnd.github+json -X POST user/keys -f key=x", "keys on Robin's GitHub account"],
+    ["gh api user/keys -f title=box -f key=x", "keys on Robin's GitHub account"],
+    ["gh repo new acme/app --public", "makes code public"],
+    ["gh repo create acme/app --public=true", "makes code public"],
+    ["gh repo edit acme/app --visibility=PUBLIC --accept-visibility-change-consequences", "makes code public"],
+    ["echo $(gh repo delete acme/app --yes)", "makes code public"],
+    ["bash -c 'gh auth token'", "the GitHub token"],
   ])("refuses account, token, extension and exposure commands: %s", (command, why) => {
     expect(refusal(command)).toContain(why);
   });
@@ -332,6 +349,14 @@ describe("the gh guard", () => {
     ["gh pr view https://github.com/someone/repo/pull/6", "someone"],
     ["cd /x && gh repo clone evil/payload", "evil"],
     ["gh release download --repo=else/tool v1", "else"],
+    ["gh pr create -Rother/app --fill", "other"],
+    ["gh -R other/app pr create --fill", "other"],
+    ["gh pr view 1 --repo https://github.com/other/app", "other"],
+    ["GH_REPO=other/app gh pr create --title hello --body hello", "other"],
+    ["export GH_REPO=other/app; gh pr create --fill", "other"],
+    ["gh secret set TOKEN --org other --body x", "other"],
+    ["gh variable set VAR -o other --body x", "other"],
+    ["gh repo list other", "other"],
   ])("refuses an owner outside guards.owners: %s", (command, owner) => {
     expect(refusal(command)).toContain(`\`${owner}\``);
   });
@@ -345,8 +370,31 @@ describe("the gh guard", () => {
     "git push origin HEAD && gh pr checks 12 --watch",
     'grep -rn "gh auth token\\|gh ssh-key" docs',
     "cat > note.md <<'EOF'\nRun gh pr view -R <owner>/<repo> 1, never gh auth token.\nEOF",
+    "gh auth status",
+    "printf '%s\\n' '$(gh auth token)'",
+    "gh api user/keys",
+    "gh api user/gpg_keys --jq '.[].key_id'",
+    "gh api user/repos -f name=x -F private=true",
+    "gh api orgs/acme/repos -f name=x -f visibility=private",
+    "gh api -X PATCH repos/acme/app -f description=notes",
+    "gh repo create acme/app --private --public=false",
+    'gh pr comment -R acme/app 1 --body "https://github.com/other/app"',
+    "gh pr view 1 --repo https://github.com/acme/app",
+    "gh pr view 1 -R github.com/Octo-Org/site",
+    "gh secret set TOKEN --org acme --body x",
   ])("allows ordinary work with allowed owners: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
+  });
+
+  test("refuses gh on the repository that GH_REPO names when the agent inherits it", async () => {
+    const home = homeWith(withGuards(), { "guards.person": "Robin", "guards.owners": "acme" });
+    const run = (repo: string) => Bun.spawn(["sh", join(home, ".config/fleet/hooks/run.sh"), "claude", "PreToolUse"], {
+      env: { ...process.env, HOME: home, GH_REPO: repo },
+      stdin: new Blob([JSON.stringify(bash("gh pr create --fill"))]),
+      stdout: "pipe",
+    });
+    expect(await new Response(run("other/app").stdout).text()).toContain("`other` is not one of the GitHub owners");
+    expect(await new Response(run("acme/app").stdout).text()).toBe("");
   });
 
   test("checks no owners when guards.owners is empty", () => {

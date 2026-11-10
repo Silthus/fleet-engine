@@ -34,7 +34,7 @@ const uncheckedReason = (error: unknown, person: string) => `Fleet blocked this 
 function check(call: ToolCall, { person, owners }: ReturnType<typeof guardSettings>): string | undefined {
   if (call.tool_name !== "Bash") return undefined;
   const command = shellCommand(call.tool_input);
-  return downloadRisk(command, call.cwd ?? "/", person) ?? ghRisk(command, owners, person);
+  return downloadRisk(command, call.cwd ?? "/", person) ?? ghRisk(command, owners, person, process.env.GH_REPO);
 }
 
 /** The refusal for a tool call that a shell guard stops, naming the person the settings give. A call the guards cannot
