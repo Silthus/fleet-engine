@@ -81,6 +81,7 @@ describe("register refuses a service it cannot place", () => {
   test("a served service off the hub, a service with neither a process nor serve, and a port out of range", async () => {
     await expect(refused(`fleet.service({ id: "odd-api", serve: { port: 4600, health: "/health", credential: async () => "x" } });`)).rejects.toThrow('service odd-api: serve needs on: "hub"');
     await expect(refused(`fleet.service({ id: "odd-api" } as never);`)).rejects.toThrow("service odd-api needs run, serve, or both");
+    await expect(refused(`fleet.service({ on: "hub", id: "odd_api", serve: { port: 4600, health: "/health", credential: async () => "x" } });`)).rejects.toThrow("service odd_api: a served service's id names its credential, so it is lowercase words joined by dashes or dots");
     await expect(refused(`fleet.service({ on: "hub", id: "odd-api", serve: { port: 70000, health: "/health", credential: async () => "x" } });`)).rejects.toThrow("service odd-api: serve.port must be a port from 1 to 65535");
     await expect(refused(`fleet.service({ on: "hub", id: "odd-api", serve: { port: 4600, health: "health", credential: async () => "x" } });`)).rejects.toThrow("service odd-api: serve.health must be a path that starts with /");
   });

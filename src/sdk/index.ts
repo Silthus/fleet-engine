@@ -35,7 +35,8 @@ export type Process = { run(ctx: Context): Promise<void> };
 export type Serve = { port: number; health: string; credential(ctx: Context, node: string): Promise<string> };
 export type ServiceDef = Scope & { id: string } & ((Process & { serve?: Serve }) | { serve: Serve; run?: undefined });
 export type ConfigDef = Scope & { provider: "claude" | "codex" | "t3"; key: string; value: unknown };
-export type Repair = { ask: string; command?: string; interactive?: true };
+/** command: a fleet command a person runs. run: a repair that Fleet runs during apply when the check fails. */
+export type Repair = { ask: string; command?: string; interactive?: true; run?: never } | { run(ctx: Context): Promise<void>; ask?: string; command?: never; interactive?: never };
 export type CheckDef = Scope & { id: string; say: string; test(ctx: Context): Promise<boolean>; repair?: Repair };
 
 export type Fleet = {
@@ -58,6 +59,8 @@ export type Context = {
   now(): number;
   sleep(ms: number): Promise<void>;
   threads: Threads;
+  /** The loopback URL of a served service of this pack and this machine's credential for it. Fails fast when either is missing. */
+  use(service: Service): Promise<{ url: string; credential: string }>;
 };
 
 export type ThreadStart = { key: string; title: string; prompt: string; modelRole: string };

@@ -71,6 +71,8 @@ export type HumanStep = Scope & {
   probe: string[];
   /** The command reads the keyboard, such as a sign-in that asks to paste a code: it runs in the foreground with the terminal, and the probe runs once it ends. */
   interactive?: true;
+  /** A command that Fleet runs during apply when the probe fails, before it probes again. */
+  repair?: string[];
 };
 
 export type PackStep = Scope & {
@@ -149,6 +151,8 @@ export type SourceRef = { name: string; repo: string; ref: string };
 
 export type PackCode = {
   settingKey(handle: unknown): string;
+  serviceId(handle: unknown): string;
+  repairs: Record<string, (ctx: Context) => Promise<void>>;
   commands: Record<string, (args: string[], ctx: Context) => Promise<number>>;
   services: Record<string, (ctx: Context) => Promise<void>>;
   credentials: Record<string, (ctx: Context, node: string) => Promise<string>>;
