@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { pipelinesIn, shellInput, shells, type Command } from "./shell-words.ts";
+import { pipelinesIn, shellInput, shells, type Command, type Scope } from "./shell-words.ts";
 
 const downloaders = new Set(["curl", "wget"]);
 const stdinInterpreters = new Set(["python", "python3", "node", "bun", "deno", "perl", "ruby", "php", "pwsh"]);
@@ -42,8 +42,22 @@ function pipesDownloadIntoInterpreter(pipeline: Command[]): boolean {
   return download >= 0 && pipeline.slice(download + 1).some(readsProgramFromStdin);
 }
 
+function lastProgramArgument(command: Command): number {
+  if (command.name === "eval") return command.args.length - 1;
+  if (command.name === "source" || command.name === ".") return 0;
+  const input = shellInput(command);
+  if (input) return "index" in input ? input.index : -1;
+  const inlineFlag = command.args.findIndex((arg) => inlineCodeFlags.has(arg));
+  return inlineFlag >= 0 ? inlineFlag + 1 : command.args.findIndex((arg) => arg === "-" || !arg.startsWith("-"));
+}
+
+function programSubstitutions(command: Command): string[] {
+  const fromStdin = command.stdin && readsProgramFromStdin(command) ? command.stdin.substitutions : [];
+  return [...command.leadingSubstitutions, ...command.argSubstitutions.slice(0, lastProgramArgument(command) + 1).flat(), ...fromStdin];
+}
+
 const runsDownloadedSubstitution = (command: Command) => substitutionRunners.has(command.name)
-  && command.substitutions.some((program) => pipelinesIn(program).flat().some((inner) => downloaders.has(inner.name)));
+  && programSubstitutions(command).some((program) => pipelinesIn(program).flat().some((inner) => downloaders.has(inner.name)));
 
 const urlFileName = (url: string) => url.replace(/[?#].*$/, "").replace(/^[a-z]+:\/\/[^/]*/i, "");
 
@@ -91,7 +105,7 @@ function runsDownloadedFile(pipelines: Command[][]): boolean {
 function gitConfigKeys(args: string[]): string[] {
   return args.flatMap((arg, index) => {
     if (arg === "-c" || arg === "--config" || arg === "--config-env") return [args[index + 1] ?? ""];
-    return arg.match(/^--config(?:-env)?=(.*)$/s)?.slice(1) ?? [];
+    return arg.match(/^(?:--config(?:-env)?=|-c)(.+)$/s)?.slice(1) ?? [];
   });
 }
 
@@ -129,6 +143,7 @@ function requestedPackages(args: string[]): { packages: string[]; tool?: string 
     const arg = args[index];
     if (packageFlags.has(arg)) packages.push(args[++index] ?? "");
     else if (/^--(?:package|from|spec)=/.test(arg)) packages.push(arg.slice(arg.indexOf("=") + 1));
+    else if (/^-p./.test(arg)) packages.push(arg.slice(2).replace(/^=/, ""));
     else if (valueFlags.has(arg)) index++;
     else if (arg === "--") return { packages, tool: args[index + 1] };
     else if (!arg.startsWith("-")) return { packages, tool: arg };
@@ -138,18 +153,37 @@ function requestedPackages(args: string[]): { packages: string[]; tool?: string 
 
 const bareName = (name: string) => name.replace(/(?<=.)@.*$/, "").replace(/\[.*$/, "").replace(/[<>=~].*$/, "");
 
-function inProject(cwd: string | undefined, paths: (directory: string) => string[]): boolean {
+function nearest(cwd: string | undefined, paths: (directory: string) => string[]): string | undefined {
   for (let directory = cwd; directory; directory = dirname(directory) === directory ? undefined : dirname(directory)) {
-    if (paths(directory).some((path) => existsSync(path))) return true;
+    const found = paths(directory).find((path) => existsSync(path));
+    if (found) return found;
   }
-  return false;
+  return undefined;
 }
+
+const inProject = (cwd: string | undefined, paths: (directory: string) => string[]) => nearest(cwd, paths) !== undefined;
 
 const hasPackage = (name: string, cwd: string | undefined) =>
   inProject(cwd, (directory) => [join(directory, "node_modules", name, "package.json"), ...(name.includes("/") ? [] : [join(directory, ".venv", "bin", name)])]);
 
 const hasTool = (name: string, cwd: string | undefined) => hasPackage(name, cwd)
   || (!name.includes("/") && (Bun.which(name) !== null || inProject(cwd, (directory) => [join(directory, "node_modules", ".bin", name)])));
+
+const npmRange = (spec: string) => spec.match(/^@?[^@]+@(.+)$/)?.[1];
+
+function installedVersion(name: string, cwd: string | undefined): string | undefined {
+  const manifest = nearest(cwd, (directory) => [join(directory, "node_modules", name, "package.json")]);
+  if (!manifest) return undefined;
+  const { version } = JSON.parse(readFileSync(manifest, "utf8"));
+  return typeof version === "string" ? version : undefined;
+}
+
+function hasVersion(spec: string, cwd: string | undefined): boolean {
+  const range = npmRange(spec);
+  if (range === undefined) return true;
+  const version = installedVersion(bareName(spec), cwd);
+  return version !== undefined && Bun.semver.satisfies(version, range);
+}
 
 function missingPackage(command: Command, cwd: string | undefined): { runner: string; name: string } | undefined {
   const two = `${command.name} ${command.args[0]}`;
@@ -158,8 +192,11 @@ function missingPackage(command: Command, cwd: string | undefined): { runner: st
   const { packages, tool } = requestedPackages(command.args.slice(runner === two ? 1 : 0));
   const specs = packages.length > 0 ? packages : tool ? [tool] : [];
   const check = packages.length > 0 ? hasPackage : hasTool;
-  const missing = specs.map(bareName).find((name) => !check(name, cwd));
-  return missing === undefined ? undefined : { runner, name: missing };
+  for (const spec of specs) {
+    if (!check(bareName(spec), cwd)) return { runner, name: bareName(spec) };
+    if (!hasVersion(spec, cwd)) return { runner, name: spec };
+  }
+  return undefined;
 }
 
 function changedDirectory(cwd: string | undefined, args: string[]): string | undefined {
@@ -170,11 +207,19 @@ function changedDirectory(cwd: string | undefined, args: string[]): string | und
 }
 
 function unknownPackageRun(commands: Command[], cwd: string, person: string): string | undefined {
-  let directory: string | undefined = cwd;
+  const directories = new Map<Scope, string | undefined>();
+  const directoryOf = (scope: Scope): string | undefined => {
+    if (!directories.has(scope)) {
+      const start = scope.parent ? directoryOf(scope.parent) : cwd;
+      directories.set(scope, scope.chdir === undefined ? start : changedDirectory(start, [scope.chdir]));
+    }
+    return directories.get(scope);
+  };
   for (const command of commands) {
-    if (command.name === "cd" || command.name === "pushd") directory = changedDirectory(directory, command.args);
-    else if (command.name === "popd") directory = undefined;
-    const missing = missingPackage(command, directory);
+    const directory = directoryOf(command.scope);
+    if (command.name === "cd" || command.name === "pushd") directories.set(command.scope, changedDirectory(directory, command.args));
+    else if (command.name === "popd") directories.set(command.scope, undefined);
+    const missing = missingPackage(command, command.chdir === undefined ? directory : changedDirectory(directory, [command.chdir]));
     if (missing) return runnerReason(missing.runner, missing.name, person);
   }
   return undefined;

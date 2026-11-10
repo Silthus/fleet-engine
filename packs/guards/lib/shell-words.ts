@@ -1,16 +1,22 @@
 import { basename } from "node:path";
 
+export type Scope = { parent?: Scope; chdir?: string };
+
 export type Command = {
   name: string;
   args: string[];
   env: ReadonlyMap<string, string>;
   substitutions: string[];
-  stdin?: string;
+  leadingSubstitutions: string[];
+  argSubstitutions: string[][];
+  stdin?: { body: string; substitutions: string[] };
   outputs: string[];
   inLoop: boolean;
+  scope: Scope;
+  chdir?: string;
 };
 
-type Context = { env: ReadonlyMap<string, string>; inLoop: boolean };
+type Context = { env: ReadonlyMap<string, string>; inLoop: boolean; scope?: Scope };
 type Word = { text: string; raw: string; substitutions: string[] };
 type Heredoc = { delimiter: string; literal: boolean; stripTabs: boolean; body: string; substitutions: string[] };
 type Token = { word: Word } | { operator: string } | { heredoc: Heredoc } | { herestring: true };
@@ -22,10 +28,10 @@ const keywords = new Set(["then", "do", "else", "elif", "if", "!", "{", "while",
 const loops = new Set(["for", "select", "while", "until"]);
 const assignment = /^([A-Za-z_]\w*)=(.*)$/s;
 const redirect = /^(\d+|&)?(>>|>\||>&|<&|<>|>|<)(?!\()/;
-const wrappers: Record<string, { valued: string[]; operands?: number }> = {
-  sudo: { valued: ["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user"] },
+const wrappers: Record<string, { valued: string[]; operands?: number; chdir?: string[] }> = {
+  sudo: { chdir: ["-D", "--chdir"], valued: ["-u", "--user", "-g", "--group", "-C", "--close-from", "-D", "--chdir", "-h", "--host", "-p", "--prompt", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-U", "--other-user"] },
   doas: { valued: ["-u", "-C"] },
-  env: { valued: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-a", "--argv0"] },
+  env: { chdir: ["-C", "--chdir"], valued: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-a", "--argv0"] },
   nice: { valued: ["-n", "--adjustment"] },
   ionice: { valued: ["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"] },
   timeout: { valued: ["-s", "--signal", "-k", "--kill-after"], operands: 1 },
@@ -63,18 +69,35 @@ function quoteEnd(text: string, start: number, quote: string): number {
 
 const backtickProgram = (inner: string) => inner.replace(/\\([`\\$])/g, "$1");
 
-function expansion(text: string, index: number): { end: number; program?: string } | undefined {
+function braceEnd(text: string, start: number): number {
+  for (let index = start; index < text.length; index++) {
+    if (text[index] === "\\") index++;
+    else if (text[index] === "}") return index;
+    else index = expansion(text, index)?.end ?? index;
+  }
+  return text.length;
+}
+
+const programsInside = (inner: string) => doubleQuoted(inner, 0, false).substitutions;
+
+function expansion(text: string, index: number): { end: number; programs: string[] } | undefined {
   if (text[index] === "`") {
     const end = quoteEnd(text, index + 1, "`");
-    return { end, program: backtickProgram(text.slice(index + 1, end)) };
+    return { end, programs: [backtickProgram(text.slice(index + 1, end))] };
   }
   if (text[index] !== "$") return undefined;
-  if (text.startsWith("$((", index)) return { end: parenEnd(text, index + 1) };
+  if (text.startsWith("$((", index)) {
+    const end = parenEnd(text, index + 1);
+    return { end, programs: programsInside(text.slice(index + 3, end - 1)) };
+  }
   if (text[index + 1] === "(") {
     const end = parenEnd(text, index + 1);
-    return { end, program: text.slice(index + 2, end) };
+    return { end, programs: [text.slice(index + 2, end)] };
   }
-  if (text[index + 1] === "{") return { end: quoteEnd(text, index + 2, "}") };
+  if (text[index + 1] === "{") {
+    const end = braceEnd(text, index + 2);
+    return { end, programs: programsInside(text.slice(index + 2, end)) };
+  }
   return undefined;
 }
 
@@ -92,7 +115,7 @@ function doubleQuoted(text: string, start: number, stopAtQuote: boolean) {
     }
     const found = expansion(text, index);
     if (found) {
-      if (found.program !== undefined) substitutions.push(found.program);
+      substitutions.push(...found.programs);
       value += text.slice(index, found.end + 1);
       index = found.end;
     } else value += char;
@@ -195,6 +218,7 @@ function tokenize(text: string): Token[] {
       tokens.push({ operator: "\n" });
       index = readBodies(text, index + 1, pending);
     } else if ((char === "&" && (next === ">" || /[<>]$/.test(word?.raw ?? ""))) || (char === "|" && /\d*>$/.test(word?.raw ?? ""))) {
+      if (char === "&" && next === ">" && !/[<>]$/.test(word?.raw ?? "")) endWord();
       append(char, char);
       index++;
     } else if (/[;&|()]/.test(char)) {
@@ -203,9 +227,10 @@ function tokenize(text: string): Token[] {
       tokens.push({ operator });
       index += operator.length;
     } else {
+      if ((char === "<" || char === ">") && word && !/^\d+$|[<>&]$/.test(word.raw)) endWord();
       const found = expansion(text, index);
       const end = found?.end ?? index;
-      append(text.slice(index, end + 1), text.slice(index, end + 1), found?.program === undefined ? [] : [found.program]);
+      append(text.slice(index, end + 1), text.slice(index, end + 1), found?.programs);
       index = end + 1;
     }
   }
@@ -231,9 +256,24 @@ function withoutRedirects(words: Word[]) {
   return { kept, outputs };
 }
 
-function skipWrapper(texts: string[], start: number, env: Map<string, string>): number {
-  const { valued, operands = 0 } = wrappers[basename(texts[start])];
+function wrapperOption(texts: string[], index: number, valued: string[]): { width: number; name: string; value?: string } {
+  const text = texts[index];
+  const long = text.match(/^(--[^=]+)=(.*)$/s);
+  if (long) return { width: 1, name: long[1], value: long[2] };
+  if (valued.includes(text)) return { width: 2, name: text, value: texts[index + 1] };
+  if (text.startsWith("--")) return { width: 1, name: text };
+  for (let letter = 1; letter < text.length; letter++) {
+    const name = `-${text[letter]}`;
+    if (!valued.includes(name)) continue;
+    return letter === text.length - 1 ? { width: 2, name, value: texts[index + 1] } : { width: 1, name, value: text.slice(letter + 1) };
+  }
+  return { width: 1, name: text };
+}
+
+function skipWrapper(texts: string[], start: number, env: Map<string, string>): { index: number; chdir?: string } {
+  const { valued, operands = 0, chdir: chdirOptions = [] } = wrappers[basename(texts[start])];
   let index = start + 1;
+  let chdir: string | undefined;
   while (index < texts.length) {
     const text = texts[index];
     const assigned = text.match(assignment);
@@ -241,13 +281,16 @@ function skipWrapper(texts: string[], start: number, env: Map<string, string>): 
       index++;
       break;
     }
-    if (text.startsWith("-") && text.length > 1) index += valued.includes(text) ? 2 : 1;
-    else if (assigned && (texts[start] === "env" || texts[start] === "sudo")) {
+    if (text.startsWith("-") && text.length > 1) {
+      const option = wrapperOption(texts, index, valued);
+      if (chdirOptions.includes(option.name)) chdir = option.value;
+      index += option.width;
+    } else if (assigned && (texts[start] === "env" || texts[start] === "sudo")) {
       env.set(assigned[1], assigned[2]);
       index++;
     } else break;
   }
-  return index + operands;
+  return { index: index + operands, chdir };
 }
 
 /** The simple commands of one shell program, grouped by pipeline in the order they run. Wrappers such as `sudo -u root`,
@@ -257,9 +300,10 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
   const pipelines: Command[][] = [];
   let pipeline: Command[] = [];
   let words: Word[] = [];
-  let stdin: { body: string; substitutions: string[] } | undefined;
+  let stdin: Command["stdin"];
   let hereString = false;
   let loopDepth = 0;
+  let scope: Scope = context.scope ?? {};
 
   const finishCommand = () => {
     if (words.length === 0 && !stdin) return;
@@ -267,6 +311,7 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
     const texts = kept.map((word) => word.text);
     const commandEnv = new Map(env);
     const assigned = new Map<string, string>();
+    let chdir: string | undefined;
     let index = 0;
     while (index < texts.length) {
       const text = texts[index];
@@ -278,7 +323,11 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
       } else if (keywords.has(text)) {
         if (loops.has(text)) loopDepth++;
         index++;
-      } else if (wrappers[basename(text)]) index = skipWrapper(texts, index, commandEnv);
+      } else if (wrappers[basename(text)]) {
+        const wrapper = skipWrapper(texts, index, commandEnv);
+        index = wrapper.index;
+        chdir = wrapper.chdir ?? chdir;
+      }
       else if (basename(text) === "fleet" && texts[index + 1] === "heavy" && texts.includes("--", index)) index = texts.indexOf("--", index) + 1;
       else break;
     }
@@ -290,7 +339,9 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
     if (name === "export") for (const pair of args.map((arg) => arg.match(assignment))) if (pair) assigned.set(pair[1], pair[2]);
     if (name === "" || name === "export") for (const [key, value] of assigned) env.set(key, value), commandEnv.set(key, value);
     const substitutions = [...words.flatMap((word) => word.substitutions), ...(stdin?.substitutions ?? [])];
-    pipeline.push({ name, args, env: commandEnv, substitutions, stdin: stdin?.body, outputs, inLoop });
+    const leadingSubstitutions = kept.slice(0, index + 1).flatMap((word) => word.substitutions);
+    const argSubstitutions = kept.slice(index + 1).map((word) => word.substitutions);
+    pipeline.push({ name, args, env: commandEnv, substitutions, leadingSubstitutions, argSubstitutions, stdin, outputs, inLoop, scope, chdir });
     words = [];
     stdin = undefined;
   };
@@ -308,38 +359,43 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
     else if ("herestring" in token) hereString = true;
     else if ("heredoc" in token) stdin = { body: token.heredoc.body, substitutions: token.heredoc.substitutions };
     else if (token.operator === "|" || token.operator === "|&") finishCommand();
-    else finishPipeline();
+    else {
+      finishPipeline();
+      if (token.operator === "(") scope = { parent: scope };
+      if (token.operator === ")") scope = scope.parent ?? scope;
+    }
   }
   finishPipeline();
   return pipelines;
 }
 
 /** What a shell runs: a program given with `-c`, a script file, or the program on its standard input. */
-export function shellInput(command: Command): { program: string } | { script: string } | { stdin: true } | undefined {
+export function shellInput(command: Command): { program: string; index: number } | { script: string; index: number } | { stdin: true } | undefined {
   if (!shells.has(command.name)) return undefined;
   let inline = false;
   for (let index = 0; index < command.args.length; index++) {
     const arg = command.args[index];
     if (arg === "--" || arg === "-") {
       const operand = command.args[index + 1];
-      return inline ? { program: operand ?? "" } : operand && arg === "--" ? { script: operand } : { stdin: true };
+      return inline ? { program: operand ?? "", index: index + 1 } : operand && arg === "--" ? { script: operand, index: index + 1 } : { stdin: true };
     }
     if (/^[-+][oO]$/.test(arg) || arg === "--rcfile" || arg === "--init-file") index++;
     else if (/^-[A-Za-z]+$/.test(arg)) {
       if (arg.includes("c")) inline = true;
       else if (arg.includes("s")) return { stdin: true };
-    } else if (!/^(?:--|\+)/.test(arg)) return inline ? { program: arg } : { script: arg };
+    } else if (!/^(?:--|\+)/.test(arg)) return inline ? { program: arg, index } : { script: arg, index };
   }
-  return inline ? { program: "" } : { stdin: true };
+  return inline ? { program: "", index: command.args.length } : { stdin: true };
 }
 
-function nestedPrograms(command: Command): string[] {
+function nestedPrograms(command: Command): { program: string; scope: Scope }[] {
   const input = shellInput(command);
+  const child = { parent: command.scope, chdir: command.chdir };
   return [
-    ...command.substitutions,
-    ...(input && "program" in input ? [input.program] : []),
-    ...(input && "stdin" in input && command.stdin !== undefined ? [command.stdin] : []),
-    ...(command.name === "eval" ? [command.args.join(" ")] : []),
+    ...command.substitutions.map((program) => ({ program, scope: { parent: command.scope } })),
+    ...(input && "program" in input ? [{ program: input.program, scope: child }] : []),
+    ...(input && "stdin" in input && command.stdin !== undefined ? [{ program: command.stdin.body, scope: child }] : []),
+    ...(command.name === "eval" ? [{ program: command.args.join(" "), scope: command.scope }] : []),
   ];
 }
 
@@ -348,7 +404,7 @@ function nestedPrograms(command: Command): string[] {
 export function pipelinesIn(program: string, context?: Context, depth = 0): Command[][] {
   if (depth > maxDepth) throw new Error(`it nests more than ${maxDepth} shell programs`);
   return parse(program, context).flatMap((pipeline) => [
-    ...pipeline.flatMap((command) => nestedPrograms(command).flatMap((nested) => pipelinesIn(nested, command, depth + 1))),
+    ...pipeline.flatMap((command) => nestedPrograms(command).flatMap(({ program: nested, scope }) => pipelinesIn(nested, { ...command, scope }, depth + 1))),
     pipeline,
   ]);
 }
