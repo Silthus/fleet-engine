@@ -1,7 +1,8 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { downloadRisk } from "../lib/download.ts";
+import { ghRisk, ownerList } from "../lib/gh.ts";
 
 export type Provider = "claude" | "codex";
 export type ToolCall = { tool_name?: string; tool_input?: Record<string, unknown>; cwd?: string };
@@ -9,13 +10,19 @@ export type Denial = { hookSpecificOutput: { hookEventName: "PreToolUse"; permis
 
 const fallbackPerson = "the person who runs this machine";
 
-function guardSettings(home: string) {
+type Settings = { person: string; owners: Set<string> | null; unreadable?: string };
+
+function guardSettings(home: string): Settings {
+  const file = join(home, ".local/state/fleet/settings.json");
+  if (!existsSync(file)) return { person: fallbackPerson, owners: null };
   try {
-    const settings = JSON.parse(readFileSync(join(home, ".local/state/fleet/settings.json"), "utf8"));
-    const person = settings["guards.person"];
-    return { person: typeof person === "string" && person.trim() ? person.trim() : fallbackPerson };
-  } catch {
-    return { person: fallbackPerson };
+    const settings: unknown = JSON.parse(readFileSync(file, "utf8"));
+    if (typeof settings !== "object" || settings === null || Array.isArray(settings)) throw new Error("it is not a JSON object");
+    const { "guards.person": person, "guards.owners": owners } = settings as Record<string, unknown>;
+    if (owners !== undefined && owners !== null && typeof owners !== "string") throw new Error("guards.owners is not text");
+    return { person: typeof person === "string" && person.trim() ? person.trim() : fallbackPerson, owners: ownerList(owners) };
+  } catch (error) {
+    return { person: fallbackPerson, owners: null, unreadable: `${file} (${error instanceof Error ? error.message : String(error)})` };
   }
 }
 
@@ -27,23 +34,28 @@ function shellCommand(input: Record<string, unknown> = {}) {
 
 const deny = (reason: string): Denial => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
 
+const unreadableReason = (problem: string, person: string) => `Fleet blocked this call: the shell guards could not read their settings in ${problem}, `
+  + `so they cannot tell which GitHub owners agents may use. Fix that file, or stop and ask ${person}.`;
+
 const uncheckedReason = (error: unknown, person: string) => `Fleet blocked this call: the shell guards could not check it (${error instanceof Error ? error.message : String(error)}). `
   + `Split it into simpler commands, or stop and ask ${person}.`;
 
-function check(call: ToolCall, person: string): string | undefined {
+function check(call: ToolCall, { person, owners, unreadable }: Settings): string | undefined {
   if (call.tool_name !== "Bash") return undefined;
-  return downloadRisk(shellCommand(call.tool_input), call.cwd ?? "/", person);
+  if (unreadable) return unreadableReason(unreadable, person);
+  const command = shellCommand(call.tool_input);
+  return downloadRisk(command, call.cwd ?? "/", person) ?? ghRisk(command, owners, person, process.env.GH_REPO);
 }
 
 /** The refusal for a tool call that a shell guard stops, naming the person the settings give. A call the guards cannot
  * check is refused too. */
 export function guard(call: ToolCall, home: string): Denial | undefined {
-  const { person } = guardSettings(home);
+  const settings = guardSettings(home);
   try {
-    const risk = check(call, person);
+    const risk = check(call, settings);
     return risk ? deny(risk) : undefined;
   } catch (error) {
-    return deny(uncheckedReason(error, person));
+    return deny(uncheckedReason(error, settings.person));
   }
 }
 

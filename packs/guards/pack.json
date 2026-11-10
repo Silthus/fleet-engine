@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "guards",
-  "summary": "Hooks that stop an agent's shell commands from running network code, writing outside your GitHub owners, or polling in loops.",
+  "summary": "Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops.",
   "day": "A prompt injection that tells an agent to pipe a script into a shell gets a refusal that names you, and the agent stops to ask.",
   "cost": "Nothing to run: a hook checks each shell command before it starts.",
   "risk": "A guard can refuse a command you meant. The refusal says why and what to do instead. Every guard is off until you turn it on.",
@@ -15,7 +15,7 @@
     },
     {
       "key": "guards.owners",
-      "question": "Which GitHub owners may agents write to, separated by commas, such as you,your-org?",
+      "question": "Which GitHub owners may agents use, separated by commas, such as you,your-org?",
       "type": "string",
       "optional": true,
       "ask": "never"
@@ -33,7 +33,7 @@
       "id": "shell-guards",
       "name": "Shell guards",
       "default": false,
-      "sentence": "Agents cannot pipe network code into a shell, run a package the project lacks, or change how Git maps URLs.",
+      "sentence": "Agents cannot pipe network code into a shell, run a package the project lacks, change how Git maps URLs, or use gh outside your GitHub owners.",
       "moment": {
         "time": "13:40",
         "title": "A README asks for curl | sh",
