@@ -79,7 +79,7 @@ describe("memory recall at session start", () => {
 
   test("gives Claude only the repo index, since Claude loads the main index itself", async () => {
     const home = await machineWithMemory(notes);
-    const cwd = repoCheckout(home, "https://github.com/someone/notes-app");
+    const cwd = repoCheckout(home, "git@example.org:notes-app.git");
     const { context } = await fire(home, "claude", "SessionStart", { session_id: "s1", cwd: join(cwd), source: "startup" });
     expect(context).toContain("- [Flaky sync test](flaky-sync.md)");
     expect(context).not.toContain("Ask before deleting");
@@ -97,6 +97,21 @@ describe("memory recall at session start", () => {
     const home = await machineWithMemory(notes);
     expect((await fire(home, "codex", "SessionStart", { session_id: "s1", cwd: home, source: "startup" })).context).toContain("Ask before deleting");
     expect(await fire(home, "claude", "SessionStart", { session_id: "s2", cwd: home, source: "startup" })).toEqual({ code: 0, stderr: "", context: "" });
+  });
+
+  test("gives Claude the repo index when the memory has no main index", async () => {
+    const home = await machineWithMemory({ "projects/notes-app/INDEX.md": notes["projects/notes-app/INDEX.md"] });
+    const cwd = repoCheckout(home, "https://github.com/someone/notes-app.git");
+    expect((await fire(home, "claude", "SessionStart", { session_id: "s1", cwd, source: "startup" })).context).toContain("Flaky sync test");
+  });
+
+  test("keeps a readable index when the other one is broken, and logs only what it showed", async () => {
+    const home = await machineWithMemory({ "projects/notes-app/INDEX.md": notes["projects/notes-app/INDEX.md"] });
+    mkdirSync(join(home, ".agents/memory/MEMORY.md"));
+    const cwd = repoCheckout(home, "https://github.com/someone/notes-app.git");
+    const started = await fire(home, "codex", "SessionStart", { session_id: "s1", cwd, source: "startup" });
+    expect([started.code, started.context]).toEqual([0, expect.stringContaining("Flaky sync test")]);
+    expect(shownLog(home, "s1").map((line) => line.note)).toEqual(["projects/notes-app/INDEX.md"]);
   });
 
   test("lets the session start quietly when the memory checkout is missing or broken", async () => {

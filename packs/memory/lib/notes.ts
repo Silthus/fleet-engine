@@ -19,7 +19,7 @@ function gitOutput(cwd: string, args: string[]) {
 export function repoOf(cwd: string): string | undefined {
   if (!existsSync(cwd)) return undefined;
   const origin = gitOutput(cwd, ["remote", "get-url", "origin"]);
-  if (origin) return basename(origin.replace(/\/+$/, "").replace(/\.git$/, ""));
+  if (origin) return origin.replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/).pop() || undefined;
   const common = gitOutput(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   return common ? basename(dirname(common)) : undefined;
 }
