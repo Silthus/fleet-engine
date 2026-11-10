@@ -19,7 +19,9 @@ export async function packContext({ home, plan, pack, code, workflows, print, cl
       const key = code.settingKey(setting);
       const value = plan.settings[key];
       if (value === undefined) {
-        const off = workflows.find((workflow) => workflow.settings?.includes(key) && !plan.workflows.some((entry) => entry.id === workflow.id && entry.active));
+        const listing = workflows.filter((workflow) => workflow.settings?.includes(key));
+        const active = (workflow: Workflow) => plan.workflows.some((entry) => entry.id === workflow.id && entry.active);
+        const off = listing.some(active) ? undefined : listing[0];
         throw new Error(off ? `${key} belongs to the ${off.name} workflow, which is off. Turn it on with fleet packs --workflows ${off.id}=on.` : `${key} has no value. Set it with fleet set ${key}=<value>.`);
       }
       return value as T;

@@ -134,6 +134,14 @@ test("ctx.get names the workflow that is off when a setting only that workflow u
   expect(await fleet("kit", "note")).toEqual({ code: 1, lines: ["fleet: kit.note belongs to the Kit extra workflow, which is off. Turn it on with fleet packs --workflows kit-extra=on."] });
 });
 
+test("ctx.get asks for the value, not for an off workflow, when a workflow that is on also uses the setting", async () => {
+  const kit = readFileSync(join(import.meta.dir, "fixtures/kit/pack.ts"), "utf8");
+  const notes = 'fleet.workflow({ id: "kit-notes", name: "Kit notes", sentence: "The kit keeps notes.", default: true, settings: [note] });\n    const extra =';
+  const variant = kit.replace('question: "Which note?" }', 'question: "Which note?", optional: true }').replace("const extra =", notes);
+  const { fleet } = await machine(["kit"], {}, { "packs/kit/pack.ts": variant });
+  expect(await fleet("kit", "note")).toEqual({ code: 1, lines: ["fleet: kit.note has no value. Set it with fleet set kit.note=<value>."] });
+});
+
 test("fleet run refuses an item that no pack you turned on declares", async () => {
   const { fleet } = await machine([]);
   expect(await fleet("run", "kit/kit-ticker")).toEqual({ code: 2, lines: ["fleet run: your packs have no service or check kit/kit-ticker"] });

@@ -59,7 +59,6 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const starts: string[][] = [];
   const runs: Array<{ command: string[]; input: boolean }> = [];
   const sleeps: number[] = [];
-  const signedIn = new Map<SignInName, (code: number) => void>();
   const opened: string[] = [];
   let devbox = false;
   const passes = (name: SignInName) => left[name] === 0;
@@ -112,7 +111,9 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       const signIn = (remote === undefined ? name : `box:${name}`) as SignInName;
       started.add(signIn);
       const exit = options.exits?.[signIn];
-      return { stop: () => {}, exited: exit === undefined ? new Promise<number>((resolve) => signedIn.set(signIn, resolve)) : Promise.resolve(exit) };
+      if (exit !== undefined) return { stop: () => {}, exited: Promise.resolve(exit) };
+      let kill = () => {};
+      return { stop: () => kill(), exited: new Promise<number>((resolve) => (kill = () => resolve(143))) };
     },
     async run(command, run = {}) {
       runs.push({ command, input: run.input ?? false });
@@ -123,7 +124,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     async sleep(ms) {
       sleeps.push(ms);
-      for (const name of started) if (left[name] > 0 && --left[name] === 0) signedIn.get(name)?.(0);
+      for (const name of started) if (left[name] > 0) left[name]--;
     },
     async openUrl(url) {
       opened.push(url);

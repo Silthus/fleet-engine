@@ -504,9 +504,9 @@ stores for each Slack message before it starts a thread
 
 How an item runs: `fleet <command>` resolves the plan as today, loads the
 pack that owns the command, and calls `run`. The unit of a service with a
-`run` body runs `fleet run <pack>/<id>`. From step 4, the unit of a service
-with a `command` runs that command itself. A person's check loads as today's human
-step, with `fleet run <pack>/<id>` as its probe.
+`run` body runs `fleet run <pack>/<id>`. From step 4 of section 8.3, the unit
+of a service with a `command` runs that command itself. A person's check loads
+as today's human step, with `fleet run <pack>/<id>` as its probe.
 
 ## 6. Threads, tasks, and project scripts
 
