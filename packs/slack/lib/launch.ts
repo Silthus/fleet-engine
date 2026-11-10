@@ -9,7 +9,7 @@ export type Launch = ((request: LaunchRequest) => Promise<Started | Failed>) & {
 
 export const spawnRun: Run = async (argv, input) => {
   try {
-    const child = Bun.spawn(argv, { stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn(argv, { env: process.env, stdin: input === undefined ? "ignore" : new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { code, stdout, stderr };
   } catch (error) {

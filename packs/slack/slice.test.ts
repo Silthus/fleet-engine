@@ -93,12 +93,13 @@ async function hub() {
 test("setup installs the trigger, an owner's message starts one thread, and after a lost answer the restarted trigger posts its link once", async () => {
   const { home, profile, slack, liveApps, t3, fleet, setup, minute, unit } = await hub();
   const todo = "Make your own Slack app for Start a thread from Slack, then paste its two tokens. Fleet keeps them where only you can read them. Run: fleet slack-trigger setup";
+  const saved = "Saved both tokens where only you can read them. A running Slack trigger starts again with them within a minute.";
   const replies = () => slack.method("chat.postEphemeral").map((call) => call.args.text);
 
   const before = await fleet("apply", "--profile", profile);
   expect(before.lines.join("\n")).toContain(todo);
   expect(existsSync(unit)).toBe(false);
-  expect((await setup(firstApp)).code).toBe(0);
+  expect(await setup(firstApp)).toEqual({ code: 0, lines: expect.arrayContaining([saved, expect.stringContaining("T3Code%20-%20Nora%20Example")]) });
   expect(existsSync(unit)).toBe(true);
   expect(readFileSync(join(home, ".local/state/fleet/jobs/slack-trigger.sh"), "utf8")).toContain("'run' 'slack/slack-trigger'");
   await fleet("apply");
@@ -112,7 +113,7 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   expect(t3.threads.map((thread) => thread.title)).toEqual(["Slack: the build is red"]);
 
   liveApps.add(secondApp);
-  expect((await setup(secondApp)).code).toBe(0);
+  expect(await setup(secondApp)).toEqual({ code: 0, lines: expect.arrayContaining([saved]) });
   liveApps.delete(firstApp);
   minute();
   expect((await serving).code).toBe(0);
