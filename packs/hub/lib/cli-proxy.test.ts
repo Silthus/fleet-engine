@@ -440,3 +440,27 @@ test("a linked Codex config stops the switch", async () => {
   symlinkSync(real, codexFile(home));
   await expect(cliProxy("check", machine)).rejects.toThrow("Keep linked Codex config path");
 });
+
+test("a Fleet provider table you edited stays when Codex falls back, and only Fleet's selection goes", async () => {
+  const { machine, home } = client({}, { down: true });
+  connected(home);
+  const edited = { ...fleetProxy, http_headers: { "X-Team": "mine" } };
+  codexRouted(home, { model_provider: "fleet-proxy", model_providers: { "fleet-proxy": edited } });
+  expect(await cliProxy("check", machine)).toBe(1);
+  expect(readCodex(home)).toEqual({ model_providers: { "fleet-proxy": edited } });
+});
+
+test("a Fleet selection without its provider table sends Codex back to its own sign-in even while the proxy serves Codex", async () => {
+  const { machine, home, printed } = client({}, { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
+  connected(home);
+  codexRouted(home, { ...mine, model_provider: "fleet-proxy" });
+  expect(await cliProxy("check", machine)).toBe(1);
+  expect(readCodex(home)).toEqual(mine);
+  expect(printed.join("\n")).toContain("selects the fleet-proxy provider, but its table has no base_url. Codex uses its own sign-in now.");
+
+  const partial = client({}, { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
+  connected(partial.home);
+  codexRouted(partial.home, { model_provider: "fleet-proxy", model_providers: { "fleet-proxy": { name: "Mine" } } });
+  expect(await cliProxy("route", partial.machine)).toBe(0);
+  expect(readCodex(partial.home)).toEqual({ model_providers: { "fleet-proxy": { name: "Mine" } } });
+});
