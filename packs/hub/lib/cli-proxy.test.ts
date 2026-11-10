@@ -431,14 +431,24 @@ test("disconnect sends Codex back to its own sign-in too, and says how to sign i
   expect(printed.join("\n")).toContain("run codex login");
 });
 
-test("a linked Codex config stops the switch", async () => {
-  const { machine, home } = client({}, { down: true });
-  codexRouted(home);
+test("a linked or unreadable Codex config is left alone and never breaks the Claude route", async () => {
+  const linked = client();
+  connected(linked.home);
+  mkdirSync(join(linked.home, ".codex"), { recursive: true });
   const real = join(temp.make("real-"), "config.toml");
-  writeFileSync(real, readFileSync(codexFile(home)));
-  rmSync(codexFile(home));
-  symlinkSync(real, codexFile(home));
-  await expect(cliProxy("check", machine)).rejects.toThrow("Keep linked Codex config path");
+  writeFileSync(real, stringify({ model_provider: "fleet-proxy", model_providers: { "fleet-proxy": fleetProxy } }));
+  symlinkSync(real, codexFile(linked.home));
+  expect(await cliProxy("check", linked.machine)).toBe(0);
+  expect(await cliProxy("disconnect", linked.machine)).toBe(0);
+  expect(parse(readFileSync(real, "utf8"))).toEqual({ model_provider: "fleet-proxy", model_providers: { "fleet-proxy": fleetProxy } });
+
+  const broken = client();
+  connected(broken.home);
+  mkdirSync(join(broken.home, ".codex"), { recursive: true });
+  writeFileSync(codexFile(broken.home), "model = [");
+  expect(await cliProxy("check", broken.machine)).toBe(0);
+  expect(readJson(settingsFile(broken.home)).env.ANTHROPIC_BASE_URL).toBe(proxyUrl);
+  expect(readFileSync(codexFile(broken.home), "utf8")).toBe("model = [");
 });
 
 test("a Fleet provider table you edited stays when Codex falls back, and only Fleet's selection goes", async () => {
