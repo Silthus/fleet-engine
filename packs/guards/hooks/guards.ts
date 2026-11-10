@@ -27,15 +27,37 @@ function shellCommand(input: Record<string, unknown> = {}) {
 
 const deny = (reason: string): Denial => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
 
-/** The refusal for a tool call that a shell guard stops, naming the person the settings give. */
-export function guard(call: ToolCall, home: string): Denial | undefined {
+const uncheckedReason = (error: unknown, person: string) => `Fleet blocked this call: the shell guards could not check it (${error instanceof Error ? error.message : String(error)}). `
+  + `Split it into simpler commands, or stop and ask ${person}.`;
+
+function check(call: ToolCall, person: string): string | undefined {
   if (call.tool_name !== "Bash") return undefined;
+  return downloadRisk(shellCommand(call.tool_input), call.cwd ?? "/", person);
+}
+
+/** The refusal for a tool call that a shell guard stops, naming the person the settings give. A call the guards cannot
+ * check is refused too. */
+export function guard(call: ToolCall, home: string): Denial | undefined {
   const { person } = guardSettings(home);
-  const risk = downloadRisk(shellCommand(call.tool_input), call.cwd ?? "/", person);
-  return risk ? deny(risk) : undefined;
+  try {
+    const risk = check(call, person);
+    return risk ? deny(risk) : undefined;
+  } catch (error) {
+    return deny(uncheckedReason(error, person));
+  }
+}
+
+function answer(input: string, home: string): Denial | undefined {
+  let call: ToolCall;
+  try {
+    call = JSON.parse(input);
+  } catch {
+    return deny(uncheckedReason(new Error("the hook input is not JSON"), guardSettings(home).person));
+  }
+  return guard(call, home);
 }
 
 if (import.meta.main) {
-  const denial = guard(JSON.parse(await Bun.stdin.text()) as ToolCall, process.env.HOME ?? homedir());
+  const denial = answer(await Bun.stdin.text(), process.env.HOME ?? homedir());
   if (denial) process.stdout.write(`${JSON.stringify(denial)}\n`);
 }
