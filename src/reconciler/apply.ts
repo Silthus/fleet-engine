@@ -111,7 +111,6 @@ function humanFinding(step: Owned<HumanStep>): Finding {
   return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: "human" };
 }
 
-/** Tests each check that a job waits for once, and leaves out the jobs whose check fails, so the adapters remove their units. */
 async function gate(plan: Plan, run: Runner): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>> }> {
   const tested = new Map<Owned<HumanStep>, boolean>();
   const passes = async (step: Owned<HumanStep> | undefined) => {

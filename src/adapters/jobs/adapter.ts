@@ -96,7 +96,7 @@ async function removeLauncher(home: string, id: string) {
   if (!(await linkOnPath(home, launcherTarget(id)))) await rm(inside(home, launcherTarget(id)), { force: true });
 }
 
-async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun, run, result, outage }: Context, keep: Set<string> = new Set(), hold: Set<string> = new Set()): Promise<boolean> {
+async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun, run, result, outage, dropped }: Context, keep: Set<string> = new Set(), hold: Set<string> = new Set()): Promise<boolean> {
   const listed = await run(["crontab", "-l"]);
   const empty = listed.code !== 0 && /no crontab/i.test(listed.stderr ?? "");
   if (listed.code !== 0 && !empty) {
@@ -110,7 +110,7 @@ async function reconcileCron(jobs: TimedJob[], scripts: Scripts, { home, dryRun,
     return false;
   }
   const wanted = new Map(jobs.map((job) => [job.id, cronLine(job.id, cronExpression(job.schedule), inside(home, launcherTarget(job.id)))]));
-  const changes = reconcileCrontab(empty ? "" : listed.stdout, wanted, outage || hold);
+  const changes = reconcileCrontab(empty ? "" : listed.stdout, wanted, (id) => (outage && !dropped.has(id)) || hold.has(id));
   const owner = (id: string) => jobs.find((job) => job.id === id) ?? id;
   const rewritten = jobs.filter((job) => stale(scripts.get(job.id)) && !changes.added.includes(job.id) && !changes.changed.includes(job.id)).map((job) => job.id);
   const all = [...changes.added.map((id) => needs(owner(id), "added")), ...[...changes.changed, ...rewritten].map((id) => needs(owner(id), "updated")), ...changes.removed.map((id) => needs(id, "removed"))];
@@ -304,7 +304,7 @@ async function reconcileSystemd(jobs: Array<Owned<PackJob>>, scripts: Scripts, {
   return done;
 }
 
-async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun, result, outage }: Context) {
+async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun, result, outage, dropped }: Context) {
   const jobs = plan.jobs.filter(isTimed).filter((job) => job.runner === "t3" && job.task);
   if (!client) {
     for (const job of jobs) result.findings.push({ id: `task:${job.id}`, pack: job.pack, say: `The ${job.id} task waits for T3 Code to run. The next fleet apply after T3 Code starts adds it.`, repair: "apply" });
@@ -339,7 +339,7 @@ async function reconcileTasks(plan: Plan, client: T3Tasks | undefined, { dryRun,
     result.actions.push({ target: `t3 task ${wanted.id}`, operation: current ? "replace" : "create" });
   }
   for (const task of existing) {
-    if (outage || !task.id.startsWith(taskPrefix) || !task.enabled || jobs.some((job) => `${taskPrefix}${job.id}` === task.id)) continue;
+    if ((outage && !dropped.has(task.id.slice(taskPrefix.length))) || !task.id.startsWith(taskPrefix) || !task.enabled || jobs.some((job) => `${taskPrefix}${job.id}` === task.id)) continue;
     if (dryRun) {
       result.findings.push(needs(task.id.slice(taskPrefix.length), "turned off", "task"));
       continue;
