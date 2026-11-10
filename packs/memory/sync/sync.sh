@@ -16,7 +16,7 @@ machine=${CODER_WORKSPACE_NAME:-$(hostname -s)}
 here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 g() { git -c core.quotePath=false -C "$checkout" "$@"; }
 fail() { echo "Memory: $*" >&2; exit 1; }
-case "/${subtree:-x}/" in */../* | */./* | *//*) fail "memory.subtree $subtree must name a folder inside the memory repo." ;; esac
+case "/${subtree:-x}/" in */../* | */./* | *//* | */-* | *[!A-Za-z0-9._/-]*) fail "memory.subtree $subtree must name a folder inside the memory repo, in letters, digits, dots, dashes and underscores." ;; esac
 if [ -n "$subtree" ]; then
   checkout="$memory-repo"
   scope=$subtree
@@ -77,14 +77,18 @@ if [ -n "$subtree" ]; then
   if [ -L "$memory" ]; then
     [ "$(readlink "$memory")" = "$target" ] || ln -sfn "$target" "$memory"
   elif [ -d "$memory" ]; then
-    cp -R "$memory/." "$target/"
-    rm -rf "$memory"
+    [ ! -e "$memory.premove" ] || fail "$memory.premove holds notes from an earlier move, and $memory is a folder again. Move the notes of both into $target; until then nothing syncs."
+    mv "$memory" "$memory.premove"
     ln -s "$target" "$memory"
-    echo "Memory: moved the notes in $memory into $target."
   elif [ -e "$memory" ]; then
     fail "$memory is a file. Move it aside; the next sync links $memory to $target."
   else
     ln -s "$target" "$memory"
+  fi
+  if [ -d "$memory.premove" ]; then
+    cp -R "$memory.premove/." "$target/"
+    rm -rf "$memory.premove"
+    echo "Memory: moved the notes in $memory into $target."
   fi
 fi
 
@@ -217,7 +221,7 @@ while :; do
       fi
       exit 0
     fi
-    parted=$(g merge-base HEAD origin/main 2>/dev/null || true)
+    parted=$(g merge-base HEAD origin/main 2>/dev/null || g hash-object -t tree /dev/null)
     at_risk "$parted" "$gitdir/fleet-sync-at-risk"
     rebase || fail "cannot rebase $checkout onto origin/main. Not synced."
     keep_lost "$parted" "$gitdir/fleet-sync-at-risk"

@@ -374,6 +374,35 @@ describe("the memory sync", () => {
     expect(git(root, "--git-dir", remote, "show", "main:scripts/sync.sh")).toBe("echo old machines");
   });
 
+  test.concurrent("with a subtree, finishes moving notes that a stopped sync set aside", async () => {
+    const { root, remote } = setup();
+    commitAll(join(root, "seed-main"), "old layout", { "memory/MEMORY.md": "# Memory\n" });
+    write(join(root, "home-laptop/.agents/memory.premove"), { "early.md": "an early note\n" });
+    const env = { FLEET_MEMORY_SUBTREE: "memory" };
+    expect((await sync(root, remote, "laptop", env)).code).toBe(0);
+    expect((await sync(root, remote, "laptop", env)).code).toBe(0);
+    expect(git(root, "--git-dir", remote, "show", "main:memory/early.md")).toBe("an early note");
+    expect(existsSync(join(root, "home-laptop/.agents/memory.premove"))).toBe(false);
+  });
+
+  test.concurrent("keeps the other side when a note written before the first sync replaces one in the repo", async () => {
+    const { root, remote } = setup();
+    commitAll(join(root, "seed-main"), "notes", { "trap.md": "the trap, as the repo has it\n" });
+    write(join(root, "home-laptop/.agents/memory"), { "trap.md": "the trap, as the laptop saw it\n" });
+    const merged = await sync(root, remote, "laptop");
+    expect([merged.code, merged.out]).toEqual([0, expect.stringContaining("kept the other side of a conflict in trap.md")]);
+    expect(git(root, "--git-dir", remote, "show", "main:trap.md")).toBe("the trap, as the laptop saw it");
+    const kept = git(root, "--git-dir", remote, "ls-tree", "--name-only", "main:.conflicts");
+    expect(git(root, "--git-dir", remote, "show", `main:.conflicts/${kept}`)).toContain("the trap, as the repo has it");
+  });
+
+  test.concurrent.each(["*", ":(top)", "notes[0]", "-memory"])("refuses the subtree %s, which Git would read as a pattern or an option", async (subtree) => {
+    const { root, remote } = setup();
+    const result = await sync(root, remote, "laptop", { FLEET_MEMORY_SUBTREE: subtree });
+    expect([result.code, result.out]).toEqual([1, expect.stringContaining("must name a folder inside the memory repo")]);
+    expect(existsSync(join(root, "home-laptop/.agents"))).toBe(false);
+  });
+
   test.concurrent("refuses to turn a flat checkout into a subtree link, or the other way round", async () => {
     const { root, remote } = setup();
     expect((await sync(root, remote, "laptop")).code).toBe(0);
