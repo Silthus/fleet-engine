@@ -96,7 +96,8 @@ export function packSignIn(step: Owned<HumanStep>, steps: Array<Owned<PackStep>>
     minutes: 2,
     why: `The ${step.pack} pack needs this.`,
     probe: () => passes(step.probe),
-    ...(step.command ? { command: ["sh", "-c", engineShellCommand(step.command, engineRoot)], finishes: true as const } : {}),
+    ...(step.command ? { command: ["sh", "-c", engineShellCommand(step.command, engineRoot)] } : {}),
+    ...(step.command && /^fleet( \S+)+$/.test(step.command) ? { finishes: true as const } : {}),
     ...(step.interactive ? { interactive: true as const } : {}),
     async after() {
       for (const next of steps.filter((item) => item.pack === step.pack && item.after === step.id)) {

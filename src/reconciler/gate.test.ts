@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { jobsAdapter } from "../adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../cli.ts";
 import type { CommandRunner } from "../adapters/run.ts";
@@ -47,12 +47,12 @@ function machine(repair = "fleet gated setup", platform: "linux" | "darwin" = "l
   cpSync(join(import.meta.dir, "fixtures/gated"), join(engine, "packs/gated"), { recursive: true });
   const pack = join(engine, "packs/gated/pack.ts");
   writeFileSync(pack, readFileSync(pack, "utf8").replace('command: "fleet gated setup"', `command: ${JSON.stringify(repair)}`));
-  for (const [name, text] of Object.entries(extra)) {
-    mkdirSync(join(engine, "packs", name), { recursive: true });
-    writeFileSync(join(engine, "packs", name, "pack.ts"), text);
+  for (const [file, text] of Object.entries(extra)) {
+    mkdirSync(join(engine, "packs", dirname(file)), { recursive: true });
+    writeFileSync(join(engine, "packs", file), text);
   }
   const profile = temp.make("profile-");
-  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["gated", ...Object.keys(extra)], plan: "claude", settings: {}, workflows: {} }));
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["gated", ...Object.keys(extra).map(dirname)], plan: "claude", settings: {}, workflows: {} }));
   const home = temp.make("home-");
   const engineFleet = join(engine, "fleet");
   let lines: string[] = [];
@@ -135,8 +135,9 @@ test.each(["linux", "darwin"] as const)("on %s, a check that stops passing remov
   expect([service("gated-worker"), service("team-watch")]).toEqual(["gone", "running"]);
 });
 
-test("a repair command matches the words you type, however the pack spaces them", async () => {
-  const { profile, fleet, service } = machine("fleet  gated   setup");
+test("a pack.json sign-in command matches the words you type, however that pack spaces them", async () => {
+  const spaced = JSON.stringify({ schema: 1, name: "spaced", summary: "Spaces its words.", human: [{ id: "save", say: "Save the token.", command: "fleet  gated   setup", probe: ["true"] }] });
+  const { profile, fleet, service } = machine("fleet gated never", "linux", { "spaced/pack.json": spaced });
   await fleet("apply", "--profile", profile);
   expect((await fleet("gated", "setup")).code).toBe(0);
   expect(service("gated-worker")).toBe("running");
@@ -144,7 +145,7 @@ test("a repair command matches the words you type, however the pack spaces them"
 
 test("a repair command that another pack ships installs the service once it passes", async () => {
   const keeper = `export default { sdk: 1, name: "keeper", summary: "Keeps tokens.", register(fleet) { fleet.command("keeper", { summary: "Save", run: async () => { const dir = process.env.HOME + "/.config/fleet/secrets/gated"; await Bun.$\`mkdir -p \${dir}\`; await Bun.write(dir + "/token", "value"); return 0; } }); } };\n`;
-  const { profile, fleet, service } = machine("fleet keeper save", "linux", { keeper });
+  const { profile, fleet, service } = machine("fleet keeper save", "linux", { "keeper/pack.ts": keeper });
   await fleet("apply", "--profile", profile);
   expect(service("gated-worker")).toBe("gone");
   expect((await fleet("keeper", "save")).code).toBe(0);
