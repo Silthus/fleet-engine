@@ -21,7 +21,7 @@ function node(ssh?: string) {
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "devbox", coder: true, name: "node-2", profileDir: profile }));
   if (ssh) writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho $$ > "$HOME/ssh.pid"\n${ssh}\n`, { mode: 0o755 });
-  leftovers.push(join(home, "ssh.pid"));
+  leftovers.push(join(home, "ssh.pid"), join(home, "held.pid"));
   const env = { HOME: home, PATH: ssh ? `${bin}:/usr/bin:/bin` : bin };
   return { home, env, args: [process.execPath, cli, "mcp-gateway", "doctor"] };
 }
@@ -34,7 +34,7 @@ onLinux("a hub command typed on a node hands ssh this terminal: its input, its o
 });
 
 onLinux("a hub command passes a stop signal on to ssh and waits for it", async () => {
-  const { home, env, args } = node(`trap 'echo stopped > "$HOME/stopped"; exit 143' TERM; echo ready; while :; do sleep 0.05; done`);
+  const { home, env, args } = node(`trap 'kill $held; echo stopped > "$HOME/stopped"; exit 143' TERM; sleep 600 & held=$!; echo $held > "$HOME/held.pid"; echo ready; wait $held`);
   const fleet = Bun.spawn(args, { env, stdout: "pipe", stderr: "pipe" });
   const reader = fleet.stdout.getReader();
   let seen = "";

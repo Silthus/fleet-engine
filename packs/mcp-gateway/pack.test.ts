@@ -237,16 +237,25 @@ describe("on a devbox", () => {
     expect(await fleet(["run", "mcp-gateway/mcp-gateway-client"])).toEqual({ code: 1, output: "This machine has no MCP gateway key. Run fleet apply on this machine to pull its key from the hub." });
   });
 
-  test("fleet mcp-gateway typed on a devbox runs on the hub, with a server name that holds a space and shell characters", async () => {
-    const tricky = "team docs; $(touch pwned) 'x'";
+  const trickyServer = "team docs; $(touch pwned) 'x'";
+  const nodeOfHub = () => {
     const hub = machine(hubMachine);
-    writeMcpHubSettings(hub.home, { mcpServers: { [tricky]: { oauth: { pendingAuthorization: { authorizationUrl: "https://auth.example.com/authorize?state=1" } } } } });
+    writeMcpHubSettings(hub.home, { mcpServers: { [trickyServer]: { oauth: { pendingAuthorization: { authorizationUrl: "https://auth.example.com/authorize?state=1" } } } } });
     const { state } = gatewayServer({ home: hub.home });
-    const { fleet } = machine(nodeMachine, {}, { "hub-1": hub.host });
-    expect(await fleet(["mcp-gateway", "reconnect", tricky])).toEqual({ code: 0, output: `MCPHub reconnected ${tricky}. If it needs a sign-in, run: fleet mcp-gateway sign-in` });
-    expect(state.calls.map((call) => call.path)).toContain(`servers/${encodeURIComponent(tricky)}/reload`);
-    expect(await fleet(["mcp-gateway", "sign-in"])).toEqual({ code: 0, output: `On your computer, keep this running while you sign in: coder port-forward hub-1 --tcp 3317\n${tricky}: https://auth.example.com/authorize?state=1` });
+    return { state, fleet: machine(nodeMachine, {}, { "hub-1": hub.host }).fleet };
+  };
+
+  test("fleet mcp-gateway reconnect typed on a devbox reconnects that server on the hub, with a name that holds a space and shell characters", async () => {
+    const { state, fleet } = nodeOfHub();
+    expect(await fleet(["mcp-gateway", "reconnect", trickyServer])).toEqual({ code: 0, output: `MCPHub reconnected ${trickyServer}. If it needs a sign-in, run: fleet mcp-gateway sign-in` });
+    expect(state.calls.map((call) => call.path)).toContain(`servers/${encodeURIComponent(trickyServer)}/reload`);
   });
+
+  test("fleet mcp-gateway sign-in typed on a devbox prints the hub's pending sign-ins", async () => {
+    const { fleet } = nodeOfHub();
+    expect(await fleet(["mcp-gateway", "sign-in"])).toEqual({ code: 0, output: `On your computer, keep this running while you sign in: coder port-forward hub-1 --tcp 3317\n${trickyServer}: https://auth.example.com/authorize?state=1` });
+  });
+
 
   test("the hub's install check and the key issue stay off a devbox", async () => {
     const { home, fleet } = machine(nodeMachine);
