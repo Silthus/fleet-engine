@@ -8,17 +8,33 @@ desired=$(printf '%s\nEARLYOOM_ARGS="-m 10,7 -s 100,100 --prefer %s --avoid %s"'
 
 installed() { dpkg-query -W -f='${Status}' earlyoom 2>/dev/null | grep -q 'install ok installed'; }
 package_default() { dpkg-query -W -f='${Conffiles}\n' earlyoom 2>/dev/null | awk '$1 == "/etc/default/earlyoom" { print $2 }'; }
-own_config() { [ -e "$config" ] && [ "$(head -n 1 "$config")" != "$marker" ] && [ "$(md5sum < "$config" | cut -d' ' -f1)" != "$(package_default)" ]; }
+config_state() {
+  [ -e "$config" ] || { echo absent; return; }
+  [ "$(head -n 1 "$config")" = "$marker" ] && { echo fleet; return; }
+  default=$(package_default)
+  sum=$(md5sum < "$config" 2>/dev/null) || sum=
+  sum=${sum%% *}
+  if [ -z "$default" ] || [ -z "$sum" ]; then echo unknown
+  elif [ "$sum" = "$default" ]; then echo package
+  else echo own
+  fi
+}
 
 if [ "${1:-}" = --check ]; then
-  { own_config || [ "$(cat "$config" 2>/dev/null)" = "$desired" ]; } && systemctl is-active --quiet earlyoom
+  state=$(config_state)
+  [ "$state" = own ] || { [ "$state" = fleet ] && [ "$(cat "$config")" = "$desired" ]; } || exit 1
+  systemctl is-active --quiet earlyoom
   exit
 fi
 if ! installed; then
   command -v apt-get >/dev/null 2>&1 || { echo "earlyoom: install it with your package manager, then run this again." >&2; exit 1; }
   apt-get install -y earlyoom
 fi
-if own_config; then
+state=$(config_state)
+if [ "$state" = unknown ]; then
+  echo "earlyoom: kept $config, because dpkg-query or md5sum failed, so Fleet cannot tell whether it is the package's default. Delete it and run this again to take Fleet's config." >&2
+  exit 1
+elif [ "$state" = own ]; then
   echo "earlyoom: kept your own $config, because its first line is not Fleet's marker."
   systemctl enable --now earlyoom
 elif [ "$(cat "$config" 2>/dev/null)" != "$desired" ]; then

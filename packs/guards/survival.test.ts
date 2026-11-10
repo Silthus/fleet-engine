@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
@@ -145,79 +145,115 @@ describe("the OOM survival workflow", () => {
     const root = temp.make("root-");
     const state = temp.make("state-");
     const bin = temp.make("bin-");
+    const config = join(root, "etc/default/earlyoom");
     const stub = (name: string, body: string) => {
-      writeFileSync(join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${state}/log"\n${body}\n`);
+      writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
       chmodSync(join(bin, name), 0o755);
     };
     const md5 = new Bun.CryptoHasher("md5").update(packageDefault).digest("hex");
-    stub("dpkg-query", `[ -e "${state}/installed" ] || exit 1\ncase "$*" in *Status*) printf 'install ok installed' ;; *) printf ' /etc/default/earlyoom ${md5}\\n /etc/other 0\\n' ;; esac`);
-    stub("apt-get", `touch "${state}/installed"\nmkdir -p "${root}/etc/default"\nprintf '%s' '${packageDefault}' > "${root}/etc/default/earlyoom"`);
-    stub("systemctl", `case "$*" in "is-active --quiet earlyoom") [ -e "${state}/active" ] ;; *now*|restart*) [ -e "${state}/broken" ] || touch "${state}/active" ;; esac`);
-    const config = join(root, "etc/default/earlyoom");
-    const run = (...args: string[]) => {
-      writeFileSync(join(state, "log"), "");
-      const result = Bun.spawnSync(["sh", join(import.meta.dir, "system/earlyoom.sh"), ...args], { env: { PATH: `${bin}:${process.env.PATH}`, FLEET_SYSTEM_ROOT: root }, stdout: "pipe", stderr: "pipe" });
-      return { code: result.exitCode, stdout: result.stdout.toString().trim(), stderr: result.stderr.toString().trim(), log: readFileSync(join(state, "log"), "utf8").split("\n").filter((line) => /^(apt-get|systemctl) /.test(line)) };
+    stub("dpkg-query", `[ -e "${state}/installed" ] || exit 1\ncase "$*" in *Status*) printf 'install ok installed' ;; *) [ -e "${state}/no-conffiles" ] || printf ' /etc/default/earlyoom ${md5}\\n /etc/other 0\\n' ;; esac`);
+    stub("md5sum", `[ -e "${state}/no-md5sum" ] && exit 127\nexec ${Bun.which("md5sum")} "$@"`);
+    stub("apt-get", `touch "${state}/installed"\nmkdir -p "${root}/etc/default"\nprintf '%s' '${packageDefault}' > "${config}"`);
+    stub(
+      "systemctl",
+      [
+        `start() { [ -e "${state}/broken" ] && return; cp "${config}" "${state}/running-config"; echo x >> "${state}/starts"; }`,
+        `case "$*" in`,
+        `  "is-active --quiet earlyoom") [ -e "${state}/running-config" ] ;;`,
+        `  "enable earlyoom") touch "${state}/enabled" ;;`,
+        `  "enable --now earlyoom") touch "${state}/enabled"; [ -e "${state}/running-config" ] || start ;;`,
+        `  "restart earlyoom") start ;;`,
+        `esac`,
+      ].join("\n"),
+    );
+    const read = (name: string) => (existsSync(join(state, name)) ? readFileSync(join(state, name), "utf8") : undefined);
+    const service = () => ({ installed: existsSync(join(state, "installed")), enabled: existsSync(join(state, "enabled")), runningConfig: read("running-config"), starts: (read("starts") ?? "").split("\n").filter(Boolean).length });
+    const writeConfig = (text: string) => {
+      mkdirSync(join(root, "etc/default"), { recursive: true });
+      writeFileSync(config, text);
     };
-    return { root, state, config, run };
+    const run = (...args: string[]) => {
+      const result = Bun.spawnSync(["sh", join(import.meta.dir, "system/earlyoom.sh"), ...args], { env: { PATH: `${bin}:${process.env.PATH}`, FLEET_SYSTEM_ROOT: root }, stdout: "pipe", stderr: "pipe" });
+      return { code: result.exitCode, stdout: result.stdout.toString().trim(), stderr: result.stderr.toString().trim() };
+    };
+    const install = () => writeFileSync(join(state, "installed"), "");
+    const start = () => writeFileSync(join(state, "running-config"), readFileSync(config, "utf8"));
+    const stop = () => rmSync(join(state, "running-config"));
+    const flag = (name: string) => writeFileSync(join(state, name), "");
+    return { config, run, service, writeConfig, install, start, stop, flag };
   }
 
-  test("installs earlyoom, replaces the package's default config, and restarts it once", () => {
+  test("installs earlyoom, enables it, and runs it with Fleet's config instead of the package's default", () => {
     const box = machine();
-    const first = box.run();
-    expect(first).toMatchObject({ code: 0, stdout: expect.stringContaining("earlyoom: on.") });
-    expect(first.log).toEqual(["apt-get install -y earlyoom", "systemctl enable earlyoom", "systemctl restart earlyoom", "systemctl is-active --quiet earlyoom"]);
+    expect(box.run()).toMatchObject({ code: 0, stdout: expect.stringContaining("earlyoom: on.") });
     const config = readFileSync(box.config, "utf8");
     expect(config).toStartWith("# Managed by Fleet's Guards pack.");
     expect(config).toContain("-m 10,7 -s 100,100 --prefer ^(node|");
     expect(config).toMatch(/--avoid \^\(t3\|[^)]*claude\|codex/);
+    expect(box.service()).toEqual({ installed: true, enabled: true, runningConfig: config, starts: 1 });
 
-    expect(box.run().log).toEqual(["systemctl enable --now earlyoom", "systemctl is-active --quiet earlyoom"]);
+    expect(box.run().code).toBe(0);
+    expect(box.service().starts).toBe(1);
+    box.stop();
+    expect(box.run().code).toBe(0);
+    expect(box.service()).toMatchObject({ runningConfig: config, starts: 2 });
   });
 
-  test("keeps an earlyoom config the person wrote and never restarts with it", () => {
+  test("keeps an earlyoom config the person wrote and runs earlyoom with it", () => {
     const box = machine();
-    writeFileSync(join(box.state, "installed"), "");
-    mkdirSync(join(box.root, "etc/default"), { recursive: true });
-    writeFileSync(box.config, 'EARLYOOM_ARGS="-m 5"\n');
-    const kept = box.run();
-    expect(kept).toMatchObject({ code: 0, stdout: expect.stringContaining("kept your own") });
-    expect(kept.log).not.toContain("systemctl restart earlyoom");
+    box.install();
+    box.writeConfig('EARLYOOM_ARGS="-m 5"\n');
+    expect(box.run()).toMatchObject({ code: 0, stdout: expect.stringContaining("kept your own") });
     expect(readFileSync(box.config, "utf8")).toBe('EARLYOOM_ARGS="-m 5"\n');
+    expect(box.service()).toMatchObject({ enabled: true, runningConfig: 'EARLYOOM_ARGS="-m 5"\n' });
   });
 
-  test("replaces a config an older Fleet wrote", () => {
+  test("replaces a config an older Fleet wrote, and restarts earlyoom with the new one", () => {
     const box = machine();
-    writeFileSync(join(box.state, "installed"), "");
-    mkdirSync(join(box.root, "etc/default"), { recursive: true });
-    writeFileSync(box.config, `# Managed by Fleet's Guards pack. Delete this line to keep your own settings.\nEARLYOOM_ARGS="-m 20"\n`);
-    expect(box.run().log).toContain("systemctl restart earlyoom");
-    expect(readFileSync(box.config, "utf8")).toContain("-m 10,7");
+    box.install();
+    box.writeConfig(`# Managed by Fleet's Guards pack. Delete this line to keep your own settings.\nEARLYOOM_ARGS="-m 20"\n`);
+    box.start();
+    expect(box.run().code).toBe(0);
+    expect(box.service().runningConfig).toContain("-m 10,7");
+  });
+
+  test("never takes a config it cannot tell from the package's default, and its check fails until a person decides", () => {
+    for (const missing of ["no-conffiles", "no-md5sum"]) {
+      const box = machine();
+      box.install();
+      box.writeConfig(packageDefault);
+      box.start();
+      box.flag(missing);
+      expect([missing, box.run().code, box.run("--check").code]).toEqual([missing, 1, 1]);
+      expect([missing, readFileSync(box.config, "utf8")]).toEqual([missing, packageDefault]);
+    }
   });
 
   test("its check passes only while earlyoom runs with Fleet's config or one the person wrote, and changes nothing", () => {
     const box = machine();
-    expect(box.run("--check")).toMatchObject({ code: 1, log: [] });
-    writeFileSync(join(box.state, "installed"), "");
-    mkdirSync(join(box.root, "etc/default"), { recursive: true });
-    writeFileSync(box.config, packageDefault);
-    writeFileSync(join(box.state, "active"), "");
+    expect(box.run("--check").code).toBe(1);
+    expect(box.service()).toEqual({ installed: false, enabled: false, runningConfig: undefined, starts: 0 });
+    box.install();
+    box.writeConfig(packageDefault);
+    box.start();
     expect(box.run("--check").code).toBe(1);
     expect(readFileSync(box.config, "utf8")).toBe(packageDefault);
     box.run();
-    expect(box.run("--check")).toMatchObject({ code: 0, log: ["systemctl is-active --quiet earlyoom"] });
-    writeFileSync(box.config, 'EARLYOOM_ARGS="-m 5"\n');
+    const before = box.service();
     expect(box.run("--check").code).toBe(0);
-    writeFileSync(box.config, `# Managed by Fleet's Guards pack. Delete this line to keep your own settings.\nEARLYOOM_ARGS="-m 20"\n`);
+    expect(box.service()).toEqual(before);
+    box.writeConfig('EARLYOOM_ARGS="-m 5"\n');
+    expect(box.run("--check").code).toBe(0);
+    box.writeConfig(`# Managed by Fleet's Guards pack. Delete this line to keep your own settings.\nEARLYOOM_ARGS="-m 20"\n`);
     expect(box.run("--check").code).toBe(1);
-    writeFileSync(box.config, 'EARLYOOM_ARGS="-m 5"\n');
-    rmSync(join(box.state, "active"));
+    box.flag("no-conffiles");
+    box.writeConfig(packageDefault);
     expect(box.run("--check").code).toBe(1);
   });
 
   test("fails and says where to look when earlyoom does not start", () => {
     const box = machine();
-    writeFileSync(join(box.state, "broken"), "");
+    box.flag("broken");
     const result = box.run();
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("journalctl -u earlyoom");
