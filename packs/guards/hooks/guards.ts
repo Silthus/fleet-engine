@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { downloadRisk } from "../lib/download.ts";
 import { ghRisk, ownerList } from "../lib/gh.ts";
+import { isSleepPoll, isTaskStatus, repeatedStatusReason, repeatsTaskStatus, sleepPollReason } from "../lib/wait.ts";
 
-export type Provider = "claude" | "codex";
-export type ToolCall = { tool_name?: string; tool_input?: Record<string, unknown>; cwd?: string };
+export type ToolCall = { tool_name?: string; tool_input?: Record<string, unknown>; cwd?: string; tool_use_id?: string; transcript_path?: string };
 export type Denial = { hookSpecificOutput: { hookEventName: "PreToolUse"; permissionDecision: "deny"; permissionDecisionReason: string } };
 
 const fallbackPerson = "the person who runs this machine";
@@ -41,10 +41,11 @@ const uncheckedReason = (error: unknown, person: string) => `Fleet blocked this 
   + `Split it into simpler commands, or stop and ask ${person}.`;
 
 function check(call: ToolCall, { person, owners, unreadable }: Settings): string | undefined {
+  if (isTaskStatus(call.tool_name)) return repeatsTaskStatus(call) ? repeatedStatusReason(person) : undefined;
   if (call.tool_name !== "Bash") return undefined;
   if (unreadable) return unreadableReason(unreadable, person);
   const command = shellCommand(call.tool_input);
-  return downloadRisk(command, call.cwd ?? "/", person) ?? ghRisk(command, owners, person, process.env.GH_REPO);
+  return downloadRisk(command, call.cwd ?? "/", person) ?? ghRisk(command, owners, person, process.env.GH_REPO) ?? (isSleepPoll(command) ? sleepPollReason(person) : undefined);
 }
 
 /** The refusal for a tool call that a shell guard stops, naming the person the settings give. A call the guards cannot
