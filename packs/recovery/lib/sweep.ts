@@ -23,7 +23,7 @@ async function continueLimited(client: Parameters<typeof sendContinue>[0], threa
   const status = availability.providers[provider];
   const name = `${thread.title ?? "Untitled thread"} (${thread.id})`;
   if (status !== "available") return print(`${name}: waits for ${provider}, which is ${status}.`);
-  await sendContinue(client, { threadId: thread.id, runId: thread.latestRunId!, commandId: `fleet-limit-resume:${thread.id}:${thread.latestRunId}`, continuesRun: true });
+  await sendContinue(client, { threadId: thread.id, runId: thread.latestRunId!, commandId: `fleet-limit-resume:${thread.id}:${thread.latestRunId}`, continuesRun: thread.lastErrorClass === "usage_limit" });
   print(`${name}: continued after a usage limit; ${provider} is available.`);
 }
 

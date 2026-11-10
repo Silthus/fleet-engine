@@ -50,10 +50,11 @@ function bodyFor(code: number): string {
   return code === 200 ? "{}" : code === 429 ? '{"error":{"type":"rate_limit_error"}}' : "error";
 }
 
+type ThreadFields = Record<string, unknown>;
+
 export type DeliveredMessage = { threadId: string; text: string; continuesRunId?: string };
 
-/** T3's dispatchCommand as the sweep reaches it: it checks the message's shape and keeps one message per command id. */
-export function t3Inbox() {
+export function t3Inbox(threads: ThreadFields[] = []) {
   const byCommand = new Map<string, DeliveredMessage>();
   const rpc = (tag: string, payload: unknown) => {
     if (tag !== "orchestration.dispatchCommand") return undefined;
@@ -62,6 +63,7 @@ export function t3Inbox() {
       && typeof message.threadId === "string" && typeof message.text === "string" && Array.isArray(message.attachments)
       && (message.dispatchMode as { type?: string })?.type === "start_immediately";
     if (!shaped) return undefined;
+    if (message.manualContinuationOfRunId !== undefined && !resumable(threads.find((thread) => thread.id === message.threadId), message.manualContinuationOfRunId)) return undefined;
     if (!byCommand.has(message.commandId as string)) {
       byCommand.set(message.commandId as string, {
         threadId: message.threadId as string, text: message.text as string,
@@ -73,7 +75,11 @@ export function t3Inbox() {
   return { rpc, delivered: () => [...byCommand.values()] };
 }
 
-type ThreadFields = Record<string, unknown>;
+
+function resumable(thread: ThreadFields | undefined, runId: unknown): boolean {
+  if (!thread || thread.latestRunId !== runId || thread.archivedAt || thread.deletedAt || thread.pendingRuntimeRequest) return false;
+  return thread.status === "interrupted" || (thread.status === "failed" && thread.lastErrorClass === "usage_limit");
+}
 
 export function limitedThread(id: string, fields: ThreadFields = {}): ThreadFields {
   return {
