@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { main } from "../../src/cli.ts";
@@ -19,10 +19,10 @@ async function fleet(args: string[], home: string) {
   return main(args, { home, engineRoot, platform: "linux", env: {}, print: () => {}, run: runFleetStepsOnly });
 }
 
-async function machineWithMemory(notes: Record<string, string>, repo = "me/notes") {
+async function machineWithMemory(notes: Record<string, string>, repo = "me/notes", extra: Record<string, string> = {}) {
   const home = temp.make("home-");
   const profile = temp.make("profile-");
-  const settings = { "memory.repo": repo };
+  const settings = { "memory.repo": repo, ...extra };
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [], packs: ["memory"], plan: "both", settings, workflows: {} }));
   expect(await fleet(["apply", "--profile", profile], home)).toBe(0);
   for (const [path, text] of Object.entries(notes)) {
@@ -234,6 +234,25 @@ describe("memory recall on a tool call", () => {
     const calls = await Promise.all(Array.from({ length: 6 }, () => fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })));
     expect(calls.filter((call) => call.context.includes("Pass full SHAs"))).toHaveLength(1);
     expect(shownLog(home, "s1")).toHaveLength(1);
+  });
+
+  test("shows the notes of a repo whose memory lives in a subtree, through the same memory folder", async () => {
+    const remoteDir = temp.make("remote-");
+    const remote = join(remoteDir, "notes.git");
+    git(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
+    const old = join(remoteDir, "old-machine");
+    git(remoteDir, "clone", "-q", remote, old);
+    mkdirSync(join(old, "memory"));
+    writeFileSync(join(old, "memory/MEMORY.md"), "# Memory index\n");
+    writeFileSync(join(old, "memory/proof-traps.md"), proofTraps);
+    writeFileSync(join(old, "README.md"), "Shared memory\n");
+    git(old, "add", "-A");
+    git(old, "commit", "-q", "-m", "old layout");
+    git(old, "push", "-q", "origin", "HEAD:main");
+    const home = await machineWithMemory({}, `file://${remote}`, { "memory.subtree": "memory" });
+    expect(await fleet(["memory-sync"], home)).toBe(0);
+    expect(realpathSync(join(home, ".agents/memory"))).toBe(realpathSync(join(home, ".agents/memory-repo/memory")));
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Pass full SHAs");
   });
 
   test("lets the call through quietly when the memory checkout is broken", async () => {
