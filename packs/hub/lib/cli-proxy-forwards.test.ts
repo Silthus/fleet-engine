@@ -1,6 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parse } from "smol-toml";
 import { tempDirs } from "../../../src/testing/git.ts";
+import { cliProxy, type ProxyMachine } from "./cli-proxy.ts";
 import { handOver, hubForward } from "./links.ts";
+import { roleHome } from "./run-testing.ts";
 import { proxyOn, readBoxSettings } from "./machine.ts";
 import { boxSettings, fakeCoder, fakeMachine, ok, writeHome } from "./testing.ts";
 import { tunnelUnit } from "./tunnels.ts";
@@ -55,7 +60,7 @@ test("a box that cannot reach the proxy yet keeps its own sign-in, and the hando
   writeHome(on.machine.home, { ".config/fleet/cli-proxy.key": `${clientKey}\n` });
   const { coder } = fakeCoder({ ssh: async (_box, command) => ({ ...ok, code: command.includes("cli-proxy connect") ? 1 : 0, stderr: "The proxy does not answer." }) });
   await handOver(coder, on.machine, "box-lane");
-  expect(on.lines).toContain("box-lane keeps its own Claude sign-in: The proxy does not answer.");
+  expect(on.lines).toContain("box-lane keeps its own sign-in: The proxy does not answer.");
 
   const none = fakeMachine(temp.make("fleet-box-"), { settings: balancing, run: async () => ({ ...ok, code: 1 }) });
   await handOver(fakeCoder().coder, none.machine, "box-lane");
@@ -69,4 +74,17 @@ test("a relay port on the proxy port is refused only while the workflow is on, b
   expect(tunnelUnit("devbox-1", 8317)).toContain("-R 127.0.0.1:8317:127.0.0.1:8317");
   const off = fakeMachine(temp.make("fleet-box-"), { settings: { ...readBoxSettings({ FLEET_SETTINGS: JSON.stringify(boxSettings) }), relayPort: 8317 } }).machine;
   expect(hubForward(off, "box-lane")).toContain("8317:127.0.0.1:8317");
+});
+
+test("a box handed over on the Codex plan sends Codex through the proxy without another apply", async () => {
+  const hub = fakeMachine(temp.make("fleet-hub-"), { settings: balancing, run: async () => ({ ...ok, code: 1 }) });
+  writeHome(hub.machine.home, { ".config/fleet/cli-proxy.key": `${clientKey}\n` });
+  const boxHome = roleHome(temp.make("fleet-box-"), "devbox");
+  const fetch = async () => Response.json({ data: [{ id: "gpt-6.1-sol" }] });
+  const box = (stdin: string): ProxyMachine => ({ home: boxHome, uid: 1000, user: "me", plan: "codex", devboxes: [], release: { version: "", url: "", sha256: "" }, run: async () => ok, fetch, sleep: async () => {}, readStdin: async () => stdin, randomKey: () => clientKey, print: () => {} });
+  const { coder } = fakeCoder({ ssh: async (_name, command, stdin) => (command.includes("cli-proxy connect") ? { ...ok, code: await cliProxy("connect", box(stdin ?? "")) } : ok) });
+  await handOver(coder, hub.machine, "box-lane");
+  expect(parse(readFileSync(join(boxHome, ".codex/config.toml"), "utf8")).model_provider).toBe("fleet-proxy");
+  expect(existsSync(join(boxHome, ".claude/settings.json"))).toBe(false);
+  expect(await cliProxy("check", box(""), "codex")).toBe(0);
 });

@@ -268,20 +268,40 @@ async function codexUnserved(home: string, models: string[] | string): Promise<s
   return unserved(models, "codex");
 }
 
+async function codexRoute(home: string): Promise<string | (() => Promise<void>)> {
+  const read = await readableCodex(home);
+  if (!read) return "Fleet cannot read ~/.codex/config.toml, or it is a link, so Fleet leaves it alone.";
+  const { path, text, config, providers } = read;
+  const table = providers?.[codexProvider];
+  if (config.model_provider !== undefined && config.model_provider !== codexProvider) return `Keep your Codex setting model_provider in ${path}: Fleet did not set it. Remove it to use the proxy.`;
+  if (table !== undefined && !(isObject(table) && table.base_url === codexUrl)) return `${path} has its own ${codexProvider} provider table, which does not use the proxy's base_url.`;
+  config.model_provider = codexProvider;
+  config.model_providers = { ...providers, [codexProvider]: table ?? codexProviderTable };
+  return () => replaceUnchanged(path, text, `${stringify(config)}\n`);
+}
+
 async function connect(machine: ProxyMachine): Promise<void> {
   if (readRole(machine.home) === "hub") throw new Error("The hub has its own key. Run fleet cli-proxy install there.");
   const key = (await machine.readStdin()).trim();
   if (!keyPattern.test(key)) throw new Error("Pass the proxy key from the hub on standard input: 64 hexadecimal characters.");
   const agent = pooled(machine.plan);
   if (agent === "claude") await claudeRoute(machine.home, true);
+  const codex = machine.plan === "codex" || machine.plan === "both" ? await codexRoute(machine.home) : undefined;
+  if (agent === "codex" && typeof codex === "string") throw new Error(`${codex} Nothing changed.`);
   const reason = await answered(machine, key, agent);
   if (reason) throw new Error(`${reason} Nothing changed.`);
   await refuseLinks(machine.home, keyPath(machine.home), `${what} path`);
   await mkdir(dirname(keyPath(machine.home)), { recursive: true, mode: 0o700 });
   await writePrivateFile(keyPath(machine.home), `${key}\n`);
-  if (agent === "codex") return machine.print(`Codex can reach your own-account proxy at ${proxyUrl} now. Run fleet apply to send Codex to the proxy, then restart open Codex sessions.`);
-  await sendClaude(machine.home, true);
-  machine.print(`Claude Code uses your own-account proxy at ${proxyUrl} now. Restart open Claude Code sessions.`);
+  if (agent === "claude") {
+    await sendClaude(machine.home, true);
+    machine.print(`Claude Code uses your own-account proxy at ${proxyUrl} now. Restart open Claude Code sessions.`);
+  }
+  if (codex === undefined) return;
+  const unroutable = typeof codex === "string" ? codex : agent === "codex" ? undefined : await probe(machine.fetch, key, "codex");
+  if (unroutable) return machine.print(`${unroutable} Codex keeps its own sign-in.`);
+  await (codex as () => Promise<void>)();
+  machine.print(`Codex uses your own-account proxy at ${proxyUrl} now. Restart open Codex sessions.`);
 }
 
 async function disconnect(machine: ProxyMachine): Promise<void> {
@@ -298,7 +318,8 @@ async function disconnect(machine: ProxyMachine): Promise<void> {
 async function plan(machine: ProxyMachine, paths: Layout): Promise<void> {
   if (readRole(machine.home) !== "hub") {
     const key = await savedKey(machine.home);
-    return machine.print(key ? `CLI proxy plan (no changes): Claude Code uses the proxy at ${proxyUrl} through the hub's tunnel.` : "CLI proxy plan (no changes): this machine has no proxy key. On the hub, fleet cli-proxy doctor prints the connect command.");
+    const agents = machine.plan === "codex" ? "Codex uses" : machine.plan === "both" ? "Claude Code and Codex use" : "Claude Code uses";
+    return machine.print(key ? `CLI proxy plan (no changes): this machine has a proxy key, and ${agents} the proxy at ${proxyUrl} through the hub's tunnel while the proxy serves them.` : "CLI proxy plan (no changes): this machine has no proxy key. On the hub, fleet cli-proxy doctor prints the connect command.");
   }
   machine.print("CLI proxy plan (no changes):");
   if (!(await binaryReady(machine, paths))) machine.print(`  Install CLIProxyAPI ${machine.release.version} at ${paths.binary}.`);
