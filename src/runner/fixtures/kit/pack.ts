@@ -10,6 +10,7 @@ export default {
       summary: "Use the context",
       run: async ([mode, ...rest], ctx) => {
         if (mode === "greet") return ctx.print(`${ctx.get(greeting)} ${rest.join(" ")}`), 0;
+        if (mode === "stray") return ctx.print(String(ctx.get({} as typeof greeting))), 0;
         if (mode === "save") return await ctx.secrets.write(rest[0]!, rest[1]!), 0;
         if (mode === "show") return ctx.print((await ctx.secrets.read(rest[0]!)) ?? "no secret"), 0;
         if (mode === "env") return ctx.print(`${process.env.HOME} ${process.env.FLEET_ENGINE_DIR} ${process.env.FLEET_SETTINGS}`), 0;

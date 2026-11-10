@@ -15,8 +15,7 @@ export async function packContext({ home, plan, pack, code, print, clock }: Cont
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   return {
     get: <T extends Value>(setting: Setting<T>) => {
-      const key = code.settings.get(setting);
-      if (key === undefined) throw new Error(`the ${pack} pack asked for a setting it did not declare`);
+      const key = code.settingKey(setting);
       const value = plan.settings[key];
       if (value === undefined) throw new Error(`${key} has no value. Set it with fleet set ${key}=<value>.`);
       return value as T;

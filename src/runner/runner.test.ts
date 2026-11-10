@@ -22,15 +22,15 @@ async function machine(packs = ["kit"], settings: Record<string, string> = {}) {
   const profile = temp.make("profile-");
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs, plan: "claude", settings, workflows: {} }));
   const home = temp.make("home-");
-  const slept: number[] = [];
+  let now = start;
   let lines: string[] = [];
   const fleet = async (...args: string[]) => {
     lines = [];
-    const code = await main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line), run: async () => 0, clock: { now: () => start, sleep: async (ms) => void slept.push(ms) } });
+    const code = await main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line), run: async () => 0, clock: { now: () => now, sleep: async (ms) => void (now += ms) } });
     return { code, lines };
   };
   expect((await fleet("apply", "--profile", profile)).code).toBe(0);
-  return { home, engine, fleet, slept };
+  return { home, engine, fleet };
 }
 
 test("a pack.ts command runs in the engine with the pack's settings", async () => {
@@ -72,10 +72,13 @@ test("a secret's name cannot leave the pack's store", async () => {
 });
 
 test("fleet run runs a service body on the context's clock, never on real time", async () => {
-  const { home, fleet, slept } = await machine();
-  expect(await fleet("run", "kit/kit-ticker")).toEqual({ code: 0, lines: ["2026-11-10T08:00:00.000Z tick 1", "2026-11-10T08:00:00.000Z tick 2", "2026-11-10T08:00:00.000Z tick 3"] });
-  expect(slept).toEqual([60_000, 60_000, 60_000]);
-  expect(readFileSync(join(home, ".local/state/fleet/kit/ticked"), "utf8")).toBe(String(start));
+  const { home, fleet } = await machine();
+  expect(await fleet("run", "kit/kit-ticker")).toEqual({ code: 0, lines: ["2026-11-10T08:00:00.000Z tick 1", "2026-11-10T08:01:00.000Z tick 2", "2026-11-10T08:02:00.000Z tick 3"] });
+  expect(readFileSync(join(home, ".local/state/fleet/kit/ticked"), "utf8")).toBe(String(Date.parse("2026-11-10T08:03:00Z")));
+});
+
+test("a pack.ts command cannot read a setting that its pack did not declare", async () => {
+  expect(await (await machine()).fleet("kit", "stray")).toEqual({ code: 1, lines: ["fleet: ctx.get names a setting that the kit pack did not declare"] });
 });
 
 test("fleet run tests a check: it exits 1 until the check passes, then 0", async () => {
@@ -107,5 +110,5 @@ test("ctx.threads starts a T3 thread from the plan's model table, once per key",
   cpSync(join(t3.home, ".t3/userdata/server-runtime.json"), join(home, ".t3/userdata/server-runtime.json"));
   expect((await fleet("kit", "start", "key-1")).lines).toEqual(["https://app.t3.codes/threads/env-1/thread-1"]);
   expect((await fleet("kit", "start", "key-1")).lines).toEqual(["https://app.t3.codes/threads/env-1/thread-1"]);
-  expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")?.payload).toMatchObject({ modelSelection: { instanceId: "claudeAgent" } });
+  expect(t3.threads).toEqual([expect.objectContaining({ id: "thread-1", modelSelection: expect.objectContaining({ instanceId: "claudeAgent" }) })]);
 });

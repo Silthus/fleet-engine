@@ -11,8 +11,6 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   const workflows: Workflow[] = [];
   const jobs: PackJob[] = [];
   const human: HumanStep[] = [];
-  const code: PackCode = { settings: new Map(), commands: {}, services: {}, checks: {} };
-
   const declare = <T>(kind: Declared["kind"], id: string): T => {
     const handle = Object.freeze({});
     declared.set(handle, { kind, id });
@@ -23,6 +21,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     if (found?.kind !== kind) throw new Error(`${label} names a ${kind} that the ${fields.name} pack did not declare`);
     return found.id;
   };
+  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), commands: {}, services: {}, checks: {} };
   const place = (scope: SdkScope, label: string): Scope & { after?: string } => {
     if (scope.on !== undefined && scope.on !== "hub") throw new Error(`${label}: on takes only "hub"`);
     return {
@@ -41,9 +40,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   const fleet: Fleet = {
     setting(def) {
       settings.push(def as PackSetting);
-      const handle = declare<Setting<never>>("setting", def.key);
-      code.settings.set(handle, def.key);
-      return handle;
+      return declare<Setting<never>>("setting", def.key);
     },
     workflow({ settings: handles, ...def }) {
       workflows.push({ ...def, ...(handles ? { settings: handles.map((handle) => own(handle, "setting", `workflow ${def.id}`)) } : {}) });
