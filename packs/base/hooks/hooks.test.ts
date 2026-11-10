@@ -181,6 +181,45 @@ describe("hook runner", () => {
     expect(await dispatch(dirWith("a.ts", "b.ts", "c.ts"), "codex", "{}", run)).toEqual({ code: 0, stdout: '{"decision":"block"}\n', stderr: "fleet hook a.ts: boom\n" });
   });
 
+  const hooksPrinting = (answers: Record<string, unknown>) => {
+    const dir = temp.make("hooks-");
+    for (const [name, answer] of Object.entries(answers)) writeFileSync(join(dir, name), `console.log(${JSON.stringify(JSON.stringify(answer))});\n`);
+    return dir;
+  };
+  const preToolUse = (fields: Record<string, string>) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", ...fields } });
+
+  test("a guard's deny wins over an earlier hook's context and a later allow, and every context reaches the agent", async () => {
+    const dir = hooksPrinting({
+      "a-recall.ts": preToolUse({ additionalContext: "A note about this command." }),
+      "b-allow.ts": preToolUse({ permissionDecision: "allow", permissionDecisionReason: "fine" }),
+      "c-guard.ts": preToolUse({ permissionDecision: "deny", permissionDecisionReason: "Fleet blocked this command." }),
+      "d-recall.ts": preToolUse({ additionalContext: "Another note." }),
+    });
+    const answer = JSON.parse((await dispatch(dir, "claude", "{}")).stdout);
+    expect(answer.hookSpecificOutput).toEqual({
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: "Fleet blocked this command.",
+      additionalContext: "A note about this command.\n\nAnother note.",
+    });
+  });
+
+  test("a later hook cannot replace the secret guard's redaction", async () => {
+    const dir = hooksPrinting({
+      "secret-guard.ts": { hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: "[redacted]" } },
+      "z-echo.ts": { hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: "the raw output", additionalContext: "echoed" } },
+    });
+    expect(JSON.parse((await dispatch(dir, "claude", "{}")).stdout).hookSpecificOutput).toEqual({ hookEventName: "PostToolUse", updatedToolOutput: "[redacted]", additionalContext: "echoed" });
+  });
+
+  test("asking the person wins over an allow", async () => {
+    const dir = hooksPrinting({
+      "a-allow.ts": preToolUse({ permissionDecision: "allow", permissionDecisionReason: "fine" }),
+      "b-ask.ts": preToolUse({ permissionDecision: "ask", permissionDecisionReason: "Check this one." }),
+    });
+    expect(JSON.parse((await dispatch(dir, "codex", "{}")).stdout).hookSpecificOutput).toMatchObject({ permissionDecision: "ask", permissionDecisionReason: "Check this one." });
+  });
+
   test("fails without a decision when a hook fails", async () => {
     const run = scripted({ "a.ts": { code: 1, stdout: "", stderr: "" } });
     expect(await dispatch(dirWith("a.ts"), "codex", "{}", run)).toEqual({ code: 1, stdout: "", stderr: "fleet hook a.ts: exit 1\n" });

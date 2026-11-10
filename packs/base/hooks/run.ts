@@ -5,12 +5,17 @@ import { join } from "node:path";
 export type HookResult = { code: number; stdout: string; stderr: string };
 export type RunHook = (path: string, provider: string, input: string) => Promise<HookResult>;
 
-type Decision = { decision?: string; reason?: string; hookSpecificOutput?: unknown };
+type Specific = { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string; [key: string]: unknown };
+type Decision = { decision?: string; reason?: string; hookSpecificOutput?: Specific };
+
+const strictness = ["allow", "ask", "deny"];
 
 /**
  * Runs every hook in name order and picks one answer. A JSON block wins, then an exit-2 block, then a
- * JSON answer that redacts or suppresses, then the first other output. A block keeps the first
- * redaction or suppression, so another hook can never undo the secret guard. A failing hook only reports.
+ * JSON answer with hook-specific output, then the first other output. Every hook's hook-specific output
+ * is merged into one: the strictest permission decision wins (deny, then ask, then allow), the contexts
+ * are joined, and any other field keeps its first value, so another hook can never undo the secret guard.
+ * A failing hook only reports.
  */
 export async function dispatch(dir: string, provider: string, input: string, run: RunHook = runWithBun): Promise<HookResult> {
   const results: Array<HookResult & { name: string; json?: Decision }> = [];
@@ -20,15 +25,29 @@ export async function dispatch(dir: string, provider: string, input: string, run
   }
   const problems = results.filter((result) => result.code !== 0 && result.code !== 2).map((result) => `fleet hook ${result.name}: ${result.stderr.trim() || `exit ${result.code}`}\n`).join("");
   const blockJson = results.find((result) => result.json?.decision === "block")?.json;
-  const protect = results.find((result) => result.json?.hookSpecificOutput)?.json?.hookSpecificOutput;
+  const protect = mergeSpecific(results.flatMap((result) => (result.json?.hookSpecificOutput ? [result.json.hookSpecificOutput] : [])));
   const blocked = results.find((result) => result.code === 2);
   const answer = (decision: Decision): HookResult => ({ code: 0, stdout: `${JSON.stringify(decision)}\n`, stderr: problems });
-  if (blockJson) return answer({ ...blockJson, hookSpecificOutput: blockJson.hookSpecificOutput ?? protect });
+  if (blockJson) return answer({ ...blockJson, hookSpecificOutput: protect });
   if (blocked && protect) return answer({ decision: "block", reason: blocked.stderr.trim(), hookSpecificOutput: protect });
   if (blocked) return { code: 2, stdout: "", stderr: problems + blocked.stderr };
-  if (protect) return answer({ ...results.find((result) => result.json?.hookSpecificOutput)!.json });
+  if (protect) return answer({ ...results.find((result) => result.json?.hookSpecificOutput)!.json, hookSpecificOutput: protect });
   const first = results.find((result) => result.code === 0 && result.stdout.trim());
   return { code: first || !problems ? 0 : 1, stdout: first?.stdout ?? "", stderr: problems };
+}
+
+function mergeSpecific(outputs: Specific[]): Specific | undefined {
+  if (outputs.length === 0) return undefined;
+  const merged: Specific = Object.assign({}, ...[...outputs].reverse());
+  const decided = outputs.filter((output) => strictness.includes(output.permissionDecision ?? ""));
+  const strictest = decided.reduce<Specific | undefined>((best, output) => (!best || strictness.indexOf(output.permissionDecision!) > strictness.indexOf(best.permissionDecision!) ? output : best), undefined);
+  if (strictest) {
+    merged.permissionDecision = strictest.permissionDecision;
+    merged.permissionDecisionReason = strictest.permissionDecisionReason;
+  }
+  const contexts = outputs.map((output) => output.additionalContext).filter((context): context is string => typeof context === "string" && context.length > 0);
+  if (contexts.length > 0) merged.additionalContext = contexts.join("\n\n");
+  return merged;
 }
 
 function parseDecision(stdout: string): Decision | undefined {
