@@ -11,7 +11,7 @@ export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promi
 export const gatewayPort = 3317;
 export const localGatewayUrl = `http://127.0.0.1:${gatewayPort}/mcphub`;
 export const gatewayGroup = "fleet";
-export const grantHint = "On the hub, run: fleet mcp-gateway grant <this machine's SSH name>";
+export const grantHint = "Run fleet apply on this machine to pull its key from the hub.";
 const invalidClient = `~/.config/fleet/mcphub.client.json is not a key from your hub. ${grantHint}`;
 
 export class GatewayClientError extends Error {}

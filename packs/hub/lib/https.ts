@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed } from "./managed.ts";
 import { gatewayPort, refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
-import { peerSsh, readRole, remoteFleet } from "./machine.ts";
+import { readRole } from "./machine.ts";
+import { onHub } from "../../../src/hub/ssh.ts";
 import { dataDir } from "../../mcp-gateway/lib/hub.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { hostPattern, must, relayPortOf } from "./run.ts";
@@ -138,7 +139,7 @@ async function printAuthority(hub: HttpsHub): Promise<number> {
 const trustProbeLimitMs = 60_000;
 
 async function trusted(hub: HttpsHub): Promise<number> {
-  const answer = await hub.run(peerSsh(hub.alias, remoteFleet("hub-https ca")), { timeoutMs: trustProbeLimitMs });
+  const answer = await hub.run(onHub(hub.alias, ["hub-https", "ca"]), { timeoutMs: trustProbeLimitMs });
   const certificate = answer.code === 0 ? answer.stdout.split("\n").filter((line) => !line.startsWith(caHeading)).join("\n").trim() + "\n" : "";
   if (!certificatePattern.test(certificate)) return hub.print(`${hub.alias} gave no public root certificate: ${(answer.stderr || answer.stdout).trim()}`), 1;
   const folder = await mkdtemp(join(tmpdir(), "fleet-hub-ca-"));

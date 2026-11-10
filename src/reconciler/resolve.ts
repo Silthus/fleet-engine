@@ -28,7 +28,7 @@ export class ResolveError extends Error {}
 
 const hubAlias = "hub.alias";
 
-export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "hub", "run"];
+export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "hub", "run", "credential"];
 
 /** Why a machine leaves out an item of the hub while a profile with devboxes names no hub. */
 export const hublessReason = "your profile names no hub. Run fleet hub here on the machine that should be the hub.";
@@ -114,7 +114,8 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
       plan.config.push({ ...entry, pack });
     }
   }
-  if (forwardsToHub(profile, machine, os) && plan.catalog.length) plan.jobs.push(hubForward(profile.hub!, plan.catalog));
+  if (forwardsToHub(profile, machine, os)) plan.reachesHub = true;
+  if (plan.reachesHub && plan.catalog.length) plan.jobs.push(hubForward(profile.hub!, plan.catalog));
   for (const entry of profile.overrides?.config ?? []) {
     if (!fits("profile", entry, `config ${entry.provider}:${entry.key}`)) continue;
     const owner = `${entry.provider}:${entry.key}`;
