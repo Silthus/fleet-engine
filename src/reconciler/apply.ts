@@ -125,8 +125,13 @@ async function gate(plan: Plan, run: Runner): Promise<{ plan: Plan; failed: Arra
     if (!job.after || (await passes(plan.human.find((step) => step.pack === job.pack && step.id === job.after)))) jobs.push(job);
     else dropped.push({ pack: job.pack, item: `job ${job.id}`, reason: `check ${job.after} does not pass`, check: job.after });
   }
+  const config: Plan["config"] = [];
+  for (const entry of plan.config) {
+    if (!entry.after || (await passes(plan.human.find((step) => step.pack === entry.pack && step.id === entry.after)))) config.push(entry);
+    else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after });
+  }
   const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);
-  return { plan: { ...plan, jobs, dropped: [...plan.dropped, ...dropped] }, failed };
+  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed };
 }
 
 /** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */

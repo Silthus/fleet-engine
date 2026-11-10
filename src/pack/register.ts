@@ -1,5 +1,5 @@
 import type { Fleet, Pack, Scope as SdkScope, Setting } from "../sdk/index.ts";
-import type { HumanStep, PackCode, PackJob, PackSetting, Scope, Workflow } from "./types.ts";
+import type { ConfigEntry, HumanStep, PackCode, PackJob, PackSetting, Scope, ServedService, Workflow } from "./types.ts";
 
 type Declared = { kind: "setting" | "workflow" | "check" | "service"; id: string };
 
@@ -13,6 +13,8 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   const workflows: Workflow[] = [];
   const jobs: PackJob[] = [];
   const human: HumanStep[] = [];
+  const served: ServedService[] = [];
+  const config: ConfigEntry[] = [];
   const declare = <T>(kind: Declared["kind"], id: string): T => {
     const handle = Object.freeze({});
     declared.set(handle, { kind, id });
@@ -23,7 +25,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     if (found?.kind !== kind) throw new Error(`${label} names a ${kind} that the ${fields.name} pack did not declare`);
     return found.id;
   };
-  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), commands: Object.create(null), services: Object.create(null), checks: Object.create(null) };
+  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), commands: Object.create(null), services: Object.create(null), checks: Object.create(null), credentials: Object.create(null) };
   const place = (scope: SdkScope, label: string): Scope & { after?: string } => {
     if (scope.on !== undefined && scope.on !== "hub") throw new Error(`${label}: on takes only "hub"`);
     return {
@@ -35,7 +37,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     };
   };
   const runnable = (id: string, label: string) => {
-    if (code.services[id] || code.checks[id]) throw new Error(`${label}: ${id} is declared twice`);
+    if (code.services[id] || code.checks[id] || code.credentials[id]) throw new Error(`${label}: ${id} is declared twice`);
     return ["fleet", "run", `${fields.name}/${id}`];
   };
 
@@ -52,10 +54,26 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
       if (code.commands[name]) throw new Error(`command ${name} is declared twice`);
       code.commands[name] = run;
     },
-    service({ id, run, ...scope }) {
-      jobs.push({ id, command: runnable(id, `service ${id}`), schedule: { every: "always" }, ...place(scope, `service ${id}`) });
-      code.services[id] = run;
+    service({ id, run, serve, ...scope }) {
+      const label = `service ${id}`;
+      if (!run && !serve) throw new Error(`${label} needs run, serve, or both`);
+      const command = runnable(id, label);
+      if (serve) {
+        if (scope.on !== "hub") throw new Error(`${label}: serve needs on: "hub"`);
+        if (!Number.isInteger(serve.port) || serve.port < 1 || serve.port > 65535) throw new Error(`${label}: serve.port must be a port from 1 to 65535`);
+        if (typeof serve.health !== "string" || !serve.health.startsWith("/")) throw new Error(`${label}: serve.health must be a path that starts with /`);
+        if (typeof serve.credential !== "function") throw new Error(`${label}: serve.credential must be a function`);
+        served.push({ id, port: serve.port, health: serve.health, ...place(scope, label) });
+        code.credentials[id] = serve.credential;
+      }
+      if (run) {
+        jobs.push({ id, command, schedule: { every: "always" }, ...place(scope, label) });
+        code.services[id] = run;
+      }
       return declare("service", id);
+    },
+    config({ provider, key, value, ...scope }) {
+      config.push({ provider, key, value, ...place(scope, `config ${provider}:${key}`) });
     },
     check({ id, say, test, repair, ...scope }) {
       if (scope.after) throw new Error(`check ${id}: a check cannot wait for another check`);
@@ -71,7 +89,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     registered.catch(() => {});
     throw new Error("register returned a promise; declare everything before it returns");
   }
-  return { manifest: { schema: 1, ...fields, settings, workflows, jobs, human }, code };
+  return { manifest: { schema: 1, ...fields, settings, workflows, jobs, human, ...(served.length ? { served } : {}), ...(config.length ? { config } : {}) }, code };
 }
 
 const namedFields: Record<Exclude<keyof Pack, "sdk" | "register">, true> = { name: true, summary: true, title: true, day: true, cost: true, risk: true, requires: true };

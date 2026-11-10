@@ -31,7 +31,11 @@ async function loadPack(dir: string) {
   const ts = join(dir, "pack.ts");
   const [hasJson, hasTs] = await Promise.all([Bun.file(json).exists(), Bun.file(ts).exists()]);
   if (hasJson && hasTs) throw new PackError(`${dir}: has both pack.json and pack.ts; keep one`);
-  if (hasJson) return { path: json, manifest: parseManifest(await Bun.file(json).json(), json) };
+  if (hasJson) {
+    const manifest = parseManifest(await Bun.file(json).json(), json);
+    if (manifest.served) throw new PackError(`${json}: served services need a pack.ts, because their credential is code`);
+    return { path: json, manifest };
+  }
   if (!hasTs) return undefined;
   const recorded = await record(ts);
   return { path: ts, manifest: parseManifest(recorded.manifest, ts), code: recorded.code };
@@ -54,7 +58,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
   if (typeof raw.name !== "string" || !packName.test(raw.name)) return fail("name must be lowercase words joined by dashes");
   if (raw.title !== undefined && !filled(raw.title)) return fail("title must be the name people read");
   if (typeof raw.summary !== "string" || raw.summary === "") return fail("summary must be one plain sentence");
-  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "t3ProjectScripts", "handlers"]) {
+  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "t3ProjectScripts", "handlers", "served"]) {
     if (raw[field] !== undefined && !Array.isArray(raw[field])) fail(`${field} must be a list`);
   }
   checkShapes(raw, fail);
@@ -128,6 +132,12 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("config", (item, label) => {
     const problem = configEntryProblem(item);
     if (problem) fail(`${label}: ${problem}`);
+    waitsWithin(item, label);
+  });
+  each("served", (item, label) => {
+    need(typeof item.id === "string" && Number.isInteger(item.port) && typeof item.health === "string", `${label}: needs an id, a port, and a health path`);
+    waitsWithin(item, label);
+    filters(item, label);
   });
   each("settings", (item, label) => {
     need(typeof item.key === "string" && typeof item.question === "string", `${label}: needs a key and a question`);
@@ -234,7 +244,7 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
       if (!(needValues as readonly string[]).includes(need)) fail(`workflow ${workflow.id} has unknown need ${need}`);
     }
   }
-  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, t3ProjectScripts: manifest.t3ProjectScripts, handlers: manifest.handlers };
+  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, t3ProjectScripts: manifest.t3ProjectScripts, handlers: manifest.handlers, served: manifest.served };
   for (const [field, items] of Object.entries(tied)) {
     for (const item of items ?? []) {
       const label = "id" in item ? item.id : "key" in item ? item.key : "seam" in item ? item.seam : item.target;
