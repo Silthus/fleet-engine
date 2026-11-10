@@ -20,8 +20,6 @@ export function staleKeys(provider: Provider, document: Document, isFree: (path:
     const base = ["env", "ANTHROPIC_BASE_URL"];
     const token = ["env", "ANTHROPIC_AUTH_TOKEN"];
     if (free(base) && pointsAtProxy(get(document, base))) stale.push(base, ...(free(token) ? [token] : []));
-    const helper = get(document, ["apiKeyHelper"]);
-    if (free(["apiKeyHelper"]) && typeof helper === "string" && helper.includes(".config/fleet/cli-proxy.key")) stale.push(["apiKeyHelper"]);
   }
   if (provider === "codex") {
     const providers = get(document, ["model_providers"]);

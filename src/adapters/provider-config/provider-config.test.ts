@@ -321,6 +321,14 @@ describe("provider config", () => {
     expect(read(home, claude)).toEqual({});
   });
 
+  test("keeps a key helper Fleet did not write, though it names a file beside the proxy key", async () => {
+    const home = temp.make("home-");
+    const mine = { apiKeyHelper: 'my-helper --cache "$HOME/.config/fleet/cli-proxy.key-cache"' };
+    write(home, claude, mine);
+    await apply(plan(), { home, adapters: adapters() });
+    expect(read(home, claude)).toEqual(mine);
+  });
+
   test("removes nothing while a pack source cannot be fetched", async () => {
     const home = temp.make("home-");
     const hub = [{ provider: "claude" as const, key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", pack: "hub" }];

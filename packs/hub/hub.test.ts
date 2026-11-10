@@ -287,9 +287,10 @@ describe("the Own-account balancing workflow", () => {
       }
       return home;
     };
-    const applied = async (home: string, models: string[] | "down", times = 2) => {
+    const offline = (result: Plan): Plan => ({ ...result, packs: [...result.packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] });
+    const applied = async (home: string, models: string[] | "down", times = 2, shape: (result: Plan) => Plan = routeOnly) => {
       const reports = [];
-      for (let run = 0; run < times; run++) reports.push(await apply(routeOnly(plan({ ...balancing, plan: "both" }, devbox)), { home, adapters: [providerConfigAdapter()], run: realCheck(home, models) }));
+      for (let run = 0; run < times; run++) reports.push(await apply(shape(routeOnly(plan({ ...balancing, plan: "both" }, devbox))), { home, adapters: [providerConfigAdapter()], run: realCheck(home, models) }));
       const claude = existsSync(join(home, ".claude/settings.json")) ? JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")) : {};
       const codex = existsSync(join(home, ".codex/config.toml")) ? parse(readFileSync(join(home, ".codex/config.toml"), "utf8")) : {};
       return { reports, claude, codex };
@@ -311,6 +312,19 @@ describe("the Own-account balancing workflow", () => {
       const { claude, reports } = await applied(home, "down");
       expect(claude).toEqual({ model: "opus" });
       expect(reports[1]!.actions).toEqual([]);
+    });
+
+    test("removes the settings that connect wrote even while a pack source cannot be fetched", async () => {
+      const connected = { model: "opus", env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" }, apiKeyHelper: 'cat "$HOME/.config/fleet/cli-proxy.key"' };
+      const { claude, reports } = await applied(homeWith({ ".claude/settings.json": JSON.stringify(connected) }), "down", 2, offline);
+      expect(claude).toEqual({ model: "opus" });
+      expect(reports[1]!.actions).toEqual([]);
+    });
+
+    test("keeps a key helper of your own that reads a file beside the proxy key", async () => {
+      const mine = { apiKeyHelper: 'my-helper --cache "$HOME/.config/fleet/cli-proxy.key-cache"' };
+      const { claude } = await applied(homeWith({ ".claude/settings.json": JSON.stringify(mine) }), "down");
+      expect(claude).toEqual(mine);
     });
 
     test("a proxy that serves Claude but not Codex routes Claude only, and the next apply changes nothing", async () => {

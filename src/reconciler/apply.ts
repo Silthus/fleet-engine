@@ -155,7 +155,7 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
   const config: Plan["config"] = [];
   for (const entry of plan.config) {
     if (!entry.after || (await waitsFor(entry.pack, entry.after))) config.push(entry);
-    else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after });
+    else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after, value: entry.value });
   }
   const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);
   const failedChecks = [...checked].filter(([, passed]) => !passed).map(([item]) => item);
