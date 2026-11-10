@@ -54,7 +54,7 @@ type ThreadFields = Record<string, unknown>;
 
 export type DeliveredMessage = { threadId: string; text: string; continuesRunId?: string };
 
-export function t3Inbox(threads: ThreadFields[] = []) {
+export function t3Inbox(threads: () => ThreadFields[] = () => []) {
   const byCommand = new Map<string, DeliveredMessage>();
   const rpc = (tag: string, payload: unknown) => {
     if (tag !== "orchestration.dispatchCommand") return undefined;
@@ -64,7 +64,7 @@ export function t3Inbox(threads: ThreadFields[] = []) {
       && (message.dispatchMode as { type?: string })?.type === "start_immediately";
     if (!shaped) return undefined;
     if (byCommand.has(message.commandId as string)) return { sequence: byCommand.size };
-    if (message.manualContinuationOfRunId !== undefined && !resumable(threads.find((thread) => thread.id === message.threadId), message.manualContinuationOfRunId)) return undefined;
+    if (message.manualContinuationOfRunId !== undefined && !resumable(threads().find((thread) => thread.id === message.threadId), message.manualContinuationOfRunId)) return undefined;
     byCommand.set(message.commandId as string, {
       threadId: message.threadId as string, text: message.text as string,
       ...(typeof message.manualContinuationOfRunId === "string" ? { continuesRunId: message.manualContinuationOfRunId } : {}),
