@@ -187,7 +187,7 @@ test("trusted fetches the hub's root certificate over SSH and passes only when t
   const trusted = trustSandbox({ trusted: true });
   expect(trusted.probe().exitCode).toBe(0);
   const [ssh, security] = trusted.calls();
-  expect(ssh).toStartWith("ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 my-hub bash -lc ");
+  expect(ssh).toStartWith("ssh -T -o BatchMode=yes -o ConnectTimeout=30 -o ForwardAgent=no my-hub ");
   expect(ssh).toContain(`fleet/engine/fleet" hub-https ca`);
   expect(security).toMatch(/^security verify-cert -l -L -p ssl -c \S+$/);
   expect(readFileSync(join(trusted.bin, "checked.crt"), "utf8")).toBe(certificate);
