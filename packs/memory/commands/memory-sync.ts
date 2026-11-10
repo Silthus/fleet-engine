@@ -12,7 +12,8 @@ export function memoryUrl(repo: string) {
 export async function syncMemory(env: Record<string, string | undefined> = Bun.env) {
   const repo = stringSetting("memory.repo", env);
   if (!repo) throw new Error("memory.repo is empty. Set it with fleet set memory.repo=<owner>/<repo>.");
-  const child = Bun.spawn(["sh", join(import.meta.dir, "../sync/sync.sh")], { stdio: ["inherit", "inherit", "inherit"], env: { ...env, FLEET_MEMORY_URL: memoryUrl(repo) } });
+  const subtree = stringSetting("memory.subtree", env);
+  const child = Bun.spawn(["sh", join(import.meta.dir, "../sync/sync.sh")], { stdio: ["inherit", "inherit", "inherit"], env: { ...env, FLEET_MEMORY_URL: memoryUrl(repo), FLEET_MEMORY_SUBTREE: subtree } });
   const code = await child.exited;
   const home = env.HOME ?? homedir();
   try {
