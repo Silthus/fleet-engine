@@ -26,6 +26,12 @@ describe("the command runner", () => {
     }
   });
 
+  test("stops the command when its signal aborts", async () => {
+    const deadline = new AbortController();
+    const running = spawnRunner(["sleep", "30"], { signal: deadline.signal });
+    deadline.abort();
+    expect((await running).code).not.toBe(0);
+  });
 });
 
 describe("account home lookup", () => {

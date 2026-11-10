@@ -35,6 +35,21 @@ test("when the hub does not answer or refuses, the node keeps its stored credent
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
 });
 
+test("when the hub connects but never answers, the pull gives up at its deadline and the node keeps its stored credential", async () => {
+  let lapsed = false;
+  const slept: number[] = [];
+  const { hub, node, hosts } = linkedFleets(temp, undefined, { now: Date.now, sleep: (ms) => (lapsed ? (slept.push(ms), Promise.resolve()) : new Promise(() => {})) });
+  await hub("apply");
+  expect((await node("apply")).output).not.toContain("Could not pull");
+  hosts["hub-1"] = () => new Promise(() => {});
+  lapsed = true;
+  const stuck = await node("apply");
+  expect(stuck.code).toBe(0);
+  expect(stuck.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (it did not answer within 90 seconds). Kept the one this machine has.");
+  expect(slept).toEqual([90_000]);
+  expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
+});
+
 test("fleet credential on the hub prints only the key for a node that the profile names, and what the service says goes to standard error", async () => {
   const { hub, hubFleet } = linkedFleets(temp);
   await hub("apply");

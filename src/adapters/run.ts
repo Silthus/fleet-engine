@@ -4,7 +4,8 @@ import type { AdapterResult } from "../reconciler/apply.ts";
 
 /** clearEnv names variables the command must not inherit. */
 /** inherit: the command uses this terminal, so its output is shown, not returned. */
-export type RunOptions = { input?: string; home?: string; clearEnv?: string[]; inherit?: true };
+/** signal: stops the command when it aborts. */
+export type RunOptions = { input?: string; home?: string; clearEnv?: string[]; inherit?: true; signal?: AbortSignal };
 export type CommandRunner = (command: string[], options?: RunOptions) => Promise<{ code: number; stdout: string; stderr?: string }>;
 
 export const spawnRunner: CommandRunner = async (command, options = {}) => {
@@ -14,6 +15,7 @@ export const spawnRunner: CommandRunner = async (command, options = {}) => {
       stderr: options.inherit ? "inherit" : "pipe",
       stdin: options.inherit ? "inherit" : options.input === undefined ? "ignore" : new TextEncoder().encode(options.input),
       env: Object.fromEntries(Object.entries({ ...Bun.env, ...(options.home === undefined ? {} : { HOME: options.home }) }).filter(([name]) => !options.clearEnv?.includes(name))),
+      ...(options.signal ? { signal: options.signal } : {}),
     });
     if (options.inherit) {
       const forward = (signal: NodeJS.Signals) => child.kill(signal);

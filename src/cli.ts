@@ -240,21 +240,28 @@ async function issued(value: Promise<string>) {
   return credential;
 }
 
-/** Asks the hub for this node's credential of each service and stores the answer. A failed pull keeps what the store holds. */
+const pullLimitMs = 90_000;
+
+/** Asks the hub for this node's credential of each service and stores the answer. Each pull ends at a deadline, so a hub that connects but never answers cannot hold the apply. A failed pull keeps what the store holds. */
 async function pullCredentials(entries: CatalogEntry[], node: string, hub: string, options: CliOptions): Promise<Finding[]> {
   const capture = options.capture ?? spawnRunner;
+  const clock = options.clock ?? { now: Date.now, sleep: Bun.sleep };
   const findings: Finding[] = [];
   for (const entry of entries) {
     const service = `${entry.pack}/${entry.id}`;
     const store = secretStore(options.home, entry.pack);
     const name = credentialName(entry.id);
-    const answer = await capture(onHub(hub, ["credential", service, node]));
+    const deadline = new AbortController();
+    void clock.sleep(pullLimitMs).then(() => deadline.abort());
+    const answer = await capture(onHub(hub, ["credential", service, node]), { signal: deadline.signal });
+    const late = deadline.signal.aborted;
+    deadline.abort();
     const value = answer.stdout.trim();
     if (answer.code === 0 && value) {
       if ((await store.read(name)) !== value) await store.write(name, value);
       continue;
     }
-    const reason = (answer.stderr ?? "").trim().split("\n").at(-1) || `exit ${answer.code}`;
+    const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : (answer.stderr ?? "").trim().split("\n").at(-1) || `exit ${answer.code}`;
     const kept = (await store.read(name)) ? "Kept the one this machine has." : "Fleet tries again at the next apply.";
     findings.push({ id: `credential:${service}`, pack: entry.pack, say: `Could not pull the credential of ${service} from the hub ${hub} (${reason}). ${kept}`, repair: "apply" });
   }
