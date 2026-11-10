@@ -1,6 +1,5 @@
 #!/bin/sh
 # Installs the pinned gitleaks release for this machine into $1 after a checksum check.
-# Supports Linux and macOS on x64 and arm64.
 set -eu
 version=8.21.2
 dir=${1:?usage: install-gitleaks.sh <bin-dir>}
