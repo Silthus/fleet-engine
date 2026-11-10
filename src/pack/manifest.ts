@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { recordPack } from "./register.ts";
 import { handlerSeams, needValues, type LoadedPack, type ModelRow, type PackManifest } from "./types.ts";
 
 export class PackError extends Error {}
@@ -16,14 +17,32 @@ export async function loadPacks(sourceDir: string): Promise<LoadedPack[]> {
   const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
   const packs: LoadedPack[] = [];
   for (const name of dirs) {
-    const path = join(root, name, "pack.json");
-    const file = Bun.file(path);
-    if (!(await file.exists())) continue;
-    const manifest = parseManifest(await file.json(), path);
-    if (manifest.name !== name) throw new PackError(`${path}: name ${manifest.name} does not match its directory ${name}`);
-    packs.push({ manifest, dir: join(root, name) });
+    const dir = join(root, name);
+    const loaded = await loadPack(dir);
+    if (!loaded) continue;
+    if (loaded.manifest.name !== name) throw new PackError(`${loaded.path}: name ${loaded.manifest.name} does not match its directory ${name}`);
+    packs.push({ manifest: loaded.manifest, dir, ...(loaded.code ? { code: loaded.code } : {}) });
   }
   return packs;
+}
+
+async function loadPack(dir: string) {
+  const json = join(dir, "pack.json");
+  const ts = join(dir, "pack.ts");
+  const [hasJson, hasTs] = await Promise.all([Bun.file(json).exists(), Bun.file(ts).exists()]);
+  if (hasJson && hasTs) throw new PackError(`${dir}: has both pack.json and pack.ts; keep one`);
+  if (hasJson) return { path: json, manifest: parseManifest(await Bun.file(json).json(), json) };
+  if (!hasTs) return undefined;
+  const recorded = await record(ts);
+  return { path: ts, manifest: parseManifest(recorded.manifest, ts), code: recorded.code };
+}
+
+async function record(path: string) {
+  try {
+    return recordPack((await import(resolve(path))).default);
+  } catch (error) {
+    throw new PackError(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export function parseManifest(raw: unknown, where: string): PackManifest {
@@ -86,6 +105,15 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
       check(item, `${field} ${name}`);
     });
   };
+  const waitsWithin = (item: Record<string, unknown>, label: string) => {
+    const human = Array.isArray(raw.human) ? (raw.human as Array<Record<string, unknown>>) : [];
+    const waited = human.find((step) => step.id === item.after);
+    need(item.after === undefined || (typeof item.after === "string" && waited !== undefined), `${label}: after must name a human step of this pack`);
+    for (const scope of ["on", "roles", "plans", "workflow"]) {
+      const wider = waited?.[scope] !== undefined && (Array.isArray(waited[scope]) ? !(Array.isArray(item[scope]) && (item[scope] as unknown[]).every((value) => (waited[scope] as unknown[]).includes(value))) : item[scope] !== waited[scope]);
+      need(!wider, `${label}: runs where its human step ${String(item.after)} does not; give it the same ${scope}`);
+    }
+  };
   const filters = (item: Record<string, unknown>, label: string) => {
     const problem = scopeProblem(item);
     if (problem) fail(`${label}: ${problem}`);
@@ -124,6 +152,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(schedule?.at === undefined || /^([01]\d|2[0-3]):[0-5]\d$/.test(String(schedule.at)), `${label}: schedule.at must be HH:MM`);
     need(schedule?.every !== "always" || schedule.at === undefined, `${label}: a job that runs always has no schedule.at`);
     need(schedule?.every !== "always" || (item.runner !== "t3" && item.task === undefined), `${label}: a job that runs always runs on the machine, not on t3`);
+    waitsWithin(item, label);
     filters(item, label);
     if (item.task === undefined) return;
     const task = isRecord(item.task) ? item.task : fail(`${label}: task must be an object`);
@@ -147,13 +176,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("steps", (item, label) => {
     need(typeof item.id === "string" && isStrings(item.run), `${label}: needs an id and a run list`);
     need(item.check === undefined || isStrings(item.check), `${label}: check must be a command list`);
-    const human = Array.isArray(raw.human) ? (raw.human as Array<Record<string, unknown>>) : [];
-    const waited = human.find((step) => step.id === item.after);
-    need(item.after === undefined || (typeof item.after === "string" && waited !== undefined), `${label}: after must name a human step of this pack`);
-    for (const scope of ["on", "roles", "plans", "workflow"]) {
-      const wider = waited?.[scope] !== undefined && (Array.isArray(waited[scope]) ? !(Array.isArray(item[scope]) && (item[scope] as unknown[]).every((value) => (waited[scope] as unknown[]).includes(value))) : item[scope] !== waited[scope]);
-      need(!wider, `${label}: runs where its human step ${String(item.after)} does not; give it the same ${scope}`);
-    }
+    waitsWithin(item, label);
     filters(item, label);
   });
   each("t3ProjectScripts", (item, label) => {

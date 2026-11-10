@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ModelRow } from "../models.ts";
+import type { ModelRow } from "../../pack/types.ts";
 import type { T3Client } from "./session.ts";
 
 export type ThreadLaunch = { title: string; prompt: string; row: ModelRow; commandId?: string };

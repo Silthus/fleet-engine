@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
 import { fetchSource } from "./sources.ts";
 
@@ -21,6 +21,23 @@ function packRepo(summary: string) {
 function writePack(dir: string, summary: string) {
   mkdirSync(join(dir, "packs", "team"), { recursive: true });
   writeFileSync(join(dir, "packs", "team", "pack.json"), JSON.stringify({ schema: 1, name: "team", summary }));
+}
+
+function tsRepo(files: Record<string, string>) {
+  const dir = temp.make("pack-repo-");
+  git(dir, "init", "-q", "-b", "main");
+  commitTag(dir, "v1", files);
+  return dir;
+}
+
+function commitTag(dir: string, tag: string, files: Record<string, string>) {
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+  git(dir, "add", ".");
+  git(dir, "commit", "-q", "-m", tag);
+  git(dir, "tag", tag);
 }
 
 describe("fetchSource", () => {
@@ -74,6 +91,117 @@ describe("fetchSource", () => {
       expect(fetched.packs[0]?.manifest.summary).toBe("Team rules v1.");
       expect(fetched.stale).toContain("does not load");
     }
+  });
+
+  test("keeps the last good pack.ts and the files it imports when a fetched ref does not load", async () => {
+    const repo = temp.make("pack-repo-");
+    git(repo, "init", "-q", "-b", "main");
+    mkdirSync(join(repo, "packs", "team"), { recursive: true });
+    writeFileSync(join(repo, "packs", "team", "pack.ts"), `import { summary } from "./summary.ts";\nexport default { sdk: 1, name: "team", summary, register() {} };\n`);
+    writeFileSync(join(repo, "packs", "team", "summary.ts"), `export const summary = "Team rules v1.";\n`);
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "v1");
+    git(repo, "tag", "v1");
+    const cache = temp.make("cache-");
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    writeFileSync(join(repo, "packs", "team", "summary.ts"), `export const summary = "";\n`);
+    git(repo, "commit", "-q", "-am", "v2");
+    git(repo, "tag", "v2");
+    const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect(fetched.packs[0]?.manifest.summary).toBe("Team rules v1.");
+    expect(fetched.stale).toContain("does not load");
+  });
+
+  test("keeps the last good pack.ts when a fetched pack.ts throws as it loads", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `export default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const cache = temp.make("cache-");
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    commitTag(repo, "v2", { "packs/team/pack.ts": `throw new Error("broken on load");\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect(fetched.packs[0]?.manifest.summary).toBe("Team rules v1.");
+    expect(fetched.stale).toContain("broken on load");
+  });
+
+  test("loads a new ref with the new version of a helper outside the pack's folder", async () => {
+    const repo = tsRepo({
+      "packs/team/pack.ts": `import { summary } from "../../shared/summary.ts";\nexport default { sdk: 1, name: "team", summary, register() {} };\n`,
+      "shared/summary.ts": `export const summary = "Team rules v1.";\n`,
+    });
+    const cache = temp.make("cache-");
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    commitTag(repo, "v2", { "shared/summary.ts": `export const summary = "Team rules v2.";\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v2.", undefined]);
+  });
+
+  test("loads a new ref with its new helper when the cache folder sits behind a symlink", async () => {
+    const repo = tsRepo({
+      "packs/team/pack.ts": `import { summary } from "./summary.ts";\nexport default { sdk: 1, name: "team", summary, register() {} };\n`,
+      "packs/team/summary.ts": `export const summary = "Team rules v1.";\n`,
+    });
+    const cache = join(temp.make("link-"), "cache");
+    symlinkSync(temp.make("cache-"), cache);
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    commitTag(repo, "v2", { "packs/team/summary.ts": `export const summary = "Team rules v2.";\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v2.", undefined]);
+  });
+
+  test("loads a pack.ts whose helper keeps a timer running", async () => {
+    const repo = tsRepo({
+      "packs/team/pack.ts": `import { summary } from "./ticker.ts";\nexport default { sdk: 1, name: "team", summary, register() {} };\n`,
+      "packs/team/ticker.ts": `setInterval(() => {}, 3_600_000);\nexport const summary = "Team rules v1.";\n`,
+    });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v1.", undefined]);
+  });
+
+  test("reports a pack.ts that never finishes loading, so apply goes on", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `await new Promise((resolve) => setTimeout(resolve, 3_600_000));\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"), 1);
+    expect(fetched).toMatchObject({ error: expect.stringContaining("did not finish loading within") });
+  });
+
+  test("reports a pack.ts that ignores SIGTERM and never finishes loading", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `process.on("SIGTERM", () => {});\nawait new Promise((resolve) => setTimeout(resolve, 3_600_000));\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"), 200);
+    expect(fetched).toMatchObject({ error: expect.stringContaining("did not finish loading within 0.2 seconds") });
+  });
+
+  test("names the signal, not the time limit, when a pack.ts crashes as it loads", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `process.kill(process.pid, "SIGKILL");\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+    if (!("error" in fetched)) throw new Error("the crashed pack loaded");
+    expect(fetched.error).toContain("the packs stop on SIGKILL as they load");
+    expect(fetched.error).not.toContain("within");
+  });
+
+  test("names the exit code and the thrown error when a pack.ts prints progress and then throws", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `console.log("loading team rules");\nthrow new Error("broken on load");\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+    expect(fetched).toMatchObject({ error: expect.stringMatching(/the packs exit 1 as they load: \S+pack\.ts: broken on load$/) });
+  });
+
+  test("returns promptly when a pack.ts leaves a process holding its output open and then throws", async () => {
+    const pidFile = join(temp.make("sleeper-"), "pid");
+    const repo = tsRepo({ "packs/team/pack.ts": `const sleeper = Bun.spawn(["sleep", "30"], { stdout: "inherit", stderr: "inherit" });\nawait Bun.write(${JSON.stringify(pidFile)}, String(sleeper.pid));\nthrow new Error("broken after spawn");\n` });
+    try {
+      const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+      expect(fetched).toMatchObject({ error: expect.stringMatching(/the packs exit 1 as they load: \S+pack\.ts: broken after spawn$/) });
+    } finally {
+      if (existsSync(pidFile)) process.kill(Number(await Bun.file(pidFile).text()), "SIGKILL");
+    }
+  });
+
+  test("names the last line a pack.ts printed when it exits as it loads", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `console.error("the team token file is missing");\nprocess.exit(3);\nexport default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+    expect(fetched).toMatchObject({ error: expect.stringContaining("the packs exit 3 as they load: the team token file is missing") });
   });
 
   test("never falls back to a cache of another repository", async () => {

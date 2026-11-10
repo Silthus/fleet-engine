@@ -356,7 +356,7 @@ The first slice ships only what the Slack pack uses:
 
 ```ts
 /** Where and when an item applies. No field means every node. Os, AiPlan, and Value are today's types. */
-export type Scope = { on?: "hub" | "nodes"; os?: Os; plans?: AiPlan[]; when?: Workflow; after?: Check };
+export type Scope = { on?: "hub"; os?: Os; plans?: AiPlan[]; when?: Workflow; after?: Check };
 export type Pack = {
   sdk: 1; name: string; summary: string; title?: string; day?: string; cost?: string; risk?: string;
   requires?: string[]; register(fleet: Fleet): void;
@@ -368,8 +368,8 @@ export type Fleet = {
   service(def: Scope & { id: string } & Process): Service;
   check(def: Scope & { id: string; say: string; test(ctx: Context): Promise<boolean>; repair?: Repair }): Check;
 };
-/** command is the unit's own process, as PackJob.command is today. run is the short form for Bun code. */
-export type Process = { command: string[] } | { run(ctx: Context): Promise<void> };
+/** The body in Bun that the service's unit runs as fleet run <pack>/<id>. */
+export type Process = { run(ctx: Context): Promise<void> };
 export type Repair = { ask: string; command?: string; interactive?: true };
 export type Context = {
   get<T extends Value>(setting: Setting<T>): T;
@@ -394,7 +394,9 @@ export type FleetLater = {
   provide<T>(seam: Seam<T>, def: Scope & { load(ctx: Context): T | Promise<T> }): void;                            // 5
   agent(def: Scope & { skills: string[] }): void;                                                                  // 6
 };
-/** Step 2: service takes serve?: Serve and can omit its process, and Repair takes { run(ctx) }. Step 3: command takes on?: "hub". */
+/** Step 2: service takes serve?: Serve and can omit its process, and Repair takes { run(ctx) }. Step 3: command takes on?: "hub".
+    Step 4: Process takes { command: string[] }, the unit's own process, as PackJob.command is today, for cli-proxy.
+    Scope takes on?: "nodes" when a pack first needs it. */
 export type Serve = { port: number; health?: string; credential?(ctx: Context, node: string): Promise<string> };
 export type Service = { id: string; url: string; credentialCommand: string };
 export type ContextLater = {
@@ -503,9 +505,9 @@ stores for each Slack message before it starts a thread
 
 How an item runs: `fleet <command>` resolves the plan as today, loads the
 pack that owns the command, and calls `run`. The unit of a service with a
-`run` body runs `fleet run <pack>/<id>`, and the unit of a service with a
-`command` runs that command itself. A person's check loads as today's human
-step, with `fleet run <pack>/<id>` as its probe.
+`run` body runs `fleet run <pack>/<id>`. From step 4 of section 8.3, the unit
+of a service with a `command` runs that command itself. A person's check loads
+as today's human step, with `fleet run <pack>/<id>` as its probe.
 
 ## 6. Threads, tasks, and project scripts
 
@@ -573,19 +575,24 @@ declares checks, and provides seams. `fleet.command`, `ctx.run`, and
 ### 8.1 The first slice
 
 **Step 1 is one vertical slice:** a machine that is its own hub runs the
-Slack pack from a `pack.ts`, beside the JSON packs. It is a stack of three
+Slack pack from a `pack.ts`, beside the JSON packs. It is a stack of five
 PRs that merges as one unit, and it holds everything that it uses:
 
-1. **Loader, runner, and gate.** `src/sdk/` with the slice's types. Load
-   `pack.ts`, run `register` against a recorder, and emit today's
-   `LoadedPack`. `fleet <command>` and `fleet run <pack>/<id>` call handlers
-   with a real `Context`. `apply` gets the readiness gate.
-2. **`ctx.threads.start` with a key.** `packs/base/lib/t3/` moves whole
+1. **`ctx.threads.start` with a key.** `packs/base/lib/t3/` moves whole
    into `src/integrations/t3/` and leaves a re-export (D19).
-3. **The Slack port.** `pack.json` goes. The tokens live in the secret
+2. **SDK types and the loader.** `src/sdk/` with the slice's types. Load
+   `pack.ts`, run `register` against a recorder, and emit today's
+   `LoadedPack`.
+3. **Runner, context, and secret store.** `fleet <command>` and
+   `fleet run <pack>/<id>` call handlers with a real `Context`.
+4. **Readiness gate.** `apply` gets the readiness gate.
+5. **The Slack port.** `pack.json` goes. The tokens live in the secret
    store only. No machine runs the engine's Slack pack yet, so no token
-   file moves. Resolve reads `profile.hub` and the machine's name, and a
-   profile without `hub` keeps today's placement (D2).
+   file moves.
+
+The slice reads no `profile.hub`: the dog-food hub is solo in step 1, so
+`on: "hub"` keeps today's predicate. All of D2 lands in step 2, where
+`fleet hub here` writes the field.
 
 **Proof, through the CLI only.** One outside-in test uses a temporary home,
 a fake Slack, and a fake T3. The same four steps then run by hand on the
@@ -614,8 +621,9 @@ The real machines run the private Fleet, not the engine.
 
 - **The dog-food hub** is a freshly created machine: a devbox with its own
   engine profile and no devboxes in it. It is not a box, because a box
-  leaves within hours (risk 9). The profile names it as the hub (D2), so
-  the Hub pack is not in that profile.
+  leaves within hours (risk 9). In step 1 it is solo, and the Hub pack is
+  not in its profile. Its profile names it as the hub (D2) once step 2
+  brings `fleet hub here`.
 - **The engine is the only Fleet in that home.** The machine is created
   without the private dotfiles installer, because both Fleets write
   `~/.config/fleet` and name the unit `fleet-slack-trigger.service`.
@@ -631,7 +639,7 @@ The real machines run the private Fleet, not the engine.
 ### 8.3 Later steps
 
 2. **One served hub service, on loopback.** The step holds what it uses:
-   `fleet hub here`, `serve`, the service catalog, `ctx.use`, `ctx.node`,
+   `fleet hub here` and the reading of `profile.hub` (D2), `serve`, the service catalog, `ctx.use`, `ctx.node`,
    `config`, a repair that Fleet runs, and credential issue and storage on
    the hub itself. The MCP gateway becomes its own pack on the dog-food
    hub, and Docker keeps supervising it. Proof: another node's plan holds
