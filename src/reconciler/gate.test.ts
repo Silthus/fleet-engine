@@ -1,17 +1,30 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { jobsAdapter } from "../adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../cli.ts";
-import { tempDirs } from "../testing/git.ts";
+import type { CommandRunner } from "../adapters/run.ts";
+import { git, isolateGit, tempDirs } from "../testing/git.ts";
 import { filesAdapter } from "./apply.ts";
 
+isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
 const repoRoot = join(import.meta.dir, "../..");
 
-function machine(repair = "fleet gated setup") {
+function launchd() {
+  const loaded = new Set<string>();
+  const run: CommandRunner = async ([, verb, target, file]) => {
+    if (verb === "print") return { code: loaded.has(target!) ? 0 : 113, stdout: "" };
+    if (verb === "bootstrap") loaded.add(`gui/501/${file!.split("/").at(-1)!.replace(/\.plist$/, "")}`);
+    if (verb === "bootout") loaded.delete(target!);
+    return { code: 0, stdout: "" };
+  };
+  return { loaded, run };
+}
+
+function machine(repair = "fleet gated setup", platform: "linux" | "darwin" = "linux") {
   const engine = temp.make("engine-");
   cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
   cpSync(join(import.meta.dir, "fixtures/gated"), join(engine, "packs/gated"), { recursive: true });
@@ -22,21 +35,22 @@ function machine(repair = "fleet gated setup") {
   const home = temp.make("home-");
   const engineFleet = join(engine, "fleet");
   let lines: string[] = [];
+  const mac = launchd();
   const options: CliOptions = {
     home,
     engineRoot: engine,
-    platform: "linux",
+    platform,
     env: {},
     print: (line) => lines.push(line),
     run: async (command) => (command[0] === "/bin/sh" && command[1] === engineFleet ? main(command.slice(2), { ...options, print: () => {} }) : 0),
-    adapters: () => [filesAdapter, jobsAdapter({ run: async () => ({ code: 0, stdout: "" }), engineRoot: engine })],
+    adapters: () => [filesAdapter, jobsAdapter({ run: platform === "darwin" ? mac.run : async () => ({ code: 0, stdout: "" }), engineRoot: engine, uid: 501 })],
   };
   const fleet = async (...args: string[]) => {
     lines = [];
     return { code: await main(args, options), lines };
   };
   const unit = join(home, ".config/systemd/user/fleet-gated-worker.service");
-  return { profile, fleet, unit };
+  return { profile, home, fleet, unit, loaded: mac.loaded };
 }
 
 const todo = "The gated service needs its token. Run: fleet gated setup";
@@ -74,16 +88,24 @@ test("a setup command that fails applies nothing, even when it saved the token",
   expect(existsSync(unit)).toBe(false);
 });
 
-test("a check that stops passing removes the unit even while another source is unreachable", async () => {
-  const { profile, fleet, unit } = machine();
+test.each(["linux", "darwin"] as const)("on %s, a check that stops passing removes its service while another source is out, and that source's service stays", async (platform) => {
+  const { profile, home, fleet, loaded } = machine("fleet gated setup", platform);
+  const repo = join(temp.make("team-"), "team");
+  mkdirSync(join(repo, "packs/team"), { recursive: true });
+  writeFileSync(join(repo, "packs/team/pack.json"), JSON.stringify({ schema: 1, name: "team", summary: "Team rules.", jobs: [{ id: "team-watch", command: ["fleet", "packs"], schedule: { every: "always" } }] }));
+  git(repo, "init", "-q", "-b", "main");
+  git(repo, "add", ".");
+  git(repo, "commit", "-q", "-m", "team");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [{ name: "team", repo, ref: "main" }], packs: ["gated", "team"], plan: "claude", settings: {}, workflows: {} }));
   await fleet("apply", "--profile", profile);
   await fleet("gated", "setup");
-  expect(existsSync(unit)).toBe(true);
-  const unreachable = { name: "team", repo: join(temp.make("gone-"), "team"), ref: "main" };
-  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [unreachable], packs: ["gated", "team"], plan: "claude", settings: {}, workflows: {} }));
+  const service = (id: string) => platform === "darwin" ? existsSync(join(home, `Library/LaunchAgents/dev.fleet.${id}.plist`)) && loaded.has(`gui/501/dev.fleet.${id}`) : existsSync(join(home, `.config/systemd/user/fleet-${id}.service`));
+  expect([service("gated-worker"), service("team-watch")]).toEqual([true, true]);
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(join(home, ".local/share/fleet/sources/team"), { recursive: true, force: true });
   await fleet("gated", "forget");
   expect((await fleet("apply")).lines.join("\n")).toContain(todo);
-  expect(existsSync(unit)).toBe(false);
+  expect([service("gated-worker"), service("team-watch")]).toEqual([false, true]);
 });
 
 test("a repair command matches the words you type, however the pack spaces them", async () => {
