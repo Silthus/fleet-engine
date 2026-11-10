@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "name": "recovery",
+  "summary": "Fleet tells you and your agents whether Claude and Codex have capacity, so work goes to a provider that answers.",
+  "day": "You and your agents ask fleet providers whether Claude and Codex answer through the hub's proxy before you start work on them.",
+  "cost": "One small request per provider through the hub's proxy, at most every five minutes.",
+  "risk": "Low: fleet providers only reads, and spends one tiny request per provider."
+}
