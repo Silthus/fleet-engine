@@ -64,10 +64,10 @@ function runDueLines(text: string | undefined, home: string) {
   for (const line of (text ?? "").split("\n").filter((entry) => entry && !entry.startsWith("#"))) {
     Bun.spawnSync(["/bin/sh", "-c", line.replace(/^(\S+\s+){5}/, "")], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
   }
-  return readdirSync(join(home, ".local/state/fleet/jobs")).filter((name) => name.endsWith(".log")).map((name) => name.slice(0, -".log".length)).sort();
+  return existsSync(join(home, "ran")) ? readdirSync(join(home, "ran")).sort() : [];
 }
 
-const ping = (id: string): PackJob => ({ id, command: ["echo", id], schedule: { every: "5m" } });
+const ping = (id: string): PackJob => ({ id, command: ["/bin/sh", "-c", `mkdir -p "$HOME/ran" && touch "$HOME/ran/${id}"`], schedule: { every: "5m" } });
 
 describe("cron jobs on Linux", () => {
   test("adds marked lines that run launcher scripts, and keeps foreign lines", async () => {
