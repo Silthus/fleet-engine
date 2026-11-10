@@ -202,7 +202,7 @@ export type Plan = {
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];
   ask: PackSetting[];
-  dropped: Array<{ pack: string; item: string; reason: string }>;
+  dropped: Array<{ pack: string; item: string; reason: string; check?: string }>;
 };
 
 export type Finding = { id: string; pack: string; say: string; repair?: "apply" | "human" };

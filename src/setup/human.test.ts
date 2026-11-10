@@ -6,7 +6,7 @@ import type { FetchedSource, SourceRef } from "../pack/types.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { fakeMachine, fleetSetup, machineFile, savedAnswers } from "./testing.ts";
 import type { Machine } from "./commands.ts";
-import { packSignIn } from "./human.ts";
+import { humanStep, packSignIn } from "./human.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -199,6 +199,55 @@ describe("fleet setup sign-ins", () => {
 });
 
 describe("a pack's sign-in", () => {
+  const killed = 143;
+
+  function backgroundCommand(applied: string) {
+    let saved = false;
+    let end = (_code: number) => {};
+    const exited = new Promise<number>((resolve) => (end = resolve));
+    let code: number | undefined;
+    void exited.then((exit) => (code = exit));
+    const lines: string[] = [];
+    const machine = {
+      exec: async (command: string[]) => ({ code: command.at(-1) === "whoami" && saved ? 0 : 1, output: "" }),
+      start: () => ({ stop: () => end(killed), exited }),
+      sleep: async () => void (saved = true),
+      openUrl: async () => {},
+    } as unknown as Machine;
+    const context = { terminal: { print: (line: string) => void lines.push(line), ask: async () => "" }, machine, nonInteractive: false };
+    const runToEnd = () => {
+      if (code !== undefined) return;
+      writeFileSync(applied, "applied");
+      end(0);
+    };
+    return { context, runToEnd, exit: () => code, output: () => lines.join("\n") };
+  }
+
+  const settle = async () => {
+    for (let tick = 0; tick < 50; tick++) await Promise.resolve();
+  };
+
+  test("lets its fleet repair command run to its end once the check passes, so the command's own apply completes", async () => {
+    const applied = join(temp.make("repair-"), "applied");
+    const command = backgroundCommand(applied);
+    const human = { id: "login", pack: "team", say: "Sign in.", command: "fleet login", probe: ["fleet", "whoami"] };
+    const running = humanStep(packSignIn(human, [], command.context, "/engine"), command.context).run();
+    await settle();
+    expect(command.output()).not.toContain("✓ Sign in.: done");
+    command.runToEnd();
+    await running;
+    expect([existsSync(applied), command.exit()]).toEqual([true, 0]);
+    expect(command.output()).toContain("✓ Sign in.: done");
+  });
+
+  test("stops a background command that is not a fleet command once the check passes, and finishes the step", async () => {
+    const command = backgroundCommand(join(temp.make("tunnel-"), "applied"));
+    const human = { id: "tunnel", pack: "team", say: "Open the tunnel.", command: "t3 connect --keep-running", probe: ["t3", "whoami"] };
+    void humanStep(packSignIn(human, [], command.context, "/engine"), command.context).run();
+    await settle();
+    expect([command.output().includes("✓ Open the tunnel.: done"), command.exit()]).toEqual([true, killed]);
+  });
+
   test("runs this engine's launcher for a leading fleet in its probe, command, and steps", async () => {
     const calls: string[] = [];
     let started = false;

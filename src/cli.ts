@@ -6,7 +6,7 @@ import { cachedSource, fetchSource } from "./pack/sources.ts";
 import type { AvailableSource, FetchedSource, LoadedPack, MachineFile, PackCode, Plan, Report } from "./pack/types.ts";
 import { loadMachine, loadProfile, saveMachine, thisMachine } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
-import { apply, check, type Runner } from "./reconciler/apply.ts";
+import { apply, check, type Adapter, type Runner } from "./reconciler/apply.ts";
 import { resolve } from "./reconciler/resolve.ts";
 import { readNotice, update } from "./update.ts";
 import { setup, type SetupOptions } from "./setup/setup.ts";
@@ -20,7 +20,7 @@ import { realMachine } from "./setup/commands.ts";
 import { packContext, type Clock } from "./runner/context.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[] };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -70,7 +70,7 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const doctor = command === "doctor";
   const preview = doctor || flags.dryRun;
   const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview, inherit: preview });
-  const adapters = engineAdapters();
+  const adapters = (options.adapters ?? engineAdapters)();
   const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, adapters, run: options.run });
   const notice = doctor ? await readNotice(options.home) : undefined;
   if (notice) report.findings.push({ id: "update:major", pack: "engine", say: notice });
@@ -138,8 +138,14 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   }
   const loaded = loadedPack(sources, command.pack);
   const run = loaded?.code?.commands[name];
-  if (run) return inPack(plan, loaded!, options, (ctx) => run(args, ctx));
-  const child = Bun.spawn(["bun", command.path, ...args], { stdio: ["inherit", "inherit", "inherit"], env: { ...Bun.env, ...packEnvironment(plan, options) } });
+  const exit = run ? await inPack(plan, loaded!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
+  const typed = ["fleet", name, ...args];
+  const repairs = plan.human.some((step) => step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
+  return exit === 0 && repairs ? applyProfile(plan.machine.profileDir!, options) : exit;
+}
+
+async function spawnPackCommand(path: string, args: string[], plan: Plan, options: CliOptions) {
+  const child = Bun.spawn(["bun", path, ...args], { stdio: ["inherit", "inherit", "inherit"], env: { ...Bun.env, ...packEnvironment(plan, options) } });
   const forward = (signal: NodeJS.Signals) => child.kill(signal);
   process.on("SIGINT", forward).on("SIGTERM", forward);
   try { return await child.exited; }
@@ -164,7 +170,12 @@ async function runItem(args: string[], options: CliOptions) {
   return inPack(plan, loaded!, options, async (ctx) => {
     if (!service) return (await check!(ctx)) ? 0 : 1;
     const waits = job?.after ? plan.human.find((step) => step.pack === pack && step.id === job.after) : undefined;
-    if (waits && !(await code!.checks[waits.id]!(ctx))) return options.print(`fleet run: ${item} waits until ${waits.id} passes. ${waits.say}`), 1;
+    const ready = async () => !waits || (await code!.checks[waits.id]!(ctx));
+    if (!(await ready())) {
+      options.print(`fleet run: ${item} waits until ${waits!.id} passes. ${waits!.say}${waits!.command ? ` Run: ${waits!.command}` : ""}`);
+      do await ctx.sleep(60_000);
+      while (!(await ready()));
+    }
     return await service(ctx), 0;
   });
 }

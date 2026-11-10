@@ -1,4 +1,3 @@
-import { readFileSync, statSync } from "node:fs";
 import { triggerEmoji } from "./trigger.ts";
 
 export type Tokens = { appToken: string; userToken: string };
@@ -7,17 +6,12 @@ export type Sleep = (ms: number) => Promise<void>;
 
 export const slackApiBase = "https://slack.com/api";
 
-export type SlackApp = { tokens: Tokens; text: string };
-
-export function readSlackApp(path: string): SlackApp {
-  if ((statSync(path).mode & 0o077) !== 0) throw new Error(`${path} must be readable only by you: chmod 600 ${path}`);
-  const text = readFileSync(path, "utf8");
-  const tokens = JSON.parse(text) as Partial<Tokens>;
-  if (!tokens.appToken?.startsWith("xapp-") || !tokens.userToken?.startsWith("xoxp-")) throw new Error(`${path} needs appToken (xapp-…) and userToken (xoxp-…)`);
-  return { tokens: tokens as Tokens, text };
+export function slackApp(saved: string | undefined): Tokens {
+  if (saved === undefined) throw new Error("no Slack app is saved. Run fleet slack-trigger setup");
+  const tokens = JSON.parse(saved) as Partial<Tokens>;
+  if (!tokens.appToken?.startsWith("xapp-") || !tokens.userToken?.startsWith("xoxp-")) throw new Error("the saved Slack app needs appToken (xapp-…) and userToken (xoxp-…). Run fleet slack-trigger setup");
+  return tokens as Tokens;
 }
-
-export const readTokens = (path: string): Tokens => readSlackApp(path).tokens;
 
 export function slackApi(token: string, base = slackApiBase, sleep: Sleep = Bun.sleep): SlackApi {
   return async (method, args) => {
