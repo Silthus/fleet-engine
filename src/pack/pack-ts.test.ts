@@ -47,7 +47,7 @@ describe("a pack.ts", () => {
     writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["twin"], plan: "both", settings: {}, workflows: {} }));
     const home = temp.make("home-");
     const lines: string[] = [];
-    const fleet = (args: string[]) => main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line), run: async () => 0 });
+    const fleet = (args: string[]) => main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line), run: installedAgents });
     expect(await fleet(["apply", "--profile", profile])).toBe(0);
     expect(await fleet(["packs"])).toBe(0);
     expect(lines).toContain("  ✓ twin  The hub greets you once you pick a greeting.");
@@ -55,6 +55,11 @@ describe("a pack.ts", () => {
     expect(page.packs.find((pack) => pack.name === "twin")).toMatchObject({ title: "Twin", summary: "The hub greets you once you pick a greeting." });
   });
 });
+
+async function installedAgents(command: string[]) {
+  if (["claude --version", "codex --version"].includes(command.join(" "))) return 0;
+  throw new Error(`this machine runs only claude and codex --version, not ${command.join(" ")}`);
+}
 
 describe("loading a pack.ts", () => {
   function source(packs: Record<string, string>, json: Record<string, string> = {}) {
@@ -99,6 +104,12 @@ describe("loading a pack.ts", () => {
   test("refuses a repair command that is more than plain words", async () => {
     const dir = source({ one: pack("one", `fleet.check({ id: "one-saved", say: "Save it.", test: async () => true, repair: { ask: "Save it.", command: "fleet one 'setup'" } });`) });
     await expect(loadPacks(dir)).rejects.toThrow("check one-saved: repair.command must be plain words, without quotes or backslashes, so Fleet knows it when you run it");
+  });
+
+  test("takes a command named like a property that every object has", async () => {
+    const dir = source({ one: pack("one", `fleet.command("toString", { summary: "Show.", run: async () => 0 }); fleet.command("constructor", { summary: "Build.", run: async () => 0 });`) });
+    const [loaded] = await loadPacks(dir);
+    expect(Object.keys(loaded!.code!.commands).sort()).toEqual(["constructor", "toString"]);
   });
 
   test("refuses a recorded manifest that today's validation refuses", async () => {
