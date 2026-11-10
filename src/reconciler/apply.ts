@@ -113,7 +113,7 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
 }
 
 function humanFinding(step: Owned<HumanStep>, repairStillToRun: boolean): Finding {
-  return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: repairStillToRun && step.repair ? "apply" : "human" };
+  return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: repairStillToRun && step.repair && !step.command ? "apply" : "human" };
 }
 
 /** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. It tests the checks that served services wait for first and issues their credentials, so a repair that reads a credential sees it in the same apply. */
