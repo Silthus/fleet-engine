@@ -4,11 +4,14 @@ import type { Env, Result } from "../coder.ts";
 import { reasonOf, render, type Ask } from "./analyze.ts";
 import { frontmatterField, isIndex } from "./budget.ts";
 import { clip, memoryCheckout, stateDir, type Digest } from "./digest.ts";
+import { redactCredentials, redactValue } from "./redact.ts";
 import { mostRead, recordRuns } from "./scorecard.ts";
 
 export type Verdict = { verdict: "confirmed" | "wrong" | "unsupported"; reason: string; evidence: string; correction: string };
 export type Checker = Ask<Verdict>;
 export type AuditIo = { home: string; env: Env; now(): number; limit: number; git(args: string[]): Promise<Result>; checker: Checker; say(line: string): void };
+type ChangedNote = { path: string; syncedAt: string; blob: string };
+type AuditState = { audited?: string; checked?: Record<string, string> };
 type Checked = { memory: string; session?: string; verdict: Omit<Verdict, "verdict"> & { verdict: Verdict["verdict"] | "no session" } };
 
 const day = 86_400_000;
@@ -42,20 +45,24 @@ function digestsOf(run: string): Digest[] {
   return existsSync(dir) ? readdirSync(dir).sort().map((file) => JSON.parse(readFileSync(join(dir, file), "utf8")) as Digest) : [];
 }
 
-function findSession(state: string, session: string): Digest | undefined {
+function sessionOf(digests: Digest[], session: string): Digest | undefined {
   let found: Digest | undefined;
-  for (const run of runDirs(state)) {
-    for (const item of digestsOf(join(state, run))) {
-      if (item.session !== session) continue;
-      const after = found?.entries.at(-1)?.at ?? "";
-      found = found ? { ...item, entries: [...found.entries, ...item.entries.filter((entry) => entry.at > after)] } : { ...item, entries: [...item.entries] };
-    }
+  for (const item of digests) {
+    if (item.session !== session) continue;
+    const after = found?.entries.at(-1)?.at ?? "";
+    found = found ? { ...item, entries: [...found.entries, ...item.entries.filter((entry) => entry.at > after)] } : { ...item, entries: [...item.entries] };
   }
   return found;
 }
 
+function writerOf(digests: Digest[], note: ChangedNote, origin: string | undefined): Digest | undefined {
+  const before = digests.filter((item) => item.memoryWrites.includes(note.path) && Date.parse(item.startedAt) <= Date.parse(note.syncedAt));
+  const latest = before.sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt)).at(-1);
+  return latest ? sessionOf(digests, latest.session) : origin ? sessionOf(digests, origin) : undefined;
+}
+
 const isNote = (path: string) => path.endsWith(".md") && !isIndex(path) && !path.split("/").some((part) => part.startsWith("."));
-const oneLine = (text: string) => text.replaceAll("\n", " ");
+const oneLine = (text: string) => redactCredentials(text).replace(/\s+/g, " ").trim();
 
 function readText(path: string) {
   try {
@@ -65,17 +72,25 @@ function readText(path: string) {
   }
 }
 
-async function changedNotes(git: (...args: string[]) => Promise<Result>, since: string, head: string): Promise<string[]> {
-  if (!since || since === head) return [];
-  const log = await git("log", "--format=%x1e%s", "--name-only", "--no-renames", "--relative", `${since}..${head}`, "--", ".");
-  if (log.code !== 0) throw new Error(`cannot read the memory repo's history from ${since.slice(0, 12)}`);
-  const changed = new Set<string>();
+async function changedNotes(git: (...args: string[]) => Promise<Result>, since: string, head: string, checked: Record<string, string>): Promise<ChangedNote[]> {
+  if (since === head) return [];
+  const log = await git("log", "-z", "--format=%x1e%cI%x1f%s", "--name-only", "--no-renames", "--relative", since ? `${since}..${head}` : head, "--", ".");
+  if (log.code !== 0) throw new Error(`cannot read the memory repo's history from ${since ? since.slice(0, 12) : "the start"}`);
+  const changed = new Map<string, ChangedNote>();
   for (const chunk of log.stdout.split("\x1e").slice(1)) {
-    const [subject = "", ...paths] = chunk.trim().split("\n");
+    const [header = "", ...paths] = chunk.split("\0");
+    const [syncedAt = "", subject = ""] = header.split("\x1f");
     if (!subject.startsWith("memory: ")) continue;
-    for (const path of paths.filter(isNote)) if ((await git("cat-file", "-e", `${head}:./${path}`)).code === 0) changed.add(path);
+    for (const path of paths.map((name) => name.replace(/^\n/, "")).filter((name) => isNote(name) && !changed.has(name))) {
+      const blob = (await git("rev-parse", "--verify", "--quiet", `${head}:./${path}`)).stdout.trim();
+      if (blob && checked[path] !== blob) changed.set(path, { path, syncedAt, blob });
+    }
   }
-  return [...changed].sort();
+  return [...changed.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function question(memory: string, change: string, text: string, writer: Digest) {
+  return redactCredentials([`Memory: ${memory}`, `Change since the last check:\n${clip(change, 6000)}`, `Current text:\n${clip(text, 6000)}`, `Session:\n${render(writer)}`].join("\n\n"));
 }
 
 function recheck(state: string, checkout: string, now: number) {
@@ -91,7 +106,7 @@ function report(run: string, since: string, changed: number, limit: number, resu
   const groups = verdictOrder.flatMap((verdict) => {
     const group = results.filter((result) => result.verdict.verdict === verdict).sort((a, b) => a.memory.localeCompare(b.memory));
     return group.length ? [`## ${verdict} (${group.length})`, "", ...group.map(({ memory, session, verdict: answer }) => [
-      `- \`${memory}\`: ${answer.reason}`,
+      `- \`${memory}\`: ${oneLine(answer.reason)}`,
       ...(answer.evidence ? [`  Evidence: ${oneLine(answer.evidence)}`] : []),
       ...(answer.correction ? [`  Correction: ${oneLine(answer.correction)}`] : []),
       ...(session ? [`  Session: ${session}`] : []),
@@ -116,13 +131,13 @@ export async function audit(run: string, io: AuditIo): Promise<string> {
   const head = (await git("rev-parse", "--verify", "origin/main")).stdout.trim();
   if (!head) throw new Error(`the memory repo in ${checkout} has no origin/main`);
   const statePath = join(state, "audit.json");
-  const saved = (existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {}) as { audited?: string };
-  const since = saved.audited && (await git("cat-file", "-e", `${saved.audited}^{commit}`)).code === 0
+  const saved = (existsSync(statePath) ? JSON.parse(readFileSync(statePath, "utf8")) : {}) as AuditState;
+  const since = saved.audited !== undefined && (saved.audited === "" || (await git("cat-file", "-e", `${saved.audited}^{commit}`)).code === 0)
     ? saved.audited
     : (await git("rev-list", "-1", `--before=${new Date(io.now() - day).toISOString()}`, "origin/main")).stdout.trim();
-  const changed = await changedNotes(git, since, head);
-  const writers = new Map<string, Digest>();
-  for (const item of digestsOf(run)) for (const path of item.memoryWrites) writers.set(path, item);
+  const checked = since === saved.audited ? { ...saved.checked } : {};
+  const changed = await changedNotes(git, since, head, checked);
+  const digests = runDirs(state).flatMap((name) => digestsOf(join(state, name)));
   mkdirSync(join(run, "audit"), { recursive: true, mode: 0o700 });
   const chosen = changed.slice(0, io.limit);
   const results: Checked[] = [];
@@ -130,24 +145,26 @@ export async function audit(run: string, io: AuditIo): Promise<string> {
   let next = 0;
   await Promise.all(Array.from({ length: jobs }, async () => {
     while (next < chosen.length) {
-      const memory = chosen[next++]!;
+      const note = chosen[next++]!;
+      const memory = note.path;
       try {
         const text = (await git("show", `${head}:./${memory}`)).stdout;
-        const origin = frontmatterField(text, "originSessionId");
-        const writer = writers.get(memory) ?? (origin ? findSession(state, origin) : undefined);
+        const writer = writerOf(digests, note, frontmatterField(text, "originSessionId"));
         const change = since ? (await git("diff", since, head, "--relative", "--", memory)).stdout : text;
         const verdict: Checked["verdict"] = writer
-          ? await io.checker([`Memory: ${memory}`, `Change since the last check:\n${clip(change, 6000)}`, `Current text:\n${clip(text, 6000)}`, `Session:\n${render(writer)}`].join("\n\n"), run)
+          ? redactValue(await io.checker(question(memory, change, text, writer), run)) as Verdict
           : { verdict: "no session", reason: "No digest of the writing session is on the hub: a Mac session, or one older than the runs.", evidence: "", correction: "" };
         const session = writer && `${writer.machine} ${writer.provider} ${writer.session}`;
         writeFileSync(join(run, "audit", `${memory.replaceAll("/", "__")}.json`), JSON.stringify({ memory, session, verdict }), { mode: 0o600 });
         results.push({ memory, session, verdict });
+        checked[memory] = note.blob;
       } catch (error) {
         failed.push(`${memory}: ${reasonOf(error)}`);
       }
     }
   }));
-  if (!failed.length && changed.length <= io.limit) writeFileSync(statePath, JSON.stringify({ audited: head }), { mode: 0o600 });
+  const complete = !failed.length && changed.length <= io.limit;
+  writeFileSync(statePath, JSON.stringify(complete ? { audited: head, checked: {} } : { audited: since, checked }), { mode: 0o600 });
   writeFileSync(join(run, "audit.md"), report(run, since, changed.length, io.limit, results, failed, recheck(state, checkout, io.now())), { mode: 0o600 });
   io.say(`Fleet dream: audited ${results.length} of ${changed.length} notes written since the last audit. Audit: ${join(run, "audit.md")}`);
   return run;

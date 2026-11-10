@@ -4,7 +4,7 @@ import type { Env, Result } from "../coder.ts";
 import { quote, readRole, remoteFleet } from "../machine.ts";
 import { analyze, render, type Analyst } from "./analyze.ts";
 import { audit, type Checker } from "./audit.ts";
-import { budget, homeCheckouts } from "./budget.ts";
+import { budget, homeCheckouts, memoryRootIn } from "./budget.ts";
 import { publish } from "./publish.ts";
 import { searchSessions } from "./search.ts";
 import { collect, dateOf, type DreamBoxes } from "./collect.ts";
@@ -173,8 +173,7 @@ export async function dreamCommand(args: string[], io: DreamIo): Promise<number>
     io.print(await scorecardText(state, checkout, git, io.now()));
     return 0;
   }
-  const subtree = settingsOf(io.env)["memory.subtree"];
-  const root = positional(rest) && typeof subtree === "string" && subtree && existsSync(join(checkout, subtree, "MEMORY.md")) ? join(checkout, subtree) : checkout;
+  const root = positional(rest) ? memoryRootIn(checkout, settingsOf(io.env)["memory.subtree"]) : checkout;
   const usagePath = join(state, "usage.json");
   const problems = budget(root, existsSync(usagePath) ? JSON.parse(readFileSync(usagePath, "utf8")) : {}, io.now(), homeCheckouts(io.home));
   if (rest.includes("--json")) io.print(JSON.stringify(problems, null, 2));
