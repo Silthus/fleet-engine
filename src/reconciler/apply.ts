@@ -1,5 +1,5 @@
 import { install, plan as planFiles } from "../files/install.ts";
-import type { Action, Finding, Plan, Report } from "../pack/types.ts";
+import type { Action, Finding, HumanStep, Owned, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
 
 export type AdapterContext = { home: string; dryRun: boolean; adopt: string[] };
@@ -63,13 +63,15 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.findings.push(...plan.unanswered.map((setting) => ({ id: `unanswered:${setting.key}`, pack: setting.key.split(".")[0] ?? "", say: `${setting.question} Answer it with fleet set ${setting.key}=<value>.`, repair: "human" as const })));
     return report;
   }
+  const run = viaEngine(plan, options.run ?? spawnRunner(options.home));
+  const gated = await gate(plan, run);
+  report.findings.push(...gated.failed.map(humanFinding));
   for (const adapter of adapters) {
-    const result = await adapter.apply(plan, context);
+    const result = await adapter.apply(gated.plan, context);
     report.actions.push(...result.actions);
     report.findings.push(...result.findings);
   }
   if (context.dryRun) return report;
-  const run = viaEngine(plan, options.run ?? spawnRunner(options.home));
   const failed = new Set<string>();
   const waits = waiter(plan, run);
   for (const step of plan.steps) {
@@ -96,12 +98,35 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
   }
   for (const step of plan.human) {
-    if ((await run(step.probe)) === 0) continue;
+    const reported = report.findings.some((finding) => finding.id === `human:${step.id}` && finding.pack === step.pack);
+    if (!reported && (await run(step.probe)) === 0) continue;
     report.humanLeft.push(step);
-    report.findings.push({ id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: "human" });
+    if (!reported) report.findings.push(humanFinding(step));
   }
   if (report.findings.some((finding) => finding.repair || finding.id.startsWith("kept:"))) report.ok = false;
   return report;
+}
+
+function humanFinding(step: Owned<HumanStep>): Finding {
+  return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: "human" };
+}
+
+/** Tests each check that a job waits for once, and leaves out the jobs whose check fails, so the adapters remove their units. */
+async function gate(plan: Plan, run: Runner): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>> }> {
+  const tested = new Map<Owned<HumanStep>, boolean>();
+  const passes = async (step: Owned<HumanStep> | undefined) => {
+    if (!step) return false;
+    if (!tested.has(step)) tested.set(step, (await run(step.probe)) === 0);
+    return tested.get(step)!;
+  };
+  const jobs: Plan["jobs"] = [];
+  const dropped: Plan["dropped"] = [];
+  for (const job of plan.jobs) {
+    if (!job.after || (await passes(plan.human.find((step) => step.pack === job.pack && step.id === job.after)))) jobs.push(job);
+    else dropped.push({ pack: job.pack, item: `job ${job.id}`, reason: `check ${job.after} does not pass` });
+  }
+  const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);
+  return { plan: { ...plan, jobs, dropped: [...plan.dropped, ...dropped] }, failed };
 }
 
 /** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */
