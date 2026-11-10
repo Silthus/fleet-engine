@@ -18,7 +18,7 @@ export function shellThread(id: string, fields: Partial<ShellThread> = {}): Shel
   return { id, title: `Thread ${id}`, projectId: "project-local", status: "idle", createdAt: minutesAgo(600), ...fields };
 }
 
-export type LinkedThreadFixture = LinkedThread & { archived?: boolean; pendingRequestCount?: number; branch?: string | null; items?: LinkedTimelineItem[] };
+export type LinkedThreadFixture = LinkedThread & { archived?: boolean; pendingRequestCount?: number; branch?: string | null; items?: LinkedTimelineItem[]; runtimeMode?: string };
 
 export function linkedThread(threadId: string, fields: Partial<LinkedThreadFixture> = {}): LinkedThreadFixture {
   return {
@@ -38,7 +38,14 @@ export function linkedTools(threads: LinkedThreadFixture[]): ToolHandler {
     if (name === "t3_project_list") return { projects: [{ id: "project-linked", title: "Linked project" }], nextCursor: null };
     if (name === "t3_thread_list") {
       const listed = threads.filter((thread) => !thread.archived && (args.includeSubagents || !thread.parentThreadId) && (args.settled === undefined || thread.settled === args.settled));
-      return { projectId: null, currentThreadId: null, threads: listed.map(({ archived, pendingRequestCount, branch, items, ...item }) => item), nextCursor: null, total: listed.length };
+      return { projectId: null, currentThreadId: null, threads: listed.map(({ archived, pendingRequestCount, branch, items, runtimeMode, ...item }) => item), nextCursor: null, total: listed.length };
+    }
+    if (name === "t3_thread_send") {
+      const thread = threads.find((candidate) => candidate.threadId === args.threadId);
+      if (!thread) throw new ToolRefusal("thread_not_found", "The thread was not found.");
+      if (thread.runtimeMode === "full-access") throw new ToolRefusal("runtime_mode_escalation_denied", `Thread ${thread.threadId} runs in full-access mode, above this caller's.`);
+      const delivery = thread.status === "running" ? "queued" : "started";
+      return { threadId: thread.threadId, messageId: `message:${args.clientRequestId}`, runId: "run:linked", status: delivery === "queued" ? "queued" : "starting", delivery };
     }
     if (name === "t3_thread_read") {
       const thread = threads.find((candidate) => candidate.threadId === args.threadId);
@@ -54,7 +61,7 @@ export function linkedTools(threads: LinkedThreadFixture[]): ToolHandler {
         const end = offset + maxChars;
         return { ...item, text: item.text === null ? null : text.slice(offset, end), textTruncated: end < text.length, nextTextOffset: end < text.length ? end : null };
       });
-      const { archived, pendingRequestCount, branch, items: _, ...detail } = thread;
+      const { archived, pendingRequestCount, branch, items: _, runtimeMode, ...detail } = thread;
       return {
         thread: { ...detail, itemCount: items.length, archived: Boolean(archived), pendingRequestCount: pendingRequestCount ?? 0, branch: branch ?? null, worktreePath: null },
         recentRuns: [], items: shown, nextPosition: page.at(-1)?.position ?? null, hasMore: args.itemId === undefined && view.some((item) => item.position > (page.at(-1)?.position ?? after)),

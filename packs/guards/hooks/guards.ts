@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { installedOwners } from "../lib/allowlist.ts";
 import { downloadRisk } from "../lib/download.ts";
 import { ghRisk, ownerList } from "../lib/gh.ts";
 import { isSleepPoll, isTaskStatus, repeatedStatusReason, repeatsTaskStatus, sleepPollReason } from "../lib/wait.ts";
@@ -49,11 +50,11 @@ function check(call: ToolCall, { person, owners, unreadable }: Settings): string
 }
 
 /** The refusal for a tool call that a shell guard stops, naming the person the settings give. A call the guards cannot
- * check is refused too. */
-export function guard(call: ToolCall, home: string): Denial | undefined {
+ * check is refused too. An installed signed allowlist under the system root wins over guards.owners. */
+export function guard(call: ToolCall, home: string, root = "/"): Denial | undefined {
   const settings = guardSettings(home);
   try {
-    const risk = check(call, settings);
+    const risk = check(call, { ...settings, owners: installedOwners(root) ?? settings.owners });
     return risk ? deny(risk) : undefined;
   } catch (error) {
     return deny(uncheckedReason(error, settings.person));

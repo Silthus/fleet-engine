@@ -227,7 +227,7 @@ fleet.service({ on: "hub", id: "gateway", serve: { port: 3317, health: "/health"
 ```
 
 This service names no process. Docker already restarts the gateway's
-container (`--restart unless-stopped`, `packs/hub/lib/mcphub/install.ts:32`),
+container (`--restart unless-stopped`, `packs/mcp-gateway/lib/install.ts`),
 and Fleet does not wrap it in a unit.
 
 - **The service catalog comes from declarations (D11).** Every node
@@ -269,7 +269,7 @@ and Fleet does not wrap it in a unit.
   secret store, and `ctx.use` returns it. When the hub does not answer,
   the node keeps its stored credential, and apply reports a finding.
   *Reason:* the MCP gateway already mints a scoped key for each machine
-  (`grant`, `packs/hub/lib/mcphub/hub.ts:151-168`), and the CLI proxy has
+  (`grant`, `packs/mcp-gateway/lib/hub.ts`), and the CLI proxy has
   one shared key in its config. Engine keys would be a second auth system.
 - **A node works without the hub (D15).** `ctx.use` fails fast, but that
   protects only pack code. An agent reads a static `ANTHROPIC_BASE_URL`.
