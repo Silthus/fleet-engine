@@ -7,7 +7,7 @@ import type { Digest, Effort } from "./digest.ts";
 type Hit = Pick<Finding, "kind" | "reach" | "memory" | "importance"> & { topic: string };
 export type SessionRecord = {
   machine: string; provider: string; repo: string; startedAt: string; endedAt: string;
-  taskType?: string; tokens?: number; effort?: Effort; memoryReads: string[];
+  taskType?: string; tokens?: number; effort?: Effort; memoryReads: string[]; memoryShown?: string[];
   parts: Record<string, Hit[]>;
 };
 type Ledger = Record<string, SessionRecord>;
@@ -44,6 +44,7 @@ export function recordRuns(state: string, now = Date.now()): number {
         } : {}),
         taskType: known?.taskType ?? answer.taskType,
         memoryReads: [...new Set([...(known?.memoryReads ?? []), ...item.memoryReads])],
+        memoryShown: [...new Set([...(known?.memoryShown ?? []), ...(item.memoryShown ?? [])])],
         parts: {
           ...known?.parts,
           [file]: answer.findings.map((finding) => ({
@@ -91,6 +92,16 @@ export async function readMemories(checkout: string, git: Git): Promise<Memory[]
   return [...memories.values()].filter((memory) => existsSync(join(checkout, memory.path)));
 }
 
+export function mostRead(state: string, days: number, now: number): Array<{ path: string; sessions: number }> {
+  const cutoff = new Date(now - days * day).toISOString();
+  const counts = new Map<string, number>();
+  for (const record of Object.values(readLedger(state))) {
+    if ((record.endedAt || "") < cutoff) continue;
+    for (const path of new Set([...record.memoryReads, ...(record.memoryShown ?? [])])) if (!isIndex(path)) counts.set(path, (counts.get(path) ?? 0) + 1);
+  }
+  return [...counts].map(([path, sessions]) => ({ path, sessions })).sort((a, b) => b.sessions - a.sessions || a.path.localeCompare(b.path));
+}
+
 type Session = SessionRecord & { key: string; week: string; hits: Hit[] };
 
 export function weekOf(at: string): string {
@@ -119,7 +130,7 @@ export function scorecard(ledger: Ledger, memories: Memory[], usage: Record<stri
   const sessions: Session[] = Object.entries(ledger).filter(([, record]) => record.startedAt).map(([key, record]) => ({
     ...record, key, week: weekOf(record.startedAt), hits: Object.values(record.parts).flat(),
   }));
-  const reads = (session: Session) => new Set(session.memoryReads.filter((path) => !isIndex(path)));
+  const reads = (session: Session) => new Set([...session.memoryReads, ...(session.memoryShown ?? [])].filter((path) => !isIndex(path)));
   const repeats = (session: Session) => new Set(session.hits.filter((hit) => mistakes.has(hit.kind))
     .flatMap(covering).filter((memory) => memory.addedAt < session.startedAt));
   const misses = (session: Session) => [...repeats(session)].filter((memory) => !reads(session).has(memory.path));
