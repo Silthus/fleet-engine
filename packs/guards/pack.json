@@ -41,7 +41,32 @@
         "words": [
           "agent"
         ]
-      }
+      },
+      "settings": [
+        "guards.owners"
+      ]
+    },
+    {
+      "id": "git-allowlist",
+      "name": "Signed Git allowlist",
+      "default": false,
+      "needs": [
+        "devbox"
+      ],
+      "settings": [
+        "guards.owners",
+        "guards.signers"
+      ],
+      "sentence": "Git refuses any remote whose GitHub owner is not on a list you signed. With the shell guards on, gh follows the same list.",
+      "moment": {
+        "time": "15:05",
+        "title": "A clone of the wrong repo stops at Git",
+        "body": "A script in a repo tries to clone a fork from an owner you never allowed. Git refuses the remote and the agent stops to ask you, even though no hook saw the command.",
+        "words": [
+          "agent"
+        ]
+      },
+      "risk": "Git refuses every remote outside the signed list, including other hosts than GitHub. Root, or anyone with sudo, can remove it. It stops mistakes, not a hostile agent: an agent that runs as you can override it with its own Git config, or edit the staged script before you run it with sudo."
     }
   ],
   "files": [
@@ -49,6 +74,24 @@
       "path": "hooks/guards.ts",
       "target": ".config/fleet/hooks/PreToolUse/guards.ts",
       "workflow": "shell-guards"
+    }
+  ],
+  "human": [
+    {
+      "id": "git-allowlist",
+      "workflow": "git-allowlist",
+      "on": [
+        "linux"
+      ],
+      "say": "Install the signed Git allowlist as root. Fleet stages the list that verifies against guards.signers, and the root script checks the signature again before it writes /etc/fleet, the blocked-remote helper and the include in /etc/gitconfig.",
+      "command": "fleet guards allowlist stage ~/.local/state/fleet/git-allowlist && sudo sh ~/.local/state/fleet/git-allowlist/install.sh",
+      "probe": [
+        "fleet",
+        "guards",
+        "allowlist",
+        "--check"
+      ],
+      "interactive": true
     }
   ]
 }
