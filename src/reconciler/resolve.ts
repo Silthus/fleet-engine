@@ -81,7 +81,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
     return !reason;
   };
 
-  plan.catalog = serviceCatalog(order, profile, active, machine.role === "hub" ? os : "linux");
+  plan.catalog = serviceCatalog(order, profile, activeIds(workflowStates(profile, { ...machine, role: "hub" }, order, names)), machine.role === "hub" ? os : "linux");
   const packFiles: DesiredFile[] = [];
   for (const { manifest, dir } of order) {
     const pack = manifest.name;
@@ -226,6 +226,14 @@ function choosePacks(profile: Profile, sources: FetchedSource[]) {
 }
 
 function activateWorkflows(profile: Profile, machine: MachineFile, order: Candidate[], names: Set<string>, plan: Plan) {
+  const states = workflowStates(profile, machine, order, names);
+  plan.workflows.push(...states);
+  return activeIds(states);
+}
+
+const activeIds = (states: Plan["workflows"]) => new Set(states.filter((state) => state.active).map((state) => state.id));
+
+function workflowStates(profile: Profile, machine: MachineFile, order: Candidate[], names: Set<string>): Plan["workflows"] {
   const devbox = (profile.devboxes?.length ?? 0) > 0 || machine.role === "devbox" || machine.role === "hub";
   const holds: Record<Need, boolean> = {
     gh: true,
@@ -235,17 +243,14 @@ function activateWorkflows(profile: Profile, machine: MachineFile, order: Candid
     coder: names.has("posthog"),
     "posthog-org": names.has("posthog"),
   };
-  const active = new Set<string>();
-  for (const { manifest } of order) {
-    for (const workflow of manifest.workflows ?? []) {
+  return order.flatMap(({ manifest }) =>
+    (manifest.workflows ?? []).map((workflow) => {
       const chosen = profile.workflows[workflow.id] ?? workflow.default;
       const unmet = (workflow.needs ?? []).filter((need) => !holds[need]);
       const reason = !chosen ? "turned off" : unmet.length ? `needs ${unmet.join(", ")}` : undefined;
-      plan.workflows.push({ id: workflow.id, pack: manifest.name, active: !reason, ...(reason ? { reason } : {}) });
-      if (!reason) active.add(workflow.id);
-    }
-  }
-  return active;
+      return { id: workflow.id, pack: manifest.name, active: !reason, ...(reason ? { reason } : {}) };
+    }),
+  );
 }
 
 function activeSettings(order: Candidate[], active: Set<string>): Array<PackSetting & { pack: string }> {

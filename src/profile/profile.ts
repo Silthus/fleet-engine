@@ -150,7 +150,7 @@ function checkProfile(file: Record<string, unknown>, path: string): ProfileFile 
   const config = isRecord(file.overrides) ? file.overrides.config : undefined;
   if (config !== undefined && !Array.isArray(config)) fail("overrides.config must list config entries");
   ((config as unknown[] | undefined) ?? []).forEach((entry, index) => {
-    const problem = configEntryProblem(entry);
+    const problem = isRecord(entry) && entry.after !== undefined ? "after names a pack's check, so only a pack's own config item can wait for one" : configEntryProblem(entry);
     if (problem) fail(`overrides.config[${index}]: ${problem}`);
   });
   const models = isRecord(file.overrides) ? file.overrides.models : undefined;

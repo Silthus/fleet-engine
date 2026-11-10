@@ -334,6 +334,19 @@ describe("provider config", () => {
     expect(report.findings.map((finding) => finding.id)).toContain("config:outage");
   });
 
+  test("while a source is out, removes a setting whose check fails, and keeps a setting the outage hides", async () => {
+    const home = temp.make("home-");
+    const proxy = { provider: "claude" as const, key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", pack: "hub" };
+    const model = { provider: "claude" as const, key: "model", value: "opus", pack: "team" };
+    await apply(plan([proxy, model]), { home, adapters: adapters() });
+    const offline = { ...plan(), packs: [...plan().packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }], dropped: [{ pack: "hub", item: "config claude:env.ANTHROPIC_BASE_URL", reason: "check proxy-ready does not pass", check: "proxy-ready" }] };
+
+    await apply(offline, { home, adapters: adapters() });
+
+    expect(read(home, claude)).toEqual({ model: "opus" });
+    expect(read(home, record)[claude]).toEqual([{ path: ["model"], value: "opus", pack: "team" }]);
+  });
+
   test("keeps the old hook trust while the user's own hook list is kept", async () => {
     const home = temp.make("home-");
     const hook = (command: string) => ({ provider: "codex" as const, key: "hooks.UserPromptSubmit", value: [{ hooks: [{ type: "command", command }] }] });
@@ -554,6 +567,18 @@ describe("Claude MCP servers", () => {
     await apply(outage, { home, adapters: cli.adapters });
     expect(cli.mcp()).toHaveLength(1);
     expect(read(home, claudeJson).mcpServers.metabase).toEqual(metabase);
+  });
+
+  test("while a source is out, remove a server whose check fails", async () => {
+    const home = temp.make("home-");
+    const cli = claudeMcp();
+    await apply(plan([server]), { home, adapters: cli.adapters });
+    const outage = { ...plan(), packs: [...plan().packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }], dropped: [{ pack: "posthog", item: "config claude:mcpServers.metabase", reason: "check gateway-ready does not pass", check: "gateway-ready" }] };
+
+    await apply(outage, { home, adapters: cli.adapters });
+
+    expect(cli.mcp().at(-1)).toEqual(["claude", "mcp", "remove", "metabase", "--scope", "user"]);
+    expect(read(home, claudeJson).mcpServers).toEqual({});
   });
 
   test("leave ~/.claude.json as it is while it is a link", async () => {
