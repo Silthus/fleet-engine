@@ -69,7 +69,7 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const flags = parseFlags(args);
   const doctor = command === "doctor";
   const preview = doctor || flags.dryRun;
-  const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview });
+  const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview, inherit: preview });
   const adapters = engineAdapters();
   const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, adapters, run: options.run });
   const notice = doctor ? await readNotice(options.home) : undefined;
@@ -129,7 +129,7 @@ async function runUpdate(options: CliOptions) {
 }
 
 async function runPackCommand(name: string, args: string[], options: CliOptions) {
-  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true });
   const command = plan.commands[name];
   if (!command) {
     const owner = sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => existsSync(join(pack.dir, "commands", `${name}.ts`)) || Object.hasOwn(pack.code?.commands ?? {}, name));
@@ -194,9 +194,9 @@ function handlerPaths(plan: Plan) {
   return Object.fromEntries(Object.entries(plan.handlers).map(([seam, handler]) => [seam, handler.path]));
 }
 
-async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
+async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean; inherit?: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
   const saved = await loadMachine(options.home);
-  const inherited = profileFlag ? undefined : options.env?.FLEET_PROFILE_DIR;
+  const inherited = mode.inherit && !profileFlag ? options.env?.FLEET_PROFILE_DIR : undefined;
   const profileDir = profileFlag ? resolvePath(profileFlag) : inherited ? resolvePath(inherited) : saved?.profileDir;
   if (!profileDir) throw new Error("no profile on this machine. Run get.sh, or pass --profile <dir>.");
   const machine: MachineFile = { ...thisMachine(saved, options.platform, options.env ?? {}), profileDir };
@@ -206,7 +206,7 @@ async function loadPlan(options: CliOptions, profileFlag: string | undefined, mo
   const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => (mode.fetch ? fetchSource(ref, cache) : cachedSource(ref, cache)))))];
   const plan = resolve(profile, machine, sources);
   const changed = saved?.profileDir !== profileDir || saved.role !== machine.role || saved.coder !== machine.coder;
-  if (mode.remember && !inherited && changed) await saveMachine(options.home, machine);
+  if (mode.remember && changed) await saveMachine(options.home, machine);
   return { plan, sources };
 }
 

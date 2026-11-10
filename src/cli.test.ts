@@ -52,13 +52,19 @@ describe("fleet apply", () => {
     expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
   });
 
-  test("a nested run applies the profile its parent passes down, and leaves the remembered one alone", async () => {
+  test("a profile the parent passes down is checked by doctor, but never applied or remembered", async () => {
     const home = temp.make("home-");
-    const remembered = profileDir();
-    const passedDown = profileDir([], "# Passed down\n");
+    const remembered = profileDir([], "# Remembered\n");
+    const passedDown = { FLEET_PROFILE_DIR: profileDir([], "# Passed down\n") };
     expect((await fleet(["apply", "--profile", remembered], home)).code).toBe(0);
-    expect((await fleet(["apply"], home, repoRoot, { FLEET_PROFILE_DIR: passedDown })).code).toBe(0);
-    expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toContain("# Passed down");
+
+    const doctor = await fleet(["doctor"], home, repoRoot, passedDown);
+    expect(doctor).toMatchObject({ code: 1 });
+    expect(doctor.output).toContain(".agents/AGENTS.md needs to be updated.");
+
+    expect((await fleet(["apply"], home, repoRoot, passedDown)).code).toBe(0);
+    expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toContain("# Remembered");
+    expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).not.toContain("# Passed down");
     expect(JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")).profileDir).toBe(remembered);
   });
 
