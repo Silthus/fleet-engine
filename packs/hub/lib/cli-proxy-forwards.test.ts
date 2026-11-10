@@ -23,7 +23,7 @@ test("a devbox tunnel carries the proxy port only while the workflow is on", () 
   expect(tunnelUnit("devbox-1", 60002)).not.toContain("8317");
   const unit = tunnelUnit("devbox-1", 60002, true);
   expect(unit).toContain("-R 127.0.0.1:8317:127.0.0.1:8317");
-  expect([...unit.matchAll(/ -R /g)]).toHaveLength(3);
+  expect([...unit.matchAll(/ -R /g)]).toHaveLength(2);
 });
 
 test("a box's hub forward carries the proxy port only while the workflow is on", () => {

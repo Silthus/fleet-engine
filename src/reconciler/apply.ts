@@ -12,7 +12,7 @@ export type Adapter = {
   apply(plan: Plan, context: AdapterContext): Promise<AdapterResult>;
 };
 export type Runner = (command: string[]) => Promise<number>;
-/** Issues this machine's credential for each served service that lacks one, and reports what failed. */
+/** Fills this machine's credential for each served service: the hub issues its own, and a node pulls its own from the hub. Reports what failed. */
 export type Issuer = (entries: CatalogEntry[], node: string) => Promise<Finding[]>;
 
 export const filesGroup = "fleet";
@@ -67,7 +67,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     return report;
   }
   const run = viaEngine(plan, options.run ?? spawnRunner(options.home, plan.machine.profileDir));
-  const node = plan.onHub ? plan.machine.name : undefined;
+  const node = plan.onHub || plan.reachesHub ? plan.machine.name : undefined;
   const issue = !context.dryRun && node && options.issue ? (ready: CatalogEntry[]) => options.issue!(ready, node) : undefined;
   const gated = await gate(plan, run, !context.dryRun, issue);
   report.findings.push(...gated.issued, ...gated.failed.map((step) => humanFinding(step, context.dryRun)));
@@ -116,7 +116,7 @@ function humanFinding(step: Owned<HumanStep>, repairStillToRun: boolean): Findin
   return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: repairStillToRun && step.repair && !step.command ? "apply" : "human" };
 }
 
-/** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. It tests the checks that served services wait for first and issues their credentials, so a repair that reads a credential sees it in the same apply. */
+/** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. It tests the checks that served services wait for first, which only the hub can, and fills their credentials, so a repair that reads a credential sees it in the same apply. */
 async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: CatalogEntry[]) => Promise<Finding[]>): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; issued: Finding[] }> {
   const tested = new Map<Owned<HumanStep>, boolean>();
   const probe = async (step: Owned<HumanStep>) => {
@@ -130,7 +130,7 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
   };
   const checkOf = (pack: string, id: string) => plan.human.find((step) => step.pack === pack && step.id === id);
   const ready: CatalogEntry[] = [];
-  for (const entry of plan.catalog ?? []) if (!entry.after || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
+  for (const entry of plan.catalog ?? []) if (!entry.after || plan.reachesHub || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
   const issued = issue ? await issue(ready) : [];
   if (repair) for (const step of plan.human) if (step.repair) await passes(step);
   const jobs: Plan["jobs"] = [];

@@ -22,12 +22,13 @@ import type {
 import { signerSetting } from "../adapters/identity/signers.ts";
 import { engineSettings } from "../pack/manifest.ts";
 import { placedMachine } from "../profile/profile.ts";
+import { forwardId, hubForward } from "../hub/ssh.ts";
 
 export class ResolveError extends Error {}
 
 const hubAlias = "hub.alias";
 
-export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "hub", "run"];
+export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "hub", "run", "credential"];
 
 /** Why a machine leaves out an item of the hub while a profile with devboxes names no hub. */
 export const hublessReason = "your profile names no hub. Run fleet hub here on the machine that should be the hub.";
@@ -113,6 +114,8 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
       plan.config.push({ ...entry, pack });
     }
   }
+  if (forwardsToHub(profile, machine, os)) plan.reachesHub = true;
+  if (plan.reachesHub && plan.catalog.length) plan.jobs.push(hubForward(profile.hub!, plan.catalog));
   for (const entry of profile.overrides?.config ?? []) {
     if (!fits("profile", entry, `config ${entry.provider}:${entry.key}`)) continue;
     const owner = `${entry.provider}:${entry.key}`;
@@ -153,12 +156,20 @@ function serviceCatalog(order: Candidate[], profile: Profile, active: Set<string
   );
 }
 
+/** A node that the profile names, other than the hub, reaches the hub's services through its own forward. The Mac and boxes keep today's forwards. */
+function forwardsToHub(profile: Profile, machine: MachineFile, os: Os) {
+  return os === "linux" && profile.hub !== undefined && machine.name !== undefined && machine.name !== profile.hub && !boxName.test(machine.name) && Boolean(profile.devboxes?.includes(machine.name));
+}
+
+const boxName = /^box-/;
+
 /** Workflow and job ids are global: the profile and the Jobs adapter key on them alone. */
 function checkUniqueIds(order: Candidate[]) {
   for (const kind of ["workflows", "jobs"] as const) {
     const seen = new Map<string, string>();
     for (const { manifest } of order) {
       for (const { id } of manifest[kind] ?? []) {
+        if (kind === "jobs" && id === forwardId) throw new ResolveError(`${manifest.name}: job ${forwardId} is reserved by the engine`);
         const other = seen.get(id);
         if (other) throw new ResolveError(`${kind === "jobs" ? "job" : "workflow"} ${id} is declared by both ${other} and ${manifest.name}`);
         seen.set(id, manifest.name);
@@ -395,14 +406,14 @@ function skillDir(pack: string, packDir: string, path: string, sources: FetchedS
 
 function packCommands(order: Candidate[]) {
   const commands: Plan["commands"] = Object.create(null);
-  const add = (name: string, pack: string, path: string) => {
+  const add = (name: string, pack: string, path: string, onHub = false) => {
     if (engineCommands.includes(name)) throw new ResolveError(`${pack}: command ${name} is reserved by the engine`);
     const other = commands[name];
     if (other) throw new ResolveError(`command ${name} is shipped by both ${other.pack} and ${pack}`);
-    commands[name] = { pack, path };
+    commands[name] = { pack, path, ...(onHub ? { on: "hub" as const } : {}) };
   };
   for (const { manifest, dir, code } of order) {
-    for (const name of Object.keys(code?.commands ?? {}).sort()) add(name, manifest.name, join(dir, "pack.ts"));
+    for (const name of Object.keys(code?.commands ?? {}).sort()) add(name, manifest.name, join(dir, "pack.ts"), code!.hubCommands.includes(name));
     const root = join(dir, "commands");
     if (!existsSync(root)) continue;
     for (const file of readdirSync(root).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts")).sort()) {
