@@ -218,6 +218,55 @@ test("connect on the both plan sends Claude Code to the proxy, and Codex too whi
   expect(claudeOnly.printed.join("\n")).toContain("lists no Codex model. Add one of your own Codex subscriptions to the hub's proxy. Codex keeps its own sign-in.");
 });
 
+test("connect never selects a fleet-proxy table that cannot reach the proxy with this machine's key", async () => {
+  const { auth: _auth, ...keyless } = fleetProxy;
+  const config = { model_providers: { "fleet-proxy": keyless } };
+  const codexOnly = client({ plan: "codex" }, { models: ["gpt-6.1-sol"] });
+  codexRouted(codexOnly.home, config);
+  await expect(cliProxy("connect", codexOnly.machine)).rejects.toThrow("which does not reach the proxy with this machine's key. Nothing changed.");
+  expect(readCodex(codexOnly.home)).toEqual(config);
+  expect(existsSync(keyFile(codexOnly.home))).toBe(false);
+
+  const both = client({ plan: "both" }, { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
+  codexRouted(both.home, config);
+  expect(await cliProxy("connect", both.machine)).toBe(0);
+  expect(readCodex(both.home)).toEqual(config);
+  expect(both.printed.join("\n")).toContain("Codex keeps its own sign-in.");
+});
+
+test("on the both plan, a Codex config that connect cannot write keeps Codex on its own sign-in, and Claude Code still connects", async () => {
+  const { machine, home, printed } = client({ plan: "both" }, { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
+  codexRouted(home, mine);
+  chmodSync(join(home, ".codex"), 0o500);
+  try {
+    expect(await cliProxy("connect", machine)).toBe(0);
+  } finally {
+    chmodSync(join(home, ".codex"), 0o700);
+  }
+  expect(readJson(settingsFile(home)).apiKeyHelper).toBe(keyHelper);
+  expect(readCodex(home)).toEqual(mine);
+  expect(printed.at(-1)).toEndWith("Codex keeps its own sign-in.");
+});
+
+test("connect leaves a Codex config that becomes a link while it checks the proxy", async () => {
+  const { machine, home, printed } = client({ plan: "both" }, { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
+  codexRouted(home, mine);
+  const outside = temp.make("elsewhere-");
+  writeFileSync(join(outside, "config.toml"), readFileSync(codexFile(home), "utf8"));
+  const fetch = machine.fetch;
+  machine.fetch = async (input, init) => {
+    if (!existsSync(join(home, ".codex", "moved"))) {
+      rmSync(join(home, ".codex"), { recursive: true });
+      symlinkSync(outside, join(home, ".codex"));
+      writeFileSync(join(outside, "moved"), "");
+    }
+    return fetch(input, init);
+  };
+  expect(await cliProxy("connect", machine)).toBe(0);
+  expect(parse(readFileSync(join(outside, "config.toml"), "utf8"))).toEqual(mine);
+  expect(printed.at(-1)).toEndWith("Codex keeps its own sign-in.");
+});
+
 test("on a devbox, plan names the agents that the plan sends through the proxy", async () => {
   for (const [ai, agents] of [["claude", "Claude Code uses"], ["codex", "Codex uses"], ["both", "Claude Code and Codex use"]] as const) {
     const { machine, home, printed } = client({ plan: ai });
@@ -531,16 +580,17 @@ test("disconnect keeps a Fleet provider table you edited, and removes only Fleet
   expect(readCodex(home)).toEqual({ model_providers: { "fleet-proxy": edited } });
 });
 
-test("a fleet-proxy table that does not use the proxy's base_url fails the Codex check, whether or not Codex selects it", async () => {
+test("a fleet-proxy table that does not reach the proxy with this machine's key fails the Codex check, whether or not Codex selects it", async () => {
   const served = { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] };
-  const configs: Array<Record<string, unknown>> = [{ model_provider: "fleet-proxy", model_providers: { "fleet-proxy": { name: "Mine" } } }, { model_providers: { "fleet-proxy": { name: "Mine" } } }, { model_providers: { "fleet-proxy": { ...fleetProxy, base_url: "https://gateway.example.com/v1" } } }];
+  const { auth: _auth, ...keyless } = fleetProxy;
+  const configs: Array<Record<string, unknown>> = [{ model_provider: "fleet-proxy", model_providers: { "fleet-proxy": { name: "Mine" } } }, { model_providers: { "fleet-proxy": { name: "Mine" } } }, { model_providers: { "fleet-proxy": { ...fleetProxy, base_url: "https://gateway.example.com/v1" } } }, { model_providers: { "fleet-proxy": keyless } }, { model_providers: { "fleet-proxy": { ...fleetProxy, wire_api: "chat" } } }];
   for (const config of configs) {
     const { machine, home, printed } = client({}, served);
     connected(home);
     codexRouted(home, config);
     expect(await cliProxy("check", machine, "codex")).toBe(1);
     expect(readCodex(home) as Record<string, unknown>).toEqual(config);
-    expect(printed.join("\n")).toContain("has its own fleet-proxy provider table, which does not use the proxy's base_url.");
+    expect(printed.join("\n")).toContain("has its own fleet-proxy provider table, which does not reach the proxy with this machine's key.");
   }
   const edited = client({}, served);
   connected(edited.home);

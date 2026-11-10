@@ -264,9 +264,12 @@ async function check(machine: ProxyMachine, agent: Agent): Promise<boolean> {
 async function codexUnserved(home: string, models: string[] | string): Promise<string | undefined> {
   const config = await readableCodex(home);
   const table = config?.providers?.[codexProvider];
-  if (table !== undefined && !(isObject(table) && table.base_url === codexUrl)) return `${config!.path} has its own ${codexProvider} provider table, which does not use the proxy's base_url.`;
+  if (table !== undefined && !reachesProxy(table)) return ownTable(config!.path);
   return unserved(models, "codex");
 }
+
+const reachesProxy = (table: unknown) => isObject(table) && (["base_url", "wire_api", "auth"] as const).every((field) => Bun.deepEquals(table[field], codexProviderTable[field]));
+const ownTable = (path: string) => `${path} has its own ${codexProvider} provider table, which does not reach the proxy with this machine's key.`;
 
 async function codexRoute(home: string): Promise<string | (() => Promise<void>)> {
   const read = await readableCodex(home);
@@ -274,10 +277,21 @@ async function codexRoute(home: string): Promise<string | (() => Promise<void>)>
   const { path, text, config, providers } = read;
   const table = providers?.[codexProvider];
   if (config.model_provider !== undefined && config.model_provider !== codexProvider) return `Keep your Codex setting model_provider in ${path}: Fleet did not set it. Remove it to use the proxy.`;
-  if (table !== undefined && !(isObject(table) && table.base_url === codexUrl)) return `${path} has its own ${codexProvider} provider table, which does not use the proxy's base_url.`;
+  if (table !== undefined && !reachesProxy(table)) return ownTable(path);
   config.model_provider = codexProvider;
   config.model_providers = { ...providers, [codexProvider]: table ?? codexProviderTable };
   return () => replaceUnchanged(path, text, `${stringify(config)}\n`);
+}
+
+async function sendCodex(home: string, besideClaude: boolean): Promise<string | undefined> {
+  const route = await codexRoute(home);
+  if (typeof route === "string") return route;
+  try {
+    await route();
+  } catch (error) {
+    if (!besideClaude) throw error;
+    return (error as Error).message;
+  }
 }
 
 async function connect(machine: ProxyMachine): Promise<void> {
@@ -299,8 +313,8 @@ async function connect(machine: ProxyMachine): Promise<void> {
   }
   if (codex === undefined) return;
   const unroutable = typeof codex === "string" ? codex : agent === "codex" ? undefined : await probe(machine.fetch, key, "codex");
-  if (unroutable) return machine.print(`${unroutable} Codex keeps its own sign-in.`);
-  await (codex as () => Promise<void>)();
+  const failed = unroutable ?? (await sendCodex(machine.home, agent === "claude"));
+  if (failed) return machine.print(`${failed} Codex keeps its own sign-in.`);
   machine.print(`Codex uses your own-account proxy at ${proxyUrl} now. Restart open Codex sessions.`);
 }
 
