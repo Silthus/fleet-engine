@@ -71,7 +71,7 @@ const analystSchema = {
 export function render(item: Digest): string {
   const head = [`Machine: ${item.machine}`, `Agent: ${item.provider} ${item.model}`, `Repository: ${item.repo} (${item.cwd})`,
     `Time: ${item.startedAt} to ${item.endedAt}`, `Tool calls: ${item.toolCalls}`, `Skills: ${[...new Set(item.skills)].join(", ") || "none"}`,
-    `Memory read: ${[...new Set(item.memoryReads)].join(", ") || "none"}`, ""].join("\n");
+    `Memory read: ${[...new Set(item.memoryReads)].join(", ") || "none"}`, `Memory shown by trigger: ${(item.memoryShown ?? []).join(", ") || "none"}`, ""].join("\n");
   const shown = item.entries.map((entry) => `[${entry.role}] ${entry.text}`);
   const text = shown.join("\n\n");
   if (head.length + text.length <= digestLimit) return head + text;
@@ -89,10 +89,10 @@ const codexToolsOff = ["shell_tool", "unified_exec", "apps", "plugins", "remote_
   "in_app_browser", "computer_use", "image_generation", "view_image", "code_mode_host", "hooks", "shell_snapshot", "skill_mcp_dependency_install", "tool_suggest",
   "sleep_tool", "goals", "workspace_dependencies"];
 
-export function analystCommand(row: ModelRow, scratch: string): string[] {
+export function analystCommand(row: ModelRow, scratch: string, prompt = analystPrompt, schema: object = analystSchema): string[] {
   if (row.provider === "claude") {
     return ["claude", "-p", "--model", row.model, "--effort", row.effort, "--setting-sources", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
-      "--disable-slash-commands", "--no-session-persistence", "--tools", "", "--system-prompt", analystPrompt, "--output-format", "json", "--json-schema", JSON.stringify(analystSchema)];
+      "--disable-slash-commands", "--no-session-persistence", "--tools", "", "--system-prompt", prompt, "--output-format", "json", "--json-schema", JSON.stringify(schema)];
   }
   return ["codex", "exec", "--ignore-user-config", "-m", row.model, "-c", `model_reasoning_effort="${row.effort}"`, "-c", 'web_search="disabled"',
     "-c", 'approvals_reviewer="user"', ...codexToolsOff.flatMap((feature) => ["--disable", feature]), "-s", "read-only", "--ephemeral", "--skip-git-repo-check",
@@ -107,7 +107,7 @@ export class AnalystFailure extends Error {
   }
 }
 
-const reasonOf = (error: unknown): FailureReason => error instanceof AnalystFailure ? error.reason : "not started";
+export const reasonOf = (error: unknown): FailureReason => error instanceof AnalystFailure ? error.reason : "not started";
 
 export type Spawn = (argv: string[], options: { cwd: string; env: Env; stdin: string; timeoutMs: number }) => Promise<{ code: number; stdout: string; timedOut?: boolean }>;
 
@@ -122,8 +122,8 @@ function checked(answer: { code: number; timedOut?: boolean }) {
   if (answer.code !== 0) throw new AnalystFailure(`exit ${answer.code}`);
 }
 
-function findingsIn(read: () => Findings | undefined): Findings {
-  let found: Findings | undefined;
+function answerIn<T>(read: () => T | undefined): T {
+  let found: T | undefined;
   try {
     found = read();
   } catch {}
@@ -131,27 +131,33 @@ function findingsIn(read: () => Findings | undefined): Findings {
   return found;
 }
 
-export function modelAnalyst(row: ModelRow, home: string, env: Env, spawn: Spawn): Analyst {
-  return async (item, index, run) => {
-    const input = `Memory index:\n${index}\n\nSession:\n${render(item)}`;
+export type Ask<T> = (input: string, cwd: string) => Promise<T>;
+
+export function modelAsk<T>(row: ModelRow, home: string, env: Env, spawn: Spawn, prompt: string, schema: object): Ask<T> {
+  return async (input, cwd) => {
     if (row.provider === "claude") {
-      const answer = await spawn(analystCommand(row, run), { cwd: run, env: claudeEnv(home, env), stdin: input, timeoutMs: analystTimeoutMs });
+      const answer = await spawn(analystCommand(row, cwd, prompt, schema), { cwd, env: claudeEnv(home, env), stdin: input, timeoutMs: analystTimeoutMs });
       checked(answer);
-      return findingsIn(() => {
-        const parsed = JSON.parse(answer.stdout) as { is_error?: boolean; structured_output?: Findings };
+      return answerIn(() => {
+        const parsed = JSON.parse(answer.stdout) as { is_error?: boolean; structured_output?: T };
         return parsed.is_error ? undefined : parsed.structured_output;
       });
     }
     const scratch = mkdtempSync(join(tmpdir(), "fleet-dream-analyst-"));
     try {
-      writeFileSync(join(scratch, "schema.json"), JSON.stringify(analystSchema));
-      const answer = await spawn(analystCommand(row, scratch), { cwd: scratch, env, stdin: `${analystPrompt}\n\n${input}`, timeoutMs: analystTimeoutMs });
+      writeFileSync(join(scratch, "schema.json"), JSON.stringify(schema));
+      const answer = await spawn(analystCommand(row, scratch, prompt, schema), { cwd: scratch, env, stdin: `${prompt}\n\n${input}`, timeoutMs: analystTimeoutMs });
       checked(answer);
-      return findingsIn(() => JSON.parse(readFileSync(join(scratch, "answer.json"), "utf8")) as Findings);
+      return answerIn(() => JSON.parse(readFileSync(join(scratch, "answer.json"), "utf8")) as T);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
   };
+}
+
+export function modelAnalyst(row: ModelRow, home: string, env: Env, spawn: Spawn): Analyst {
+  const ask = modelAsk<Findings>(row, home, env, spawn, analystPrompt, analystSchema);
+  return (item, index, run) => ask(`Memory index:\n${index}\n\nSession:\n${render(item)}`, run);
 }
 
 const weight = (item: Digest) => item.entries.filter((entry) => entry.role === "user").length * 2 + item.entries.filter((entry) => entry.role === "error").length;

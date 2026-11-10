@@ -232,15 +232,19 @@ describe("memory recall on a tool call", () => {
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("run deploy-gate") })).context).toContain("Wait for the gate.");
   });
 
-  test("the sync forgets what it showed in sessions idle for a week", async () => {
+  test("the sync forgets what it showed in sessions idle for a week, and drops the shown-note log after 30 days", async () => {
     const home = await machineWithMemory(notes, "file:///nowhere/notes.git");
     await fire(home, "claude", "PreToolUse", { session_id: "old", cwd: home, ...bash("fleet proof 12") });
     await fire(home, "claude", "PreToolUse", { session_id: "recent", cwd: home, ...bash("fleet proof 12") });
     const claimed = join(home, ".local/state/fleet/memory/claimed");
-    const weekAgo = new Date(Date.now() - 8 * 24 * 3600 * 1000);
-    utimesSync(join(claimed, "old"), weekAgo, weekAgo);
+    const shown = join(home, ".local/state/fleet/memory/shown");
+    const daysAgo = (days: number) => new Date(Date.now() - days * 24 * 3600 * 1000);
+    utimesSync(join(claimed, "old"), daysAgo(8), daysAgo(8));
+    utimesSync(join(shown, "old.jsonl"), daysAgo(31), daysAgo(31));
+    utimesSync(join(shown, "recent.jsonl"), daysAgo(29), daysAgo(29));
     await fleet(["memory-sync"], home);
     expect(readdirSync(claimed)).toEqual(["recent"]);
+    expect(readdirSync(shown)).toEqual(["recent.jsonl"]);
   });
 
   test("shows a note once when parallel calls name its trigger at the same time", async () => {
