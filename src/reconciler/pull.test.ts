@@ -35,11 +35,25 @@ test("when the hub does not answer or refuses, the node keeps its stored credent
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
 });
 
-test("fleet credential answers only on the hub, and only for a node that the profile names", async () => {
-  const { hub, node } = linkedFleets(temp);
+test("fleet credential on the hub prints only the key for a node that the profile names, and what the service says goes to standard error", async () => {
+  const { hub, hubFleet } = linkedFleets(temp);
   await hub("apply");
-  expect(await hub("credential", "issued/issued-api", "node-2")).toEqual({ code: 0, output: "key-2-for-node-2" });
+  expect(await hubFleet(["credential", "issued/issued-api", "node-2"])).toEqual({ code: 0, stdout: "key-2-for-node-2\n", stderr: "Issuing a key for node-2\n" });
+});
+
+test("fleet credential refuses a node that the profile does not name", async () => {
+  const { hub } = linkedFleets(temp);
+  await hub("apply");
   expect(await hub("credential", "issued/issued-api", "stranger")).toEqual({ code: 1, output: "fleet: stranger is not a node of your profile. Name it in devboxes, or run fleet devbox add stranger." });
+});
+
+test("fleet credential refuses to run off the hub", async () => {
+  const { node } = linkedFleets(temp);
   expect(await node("credential", "issued/issued-api", "node-2")).toEqual({ code: 1, output: "fleet: fleet credential runs on the hub, hub-1." });
+});
+
+test("fleet credential refuses a service that is not in the catalog", async () => {
+  const { hub } = linkedFleets(temp);
+  await hub("apply");
   expect(await hub("credential", "issued/issued-spare", "node-2")).toEqual({ code: 1, output: "fleet: the service catalog has no issued/issued-spare: its workflow or plan is off in your profile." });
 });

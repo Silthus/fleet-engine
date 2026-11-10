@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { jobsAdapter } from "../adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../cli.ts";
@@ -25,12 +25,19 @@ function machine(saved: MachineFile, extra: Record<string, string> = {}) {
   }
   const home = temp.make("home-");
   const profile = temp.make("profile-");
-  const writeProfile = (fields: { packs?: string[]; workflows?: Record<string, boolean> } = {}) =>
-    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: fields.packs ?? ["served", ...Object.keys(extra)], plan: "claude", settings: {}, workflows: fields.workflows ?? {}, hub: "hub-1", devboxes: ["node-2"] }));
+  const writeProfile = (fields: { packs?: string[]; workflows?: Record<string, boolean>; devboxes?: string[] } = {}) =>
+    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: fields.packs ?? ["served", ...Object.keys(extra)], plan: "claude", settings: {}, workflows: fields.workflows ?? {}, hub: "hub-1", devboxes: fields.devboxes ?? ["node-2"] }));
   writeProfile();
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...saved, profileDir: profile }));
   const systemd = fakeSystemd();
+  const launcher = join(home, ".local/state/fleet/jobs/hub-forward.sh");
+  let started: string | undefined;
+  const run: typeof systemd.run = async (command, options) => {
+    const answer = await systemd.run(command, options);
+    if (command.join(" ") === "systemctl --user restart fleet-hub-forward.service") started = readFileSync(launcher, "utf8");
+    return answer;
+  };
   let lines: string[] = [];
   const options: CliOptions = {
     home,
@@ -40,7 +47,7 @@ function machine(saved: MachineFile, extra: Record<string, string> = {}) {
     print: (line) => lines.push(line),
     hostname: () => saved.name!,
     run: async (command) => (command[0] === "/bin/sh" && command[1] === join(engine, "fleet") ? main(command.slice(2), { ...options, print: () => {} }) : 0),
-    adapters: () => [filesAdapter, jobsAdapter({ run: systemd.run, engineRoot: engine })],
+    adapters: () => [filesAdapter, jobsAdapter({ run, engineRoot: engine })],
   };
   const apply = async () => {
     lines = [];
@@ -48,13 +55,14 @@ function machine(saved: MachineFile, extra: Record<string, string> = {}) {
   };
   mkdirSync(join(home, ".local/bin"), { recursive: true });
   writeFileSync(join(home, ".local/bin/ssh"), `#!/bin/sh\nprintf '%s\\n' "$@"\n`, { mode: 0o755 });
-  const launcher = join(home, ".local/state/fleet/jobs/hub-forward.sh");
   const log = join(home, ".local/state/fleet/jobs/hub-forward.log");
+  const running = join(home, "running-forward.sh");
   const forward = () => {
     const state = systemd.service(home, "hub-forward");
-    if (state !== "running" || !existsSync(launcher)) return state;
+    if (state !== "running" || started === undefined) return state;
+    writeFileSync(running, started);
     writeFileSync(log, "");
-    Bun.spawnSync(["/bin/sh", launcher], { env: { HOME: home } });
+    Bun.spawnSync(["/bin/sh", running], { env: { HOME: home } });
     const words = readFileSync(log, "utf8").trimEnd().split("\n");
     const ports = words.flatMap((word, index) => (words[index - 1] === "-L" ? [word] : []));
     return { to: words.at(-1), batch: words.includes("BatchMode=yes"), ports };
@@ -62,26 +70,43 @@ function machine(saved: MachineFile, extra: Record<string, string> = {}) {
   return { apply, forward, writeProfile };
 }
 
-test("a node's apply renders one forward to the hub with the catalog's ports, and a catalog change rewrites it", async () => {
+test("a node's apply starts one forward to the hub with the catalog's ports", async () => {
   const fleet = machine(node);
   expect((await fleet.apply()).code).toBe(0);
   expect(fleet.forward()).toEqual({ to: "hub-1", batch: true, ports: ["127.0.0.1:4555:127.0.0.1:4555"] });
+});
 
+test("a catalog change restarts the forward with the new ports", async () => {
+  const fleet = machine(node);
+  await fleet.apply();
   fleet.writeProfile({ workflows: { "served-extra": true } });
   expect((await fleet.apply()).code).toBe(0);
   expect(fleet.forward()).toEqual({ to: "hub-1", batch: true, ports: ["127.0.0.1:4555:127.0.0.1:4555", "127.0.0.1:4556:127.0.0.1:4556"] });
+});
 
+test("an empty catalog removes the forward", async () => {
+  const fleet = machine(node);
+  await fleet.apply();
   fleet.writeProfile({ packs: [] });
   expect((await fleet.apply()).code).toBe(0);
   expect(fleet.forward()).toBe("gone");
 });
 
-test("the hub renders no forward, and neither does a machine that the profile does not name", async () => {
+test("the hub renders no forward", async () => {
   const onHub = machine(hub);
   expect((await onHub.apply()).code).toBe(0);
   expect(onHub.forward()).toBe("gone");
+});
 
+test("a machine that the profile does not name renders no forward", async () => {
+  const stranger = machine({ schema: 1, role: "devbox", coder: true, name: "devbox-9" });
+  expect((await stranger.apply()).code).toBe(0);
+  expect(stranger.forward()).toBe("gone");
+});
+
+test("a box renders no forward even when the profile names it, because its box forward carries the hub's ports", async () => {
   const box = machine({ schema: 1, role: "devbox", coder: true, name: "box-lane" });
+  box.writeProfile({ devboxes: ["node-2", "box-lane"] });
   expect((await box.apply()).code).toBe(0);
   expect(box.forward()).toBe("gone");
 });

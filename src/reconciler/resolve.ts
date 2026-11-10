@@ -158,8 +158,10 @@ function serviceCatalog(order: Candidate[], profile: Profile, active: Set<string
 
 /** A node that the profile names, other than the hub, reaches the hub's services through its own forward. The Mac and boxes keep today's forwards. */
 function forwardsToHub(profile: Profile, machine: MachineFile, os: Os) {
-  return os === "linux" && profile.hub !== undefined && machine.name !== undefined && machine.name !== profile.hub && Boolean(profile.devboxes?.includes(machine.name));
+  return os === "linux" && profile.hub !== undefined && machine.name !== undefined && machine.name !== profile.hub && !boxName.test(machine.name) && Boolean(profile.devboxes?.includes(machine.name));
 }
+
+const boxName = /^box-/;
 
 /** Workflow and job ids are global: the profile and the Jobs adapter key on them alone. */
 function checkUniqueIds(order: Candidate[]) {

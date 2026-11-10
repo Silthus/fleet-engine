@@ -27,6 +27,7 @@ export default {
         health: "/health",
         credential: async (ctx, node) => {
           if (await ctx.secrets.read("refuse")) throw new Error("the service said no");
+          ctx.print(`Issuing a key for ${node}`);
           const count = Number((await ctx.secrets.read("count")) ?? "0") + 1;
           await ctx.secrets.write("count", String(count));
           return `key-${count}-for-${node}`;

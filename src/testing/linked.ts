@@ -43,5 +43,5 @@ export function linkedFleets(temp: ReturnType<typeof tempDirs>) {
   };
   const hub = machine(hubMachine);
   hosts["hub-1"] = hub.fleet;
-  return { hub: hub.typed, node: machine(nodeMachine).typed, other: (saved: MachineFile) => machine(saved).typed, hosts, profile };
+  return { hub: hub.typed, hubFleet: hub.fleet, node: machine(nodeMachine).typed, other: (saved: MachineFile) => machine(saved).typed, hosts, profile };
 }
