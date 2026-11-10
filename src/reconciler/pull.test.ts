@@ -85,29 +85,56 @@ test("a pull waits for a slow hub until its deadline, then gives up and the node
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-3-for-node-2");
 });
 
-test("a pull's finding names the hub's own error and never what the service logged", async () => {
-  const { hub, node, hosts } = linkedFleets(temp);
+test("a pull's finding never names what the service printed or threw on the hub", async () => {
+  const { hub, node } = linkedFleets(temp);
   await hub("apply");
   await node("apply");
 
-  hosts["hub-1"] = async () => ({ code: 137, stdout: "", stderr: "Issuing key-9-for-node-2\n" });
-  const killed = await node("apply");
-  expect(killed.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (exit 137). Kept the one this machine has.");
-  expect(killed.output).not.toContain("key-9");
+  await hub("issued", "crash");
+  const crashed = await node("apply");
+  expect(crashed.output).toContain("(fleet: the service failed without an error message.)");
+  expect(crashed.output).not.toContain("leaked-key");
 
-  hosts["hub-1"] = async () => ({ code: 1, stdout: "", stderr: "Issuing key-9-for-node-2\nfleet: the service said no\nkey-9-for-node-2\n" });
-  const refused = await node("apply");
-  expect(refused.output).toContain("(fleet: the service said no)");
-  expect(refused.output).not.toContain("key-9");
+  await hub("issued", "leak");
+  const leaked = await node("apply");
+  expect(leaked.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (fleet: the issue failed). Kept the one this machine has.");
+  expect(leaked.output).not.toContain("leaked-key");
+});
 
-  hosts["hub-1"] = async () => ({ code: 127, stdout: "", stderr: "sh: 1: fleet: not found\n" });
-  expect((await node("apply")).output).toContain("(sh: 1: fleet: not found)");
+test("fleet credential frames each line the service prints with its pack, and gives one line for an error", async () => {
+  const { hub, hubFleet } = linkedFleets(temp);
+  await hub("apply");
+  await hub("issued", "leak");
+  expect(await hubFleet(["credential", "issued/issued-api", "node-2"])).toEqual({ code: 1, stdout: "", stderr: "issued: fleet: leaked-key\nissued: leaked-key\nfleet: the issue failed\n" });
+});
+
+test("a non-Error that the service throws on the hub fails with one fixed line", async () => {
+  const { hub, hubFleet } = linkedFleets(temp);
+  await hub("apply");
+  await hub("issued", "crash");
+  expect(await hubFleet(["credential", "issued/issued-api", "node-2"])).toEqual({ code: 1, stdout: "", stderr: "fleet: the service failed without an error message.\n" });
+});
+
+test("a pull's finding names ssh's or the hub shell's own line, and the last line of the hub's fleet, but no line of the service", async () => {
+  const { hub, node, hosts } = linkedFleets(temp);
+  await hub("apply");
+  await node("apply");
+  const reason = async (code: number, stderr: string) => {
+    hosts["hub-1"] = async () => ({ code, stdout: "", stderr });
+    return (await node("apply")).output.match(/hub-1 \((.*)\)\. Kept/)?.[1];
+  };
+  expect(await reason(137, "issued: key-9-for-node-2\n")).toBe("exit 137");
+  expect(await reason(255, "issued: key-9-for-node-2\n")).toBe("exit 255");
+  expect(await reason(255, "issued: key-9-for-node-2\nPermission denied (publickey).\n")).toBe("Permission denied (publickey).");
+  expect(await reason(126, "sh: 1: fleet: Permission denied\n")).toBe("sh: 1: fleet: Permission denied");
+  expect(await reason(127, "sh: 1: fleet: not found\n")).toBe("sh: 1: fleet: not found");
+  expect(await reason(1, "fleet: the first\nissued: fleet: key-9-for-node-2\nfleet: the last\nissued: key-9-for-node-2\n")).toBe("fleet: the last");
 });
 
 test("fleet credential on the hub prints only the key for a node that the profile names, and what the service says goes to standard error", async () => {
   const { hub, hubFleet } = linkedFleets(temp);
   await hub("apply");
-  expect(await hubFleet(["credential", "issued/issued-api", "node-2"])).toEqual({ code: 0, stdout: "key-2-for-node-2\n", stderr: "Issuing a key for node-2\n" });
+  expect(await hubFleet(["credential", "issued/issued-api", "node-2"])).toEqual({ code: 0, stdout: "key-2-for-node-2\n", stderr: "issued: Issuing a key for node-2\n" });
 });
 
 test("fleet credential refuses a node that the profile does not name", async () => {

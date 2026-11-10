@@ -261,22 +261,22 @@ async function pullCredentials(entries: CatalogEntry[], node: string, hub: strin
       if ((await store.read(name)) !== value) await store.write(name, value);
       continue;
     }
-    const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : pullError(answer.code, answer.stderr ?? "");
+    const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : pullError(answer.code, answer.stderr ?? "", entry.pack);
     const kept = (await store.read(name)) ? "Kept the one this machine has." : "Fleet tries again at the next apply.";
     findings.push({ id: `credential:${service}`, pack: entry.pack, say: `Could not pull the credential of ${service} from the hub ${hub} (${reason}). ${kept}`, repair: "apply" });
   }
   return findings;
 }
 
-/** Why a pull failed, without what the service logged on the hub: the hub fleet's own error line, or the line of ssh or the hub's shell when they failed before fleet ran. */
-function pullError(code: number, stderr: string) {
-  const lines = stderr.trim().split("\n");
+/** Why a pull failed, without what the service printed on the hub, which fleet credential frames with its pack: the hub fleet's own error line, or the line of ssh or the hub's shell. */
+function pullError(code: number, stderr: string, pack: string) {
+  const lines = stderr.trim().split("\n").filter((line) => !line.startsWith(`${pack}: `));
   const own = lines.findLast((line) => line.startsWith("fleet: "));
   if (own) return own;
   return ([126, 127, 255].includes(code) && lines.at(-1)) || `exit ${code}`;
 }
 
-/** On the hub: the credential that a served service issues for a node of the profile, printed for that node's pull. */
+/** On the hub: the credential that a served service issues for a node of the profile, printed for that node's pull. Each line the service prints goes to standard error after its pack's name, and its error as one line, so the node can tell them apart. */
 async function credential(args: string[], options: CliOptions) {
   const [item = "", node, ...extra] = args;
   const slash = item.indexOf("/");
@@ -289,8 +289,15 @@ async function credential(args: string[], options: CliOptions) {
   if (![profile.hub ?? plan.machine.name, ...(profile.devboxes ?? [])].includes(node)) throw new Error(`${node} is not a node of your profile. Name it in devboxes, or run fleet devbox add ${node}.`);
   const loaded = loadedPack(sources, pack)!;
   const issue = loaded.code!.credentials[id]!;
-  const said = { ...options, print: options.fail ?? (() => {}) };
-  return inPack(plan, loaded, said, async (ctx) => (options.print(await issued(issue(ctx, node))), 0));
+  const fail = options.fail ?? (() => {});
+  const said = { ...options, print: (text: string) => text.split("\n").forEach((line) => fail(`${pack}: ${line}`)) };
+  return inPack(plan, loaded, said, async (ctx) => {
+    try {
+      return options.print(await issued(issue(ctx, node))), 0;
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message.split("\n")[0] : "the service failed without an error message.");
+    }
+  });
 }
 
 function loadedPack(sources: FetchedSource[], name: string): LoadedPack | undefined {
