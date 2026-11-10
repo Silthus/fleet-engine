@@ -358,7 +358,7 @@ function skillDir(pack: string, packDir: string, path: string, sources: FetchedS
 }
 
 function packCommands(order: Candidate[]) {
-  const commands: Plan["commands"] = {};
+  const commands: Plan["commands"] = Object.create(null);
   const add = (name: string, pack: string, path: string) => {
     if (engineCommands.includes(name)) throw new ResolveError(`${pack}: command ${name} is reserved by the engine`);
     const other = commands[name];
