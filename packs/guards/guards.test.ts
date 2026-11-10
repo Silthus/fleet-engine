@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AvailableSource, Plan } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
@@ -115,6 +115,22 @@ describe("the shell guards through the hook dispatcher", () => {
     expect(await preToolUse(home, provider, check("task-b"))).toEqual({ code: 0, refusal: undefined });
   });
 
+  test("finds a repeated task_status check in long entries at the end of a transcript too large to read at once", () => {
+    const home = homeWith(withGuards());
+    const transcript = join(home, "transcript.jsonl");
+    const status = { type: "tool_use", id: "call-1", name: "mcp__t3-code__task_status", input: { taskId: "task-a" } };
+    const lines = [
+      { type: "user", message: { content: "Review the PR." } },
+      { type: "assistant", message: { content: [{ type: "text", text: "x".repeat(200_000) }, status] } },
+      { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call-1", content: "running" }] } },
+    ];
+    writeFileSync(transcript, "");
+    truncateSync(transcript, 100 * 1024 ** 3);
+    appendFileSync(transcript, `\n${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+    const call: ToolCall = { tool_name: "mcp__t3-code__task_status", tool_input: { taskId: "task-a" }, tool_use_id: "call-2", transcript_path: transcript };
+    expect(guard(call, home)?.hookSpecificOutput.permissionDecisionReason).toContain("`t3_thread_wait`");
+  });
+
   test("lets the first task_status check after a new message through", async () => {
     const home = homeWith(withGuards());
     const transcript = join(home, "transcript.jsonl");
@@ -153,11 +169,34 @@ describe("the shell guards through the hook dispatcher", () => {
 describe("the wait guard", () => {
   const refusal = (command: string) => guard(bash(command), temp.make("home-"))?.hookSpecificOutput.permissionDecisionReason;
 
-  test.each(["sleep 60; gh pr checks 12", "sleep 11 && curl -s localhost:8000/health", "gh run view 1; sleep 120.5; gh run view 1"])("refuses a pause over 10 seconds outside a waiting loop: %s", (command) => {
+  test.each([
+    "sleep 60; gh pr checks 12",
+    "sleep 11 && curl -s localhost:8000/health",
+    "gh run view 1; sleep 120.5; gh run view 1",
+    'echo "waiting for CI"; sleep 60; gh pr checks 12',
+    "for i in 1 2; do echo $i; done; sleep 60; gh pr checks 12",
+    "sleep 1m && gh pr checks 12",
+    "sleep 1e2; gh run view 1",
+    "sleep infinity",
+    "sleep 5 6 && gh pr checks 12",
+    "bash -c 'sleep 30; gh pr checks 12'",
+  ])("refuses a pause over 10 seconds outside a waiting loop: %s", (command) => {
     expect(refusal(command)).toContain("costs a model turn");
   });
 
-  test.each(["sleep 10 && gh pr checks 12", "for i in 1 2 3; do sleep 30; curl -sf localhost:8000 && break; done", "while ! test -f done; do sleep 20; done", "gh run watch 7 --exit-status"])("allows a short pause or one blocking wait: %s", (command) => {
+  test.each([
+    "sleep 10 && gh pr checks 12",
+    "sleep 4 5 && gh pr checks 12",
+    "sleep 0.1m && gh pr checks 12",
+    "for i in 1 2 3; do sleep 30; curl -sf localhost:8000 && break; done",
+    "while ! test -f done; do sleep 20; done",
+    "timeout 600 bash -c 'until gh pr checks 12; do sleep 30; done'",
+    "for host in a b; do bash -c 'sleep 15; ls'; done",
+    "echo next: sleep 30 then check",
+    "gh run watch 7 --exit-status",
+    "rg 'sleep 60' docs",
+    "cat > notes.md <<'EOF'\nWait with sleep 60 between checks.\nEOF",
+  ])("allows a short pause, one blocking wait, or text about sleep: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
   });
 });
