@@ -69,6 +69,11 @@
       "path": "hooks/memory-index.ts",
       "target": ".config/fleet/hooks/SessionStart/memory-index.ts",
       "workflow": "shared-memory"
+    },
+    {
+      "path": "hooks/memory-recall.ts",
+      "target": ".config/fleet/hooks/PreToolUse/memory-recall.ts",
+      "workflow": "shared-memory"
     }
   ],
   "jobs": [
