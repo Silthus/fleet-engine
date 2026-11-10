@@ -1,6 +1,10 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { parse } from "smol-toml";
+import { providerConfigAdapter } from "../../src/adapters/provider-config/adapter.ts";
+import { apply } from "../../src/reconciler/apply.ts";
+import { codexProviderTable } from "./lib/cli-proxy.ts";
 import type { AvailableSource, MachineFile, MachineRole, Plan, Profile } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
@@ -189,6 +193,7 @@ describe("the Own-account balancing workflow", () => {
     config: result.config.filter((entry) => entry.workflow === "own-account-balancing").map((entry) => `${entry.provider}:${entry.key}`),
   });
   const nothing = { jobs: [], steps: [], checks: [], config: [] };
+  const codexRoute = ["codex:model_provider", "codex:model_providers.fleet-proxy"];
 
   test("is off by default, needs only the hub, and its risk quotes the Anthropic terms word for word", () => {
     const workflow = manifest().workflows!.find((item) => item.id === "own-account-balancing")!;
@@ -213,18 +218,46 @@ describe("the Own-account balancing workflow", () => {
   });
 
   test("with it on, the hub gets the proxy, its balancer, and the route; a devbox gets only the route; the Mac gets nothing", () => {
-    const route = { checks: ["cli-proxy-client"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper"] };
+    const route = { checks: ["cli-proxy-client"], config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper", ...codexRoute] };
     expect(proxyItems(plan(balancing, hub))).toEqual({ jobs: ["cli-proxy-balance: fleet cli-proxy-balance every 5m"], steps: ["cli-proxy-route", "cli-proxy"], ...route });
     expect(proxyItems(plan(balancing, devbox))).toEqual({ jobs: [], steps: ["cli-proxy-route"], ...route });
     expect(proxyItems(plan(balancing, mac))).toEqual(nothing);
-    for (const machine of [hub, devbox]) expect(proxyItems(plan({ ...balancing, plan: "codex" }, machine))).toEqual(nothing);
     expect(plan(balancing, hub).settings["hub.proxyAccounts"]).toBe(2);
+  });
+
+  test("Codex goes through the proxy only on the both plan, where the hub runs the proxy; a Claude plan routes Claude only, and a Codex plan routes nothing yet", () => {
+    const routed = { jobs: [], steps: ["cli-proxy-route"], checks: ["cli-proxy-client"] };
+    expect(proxyItems(plan({ ...balancing, plan: "both" }, devbox))).toEqual({ ...routed, config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper", ...codexRoute] });
+    expect(proxyItems(plan({ ...balancing, plan: "claude" }, devbox))).toEqual({ ...routed, config: ["claude:env.ANTHROPIC_BASE_URL", "claude:apiKeyHelper"] });
+    for (const machine of [hub, devbox]) expect(proxyItems(plan({ ...balancing, plan: "codex" }, machine))).toEqual(nothing);
+    for (const ai of ["claude", "codex", "both"] as const) expect(proxyItems(plan({ ...balancing, plan: ai }, mac))).toEqual(nothing);
+  });
+
+  test("the planned Codex provider is the table the route switch recognizes as Fleet's own", () => {
+    expect(plan(balancing, devbox).config.find((entry) => entry.key === "model_providers.fleet-proxy")?.value).toEqual(codexProviderTable);
+  });
+
+  test("a devbox on the both plan gets a Codex config that uses the proxy's Responses route and reads the client key from its private file; a Mac gets none", async () => {
+    const codexConfig = async (machine: MachineFile) => {
+      const home = temp.make("fleet-codex-route-");
+      const result = plan({ ...balancing, plan: "both" }, machine);
+      const report = await apply({ ...result, config: result.config.filter((entry) => entry.pack === "hub"), steps: [], checks: [], jobs: [], human: [] }, { home, adapters: [providerConfigAdapter()] });
+      expect(report.ok).toBe(true);
+      return existsSync(join(home, ".codex/config.toml")) ? parse(readFileSync(join(home, ".codex/config.toml"), "utf8")) : undefined;
+    };
+    expect(await codexConfig(devbox)).toEqual({
+      model_provider: "fleet-proxy",
+      model_providers: {
+        "fleet-proxy": { name: "Fleet CLI proxy", base_url: "http://127.0.0.1:8317/v1", wire_api: "responses", auth: { command: "/bin/sh", args: ["-c", "cat \"$HOME/.config/fleet/cli-proxy.key\""] } },
+      },
+    });
+    expect(await codexConfig(mac)).toBeUndefined();
   });
 
   test("sends Claude Code to the loopback proxy, and keeps the client key out of the settings: Claude reads it from a private file", () => {
     const config = plan(balancing, devbox).config.filter((entry) => entry.workflow === "own-account-balancing");
-    expect(Object.fromEntries(config.map((entry) => [entry.key, entry.value]))).toEqual({ "env.ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", apiKeyHelper: "cat \"$HOME/.config/fleet/cli-proxy.key\"" });
-    expect(config.map((entry) => entry.pack)).toEqual(["hub", "hub"]);
+    expect(Object.fromEntries(config.filter((entry) => entry.provider === "claude").map((entry) => [entry.key, entry.value]))).toEqual({ "env.ANTHROPIC_BASE_URL": "http://127.0.0.1:8317", apiKeyHelper: "cat \"$HOME/.config/fleet/cli-proxy.key\"" });
+    expect(config.map((entry) => entry.pack)).toEqual(["hub", "hub", "hub", "hub"]);
   });
 
   test("runs the route before the hub's other steps, so a failed step can never leave Claude Code at a dead proxy", () => {
