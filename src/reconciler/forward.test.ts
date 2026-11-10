@@ -31,11 +31,16 @@ function machine(saved: MachineFile, extra: Record<string, string> = {}) {
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...saved, profileDir: profile }));
   const systemd = fakeSystemd();
-  const launcher = join(home, ".local/state/fleet/jobs/hub-forward.sh");
-  let started: string | undefined;
+  const unit = join(home, ".config/systemd/user/fleet-hub-forward.service");
+  const log = join(home, ".local/state/fleet/jobs/hub-forward.log");
+  let started: string[] | undefined;
   const run: typeof systemd.run = async (command, options) => {
     const answer = await systemd.run(command, options);
-    if (command.join(" ") === "systemctl --user restart fleet-hub-forward.service") started = readFileSync(launcher, "utf8");
+    if (command.join(" ") !== "systemctl --user restart fleet-hub-forward.service") return answer;
+    const execStart = readFileSync(unit, "utf8").match(/^ExecStart=(.+)$/m)![1]!;
+    writeFileSync(log, "");
+    Bun.spawnSync(["/bin/sh", "-c", execStart], { env: { HOME: home } });
+    started = readFileSync(log, "utf8").trimEnd().split("\n");
     return answer;
   };
   let lines: string[] = [];
@@ -55,15 +60,10 @@ function machine(saved: MachineFile, extra: Record<string, string> = {}) {
   };
   mkdirSync(join(home, ".local/bin"), { recursive: true });
   writeFileSync(join(home, ".local/bin/ssh"), `#!/bin/sh\nprintf '%s\\n' "$@"\n`, { mode: 0o755 });
-  const log = join(home, ".local/state/fleet/jobs/hub-forward.log");
-  const running = join(home, "running-forward.sh");
   const forward = () => {
     const state = systemd.service(home, "hub-forward");
     if (state !== "running" || started === undefined) return state;
-    writeFileSync(running, started);
-    writeFileSync(log, "");
-    Bun.spawnSync(["/bin/sh", running], { env: { HOME: home } });
-    const words = readFileSync(log, "utf8").trimEnd().split("\n");
+    const words = started;
     const ports = words.flatMap((word, index) => (words[index - 1] === "-L" ? [word] : []));
     return { to: words.at(-1), batch: words.includes("BatchMode=yes"), ports };
   };

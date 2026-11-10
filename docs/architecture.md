@@ -259,7 +259,9 @@ and Fleet does not wrap it in a unit.
   proxy port then joins the catalog, and the rest goes with `peers`. It no
   longer carries the gateway port to a devbox that the profile names. A
   devbox that only the hub's machine file names (`fleet devbox add`) keeps
-  the gateway port in its hub tunnel until the profile names it. A box gets
+  the gateway port in its hub tunnel until the profile names it and names
+  a hub. In the switch, the node's forward retries until the hub's tunnel
+  lets go of the port, so the gateway is back once both have applied. A box gets
   no `hub-forward`, even when the profile names it, because its box forward
   carries the hub's ports. The other two drivers stay in today's code.
   *Reason:* a forward is not a command channel, and one topology that works
