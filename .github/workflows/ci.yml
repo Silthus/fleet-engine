@@ -25,6 +25,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Move the runner's gh aside, so get.sh has to install it
+        run: sudo mv "$(command -v gh)" /usr/local/share/gh-runner
       - name: A new Linux user runs get.sh, fleet setup, and fleet doctor from this tree
         run: sudo FLEET_PROOF_ENGINE="$GITHUB_WORKSPACE" sh proof/fresh-linux.sh
   gitleaks-install:
