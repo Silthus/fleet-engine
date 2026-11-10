@@ -381,7 +381,7 @@ test("stops with one plain line, without the key, when the gateway refuses it", 
   const done = bridge({ client: { baseUrl: gateway.baseUrl, token: "mcphub_revoked-token" }, stdin: client.stdin, write: client.write, fail: client.fail, fetch });
   client.send(initialize);
   expect(await done).toBe(1);
-  expect(client.errors).toEqual(["The MCP gateway refused this machine's key. On the hub, run: fleet mcp-gateway grant <this machine's SSH name>"]);
+  expect(client.errors).toEqual(["The MCP gateway refused this machine's key. Run fleet apply on this machine to pull its key from the hub."]);
   expect(client.received).toEqual([]);
 });
 
