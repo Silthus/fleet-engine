@@ -5,6 +5,7 @@ Shared memory is `~/.agents/memory`, a clone of the private repo in `memory.repo
 ## Recall
 
 - A session starts with the main index, `MEMORY.md`, and the index of the repo it works in, `projects/<repo>/INDEX.md`. Fleet adds them when the session starts. The repo is the last part of the checkout's `origin` URL, such as `notes-app` for `you/notes-app`. Read an index yourself when your harness did not load it.
+- Before a tool call, Fleet shows each memory whose `triggers:` the call names, once per session. A repo memory shows only in a session in that repo. The trigger list comes from the last sync, so a trigger you add shows after the next one.
 - Search before you research a fact about me, my machines, my tools, or a repo: `grep -ril --exclude-dir=.git <term> ~/.agents/memory`.
 - A memory is true as of when it was written. Check a file, flag, or command it names before you act on it, and fix the memory when it is wrong.
 
@@ -25,6 +26,8 @@ Memory holds what recurs. A preference or decision for one pull request, ticket,
     type: user | feedback | project | reference
   ---
   ```
+
+  Add `triggers: [term, "another term"]` to the frontmatter when a word in a tool call means the memory matters now, such as a command name or a flag. Use terms of 4 characters or more that seldom appear elsewhere: a trigger matches whole words in any part of the call.
 
   The types: `user` is a fact about me; `feedback` is a correction or preference from me, with its reason; `project` is a fact about ongoing work that the code does not show; `reference` is where outside information lives. The type `project` is not the same as the `projects/` folder: any type can live in any folder.
 
