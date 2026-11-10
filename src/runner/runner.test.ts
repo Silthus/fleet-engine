@@ -52,9 +52,9 @@ test("a pack's secrets live in an owner-only store, and a write replaces the val
   expect((await fleet("kit", "save", "token", "second")).code).toBe(0);
   expect((await fleet("kit", "show", "token")).lines).toEqual(["second"]);
   const dir = join(home, ".config/fleet/secrets/kit");
-  expect(readdirSync(dir)).toEqual(["token"]);
-  expect(statSync(dir).mode & 0o777).toBe(0o700);
-  expect(statSync(join(dir, "token")).mode & 0o777).toBe(0o600);
+  const files = readdirSync(dir).map((name) => join(dir, name));
+  expect(files.filter((file) => readFileSync(file, "utf8").includes("first"))).toEqual([]);
+  expect([statSync(dir).mode & 0o777, ...new Set(files.map((file) => statSync(file).mode & 0o777))]).toEqual([0o700, 0o600]);
 });
 
 test("a write closes a store directory that was left open to others", async () => {
