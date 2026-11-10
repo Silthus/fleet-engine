@@ -55,6 +55,13 @@ you pick.
 
 ### Known gaps
 
+CI proves the Linux first-run path on every pull request: a new Linux user
+runs `get.sh` from the pull request's tree, then `fleet setup --non-interactive
+--preset everyday` and `fleet doctor`, with a sandbox GitHub account. A second
+user installs from the profile repo that setup made, the way a devbox does.
+Setup leaves only the real sign-ins open, and `fleet doctor` finds nothing
+open for either user.
+
 These paths are built but not yet proved end to end, because each needs a
 person's sign-in or machine: a run on a clean Mac user, real GitHub, Claude,
 and ChatGPT sign-ins, `t3 up --connect`, and a live Coder devbox.

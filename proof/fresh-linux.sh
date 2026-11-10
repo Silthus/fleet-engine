@@ -32,6 +32,10 @@ die() { printf 'proof: %s\n' "$*" >&2; exit 2; }
 for tool in useradd userdel loginctl systemctl crontab curl git setsid sudo sha256sum ss python3; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is missing."
 done
+for tool in gh bun; do
+  found=$(PATH=/usr/local/bin:/usr/bin:/bin; command -v "$tool" || true)
+  [ -z "$found" ] || die "$tool is installed at $found, so the proof cannot show that get.sh installs it. Run it on a box without $tool, or move $found aside."
+done
 for user in "$user_a" "$user_b"; do
   ! id "$user" >/dev/null 2>&1 || die "user $user exists already. Remove it, or set FLEET_PROOF_USER_A and FLEET_PROOF_USER_B."
 done
@@ -222,6 +226,7 @@ sign_in() {
 home_files() {
   find . \( -path ./.t3 -o -path ./.cache -o -path ./.bun -o -path ./.npm -o -path ./.proof \
     -o -path ./.local/share/fleet/sources -o -path ./.local/share/fleet/engine/.git -o -path ./.local/state/fleet/logs \
+    -o -path ./.local/state/fleet/jobs -o -path ./.local/state/fleet/worktree-prune.last -o -path './.local/state/fleet/worktree-sightings.json*' \
     -o -path ./.local/share/claude -o -path ./.local/share/t3code -o -path ./.claude/statsig -o -path ./.claude/todos -o -path ./.codex/tmp \) -prune \
     -o "$@"
 }
