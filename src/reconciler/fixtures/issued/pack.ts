@@ -27,6 +27,7 @@ export default {
         health: "/health",
         credential: async (ctx, node) => {
           if (await ctx.secrets.read("refuse")) throw new Error("the service said no");
+          ctx.print(`Issuing a key for ${node}`);
           const count = Number((await ctx.secrets.read("count")) ?? "0") + 1;
           await ctx.secrets.write("count", String(count));
           return `key-${count}-for-${node}`;
@@ -34,6 +35,11 @@ export default {
       },
     });
     const spare = fleet.service({ on: "hub", id: "issued-spare", when: extra, serve: { port: 4601, health: "/health", credential: async () => "spare" } });
+    fleet.command("issued-admin", {
+      on: "hub",
+      summary: "Show what the hub holds",
+      run: async (args, ctx) => (ctx.print(`${(await ctx.secrets.read("installed")) ?? "not installed"} ${JSON.stringify(args)}`), args.includes("fail") ? 3 : 0),
+    });
     fleet.command("issued", {
       summary: "Use the issued service",
       run: async ([mode], ctx) => {
