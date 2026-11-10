@@ -77,6 +77,32 @@ onLinux("takes the slot count from FLEET_HEAVY_SLOTS over the setting", async ()
   expect(result.stderr).toContain("Fleet heavy: 1 heavy jobs run already");
 });
 
+function routeHandler(bin: string) {
+  const handler = join(bin, "route.ts");
+  const seen = join(bin, "routed.log");
+  writeFileSync(handler, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(seen)}, JSON.stringify({ argv: Bun.argv.slice(2), routed: Bun.env.FLEET_HEAVY_ROUTED }) + "\\n");\nprocess.exit(7);\n`);
+  return { handlers: JSON.stringify({ "heavy-route": handler }), routed: () => (existsSync(seen) ? readFileSync(seen, "utf8").trim().split("\n").map((line) => JSON.parse(line)) : []) };
+}
+
+onLinux("hands a typed heavy command to the heavy-route handler, which decides where it runs", async () => {
+  const { bin, calls } = stubs();
+  const { handlers, routed } = routeHandler(bin);
+  expect(await heavyWith({ FLEET_HANDLERS: handlers }, bin, roomy, "--", "sh", "-c", "echo built")).toMatchObject({ code: 7, stdout: "" });
+  expect(routed()).toEqual([{ argv: ["sh", "-c", "echo built"], routed: "1" }]);
+  expect(calls()).toBe("");
+});
+
+onLinux("runs here when the handler already routed the command, or for a named unit or service", async () => {
+  const { bin, calls } = stubs();
+  const { handlers, routed } = routeHandler(bin);
+  expect(await heavyWith({ FLEET_HANDLERS: handlers, FLEET_HEAVY_ROUTED: "1" }, bin, roomy, "--", "sh", "-c", "echo built")).toMatchObject({ code: 0, stdout: "built\n" });
+  expect(await heavyWith({ FLEET_HANDLERS: handlers }, bin, roomy, "--unit", "lane-a", "--", "true")).toMatchObject({ code: 0 });
+  expect(await heavyWith({ FLEET_HANDLERS: handlers }, bin, roomy, "--service", "preview-a", "--", "true")).toMatchObject({ code: 0 });
+  expect(routed()).toEqual([]);
+  expect(calls()).toContain("--unit=lane-a");
+  expect(calls()).toContain("--unit=preview-a");
+});
+
 onLinux("refuses a slot count that is not a whole number above 0", async () => {
   const { bin, calls } = stubs();
   for (const slots of [0, -1, 1.5]) {
