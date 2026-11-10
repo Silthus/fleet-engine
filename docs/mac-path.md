@@ -111,7 +111,7 @@ The spec names this phase `seedT3`. In the product, `t3Adapter().apply` does it:
 
 ## 5. launchd jobs
 
-**What happens.** On `darwin` the Jobs adapter uses launchd, not cron. The Mac gets `fleet-update` (daily, 03:17), `agent-update` (daily, 03:47) and `worktree-prune` (every 5 minutes) from the Base pack, and `memory-sync` (every 5 minutes) with the Memory pack. The Orchestration T3 tasks are for devboxes and hubs only.
+**What happens.** On `darwin` the Jobs adapter uses launchd, not cron. The Mac gets `fleet-update` (hourly at :17) and `agent-update` (hourly at :47), which run only from 00:00 to 05:59 UTC and stop for the day after their first success, and `worktree-prune` (every 5 minutes) from the Base pack, and `memory-sync` (every 5 minutes) with the Memory pack. The Orchestration T3 tasks are for devboxes and hubs only.
 
 For each job:
 
