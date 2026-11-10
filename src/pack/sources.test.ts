@@ -137,6 +137,16 @@ describe("fetchSource", () => {
     expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v2.", undefined]);
   });
 
+  test("loads a pack.ts whose helper keeps a timer running", async () => {
+    const repo = tsRepo({
+      "packs/team/pack.ts": `import { summary } from "./ticker.ts";\nexport default { sdk: 1, name: "team", summary, register() {} };\n`,
+      "packs/team/ticker.ts": `setInterval(() => {}, 3_600_000);\nexport const summary = "Team rules v1.";\n`,
+    });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v1" }, temp.make("cache-"));
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v1.", undefined]);
+  });
+
   test("never falls back to a cache of another repository", async () => {
     const cache = temp.make("cache-");
     await fetchSource({ name: "team", repo: packRepo("Old repo."), ref: "v1" }, cache);
