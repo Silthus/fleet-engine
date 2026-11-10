@@ -252,7 +252,7 @@ test.concurrent("audit keeps secrets out of what it asks and writes, and flatten
   expect(written.split("\n").filter((line) => line.startsWith("## "))).toEqual(["## no session (1)", "## confirmed (3)", "## Recheck"]);
 });
 
-test("audit starts over from the first commit when main was rewound past its last point", async () => {
+test.concurrent("audit starts over from the first commit when main was rewound past its last point", async () => {
   const { home, run } = hubWithSyncedNotes();
   const writer = join(home, "writer");
   expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => checker().check }).io)).toBe(0);
@@ -268,7 +268,7 @@ test("audit starts over from the first commit when main was rewound past its las
   expect(after.asked.some((input) => input.includes("Memory: tech/trap.md") && input.includes("Always run the slow suite twice."))).toBe(true);
 });
 
-test("audit redacts a note and its change before it clips them, so a secret across the cut does not leak", async () => {
+test.concurrent("audit redacts a note and its change before it clips them, so a secret across the cut does not leak", async () => {
   const { home } = hubWithSyncedNotes();
   const password = ["pretend", "pass", "9z8y7x"].join("-");
   const head = note("hook", { originSessionId: "s-2" }, "").length - 1;
