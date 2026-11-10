@@ -5,18 +5,24 @@ import type { Fetch } from "../../mcp-gateway/lib/client.ts";
 
 export type UsageWindow = { utilization: number; resetsAt?: number };
 export type Usage = { fiveHour?: UsageWindow; sevenDay?: UsageWindow; scoped: UsageWindow[] };
-export type Credential = { name: string; authIndex: string; priority: number; usage?: Usage; quotaCooldown: boolean };
+export type Provider = "claude" | "codex";
+export type Credential = { name: string; authIndex: string; provider: Provider; priority: number; usage?: Usage; quotaCooldown: boolean; blocked: string | false };
 export type Balance = { fetch: Fetch; managementKey: string; now: number; dryRun: boolean; log(line: string): void };
 export type BalanceDeps = { home: string; fetch: Fetch; now(): number; log(line: string): void };
 
 type AuthFile = { name: string; provider?: string; disabled?: boolean; priority?: number; auth_index?: string; unavailable?: boolean; status_message?: string; cooldowns?: { reason?: string }[] };
 type RawWindow = { utilization?: number | null; resets_at?: string | null } | null | undefined;
+type CodexWindow = { used_percent?: number; reset_at?: number; limit_window_seconds?: number } | null | undefined;
+type CodexLimit = { allowed?: boolean; limit_reached?: boolean; primary_window?: CodexWindow; secondary_window?: CodexWindow } | undefined;
+type Call = (path: string, init?: RequestInit) => Promise<unknown>;
 
 export const proxyUrl = "http://127.0.0.1:8317";
 export const proxyDir = (home: string) => join(home, ".local/share/fleet-cli-proxy");
 export const managementFile = (home: string) => join(proxyDir(home), "management.env");
 export const managementPattern = /^MANAGEMENT_PASSWORD=([0-9a-f]{64})\n$/;
 const usageUrl = "https://api.anthropic.com/api/oauth/usage";
+const codexUsageUrl = "https://chatgpt.com/backend-api/wham/usage";
+const providerNames: Record<Provider, string> = { claude: "Claude", codex: "Codex" };
 const strategy = "fill-first";
 const hour = 3_600_000;
 
@@ -26,9 +32,9 @@ export async function management(fetch: Fetch, key: string, path: string, init: 
   return response.json();
 }
 
-export function quotaStatus({ usage }: Credential): "available" | "exhausted" | "unknown" {
-  if (!usage?.sevenDay) return "unknown";
-  const windows = [usage.fiveHour, usage.sevenDay, ...usage.scoped].filter((window) => window !== undefined);
+export function quotaStatus({ usage, provider }: Credential): "available" | "exhausted" | "unknown" {
+  const windows = usage ? [usage.fiveHour, usage.sevenDay, ...usage.scoped].filter((window) => window !== undefined) : [];
+  if (provider === "claude" ? !usage?.sevenDay : !windows.length) return "unknown";
   if (!windows.every((window) => Number.isFinite(window.utilization) && window.utilization >= 0)) return "unknown";
   return windows.some((window) => window.utilization >= 100) ? "exhausted" : "available";
 }
@@ -52,15 +58,21 @@ export async function balance(options: Balance): Promise<void> {
     if (!options.dryRun) await call("routing/strategy", { method: "PUT", body: JSON.stringify({ value: strategy }) });
   }
   const { files } = (await call("auth-files")) as { files: AuthFile[] };
-  const enabled = files.filter((file) => file.provider === "claude" && !file.disabled && file.auth_index);
-  const credentials = await Promise.all(enabled.map(async (file): Promise<Credential> => ({
-    name: file.name, authIndex: file.auth_index!, priority: file.priority ?? 0, quotaCooldown: quotaCooldown(file), usage: await readUsage(call, file.auth_index!),
-  })));
-  if (!credentials.length) options.log("The proxy holds no enabled Claude subscription.");
-  const planned = priorities(credentials);
-  const changed = credentials.filter((credential) => planned.get(credential.name) !== credential.priority);
+  const enabled = files.filter((file) => (file.provider === "claude" || file.provider === "codex") && !file.disabled && file.auth_index);
+  const credentials = await Promise.all(enabled.map(async (file): Promise<Credential> => {
+    const provider = file.provider as Provider;
+    const usage = provider === "codex" ? await readCodexUsage(call, file.auth_index!) : await readUsage(call, file.auth_index!);
+    return { name: file.name, authIndex: file.auth_index!, provider, priority: file.priority ?? 0, quotaCooldown: quotaCooldown(file), blocked: blocked(file), usage };
+  }));
+  const claude = credentials.filter((credential) => credential.provider === "claude");
+  if (!credentials.length) options.log("The proxy holds no enabled Claude or Codex subscription.");
+  const planned = new Map([...credentials.map((credential) => [credential.name, credential.priority] as const), ...priorities(claude)]);
+  const changed = claude.filter((credential) => planned.get(credential.name) !== credential.priority);
   if (options.dryRun || changed.length || credentials.some((credential) => !credential.usage)) {
     for (const credential of credentials) options.log(describe(credential, planned.get(credential.name)!, options.now));
+  }
+  for (const credential of credentials) {
+    if (credential.blocked) options.log(`${credential.name}: blocked (${credential.blocked}). The proxy skips this ${providerNames[credential.provider]} subscription until you sign it in again on the hub.`);
   }
   if (options.dryRun) return;
   for (const credential of changed) await call("auth-files/fields", { method: "PATCH", body: JSON.stringify({ name: credential.name, priority: planned.get(credential.name) }) });
@@ -73,11 +85,50 @@ export async function balance(options: Balance): Promise<void> {
 function quotaCooldown(file: AuthFile): boolean {
   if (!file.unavailable) return false;
   if (file.cooldowns?.length) return file.cooldowns.every(({ reason }) => reason === "quota" || reason === "credential_quota");
-  try { return JSON.parse(file.status_message ?? "").error?.type === "rate_limit_error"; }
-  catch { return false; }
+  return statusType(file) === "rate_limit_error";
 }
 
-async function readUsage(call: (path: string, init?: RequestInit) => Promise<unknown>, authIndex: string): Promise<Usage | undefined> {
+function statusType(file: AuthFile): string | undefined {
+  try {
+    const type = JSON.parse(file.status_message ?? "").error?.type;
+    return typeof type === "string" && /^[a-z_]{1,64}$/.test(type) ? type : undefined;
+  } catch { return undefined; }
+}
+
+function blocked(file: AuthFile): string | false {
+  if (!file.unavailable || quotaCooldown(file)) return false;
+  const reasons = (file.cooldowns ?? []).flatMap(({ reason }) => (typeof reason === "string" && /^[a-z_]{1,64}$/.test(reason) ? [reason] : []));
+  return reasons.length ? [...new Set(reasons)].join(", ") : (statusType(file) ?? "unavailable");
+}
+
+async function readCodexUsage(call: Call, authIndex: string): Promise<Usage | undefined> {
+  try {
+    const response = (await call("api-call", { method: "POST", body: JSON.stringify({ auth_index: authIndex, method: "GET", url: codexUsageUrl, header: { Authorization: "Bearer $TOKEN$" } }) })) as { status_code: number; body: string };
+    if (response.status_code !== 200) return undefined;
+    const raw = JSON.parse(response.body) as { rate_limit?: CodexLimit; additional_rate_limits?: { rate_limit?: CodexLimit }[] };
+    const usage: Usage = { scoped: [] };
+    for (const [index, limit] of [raw.rate_limit, ...(raw.additional_rate_limits ?? []).map((item) => item?.rate_limit)].entries()) {
+      if (typeof limit?.allowed !== "boolean" || typeof limit.limit_reached !== "boolean" || !limit.primary_window) return undefined;
+      for (const value of [limit.primary_window, limit.secondary_window]) {
+        if (value == null) continue;
+        const window = codexWindow(value);
+        if (!window) return undefined;
+        if (index === 0 && value.limit_window_seconds === 18_000 && !usage.fiveHour) usage.fiveHour = window;
+        else if (index === 0 && value.limit_window_seconds === 604_800 && !usage.sevenDay) usage.sevenDay = window;
+        else usage.scoped.push(window);
+      }
+      if (!limit.allowed || limit.limit_reached) usage.scoped.push({ utilization: 100 });
+    }
+    return usage;
+  } catch { return undefined; }
+}
+
+function codexWindow(raw: NonNullable<CodexWindow>): UsageWindow | undefined {
+  if (typeof raw.used_percent !== "number" || !Number.isFinite(raw.used_percent) || raw.used_percent < 0) return undefined;
+  return { utilization: raw.used_percent, ...(typeof raw.reset_at === "number" && Number.isFinite(raw.reset_at) ? { resetsAt: raw.reset_at * 1000 } : {}) };
+}
+
+async function readUsage(call: Call, authIndex: string): Promise<Usage | undefined> {
   try {
     const header = { Authorization: "Bearer $TOKEN$", "Content-Type": "application/json", "anthropic-beta": "oauth-2025-04-20" };
     const response = (await call("api-call", { method: "POST", body: JSON.stringify({ auth_index: authIndex, method: "GET", url: usageUrl, header }) })) as { status_code: number; body: string };
