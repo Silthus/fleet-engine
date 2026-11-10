@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { tempDirs } from "../testing/git.ts";
 import { linkedFleets } from "../testing/linked.ts";
+import type { Clock } from "../runner/context.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -35,19 +36,53 @@ test("when the hub does not answer or refuses, the node keeps its stored credent
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
 });
 
-test("when the hub connects but never answers, the pull gives up at its deadline and the node keeps its stored credential", async () => {
-  let lapsed = false;
-  const slept: number[] = [];
-  const { hub, node, hosts } = linkedFleets(temp, undefined, { now: Date.now, sleep: (ms) => (lapsed ? (slept.push(ms), Promise.resolve()) : new Promise(() => {})) });
+/** A clock that moves only when the test advances it. next resolves when the next sleep after the call starts. */
+function handClock() {
+  let now = 0;
+  const timers: Array<{ at: number; fire: () => void }> = [];
+  let started: (() => void) | undefined;
+  const clock: Clock = {
+    now: () => now,
+    sleep: (ms) => new Promise((fire) => (timers.push({ at: now + ms, fire }), started?.())),
+  };
+  return {
+    clock,
+    next: () => new Promise<void>((done) => (started = done)),
+    advance(ms: number) {
+      now += ms;
+      for (const timer of timers.filter((item) => item.at <= now)) timer.fire();
+    },
+  };
+}
+
+const settled = () => new Promise((done) => setImmediate(done));
+
+test("a pull waits for a slow hub until its deadline, then gives up and the node keeps its stored credential", async () => {
+  const hand = handClock();
+  const { hub, hubFleet, node, hosts } = linkedFleets(temp, undefined, hand.clock);
   await hub("apply");
   expect((await node("apply")).output).not.toContain("Could not pull");
+
+  const answer = Promise.withResolvers<void>();
+  hosts["hub-1"] = async (args) => (await answer.promise, hubFleet(args));
+  const slowStarted = hand.next();
+  const slow = node("apply");
+  await slowStarted;
+  hand.advance(89_999);
+  await settled();
+  answer.resolve();
+  expect((await slow).output).not.toContain("Could not pull");
+  expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-3-for-node-2");
+
   hosts["hub-1"] = () => new Promise(() => {});
-  lapsed = true;
-  const stuck = await node("apply");
-  expect(stuck.code).toBe(0);
-  expect(stuck.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (it did not answer within 90 seconds). Kept the one this machine has.");
-  expect(slept).toEqual([90_000]);
-  expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
+  const stuckStarted = hand.next();
+  const stuck = node("apply");
+  await stuckStarted;
+  hand.advance(90_000);
+  const late = await stuck;
+  expect(late.code).toBe(0);
+  expect(late.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (it did not answer within 90 seconds). Kept the one this machine has.");
+  expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-3-for-node-2");
 });
 
 test("fleet credential on the hub prints only the key for a node that the profile names, and what the service says goes to standard error", async () => {

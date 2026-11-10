@@ -4,7 +4,7 @@ import type { AdapterResult } from "../reconciler/apply.ts";
 
 /** clearEnv names variables the command must not inherit. */
 /** inherit: the command uses this terminal, so its output is shown, not returned. */
-/** signal: stops the command when it aborts. */
+/** signal: stops the command when it aborts, and returns no output for it. */
 export type RunOptions = { input?: string; home?: string; clearEnv?: string[]; inherit?: true; signal?: AbortSignal };
 export type CommandRunner = (command: string[], options?: RunOptions) => Promise<{ code: number; stdout: string; stderr?: string }>;
 
@@ -23,12 +23,20 @@ export const spawnRunner: CommandRunner = async (command, options = {}) => {
       try { return { code: await child.exited, stdout: "" }; }
       finally { process.off("SIGINT", forward).off("SIGTERM", forward); }
     }
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    const [[stdout, stderr], code] = await Promise.all([options.signal ? Promise.race([output, stopped(options.signal, child.exited)]) : output, child.exited]);
     return { code, stdout, stderr };
   } catch (error) {
     return { code: 127, stdout: "", stderr: `${command[0]} could not start: ${error instanceof Error ? error.message : String(error)}\n` };
   }
 };
+
+/** No output once an aborted command has exited, since a process it started may keep its pipes open. */
+function stopped(signal: AbortSignal, exited: Promise<number>): Promise<[string, string]> {
+  const output = (): Promise<[string, string]> => exited.then(() => ["", ""]);
+  if (signal.aborted) return output();
+  return new Promise((settle) => signal.addEventListener("abort", () => settle(output()), { once: true }));
+}
 
 export function passwdHome(text: string, uid: number) {
   for (const line of text.split("\n")) {
