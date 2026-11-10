@@ -58,7 +58,7 @@ flowchart LR
     a1["Agents, T3 threads"]
     l1["127.0.0.1:port of each served service"]
   end
-  hs -- "forward: the hub dials the devbox with ssh -R" --> l1
+  l1 -- "forward: the devbox dials the hub with ssh -L" --> hs
   n1 -- "hub commands and credential pulls: plain ssh" --> hub
   a1 --> l1
 ```
@@ -247,14 +247,22 @@ and Fleet does not wrap it in a unit.
   today: the hub dials a devbox with `ssh -R` (`tunnels.ts:29`), the hub
   dials a box with `coder ssh -R` (`links.ts:108`), and a Mac dials the hub
   with `coder port-forward` (`hub-tunnel.ts:21`). v1 supports one topology
-  in full: a Linux hub and Linux devboxes, with one `ssh -R` unit for each
-  devbox, rendered from the catalog. That unit carries catalog ports only.
+  in full: a Linux hub and Linux devboxes. **The node dials the hub with
+  `ssh -L`** (Michael, 2026-11-10). Each node that the profile names, other
+  than the hub, gets one engine-owned service, `hub-forward`, rendered from
+  its own catalog at its own apply. The Jobs adapter renders and prunes it
+  like any service, and a catalog change rewrites and restarts it. The hub
+  renders no forward and needs no SSH access to nodes. Its sshd must allow
+  local forwarding to the catalog ports, which the hub's bring-up sets.
   `tunnelUnit` keeps the relay port, the proxy port, and the devbox hosts
   entry (`tunnels.ts:29,93-103`) until their packs move in step 4: the
-  proxy port then joins the catalog, and the rest goes with `peers`. The
-  other two drivers stay in today's code.
+  proxy port then joins the catalog, and the rest goes with `peers`. It no
+  longer carries the gateway port. The other two drivers stay in today's
+  code.
   *Reason:* a forward is not a command channel, and one topology that works
-  end to end is worth more than three that share an abstraction.
+  end to end is worth more than three that share an abstraction. A node
+  already dials the hub for commands and credentials, so the forward needs
+  no second direction.
 - **Commands and credentials travel over plain `ssh`, from the node to the
   hub.** A node runs a hub command as `ssh <hub> fleet <command>`, as
   `toHub` does today (`packs/hub/lib/machine.ts:144`). During its own apply
@@ -561,7 +569,7 @@ what the port changes. The Hub pack is gone after step 4.
 | Hub: MCP gateway | `mcp-gateway` | Served service under Docker's restart policy, install check with a Fleet repair: hub. Client check, MCP config entries with the bridge: nodes. | Each node pulls its key during apply. `fleet mcphub grant` by hand goes. The sign-in command prints the authorization URL, not a page that Caddy serves. |
 | Hub: own-account balancing | `cli-proxy` | Service with `serve`, balance job: hub. Route check, two gated config keys: Linux nodes. | A Linux node that is not a devbox also gets the route. The route step goes (D15). |
 | Hub: boxes | `boxes` | `fleet box`, sweep and nightly jobs, a token check: hub. Restore job: `os: "linux"`. | `fleet box` on a node runs on the hub over `ssh`. A plain Linux node also gets the restore job. A Mac never does. |
-| Hub: SSH tunnels to devboxes | The engine's forwards, and `peers` | Step 3: one engine unit per devbox with the catalog's ports. `tunnelUnit` keeps the rest (D13). | A devbox has two `ssh -R` units. |
+| Hub: SSH tunnels to devboxes | The engine's forwards, and `peers` | Step 3: each devbox dials the hub with one engine `ssh -L` unit that carries the catalog's ports. `tunnelUnit` keeps the rest (D13). | A devbox has its own forward to the hub, and the hub's `ssh -R` unit no longer carries the gateway port. |
 | Hub: T3 links between nodes, the box forward, the Mac's hub tunnel, private HTTPS | `peers`, schema 1 | `peers.ts`, `links.ts`, `hub-tunnel.ts`, `https.ts`, unchanged in v1 | None |
 | Slack | `slack` | Section 5.3. Check and service: hub. Command: no placement. | The service waits for the tokens. `ctx.threads.start` replaces only `launchHere`. With `hub.boxTemplate` set, the pack's own `launchOnBox` still launches on a box, unchanged until `boxes` ports in step 4, and the `launch` subcommand still runs on that box. |
 | The private team pack | Stays private | Setup checks, a T3 project script, gated MCP entries, a file, a provider for `pull-requests/review-bot` | Its own port, in step 5 |
@@ -659,7 +667,7 @@ The real machines run the private Fleet, not the engine.
    the gateway in its catalog, the hub's bridge uses a key that the hub
    issued to itself, and one sign-in completes through the Mac's forward.
 3. **Forwards, credential pulls, and hub commands for one topology.**
-   Render one forward for each devbox with the catalog's ports, pull
+   Each devbox renders its own `ssh -L` forward with the catalog's ports, pull
    credentials with `fleet credential`, and run a hub command from a node.
    A second spare devbox joins as a node.
 4. **Finish the split.** `cli-proxy`, `boxes`, `peers`, Dream to Memory,
@@ -708,9 +716,9 @@ Ranked, most important first.
    pack on or off rewrites the forward and cuts open connections.
 7. **Commands run inside the engine's process.** A pack can crash the
    CLI or load slowly. *Plan:* handlers import their code lazily.
-8. **Open: the direction of the forward.** v1 uses `ssh` both ways
-   (section 4.2). A node's own `ssh -L` could carry the forward and remove
-   the hub's unit for each devbox. Decide before step 3.
+8. **Closed: the direction of the forward.** The node dials the hub with
+   `ssh -L` (D13, Michael, 2026-11-10). The hub needs no SSH access to
+   nodes.
 9. **Open: the Mac and boxes as nodes of the engine's forwards.** The hub
    cannot dial a Mac, and a box joins and leaves within hours. Both stay on
    today's code in v1 (D13), so the dog-food hub and its node are devboxes.

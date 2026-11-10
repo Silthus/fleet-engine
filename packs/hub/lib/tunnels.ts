@@ -2,7 +2,7 @@ import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { changedFiles, ownedBy, readIfThere, requireInstalled, writeFiles } from "./managed.ts";
 import { peersOf, readRole } from "./machine.ts";
-import { gatewayPort, refuseLinks } from "../../mcp-gateway/lib/client.ts";
+import { refuseLinks } from "../../mcp-gateway/lib/client.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { isBoxName, sshName } from "./names.ts";
 import { hostPattern, must, proxyPort, relayPortOf } from "./run.ts";
@@ -26,7 +26,7 @@ Description=Fleet hub SSH tunnel for ${sshName(alias)}
 
 [Service]
 Environment=CODER_SSH_DISABLE_AUTOSTART=true
-ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ConnectTimeout=30 -o ExitOnForwardFailure=yes -o ForwardAgent=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ${loopback(gatewayPort)} ${loopback(relayPortOf(relayPort, proxy))}${proxy ? ` ${loopback(proxyPort)}` : ""} ${alias}
+ExecStart=/usr/bin/ssh -NT -o BatchMode=yes -o ConnectTimeout=30 -o ExitOnForwardFailure=yes -o ForwardAgent=no -o ServerAliveInterval=30 -o ServerAliveCountMax=3 ${loopback(relayPortOf(relayPort, proxy))}${proxy ? ` ${loopback(proxyPort)}` : ""} ${alias}
 Restart=always
 RestartSec=5
 

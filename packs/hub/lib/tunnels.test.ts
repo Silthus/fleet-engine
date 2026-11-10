@@ -21,14 +21,13 @@ function machine(role: string, fields: Partial<TunnelMachine> = {}) {
 
 const unitPath = (home: string, alias: string) => join(home, `.config/systemd/user/fleet-ssh-${alias}.service`);
 
-test("a hub tunnel forwards only the MCP gateway port and the relay port to the devbox's loopback, and never a proxy port", () => {
+test("a hub tunnel forwards only the relay port to the devbox's loopback, and never a proxy port or a catalog port, which the devbox's own forward carries", () => {
   const unit = tunnelUnit("devbox-1", 60002);
-  expect(unit).toContain("-R 127.0.0.1:3317:127.0.0.1:3317");
   expect(unit).toContain("-R 127.0.0.1:60002:127.0.0.1:60002");
   expect(unit).toMatch(/ devbox-1\n/);
   for (const option of ["ExitOnForwardFailure=yes", "ForwardAgent=no", "BatchMode=yes", "Restart=always", "Environment=CODER_SSH_DISABLE_AUTOSTART=true"]) expect(unit).toContain(option);
-  expect(unit).not.toMatch(/8317|60001| -L |:22\b/);
-  expect([...unit.matchAll(/ -R /g)]).toHaveLength(2);
+  expect(unit).not.toMatch(/3317|8317|60001| -L |:22\b/);
+  expect([...unit.matchAll(/ -R /g)]).toHaveLength(1);
 });
 
 test("a tunnel refuses an alias that could break its unit, and a relay port that is the gateway's or a system port", () => {
