@@ -38,11 +38,11 @@ function nightlyArgs(jobId: string) {
 
 const hourlyFrom = (start: string, hours: number) => Array.from({ length: hours }, (_, hour) => new Date(Date.parse(start) + hour * 3_600_000));
 
-async function hourlyRuns(jobId: string, start: string, hours: number, fails: (at: Date) => boolean) {
+async function hourlyRuns(jobId: string, start: string, hours: number, fails: (at: Date) => boolean, failure = 3) {
   const box = machine();
   const runs: string[] = [];
   for (const at of hourlyFrom(start, hours)) {
-    box.failWith(fails(at) ? 3 : 0);
+    box.failWith(fails(at) ? failure : 0);
     const before = box.calls().length;
     const code = await nightlyCommand(nightlyArgs(jobId), { home: box.home, engineRoot: box.engineRoot, now: () => at });
     if (box.calls().length > before) runs.push(`${at.toISOString().slice(0, 13)} ${box.calls().at(-1)} exit ${code}`);
@@ -69,6 +69,11 @@ test("an update that keeps failing tries each hour of the night window and stops
   const runs = await hourlyRuns("agent-update", "2026-11-10T00:47:00Z", 24, () => true);
   expect(runs.map((line) => line.slice(11, 13))).toEqual(["00", "01", "02", "03", "04", "05"]);
   expect(runs[0]).toEndWith("agent-update exit 3");
+});
+
+test("an update that exits 75 counts as failed and tries again the next hour", async () => {
+  const runs = await hourlyRuns("fleet-update", "2026-11-10T00:17:00Z", 3, (at) => at.getUTCHours() === 0, 75);
+  expect(runs).toEqual(["2026-11-10T00 update exit 1", "2026-11-10T01 update exit 0"]);
 });
 
 onLinux("an hour that starts while the last update still runs leaves it alone", async () => {
