@@ -191,8 +191,9 @@ async function issueCredentials(entries: CatalogEntry[], node: string, plan: Pla
     const loaded = loadedPack(sources, entry.pack);
     const issue = loaded?.code?.credentials[entry.id];
     const name = credentialName(entry.id);
-    if (!issue || (await secretStore(options.home, entry.pack).read(name))) continue;
+    if (!issue) continue;
     try {
+      if (await secretStore(options.home, entry.pack).read(name)) continue;
       await inPack(plan, loaded!, options, async (ctx) => {
         const value = await issue(ctx, node);
         if (!value) throw new Error("it gave no credential");

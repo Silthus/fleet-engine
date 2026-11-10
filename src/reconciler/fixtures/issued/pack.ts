@@ -12,7 +12,6 @@ export default {
       say: "The issued service is not installed.",
       test: async (ctx) => (await ctx.secrets.read("installed")) === "yes",
       repair: {
-        ask: "Install it by hand.",
         run: async (ctx) => {
           if (await ctx.secrets.read("broken")) throw new Error("the install failed");
           await ctx.secrets.write("installed", "yes");

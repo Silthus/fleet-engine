@@ -36,7 +36,7 @@ export type Serve = { port: number; health: string; credential(ctx: Context, nod
 export type ServiceDef = Scope & { id: string } & ((Process & { serve?: Serve }) | { serve: Serve; run?: undefined });
 export type ConfigDef = Scope & { provider: "claude" | "codex" | "t3"; key: string; value: unknown };
 /** command: a fleet command a person runs. run: a repair that Fleet runs during apply when the check fails. */
-export type Repair = { ask: string; command?: string; interactive?: true; run?(ctx: Context): Promise<void> };
+export type Repair = { ask: string; command?: string; interactive?: true; run?: never } | { run(ctx: Context): Promise<void>; ask?: string; command?: never; interactive?: never };
 export type CheckDef = Scope & { id: string; say: string; test(ctx: Context): Promise<boolean>; repair?: Repair };
 
 export type Fleet = {
