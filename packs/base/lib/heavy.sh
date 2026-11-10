@@ -29,6 +29,10 @@ if [ -n "${FLEET_HEAVY_ROUTE:-}" ] && [ -z "$unit$service" ]; then
   unset FLEET_HEAVY_ROUTE
   FLEET_HEAVY_ROUTED=1 exec bun "$route" "$@"
 fi
+if [ "$1" = fleet ]; then
+  shift
+  set -- /bin/sh "$(CDPATH='' cd -- "$commands/../../.." && pwd -P)/fleet" "$@"
+fi
 disk_has_room() { bun "$commands/disk.ts" >/dev/null || exit 75; }
 disk_has_room
 [ "$(uname -s)" = Linux ] || exec "$@"
@@ -36,6 +40,9 @@ disk_has_room
 if [ -n "$service" ]; then
   systemctl --user stop "$service" 2>/dev/null || true
   systemd-run --user --quiet --collect --unit="$service" --slice=fleet-heavy.slice --working-directory="$PWD" \
+    --setenv=PATH="$PATH" ${HOME:+--setenv=HOME="$HOME"} ${FLEET_PROFILE_DIR:+--setenv=FLEET_PROFILE_DIR="$FLEET_PROFILE_DIR"} \
+    ${FLEET_MEMORY_DIR:+--setenv=FLEET_MEMORY_DIR="$FLEET_MEMORY_DIR"} ${XDG_STATE_HOME:+--setenv=XDG_STATE_HOME="$XDG_STATE_HOME"} \
+    ${XDG_CONFIG_HOME:+--setenv=XDG_CONFIG_HOME="$XDG_CONFIG_HOME"} \
     ${VSCODE_PROXY_URI:+--setenv=VSCODE_PROXY_URI="$VSCODE_PROXY_URI"} -- "$@"
   echo "Fleet heavy: $service serves from $(hostname)."
   exit 0
