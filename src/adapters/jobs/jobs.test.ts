@@ -64,7 +64,7 @@ describe("cron jobs on Linux", () => {
     const jobs = `${home}/.local/state/fleet/jobs`;
     expect(cron.state.text).toBe(foreign + `17 3 * * * /bin/sh '${jobs}/prune.sh' # fleet:prune\n` + `*/5 * * * * /bin/sh '${jobs}/skills-pull.sh' # fleet:skills-pull\n`);
     expect(readFileSync(join(jobs, "prune.sh"), "utf8")).toBe(
-      `#!/bin/sh\nPATH='${home}/.local/bin:${home}/.bun/bin:/usr/local/bin:/usr/bin:/bin'\nexport PATH\nexec '/bin/sh' '${engine}/fleet' 'prune' '--auto' >>'${jobs}/prune.log' 2>&1\n`,
+      `#!/bin/sh\nPATH='${home}/.local/bin:${home}/.bun/bin:/usr/local/bin:/usr/bin:/bin'\nexport PATH\n[ -r "$HOME/.config/fleet/session.sh" ] && . "$HOME/.config/fleet/session.sh"\nexec '/bin/sh' '${engine}/fleet' 'prune' '--auto' >>'${jobs}/prune.log' 2>&1\n`,
     );
   });
 

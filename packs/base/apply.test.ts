@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
+import { jobsAdapter } from "../../src/adapters/jobs/adapter.ts";
 import { main } from "../../src/cli.ts";
+import type { Plan } from "../../src/pack/types.ts";
+import { apply } from "../../src/reconciler/apply.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 
 const temp = tempDirs();
@@ -24,7 +27,29 @@ async function fleet(args: string[], home: string): Promise<{ code: number; outp
   return { code, output: lines.join("\n") };
 }
 
-type HookGroup = { hooks: Array<{ command: string }> };
+const emptyPlan: Plan = {
+  machine: { schema: 1, role: "linux" },
+  os: "linux",
+  ai: "both",
+  packs: [{ name: "base", source: "engine", ref: "main", available: true }],
+  workflows: [],
+  files: [],
+  config: [],
+  owners: {},
+  jobs: [],
+  human: [],
+  steps: [],
+  checks: [],
+  commands: {},
+  handlers: {},
+  settings: {},
+  unanswered: [],
+  ask: [],
+  dropped: [],
+  models: [],
+};
+
+type HookGroup ={ hooks: Array<{ command: string }> };
 
 function installedHook(home: string, provider: "claude" | "codex", event: string) {
   const config = provider === "claude" ? JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")) : parseToml(readFileSync(join(home, ".codex/config.toml"), "utf8"));
@@ -55,6 +80,56 @@ describe("the Base pack's hook events", () => {
     expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
     addFixtureHook(home, event);
     expect(await fire(home, installedHook(home, provider, event), input)).toEqual({ code: 0, stdout: `${provider} saw ${JSON.stringify(input)}` });
+  });
+});
+
+describe("the Linux session", () => {
+  const userBus = `unix:path=/run/user/${process.getuid!()}/bus`;
+  const cronEnvironment = (home: string) => ({ HOME: home, PATH: "/usr/bin:/bin" });
+  const ubuntuBashrc = 'case $- in\n    *i*) ;;\n      *) return;;\nesac\nalias ll="ls -l"\n';
+  const read = (home: string, file: string) => readFileSync(join(home, file), "utf8");
+
+  async function shell(home: string, command: string[], env: Record<string, string> = {}) {
+    const child = Bun.spawn(command, { env: { ...cronEnvironment(home), ...env }, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const [stdout] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    return stdout.trim();
+  }
+
+  test("an interactive shell, a login shell, and an ssh command all see the user bus and Fleet's PATH, and the person's own lines stay", async () => {
+    const home = temp.make("home-");
+    writeFileSync(join(home, ".bashrc"), ubuntuBashrc);
+    writeFileSync(join(home, ".bash_profile"), '[ -f ~/.bashrc ] && . ~/.bashrc\nexport EDITOR=vi\n');
+    expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
+    const seen = 'printf "%s|%s" "$DBUS_SESSION_BUS_ADDRESS" "$PATH"';
+    const wanted = `${userBus}|${home}/.local/bin:${home}/.bun/bin:`;
+    expect(await shell(home, ["bash", "-ic", seen])).toStartWith(wanted);
+    expect(await shell(home, ["bash", "-lc", seen])).toStartWith(wanted);
+    expect(await shell(home, ["bash", "-c", seen], { SSH_CLIENT: "192.0.2.1 50000 22", SHLVL: "0" })).toStartWith(wanted);
+    expect(read(home, ".bashrc")).toEndWith(ubuntuBashrc);
+    expect(read(home, ".bash_profile")).toEndWith("export EDITOR=vi\n");
+  });
+
+  test("a second apply adds no second line, and a home without bash files gets .bashrc and .profile", async () => {
+    const home = temp.make("home-");
+    const profile = profileWith();
+    await fleet(["apply", "--profile", profile], home);
+    const first = { bashrc: read(home, ".bashrc"), profile: read(home, ".profile") };
+    await fleet(["apply"], home);
+    expect({ bashrc: read(home, ".bashrc"), profile: read(home, ".profile") }).toEqual(first);
+    expect(first.bashrc.trim().split("\n")).toHaveLength(1);
+    expect(await shell(home, ["bash", "-lc", 'printf %s "$DBUS_SESSION_BUS_ADDRESS"'])).toBe(userBus);
+  });
+
+  test("a cron job started with only HOME and PATH sees the user bus", async () => {
+    const home = temp.make("home-");
+    await fleet(["apply", "--profile", profileWith()], home);
+    const crontab = { text: "" };
+    const runCrontab = async (command: string[], options?: { input?: string }) => (command[1] === "-" ? ((crontab.text = options?.input ?? ""), { code: 0, stdout: "" }) : { code: 0, stdout: crontab.text });
+    const job = { id: "bus-check", pack: "base", command: ["sh", "-c", 'printf %s "$DBUS_SESSION_BUS_ADDRESS"'], schedule: { every: "5m" as const } };
+    await apply({ ...emptyPlan, os: "linux", jobs: [job] }, { home, adapters: [jobsAdapter({ run: runCrontab, engineRoot })] });
+    const cronCommand = crontab.text.split("\n").find((line) => line.includes("bus-check"))!.split(" ").slice(5).join(" ");
+    await shell(home, ["/bin/sh", "-c", cronCommand]);
+    expect(read(home, ".local/state/fleet/jobs/bus-check.log")).toBe(userBus);
   });
 });
 

@@ -15,7 +15,7 @@ describe("get.sh", () => {
   test("on Linux installs gh and T3 Code, fetches the engine at its pin, and applies the profile", () => {
     const box = sandbox("Linux");
     const result = getSh(box, ["--ref", "v0.1.0", "--profile", profile()]);
-    expect(result.output).toContain("Applied 13 changes.");
+    expect(result.output).toContain("Applied 14 changes.");
     expect(result.code).toBe(0);
     expect(existsSync(join(box.home, ".local/bin/gh"))).toBe(true);
     expect(result.calls).toContain("t3 installer channel=nightly");
@@ -42,7 +42,7 @@ describe("get.sh", () => {
     expect(calls).toContain("brew install --cask t3-code");
     expect(calls).not.toContain("brew install bun");
     expect(result.calls).toContain("t3 installer channel=nightly");
-    expect(result.output).toContain("Applied 13 changes.");
+    expect(result.output).toContain("Applied 14 changes.");
   });
 
   onLinuxHost("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {

@@ -586,6 +586,13 @@
         "linux"
       ],
       "workflow": "disk-guard"
+    },
+    {
+      "path": "session.sh",
+      "target": ".config/fleet/session.sh",
+      "on": [
+        "linux"
+      ]
     }
   ],
   "jobs": [
@@ -637,6 +644,21 @@
         "fleet",
         "settings-snapshot",
         "--check"
+      ]
+    },
+    {
+      "id": "shell-session",
+      "run": [
+        "fleet",
+        "shell-session"
+      ],
+      "check": [
+        "fleet",
+        "shell-session",
+        "--check"
+      ],
+      "on": [
+        "linux"
       ]
     },
     {
