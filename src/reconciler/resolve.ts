@@ -25,6 +25,8 @@ import { placedMachine } from "../profile/profile.ts";
 
 export class ResolveError extends Error {}
 
+const hubAlias = "hub.alias";
+
 export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "hub", "run"];
 
 /** Why a machine leaves out an item of the hub while a profile with devboxes names no hub. */
@@ -119,7 +121,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
   }
 
   const settings = machineDefaults(activeSettings(order, active), machine);
-  plan.settings = settingValues(settings, profile.settings);
+  plan.settings = settingValues(settings, profile.hub && settings.some((setting) => setting.key === hubAlias) ? { ...profile.settings, [hubAlias]: profile.hub } : profile.settings);
   plan.unanswered = settings.filter((setting) => plan.settings[setting.key] === undefined && !setting.optional && setting.ask !== "never");
   plan.ask = settings.filter((setting) => setting.ask === "setup" || (setting.ask !== "never" && setting.default === undefined)).map(({ pack: _, ...setting }) => setting);
   for (const job of plan.models.length ? plan.jobs : []) {
