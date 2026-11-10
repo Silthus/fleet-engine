@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
 import { fetchSource } from "./sources.ts";
 
@@ -21,6 +21,23 @@ function packRepo(summary: string) {
 function writePack(dir: string, summary: string) {
   mkdirSync(join(dir, "packs", "team"), { recursive: true });
   writeFileSync(join(dir, "packs", "team", "pack.json"), JSON.stringify({ schema: 1, name: "team", summary }));
+}
+
+function tsRepo(files: Record<string, string>) {
+  const dir = temp.make("pack-repo-");
+  git(dir, "init", "-q", "-b", "main");
+  commitTag(dir, "v1", files);
+  return dir;
+}
+
+function commitTag(dir: string, tag: string, files: Record<string, string>) {
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), text);
+  }
+  git(dir, "add", ".");
+  git(dir, "commit", "-q", "-m", tag);
+  git(dir, "tag", tag);
 }
 
 describe("fetchSource", () => {
@@ -94,6 +111,30 @@ describe("fetchSource", () => {
     if ("error" in fetched) throw new Error(fetched.error);
     expect(fetched.packs[0]?.manifest.summary).toBe("Team rules v1.");
     expect(fetched.stale).toContain("does not load");
+  });
+
+  test("keeps the last good pack.ts when a fetched pack.ts throws as it loads", async () => {
+    const repo = tsRepo({ "packs/team/pack.ts": `export default { sdk: 1, name: "team", summary: "Team rules v1.", register() {} };\n` });
+    const cache = temp.make("cache-");
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    commitTag(repo, "v2", { "packs/team/pack.ts": `throw new Error("broken on load");\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect(fetched.packs[0]?.manifest.summary).toBe("Team rules v1.");
+    expect(fetched.stale).toContain("broken on load");
+  });
+
+  test("loads a new ref with the new version of a helper outside the pack's folder", async () => {
+    const repo = tsRepo({
+      "packs/team/pack.ts": `import { summary } from "../../shared/summary.ts";\nexport default { sdk: 1, name: "team", summary, register() {} };\n`,
+      "shared/summary.ts": `export const summary = "Team rules v1.";\n`,
+    });
+    const cache = temp.make("cache-");
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    commitTag(repo, "v2", { "shared/summary.ts": `export const summary = "Team rules v2.";\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v2.", undefined]);
   });
 
   test("never falls back to a cache of another repository", async () => {
