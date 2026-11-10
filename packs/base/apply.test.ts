@@ -120,6 +120,32 @@ describe("the Linux session", () => {
     expect(await shell(home, ["bash", "-lc", 'printf %s "$DBUS_SESSION_BUS_ADDRESS"'])).toBe(userBus);
   });
 
+  test("a source line below an early return moves to the top, so an ssh command still sees the user bus", async () => {
+    const home = temp.make("home-");
+    const ownSourceLine = '[ -r "$HOME/.config/fleet/session.sh" ] && . "$HOME/.config/fleet/session.sh"';
+    writeFileSync(join(home, ".bashrc"), `${ubuntuBashrc}${ownSourceLine}\n`);
+    expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
+    expect(await shell(home, ["bash", "-c", 'printf %s "$DBUS_SESSION_BUS_ADDRESS"'], { SSH_CLIENT: "192.0.2.1 50000 22", SHLVL: "0" })).toBe(userBus);
+    expect(read(home, ".bashrc").split(ownSourceLine)).toHaveLength(2);
+    expect(read(home, ".bashrc")).toContain(ubuntuBashrc);
+  });
+
+  test("a startup file that Fleet cannot read is left as it is", async () => {
+    const home = temp.make("home-");
+    writeFileSync(join(home, ".bashrc"), ubuntuBashrc, { mode: 0o200 });
+    expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(1);
+    Bun.spawnSync(["chmod", "600", join(home, ".bashrc")]);
+    expect(read(home, ".bashrc")).toBe(ubuntuBashrc);
+  });
+
+  test("a bus address and runtime folder that are already set stay, and sourcing twice adds Fleet's folders to PATH once", async () => {
+    const home = temp.make("home-");
+    await fleet(["apply", "--profile", profileWith()], home);
+    const twice = '. "$HOME/.config/fleet/session.sh"; . "$HOME/.config/fleet/session.sh"; printf "%s|%s|%s" "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" "$PATH"';
+    const set = { XDG_RUNTIME_DIR: "/run/custom", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/custom/other-bus" };
+    expect(await shell(home, ["/bin/sh", "-c", twice], set)).toBe(`/run/custom|unix:path=/run/custom/other-bus|${home}/.local/bin:${home}/.bun/bin:/usr/bin:/bin`);
+  });
+
   test("a cron job started with only HOME and PATH sees the user bus", async () => {
     const home = temp.make("home-");
     await fleet(["apply", "--profile", profileWith()], home);
