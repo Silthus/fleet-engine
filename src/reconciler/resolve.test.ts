@@ -432,14 +432,17 @@ describe("resolve per AI plan", () => {
 
 describe("a step's undo", () => {
   const step = { id: "auto-box", run: ["box-on"], check: ["box-is-on"], undo: ["box-off"], workflow: "boxes" };
-  const team = (steps: PackManifest["steps"]) => withPack({ schema: 1, name: "team", summary: "Team.", workflows: [{ id: "boxes", name: "Boxes", sentence: "Boxes.", default: true }], steps });
+  const signIn = { id: "sign-in", say: "Sign in to the box service.", probe: ["signed-in"], workflow: "boxes" };
+  const team = (steps: PackManifest["steps"]) => withPack({ schema: 1, name: "team", summary: "Team.", workflows: [{ id: "boxes", name: "Boxes", sentence: "Boxes.", default: true }], human: [signIn], steps });
   const box = (on: boolean, undo = 0) => {
-    const world = { on };
+    const world = { on, signedIn: true };
     const run = async (command: string[]) => {
       const name = command.join(" ");
       if (name === "box-is-on") return world.on ? 0 : 1;
       if (name === "box-on") return (world.on = true), 0;
       if (name === "box-off") return undo || ((world.on = false), 0);
+      if (name === "signed-in") return world.signedIn ? 0 : 1;
+      if (name === "broken") return 1;
       return 0;
     };
     return { world, run };
@@ -474,8 +477,32 @@ describe("a step's undo", () => {
     expect(report.findings).toContainEqual({ id: "undo:auto-box", pack: "team", say: "Fleet could not undo step auto-box of the team pack, whose workflow boxes is off. The next fleet apply tries again.", repair: "apply" });
   });
 
+  test("waits for the step's prerequisite and runs nothing in a pack whose step failed in this apply", async () => {
+    const waiting = box(true);
+    waiting.world.signedIn = false;
+    const gated = planWith([{ ...step, after: "sign-in" }], { boxes: false });
+    const home = temp.make("home-");
+    expect((await apply(gated, { home, run: waiting.run })).actions.filter((action) => action.target.startsWith("step "))).toEqual([]);
+    expect(waiting.world.on).toBe(true);
+    expect((await check(gated, { home, run: waiting.run })).findings).toContainEqual({ id: "undo:auto-box", pack: "team", say: "Step auto-box of the team pack waits for sign-in before Fleet can undo it.", repair: "human" });
+    waiting.world.signedIn = true;
+    await apply(gated, { home, run: waiting.run });
+    expect(waiting.world.on).toBe(false);
+    const broken = box(true);
+    await apply(planWith([{ id: "broken", run: ["broken"], check: ["broken"] }, step], { boxes: false }), { home: temp.make("home-"), run: broken.run });
+    expect(broken.world.on).toBe(true);
+  });
+
+  test("a Base step whose undo fails fails the apply", async () => {
+    const off = planWith([step], { boxes: false });
+    const base = { ...off, undo: off.undo!.map((item) => ({ ...item, pack: "base" })) };
+    expect((await apply(base, { home: temp.make("home-"), run: box(true, 1).run })).ok).toBe(false);
+    expect((await apply(off, { home: temp.make("home-"), run: box(true, 1).run })).ok).toBe(true);
+  });
+
   test("needs a check, so Fleet can tell what is left to undo", async () => {
     await expect(loadPacks(team([{ id: "auto-box", run: ["box-on"], undo: ["box-off"] }]).dir)).rejects.toThrow("steps auto-box: undo needs a check");
+    await expect(loadPacks(team([{ ...step, check: [] }]).dir)).rejects.toThrow("steps auto-box: undo needs a check");
     await expect(loadPacks(team([{ ...step, undo: "box-off" as unknown as string[] }]).dir)).rejects.toThrow("steps auto-box: undo must be a command list");
   });
 });

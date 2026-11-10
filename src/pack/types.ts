@@ -214,7 +214,7 @@ export type Plan = {
   jobs: Array<Owned<PackJob>>;
   human: Array<Owned<HumanStep>>;
   steps: Array<Owned<PackStep>>;
-  undo?: Array<Owned<PackStep>>;
+  undo?: Array<Owned<PackStep> & { prerequisite?: string[] }>;
   checks: Array<Owned<PackCheck>>;
   /** Every served service of the profile, on every node, with its port. */
   catalog?: CatalogEntry[];

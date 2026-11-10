@@ -91,7 +91,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
     for (const step of manifest.human ?? []) if (fits(pack, step, `human ${step.id}`)) plan.human.push({ ...step, pack });
     for (const step of manifest.steps ?? []) {
       if (fits(pack, step, `step ${step.id}`)) plan.steps.push({ ...step, pack });
-      else if (step.undo && plan.dropped.at(-1)?.reason === `workflow ${step.workflow} is off`) (plan.undo ??= []).push({ ...step, pack });
+      else if (step.undo && plan.dropped.at(-1)?.reason === `workflow ${step.workflow} is off`) (plan.undo ??= []).push({ ...step, pack, prerequisite: manifest.human?.find((human) => human.id === step.after)?.probe });
     }
     for (const check of manifest.checks ?? []) if (fits(pack, check, `check ${check.id}`)) plan.checks.push({ ...check, pack });
     for (const handler of manifest.handlers ?? []) {
