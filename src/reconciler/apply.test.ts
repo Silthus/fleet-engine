@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from "node:path";
 import type { Plan } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
+import { providerConfigAdapter } from "../adapters/provider-config/adapter.ts";
 import { apply, check, filesAdapter, type Adapter } from "./apply.ts";
 
 const temp = tempDirs();
@@ -170,19 +171,38 @@ describe("a config entry that waits for a pack check", () => {
     { provider: "claude" as const, key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", after: "proxy-up", pack: "base" },
     { provider: "claude" as const, key: "apiKeyHelper", value: "cat key", after: "proxy-up", pack: "base" },
   ];
-  const seen = (result: Plan[]) => (adapter: Adapter): Adapter => ({ ...adapter, async apply(given) { result.push(given); return { actions: [], findings: [] }; } });
+  const proxy = (up: () => boolean) => async (command: string[]) => (command.join(" ") === "proxy-check" ? (up() ? 0 : 1) : 0);
+  const settings = (home: string) => (existsSync(join(home, ".claude/settings.json")) ? JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")) : undefined);
+  const down = { id: "check:proxy-up", pack: "base", say: "The proxy is down.", repair: "apply" as const };
 
-  test("is written while the check passes, and left out while it fails, running the check once", async () => {
-    for (const [code, kept] of [[0, 2], [1, 0]] as const) {
-      const given: Plan[] = [];
-      const calls: string[] = [];
-      const run = async (command: string[]) => (calls.push(command.join(" ")), code);
-      const report = await apply(plan({ checks, config }), { home: temp.make("home-"), adapters: [seen(given)(filesAdapter)], run });
-      expect(given[0]!.config).toHaveLength(kept);
-      expect(calls).toEqual(["proxy-check"]);
-      expect(report.findings).toEqual([]);
-      if (!kept) expect(given[0]!.dropped).toContainEqual({ pack: "base", item: "config claude:apiKeyHelper", reason: "check proxy-up does not pass", check: "proxy-up" });
-    }
+  test("is written while its check passes, removed while it fails, and apply names the failed check", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude/settings.json"), JSON.stringify({ model: "opus" }));
+    let up = true;
+    const options = { home, adapters: [providerConfigAdapter()], run: proxy(() => up) };
+    expect((await apply(plan({ files: [], checks, config }), options)).findings).toEqual([]);
+    expect(settings(home)).toEqual({ model: "opus", env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" }, apiKeyHelper: "cat key" });
+    up = false;
+    const failed = await apply(plan({ files: [], checks, config }), options);
+    expect(failed.ok).toBe(true);
+    expect(failed.findings).toEqual([down]);
+    expect(settings(home)).toEqual({ model: "opus" });
+    expect((await apply(plan({ files: [], checks, config }), options)).actions).toEqual([]);
+    up = true;
+    await apply(plan({ files: [], checks, config }), options);
+    expect(settings(home)).toEqual({ model: "opus", env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" }, apiKeyHelper: "cat key" });
+  });
+
+  test("doctor changes nothing, reports the failed check once, and fails", async () => {
+    const home = temp.make("home-");
+    await apply(plan({ files: [], checks, config }), { home, adapters: [providerConfigAdapter()], run: proxy(() => true) });
+    let probes = 0;
+    const flaky = async (command: string[]) => (command.join(" ") === "proxy-check" ? (probes++ === 0 ? 1 : 0) : 0);
+    const report = await check(plan({ files: [], checks, config }), { home, adapters: [providerConfigAdapter()], run: flaky });
+    expect(report.ok).toBe(false);
+    expect(report.findings.filter((finding) => finding.id === down.id)).toEqual([down]);
+    expect(settings(home)).toEqual({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" }, apiKeyHelper: "cat key" });
   });
 });
 

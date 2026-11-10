@@ -590,7 +590,7 @@
         "cli-proxy",
         "check"
       ],
-      "say": "Claude Code cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check here to see why.",
+      "say": "Claude Code cannot reach your own-account proxy, so fleet apply keeps it on its own sign-in until the proxy answers. Run fleet cli-proxy check here to see why.",
       "roles": [
         "hub",
         "devbox"
@@ -609,7 +609,7 @@
         "check",
         "codex"
       ],
-      "say": "Codex cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check codex here to see why.",
+      "say": "Codex cannot reach your own-account proxy, so fleet apply keeps it on its own sign-in until the proxy answers. Run fleet cli-proxy check codex here to see why.",
       "roles": [
         "hub",
         "devbox"

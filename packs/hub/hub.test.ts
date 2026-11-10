@@ -1,10 +1,10 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { parse } from "smol-toml";
+import { parse, stringify } from "smol-toml";
 import { providerConfigAdapter } from "../../src/adapters/provider-config/adapter.ts";
 import { apply } from "../../src/reconciler/apply.ts";
-import { codexProviderTable } from "./lib/cli-proxy.ts";
+import { cliProxy, codexProviderTable, type ProxyMachine } from "./lib/cli-proxy.ts";
 import type { AvailableSource, MachineFile, MachineRole, Plan, Profile } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
@@ -275,36 +275,68 @@ describe("the Own-account balancing workflow", () => {
   });
 
   describe("apply while the proxy is down", () => {
+    const key = "c1".repeat(32);
     const routeOnly = (result: Plan): Plan => ({ ...result, config: result.config.filter((entry) => entry.pack === "hub"), checks: result.checks.filter((check) => check.pack === "hub"), steps: [], jobs: [], human: [] });
-    const proxy = (down: string[]) => async (command: string[]) => (down.some((check) => command.join(" ").endsWith(`fleet cli-proxy ${check}`)) ? 1 : 0);
-    const settled = async (down: string[]) => {
+    const realCheck = (home: string, models: string[] | "down") => {
+      const fetch = async () => (models === "down" ? Promise.reject(new TypeError("connection refused")) : Response.json({ data: models.map((id) => ({ id })) }));
+      const machine: ProxyMachine = { home, uid: 1000, user: "me", devboxes: [], release: { version: "", url: "", sha256: "" }, run: async () => ({ code: 0, stdout: "", stderr: "" }), fetch, sleep: async () => {}, readStdin: async () => "", randomKey: () => key, print: () => {} };
+      return async (command: string[]) => {
+        const words = command.join(" ");
+        if (words.endsWith("fleet cli-proxy check codex")) return cliProxy("check", machine, "codex");
+        return words.endsWith("fleet cli-proxy check") ? cliProxy("check", machine) : 0;
+      };
+    };
+    const homeWith = (files: Record<string, string> = {}) => {
       const home = temp.make("fleet-route-gate-");
-      const options = { home, adapters: [providerConfigAdapter()], run: proxy(down) };
-      const first = await apply(routeOnly(plan({ ...balancing, plan: "both" }, devbox)), options);
-      const second = await apply(routeOnly(plan({ ...balancing, plan: "both" }, devbox)), options);
+      for (const [path, text] of Object.entries({ ".config/fleet/cli-proxy.key": `${key}\n`, ...files })) {
+        mkdirSync(join(home, path, ".."), { recursive: true });
+        writeFileSync(join(home, path), text);
+      }
+      return home;
+    };
+    const applied = async (home: string, models: string[] | "down", times = 2) => {
+      const reports = [];
+      for (let run = 0; run < times; run++) reports.push(await apply(routeOnly(plan({ ...balancing, plan: "both" }, devbox)), { home, adapters: [providerConfigAdapter()], run: realCheck(home, models) }));
       const claude = existsSync(join(home, ".claude/settings.json")) ? JSON.parse(readFileSync(join(home, ".claude/settings.json"), "utf8")) : {};
       const codex = existsSync(join(home, ".codex/config.toml")) ? parse(readFileSync(join(home, ".codex/config.toml"), "utf8")) : {};
-      return { first, second, claude, codex };
+      return { reports, claude, codex };
     };
+    const both = ["claude-sonnet-5-5", "gpt-6.1-sol"];
 
-    test("leaves Claude Code and Codex on their own sign-in, and the next apply changes nothing", async () => {
-      const { first, second, claude, codex } = await settled(["check", "check codex"]);
-      expect(first.ok).toBe(true);
-      expect(claude.apiKeyHelper).toBeUndefined();
-      expect(claude.env?.ANTHROPIC_BASE_URL).toBeUndefined();
-      expect(codex.model_provider).toBeUndefined();
-      expect(second.actions).toEqual([]);
+    test("leaves Claude Code and Codex on their own sign-in, names both checks, and the next apply changes nothing", async () => {
+      const home = homeWith();
+      await applied(home, both, 1);
+      const { reports, claude, codex } = await applied(home, "down");
+      expect(claude).toEqual({});
+      expect(codex).toEqual({});
+      expect(reports[0]!.findings.map((finding) => finding.id)).toEqual(["check:cli-proxy-client", "check:cli-proxy-codex"]);
+      expect(reports[1]!.actions).toEqual([]);
+    });
+
+    test("also removes the Claude settings that connect wrote before any apply", async () => {
+      const home = homeWith({ ".claude/settings.json": JSON.stringify({ model: "opus", env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" }, apiKeyHelper: 'cat "$HOME/.config/fleet/cli-proxy.key"' }) });
+      const { claude, reports } = await applied(home, "down");
+      expect(claude).toEqual({ model: "opus" });
+      expect(reports[1]!.actions).toEqual([]);
     });
 
     test("a proxy that serves Claude but not Codex routes Claude only, and the next apply changes nothing", async () => {
-      const { second, claude, codex } = await settled(["check codex"]);
+      const { reports, claude, codex } = await applied(homeWith(), ["claude-sonnet-5-5"]);
       expect(claude.env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:8317");
-      expect(codex.model_provider).toBeUndefined();
-      expect(second.actions).toEqual([]);
+      expect(codex).toEqual({});
+      expect(reports[1]!.actions).toEqual([]);
+    });
+
+    test("a Fleet provider table you edited away from the proxy keeps Codex off the proxy on every apply", async () => {
+      const mine = { model_provider: "fleet-proxy", model_providers: { "fleet-proxy": { name: "Mine" } } };
+      const { reports, codex } = await applied(homeWith({ ".codex/config.toml": stringify(mine) }), both, 4);
+      expect(codex.model_providers).toEqual(mine.model_providers);
+      expect(codex.model_provider).toBe("fleet-proxy");
+      expect(reports.slice(1).map((report) => report.actions)).toEqual([[], [], []]);
     });
 
     test("a proxy that answers routes both", async () => {
-      const { claude, codex } = await settled([]);
+      const { claude, codex } = await applied(homeWith(), both);
       expect(claude.apiKeyHelper).toBe("cat \"$HOME/.config/fleet/cli-proxy.key\"");
       expect(codex.model_provider).toBe("fleet-proxy");
     });
