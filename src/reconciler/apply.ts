@@ -88,6 +88,19 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: ran ? `Step ${step.id} of the ${step.pack} pack ran, but does not pass its check.` : `Step ${step.id} of the ${step.pack} pack failed.`, repair: "apply" });
     if (step.pack === "base") report.ok = false;
   }
+  for (const step of plan.undo ?? []) {
+    if (failed.has(step.pack) || (await run(step.check!)) !== 0) continue;
+    if (await undoWaits(step, run)) {
+      report.findings.push(undoWaitFinding(step));
+      continue;
+    }
+    if ((await run(step.undo!)) === 0 && (await run(step.check!)) !== 0) {
+      report.actions.push({ target: `step ${step.pack}/${step.id}`, operation: "remove", reason: `workflow ${step.workflow} is off` });
+      continue;
+    }
+    report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `Fleet could not undo step ${step.id} of the ${step.pack} pack, whose workflow ${step.workflow} is off. The next fleet apply tries again.`, repair: "apply" });
+    if (step.pack === "base") report.ok = false;
+  }
   return report;
 }
 
@@ -102,6 +115,11 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
   for (const step of plan.steps) {
     if (await waits(step)) continue;
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
+  }
+  for (const step of plan.undo ?? []) {
+    if ((await run(step.check!)) !== 0) continue;
+    if (await undoWaits(step, run)) report.findings.push(undoWaitFinding(step));
+    else report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `The workflow ${step.workflow} is off, but step ${step.id} of the ${step.pack} pack still holds what it set. Run fleet apply to undo it.`, repair: "apply" });
   }
   for (const step of plan.human) {
     const reported = report.findings.some((finding) => finding.id === `human:${step.id}` && finding.pack === step.pack);
@@ -163,6 +181,16 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
 }
 
 /** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */
+type UndoStep = NonNullable<Plan["undo"]>[number];
+
+async function undoWaits(step: UndoStep, run: Runner) {
+  return step.after !== undefined && !(step.prerequisite && (await run(step.prerequisite)) === 0);
+}
+
+function undoWaitFinding(step: UndoStep): Finding {
+  return { id: `undo:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack waits for ${step.after} before Fleet can undo it.`, repair: "human" };
+}
+
 function waiter(plan: Plan, run: Runner) {
   const passed = new Map<string, boolean>();
   return async (step: Plan["steps"][number]) => {
