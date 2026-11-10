@@ -12,7 +12,7 @@ export const startFloorVariable = "FLEET_START_MIN_FREE_GB";
 export const freeMapFile = "disk-free.json";
 
 export type DiskStatus = { critical: boolean; message: string };
-export type FreeMap = { checkedAt: string; boxes: Record<string, number> };
+export type FreeMap = { checkedAt: string; boxes: Record<string, number>; hosts?: Record<string, string> };
 export type StartPlace = { here: string; names: string[]; freeMap: () => FreeMap | undefined; now: number };
 
 export const diskFloorGigabytes = () => numberSetting("base.diskFloorGigabytes");
@@ -56,7 +56,7 @@ export function startDecision(free: number, floor: number, place: StartPlace): D
   const map = place.freeMap();
   const fresh = map && place.now - Date.parse(map.checkedAt) < hour ? map : undefined;
   const [best] = Object.entries(fresh?.boxes ?? {})
-    .filter(([box, bytes]) => !place.names.includes(box) && bytes >= floor * gigabyte)
+    .filter(([box, bytes]) => !place.names.includes(box) && !place.names.includes(fresh?.hosts?.[box] ?? "") && bytes >= floor * gigabyte)
     .sort((a, b) => b[1] - a[1]);
   const elsewhere = best
     ? `${best[0]} has ${shown(best[1])} (disk-watch, ${Math.round((place.now - Date.parse(fresh!.checkedAt)) / 60_000)} min ago): start it there.`
