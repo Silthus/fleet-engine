@@ -99,7 +99,7 @@ export function fakeHub(home: string, fields: Partial<Hub> = {}): Hub & { printe
     hubName: () => "my-hub",
     devboxes: async () => ["box-1", "box-2"],
     saveKey: async () => {},
-    gateway: { httpsHost: "hub.internal.example.com", relayPort: 60001 },
+    gateway: {},
     run: fakeRun().run,
     fetch: mcphubFetch(fakeMcpHub({ home })),
     sleep: async () => {},

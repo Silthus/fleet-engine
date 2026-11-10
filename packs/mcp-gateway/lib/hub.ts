@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gatewayGroup, gatewayPort, isGatewayUrl, localGatewayUrl, refuseLinks, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
+import { browserGatewayUrl, gatewayGroup, gatewayPort, isGatewayUrl, localGatewayUrl, refuseLinks, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type Run = (command: string[], options?: { cwd?: string; input?: string; timeoutMs?: number }) => Promise<RunResult>;
@@ -174,6 +174,8 @@ export async function grant(machine: string, hub: Hub) {
 export async function doctor(hub: Hub): Promise<boolean> {
   const settings = await readSettings(hub.home);
   if (!settings) return hub.print("MCPHub is not installed. Run: fleet apply"), false;
+  const wanted = browserGatewayUrl(hub.gateway);
+  if (settings.systemConfig.install.baseUrl !== wanted) return hub.print(`MCPHub answers at ${settings.systemConfig.install.baseUrl}, not ${wanted}. Run: fleet apply`), false;
   const health = await hub.fetch(`${loopback}/health`, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
   if (!health?.ok) return hub.print("MCPHub does not answer on 127.0.0.1:3317. Run: fleet mcp-gateway restart"), false;
   const open = await hub.fetch(`${localGatewayUrl}/mcp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: AbortSignal.timeout(5000) });

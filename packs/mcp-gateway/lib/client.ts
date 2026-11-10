@@ -63,12 +63,26 @@ export async function saveGatewayClient(home: string, value: unknown, settings: 
 
 const fileClient = (home: string) => readGatewayClient(home, {}).catch((error) => { if (error instanceof GatewayClientError) return undefined; throw error; });
 
-/** Keeps today's client file in step with the secret store, because box handover reads the file: the file follows the store, and a store without a key adopts the file's key. */
+/** The key in today's client file, whatever address an older grant wrote beside it. */
+async function fileToken(home: string) {
+  let text: string;
+  try { text = await readFile(clientPath(home), "utf8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+  try {
+    const token = (JSON.parse(text) as Partial<GatewayClient> | null)?.token;
+    return typeof token === "string" && /^[A-Za-z0-9_-]+$/.test(token) ? token : undefined;
+  } catch { return undefined; }
+}
+
+/** Keeps today's client file in step with the secret store, because box handover reads the file: a store without a key adopts the file's key, and the file then holds the store's key at loopback. */
 export async function syncClientFile(home: string, stored: string | undefined, store: (token: string) => Promise<void>) {
-  const client = await fileClient(home);
-  if (stored === undefined) {
-    if (client) await store(client.token);
-  } else if (client?.token !== stored) await saveGatewayClient(home, { baseUrl: localGatewayUrl, token: stored }, {});
+  let token = stored;
+  if (token === undefined) {
+    token = await fileToken(home);
+    if (token === undefined) return;
+    await store(token);
+  }
+  if ((await fileClient(home))?.token !== token) await saveGatewayClient(home, { baseUrl: localGatewayUrl, token }, {});
 }
 
 export async function checkGateway(home: string, stored: string | undefined, fetch: Fetch): Promise<{ ok: boolean; line: string }> {

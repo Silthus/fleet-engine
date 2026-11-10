@@ -64,15 +64,13 @@ test("grant names the machines it accepts, and refuses without an installed gate
   await expect(grant("stranger", fakeHub(hubHome()))).rejects.toThrow("Name the hub (my-hub) or a devbox from your profile: box-1, box-2.");
 });
 
-test("grant on the hub itself saves the key here, scoped to the fleet group of every server", async () => {
+test("grant on the hub itself scopes its key to the fleet group of every server and sends nothing over SSH", async () => {
   const home = hubHome();
   const api = fakeMcpHub();
   const { calls, run } = fakeRun();
-  const saved: string[] = [];
-  const hub = fakeHub(home, { fetch: mcphubFetch(api), run, saveKey: async (token) => { saved.push(token); } });
+  const hub = fakeHub(home, { fetch: mcphubFetch(api), run });
   await grant("my-hub", hub);
   expect(calls).toEqual([]);
-  expect(saved).toEqual(["mcphub_new-machine-token"]);
   expect(api.groups).toEqual([{ id: "group-1", name: "fleet", servers: ["tickets", "calendar"] }]);
   expect(api.calls.find((call) => call.path === "auth/keys")?.body).toEqual({ name: "Fleet my-hub", kind: "system", accessType: "groups", allowedGroups: ["fleet"] });
   expect(hub.printed).toEqual(["my-hub: saved its MCP gateway key."]);

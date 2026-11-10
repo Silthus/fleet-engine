@@ -91,6 +91,7 @@ function machine(saved: MachineFile, fields: Partial<Profile> = {}) {
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...saved, profileDir: profile }));
   let lines: string[] = [];
+  const errors: string[] = [];
   let input = "";
   const options: CliOptions = {
     home,
@@ -98,6 +99,7 @@ function machine(saved: MachineFile, fields: Partial<Profile> = {}) {
     platform: "linux",
     env: {},
     print: (line) => lines.push(line),
+    fail: (line) => errors.push(line),
     hostname: () => saved.name!,
     stdin: () => new Response(input).body!,
     run: async (command) => (command[0] === "/bin/sh" && command[1] === join(repoRoot, "fleet") ? main(command.slice(2), { ...options, print: () => {} }) : 0),
@@ -109,7 +111,7 @@ function machine(saved: MachineFile, fields: Partial<Profile> = {}) {
     const code = await main(args, options);
     return { code, output: lines.join("\n") };
   };
-  return { home, fleet };
+  return { home, fleet, errors };
 }
 
 const initialize = `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } })}\n`;
@@ -155,6 +157,36 @@ describe("on the hub", () => {
     expect(errors).toEqual(["mcp-gateway/mcp-gateway has no credential on this machine yet. Run fleet apply on the hub."]);
   });
 
+  test("a gateway installed at an HTTPS address fails the install check, and apply reinstalls it at loopback", async () => {
+    const { home, fleet } = machine(hubMachine);
+    writeMcpHubSettings(home, { systemConfig: { install: { baseUrl: "https://hub.internal.example.com:60001/mcphub" } } });
+    const { spawned } = gatewayServer({ home });
+    expect(await fleet(["run", "mcp-gateway/mcp-gateway-installed"])).toMatchObject({ code: 1 });
+    expect((await fleet(["mcp-gateway", "doctor"])).output).toContain("MCPHub answers at https://hub.internal.example.com:60001/mcphub, not http://127.0.0.1:3317/mcphub. Run: fleet apply");
+    await fleet(["apply"]);
+    expect(spawned[0]).toEqual(["docker", "image", "inspect", expect.stringMatching(/^fleet-mcphub:1\.1\.0-/)]);
+  });
+
+  test("grant on the hub's own name saves the key to the store and the client file, and the bridge uses it", async () => {
+    const { home, fleet } = machine(hubMachine);
+    writeMcpHubSettings(home);
+    const { bridged } = gatewayServer({ home });
+    expect(await fleet(["mcp-gateway", "grant", "hub-1"])).toEqual({ code: 0, output: "hub-1: saved its MCP gateway key." });
+    expect(readFileSync(storeFile(home), "utf8")).toBe(issued);
+    expect(JSON.parse(readFileSync(clientFile(home), "utf8"))).toEqual({ baseUrl: "http://127.0.0.1:3317/mcphub", token: issued });
+    expect((await fleet(["mcp-connect"], initialize)).code).toBe(0);
+    expect(bridged[0]).toBe(`POST Bearer ${issued}`);
+  });
+
+  test("a failure before the bridge starts goes to standard error, never onto the MCP stream", async () => {
+    const { home, fleet, errors } = machine(hubMachine);
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    writeFileSync(join(home, ".local/state/fleet/mcp-gateway"), "");
+    gatewayServer({ home });
+    expect(await fleet(["mcp-connect"], initialize)).toEqual({ code: 1, output: "" });
+    expect(errors).toEqual([expect.stringMatching(/^fleet: EEXIST/)]);
+  });
+
   test("sign-in prints the forward for your computer with the profile's hub, and each pending authorization address", async () => {
     const { home, fleet } = machine(hubMachine);
     writeMcpHubSettings(home, { mcpServers: { tickets: { oauth: { pendingAuthorization: { authorizationUrl: "https://auth.example.com/authorize?state=1" } } } } });
@@ -174,15 +206,19 @@ describe("on the hub", () => {
 });
 
 describe("on a devbox", () => {
-  test("apply adopts the key that today's client file holds into the store, and the bridge uses it", async () => {
-    const { home, fleet } = machine(nodeMachine);
-    writeFileSync(clientFile(home), JSON.stringify({ baseUrl: "http://127.0.0.1:3317/mcphub", token: issued }));
-    const { bridged } = gatewayServer();
-    const applied = await fleet(["apply"]);
-    expect(applied.output).not.toContain("cannot reach the MCP gateway");
-    expect(readFileSync(storeFile(home), "utf8")).toBe(issued);
-    expect((await fleet(["mcp-connect"], initialize)).code).toBe(0);
-    expect(bridged[0]).toBe(`POST Bearer ${issued}`);
+  test("apply adopts the key that today's client file holds into the store, at loopback or at the hub's old HTTPS address, and the bridge uses it", async () => {
+    for (const baseUrl of ["http://127.0.0.1:3317/mcphub", "https://hub.internal.example.com:60001/mcphub"]) {
+      const { home, fleet } = machine(nodeMachine);
+      writeFileSync(clientFile(home), JSON.stringify({ baseUrl, token: issued }));
+      const { bridged } = gatewayServer();
+      const applied = await fleet(["apply"]);
+      expect(applied.output).not.toContain("cannot reach the MCP gateway");
+      expect(readFileSync(storeFile(home), "utf8")).toBe(issued);
+      expect(JSON.parse(readFileSync(clientFile(home), "utf8"))).toEqual({ baseUrl: "http://127.0.0.1:3317/mcphub", token: issued });
+      expect((await fleet(["mcp-connect"], initialize)).code).toBe(0);
+      expect(bridged[0]).toBe(`POST Bearer ${issued}`);
+      mock.restore();
+    }
   });
 
   test("without a key, apply names the check, and accept saves the key the hub sends on stdin to the store and the client file", async () => {
