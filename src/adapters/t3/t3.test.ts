@@ -519,6 +519,20 @@ describe("T3 project scripts", () => {
     expect(Object.keys(server.state.settings.projectSettingsOverrides as object)).toEqual(["project-0"]);
   });
 
+  test("adds each existing folder a script names by plain path as a T3 project, so one apply puts the script on it", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, "app"), { recursive: true });
+    mkdirSync(join(home, "work/*"), { recursive: true });
+    const named = { ...prepare, projects: ["~/app", "~/missing", "~/work/*"] };
+    const { server, commands, adapter } = setup({ settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
+    const report = await apply(withScripts([named]), { home, adapters: [adapter] });
+    expect(commands.calls.filter((line) => line.startsWith("t3 project add"))).toEqual([`t3 project add ${home}/app`]);
+    expect(report.actions).toContainEqual({ target: "t3 project ~/app", operation: "create" });
+    expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [ours] } });
+    await apply(withScripts([named]), { home, adapters: [adapter] });
+    expect(commands.calls.filter((line) => line.startsWith("t3 project add")).length).toBe(1);
+  });
+
   test("waits while T3 Code is not running, and doctor names the missing script without writing", async () => {
     const home = temp.make("home-");
     const stopped = await apply(withScripts([prepare]), { home, adapters: [setup({ up: false }).adapter] });
