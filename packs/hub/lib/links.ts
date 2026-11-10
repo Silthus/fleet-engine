@@ -69,7 +69,7 @@ async function handOverProxy(coder: Pick<Coder, "ssh">, here: Machine, box: stri
   const key = join(here.home, proxyKeyPath);
   if (!existsSync(key)) return here.say(`skip ~/${proxyKeyPath}: this machine has none`);
   const connected = await coder.ssh(box, `umask 077 && ${remoteFleet("cli-proxy connect")}`, readFileSync(key, "utf8"));
-  if (connected.code !== 0) here.say(`${box} keeps its own Claude sign-in: ${(connected.stderr || connected.stdout).trim()}`);
+  if (connected.code !== 0) here.say(`${box} keeps its own sign-in: ${(connected.stderr || connected.stdout).trim()}`);
 }
 
 export async function handOver(coder: Pick<Coder, "ssh">, here: Machine, box: string): Promise<boolean> {
