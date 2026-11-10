@@ -262,6 +262,13 @@ describe("fleet routing", () => {
     expect(models.find((row: { role: string }) => row.role === "review")).toMatchObject({ provider: "codex" });
   });
 
+  test("gives a pack command the user's AI plan", async () => {
+    const { home, engine } = await machineWith(["tools"]);
+    writeFileSync(join(engine, "packs/tools/commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", Bun.env.FLEET_PLAN ?? "none");\n`);
+    expect((await fleet(["hello"], home, engine)).code).toBe(0);
+    expect(readFileSync(join(home, "hello.txt"), "utf8")).toBe("both");
+  });
+
   test("runs a leading fleet in a pack step with this engine's launcher, not one on PATH", async () => {
     const home = temp.make("home-");
     const engine = engineWithCommands();
