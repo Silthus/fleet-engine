@@ -242,7 +242,7 @@ async function issued(value: Promise<string>) {
 
 const pullLimitMs = 90_000;
 
-/** Asks the hub for this node's credential of each service and stores the answer. Each pull ends at a deadline, so a hub that connects but never answers cannot hold the apply. A failed pull keeps what the store holds. */
+/** Asks the hub for this node's credential of each service and stores the answer. Each pull ends at a deadline, so a hub that connects but never answers cannot hold the apply. A failed pull keeps what the store holds, and its finding names the exit code and copies nothing the hub printed, since a service may print its key. */
 async function pullCredentials(entries: CatalogEntry[], node: string, hub: string, options: CliOptions): Promise<Finding[]> {
   const capture = options.capture ?? spawnRunner;
   const clock = options.clock ?? { now: Date.now, sleep: Bun.sleep };
@@ -261,7 +261,7 @@ async function pullCredentials(entries: CatalogEntry[], node: string, hub: strin
       if ((await store.read(name)) !== value) await store.write(name, value);
       continue;
     }
-    const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : (answer.stderr ?? "").trim().split("\n").at(-1) || `exit ${answer.code}`;
+    const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : answer.code === 255 ? `ssh exited 255. Run ssh ${hub} true to see why` : `fleet credential exited ${answer.code} there. Run fleet credential ${service} ${node} on the hub to see why`;
     const kept = (await store.read(name)) ? "Kept the one this machine has." : "Fleet tries again at the next apply.";
     findings.push({ id: `credential:${service}`, pack: entry.pack, say: `Could not pull the credential of ${service} from the hub ${hub} (${reason}). ${kept}`, repair: "apply" });
   }
