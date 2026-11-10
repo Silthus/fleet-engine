@@ -68,6 +68,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
   const active = activateWorkflows(profile, machine, order, names, plan);
   const solo = !profile.hub && machine.role !== "devbox" && !names.has("hub") && !profile.devboxes?.length && !machine.devboxes?.length;
   const hubless = !profile.hub && Boolean(profile.devboxes?.length);
+  if (machine.role === "hub" || solo) plan.onHub = true;
   const fits = (pack: string, item: Scope, label: string) => {
     const reason =
       item.on && !item.on.includes(os) ? `not on ${os}`
@@ -217,10 +218,15 @@ function choosePacks(profile: Profile, sources: FetchedSource[]) {
     order.push(candidate);
     return true;
   };
-  for (const name of ["base", ...profile.packs.filter((name) => name !== "base")]) visit(name);
+  for (const name of ["base", ...profile.packs.filter((name) => name !== "base"), ...carriedPacks(profile)]) visit(name);
   const base = packs.find((pack) => pack.name === "base");
   if (!base?.available) throw new ResolveError(`the base pack is not available: ${base?.reason ?? "missing"}`);
   return { order, packs };
+}
+
+/** The MCP gateway left the Hub pack for its own pack. A profile that lists the Hub pack keeps the gateway until it turns the old mcp-gateway workflow off. */
+function carriedPacks(profile: Profile) {
+  return profile.packs.includes("hub") && !profile.packs.includes("mcp-gateway") && profile.workflows["mcp-gateway"] !== false ? ["mcp-gateway"] : [];
 }
 
 function activateWorkflows(profile: Profile, machine: MachineFile, order: Candidate[], names: Set<string>, plan: Plan) {

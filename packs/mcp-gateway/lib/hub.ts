@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { gatewayGroup, isGatewayUrl, localGatewayUrl, refuseLinks, saveGatewayClient, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
+import { gatewayGroup, gatewayPort, isGatewayUrl, localGatewayUrl, refuseLinks, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type Run = (command: string[], options?: { cwd?: string; input?: string; timeoutMs?: number }) => Promise<RunResult>;
@@ -12,8 +12,9 @@ export type Hub = {
   platform: NodeJS.Platform;
   uid: number;
   gid: number;
-  alias: () => string;
+  hubName: () => string;
   devboxes: () => Promise<string[]>;
+  saveKey: (token: string) => Promise<void>;
   gateway: GatewaySettings;
   run: Run;
   fetch: Fetch;
@@ -28,7 +29,7 @@ export type Container = { Config: { Labels?: Record<string, string>; Env?: strin
 
 export const container = "fleet-mcphub";
 const loopback = "http://127.0.0.1:3317";
-const acceptCommand = 'sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcphub accept';
+const acceptCommand = 'sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcp-gateway accept';
 const secret = () => randomBytes(32).toString("base64url");
 
 export const dataDir = (home: string) => join(home, ".local/share/fleet-mcphub");
@@ -38,11 +39,6 @@ export async function must(hub: Pick<Hub, "run">, command: string[], options?: {
   const result = await hub.run(command, options);
   if (result.code) throw new Error(`${command[0]} ${command[1]} failed: ${result.stderr.trim()}`);
   return result.stdout.trim();
-}
-
-export async function requireHub(hub: Pick<Hub, "home">, mode: string) {
-  const machine = await readFile(join(hub.home, ".config/fleet/machine.json"), "utf8").then((text) => JSON.parse(text) as { role?: string }, () => undefined);
-  if (machine?.role !== "hub") throw new Error(`Run fleet mcphub ${mode} on the hub.`);
 }
 
 export async function ownedContainer(hub: Pick<Hub, "run">) {
@@ -105,7 +101,7 @@ async function readSettings(home: string): Promise<McpHubSettings | undefined> {
 
 async function installedSettings(hub: Hub) {
   const settings = await readSettings(hub.home);
-  if (!settings) throw new Error("MCPHub is not installed. Run: fleet mcphub install");
+  if (!settings) throw new Error("MCPHub is not installed. Run: fleet apply");
   return settings;
 }
 
@@ -148,11 +144,11 @@ export async function syncWhenReady(hub: Hub) {
   }
 }
 
-export async function grant(machine: string, hub: Hub) {
-  await requireHub(hub, "grant");
-  const alias = hub.alias();
+/** Finds or makes the gateway key of one machine that the profile names, and returns its token. */
+export async function issueKey(machine: string, hub: Hub) {
+  const hubName = hub.hubName();
   const devboxes = await hub.devboxes();
-  if (machine !== alias && !devboxes.includes(machine)) throw new Error(`Name the hub (${alias}) or a devbox from your profile: ${devboxes.join(", ") || "none"}.`);
+  if (machine !== hubName && !devboxes.includes(machine)) throw new Error(`Name the hub (${hubName}) or a devbox from your profile: ${devboxes.join(", ") || "none"}.`);
   const settings = await installedSettings(hub);
   const call = api(hub, settings);
   await syncGatewayGroup(call);
@@ -162,59 +158,51 @@ export async function grant(machine: string, hub: Hub) {
   else if (key.accessType !== "groups" || !key.allowedGroups?.includes(gatewayGroup)) {
     await call(`auth/keys/${encodeURIComponent(key.id)}`, "PUT", { accessType: "groups", allowedGroups: [gatewayGroup], allowedServers: [] });
   }
-  if (machine === alias) await saveGatewayClient(hub.home, { baseUrl: localGatewayUrl, token: key.token }, hub.gateway);
+  return key.token;
+}
+
+export async function grant(machine: string, hub: Hub) {
+  const token = await issueKey(machine, hub);
+  if (machine === hub.hubName()) await hub.saveKey(token);
   else {
-    const result = await hub.run(["ssh", machine, acceptCommand], { input: JSON.stringify({ baseUrl: localGatewayUrl, token: key.token }) });
+    const result = await hub.run(["ssh", machine, acceptCommand], { input: JSON.stringify({ baseUrl: localGatewayUrl, token }) });
     if (result.code) throw new Error(`${machine} could not save its MCP gateway key: ${result.stderr.trim()}. Run fleet apply on ${machine} first.`);
   }
   hub.print(`${machine}: saved its MCP gateway key.`);
 }
 
 export async function doctor(hub: Hub): Promise<boolean> {
-  await requireHub(hub, "doctor");
   const settings = await readSettings(hub.home);
-  if (!settings) return hub.print("MCPHub is not installed. Run: fleet mcphub install"), false;
+  if (!settings) return hub.print("MCPHub is not installed. Run: fleet apply"), false;
   const health = await hub.fetch(`${loopback}/health`, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
-  if (!health?.ok) return hub.print("MCPHub does not answer on 127.0.0.1:3317. Run: fleet mcphub restart"), false;
+  if (!health?.ok) return hub.print("MCPHub does not answer on 127.0.0.1:3317. Run: fleet mcp-gateway restart"), false;
   const open = await hub.fetch(`${localGatewayUrl}/mcp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal: AbortSignal.timeout(5000) });
   let ok = open.status === 401;
   if (!ok) hub.print("MCPHub accepts calls without a key. Check routing.skipAuth in its settings.");
   hub.print(`MCPHub dashboard: ${settings.systemConfig.install.baseUrl}/`);
   const { servers, missing } = await groupGap(api(hub, settings));
   for (const server of servers) hub.print(`${server.name}: ${server.status}, ${server.tools?.length ?? 0} tools`);
-  if (missing.length) ok = false, hub.print(`The ${gatewayGroup} group lacks ${missing.join(", ")}. Run: fleet mcphub install`);
+  if (missing.length) ok = false, hub.print(`The ${gatewayGroup} group lacks ${missing.join(", ")}. Run: fleet apply`);
   return ok;
 }
 
 export async function reconnect(server: string, hub: Hub) {
-  await requireHub(hub, "reconnect");
   const settings = await installedSettings(hub);
   if (!Object.hasOwn(settings.mcpServers, server)) throw new Error(`Name a configured upstream server: ${Object.keys(settings.mcpServers).join(", ")}.`);
   await api(hub, settings)(`servers/${encodeURIComponent(server)}/reload`, "POST");
-  hub.print(`MCPHub reconnected ${server}. If it needs a sign-in, run: fleet mcphub links`);
+  hub.print(`MCPHub reconnected ${server}. If it needs a sign-in, run: fleet mcp-gateway sign-in`);
 }
 
-export async function links(hub: Hub) {
-  await requireHub(hub, "links");
+export async function signIn(hub: Hub) {
   const settings = await installedSettings(hub);
-  const signin = join(dataDir(hub.home), "signin");
-  await refuseLinks(hub.home, signin, "sign-in page path");
-  await mkdir(signin, { recursive: true, mode: 0o700 });
-  for (const [name, config] of Object.entries(settings.mcpServers)) {
-    const url = config.oauth?.pendingAuthorization?.authorizationUrl;
-    if (!url) continue;
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new Error(`Invalid upstream server name: ${name}`);
-    const page = `<!doctype html><meta charset="utf-8"><title>Authorize ${name}</title><script>location.replace(${JSON.stringify(url).replaceAll("<", "\\u003c")})</script>`;
-    const path = join(signin, `${name}.html`);
-    await refuseLinks(hub.home, path, "sign-in page path");
-    await writePrivateFile(path, page);
-    hub.print(`${name}: ${new URL(`/mcphub-signin/${name}.html`, settings.systemConfig.install.baseUrl)}`);
-  }
+  const waiting = Object.entries(settings.mcpServers).flatMap(([name, config]) => (config.oauth?.pendingAuthorization?.authorizationUrl ? [[name, config.oauth.pendingAuthorization.authorizationUrl] as const] : []));
+  if (!waiting.length) return hub.print("No upstream server waits for a sign-in.");
+  hub.print(`On your computer, keep this running while you sign in: coder port-forward ${hub.hubName()} --tcp ${gatewayPort}`);
+  for (const [name, url] of waiting) hub.print(`${name}: ${url}`);
 }
 
 export async function restart(hub: Hub) {
-  await requireHub(hub, "restart");
-  if (!(await ownedContainer(hub))) throw new Error("MCPHub is not installed. Run: fleet mcphub install");
+  if (!(await ownedContainer(hub))) throw new Error("MCPHub is not installed. Run: fleet apply");
   await must(hub, ["docker", "restart", container]);
   hub.print("MCPHub restarted. Upstream sign-ins stay on disk.");
 }

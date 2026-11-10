@@ -320,12 +320,19 @@ parent process. The pack writes no unit and no tunnel line.
 
 **The MCP gateway** (pack `mcp-gateway`, step 2). The pack declares the
 served service of section 4.2, one check whose repair Fleet runs (today's
-install step), today's client check, and the `config` MCP entry that
-starts `fleet mcp-gateway connect`, the stdio bridge of today, which calls
-`ctx.use`. Its sign-in command prints each upstream authorization URL
-directly, not a page that only Caddy serves (`mcphub/hub.ts:197-211`), and
-tells the person to run `coder port-forward <hub> --tcp 3317` on the Mac.
-So the browser reaches the gateway at loopback without private HTTPS.
+install step), the client check, and the `config` MCP entries that start
+`fleet mcp-connect`, the stdio bridge of today, which calls `ctx.use`.
+`fleet mcp-gateway` is the hub's administration: doctor, sign-in,
+reconnect, and restart. Its sign-in prints each upstream authorization URL
+directly, not a page that only Caddy serves, and tells the person to run
+`coder port-forward <hub> --tcp 3317` on the Mac. So the browser reaches
+the gateway at loopback without private HTTPS. Apply tests the checks that
+served services wait for first and issues their credentials, so the client
+check's repair writes today's client file from the new key in the same
+apply. Until step 3 pulls keys, `fleet mcp-gateway grant <devbox>` and its
+`accept` stay, and the client check's repair moves a key from today's
+client file into the store. A profile that lists the Hub pack gets this
+pack too, until it turns the `mcp-gateway` workflow off.
 
 **The Slack trigger** (pack `slack`, section 5.3) serves nothing: it opens
 a socket to Slack. Placement on the hub means that one runs. **An API** (a

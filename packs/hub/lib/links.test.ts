@@ -54,14 +54,15 @@ test("link gives up after a minute on the injected clock when the box's T3 never
   expect(calls.at(-1)).toBe("run systemctl --user stop fleet-box-box-lane-t3.service");
 });
 
-test("handing over sends the gateway client, the Claude token, and the GitHub login on stdin only, installed with umask 077", async () => {
+test("handing over sends the gateway client and its key for the store, the Claude token, and the GitHub login on stdin only, installed with umask 077", async () => {
   const home = temp.make("fleet-box-");
   writeHome(home, { ".config/fleet/mcphub.client.json": JSON.stringify({ baseUrl: "http://127.0.0.1:3317/mcphub", token: "secretgateway" }), ".config/fleet/box-claude-token": "secret claude\n" });
   const { machine } = fakeMachine(home, { run: async (argv) => (argv[0] === "gh" ? { ...ok, stdout: "gho_secret\n" } : ok) });
   const { coder, calls } = fakeCoder();
   await handOver(coder, machine, "box-lane");
-  expect(calls.map((call) => call.command).join("\n")).not.toMatch(/secret/);
-  expect(calls.find((call) => call.stdin?.includes("secretgateway"))?.command).toContain("umask 077");
+  expect(calls.map((call) => call.command).join("\n")).not.toMatch(/secretgateway|secret claude|gho_secret/);
+  expect(calls.find((call) => call.stdin === "secretgateway")?.command).toContain("umask 077");
+  expect(calls.find((call) => call.stdin === "secretgateway")?.command).toContain("~/.config/fleet/secrets/mcp-gateway/credential.mcp-gateway");
   expect(calls.find((call) => call.stdin?.includes("secretgateway"))?.command).toContain("~/.config/fleet/mcphub.client.json");
   expect(calls.find((call) => call.stdin === "secret claude\n")?.command).toContain("~/.config/fleet/box-claude-token");
   expect(calls.find((call) => call.stdin === "gho_secret\n")?.command).toContain("gh auth login --with-token");

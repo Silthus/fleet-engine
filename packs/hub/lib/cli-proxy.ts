@@ -7,8 +7,8 @@ import { management, managementFile, managementPattern, proxyDir, proxyUrl, read
 import { requireHubRole } from "./hub-job.ts";
 import { quote, readRole, remoteFleet } from "./machine.ts";
 import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed } from "./managed.ts";
-import { refuseLinks, writePrivateFile, type Fetch } from "./mcphub/client.ts";
-import type { Run } from "./mcphub/hub.ts";
+import { refuseLinks, writePrivateFile, type Fetch } from "../../mcp-gateway/lib/client.ts";
+import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { isBoxName } from "./names.ts";
 import { must, proxyPort } from "./run.ts";
 

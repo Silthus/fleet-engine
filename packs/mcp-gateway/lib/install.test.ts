@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, linkSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { tempDirs } from "../../../../src/testing/git.ts";
+import { tempDirs } from "../../../src/testing/git.ts";
 import { buildImage, install, mcphubImage } from "./install.ts";
 import { fakeHub, fakeMcpHub, fakeRun, mcphubFetch, writeMachineFile, type RunCall } from "./testing.ts";
 
@@ -49,9 +49,8 @@ const startCommand = (home: string, image: string) => ["docker", "run", "-d", "-
   "-p", "127.0.0.1:3317:3000", "-v", `${join(home, ".local/share/fleet-mcphub")}/data:/app/data`, "-v", `${join(home, ".local/share/fleet-mcphub")}/logs:/app/logs`,
   "--entrypoint", "node", image, "dist/index.js"];
 
-test("install runs only on the Linux hub", async () => {
+test("install runs only on Linux", async () => {
   await expect(install(fakeHub(hubHome(), { platform: "darwin" }))).rejects.toThrow("Install MCPHub on the Linux hub.");
-  await expect(install(fakeHub(hubHome("devbox")))).rejects.toThrow("Run fleet mcphub install on the hub.");
 });
 
 test("install starts the built image on loopback port 3317 with no secret in argv, then syncs the fleet group once MCPHub answers", async () => {

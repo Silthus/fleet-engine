@@ -6,7 +6,7 @@ import { LockBusy, lockBox, tryLockBox, userWaitMs, withBoxLock, type HeldLock, 
 import { assertBox, boxMarkerPath, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForward, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
 import type { Box } from "./coder.ts";
 import { quote, remoteFleet, type Machine } from "./machine.ts";
-import { writePrivateFile } from "./mcphub/client.ts";
+import { writePrivateFile } from "../../mcp-gateway/lib/client.ts";
 import * as registry from "./pool.ts";
 
 export type BoxHooks = { stopping?(box: string): void | Promise<void> };
@@ -223,12 +223,12 @@ const skippedLine = (box: string) => `${box}: skipped, not a box this pool made`
 const otherWorkspace = (box: string) => `Coder has another workspace named ${box} now, not the one the pool made. Nothing changed.`;
 
 async function checkGatewayOn(coder: BoxCoder, here: Machine, box: string): Promise<void> {
-  let checked = await coder.ssh(box, remoteFleet("mcphub check"), undefined, gatewayCheckLimitMs);
+  let checked = await coder.ssh(box, remoteFleet("run mcp-gateway/mcp-gateway-client"), undefined, gatewayCheckLimitMs);
   for (let attempt = 1; checked.code !== 0 && attempt < gatewayChecks; attempt++) {
     await here.sleep(5000);
-    checked = await coder.ssh(box, remoteFleet("mcphub check"), undefined, gatewayCheckLimitMs);
+    checked = await coder.ssh(box, remoteFleet("run mcp-gateway/mcp-gateway-client"), undefined, gatewayCheckLimitMs);
   }
-  if (checked.code !== 0) here.say(`${box} cannot reach the hub's MCP gateway yet (${lastLine(checked) || `exit ${checked.code}`}). Check it with fleet box run ${box} -- fleet mcphub check`);
+  if (checked.code !== 0) here.say(`${box} cannot reach the hub's MCP gateway yet (${lastLine(checked) || `exit ${checked.code}`}). Check it with fleet box run ${box} -- fleet run mcp-gateway/mcp-gateway-client`);
 }
 
 function finish(here: Machine, box: string, environmentId: string, unlinked: string[]) {

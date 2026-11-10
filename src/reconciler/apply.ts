@@ -67,10 +67,10 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     return report;
   }
   const run = viaEngine(plan, options.run ?? spawnRunner(options.home, plan.machine.profileDir));
-  const gated = await gate(plan, run, !context.dryRun);
-  report.findings.push(...gated.failed.map(humanFinding));
-  const node = plan.machine.role === "hub" ? plan.machine.name : undefined;
-  if (!context.dryRun && node && options.issue) report.findings.push(...(await options.issue(gated.ready, node)));
+  const node = plan.onHub ? plan.machine.name : undefined;
+  const issue = !context.dryRun && node && options.issue ? (ready: CatalogEntry[]) => options.issue!(ready, node) : undefined;
+  const gated = await gate(plan, run, !context.dryRun, issue);
+  report.findings.push(...gated.issued, ...gated.failed.map(humanFinding));
   for (const adapter of adapters) {
     const result = await adapter.apply(gated.plan, context);
     report.actions.push(...result.actions);
@@ -116,8 +116,8 @@ function humanFinding(step: Owned<HumanStep>): Finding {
   return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: "human" };
 }
 
-/** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. ready lists the catalog's services whose gate passes here. */
-async function gate(plan: Plan, run: Runner, repair: boolean): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; ready: CatalogEntry[] }> {
+/** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. It tests the checks that served services wait for first and issues their credentials, so a repair that reads a credential sees it in the same apply. */
+async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: CatalogEntry[]) => Promise<Finding[]>): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; issued: Finding[] }> {
   const tested = new Map<Owned<HumanStep>, boolean>();
   const probe = async (step: Owned<HumanStep>) => {
     if ((await run(step.probe)) === 0) return true;
@@ -129,6 +129,9 @@ async function gate(plan: Plan, run: Runner, repair: boolean): Promise<{ plan: P
     return tested.get(step)!;
   };
   const checkOf = (pack: string, id: string) => plan.human.find((step) => step.pack === pack && step.id === id);
+  const ready: CatalogEntry[] = [];
+  for (const entry of plan.catalog ?? []) if (!entry.after || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
+  const issued = issue ? await issue(ready) : [];
   if (repair) for (const step of plan.human) if (step.repair) await passes(step);
   const jobs: Plan["jobs"] = [];
   const dropped: Plan["dropped"] = [];
@@ -141,10 +144,8 @@ async function gate(plan: Plan, run: Runner, repair: boolean): Promise<{ plan: P
     if (!entry.after || (await passes(plan.human.find((step) => step.pack === entry.pack && step.id === entry.after)))) config.push(entry);
     else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after });
   }
-  const ready: CatalogEntry[] = [];
-  for (const entry of plan.catalog ?? []) if (!entry.after || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
   const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);
-  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, ready };
+  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, issued };
 }
 
 /** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */

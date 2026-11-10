@@ -5,7 +5,7 @@ import { tryLockBox } from "./box-lock.ts";
 import { boxPrefix, slugFor, type Coder, type Result } from "./coder.ts";
 import { proxyPort, relayPortOf } from "./run.ts";
 import { quote, remoteFleet, type Machine, type PeerLinkInput, type PeerMachine } from "./machine.ts";
-import { GatewayClientError, gatewayPort, localGatewayUrl, readGatewayClient, writePrivateFile, type GatewaySettings } from "./mcphub/client.ts";
+import { GatewayClientError, gatewayPort, localGatewayUrl, readGatewayClient, writePrivateFile, type GatewaySettings } from "../../mcp-gateway/lib/client.ts";
 import { isBoxName } from "./names.ts";
 import { poolFile, recorded } from "./pool.ts";
 
@@ -19,6 +19,7 @@ const answerLimitMs = 60_000;
 export const claudeTokenPath = ".config/fleet/box-claude-token";
 export const boxMarkerPath = ".config/fleet/box-marker";
 const gatewayClientPath = ".config/fleet/mcphub.client.json";
+const gatewayCredentialPath = ".config/fleet/secrets/mcp-gateway/credential.mcp-gateway";
 const proxyKeyPath = ".config/fleet/cli-proxy.key";
 
 export const t3Of = (here: Pick<Machine, "home">) => join(here.home, ".local/bin/t3");
@@ -51,6 +52,7 @@ async function handOverGateway(coder: Pick<Coder, "ssh">, here: Machine, box: st
   }
   if (!client) return here.say(`skip ~/${gatewayClientPath}: this machine has none`), false;
   await writeOnBox(coder, box, gatewayClientPath, `${JSON.stringify({ baseUrl: localGatewayUrl, token: client.token })}\n`);
+  await writeOnBox(coder, box, gatewayCredentialPath, client.token);
   return true;
 }
 

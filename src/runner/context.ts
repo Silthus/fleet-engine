@@ -6,14 +6,14 @@ import type { PackCode, Plan, Workflow } from "../pack/types.ts";
 import type { Context, Secrets, Setting, Value } from "../sdk/index.ts";
 
 export type Clock = { now(): number; sleep(ms: number): Promise<void> };
-export type ContextOptions = { home: string; plan: Plan; pack: string; code: PackCode; workflows: Workflow[]; print(line: string): void; clock: Clock };
+export type ContextOptions = { home: string; plan: Plan; pack: string; code: PackCode; workflows: Workflow[]; print(line: string): void; clock: Clock; stdin?: () => ReadableStream<Uint8Array> };
 
 const secretName = /^[a-z0-9][a-z0-9.-]*$/;
 
 /** The secret that holds this machine's credential for a served service, in the serving pack's store. */
 export const credentialName = (id: string) => `credential.${id}`;
 
-export async function packContext({ home, plan, pack, code, workflows, print, clock }: ContextOptions): Promise<Context> {
+export async function packContext({ home, plan, pack, code, workflows, print, clock, stdin = () => Bun.stdin.stream() }: ContextOptions): Promise<Context> {
   const stateDir = join(home, ".local/state/fleet", pack);
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const threads = t3Threads(plan.models, { home });
@@ -37,6 +37,7 @@ export async function packContext({ home, plan, pack, code, workflows, print, cl
     now: clock.now,
     sleep: clock.sleep,
     threads: { start: (request) => threads.start({ ...request, key: `${pack}:${request.key}` }) },
+    stdin,
     use: async (service) => {
       const id = code.serviceId(service);
       const entry = plan.catalog?.find((item) => item.pack === pack && item.id === id);

@@ -22,9 +22,8 @@ function coderTeam(): AvailableSource {
   const dir = temp.make("team-");
   return { ref: { name: "team", repo: "example/team-packs", ref: "main" }, dir, packs: [{ dir, manifest: { schema: 1, name: "posthog", summary: "A team pack that brings Coder." } }] };
 }
-const gatewayKeys = ["claude:mcpServers.fleet-hub", "codex:mcp_servers.fleet-hub"];
 
-describe("without the Hub pack", () => {
+describe("without the Hub pack and the MCP gateway pack", () => {
   const pointsAtHub = /\bhub\b|tunnel|proxy|mcphub|ANTHROPIC_BASE_URL|127\.0\.0\.1|localhost/i;
   const roles: MachineRole[] = ["mac", "devbox", "linux"];
 
@@ -43,7 +42,7 @@ describe("without the Hub pack", () => {
     const next = random(27);
     const workflows = sources[0]!.packs.flatMap((pack) => (pack.manifest.name === "hub" ? [] : (pack.manifest.workflows ?? []).map((workflow) => workflow.id)));
     for (let run = 0; run < 40; run++) {
-      const packs = shipped.filter((name) => name !== "hub" && next() < 0.6);
+      const packs = shipped.filter((name) => name !== "hub" && name !== "mcp-gateway" && next() < 0.6);
       const overrides = Object.fromEntries(workflows.filter(() => next() < 0.3).map((id) => [id, next() < 0.5]));
       const machine: MachineFile = { schema: 1, role: roles[Math.floor(next() * roles.length)] ?? "mac" };
       const ai = (["claude", "codex", "both"] as const)[Math.floor(next() * 3)];
@@ -52,8 +51,9 @@ describe("without the Hub pack", () => {
     }
   });
 
-  test("the property sees the Hub pack's keys once the pack is on", () => {
+  test("the property sees the gateway's keys once either pack is on", () => {
     expect(hubFree(plan({ packs: ["hub"] }))).toBe(false);
+    expect(hubFree(plan({ packs: ["mcp-gateway"] }))).toBe(false);
   });
 });
 
@@ -61,30 +61,6 @@ describe("the Hub pack", () => {
   test("is off by default, and needs only itself", () => {
     expect(plan().workflows.filter((workflow) => workflow.pack === "hub" && workflow.active)).toEqual([]);
     expect(plan({ packs: ["hub"] }).packs.find((pack) => pack.name === "hub")).toMatchObject({ available: true });
-  });
-
-  test("owns the MCP gateway keys alone, with every shipped pack on", () => {
-    const result = plan({ packs: shipped, settings: { ...answers, "memory.repo": "me/notes" } });
-    for (const key of gatewayKeys) expect([key, result.owners[key]]).toEqual([key, "hub"]);
-    const gateway = result.config.filter((entry) => gatewayKeys.includes(`${entry.provider}:${entry.key}`));
-    expect(gateway.map((entry) => entry.pack)).toEqual(["hub", "hub"]);
-  });
-
-  test("gives each plan only its own provider's gateway key, and drops both when the gateway is off", () => {
-    const keys = (fields: Partial<Profile>, machine: MachineFile = devbox) => plan({ packs: ["hub"], ...fields }, machine).config.map((entry) => `${entry.provider}:${entry.key}`).filter((key) => gatewayKeys.includes(key));
-    expect(keys({ plan: "claude" })).toEqual(["claude:mcpServers.fleet-hub"]);
-    expect(keys({ plan: "codex" })).toEqual(["codex:mcp_servers.fleet-hub"]);
-    expect(keys({ workflows: { "mcp-gateway": false } })).toEqual([]);
-    expect(keys({}, mac)).toEqual(gatewayKeys);
-  });
-
-  test("keeps sign-ins and hosts out of the gateway keys: each provider starts fleet mcphub connect, which reads them at run time", () => {
-    const result = plan({ packs: ["hub"] });
-    for (const entry of result.config.filter((item) => item.pack === "hub")) {
-      const text = JSON.stringify(entry.value);
-      expect(text).toContain("fleet\\\" mcphub connect");
-      expect(text).not.toMatch(/https?:|token|bearer|authorization|127\.0\.0\.1/i);
-    }
   });
 
   test("asks setup for the hub's name, and for the Coder address and box template only when a team pack brings Coder", () => {

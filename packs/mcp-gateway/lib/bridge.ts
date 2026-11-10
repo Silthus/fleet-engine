@@ -7,7 +7,7 @@ type Id = string | number;
 type Message = { id?: Id | null; method?: string; params?: { requestId?: unknown } & Record<string, unknown>; result?: { protocolVersion?: unknown } };
 
 const endedEarly = "The MCP gateway ended its answer early.";
-const lostSession = "The MCP gateway lost this session and could not start a new one. Restart this MCP server, and on the hub, run: fleet mcphub doctor";
+const lostSession = "The MCP gateway lost this session and could not start a new one. Restart this MCP server, and on the hub, run: fleet mcp-gateway doctor";
 
 export function lineWriter(stream: { write(chunk: string): boolean; once(event: "drain", listener: () => void): unknown }): Write {
   return (line) => {
@@ -55,7 +55,7 @@ export async function bridge({ client, stdin, write, fail, fetch }: BridgeOption
     try { response = await fetch(endpoint, { method, headers: headers(body !== undefined, initializing), body, signal }); }
     catch {
       if (signal.aborted) return undefined;
-      return stop(`Cannot reach the MCP gateway at ${client.baseUrl}. On the hub, run: fleet mcphub doctor`), undefined;
+      return stop(`Cannot reach the MCP gateway at ${client.baseUrl}. On the hub, run: fleet mcp-gateway doctor`), undefined;
     }
     if (response.status === 401 || response.status === 403) return stop(`The MCP gateway refused this machine's key. ${grantHint}`), undefined;
     return response;

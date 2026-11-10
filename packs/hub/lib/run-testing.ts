@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Run, RunResult } from "./mcphub/hub.ts";
+import type { Run, RunResult } from "../../mcp-gateway/lib/hub.ts";
 
 export function fakeRun(answer: (command: string[], input?: string) => Partial<RunResult> | undefined = () => undefined) {
   const calls: string[] = [];

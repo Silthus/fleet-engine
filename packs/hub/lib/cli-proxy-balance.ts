@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { requireHubRole } from "./hub-job.ts";
-import type { Fetch } from "./mcphub/client.ts";
+import type { Fetch } from "../../mcp-gateway/lib/client.ts";
 
 export type UsageWindow = { utilization: number; resetsAt?: number };
 export type Usage = { fiveHour?: UsageWindow; sevenDay?: UsageWindow; scoped: UsageWindow[] };
