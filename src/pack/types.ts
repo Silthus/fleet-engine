@@ -94,7 +94,7 @@ export type PackStep = Scope & {
 export type T3ProjectScript = Scope & { id: string; name: string; command: string; projects: string[]; projectSetting?: string };
 
 export type Provider = "claude" | "codex" | "t3";
-/** after: the id of a human step of the same pack that must pass before the entry is written. */
+/** after: the id of a human step or a check of the same pack that must pass before the entry is written. */
 export type ConfigEntry = Scope & { provider: Provider; key: string; value: unknown; after?: string };
 
 /** A service that every node reaches at 127.0.0.1:port; only a pack.ts declares one, because its credential is code. */
@@ -155,6 +155,7 @@ export type PackCode = {
   serviceId(handle: unknown): string;
   repairs: Record<string, (ctx: Context) => Promise<void>>;
   commands: Record<string, (args: string[], ctx: Context) => Promise<number>>;
+  hubCommands: string[];
   services: Record<string, (ctx: Context) => Promise<void>>;
   credentials: Record<string, (ctx: Context, node: string) => Promise<string>>;
   checks: Record<string, (ctx: Context) => Promise<boolean>>;
@@ -202,6 +203,8 @@ export type Plan = {
   hub?: string;
   /** This machine runs the hub's items: it is the hub, or the only machine. */
   onHub?: boolean;
+  /** This machine is a node that the profile names, not the hub: it reaches the hub's services through its forward and pulls its credentials from the hub. */
+  reachesHub?: true;
   /** The engine whose launcher a leading fleet in a pack's commands runs. */
   engineRoot?: string;
   os: Os;
@@ -219,15 +222,15 @@ export type Plan = {
   /** Every served service of the profile, on every node, with its port. */
   catalog?: CatalogEntry[];
   t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
-  commands: Record<string, { pack: string; path: string }>;
+  commands: Record<string, { pack: string; path: string; on?: "hub" }>;
   handlers: Partial<Record<HandlerSeam, { pack: string; path: string }>>;
   models: ModelRow[];
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];
   ask: PackSetting[];
-  dropped: Array<{ pack: string; item: string; reason: string; check?: string }>;
+  dropped: Array<{ pack: string; item: string; reason: string; check?: string; value?: unknown }>;
 };
 
 export type Finding = { id: string; pack: string; say: string; repair?: "apply" | "human" };
 
-export type Report = { ok: boolean; actions: Action[]; findings: Finding[]; humanLeft: HumanStep[] };
+export type Report = { ok: boolean; actions: Action[]; findings: Finding[]; humanLeft: Array<Owned<HumanStep>> };

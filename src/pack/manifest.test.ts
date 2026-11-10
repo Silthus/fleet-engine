@@ -157,6 +157,15 @@ describe("loadPacks", () => {
     await expect(loadPacks(sourceWith({ base: { ...base, human, jobs: [{ ...job, roles: ["hub", "solo", "devbox"] }] } }))).rejects.toThrow("jobs listen: runs where its human step token does not; give it the same roles");
   });
 
+  test("lets a config entry wait for a check of its pack, but only where that check runs", async () => {
+    const checks = [{ id: "proxy-up", run: ["proxy-check"], say: "The proxy is down.", roles: ["devbox"] }];
+    const entry = { provider: "claude", key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", after: "proxy-up", roles: ["devbox"] };
+    await expect(loadPacks(sourceWith({ base: { ...base, checks, config: [entry] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, checks, config: [{ ...entry, after: "proxy-gone" }] } }))).rejects.toThrow("config env.ANTHROPIC_BASE_URL: after must name a human step or a check of this pack");
+    await expect(loadPacks(sourceWith({ base: { ...base, checks, config: [{ ...entry, roles: ["devbox", "hub"] }] } }))).rejects.toThrow("config env.ANTHROPIC_BASE_URL: runs where its check proxy-up does not; give it the same roles");
+    await expect(loadPacks(sourceWith({ base: { ...base, checks, steps: [{ id: "start", run: ["start"], after: "proxy-up", roles: ["devbox"] }] } }))).rejects.toThrow("steps start: after must name a human step of this pack");
+  });
+
   test("rejects malformed nested items with a clear error", async () => {
     const setting = base.settings[0];
     const row = { role: "review", work: "Review", provider: "codex", model: "m", effort: "high" };

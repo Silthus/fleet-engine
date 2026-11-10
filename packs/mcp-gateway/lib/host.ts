@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { credentialName } from "../../../src/runner/context.ts";
 import type { Context } from "../../../src/sdk/index.ts";
-import { localGatewayUrl, saveGatewayClient } from "./client.ts";
 import type { Hub, Run } from "./hub.ts";
 
 export const gatewayKey = credentialName("mcp-gateway");
@@ -38,21 +37,10 @@ export async function gateway(ctx: Context): Promise<Hub> {
       return hubName;
     },
     devboxes: async () => profile.devboxes ?? [],
-    saveKey: async (token) => {
-      await saveGatewayClient(home, { baseUrl: localGatewayUrl, token }, {});
-      await ctx.secrets.write(gatewayKey, token);
-    },
     gateway: {},
     run,
     fetch: (input, init) => fetch(input, init),
     sleep: (ms) => ctx.sleep(ms),
     print: (line) => ctx.print(line),
   };
-}
-
-export async function accept(ctx: Context, hub: Hub) {
-  const sent = JSON.parse(await new Response(ctx.stdin()).text()) as { token?: unknown };
-  await saveGatewayClient(hub.home, sent, {});
-  await ctx.secrets.write(gatewayKey, String(sent.token));
-  ctx.print("Saved the MCP gateway key.");
 }
