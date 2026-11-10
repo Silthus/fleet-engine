@@ -83,7 +83,7 @@ export async function collect(since: string, io: CollectIo): Promise<string> {
   const usage: Record<string, string> = existsSync(usagePath) ? JSON.parse(readFileSync(usagePath, "utf8")) : {};
   let kept = 0;
   for (const item of newest.values()) {
-    for (const path of [...item.memoryReads, ...item.memoryWrites]) if ((usage[path] ?? "") < item.endedAt) usage[path] = item.endedAt;
+    for (const path of [...item.memoryReads, ...item.memoryWrites, ...(item.memoryShown ?? [])]) if ((usage[path] ?? "") < item.endedAt) usage[path] = item.endedAt;
     const fresh = unseenPart(item, seen);
     if (!fresh) continue;
     const name = `${item.machine}-${item.provider}-${item.session.slice(0, 8)}-${item.endedAt.replace(/\D/g, "").slice(0, 14)}.json`;

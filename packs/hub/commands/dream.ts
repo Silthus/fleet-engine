@@ -5,7 +5,8 @@ import { optionalStringSetting, stringSetting } from "../../base/lib/settings.ts
 import { launchScratchThread, withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, Coder } from "../lib/coder.ts";
 import { devboxesOf, quote, shellLimitMs } from "../lib/machine.ts";
-import { modelAnalyst } from "../lib/dream/analyze.ts";
+import { modelAnalyst, modelAsk } from "../lib/dream/analyze.ts";
+import { checkerPrompt, checkerSchema, type Verdict } from "../lib/dream/audit.ts";
 import { boundedSpawn } from "../lib/dream/spawn.ts";
 import { dreamCommand, dreamPeers } from "../lib/dream/command.ts";
 
@@ -32,5 +33,6 @@ await runCommand(() => dreamCommand(Bun.argv.slice(2), {
   boxes,
   git: (args) => capture(["git", ...args], { timeoutMs: shellLimitMs }),
   analyst: () => modelAnalyst(modelFor("lookup", env), home, env, boundedSpawn()),
+  checker: () => modelAsk<Verdict>(modelFor("survey", env), home, env, boundedSpawn(), checkerPrompt, checkerSchema),
   launch: (title, prompt) => withT3Session((client) => launchScratchThread(client, { title, prompt, row: modelFor("implementation", env) }), { home, scopes: ["orchestration:read", "orchestration:operate"] }),
 }), "fleet dream");

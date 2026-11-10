@@ -3,13 +3,14 @@ import { join, relative, resolve } from "node:path";
 import type { BoxHooks } from "../box.ts";
 import type { Coder, Env } from "../coder.ts";
 import { remoteFleet } from "../machine.ts";
+import { notesShownByTrigger } from "../../../memory/lib/notes.ts";
 import { redactCredentials, redactValue } from "./redact.ts";
 
 type Entry = { at: string; role: "user" | "assistant" | "error"; text: string };
 export type Effort = { tokens: number; toolCalls: number; errors: number; seconds: number };
 export type Digest = {
   machine: string; provider: "claude" | "codex"; session: string; cwd: string; repo: string; model: string;
-  startedAt: string; endedAt: string; toolCalls: number; skills: string[]; memoryReads: string[]; memoryWrites: string[];
+  startedAt: string; endedAt: string; toolCalls: number; skills: string[]; memoryReads: string[]; memoryWrites: string[]; memoryShown?: string[];
   tokens: number; effort?: Effort; entries: Entry[];
 };
 
@@ -211,16 +212,20 @@ function belongsToDream(digest: Digest, home: string, env: Env): boolean {
   return within(digest.cwd, memoryCheckout(home, env)) || within(digest.cwd, stateDir(home, env)) || opening.startsWith(dreamPromptStart);
 }
 
-export function localDigests(home: string, machine: string, since: number, env: Env): Digest[] {
+export function localDigests(home: string, machine: string, since: number, env: Env, dreams = false): Digest[] {
   const claude = filesSince(join(home, ".claude/projects"), since, (path) => path.endsWith(".jsonl"), 1).map((path) => digestClaude(path, machine, home, env));
   const codex = filesSince(join(home, ".codex/sessions"), since, (path) => /rollout-.*\.jsonl$/.test(path), 4).map((path) => digestCodex(path, machine, home, env));
   const cutoff = new Date(since).toISOString();
-  const notDream = [...claude, ...codex].filter((digest) => !belongsToDream(digest, home, env));
-  for (const item of notDream) item.entries = item.entries.filter((entry) => !entry.at || entry.at >= cutoff);
-  return notDream.filter((digest) => digest.session && digest.entries.some((entry) => entry.role === "user"));
+  const chosen = [...claude, ...codex].filter((digest) => belongsToDream(digest, home, env) === dreams);
+  for (const item of chosen) {
+    item.entries = item.entries.filter((entry) => !entry.at || entry.at >= cutoff);
+    const shown = notesShownByTrigger(home, item.session);
+    if (shown.length) item.memoryShown = shown;
+  }
+  return chosen.filter((digest) => digest.session && digest.entries.some((entry) => entry.role === "user"));
 }
 
-function redactDigest(item: Digest): Digest {
+export function redactDigest(item: Digest): Digest {
   const { tokens, effort, ...text } = item;
   const counted = effort && { tokens: count(effort.tokens), toolCalls: count(effort.toolCalls), errors: count(effort.errors), seconds: count(effort.seconds) };
   return { ...item, ...(redactValue(text) as Omit<Digest, "tokens" | "effort">), tokens: count(tokens), ...(counted ? { effort: counted } : {}) };
