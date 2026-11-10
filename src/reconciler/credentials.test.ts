@@ -51,6 +51,16 @@ test("on the hub, apply runs the install repair, issues the hub's own key once, 
   expect(await fleet("issued", "use")).toEqual({ code: 0, output: "http://127.0.0.1:4600 key-1-for-hub-1" });
 });
 
+test("before apply runs its repair, a dry run and doctor name the failing check as a Fix, not a To do", async () => {
+  const fleet = machine(hub);
+  const previewed = await fleet("apply", "--dry-run");
+  expect(previewed.output).toContain("Fix: The issued service is not installed.\n");
+  expect(previewed.output).not.toContain("To do:");
+  const doctored = await fleet("doctor");
+  expect(doctored.output).toContain("Fix: The issued service is not installed.\n");
+  expect(doctored.output).not.toContain("To do:");
+});
+
 test("a repair that fails leaves the check as a To do, and the hub issues no key for a service whose gate failed", async () => {
   const fleet = machine(hub);
   expect((await fleet("issued", "break")).code).toBe(0);
