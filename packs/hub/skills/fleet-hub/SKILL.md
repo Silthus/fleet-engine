@@ -110,10 +110,11 @@ the person's own subscriptions, never for someone else's.
   hands them over.
 - **When the proxy is down.** Fleet's Claude settings wait for
   `fleet cli-proxy check`, and on the `both` plan its Codex settings wait for
-  `fleet cli-proxy check codex`. `fleet apply` and `fleet doctor` run both
-  checks. When the proxy does not serve that agent with this machine's key,
-  apply leaves its settings out and removes Fleet's own values, so the agent
-  uses its own sign-in, and the next apply changes nothing. The first apply
-  after the proxy answers again sends it back to the proxy.
+  `fleet cli-proxy check codex`. Both checks only read. When the proxy does
+  not serve an agent with this machine's key, `fleet apply` leaves that
+  agent's settings out and removes Fleet's own values, so the agent uses its
+  own sign-in, and the next apply changes nothing. `fleet apply` and
+  `fleet doctor` name the failed check. The first apply after the proxy
+  answers again sends the agent back to the proxy.
 - **Stop on one machine.** `fleet cli-proxy disconnect` removes the settings
   and the key. Then run `claude` and enter `/login`.

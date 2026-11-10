@@ -206,39 +206,39 @@ test("the check passes while the proxy answers the saved key, and keeps Claude C
   expect(printed).toEqual([`Claude Code reaches your own-account proxy at ${proxyUrl}.`]);
 });
 
-test("the check reports an unreachable proxy and switches Claude Code back to its own sign-in, keeping your other settings", async () => {
+test("the check reports an unreachable proxy and changes no file: apply sends Claude Code back to its own sign-in", async () => {
   const { machine, home, printed } = client({}, { down: true });
   connected(home);
+  const before = readFileSync(settingsFile(home), "utf8");
   expect(await cliProxy("check", machine)).toBe(1);
-  expect(readJson(settingsFile(home))).toEqual({ model: "opus", env: { MY_FLAG: "1" } });
-  expect(printed.join("\n")).toContain(`The proxy at ${proxyUrl} does not answer.`);
-  expect(printed.join("\n")).toContain("Claude Code uses its own sign-in now.");
+  expect(readFileSync(settingsFile(home), "utf8")).toBe(before);
+  expect(printed).toEqual([`The proxy at ${proxyUrl} does not answer. fleet apply keeps Claude Code on its own sign-in until the proxy serves it.`]);
   expect(existsSync(keyFile(home))).toBe(true);
 });
 
-test("the check switches to direct sign-in without a saved key or when the proxy serves no Claude model, and writes no settings file that is not there", async () => {
+test("the check fails without a saved key, or when the proxy serves no Claude model, and writes nothing", async () => {
   const missing = client();
   connected(missing.home);
   writeFileSync(keyFile(missing.home), "");
   expect(await cliProxy("check", missing.machine)).toBe(1);
-  expect(readJson(settingsFile(missing.home)).apiKeyHelper).toBeUndefined();
+  expect(readJson(settingsFile(missing.home)).apiKeyHelper).toBe(keyHelper);
   expect(missing.printed.join("\n")).toContain("no proxy key");
 
   const refused = client({}, { models: ["gpt-6.1-sol"] });
   connected(refused.home);
   expect(await cliProxy("check", refused.machine)).toBe(1);
-  expect(readJson(settingsFile(refused.home)).env).toEqual({ MY_FLAG: "1" });
+  expect(refused.printed.join("\n")).toContain("lists no Claude model");
 
   const fresh = client({}, { down: true });
   expect(await cliProxy("check", fresh.machine)).toBe(1);
   expect(existsSync(settingsFile(fresh.home))).toBe(false);
 });
 
-test("the switch removes only Fleet's own values: a base URL or key helper you set stays", async () => {
-  const { machine, home } = client({}, { down: true });
+test("disconnect removes only Fleet's own values: a base URL or key helper you set stays", async () => {
+  const { machine, home } = client();
   connected(home);
   writeFileSync(settingsFile(home), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://gateway.example.com" }, apiKeyHelper: "my-helper" }));
-  expect(await cliProxy("check", machine)).toBe(1);
+  expect(await cliProxy("disconnect", machine)).toBe(0);
   expect(readJson(settingsFile(home))).toEqual({ env: { ANTHROPIC_BASE_URL: "https://gateway.example.com" }, apiKeyHelper: "my-helper" });
 });
 
@@ -252,14 +252,15 @@ test("disconnect removes Fleet's Claude settings and the key, and says how to si
   await expect(cliProxy("disconnect", hubMachine().machine)).rejects.toThrow("own-account-balancing=off");
 });
 
-test("a linked Claude settings file stops connect and the switch", async () => {
-  const { machine, home } = client({}, { down: true });
+test("a linked Claude settings file stops connect and disconnect", async () => {
+  const { machine, home } = client();
   connected(home);
   const real = join(temp.make("real-"), "settings.json");
   writeFileSync(real, readFileSync(settingsFile(home)));
   rmSync(settingsFile(home));
   symlinkSync(real, settingsFile(home));
-  await expect(cliProxy("check", machine)).rejects.toThrow("Keep linked Claude settings path");
+  await expect(cliProxy("disconnect", machine)).rejects.toThrow("Keep linked Claude settings path");
+  await expect(cliProxy("connect", machine)).rejects.toThrow("Keep linked Claude settings path");
 });
 
 test("install refuses a linked auth folder or binary before it changes modes or runs anything", async () => {
@@ -381,32 +382,30 @@ test("the Codex check judges the proxy before Fleet routes Codex, so apply can w
   expect(existsSync(codexFile(unserved.home))).toBe(false);
 });
 
-test("an unreachable proxy sends Codex back to its own sign-in too, keeping your other Codex settings", async () => {
+test("the Codex check reports an unreachable proxy and changes no file", async () => {
   const { machine, home, printed } = client({}, { down: true });
   connected(home);
   codexRouted(home);
+  const before = readFileSync(codexFile(home), "utf8");
   expect(await cliProxy("check", machine, "codex")).toBe(1);
-  expect(readCodex(home)).toEqual(mine);
-  expect(printed.join("\n")).toContain("Codex uses its own sign-in now.");
+  expect(readFileSync(codexFile(home), "utf8")).toBe(before);
+  expect(printed.join("\n")).toContain("fleet apply keeps Codex on its own sign-in until the proxy serves it.");
 });
 
-test("a proxy that lists no Codex model fails only the Codex check, which sends only Codex back", async () => {
+test("a proxy that lists no Codex model fails only the Codex check", async () => {
   const { machine, home, printed } = client();
   connected(home);
   codexRouted(home);
   expect(await cliProxy("check", machine)).toBe(0);
-  expect(readCodex(home)).toMatchObject({ model_provider: "fleet-proxy" });
   expect(await cliProxy("check", machine, "codex")).toBe(1);
-  expect(readCodex(home)).toEqual(mine);
-  expect(readJson(settingsFile(home)).env.ANTHROPIC_BASE_URL).toBe(proxyUrl);
   expect(printed.join("\n")).toContain(`The proxy at ${proxyUrl} lists no Codex model.`);
 });
 
-test("without a saved key, the Codex check sends Codex back to its own sign-in", async () => {
-  const { machine, home } = client();
+test("without a saved key, the Codex check fails", async () => {
+  const { machine, home, printed } = client({}, { models: ["gpt-6.1-sol"] });
   codexRouted(home);
   expect(await cliProxy("check", machine, "codex")).toBe(1);
-  expect(readCodex(home)).toEqual(mine);
+  expect(printed.join("\n")).toContain("no proxy key");
 });
 
 test("Codex that does not use Fleet's proxy is left alone by both checks", async () => {
@@ -455,26 +454,28 @@ test("a linked or unreadable Codex config is left alone and never breaks the Cla
   expect(readFileSync(codexFile(broken.home), "utf8")).toBe("model = [");
 });
 
-test("a Fleet provider table you edited stays when Codex falls back, and only Fleet's selection goes", async () => {
-  const { machine, home } = client({}, { down: true });
+test("disconnect keeps a Fleet provider table you edited, and removes only Fleet's selection", async () => {
+  const { machine, home } = client();
   connected(home);
   const edited = { ...fleetProxy, http_headers: { "X-Team": "mine" } };
   codexRouted(home, { model_provider: "fleet-proxy", model_providers: { "fleet-proxy": edited } });
-  expect(await cliProxy("check", machine, "codex")).toBe(1);
+  expect(await cliProxy("disconnect", machine)).toBe(0);
   expect(readCodex(home)).toEqual({ model_providers: { "fleet-proxy": edited } });
 });
 
-test("a Fleet selection without its provider table sends Codex back to its own sign-in even while the proxy serves Codex", async () => {
-  const { machine, home, printed } = client({}, { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
-  connected(home);
-  codexRouted(home, { ...mine, model_provider: "fleet-proxy" });
-  expect(await cliProxy("check", machine, "codex")).toBe(1);
-  expect(readCodex(home)).toEqual(mine);
-  expect(printed.join("\n")).toContain("selects the fleet-proxy provider, but its table has no base_url. Codex uses its own sign-in now.");
-
-  const partial = client({}, { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
-  connected(partial.home);
-  codexRouted(partial.home, { model_provider: "fleet-proxy", model_providers: { "fleet-proxy": { name: "Mine" } } });
-  expect(await cliProxy("check", partial.machine, "codex")).toBe(1);
-  expect(readCodex(partial.home)).toEqual({ model_providers: { "fleet-proxy": { name: "Mine" } } });
+test("a fleet-proxy table that does not use the proxy's base_url fails the Codex check, whether or not Codex selects it", async () => {
+  const served = { models: ["claude-sonnet-5-5", "gpt-6.1-sol"] };
+  const configs: Array<Record<string, unknown>> = [{ model_provider: "fleet-proxy", model_providers: { "fleet-proxy": { name: "Mine" } } }, { model_providers: { "fleet-proxy": { name: "Mine" } } }, { model_providers: { "fleet-proxy": { ...fleetProxy, base_url: "https://gateway.example.com/v1" } } }];
+  for (const config of configs) {
+    const { machine, home, printed } = client({}, served);
+    connected(home);
+    codexRouted(home, config);
+    expect(await cliProxy("check", machine, "codex")).toBe(1);
+    expect(readCodex(home) as Record<string, unknown>).toEqual(config);
+    expect(printed.join("\n")).toContain("has its own fleet-proxy provider table, which does not use the proxy's base_url.");
+  }
+  const edited = client({}, served);
+  connected(edited.home);
+  codexRouted(edited.home, { model_providers: { "fleet-proxy": { ...fleetProxy, http_headers: { "X-Team": "mine" } } } });
+  expect(await cliProxy("check", edited.machine, "codex")).toBe(0);
 });

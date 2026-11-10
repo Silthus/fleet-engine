@@ -226,7 +226,7 @@ async function readCodex(home: string) {
   const table = providers?.[codexProvider];
   const url = isObject(table) ? table.base_url : undefined;
   const routed = config.model_provider === codexProvider && (url === undefined || url === codexUrl);
-  return { path, text, config, providers, routed, usable: routed && url === codexUrl, untouched: Bun.deepEquals(table, codexProviderTable) };
+  return { path, text, config, providers, routed, untouched: Bun.deepEquals(table, codexProviderTable) };
 }
 
 const readableCodex = (home: string) => readCodex(home).catch(() => undefined);
@@ -248,16 +248,15 @@ async function check(machine: ProxyMachine, agent: Agent): Promise<boolean> {
   const key = await savedKey(machine.home);
   const models = key ? await listModels(machine.fetch, key) : `This machine has no proxy key at ${keyPath(machine.home)}. On the hub, fleet cli-proxy doctor prints the connect command.`;
   const reason = agent === "claude" ? unserved(models, "claude") : await codexUnserved(machine.home, models);
-  if (reason && agent === "claude") await sendClaude(machine.home, false);
-  if (reason && agent === "codex") await sendCodexHome(machine.home);
   const name = agent === "claude" ? "Claude Code" : "Codex";
-  machine.print(reason ? `${reason} ${name} uses its own sign-in now.` : `${name} reaches your own-account proxy at ${proxyUrl}.`);
+  machine.print(reason ? `${reason} fleet apply keeps ${name} on its own sign-in until the proxy serves it.` : `${name} reaches your own-account proxy at ${proxyUrl}.`);
   return !reason;
 }
 
 async function codexUnserved(home: string, models: string[] | string): Promise<string | undefined> {
   const config = await readableCodex(home);
-  if (config?.routed && !config.usable) return `${config.path} selects the ${codexProvider} provider, but its table has no base_url.`;
+  const table = config?.providers?.[codexProvider];
+  if (table !== undefined && !(isObject(table) && table.base_url === codexUrl)) return `${config!.path} has its own ${codexProvider} provider table, which does not use the proxy's base_url.`;
   return unserved(models, "codex");
 }
 
