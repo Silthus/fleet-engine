@@ -10,10 +10,14 @@ export type ContextOptions = { home: string; plan: Plan; pack: string; code: Pac
 
 const secretName = /^[a-z0-9][a-z0-9.-]*$/;
 
+/** The secret that holds this machine's credential for a served service, in the serving pack's store. */
+export const credentialName = (id: string) => `credential.${id}`;
+
 export async function packContext({ home, plan, pack, code, workflows, print, clock }: ContextOptions): Promise<Context> {
   const stateDir = join(home, ".local/state/fleet", pack);
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const threads = t3Threads(plan.models, { home });
+  const secrets = secretStore(home, pack);
   return {
     get: <T extends Value>(setting: Setting<T>) => {
       const key = code.settingKey(setting);
@@ -26,13 +30,21 @@ export async function packContext({ home, plan, pack, code, workflows, print, cl
       }
       return value as T;
     },
-    secrets: secretStore(home, pack),
+    secrets,
     stateDir,
     print,
     log: (line) => print(`${new Date(clock.now()).toISOString()} ${line}`),
     now: clock.now,
     sleep: clock.sleep,
     threads: { start: (request) => threads.start({ ...request, key: `${pack}:${request.key}` }) },
+    use: async (service) => {
+      const id = code.serviceId(service);
+      const entry = plan.catalog?.find((item) => item.pack === pack && item.id === id);
+      if (!entry) throw new Error(`the service catalog has no ${pack}/${id}: its workflow or plan is off in your profile.`);
+      const credential = await secrets.read(credentialName(id));
+      if (!credential) throw new Error(`${pack}/${id} has no credential on this machine yet. Run fleet apply on the hub.`);
+      return { url: `http://127.0.0.1:${entry.port}`, credential };
+    },
   };
 }
 

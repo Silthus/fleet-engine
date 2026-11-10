@@ -3,10 +3,10 @@ import { homedir, hostname } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
-import type { AvailableSource, FetchedSource, LoadedPack, MachineFile, PackCode, Plan, Report } from "./pack/types.ts";
+import type { AvailableSource, CatalogEntry, FetchedSource, Finding, LoadedPack, MachineFile, PackCode, Plan, Report } from "./pack/types.ts";
 import { loadMachine, loadProfile, saveMachine, thisMachine, validHost } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
-import { apply, check, type Adapter, type Runner } from "./reconciler/apply.ts";
+import { apply, check, type Adapter, type Issuer, type Runner } from "./reconciler/apply.ts";
 import { resolve } from "./reconciler/resolve.ts";
 import { readNotice, update } from "./update.ts";
 import { setup, type SetupOptions } from "./setup/setup.ts";
@@ -18,7 +18,7 @@ import { setCommand, settingsCommand } from "./commands/settings.ts";
 import { devboxCommand } from "./commands/devbox.ts";
 import { hubCommand } from "./commands/hub.ts";
 import { realMachine } from "./setup/commands.ts";
-import { packContext, type Clock } from "./runner/context.ts";
+import { credentialName, packContext, secretStore, type Clock } from "./runner/context.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
 export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string };
@@ -44,8 +44,8 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet hub here [<ssh name>]
                      Make this machine the hub of your profile
   fleet hub status   Show this machine's name and the hub
-  fleet run <pack>/<id>
-                     Run a pack's service, or test one of its checks
+  fleet run <pack>/<id> [--repair]
+                     Run a pack's service, test one of its checks, or run its repair
   fleet <command>    Run a command that one of your packs ships`;
 
 const changes = { packs: packsCommand, settings: settingsCommand, set: setCommand };
@@ -73,9 +73,10 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const flags = parseFlags(args);
   const doctor = command === "doctor";
   const preview = doctor || flags.dryRun;
-  const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview, inherit: preview });
+  const { plan, sources } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview, inherit: preview });
   const adapters = (options.adapters ?? engineAdapters)();
-  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, adapters, run: options.run });
+  const issue: Issuer = (entries, node) => issueCredentials(entries, node, plan, sources, options);
+  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, adapters, run: options.run, issue });
   const notice = doctor ? await readNotice(options.home) : undefined;
   if (notice) report.findings.push({ id: "update:major", pack: "engine", say: notice });
   printReport(report, command, options.print, flags.dryRun);
@@ -160,7 +161,8 @@ async function runItem(args: string[], options: CliOptions) {
   const [item = "", ...extra] = args;
   const slash = item.indexOf("/");
   const [pack, id] = slash < 0 ? ["", ""] : [item.slice(0, slash), item.slice(slash + 1)];
-  if (!pack || !id || extra.length) return options.print("Usage: fleet run <pack>/<id>"), 2;
+  const repairing = extra.length === 1 && extra[0] === "--repair";
+  if (!pack || !id || (extra.length && !repairing)) return options.print("Usage: fleet run <pack>/<id> [--repair]"), 2;
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true });
   const loaded = plan.packs.some((entry) => entry.name === pack && entry.available) ? loadedPack(sources, pack) : undefined;
   const code = loaded?.code;
@@ -171,12 +173,37 @@ async function runItem(args: string[], options: CliOptions) {
     const dropped = plan.dropped.find((entry) => entry.pack === pack && (entry.item === `job ${id}` || entry.item === `human ${id}`));
     return options.print(dropped ? `fleet run: ${item} does not run here: ${dropped.reason}` : `fleet run: your packs have no service or check ${item}`), 2;
   }
+  const repair = repairing ? code?.repairs[id] : undefined;
+  if (repairing && (!check || !repair)) return options.print(`fleet run: ${item} has no repair that Fleet runs`), 2;
   return inPack(plan, loaded!, options, async (ctx) => {
+    if (repair) return await repair(ctx), 0;
     if (!service) return (await check!(ctx)) ? 0 : 1;
     const waits = job?.after ? plan.human.find((step) => step.pack === pack && step.id === job.after) : undefined;
     if (waits && !(await code!.checks[waits.id]!(ctx))) return options.print(`fleet run: ${item} waits until ${waits.id} passes. ${waits.say}`), 1;
     return await service(ctx), 0;
   });
+}
+
+/** On the hub: asks each served service whose gate passed for this machine's credential when its pack's secret store holds none, and stores the answer. */
+async function issueCredentials(entries: CatalogEntry[], node: string, plan: Plan, sources: FetchedSource[], options: CliOptions): Promise<Finding[]> {
+  const findings: Finding[] = [];
+  for (const entry of entries) {
+    const loaded = loadedPack(sources, entry.pack);
+    const issue = loaded?.code?.credentials[entry.id];
+    const name = credentialName(entry.id);
+    if (!issue || (await secretStore(options.home, entry.pack).read(name))) continue;
+    try {
+      await inPack(plan, loaded!, options, async (ctx) => {
+        const value = await issue(ctx, node);
+        if (!value) throw new Error("it gave no credential");
+        await ctx.secrets.write(name, value);
+        return 0;
+      });
+    } catch (error) {
+      findings.push({ id: `credential:${entry.pack}/${entry.id}`, pack: entry.pack, say: `Could not issue the credential of ${entry.pack}/${entry.id}: ${error instanceof Error ? error.message : String(error)}. Fleet tries again at the next apply.`, repair: "apply" });
+    }
+  }
+  return findings;
 }
 
 function loadedPack(sources: FetchedSource[], name: string): LoadedPack | undefined {

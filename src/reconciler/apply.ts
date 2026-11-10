@@ -1,5 +1,5 @@
 import { install, plan as planFiles } from "../files/install.ts";
-import type { Action, Finding, HumanStep, Owned, Plan, Report } from "../pack/types.ts";
+import type { Action, CatalogEntry, Finding, HumanStep, Owned, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
 import { hublessReason } from "./resolve.ts";
 
@@ -12,6 +12,8 @@ export type Adapter = {
   apply(plan: Plan, context: AdapterContext): Promise<AdapterResult>;
 };
 export type Runner = (command: string[]) => Promise<number>;
+/** Issues this machine's credential for each served service that lacks one, and reports what failed. */
+export type Issuer = (entries: CatalogEntry[], node: string) => Promise<Finding[]>;
 
 export const filesGroup = "fleet";
 
@@ -51,7 +53,7 @@ export const filesAdapter: Adapter = {
   },
 };
 
-export async function apply(plan: Plan, options: { home: string; dryRun?: boolean; adopt?: string[]; adapters?: Adapter[]; run?: Runner }): Promise<Report> {
+export async function apply(plan: Plan, options: { home: string; dryRun?: boolean; adopt?: string[]; adapters?: Adapter[]; run?: Runner; issue?: Issuer }): Promise<Report> {
   const context = { home: options.home, dryRun: options.dryRun ?? false, adopt: options.adopt ?? [] };
   const adapters = options.adapters ?? [filesAdapter];
   const adoptable = new Set(adapters.flatMap((adapter) => adapter.targets(plan)));
@@ -65,8 +67,10 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     return report;
   }
   const run = viaEngine(plan, options.run ?? spawnRunner(options.home, plan.machine.profileDir));
-  const gated = await gate(plan, run);
+  const gated = await gate(plan, run, !context.dryRun);
   report.findings.push(...gated.failed.map(humanFinding));
+  const node = plan.machine.role === "hub" ? plan.machine.name : undefined;
+  if (!context.dryRun && node && options.issue) report.findings.push(...(await options.issue(gated.ready, node)));
   for (const adapter of adapters) {
     const result = await adapter.apply(gated.plan, context);
     report.actions.push(...result.actions);
@@ -112,13 +116,20 @@ function humanFinding(step: Owned<HumanStep>): Finding {
   return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: "human" };
 }
 
-async function gate(plan: Plan, run: Runner): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>> }> {
+/** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. ready lists the catalog's services whose gate passes here. */
+async function gate(plan: Plan, run: Runner, repair: boolean): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; ready: CatalogEntry[] }> {
   const tested = new Map<Owned<HumanStep>, boolean>();
+  const probe = async (step: Owned<HumanStep>) => {
+    if ((await run(step.probe)) === 0) return true;
+    return repair && step.repair !== undefined && (await run(step.repair)) === 0 && (await run(step.probe)) === 0;
+  };
   const passes = async (step: Owned<HumanStep> | undefined) => {
     if (!step) return false;
-    if (!tested.has(step)) tested.set(step, (await run(step.probe)) === 0);
+    if (!tested.has(step)) tested.set(step, await probe(step));
     return tested.get(step)!;
   };
+  const checkOf = (pack: string, id: string) => plan.human.find((step) => step.pack === pack && step.id === id);
+  if (repair) for (const step of plan.human) if (step.repair) await passes(step);
   const jobs: Plan["jobs"] = [];
   const dropped: Plan["dropped"] = [];
   for (const job of plan.jobs) {
@@ -130,8 +141,10 @@ async function gate(plan: Plan, run: Runner): Promise<{ plan: Plan; failed: Arra
     if (!entry.after || (await passes(plan.human.find((step) => step.pack === entry.pack && step.id === entry.after)))) config.push(entry);
     else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after });
   }
+  const ready: CatalogEntry[] = [];
+  for (const entry of plan.catalog ?? []) if (!entry.after || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
   const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);
-  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed };
+  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, ready };
 }
 
 /** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */

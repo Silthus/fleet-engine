@@ -25,7 +25,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     if (found?.kind !== kind) throw new Error(`${label} names a ${kind} that the ${fields.name} pack did not declare`);
     return found.id;
   };
-  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), commands: Object.create(null), services: Object.create(null), checks: Object.create(null), credentials: Object.create(null) };
+  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), serviceId: (handle) => own(handle, "service", "ctx.use"), commands: Object.create(null), services: Object.create(null), checks: Object.create(null), credentials: Object.create(null), repairs: Object.create(null) };
   const place = (scope: SdkScope, label: string): Scope & { after?: string } => {
     if (scope.on !== undefined && scope.on !== "hub") throw new Error(`${label}: on takes only "hub"`);
     return {
@@ -78,9 +78,12 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     check({ id, say, test, repair, ...scope }) {
       if (scope.after) throw new Error(`check ${id}: a check cannot wait for another check`);
       if (repair?.command && !/^fleet( [A-Za-z0-9._\/=:@-]+)+$/.test(repair.command)) throw new Error(`check ${id}: repair.command must be fleet and plain words of letters, digits, and . _ / = : @ -, with one space between words, so a shell passes it as written and Fleet knows it when you run it`);
+      if (repair?.run && (repair.command || repair.interactive)) throw new Error(`check ${id}: a repair is a command a person runs or a run that Fleet runs, not both`);
       const ask = repair?.command ? say : [say, repair?.ask].filter(Boolean).join(" ");
-      human.push({ id, say: ask, probe: runnable(id, `check ${id}`), ...(repair?.command ? { command: repair.command } : {}), ...(repair?.interactive ? { interactive: true as const } : {}), ...place(scope, `check ${id}`) });
+      const probe = runnable(id, `check ${id}`);
+      human.push({ id, say: ask, probe, ...(repair?.command ? { command: repair.command } : {}), ...(repair?.interactive ? { interactive: true as const } : {}), ...(repair?.run ? { repair: [...probe, "--repair"] } : {}), ...place(scope, `check ${id}`) });
       code.checks[id] = test;
+      if (repair?.run) code.repairs[id] = repair.run;
       return declare("check", id);
     },
   };

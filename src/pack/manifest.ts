@@ -181,6 +181,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(item.command === undefined || typeof item.command === "string", `${label}: command must be text`);
     need(item.interactive === undefined || item.interactive === true, `${label}: interactive must be true when set`);
     need(item.interactive === undefined || item.command !== undefined, `${label}: interactive needs a command to run`);
+    need(item.repair === undefined || isStrings(item.repair), `${label}: repair must be a command list`);
     filters(item, label);
   });
   each("steps", (item, label) => {
