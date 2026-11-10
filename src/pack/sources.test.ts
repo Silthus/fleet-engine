@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { git, isolateGit, tempDirs } from "../testing/git.ts";
 import { fetchSource } from "./sources.ts";
@@ -132,6 +132,20 @@ describe("fetchSource", () => {
     const cache = temp.make("cache-");
     await fetchSource({ name: "team", repo, ref: "v1" }, cache);
     commitTag(repo, "v2", { "shared/summary.ts": `export const summary = "Team rules v2.";\n` });
+    const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
+    if ("error" in fetched) throw new Error(fetched.error);
+    expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v2.", undefined]);
+  });
+
+  test("loads a new ref with its new helper when the cache folder sits behind a symlink", async () => {
+    const repo = tsRepo({
+      "packs/team/pack.ts": `import { summary } from "./summary.ts";\nexport default { sdk: 1, name: "team", summary, register() {} };\n`,
+      "packs/team/summary.ts": `export const summary = "Team rules v1.";\n`,
+    });
+    const cache = join(temp.make("link-"), "cache");
+    symlinkSync(temp.make("cache-"), cache);
+    await fetchSource({ name: "team", repo, ref: "v1" }, cache);
+    commitTag(repo, "v2", { "packs/team/summary.ts": `export const summary = "Team rules v2.";\n` });
     const fetched = await fetchSource({ name: "team", repo, ref: "v2" }, cache);
     if ("error" in fetched) throw new Error(fetched.error);
     expect([fetched.packs[0]?.manifest.summary, fetched.stale]).toEqual(["Team rules v2.", undefined]);
