@@ -145,6 +145,20 @@ describe("memory recall on a tool call", () => {
     ]);
   });
 
+  test.each<Provider>(["claude", "codex"])("keeps a later guard's deny beside the note it shows on %s", async (provider) => {
+    const home = await machineWithMemory(notes);
+    const deny = { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "A guard blocked this call." } };
+    writeFileSync(join(home, ".config/fleet/hooks/PreToolUse/z-guard.ts"), `console.log(${JSON.stringify(JSON.stringify(deny))});\n`);
+    const child = Bun.spawn(["sh", "-c", installedHook(home, provider, "PreToolUse")], {
+      env: { ...gitEnv, PATH: Bun.env.PATH, HOME: home },
+      stdin: new Blob([JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s1", cwd: home, ...bash("fleet proof 12") })]),
+      stdout: "pipe",
+    });
+    const answer = JSON.parse(await new Response(child.stdout).text()).hookSpecificOutput;
+    expect(answer).toMatchObject({ permissionDecision: "deny", permissionDecisionReason: "A guard blocked this call." });
+    expect(answer.additionalContext).toContain("Pass full SHAs to fleet proof.");
+  });
+
   test("names a trigger only as a whole word, and stays silent on calls that read the memory itself", async () => {
     const home = await machineWithMemory(notes);
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proofs") })).context).toBe("");
