@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { allowedSigners, listText, parseOwners, systemPaths, verify, type Verdict } from "./allowlist.ts";
 
 export type AllowlistInputs = { settings: Record<string, unknown>; profileDir?: string; root: string; print: (line: string) => void };
@@ -36,14 +36,21 @@ const probeOwner = "fleet_probe";
 const sshUser = "git";
 const blockedForms = [`https://github.com/${probeOwner}/x`, `${sshUser}@github.com:${probeOwner}/x`, `ssh://${sshUser}@github.com/${probeOwner}/x`, `github.com:${probeOwner}/x`, `https::https://github.com/${probeOwner}/x`];
 
-function remoteFor(root: string, url: string) {
-  const env = { HOME: process.env.HOME ?? "/", PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_CONFIG_SYSTEM: systemPaths(root).gitconfig, GIT_CONFIG_GLOBAL: "/dev/null" };
-  return Bun.spawnSync(["git", "ls-remote", "--get-url", url], { env, stdout: "pipe", stderr: "ignore", timeout: 10_000 }).stdout.toString().trim();
+function systemGit(root: string, args: string[]) {
+  const outside = mkdtempSync(join(tmpdir(), "fleet-allowlist-probe-"));
+  try {
+    const env = { HOME: outside, PATH: process.env.PATH ?? "/usr/bin:/bin", GIT_CONFIG_SYSTEM: systemPaths(root).gitconfig, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CEILING_DIRECTORIES: dirname(outside) };
+    return Bun.spawnSync(["git", ...args], { cwd: outside, env, stdout: "pipe", stderr: "ignore", timeout: 10_000 }).stdout.toString().trim();
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
 }
 
-function helperRefuses(helper: string) {
+const remoteFor = (root: string, url: string) => systemGit(root, ["ls-remote", "--get-url", url]);
+
+function refuses(command: string[]) {
   try {
-    const refused = Bun.spawnSync([helper, "origin", blockedForms[0]!], { stdout: "ignore", stderr: "pipe", timeout: 10_000 });
+    const refused = Bun.spawnSync(command, { stdout: "ignore", stderr: "pipe", timeout: 10_000 });
     return refused.exitCode !== 0 && refused.stderr.toString().includes("Fleet blocked Git access");
   } catch {
     return false;
@@ -61,7 +68,8 @@ function installedState(root: string, text: string) {
   if (open) return `installed, but Git does not refuse ${open}`;
   const shut = parseOwners(installed).find((owner) => remoteFor(root, `https://github.com/${owner}/x`) !== `https://github.com/${owner}/x`);
   if (shut) return `installed, but Git refuses the listed owner ${shut}`;
-  if (!helperRefuses(paths.helper)) return `installed, but the blocked-remote helper ${paths.helper} does not run`;
+  if (!refuses([paths.helper, "origin", blockedForms[0]!])) return `installed, but the blocked-remote helper ${paths.helper} does not run`;
+  if (systemGit(root, ["config", "--get", "core.sshCommand"]) !== paths.sshCheck || !refuses([paths.sshCheck, "gitlab.example", `git-upload-pack '${probeOwner}/x'`])) return `installed, but Git does not check SSH remotes with ${paths.sshCheck}`;
   return "installed";
 }
 

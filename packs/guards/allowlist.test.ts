@@ -70,11 +70,10 @@ function machineWith(owners: string, signerKey: string, dirs: Dirs = temp) {
     const child = Bun.spawn(["git", "ls-remote", url], {
       env: {
         HOME: home,
-        PATH: `${join(root, "usr/local/bin")}:${process.env.PATH}`,
+        PATH: `${join(root, "usr/local/bin")}:${dirname(ssh)}:${process.env.PATH}`,
         GIT_CONFIG_SYSTEM: join(root, "etc/gitconfig"),
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_TERMINAL_PROMPT: "0",
-        GIT_SSH_COMMAND: ssh,
         GIT_CONFIG_COUNT: "1",
         GIT_CONFIG_KEY_0: "http.proxy",
         GIT_CONFIG_VALUE_0: `http://127.0.0.1:${proxy.port}`,
@@ -143,6 +142,7 @@ describe("Git on a machine with the signed list installed", () => {
       "git@github.com:octo-org/site": { refused: false, network: ["-o SendEnv=GIT_PROTOCOL git@github.com git-upload-pack 'octo-org/site'"] },
       "ssh://git@github.com/acme/app": { refused: false, network: ["-o SendEnv=GIT_PROTOCOL git@github.com git-upload-pack 'acme/app'"] },
       "github.com:acme/app": { refused: false, network: ["-o SendEnv=GIT_PROTOCOL github.com git-upload-pack 'acme/app'"] },
+      "GitHub.com:acme/app": { refused: false, network: ["-o SendEnv=GIT_PROTOCOL GitHub.com git-upload-pack 'acme/app'"] },
       "ssh://git@ssh.github.com:443/acme/app": { refused: false, network: ["-o SendEnv=GIT_PROTOCOL -p 443 git@ssh.github.com git-upload-pack '/acme/app'"] },
     };
     for (const url of Object.keys(expected)) reached[url] = await machine.refusedByFleet(url);
@@ -159,6 +159,11 @@ describe("Git on a machine with the signed list installed", () => {
       "ssh.github.com:evil/app",
       "https::https://github.com/evil/app",
       "http::http://github.com/evil/app",
+      "gitlab.example:evil/app",
+      "gitlab.example:acme/app",
+      "GitHub.com:evil/app",
+      "GitHub.com:evil",
+      "ssh://gitlab.example:2222/evil/app",
     ];
     const outcomes: Record<string, unknown> = {};
     for (const url of urls) outcomes[url] = await machine.refusedByFleet(url);
@@ -203,6 +208,11 @@ describe("fleet guards allowlist", () => {
       writeFileSync(config, readFileSync(config, "utf8").split("\n").filter((line) => !line.includes("github.com/acme/")).join("\n"));
     }],
     ["the blocked-remote helper is not executable", (root: string) => chmodSync(join(root, "usr/local/bin/git-remote-fleet-blocked"), 0o644)],
+    ["the installed Git config no longer checks SSH", (root: string) => {
+      const config = join(root, "etc/fleet/git-allowlist.gitconfig");
+      writeFileSync(config, readFileSync(config, "utf8").replace(/\[core\]\n\s*sshCommand = .*\n/, ""));
+    }],
+    ["the SSH check is gone", (root: string) => rmSync(join(root, "usr/local/bin/fleet-git-ssh"))],
     ["the pinned signers hold another key", (root: string) => writeFileSync(join(root, "etc/fleet/git-allowlist-signers"), `fleet-allowlist namespaces="fleet-git-allowlist" ${newKey().publicKey}`)],
   ])("the doctor probe fails when %s", (_, breakInstall) => {
     const machine = installed("acme");
@@ -212,7 +222,25 @@ describe("fleet guards allowlist", () => {
     expect(machine.fleet().output).not.toContain("System: installed.");
   });
 
-  test.each(["etc/fleet", "etc/fleet/git-allowlist-signers", "etc/fleet/git-allowlist", "usr/local/bin/git-remote-fleet-blocked", "etc/gitconfig"])("the root step refuses a symbolic link at %s and writes nothing", (target) => {
+  test("the doctor probe ignores the Git config of the repository it runs in", () => {
+    const machine = installed("acme");
+    const rules = join(machine.root, "etc/fleet/git-allowlist.gitconfig");
+    const saved = join(temp.make("saved-"), "rules.gitconfig");
+    writeFileSync(saved, readFileSync(rules, "utf8"));
+    writeFileSync(rules, "");
+    const repo = temp.make("repo-");
+    expect(run(["git", "init", "-q", repo]).code).toBe(0);
+    writeFileSync(join(repo, ".git/config"), `${readFileSync(join(repo, ".git/config"), "utf8")}[include]\n  path = ${saved}\n`);
+    const here = process.cwd();
+    process.chdir(repo);
+    try {
+      expect(machine.fleet("--check").code).toBe(1);
+    } finally {
+      process.chdir(here);
+    }
+  });
+
+  test.each(["etc/fleet", "etc/fleet/git-allowlist-signers", "etc/fleet/git-allowlist", "usr/local/bin/git-remote-fleet-blocked", "usr/local/bin/fleet-git-ssh", "etc/gitconfig"])("the root step refuses a symbolic link at %s and writes nothing", (target) => {
     const { key, publicKey } = newKey();
     const machine = machineWith("acme", publicKey);
     machine.sign(key);

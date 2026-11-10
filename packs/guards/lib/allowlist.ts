@@ -12,6 +12,7 @@ export const systemPaths = (root: string) => ({
   signers: join(root, "etc/fleet/git-allowlist-signers"),
   config: join(root, "etc/fleet/git-allowlist.gitconfig"),
   helper: join(root, "usr/local/bin/git-remote-fleet-blocked"),
+  sshCheck: join(root, "usr/local/bin/fleet-git-ssh"),
   gitconfig: join(root, "etc/gitconfig"),
 });
 

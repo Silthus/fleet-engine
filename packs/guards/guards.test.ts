@@ -88,9 +88,10 @@ describe("the shell guards through the hook dispatcher", () => {
     const home = homeWith(withGuards(), { "guards.person": "Robin", "guards.owners": "acme" });
     const agentRoot = temp.make("agent-root-");
     mkdirSync(join(agentRoot, "etc/fleet"), { recursive: true });
-    writeFileSync(join(agentRoot, "etc/fleet/git-allowlist"), "acme\nother-org\n");
-    const denied = await preToolUse(home, "claude", bash("gh pr create -R other-org/repo --fill"), { FLEET_SYSTEM_ROOT: agentRoot });
-    expect(denied.refusal).toContain("`other-org` is not one of the GitHub owners");
+    const owner = `fleet-test-${crypto.randomUUID().slice(0, 8)}`;
+    writeFileSync(join(agentRoot, "etc/fleet/git-allowlist"), `acme\n${owner}\n`);
+    const denied = await preToolUse(home, "claude", bash(`gh pr create -R ${owner}/repo --fill`), { FLEET_SYSTEM_ROOT: agentRoot });
+    expect(denied.refusal).toContain(`\`${owner}\` is not one of the GitHub owners`);
   });
 
   test("refuses a Codex shell call given as an argument list", async () => {
