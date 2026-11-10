@@ -196,7 +196,8 @@ function handlerPaths(plan: Plan) {
 
 async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
   const saved = await loadMachine(options.home);
-  const profileDir = profileFlag ? resolvePath(profileFlag) : saved?.profileDir;
+  const inherited = profileFlag ? undefined : options.env?.FLEET_PROFILE_DIR;
+  const profileDir = profileFlag ? resolvePath(profileFlag) : inherited ? resolvePath(inherited) : saved?.profileDir;
   if (!profileDir) throw new Error("no profile on this machine. Run get.sh, or pass --profile <dir>.");
   const machine: MachineFile = { ...thisMachine(saved, options.platform, options.env ?? {}), profileDir };
   const profile = await loadProfile(profileDir);
@@ -205,7 +206,7 @@ async function loadPlan(options: CliOptions, profileFlag: string | undefined, mo
   const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => (mode.fetch ? fetchSource(ref, cache) : cachedSource(ref, cache)))))];
   const plan = resolve(profile, machine, sources);
   const changed = saved?.profileDir !== profileDir || saved.role !== machine.role || saved.coder !== machine.coder;
-  if (mode.remember && changed) await saveMachine(options.home, machine);
+  if (mode.remember && !inherited && changed) await saveMachine(options.home, machine);
   return { plan, sources };
 }
 

@@ -52,6 +52,16 @@ describe("fleet apply", () => {
     expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
   });
 
+  test("a nested run applies the profile its parent passes down, and leaves the remembered one alone", async () => {
+    const home = temp.make("home-");
+    const remembered = profileDir();
+    const passedDown = profileDir([], "# Passed down\n");
+    expect((await fleet(["apply", "--profile", remembered], home)).code).toBe(0);
+    expect((await fleet(["apply"], home, repoRoot, { FLEET_PROFILE_DIR: passedDown })).code).toBe(0);
+    expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toContain("# Passed down");
+    expect(JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")).profileDir).toBe(remembered);
+  });
+
   describe("in a Coder workspace", () => {
     const machineFile = (home: string) => JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"));
     const signer = (home: string) => readFileSync(join(home, ".agents/guides/skill-settings.md"), "utf8").match(/`identity\.signer`: `(\w+)`/)?.[1];
@@ -258,6 +268,34 @@ describe("fleet routing", () => {
     const code = await main(["apply", "--profile", profileDir(["tools"])], { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line) });
     expect({ code, output: lines.join("\n") }).toMatchObject({ code: 0 });
     expect(readFileSync(join(home, "hello.txt"), "utf8")).toBe("tools from-step");
+  });
+
+  test("doctor --profile runs the nested fleet in a step's check against that profile, not the remembered one", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithCommands();
+    cpSync(join(repoRoot, "src"), join(engine, "src"), { recursive: true });
+    cpSync(join(repoRoot, "fleet"), join(engine, "fleet"));
+    symlinkSync(join(repoRoot, "node_modules"), join(engine, "node_modules"));
+    const base = JSON.parse(readFileSync(join(engine, "packs/base/pack.json"), "utf8"));
+    writeFileSync(join(engine, "packs/base/pack.json"), JSON.stringify({ ...base, steps: [] }));
+    const settings = [{ key: "tools.name", question: "Which name?", type: "string" }];
+    writeFileSync(join(engine, "packs/tools/pack.json"), JSON.stringify({ schema: 1, name: "tools", summary: "tools pack.", settings, steps: [{ id: "greet", run: ["true"], check: ["fleet", "hello"] }] }));
+    writeFileSync(join(engine, "packs/tools/commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", JSON.parse(Bun.env.FLEET_SETTINGS ?? "{}")["tools.name"] ?? "none");\n`);
+    const named = (name: string) => {
+      const dir = profileDir(["tools"]);
+      const file = JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8"));
+      writeFileSync(join(dir, "fleet.json"), JSON.stringify({ ...file, settings: { "tools.name": name } }));
+      return dir;
+    };
+    const remembered = named("remembered");
+    const chosen = named("chosen");
+    const run = (args: string[]) => main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: () => {} });
+    expect(await run(["apply", "--profile", remembered])).toBe(0);
+    expect(readFileSync(join(home, "hello.txt"), "utf8")).toBe("remembered");
+
+    await run(["doctor", "--profile", chosen]);
+    expect(readFileSync(join(home, "hello.txt"), "utf8")).toBe("chosen");
+    expect(JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")).profileDir).toBe(remembered);
   });
 
   test("reports a command that two enabled packs ship", async () => {
