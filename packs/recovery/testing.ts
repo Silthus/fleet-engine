@@ -63,13 +63,12 @@ export function t3Inbox(threads: () => ThreadFields[] = () => []) {
       && typeof message.threadId === "string" && typeof message.text === "string" && Array.isArray(message.attachments)
       && (message.dispatchMode as { type?: string })?.type === "start_immediately";
     if (!shaped) return undefined;
+    if (byCommand.has(message.commandId as string)) return { sequence: byCommand.size };
     if (message.manualContinuationOfRunId !== undefined && !resumable(threads().find((thread) => thread.id === message.threadId), message.manualContinuationOfRunId)) return undefined;
-    if (!byCommand.has(message.commandId as string)) {
-      byCommand.set(message.commandId as string, {
-        threadId: message.threadId as string, text: message.text as string,
-        ...(typeof message.manualContinuationOfRunId === "string" ? { continuesRunId: message.manualContinuationOfRunId } : {}),
-      });
-    }
+    byCommand.set(message.commandId as string, {
+      threadId: message.threadId as string, text: message.text as string,
+      ...(typeof message.manualContinuationOfRunId === "string" ? { continuesRunId: message.manualContinuationOfRunId } : {}),
+    });
     return { sequence: byCommand.size };
   };
   return { rpc, delivered: () => [...byCommand.values()] };

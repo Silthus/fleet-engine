@@ -40,7 +40,7 @@ async function sweepOutages(sweep: Sweep, threads: StoppedThread[], now: number)
   const ranOut: StoppedThread[] = [];
   for (const thread of threads) {
     const entry = state.threads[thread.id];
-    if (entry && held(thread, now)) next.threads[thread.id] = entry;
+    if (entry && held(thread, now) && (thread.activeRunId || thread.status === "failed")) next.threads[thread.id] = entry;
     if (!stoppedByOutage(thread, now)) continue;
     const kept: OutageEntry = entry ?? { tries: 0 };
     next.threads[thread.id] = kept;
@@ -51,9 +51,9 @@ async function sweepOutages(sweep: Sweep, threads: StoppedThread[], now: number)
     const waitFrom = Math.max(Date.parse(thread.latestRunCompletedAt ?? "") || 0, Date.parse(kept.triedAt ?? "") || 0);
     if (now < waitFrom + firstOutageWaitMs * 2 ** kept.tries || !(await availableProvider(sweep, thread))) continue;
     const tries = kept.tries + 1;
+    if (!(await send(sweep, thread, { threadId: thread.id, runId: thread.latestRunId!, commandId: `fleet-outage-resume:${thread.id}:${thread.latestRunId}:${tries}`, continuesRun: false }))) continue;
     next.threads[thread.id] = { tries, triedAt: new Date(now).toISOString() };
-    const sent = await send(sweep, thread, { threadId: thread.id, runId: thread.latestRunId!, commandId: `fleet-outage-resume:${thread.id}:${thread.latestRunId}:${tries}`, continuesRun: false });
-    if (sent) sweep.context.print(`${label(thread)}: retried after a provider error, try ${tries} of ${maxOutageTries}.`);
+    sweep.context.print(`${label(thread)}: retried after a provider error, try ${tries} of ${maxOutageTries}.`);
   }
   if (ranOut.length) {
     const started = await alertOutages(ranOut.map((thread) => ({ name: label(thread), error: thread.lastError ?? thread.lastErrorCode ?? "provider error" })), sweep.context.env);

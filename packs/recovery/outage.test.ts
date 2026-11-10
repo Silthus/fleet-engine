@@ -121,6 +121,16 @@ test("forgets the tries of a thread that recovered, so its next outage gets four
   expect(box.t3.started().length).toBe(1);
 });
 
+test("forgets the tries of a thread that completed while it was snoozed", async () => {
+  const box = await machine([outageThread("e")], { "claude-test-1": 200 });
+  for (const time of ["20:00", "20:10", "20:30"]) await box.run(at(time));
+  box.setThreads([outageThread("e", { status: "completed", lastErrorClass: null, lastError: null, snoozedUntil: "2026-11-10T20:50:00.000Z" })]);
+  await box.run(at("20:40"));
+  box.setThreads([outageThread("e", { latestRunId: "run-e2", latestRunCompletedAt: "2026-11-10T21:00:00.000Z" })]);
+  for (const time of ["21:05", "21:15", "21:35", "22:15", "23:00"]) await box.run(at(time));
+  expect(box.inbox.delivered().length).toBe(7);
+});
+
 test("leaves spent quota to the limit sweep, and held threads and plain failures alone", async () => {
   const box = await machine([
     outageThread("quota", { lastError: "503 All credentials for model claude-test-1 are cooling down" }),
@@ -147,6 +157,23 @@ test("keeps the tries in a private state file", async () => {
   const path = join(box.home, ".local/state/fleet/outage-resume.json");
   expect(existsSync(path)).toBe(true);
   expect(statSync(path).mode & 0o777).toBe(0o600);
+});
+
+test("spends no try on a continue message that T3 did not take", async () => {
+  let refusing = true;
+  const inbox = t3Inbox();
+  const refuseWhileDown = (tag: string, payload: unknown) => (refusing ? undefined : inbox.rpc(tag, payload));
+  const stub = await startT3Stub({ shell: { projects: [], threads: [outageThread("e")] } as unknown as ShellSnapshot, rpc: refuseWhileDown });
+  stubs.push(stub);
+  const home = recoveryHome(temp.make("home-"));
+  const run = (time: string) => recoverCommand([], {
+    home, env: { FLEET_MODELS: JSON.stringify(modelRows), FLEET_SETTINGS: "{}" }, fetch: fakeProxy({ "claude-test-1": 200 }).fetch,
+    now: () => at(time), print: () => {}, session: { home: stub.home },
+  });
+  for (const time of ["20:00", "20:10", "20:30", "21:10", "22:30"]) expect(await run(time)).toBe(1);
+  refusing = false;
+  for (const time of ["22:35", "22:45", "23:05", "23:45"]) expect(await run(time)).toBe(0);
+  expect(inbox.delivered().length).toBe(4);
 });
 
 test("one failed send does not stop the others, and the sweep says so", async () => {
