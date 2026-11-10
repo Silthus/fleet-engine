@@ -15,7 +15,7 @@ export function hubForward(hub: string, catalog: CatalogEntry[]): Owned<PackJob>
 }
 
 export function quote(word: string) {
-  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
+  return /^[\w@%+:,./-][\w@%+=:,./-]*$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
 }
 
 /** The one ssh call from a node to the hub: batch mode, a checked host name, each word quoted, and Fleet's launcher at its install path, not the login PATH. */

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { hubCallLimitMs, peerMachine, peerSsh, peersOf, quote, readBoxSettings, remoteFleet, requireHub, shellLimitMs, shellsWith, thisMachine } from "./machine.ts";
 import type { Capture } from "./coder.ts";
+import { fakeSsh, type Host } from "../../../src/testing/ssh.ts";
 import { boxSettings } from "./testing.ts";
 
 const temp = tempDirs();
@@ -91,20 +92,19 @@ test("every call to a peer over SSH and every local command gets an operation ti
   expect(shellLimitMs).toBeGreaterThan(0);
 });
 
-test("a devbox hands a box operation to the hub in one batch SSH call through the engine launcher at its install path, with each word kept whole, the output passed through, and a time limit", async () => {
-  const asked: Array<{ argv: string[]; timeoutMs: number; inherit?: boolean }> = [];
-  const capture: Capture = async (argv, options) => (asked.push({ argv, timeoutMs: options.timeoutMs, ...(options.inherit ? { inherit: true } : {}) }), { code: 3, stdout: "", stderr: "" });
-  const { toHub } = shellsWith(capture, "my-hub");
-  expect(await toHub(["box", "spawn", "Lane 7; rm -rf ~", "--for", "devbox-1"])).toBe(3);
-  const [{ argv, ...rest }] = asked as [(typeof asked)[number]];
-  expect(rest).toEqual({ timeoutMs: hubCallLimitMs, inherit: true });
-  expect(argv[0]).toBe("ssh");
-  expect(argv).toContain("BatchMode=yes");
-  expect(argv.at(-2)).toBe("my-hub");
-  const home = temp.make("fleet-remote-");
-  mkdirSync(join(home, ".local/share/fleet/engine"), { recursive: true });
-  writeFileSync(join(home, ".local/share/fleet/engine/fleet"), `printf '%s\\n' "$@"\n`);
-  const remote = Bun.spawnSync(["sh", "-c", argv.at(-1)!], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
-  expect(remote.stdout.toString()).toBe("box\nspawn\nLane 7; rm -rf ~\n--for\ndevbox-1\n");
+const loginShells = ["sh", "bash", "zsh"].filter((shell) => Bun.which(shell));
+
+test("a devbox hands a box operation to the hub in one batch SSH call, with each word kept whole in the hub's login shell, and gives back the hub's exit code", async () => {
+  for (const shell of loginShells) {
+    const heard: string[][] = [];
+    const hub: Host = async (args) => (heard.push(args), { code: 3, stdout: "", stderr: "" });
+    const { toHub } = shellsWith(fakeSsh(temp.make("fleet-remote-"), { "my-hub": hub }, shell) as Capture, "my-hub");
+    const words = ["box", "spawn", "Lane 7; rm -rf ~", "=printf", "--for", "devbox-1"];
+    expect(await toHub(words)).toBe(3);
+    expect(heard).toEqual([words]);
+  }
+});
+
+test("a hub call may run longer than a shell call", () => {
   expect(hubCallLimitMs).toBeGreaterThan(shellLimitMs);
 });

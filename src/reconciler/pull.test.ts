@@ -1,56 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { main, type CliOptions } from "../cli.ts";
-import type { MachineFile } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
-import { fakeSsh, remoteFleet, type Host } from "../testing/ssh.ts";
-import { filesAdapter } from "./apply.ts";
+import { linkedFleets } from "../testing/linked.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
-const repoRoot = join(import.meta.dir, "../..");
-const hubMachine: MachineFile = { schema: 1, role: "linux", name: "hub-1" };
-const nodeMachine: MachineFile = { schema: 1, role: "devbox", coder: true, name: "node-2" };
-
-function linked() {
-  const engine = temp.make("engine-");
-  cpSync(join(repoRoot, "packs/base"), join(engine, "packs/base"), { recursive: true });
-  cpSync(join(import.meta.dir, "fixtures/issued"), join(engine, "packs/issued"), { recursive: true });
-  const profile = temp.make("profile-");
-  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["issued"], plan: "claude", settings: {}, workflows: {}, hub: "hub-1", devboxes: ["node-2"] }));
-  const hosts: Record<string, Host | "down"> = {};
-  const ssh = fakeSsh(temp.make("ssh-"), hosts);
-  const machine = (saved: MachineFile) => {
-    const home = temp.make("home-");
-    mkdirSync(join(home, ".config/fleet"), { recursive: true });
-    writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...saved, profileDir: profile }));
-    const options: CliOptions = {
-      home,
-      engineRoot: engine,
-      platform: "linux",
-      env: {},
-      print: () => {},
-      hostname: () => saved.name!,
-      capture: ssh,
-      run: async (command) => (command[0] === "/bin/sh" && command[1] === join(engine, "fleet") ? main(command.slice(2), options) : 0),
-      adapters: () => [filesAdapter],
-    };
-    const fleet = remoteFleet(() => options);
-    const typed = async (...args: string[]) => {
-      const { code, stdout, stderr } = await fleet(args);
-      return { code, output: (stdout + stderr).trimEnd() };
-    };
-    return { fleet, typed };
-  };
-  const hub = machine(hubMachine);
-  hosts["hub-1"] = hub.fleet;
-  return { hub: hub.typed, node: machine(nodeMachine).typed, hosts };
-}
-
 test("a node's apply pulls its credential from the hub over ssh, stores it, and ctx.use returns it", async () => {
-  const { hub, node } = linked();
+  const { hub, node } = linkedFleets(temp);
   expect((await hub("apply")).code).toBe(0);
   expect(await node("issued", "use")).toEqual({ code: 1, output: "fleet: issued/issued-api has no credential on this machine yet. Run fleet apply on the hub." });
   const applied = await node("apply");
@@ -61,7 +17,7 @@ test("a node's apply pulls its credential from the hub over ssh, stores it, and 
 });
 
 test("when the hub does not answer or refuses, the node keeps its stored credential and apply reports a finding", async () => {
-  const { hub, node, hosts } = linked();
+  const { hub, node, hosts } = linkedFleets(temp);
   await hub("apply");
   await node("apply");
   const answering = hosts["hub-1"]!;
@@ -79,11 +35,25 @@ test("when the hub does not answer or refuses, the node keeps its stored credent
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
 });
 
-test("fleet credential answers only on the hub, and only for a node that the profile names", async () => {
-  const { hub, node } = linked();
+test("fleet credential on the hub prints only the key for a node that the profile names, and what the service says goes to standard error", async () => {
+  const { hub, hubFleet } = linkedFleets(temp);
   await hub("apply");
-  expect(await hub("credential", "issued/issued-api", "node-2")).toEqual({ code: 0, output: "key-2-for-node-2" });
+  expect(await hubFleet(["credential", "issued/issued-api", "node-2"])).toEqual({ code: 0, stdout: "key-2-for-node-2\n", stderr: "Issuing a key for node-2\n" });
+});
+
+test("fleet credential refuses a node that the profile does not name", async () => {
+  const { hub } = linkedFleets(temp);
+  await hub("apply");
   expect(await hub("credential", "issued/issued-api", "stranger")).toEqual({ code: 1, output: "fleet: stranger is not a node of your profile. Name it in devboxes, or run fleet devbox add stranger." });
+});
+
+test("fleet credential refuses to run off the hub", async () => {
+  const { node } = linkedFleets(temp);
   expect(await node("credential", "issued/issued-api", "node-2")).toEqual({ code: 1, output: "fleet: fleet credential runs on the hub, hub-1." });
+});
+
+test("fleet credential refuses a service that is not in the catalog", async () => {
+  const { hub } = linkedFleets(temp);
+  await hub("apply");
   expect(await hub("credential", "issued/issued-spare", "node-2")).toEqual({ code: 1, output: "fleet: the service catalog has no issued/issued-spare: its workflow or plan is off in your profile." });
 });

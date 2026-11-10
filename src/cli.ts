@@ -256,7 +256,8 @@ async function credential(args: string[], options: CliOptions) {
   if (![profile.hub ?? plan.machine.name, ...(profile.devboxes ?? [])].includes(node)) throw new Error(`${node} is not a node of your profile. Name it in devboxes, or run fleet devbox add ${node}.`);
   const loaded = loadedPack(sources, pack)!;
   const issue = loaded.code!.credentials[id]!;
-  return inPack(plan, loaded, options, async (ctx) => (options.print(await issued(issue(ctx, node))), 0));
+  const said = { ...options, print: options.fail ?? (() => {}) };
+  return inPack(plan, loaded, said, async (ctx) => (options.print(await issued(issue(ctx, node))), 0));
 }
 
 function loadedPack(sources: FetchedSource[], name: string): LoadedPack | undefined {

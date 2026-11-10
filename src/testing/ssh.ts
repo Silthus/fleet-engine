@@ -16,8 +16,8 @@ export function remoteFleet(options: () => CliOptions): Host {
   };
 }
 
-/** ssh that runs its remote line in a real shell, in an empty home whose fleet launcher hands its words to the named host's fleet. A host that is down, or not named, answers as ssh does. */
-export function fakeSsh(home: string, hosts: Record<string, Host | "down">): CommandRunner {
+/** ssh that runs its remote line in a real login shell, sh unless named, in an empty home whose fleet launcher hands its words to the named host's fleet. A host that is down, or not named, answers as ssh does. */
+export function fakeSsh(home: string, hosts: Record<string, Host | "down">, shell = "sh"): CommandRunner {
   mkdirSync(join(home, ".local/share/fleet/engine"), { recursive: true });
   writeFileSync(join(home, ".local/share/fleet/engine/fleet"), `printf '%s\\0' "$@"\n`);
   return async (command) => {
@@ -26,8 +26,8 @@ export function fakeSsh(home: string, hosts: Record<string, Host | "down">): Com
     const line = command.at(-1)!;
     const target = hosts[host];
     if (!target || target === "down") return { code: 255, stdout: "", stderr: `ssh: connect to host ${host} port 22: Connection refused\n` };
-    const shell = Bun.spawnSync(["sh", "-c", line], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
-    if (shell.exitCode !== 0) return { code: shell.exitCode, stdout: "", stderr: shell.stderr.toString() };
-    return target(shell.stdout.toString().split("\0").slice(0, -1));
+    const login = Bun.spawnSync([shell, "-c", line], { cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
+    if (login.exitCode !== 0) return { code: login.exitCode, stdout: "", stderr: login.stderr.toString() };
+    return target(login.stdout.toString().split("\0").slice(0, -1));
   };
 }
