@@ -48,6 +48,14 @@ export function notesShownByTrigger(home: string, session: string): string[] {
   return [...new Set(notes)];
 }
 
+const shownKeepDays = 30;
+
+export function forgetOldShown(home: string, now = Date.now()) {
+  const dir = join(stateDir(home), "shown");
+  if (!existsSync(dir)) return;
+  for (const file of readdirSync(dir)) if (now - statSync(join(dir, file)).mtimeMs > shownKeepDays * 24 * 3600 * 1000) rmSync(join(dir, file), { force: true });
+}
+
 const claimedDir = (home: string) => join(stateDir(home), "claimed");
 const claimIdleDays = 7;
 

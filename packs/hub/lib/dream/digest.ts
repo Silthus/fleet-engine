@@ -19,6 +19,7 @@ const userLimit = 2000;
 const assistantLimit = 800;
 const errorLimit = 400;
 export const dreamSessionsKey = "hub.dreamSessions";
+export const sessionKeepDays = 30;
 export const dreamPromptStart = "Follow the dream skill";
 
 export const stateDir = (home: string, env: Env) => join(env.XDG_STATE_HOME || join(home, ".local/state"), "fleet/dream");
@@ -237,7 +238,7 @@ export function digestLines(home: string, machine: string, since: number, now: n
   for (const file of existsSync(inbox) ? readdirSync(inbox).sort() : []) {
     const path = join(inbox, file);
     const modified = statSync(path).mtimeMs;
-    if (modified < now - 14 * day) rmSync(path, { force: true });
+    if (modified < now - sessionKeepDays * day) rmSync(path, { force: true });
     else if (modified >= since) output += readFileSync(path, "utf8");
   }
   return output;

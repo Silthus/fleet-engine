@@ -117,14 +117,14 @@ test("a digest that the dream sends to analysts and the memory repo carries no t
   expect(JSON.parse(output).repo).toBe("app");
 });
 
-test("digest output adds the saved box digests since the cutoff and deletes those older than 14 days", () => {
+test("digest output adds the saved box digests since the cutoff and deletes those older than 30 days", () => {
   const home = temp.make("fleet-dream-");
   const env = {};
   const inbox = inboxDir(home, env);
   writeHome(home, { [join(inbox.slice(home.length + 1), "box-a-1.jsonl")]: "{\"session\":\"fresh\"}\n", [join(inbox.slice(home.length + 1), "box-b-1.jsonl")]: "{\"session\":\"stale\"}\n", [join(inbox.slice(home.length + 1), "box-c-1.jsonl")]: "{\"session\":\"gone\"}\n" });
   utimesSync(join(inbox, "box-a-1.jsonl"), new Date(now - 3_600_000), new Date(now - 3_600_000));
   utimesSync(join(inbox, "box-b-1.jsonl"), new Date(now - 3 * 86_400_000), new Date(now - 3 * 86_400_000));
-  utimesSync(join(inbox, "box-c-1.jsonl"), new Date(now - 15 * 86_400_000), new Date(now - 15 * 86_400_000));
+  utimesSync(join(inbox, "box-c-1.jsonl"), new Date(now - 31 * 86_400_000), new Date(now - 31 * 86_400_000));
   expect(digestLines(home, "my-hub", now - 86_400_000, now, env)).toBe("{\"session\":\"fresh\"}\n");
   expect(readdirSync(inbox).sort()).toEqual(["box-a-1.jsonl", "box-b-1.jsonl"]);
 });

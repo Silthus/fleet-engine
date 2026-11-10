@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Env, Result } from "../coder.ts";
 import { peersOf, quote, remoteFleet } from "../machine.ts";
 import { readSeen, unreachedPath, type Unreached } from "./analyze.ts";
-import { digestLines, memoryCheckout, parseSince, stateDir, type Digest } from "./digest.ts";
+import { digestLines, memoryCheckout, parseSince, sessionKeepDays, stateDir, type Digest } from "./digest.ts";
 
 export type DreamBoxes = { running(): Promise<string[]>; ssh(box: string, command: string): Promise<Result> };
 export type CollectIo = {
@@ -95,7 +95,7 @@ export async function collect(since: string, io: CollectIo): Promise<string> {
     kept++;
   }
   writeFileSync(usagePath, JSON.stringify(usage, null, 1));
-  const oldest = dateOf(io.now() - 14 * day);
+  const oldest = dateOf(io.now() - sessionKeepDays * day);
   for (const old of readdirSync(state).filter((name) => /^\d{4}-\d{2}-\d{2}$/.test(name) && name < oldest)) rmSync(join(state, old), { recursive: true, force: true });
   await io.git(["-C", memoryCheckout(io.home, io.env), "worktree", "prune"]);
   io.say(`Fleet dream: ${gathered.length} sessions read, ${kept} new in ${run}.${failed.length ? ` Not reached: ${failed.join("; ")}.` : ""}`);
