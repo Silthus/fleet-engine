@@ -1,6 +1,12 @@
 # Memory
 
-Shared memory is `~/.agents/memory`, a clone of the private repo in `memory.repo` on every machine with the Memory pack. Every five minutes, each machine commits and pushes its memory changes and pulls the others'. Claude Code uses the directory as its auto memory and loads `MEMORY.md` by itself.
+Shared memory is `~/.agents/memory` on every machine with the Memory pack. It holds the private repo in `memory.repo`. Every five minutes, each machine commits and pushes its memory changes and pulls the others'. Claude Code uses the directory as its auto memory and loads `MEMORY.md` by itself.
+
+## Layout
+
+- When `memory.subtree` is empty, `~/.agents/memory` is a clone of the whole repo.
+- When `memory.subtree` names a folder, such as `memory`, the clone is `~/.agents/memory-repo`, and `~/.agents/memory` is a link to that folder of it. The sync commits and pushes only that folder. It stops while the clone has a change outside the folder.
+- Either way, read and write memory only through `~/.agents/memory`.
 
 ## Recall
 
@@ -39,7 +45,7 @@ Memory holds what recurs. A preference or decision for one pull request, ticket,
 
 ## Sync
 
-- When two machines change the same lines of a file, the machine that syncs last wins. The other version stays in the history.
-- After a merge, `MEMORY.md` can hold both versions of a line. Keep one.
+- `MEMORY.md` and every `INDEX.md` merge by union: both machines' lines stay. After a merge, an index can hold both versions of a line. Keep one.
+- When two machines change the same lines of another file, the machine that syncs last wins. The version it replaced goes to `.conflicts/` in the memory, as a `.lost` file that names the file it came from. Merge what it has into that file, then delete it.
 - A file with conflict markers stops the sync until you fix it.
 - The sync uses the `main` branch of the memory repo. An empty repo is fine; the first sync starts `main`.
