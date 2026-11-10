@@ -328,6 +328,13 @@ describe("the Own-account balancing workflow", () => {
       expect(reports[1]!.actions).toEqual([]);
     });
 
+    test("removes the Codex settings that connect wrote even while a pack source cannot be fetched", async () => {
+      const connected = { model: "gpt-6.1-sol", model_provider: "fleet-proxy", model_providers: { "fleet-proxy": codexProviderTable } };
+      const { codex, reports } = await applied(homeWith({ ".codex/config.toml": stringify(connected) }), "down", 2, offline);
+      expect(codex).toEqual({ model: "gpt-6.1-sol" });
+      expect(reports[1]!.actions).toEqual([]);
+    });
+
     test("keeps a key helper of your own that reads a file beside the proxy key", async () => {
       const mine = { apiKeyHelper: 'my-helper --cache "$HOME/.config/fleet/cli-proxy.key-cache"' };
       const { claude } = await applied(homeWith({ ".claude/settings.json": JSON.stringify(mine) }), "down");
