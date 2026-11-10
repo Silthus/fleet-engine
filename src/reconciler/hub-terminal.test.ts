@@ -48,6 +48,13 @@ onLinux("a hub command passes a stop signal on to ssh and waits for it", async (
   expect(readFileSync(join(home, "stopped"), "utf8")).toBe("stopped\n");
 });
 
+onLinux("a hub command passes on a stop signal that arrives while ssh starts", async () => {
+  const { home, env, args } = node(`trap 'echo stopped > "$HOME/stopped"; exit 143' TERM; kill -TERM $PPID; sleep 600 & wait $!`);
+  const fleet = Bun.spawn(args, { env, stdout: "ignore", stderr: "ignore" });
+  expect(await fleet.exited).toBe(143);
+  expect(readFileSync(join(home, "stopped"), "utf8")).toBe("stopped\n");
+});
+
 onLinux("without ssh on this machine, a hub command says it could not start ssh", () => {
   const { env, args } = node();
   const ran = Bun.spawnSync(args, { env });
