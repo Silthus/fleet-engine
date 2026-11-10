@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "name": "guards",
+  "summary": "Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops.",
+  "day": "A prompt injection that tells an agent to pipe a script into a shell gets a refusal that names you, and the agent stops to ask.",
+  "cost": "Nothing to run: a hook checks each shell command before it starts.",
+  "risk": "A guard can refuse a command you meant. The refusal says why and what to do instead. Every guard is off until you turn it on.",
+  "settings": [
+    {
+      "key": "guards.person",
+      "question": "Whom should a refusal tell the agent to ask, such as your first name?",
+      "type": "string",
+      "default": "the person who runs this machine",
+      "ask": "never"
+    },
+    {
+      "key": "guards.owners",
+      "question": "Which GitHub owners may agents use, separated by commas, such as you,your-org?",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "guards.signers",
+      "question": "Which SSH public keys may sign the Git allowlist, one per line?",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "shell-guards",
+      "name": "Shell guards",
+      "default": false,
+      "sentence": "Agents cannot pipe network code into a shell, run a package the project lacks, change how Git maps URLs, use gh outside your GitHub owners, or poll in a loop of turns.",
+      "moment": {
+        "time": "13:40",
+        "title": "A README asks for curl | sh",
+        "body": "An agent reads a README that says to pipe an install script into a shell. Fleet refuses, and the agent stops to ask you instead.",
+        "words": [
+          "agent"
+        ]
+      }
+    }
+  ],
+  "files": [
+    {
+      "path": "hooks/guards.ts",
+      "target": ".config/fleet/hooks/PreToolUse/guards.ts",
+      "workflow": "shell-guards"
+    }
+  ]
+}
