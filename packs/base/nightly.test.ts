@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
@@ -74,6 +74,13 @@ test("an update that keeps failing tries each hour of the night window and stops
 test("an update that exits 75 counts as failed and tries again the next hour", async () => {
   const runs = await hourlyRuns("fleet-update", "2026-11-10T00:17:00Z", 3, (at) => at.getUTCHours() === 0, 75);
   expect(runs).toEqual(["2026-11-10T00 update exit 1", "2026-11-10T01 update exit 0"]);
+});
+
+test("an update whose success cannot be recorded reports a failure", async () => {
+  const box = machine();
+  mkdirSync(join(box.home, ".local/state/fleet/nightly/fleet-update"), { recursive: true });
+  expect(await nightlyCommand(nightlyArgs("fleet-update"), { home: box.home, engineRoot: box.engineRoot, now: () => new Date("2026-11-10T00:17:00Z") })).not.toBe(0);
+  expect(box.calls()).toEqual(["update"]);
 });
 
 onLinux("an hour that starts while the last update still runs leaves it alone", async () => {

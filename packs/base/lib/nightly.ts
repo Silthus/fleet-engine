@@ -13,9 +13,9 @@ shift 2
 [ "$(cat "$stamp" 2>/dev/null)" = "$today" ] && exit 0
 "$@"
 code=$?
-[ "$code" = 0 ] && echo "$today" > "$stamp"
 [ "$code" = ${stillRunning} ] && exit 1
-exit "$code"`;
+[ "$code" = 0 ] || exit "$code"
+echo "$today" > "$stamp"`;
 
 export type NightlyContext = { home: string; engineRoot: string | undefined; now: () => Date };
 
