@@ -117,6 +117,7 @@ describe("the signed Git allowlist workflow", () => {
     const step = plan({ "git-allowlist": true }).human.find((item) => item.id === "git-allowlist");
     expect(step?.command).toContain("sudo sh ~/.local/state/fleet/git-allowlist/install.sh");
     expect(step?.probe).toEqual(["fleet", "guards", "allowlist", "--check"]);
+    expect(step?.interactive).toBe(true);
     expect(plan({ "git-allowlist": true }, mac).human).toEqual([]);
   });
 

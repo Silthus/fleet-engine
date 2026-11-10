@@ -90,7 +90,8 @@
         "guards",
         "allowlist",
         "--check"
-      ]
+      ],
+      "interactive": true
     }
   ]
 }
