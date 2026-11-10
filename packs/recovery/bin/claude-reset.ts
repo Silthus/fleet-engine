@@ -12,7 +12,6 @@ type Proxy = { baseUrl: string; key: string };
 
 const maxResetMs = 30 * 24 * 3600_000;
 const proxyTimeoutMs = 5000;
-const fleetKeyHelper = 'cat "$HOME/.config/fleet/cli-proxy.key"';
 
 function readJson(path: string): Record<string, unknown> {
   try {
@@ -36,9 +35,10 @@ function proxyConfiguration(home: string): Proxy | undefined {
     return typeof found === "string" && found ? found : undefined;
   };
   const baseUrl = value("ANTHROPIC_BASE_URL");
-  const fleetKey = settings.apiKeyHelper === fleetKeyHelper ? readText(join(home, ".config/fleet/cli-proxy.key")) : undefined;
+  if (!baseUrl) return undefined;
+  const fleetKey = sameOrigin(baseUrl, process.env.FLEET_CLI_PROXY_URL || "http://127.0.0.1:8317") ? readText(join(home, ".config/fleet/cli-proxy.key")) : undefined;
   const key = value("ANTHROPIC_AUTH_TOKEN") || value("ANTHROPIC_API_KEY") || fleetKey;
-  if (!baseUrl || !key) return undefined;
+  if (!key) return undefined;
   try {
     const url = new URL(baseUrl);
     if (!["http:", "https:"].includes(url.protocol) || url.hostname === "api.anthropic.com" || url.username || url.password) return undefined;
@@ -46,6 +46,11 @@ function proxyConfiguration(home: string): Proxy | undefined {
     return undefined;
   }
   return { baseUrl, key };
+}
+
+function sameOrigin(one: string, other: string): boolean {
+  try { return new URL(one).origin === new URL(other).origin; }
+  catch { return false; }
 }
 
 function resetTime(value: string | null, now: number): number | undefined {
