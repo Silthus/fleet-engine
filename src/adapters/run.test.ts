@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Plan } from "../pack/types.ts";
 import { apply } from "../reconciler/apply.ts";
@@ -26,11 +27,18 @@ describe("the command runner", () => {
     }
   });
 
-  test("stops the command when its signal aborts", async () => {
+  test("stops the command when its signal aborts, even while a process it started keeps its output open", async () => {
+    const ready = join(temp.make("fifo-"), "ready");
+    expect(Bun.spawnSync(["mkfifo", ready]).exitCode).toBe(0);
     const deadline = new AbortController();
-    const running = spawnRunner(["sleep", "30"], { signal: deadline.signal });
-    deadline.abort();
-    expect((await running).code).not.toBe(0);
+    const running = spawnRunner(["sh", "-c", 'sleep 30 & echo $! > "$0"; wait', ready], { signal: deadline.signal });
+    const holder = Number((await readFile(ready, "utf8")).trim());
+    try {
+      deadline.abort();
+      expect(await running).toEqual({ code: 143, stdout: "", stderr: "" });
+    } finally {
+      process.kill(holder);
+    }
   });
 });
 
