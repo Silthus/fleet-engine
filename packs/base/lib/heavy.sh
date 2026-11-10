@@ -24,6 +24,11 @@ if [ -n "$stop" ]; then
   exec systemctl --user stop "$stop"
 fi
 [ "$#" -gt 0 ] || { echo "$usage" >&2; exit 2; }
+if [ -n "${FLEET_HEAVY_ROUTE:-}" ] && [ -z "$unit$service" ]; then
+  route=$FLEET_HEAVY_ROUTE
+  unset FLEET_HEAVY_ROUTE
+  FLEET_HEAVY_ROUTED=1 exec bun "$route" "$@"
+fi
 disk_has_room() { bun "$commands/disk.ts" >/dev/null || exit 75; }
 disk_has_room
 [ "$(uname -s)" = Linux ] || exec "$@"
