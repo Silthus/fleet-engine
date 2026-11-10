@@ -1,32 +1,102 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join, relative, resolve } from "node:path";
+import { basename, join, posix, relative, resolve } from "node:path";
+import { minimumTerm, triggersOf } from "../../../memory/lib/triggers.ts";
 
-export const memoryLimits = { indexLines: 180, indexBytes: 24_000, files: 150, fileLines: 80, fileBytes: 6000, totalBytes: 200_000, staleDays: 60 };
-export const notMemory = new Set([".git", "dreams", "node_modules"]);
+export const memoryLimits = {
+  indexLines: 180, indexBytes: 24_000, repoIndexLines: 100, repoIndexBytes: 12_000,
+  files: 150, fileLines: 80, fileBytes: 6000, totalBytes: 200_000, staleDays: 60, unconfirmedDays: 14,
+};
+export const notMemory = new Set(["dreams", "node_modules"]);
 export type Problem = { file: string; problem: string };
+export type RepoCheckout = (repo: string) => string | undefined;
+
+const day = 86_400_000;
 
 export function markdownFiles(root: string, depth = 6): string[] {
   if (!existsSync(root) || depth < 0) return [];
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);
-    if (entry.isDirectory()) return notMemory.has(entry.name) ? [] : markdownFiles(path, depth - 1);
+    if (entry.isDirectory()) return notMemory.has(entry.name) || entry.name.startsWith(".") ? [] : markdownFiles(path, depth - 1);
     return entry.name.endsWith(".md") ? [path] : [];
   });
 }
 
 export const isIndex = (file: string) => basename(file) === "MEMORY.md" || basename(file) === "INDEX.md";
 
-export function budget(memory: string, usage: Record<string, string>, now: number): Problem[] {
+export function memoryRootIn(folder: string, subtree: unknown): string {
+  if (typeof subtree !== "string" || !subtree) return folder;
+  const root = resolve(folder, subtree);
+  return root.startsWith(`${resolve(folder)}/`) && existsSync(join(root, "MEMORY.md")) ? root : folder;
+}
+
+export function homeCheckouts(home: string): RepoCheckout {
+  return (repo) => [join(home, "dev", repo), join(home, repo)].find((path) => existsSync(join(path, ".git")));
+}
+
+type Frontmatter = Record<string, unknown> & { metadata?: Record<string, unknown> };
+
+function frontmatterOf(text: string): Frontmatter {
+  const block = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text)?.[1];
+  try {
+    const parsed = block ? Bun.YAML.parse(block) : undefined;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Frontmatter : {};
+  } catch {
+    return {};
+  }
+}
+
+export function frontmatterField(text: string, name: string): string | undefined {
+  const frontmatter = frontmatterOf(text);
+  const metadata = frontmatter.metadata && typeof frontmatter.metadata === "object" ? frontmatter.metadata : {};
+  const value = frontmatter[name] ?? metadata[name];
+  return typeof value === "string" || typeof value === "number" ? String(value).trim() || undefined : undefined;
+}
+
+export const lineCount = (text: string) => text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+
+const namedPaths = (text: string) => [...new Set([...text.matchAll(/`([\w@.-]+(?:\/[\w@.-]+)+\.[a-z]{1,5})`/g)].map((match) => posix.normalize(match[1]!)).filter((path) => !path.startsWith("../") && !path.startsWith("/")))];
+const wikiLinks = (text: string) => [...new Set([...text.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)].map((match) => match[1]!.trim()))];
+const withoutMd = (name: string) => name.replace(/\.md$/, "");
+
+function indexProblems(index: string, text: string): Problem[] {
+  const main = index === "MEMORY.md";
+  const [lineLimit, byteLimit] = main ? [memoryLimits.indexLines, memoryLimits.indexBytes] : [memoryLimits.repoIndexLines, memoryLimits.repoIndexBytes];
+  const lines = lineCount(text);
+  const bytes = Buffer.byteLength(text);
+  const advice = main ? "Shorten its lines or move a section into an INDEX.md" : "Shorten its lines or move notes into topic notes";
+  return [
+    ...(lines > lineLimit ? [{ file: index, problem: `${lines} lines; the limit is ${lineLimit}` }] : []),
+    ...(bytes > byteLimit ? [{ file: index, problem: `${bytes} bytes; the limit is ${byteLimit}. ${advice}` }] : []),
+  ];
+}
+
+function noteProblems(file: string, text: string, names: Set<string>, now: number, checkouts: RepoCheckout): string[] {
+  const problems: string[] = [];
+  for (const name of wikiLinks(text)) if (!names.has(withoutMd(name))) problems.push(`links [[${name}]], which no memory is; repoint it, write that memory, or drop the link`);
+  const status = frontmatterField(text, "status");
+  const modified = Date.parse(frontmatterField(text, "modified") ?? "");
+  if (status && status !== "confirmed" && status !== "unconfirmed") problems.push(`status ${status}; use confirmed or unconfirmed`);
+  if (status === "unconfirmed" && modified && now - modified > memoryLimits.unconfirmedDays * day) problems.push(`unconfirmed since ${new Date(modified).toISOString().slice(0, 10)}; confirm it against a session or the code, or delete it`);
+  for (const term of triggersOf(text)) if (term.length < minimumTerm) problems.push(`trigger "${term}" is shorter than ${minimumTerm} characters and never fires; name the command or tool`);
+  const repo = /^projects\/([^/]+)\//.exec(file)?.[1];
+  const checkout = repo ? checkouts(repo) : undefined;
+  for (const path of checkout ? namedPaths(text) : []) {
+    if (existsSync(join(checkout!, path.split("/")[0]!)) && !existsSync(join(checkout!, path))) problems.push(`names \`${path}\`, which the hub's ${repo} checkout lacks; check it, then fix or delete the memory`);
+  }
+  return problems;
+}
+
+export function budget(memory: string, usage: Record<string, string>, now: number, checkouts: RepoCheckout = () => undefined): Problem[] {
   const problems: Problem[] = [];
   if (!existsSync(join(memory, "MEMORY.md"))) return [{ file: "MEMORY.md", problem: "missing" }];
   const files = markdownFiles(memory).map((path) => relative(memory, path));
   const indexes = files.filter(isIndex);
   const memories = files.filter((file) => !isIndex(file) && file !== "README.md");
+  const names = new Set(memories.flatMap((file) => [basename(file, ".md"), withoutMd(file)]));
   const linked = new Set<string>();
   for (const index of indexes) {
     const text = readFileSync(join(memory, index), "utf8");
-    if (index === "MEMORY.md" && text.split("\n").length > memoryLimits.indexLines) problems.push({ file: index, problem: `${text.split("\n").length} lines; the limit is ${memoryLimits.indexLines}` });
-    if (index === "MEMORY.md" && Buffer.byteLength(text) > memoryLimits.indexBytes) problems.push({ file: index, problem: `${Buffer.byteLength(text)} bytes; the limit is ${memoryLimits.indexBytes}. Shorten its lines or move a section into an INDEX.md` });
+    problems.push(...indexProblems(index, text));
     for (const match of text.matchAll(/\]\(([^)#\s]+\.md)\)/g)) {
       const target = relative(memory, resolve(join(memory, index, ".."), match[1]!));
       linked.add(target);
@@ -39,12 +109,17 @@ export function budget(memory: string, usage: Record<string, string>, now: numbe
     const bytes = Buffer.byteLength(text);
     total += bytes;
     if (!linked.has(file)) problems.push({ file, problem: "no index links it" });
-    const lineCount = text.split("\n").length;
-    if (lineCount > memoryLimits.fileLines || bytes > memoryLimits.fileBytes) problems.push({ file, problem: `${lineCount} lines, ${bytes} bytes; condense it below ${memoryLimits.fileLines} lines and ${memoryLimits.fileBytes} bytes` });
-    for (const field of ["name", "description", "type"]) if (!new RegExp(`^\\s*${field}:`, "m").test(text)) problems.push({ file, problem: `frontmatter has no ${field}` });
-    const touched = ["modified", "verified"].map((field) => Date.parse(new RegExp(`^\\s*${field}:\\s*"?([^"\\n]+)`, "m").exec(text)?.[1] ?? "")).filter((at) => !Number.isNaN(at));
+    const lines = lineCount(text);
+    if (lines > memoryLimits.fileLines || bytes > memoryLimits.fileBytes) problems.push({ file, problem: `${lines} lines, ${bytes} bytes; condense it below ${memoryLimits.fileLines} lines and ${memoryLimits.fileBytes} bytes` });
+    for (const name of ["name", "description", "type"]) if (!frontmatterField(text, name)) problems.push({ file, problem: `frontmatter has no ${name}` });
+    problems.push(...noteProblems(file, text, names, now, checkouts).map((problem) => ({ file, problem })));
+    const touched = ["modified", "verified"].map((name) => Date.parse(frontmatterField(text, name) ?? "")).filter((at) => !Number.isNaN(at));
     const last = Math.max(0, ...touched, Date.parse(usage[file] ?? "") || 0);
-    if (last && now - last > memoryLimits.staleDays * 86_400_000) problems.push({ file, problem: `stale: not written, verified, or read since ${new Date(last).toISOString().slice(0, 10)}; delete it or set verified after checking it` });
+    if (last && now - last > memoryLimits.staleDays * day) problems.push({ file, problem: `stale: not written, verified, or read since ${new Date(last).toISOString().slice(0, 10)}; delete it or set verified after checking it` });
+  }
+  const conflicts = join(memory, ".conflicts");
+  for (const kept of existsSync(conflicts) ? readdirSync(conflicts) : []) {
+    problems.push({ file: `.conflicts/${kept}`, problem: "a sync conflict replaced this version; merge what it has that the memory lacks, then delete it" });
   }
   if (memories.length > memoryLimits.files) problems.push({ file: ".", problem: `${memories.length} memories; the limit is ${memoryLimits.files}. Merge or delete some` });
   if (total > memoryLimits.totalBytes) problems.push({ file: ".", problem: `${total} bytes; the limit is ${memoryLimits.totalBytes}. Condense or delete some` });
