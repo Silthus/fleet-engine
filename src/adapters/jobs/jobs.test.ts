@@ -391,7 +391,7 @@ describe("launchd jobs on a Mac", () => {
     const home = temp.make("home-");
     const mac = launchctl();
     await apply(plan("darwin", [prune, pull]), { home, adapters: [mac.adapter] });
-    await apply({ ...outageDropping("darwin", "prune", checkFails, [pull]), dropped: [{ pack: "base", item: "job prune", ...checkFails }, { pack: "base", item: "job skills-pull", ...outageHides }] }, { home, adapters: [mac.adapter] });
+    await apply({ ...outageDropping("darwin", "prune", checkFails), dropped: [{ pack: "base", item: "job prune", ...checkFails }, { pack: "base", item: "job skills-pull", ...outageHides }] }, { home, adapters: [mac.adapter] });
     expect([mac.loaded.has("gui/501/dev.fleet.prune"), mac.loaded.has("gui/501/dev.fleet.skills-pull")]).toEqual([false, true]);
   });
 
