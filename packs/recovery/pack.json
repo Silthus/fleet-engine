@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "name": "recovery",
+  "summary": "Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity.",
+  "day": "A thread that hits your plan's usage limit or a provider outage at night goes on by itself once your provider has capacity again, and a thread that keeps failing reaches you as one alert thread.",
+  "cost": "One small request per provider through the hub's proxy, at most every five minutes, while a thread waits on a limit or an outage.",
+  "risk": "Fleet sends continue messages to stopped threads without you in the room.",
+  "workflows": [
+    {
+      "id": "provider-recovery",
+      "name": "Provider recovery",
+      "default": false,
+      "needs": [
+        "hub"
+      ],
+      "sentence": "Threads that stop on a usage limit or a provider outage continue by themselves once the provider answers again.",
+      "moment": {
+        "time": "03:00",
+        "title": "A usage limit does not end the night",
+        "body": "A thread hits your plan's usage limit in the middle of the night. Once the hub's proxy serves its provider again, Fleet sends it one continue message and the work goes on.",
+        "night": true
+      },
+      "risk": "Sends continue messages to stopped threads without you in the room, and starts an alert thread in the hub's thread folder."
+    }
+  ],
+  "jobs": [
+    {
+      "id": "recover",
+      "command": [
+        "fleet",
+        "recover"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "workflow": "provider-recovery"
+    }
+  ]
+}

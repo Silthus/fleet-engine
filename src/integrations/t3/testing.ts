@@ -43,12 +43,14 @@ export type LaunchedThread = { id: string; title: string; prompt: string; modelS
 
 export const shellToken = "shell-token";
 export const mcpToken = "mcp-token";
+export const mcpOperateToken = "mcp-operate-token";
 
 const runningLine = "t3-stub-running";
 
 const fakeCli = `[ $# -eq 0 ] && { echo ${runningLine}; read -r _; exit 0; }
 echo "$*" >> "$(dirname "$0")/cli.log"
 case "$*" in
+  *"auth session issue"*mcp-client*orchestration:operate*) echo '{"sessionId":"mcp-session","token":"${mcpOperateToken}"}' ;;
   *"auth session issue"*mcp-client*) echo '{"sessionId":"mcp-session","token":"${mcpToken}"}' ;;
   *"auth session issue"*) echo 'issued {"sessionId":"shell-session","token":"${shellToken}"}' ;;
 esac
@@ -87,7 +89,10 @@ export async function startT3Stub(fixture: T3Fixture): Promise<T3Stub> {
     fetch(request, server) {
       const url = new URL(request.url);
       const bearer = request.headers.get("authorization");
-      if (url.pathname === "/mcp") return bearer === `Bearer ${mcpToken}` ? mcp(request, fixture, toolCalls) : new Response(null, { status: 401 });
+      if (url.pathname === "/mcp") {
+        const operates = bearer === `Bearer ${mcpOperateToken}`;
+        return operates || bearer === `Bearer ${mcpToken}` ? mcp(request, fixture, toolCalls, operates) : new Response(null, { status: 401 });
+      }
       if (bearer !== `Bearer ${shellToken}` || request.headers.get("x-t3-orchestration-protocol") !== "2") return new Response(null, { status: 401 });
       if (url.pathname === "/ws") return server.upgrade(request) ? undefined : new Response(null, { status: 400 });
       if (url.pathname === "/api/orchestration/shell") return Response.json(fixture.shell);
@@ -153,7 +158,9 @@ async function untilRunning(stdout: ReadableStream<Uint8Array>): Promise<void> {
   reader.releaseLock();
 }
 
-async function mcp(request: Request, fixture: T3Fixture, toolCalls: T3Stub["toolCalls"]): Promise<Response> {
+const writingTools = ["t3_thread_send"];
+
+async function mcp(request: Request, fixture: T3Fixture, toolCalls: T3Stub["toolCalls"], operates: boolean): Promise<Response> {
   const body = await request.json() as { id?: number; method: string; params?: { name: string; arguments: Record<string, unknown> } };
   if (body.method === "initialize") return Response.json({ jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-06-18", capabilities: {} } }, { headers: { "mcp-session-id": "mcp-stub-session" } });
   if (request.headers.get("mcp-session-id") !== "mcp-stub-session") return new Response(null, { status: 404 });
@@ -162,6 +169,7 @@ async function mcp(request: Request, fixture: T3Fixture, toolCalls: T3Stub["tool
   toolCalls.push({ name, args });
   try {
     checkToolArguments(name, args);
+    if (writingTools.includes(name) && !operates) throw new ToolRefusal("capability_denied", "This tool changes the environment, and this MCP client was approved for read-only access.");
     const value = fixture.tools?.(name, args);
     if (value === undefined) throw new ToolRefusal("invalid_request", `no stub for ${name}`);
     return events({ jsonrpc: "2.0", id: body.id, result: { content: [{ type: "text", text: JSON.stringify(value) }] } });
@@ -196,6 +204,13 @@ const toolContracts: Record<string, { required: string[]; rules: Record<string, 
     },
   },
   t3_project_list: { required: [], rules: { environmentId: isString, cursor: nonNegativeInt, limit: pageLimit } },
+  t3_thread_send: {
+    required: ["threadId", "message"],
+    rules: {
+      environmentId: isString, threadId: isString, message: isString, freshContext: isBoolean, clientRequestId: isString,
+      mode: (value) => ["auto", "queue", "steer", "restart"].includes(value as string),
+    },
+  },
 };
 
 function checkToolArguments(name: string, args: Record<string, unknown>): void {
