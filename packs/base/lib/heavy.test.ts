@@ -11,7 +11,7 @@ const systemdRun = `const args = Bun.argv.slice(2);
 const split = args.indexOf("--");
 const setenv = args.slice(0, split).filter((option) => option.startsWith("--setenv=")).map((option) => option.slice("--setenv=".length));
 const given = Object.fromEntries(setenv.map((pair) => (pair.includes("=") ? [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)] : [pair, Bun.env[pair] ?? ""])));
-const manager = { HOME: Bun.env.HOME ?? "", PATH: "/usr/bin:/bin" };
+const manager = { HOME: "/home/manager", PATH: "/usr/bin:/bin" };
 const env = args.includes("--scope") ? Bun.env : { ...manager, ...given };
 process.exit(Bun.spawnSync(args.slice(split + 1), { env, stdio: ["inherit", "inherit", "inherit"] }).exitCode ?? 1);
 `;
@@ -59,11 +59,12 @@ onLinux("runs a leading fleet in the command with this engine's launcher, though
   expect(served.stdout).toStartWith("Fleet: one setup");
 });
 
-onLinux("gives a service this shell's PATH and Fleet profile, though the systemd user manager starts it with its own environment", async () => {
+onLinux("gives a service this shell's PATH, HOME, Fleet profile, memory, and XDG folders, though the systemd user manager starts it with its own environment", async () => {
   const { bin } = stubs();
   const profile = temp.make("profile-");
-  const served = await heavyWith({ FLEET_PROFILE_DIR: profile }, bin, roomy, "--service", "preview-a", "--", "sh", "-c", 'command -v bun >/dev/null && echo "$FLEET_PROFILE_DIR"');
-  expect(served.stdout).toStartWith(`${profile}\n`);
+  const folders = { FLEET_PROFILE_DIR: profile, FLEET_MEMORY_DIR: `${profile}/memory`, XDG_STATE_HOME: `${profile}/state`, XDG_CONFIG_HOME: `${profile}/config` };
+  const served = await heavyWith(folders, bin, roomy, "--service", "preview-a", "--", "sh", "-c", 'command -v bun >/dev/null && echo "$HOME" "$FLEET_PROFILE_DIR" "$FLEET_MEMORY_DIR" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME"');
+  expect(served.stdout).toMatch(new RegExp(`^/\\S*home-\\S+ ${Object.values(folders).join(" ")}\n`));
 });
 
 onLinux("refuses to start while the disk is under the floor", async () => {
