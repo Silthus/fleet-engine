@@ -69,7 +69,7 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const flags = parseFlags(args);
   const doctor = command === "doctor";
   const preview = doctor || flags.dryRun;
-  const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview });
+  const { plan } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview, inherit: preview });
   const adapters = engineAdapters();
   const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, adapters, run: options.run });
   const notice = doctor ? await readNotice(options.home) : undefined;
@@ -129,7 +129,7 @@ async function runUpdate(options: CliOptions) {
 }
 
 async function runPackCommand(name: string, args: string[], options: CliOptions) {
-  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true });
   const command = plan.commands[name];
   if (!command) {
     const owner = sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => existsSync(join(pack.dir, "commands", `${name}.ts`)) || Object.hasOwn(pack.code?.commands ?? {}, name));
@@ -151,7 +151,7 @@ async function runItem(args: string[], options: CliOptions) {
   const slash = item.indexOf("/");
   const [pack, id] = slash < 0 ? ["", ""] : [item.slice(0, slash), item.slice(slash + 1)];
   if (!pack || !id || extra.length) return options.print("Usage: fleet run <pack>/<id>"), 2;
-  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true });
   const loaded = plan.packs.some((entry) => entry.name === pack && entry.available) ? loadedPack(sources, pack) : undefined;
   const code = loaded?.code;
   const job = plan.jobs.find((entry) => entry.pack === pack && entry.id === id);
@@ -194,9 +194,10 @@ function handlerPaths(plan: Plan) {
   return Object.fromEntries(Object.entries(plan.handlers).map(([seam, handler]) => [seam, handler.path]));
 }
 
-async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
+async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean; inherit?: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
   const saved = await loadMachine(options.home);
-  const profileDir = profileFlag ? resolvePath(profileFlag) : saved?.profileDir;
+  const inherited = mode.inherit && !profileFlag ? options.env?.FLEET_PROFILE_DIR : undefined;
+  const profileDir = profileFlag ? resolvePath(profileFlag) : inherited ? resolvePath(inherited) : saved?.profileDir;
   if (!profileDir) throw new Error("no profile on this machine. Run get.sh, or pass --profile <dir>.");
   const machine: MachineFile = { ...thisMachine(saved, options.platform, options.env ?? {}), profileDir };
   const profile = await loadProfile(profileDir);

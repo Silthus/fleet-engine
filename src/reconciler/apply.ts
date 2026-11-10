@@ -69,7 +69,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.findings.push(...result.findings);
   }
   if (context.dryRun) return report;
-  const run = viaEngine(plan, options.run ?? spawnRunner(options.home));
+  const run = viaEngine(plan, options.run ?? spawnRunner(options.home, plan.machine.profileDir));
   const failed = new Set<string>();
   const waits = waiter(plan, run);
   for (const step of plan.steps) {
@@ -85,7 +85,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
 }
 
 export async function check(plan: Plan, options: { home: string; adapters?: Adapter[]; run?: Runner }): Promise<Report> {
-  const run = viaEngine(plan, options.run ?? spawnRunner(options.home));
+  const run = viaEngine(plan, options.run ?? spawnRunner(options.home, plan.machine.profileDir));
   const report = await apply(plan, { ...options, dryRun: true });
   for (const item of plan.checks) {
     if ((await run(item.run)) !== 0) report.findings.push({ id: `check:${item.id}`, pack: item.pack, say: item.say, repair: "apply" });
@@ -135,11 +135,11 @@ function viaEngine(plan: Plan, run: Runner): Runner {
   return (command) => run(engineCommand(command, plan.engineRoot));
 }
 
-/** Runs commands with the plan's home directory as HOME, so a step installs into the home it applies to. */
-function spawnRunner(home: string): Runner {
+/** Runs commands with the plan's home directory as HOME, so a step installs into the home it applies to, and with the plan's profile, so a nested fleet reads the profile this run applies or checks. */
+function spawnRunner(home: string, profileDir: string | undefined): Runner {
   return async (command) => {
     try {
-      return await Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home } }).exited;
+      return await Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home, ...(profileDir ? { FLEET_PROFILE_DIR: profileDir } : {}) } }).exited;
     } catch {
       return 127;
     }
