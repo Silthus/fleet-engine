@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Capture, type Env, type Result } from "./coder.ts";
-import { writePrivateFile } from "./mcphub/client.ts";
 import { isBoxName } from "./names.ts";
 import type { Clock } from "./pool.ts";
 
@@ -73,34 +72,10 @@ export function readRole(home: string): string | undefined {
   return typeof role === "string" ? role : undefined;
 }
 
-export async function markHub(home: string): Promise<void> {
-  const machine = readMachineFile(home);
-  if (!machine) throw new Error(`${machinePath(home)} does not exist. Run fleet setup on this machine first.`);
-  await writePrivateFile(machinePath(home), JSON.stringify({ ...machine, role: "hub" }, null, 2) + "\n");
-}
-
 export function requireHub(home: string, command: string): void {
   const role = readRole(home);
   if (role === "hub") return;
   throw new Error(`fleet box ${command} runs only on the hub. This machine's role is ${role ?? "not set"}. Run fleet hub here on the hub, or run this there.`);
-}
-
-export type HubCommandIo = { home: string; settings: Record<string, unknown>; print(line: string): void };
-
-export async function hubCommand(args: string[], io: HubCommandIo): Promise<number> {
-  const [command, ...rest] = args;
-  if (rest.length || (command !== "here" && command !== "status")) {
-    io.print("Usage: fleet hub here     Make this machine the hub\n       fleet hub status   Print this machine's role and the hub's SSH name");
-    return 2;
-  }
-  if (command === "here") {
-    await markHub(io.home);
-    io.print("This machine is the hub now. Run fleet apply to add the hub's jobs.");
-    return 0;
-  }
-  io.print(`This machine's role: ${readRole(io.home) ?? "not set up"}`);
-  io.print(`hub.alias: ${typeof io.settings["hub.alias"] === "string" ? io.settings["hub.alias"] : "not set"}`);
-  return 0;
 }
 
 function readProfile(env: Env): { devboxes: string[]; plan?: string } {

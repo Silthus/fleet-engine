@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join, relative } from "node:path";
 import { main } from "./cli.ts";
 import { tempDirs } from "./testing/git.ts";
@@ -48,7 +49,7 @@ describe("fleet apply", () => {
     expect(result).toMatchObject({ code: 0 });
     expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toStartWith("# Agent rules\n");
     expect(readFileSync(join(home, ".codex/AGENTS.md"), "utf8")).toBe(readFileSync(join(home, ".agents/AGENTS.md"), "utf8"));
-    expect(JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"))).toEqual({ schema: 1, role: "linux", profileDir: profile });
+    expect(JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"))).toEqual({ schema: 1, role: "linux", profileDir: profile, name: hostname() });
     expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
   });
 
@@ -77,7 +78,7 @@ describe("fleet apply", () => {
       const home = temp.make("home-");
       const profile = profileDir();
       expect(await fleet(["apply", "--profile", profile], home, repoRoot, { CODER: "true", CODER_AGENT_URL: "https://coder.example.test/" })).toMatchObject({ code: 0 });
-      expect(machineFile(home)).toEqual({ schema: 1, role: "devbox", coder: true, profileDir: profile });
+      expect(machineFile(home)).toEqual({ schema: 1, role: "devbox", coder: true, profileDir: profile, name: hostname() });
       expect(signer(home)).toBe("coder");
       expect(existsSync(join(home, slice))).toBe(true);
     });

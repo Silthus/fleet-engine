@@ -161,6 +161,8 @@ export type ProfileFile = {
   settings: Record<string, SettingValue>;
   workflows: Record<string, boolean>;
   devboxes?: string[];
+  /** The SSH name of the machine that runs the hub's items. */
+  hub?: string;
   overrides?: { config?: ConfigEntry[]; skills?: string[]; models?: ModelRow[] };
 };
 
@@ -168,8 +170,8 @@ export type Profile = ProfileFile & { dir: string; aboutMe?: string };
 
 export type SetupProgress = { done: string[]; draft?: Partial<ProfileFile> };
 
-/** coder: this machine is a Coder workspace. Saved once seen, because cron and services lack the Coder variables. */
-export type MachineFile = { schema: 1; role: MachineRole; coder?: true; profileDir?: string; devboxes?: string[]; setup?: SetupProgress };
+/** coder: this machine is a Coder workspace. Saved once seen, because cron and services lack the Coder variables. name: this machine's SSH name, which the profile's hub names. */
+export type MachineFile = { schema: 1; role: MachineRole; name?: string; coder?: true; profileDir?: string; devboxes?: string[]; setup?: SetupProgress };
 
 import type { Action, DesiredFile } from "../files/install.ts";
 import type { Context } from "../sdk/index.ts";
@@ -182,6 +184,8 @@ export type ResolvedPack = { name: string; source: string; ref: string; availabl
 
 export type Plan = {
   machine: MachineFile;
+  /** The profile's hub, when it names one. */
+  hub?: string;
   /** The engine whose launcher a leading fleet in a pack's commands runs. */
   engineRoot?: string;
   os: Os;

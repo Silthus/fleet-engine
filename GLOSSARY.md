@@ -57,5 +57,5 @@ A Linux machine, local or in the cloud, where agents and T3 threads run. A Coder
 _Avoid_: Coding box, agent box
 
 **Hub**:
-A devbox role, offered only by the Hub pack, that manages the other machines.
+The one machine that the profile's `hub` names, with `fleet hub here`. It runs the items placed on the hub and manages the other machines.
 _Avoid_: Controller, master box

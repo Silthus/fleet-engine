@@ -5,14 +5,15 @@ description: Manage your machines from the Fleet hub. Use to roll out a profile 
 
 # Fleet hub
 
-The hub is the devbox whose `~/.config/fleet/machine.json` has `"role": "hub"`.
+The hub is the devbox that the profile's `hub` names (`fleet hub here`).
 It reaches every devbox over SSH and the Mac through its T3 link. Make each
 change in the profile, push it, and roll it out from the hub.
 
 ## The machines
 
-- **The hub**: this machine. `fleet hub status` prints its role and
-  `hub.alias`, the SSH name other machines use for it.
+- **The hub**: this machine. `fleet hub status` prints this machine's name
+  and the hub that the profile names. `hub.alias` is the SSH name other
+  machines use for it.
 - **Devboxes**: the `devboxes` list in the profile's `fleet.json`, plus the
   ones `fleet devbox` lists on the hub, without duplicates. Reach each one by
   its SSH name.

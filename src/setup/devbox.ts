@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import type { AiPlan, ModelRow } from "../pack/types.ts";
-import { loadProfile } from "../profile/profile.ts";
+import { loadProfile, validHost } from "../profile/profile.ts";
 import type { Machine } from "./commands.ts";
 import { engineRepo } from "./defaults.ts";
 import { type HumanContext, humanStep, type SignIn } from "./human.ts";
@@ -27,7 +27,6 @@ export function sshHosts(home: string): string[] {
   return [...new Set(hosts)];
 }
 
-export const validHost = (host: string) => /^[\w][\w.@-]*$/.test(host);
 
 export function quote(word: string) {
   return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;

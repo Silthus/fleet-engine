@@ -1,7 +1,8 @@
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
 import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
+import { writePrivateFile } from "../files/private.ts";
 
 export class ProfileError extends Error {}
 
@@ -73,6 +74,8 @@ export function activeChoices(profile: Pick<ProfileFile, "workflows">, packs: Pa
   return { ...workflowDefaults(packs), ...profile.workflows };
 }
 
+export const validHost = (host: string) => /^[\w][\w.@-]*$/.test(host);
+
 export function machinePath(home: string) {
   return join(home, ".config", "fleet", "machine.json");
 }
@@ -97,12 +100,17 @@ export function thisMachine(saved: MachineFile | undefined, platform: NodeJS.Pla
   return { ...saved, schema: 1, role, ...(coder ? { coder } : {}) };
 }
 
+/** A profile that names a hub decides the role: the machine it names is the hub, and a machine saved as the hub that it does not name is a devbox or a Linux machine again. */
+export function placedMachine(machine: MachineFile, hub: string | undefined): MachineFile {
+  if (hub === undefined) return machine;
+  if (machine.name === hub) return { ...machine, role: "hub" };
+  return machine.role === "hub" ? { ...machine, role: machine.coder ? "devbox" : "linux" } : machine;
+}
+
 export async function saveMachine(home: string, machine: MachineFile) {
   const path = machinePath(home);
   await mkdir(dirname(path), { recursive: true });
-  const partial = `${path}.${process.pid}.partial`;
-  await writeFile(partial, JSON.stringify(machine, null, 2) + "\n");
-  await rename(partial, path);
+  await writePrivateFile(path, JSON.stringify(machine, null, 2) + "\n");
 }
 
 async function readJson(path: string): Promise<Record<string, unknown> | undefined> {
@@ -135,6 +143,7 @@ function checkProfile(file: Record<string, unknown>, path: string): ProfileFile 
   }
   if (!isRecord(file.settings) || !Object.values(file.settings).every((value) => ["string", "number", "boolean"].includes(typeof value))) fail("settings must map keys to text, numbers, or true and false");
   if (!isRecord(file.workflows) || !Object.values(file.workflows).every((value) => typeof value === "boolean")) fail("workflows must map ids to true or false");
+  if (file.hub !== undefined && !(typeof file.hub === "string" && validHost(file.hub))) fail("hub must be the SSH name of a machine");
   if (file.overrides !== undefined && !isRecord(file.overrides)) fail("overrides must be an object");
   const config = isRecord(file.overrides) ? file.overrides.config : undefined;
   if (config !== undefined && !Array.isArray(config)) fail("overrides.config must list config entries");
@@ -153,6 +162,7 @@ function checkMachine(file: Record<string, unknown>, path: string): MachineFile 
   };
   if (file.schema !== 1) fail(`unknown schema ${String(file.schema)}`);
   if (!roles.includes(file.role as string)) fail("role must be mac, devbox, linux, or hub");
+  if (file.name !== undefined && !(typeof file.name === "string" && validHost(file.name))) fail("name must be this machine's SSH name");
   if (file.coder !== undefined && file.coder !== true) fail("coder must be true or left out");
   if (file.profileDir !== undefined && typeof file.profileDir !== "string") fail("profileDir must be a path");
   if (file.devboxes !== undefined && !(Array.isArray(file.devboxes) && file.devboxes.every((host) => typeof host === "string"))) fail("devboxes must list SSH hosts");
