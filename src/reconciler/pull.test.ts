@@ -26,13 +26,13 @@ test("when the hub does not answer or refuses, the node keeps its stored credent
   hosts["hub-1"] = "down";
   const down = await node("apply");
   expect(down.code).toBe(0);
-  expect(down.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (ssh: connect to host hub-1 port 22: Connection refused). Kept the one this machine has.");
+  expect(down.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (ssh exited 255. Run ssh hub-1 true to see why). Kept the one this machine has.");
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
 
   hosts["hub-1"] = answering;
   await hub("issued", "refuse");
   const refused = await node("apply");
-  expect(refused.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (fleet: the service said no). Kept the one this machine has.");
+  expect(refused.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (fleet credential exited 1 there. Run fleet credential issued/issued-api node-2 on the hub to see why). Kept the one this machine has.");
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
 });
 
@@ -83,6 +83,30 @@ test("a pull waits for a slow hub until its deadline, then gives up and the node
   expect(late.code).toBe(0);
   expect(late.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (it did not answer within 90 seconds). Kept the one this machine has.");
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-3-for-node-2");
+});
+
+test("a pull's finding copies nothing that the hub printed, so a key that a service prints or throws stays on the hub", async () => {
+  const { hub, node } = linkedFleets(temp);
+  await hub("apply");
+  await node("apply");
+  await hub("issued", "leak");
+  const leaked = await node("apply");
+  expect(leaked.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (fleet credential exited 1 there. Run fleet credential issued/issued-api node-2 on the hub to see why). Kept the one this machine has.");
+  expect(leaked.output).not.toContain("leaked-key");
+});
+
+test("a pull's finding names only the exit code, and for 255 points at ssh", async () => {
+  const { hub, node, hosts } = linkedFleets(temp);
+  await hub("apply");
+  await node("apply");
+  const reason = async (code: number) => {
+    hosts["hub-1"] = async () => ({ code, stdout: "", stderr: "fleet: leaked-key\nleaked-key\n" });
+    const { output } = await node("apply");
+    expect(output).not.toContain("leaked-key");
+    return output.match(/hub-1 \((.*)\)\. Kept/)?.[1];
+  };
+  expect(await reason(255)).toBe("ssh exited 255. Run ssh hub-1 true to see why");
+  expect(await reason(137)).toBe("fleet credential exited 137 there. Run fleet credential issued/issued-api node-2 on the hub to see why");
 });
 
 test("fleet credential on the hub prints only the key for a node that the profile names, and what the service says goes to standard error", async () => {
