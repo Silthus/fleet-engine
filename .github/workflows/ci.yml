@@ -20,6 +20,16 @@ jobs:
       - run: bun run test
       - run: bun run typecheck
       - run: shellcheck get.sh fleet templates/profile/install.sh scripts/*.sh packs/*/hooks/*.sh packs/*/lib/*.sh packs/*/sync/*.sh proof/*.sh
+  gitleaks-install:
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh scripts/install-gitleaks.sh "$RUNNER_TEMP/bin"
+      - run: test "$("$RUNNER_TEMP/bin/gitleaks" version)" = 8.21.2
   privacy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
