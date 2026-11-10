@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 export type Provider = "claude" | "codex";
@@ -28,6 +28,32 @@ export function repoOf(cwd: string): string | undefined {
 export function logShown(home: string, shown: Omit<Shown, "at" | "event">) {
   mkdirSync(join(stateDir(home), "shown"), { recursive: true, mode: 0o700 });
   appendFileSync(shownFile(home, shown.session), `${JSON.stringify({ at: new Date().toISOString(), event: "memoryShown", ...shown })}\n`, { mode: 0o600 });
+}
+
+export function notesShownByTrigger(home: string, session: string): string[] {
+  let text = "";
+  try {
+    text = readFileSync(shownFile(home, session), "utf8");
+  } catch {
+    return [];
+  }
+  const notes = text.split("\n").flatMap((line) => {
+    try {
+      const shown = JSON.parse(line) as Partial<Shown>;
+      return shown.event === "memoryShown" && shown.via === "trigger" && typeof shown.note === "string" ? [shown.note] : [];
+    } catch {
+      return [];
+    }
+  });
+  return [...new Set(notes)];
+}
+
+const shownKeepDays = 30;
+
+export function forgetOldShown(home: string, now = Date.now()) {
+  const dir = join(stateDir(home), "shown");
+  if (!existsSync(dir)) return;
+  for (const file of readdirSync(dir)) if (now - statSync(join(dir, file)).mtimeMs > shownKeepDays * 24 * 3600 * 1000) rmSync(join(dir, file), { force: true });
 }
 
 const claimedDir = (home: string) => join(stateDir(home), "claimed");
