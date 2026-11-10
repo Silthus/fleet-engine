@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { accessSync, constants as fileModes, readFileSync, realpathSync, statSync } from "node:fs";
+import { constants, homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 type RateLimitInfo = { status?: string; resetsAt?: number; rateLimitType?: string; overageStatus?: string; isUsingOverage?: boolean };
@@ -12,6 +12,7 @@ type Proxy = { baseUrl: string; key: string };
 
 const maxResetMs = 30 * 24 * 3600_000;
 const proxyTimeoutMs = 5000;
+const fleetKeyHelper = 'cat "$HOME/.config/fleet/cli-proxy.key"';
 
 function readJson(path: string): Record<string, unknown> {
   try {
@@ -35,7 +36,8 @@ function proxyConfiguration(home: string): Proxy | undefined {
     return typeof found === "string" && found ? found : undefined;
   };
   const baseUrl = value("ANTHROPIC_BASE_URL");
-  const key = value("ANTHROPIC_AUTH_TOKEN") || value("ANTHROPIC_API_KEY") || readText(join(home, ".config/fleet/cli-proxy.key"));
+  const fleetKey = settings.apiKeyHelper === fleetKeyHelper ? readText(join(home, ".config/fleet/cli-proxy.key")) : undefined;
+  const key = value("ANTHROPIC_AUTH_TOKEN") || value("ANTHROPIC_API_KEY") || fleetKey;
   if (!baseUrl || !key) return undefined;
   try {
     const url = new URL(baseUrl);
@@ -82,8 +84,17 @@ async function writeLine(line: string): Promise<void> {
   if (!process.stdout.write(`${line}\n`)) await once(process.stdout, "drain");
 }
 
-function claudeExecutable(home: string): string {
-  return process.env.FLEET_CLAUDE_EXECUTABLE || Bun.which("claude", { PATH: process.env.PATH ?? "" }) || join(home, ".local/bin/claude");
+function claudeExecutable(home: string, cwd: string): string {
+  if (process.env.FLEET_CLAUDE_EXECUTABLE) return process.env.FLEET_CLAUDE_EXECUTABLE;
+  const wrapper = realpathSync(join(import.meta.dir, "claude"));
+  for (const folder of (process.env.PATH ?? "").split(":")) {
+    const candidate = resolve(cwd, folder || ".", "claude");
+    try {
+      accessSync(candidate, fileModes.X_OK);
+      if (statSync(candidate).isFile() && realpathSync(candidate) !== wrapper) return candidate;
+    } catch {}
+  }
+  return join(home, ".local/bin/claude");
 }
 
 function optionValue(args: string[], name: string): string | undefined {
@@ -136,8 +147,9 @@ async function main(args: string[]): Promise<number> {
   const home = process.env.HOME || homedir();
   const streamJson = optionValue(args, "--output-format") === "stream-json";
   const proxy = streamJson ? proxyConfiguration(home) : undefined;
-  const { FLEET_CLAUDE_CWD: cwd, ...env } = process.env;
-  const child = spawn(claudeExecutable(home), args, { cwd: cwd || process.cwd(), env, stdio: ["inherit", proxy ? "pipe" : "inherit", "inherit"] });
+  const { FLEET_CLAUDE_CWD: launchedIn, ...env } = process.env;
+  const cwd = launchedIn || process.cwd();
+  const child = spawn(claudeExecutable(home, cwd), args, { cwd, env, stdio: ["inherit", proxy ? "pipe" : "inherit", "inherit"] });
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal }));
@@ -152,7 +164,7 @@ async function main(args: string[]): Promise<number> {
   try {
     if (proxy && child.stdout) await relay(child.stdout, proxy, args, aborted.signal);
     const { code, signal } = await exited;
-    return code ?? (signal ? 128 + (({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1, SIGKILL: 9 } as Record<string, number>)[signal] ?? 1) : 1);
+    return code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1);
   } catch (error) {
     aborted.abort();
     child.kill("SIGTERM");
