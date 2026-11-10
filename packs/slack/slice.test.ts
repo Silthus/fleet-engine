@@ -41,7 +41,8 @@ function typed(...lines: string[]) {
 }
 
 async function hub() {
-  const slack = startSlackStub([{ user: ownerId, ts: "100.1", text: "the build is red :t3code:" }], ownerId);
+  const liveApps = new Set([firstApp]);
+  const slack = startSlackStub([{ user: ownerId, ts: "100.1", text: "the build is red :t3code:" }], ownerId, liveApps);
   stops.push(slack.stop);
   slackAt(slack.base);
   let launched = 0;
@@ -86,11 +87,11 @@ async function hub() {
   };
   const minute = () => minutes.splice(0).forEach((resolve) => resolve());
   const unit = join(home, ".config/systemd/user/fleet-slack-trigger.service");
-  return { home, profile, slack, t3, fleet, setup, minute, unit };
+  return { home, profile, slack, liveApps, t3, fleet, setup, minute, unit };
 }
 
 test("setup installs the trigger, an owner's message starts one thread, and after a lost answer the restarted trigger posts its link once", async () => {
-  const { home, profile, slack, t3, fleet, setup, minute, unit } = await hub();
+  const { home, profile, slack, liveApps, t3, fleet, setup, minute, unit } = await hub();
   const todo = "Make your own Slack app for Start a thread from Slack, then paste its two tokens. Fleet keeps them where only you can read them. Run: fleet slack-trigger setup";
   const replies = () => slack.method("chat.postEphemeral").map((call) => call.args.text);
 
@@ -109,14 +110,14 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   await slack.until(() => replies().length === 1);
   expect(replies()).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day."]);
   expect(t3.threads.map((thread) => thread.title)).toEqual(["Slack: the build is red"]);
-  expect(slack.method("apps.connections.open").at(-1)!.token).toBe(`Bearer ${firstApp}`);
 
+  liveApps.add(secondApp);
   expect((await setup(secondApp)).code).toBe(0);
+  liveApps.delete(firstApp);
   minute();
   expect((await serving).code).toBe(0);
   const restarted = fleet("run", "slack/slack-trigger");
   await slack.connected(2);
-  expect(slack.method("apps.connections.open").at(-1)!.token).toBe(`Bearer ${secondApp}`);
   minute();
   await slack.until(() => replies().length === 2);
   expect(replies()[1]).toBe("Started <https://app.t3.codes/threads/env-hub/thread-1|Slack: the build is red> on this machine.");

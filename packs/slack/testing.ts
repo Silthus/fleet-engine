@@ -1,7 +1,7 @@
 export type Message = { user: string; ts: string; text: string };
 type Envelope = Record<string, unknown>;
 
-export function startSlackStub(thread: Message[], ownerId: string) {
+export function startSlackStub(thread: Message[], ownerId: string, appTokens?: Set<string>) {
   const calls: Array<{ method: string; args: Record<string, string>; token: string | null }> = [];
   const acked: string[] = [];
   const sockets: Array<{ send(text: string): void; close(): void }> = [];
@@ -16,7 +16,10 @@ export function startSlackStub(thread: Message[], ownerId: string) {
       const args = Object.fromEntries(new URLSearchParams(await request.text()));
       calls.push({ method, args, token: request.headers.get("authorization") });
       queueMicrotask(settle);
-      if (method === "apps.connections.open") return Response.json({ ok: true, url: `ws://127.0.0.1:${server.port}/socket` });
+      if (method === "apps.connections.open") {
+        const token = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
+        return Response.json(!appTokens || appTokens.has(token) ? { ok: true, url: `ws://127.0.0.1:${server.port}/socket` } : { ok: false, error: "invalid_auth" });
+      }
       if (method === "auth.test") return Response.json({ ok: true, user_id: ownerId });
       if (method === "conversations.replies") {
         const found = thread.filter((message) => args.limit === "1" ? message.ts === args.ts : true).map((message) => ({ ...message, thread_ts: thread[0]!.ts }));
