@@ -284,11 +284,9 @@ and Fleet does not wrap it in a unit.
   which returns the value for that node. The hub calls it when a node
   asks, and directly for itself. The node stores the answer in the pack's
   secret store, and `ctx.use` returns it. When the hub does not answer,
-  the node keeps its stored credential, and apply reports a finding. On
-  the hub, `fleet credential` prints each line the service prints to
-  standard error after the pack's name, and its error as one `fleet:` line.
-  The node's finding names that line, or the line of ssh or the hub's shell,
-  and never a line of the service, in case it prints its key.
+  the node keeps its stored credential, and apply reports a finding. The
+  finding names the exit code and the command that shows why, and copies
+  nothing that the hub printed, in case the service prints its key.
   *Reason:* the MCP gateway already mints a scoped key for each machine
   (`grant`, `packs/mcp-gateway/lib/hub.ts`), and the CLI proxy has
   one shared key in its config. Engine keys would be a second auth system.
