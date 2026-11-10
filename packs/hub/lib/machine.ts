@@ -6,6 +6,7 @@ import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Capture, type Env, type Result } from "./coder.ts";
 import { isBoxName } from "./names.ts";
 import type { Clock } from "./pool.ts";
+import { onHub } from "../../../src/hub/ssh.ts";
 
 export type BoxSettings = {
   alias: string; coderUrl: string; template: string; diskGigabytes: number; poolSize: number;
@@ -78,11 +79,11 @@ export function requireHub(home: string, command: string): void {
   throw new Error(`fleet box ${command} runs only on the hub. This machine's role is ${role ?? "not set"}. Run fleet hub here on the hub, or run this there.`);
 }
 
-function readProfile(env: Env): { devboxes: string[]; plan?: string } {
+function readProfile(env: Env): { devboxes: string[]; plan?: string; hub?: string } {
   const path = env.FLEET_PROFILE_DIR ? join(env.FLEET_PROFILE_DIR, "fleet.json") : undefined;
   if (!path || !existsSync(path)) return { devboxes: [] };
-  const profile = JSON.parse(readFileSync(path, "utf8")) as { devboxes?: string[]; plan?: string };
-  return { devboxes: profile.devboxes ?? [], ...(profile.plan ? { plan: profile.plan } : {}) };
+  const profile = JSON.parse(readFileSync(path, "utf8")) as { devboxes?: string[]; plan?: string; hub?: string };
+  return { devboxes: profile.devboxes ?? [], ...(profile.plan ? { plan: profile.plan } : {}), ...(typeof profile.hub === "string" ? { hub: profile.hub } : {}) };
 }
 
 function freePort(): number {
@@ -108,6 +109,11 @@ function namesOfThisMachine(home: string, hub: string): string[] {
   return [...(machine?.role === "hub" ? [hub] : []), ...(typeof machine?.name === "string" ? [machine.name] : [])];
 }
 
+export function profileDevboxes(env: Env): string[] {
+  const profile = readProfile(env);
+  return profile.hub ? profile.devboxes.filter((name) => name !== profile.hub && !isBoxName(name)) : [];
+}
+
 export function devboxesOf(env: Env, home: string): string[] {
   return [...new Set([...readProfile(env).devboxes, ...savedDevboxes(home)])];
 }
@@ -116,7 +122,7 @@ export function shellsWith(run: Capture, hub: string): Pick<Machine, "onPeer" | 
   const input = (stdin?: string) => (stdin === undefined ? {} : { stdin });
   return {
     onPeer: (alias, command, stdin) => run(peerSsh(alias, command), { ...input(stdin), timeoutMs: shellLimitMs }),
-    toHub: async (args) => (await run(peerSsh(hub, remoteFleet(args.map(quote).join(" "))), { timeoutMs: hubCallLimitMs, inherit: true })).code,
+    toHub: async (args) => (await run(onHub(hub, args), { timeoutMs: hubCallLimitMs, inherit: true })).code,
     run: (argv, stdin) => run(argv, { ...input(stdin), timeoutMs: shellLimitMs }),
   };
 }

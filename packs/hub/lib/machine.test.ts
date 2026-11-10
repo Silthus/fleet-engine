@@ -2,8 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { hubCallLimitMs, peerMachine, peerSsh, peersOf, quote, readBoxSettings, remoteFleet, requireHub, shellLimitMs, shellsWith, thisMachine } from "./machine.ts";
-import type { Capture } from "./coder.ts";
+import { hubCallLimitMs, peerMachine, peerSsh, peersOf, profileDevboxes, quote, readBoxSettings, remoteFleet, requireHub, shellLimitMs, shellsWith, thisMachine } from "./machine.ts";
+import { captureWith, type Capture, type Timer } from "./coder.ts";
+import { appeared } from "./testing.ts";
+import { fakeSsh, type Host } from "../../../src/testing/ssh.ts";
 import { boxSettings } from "./testing.ts";
 
 const temp = tempDirs();
@@ -43,6 +45,19 @@ test("peers and nightly grants cover the devboxes in the profile and those fleet
   expect(machine.peers).toEqual(["devbox-2", "devbox-3"]);
   const withoutProfile = thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings) }, home);
   expect(withoutProfile.devboxes).toEqual(["devbox-3", "devbox-2"]);
+});
+
+test("a profile devbox dials the hub itself only while the profile names a hub, and a box never does", () => {
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ hub: "my-hub", devboxes: ["devbox-2", "box-lane", "my-hub"] }));
+  expect(profileDevboxes({ FLEET_PROFILE_DIR: profile })).toEqual(["devbox-2"]);
+});
+
+test("a profile that names no hub has no devbox that dials the hub, so the hub's tunnels keep the gateway port", () => {
+  const profile = temp.make("fleet-profile-");
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ devboxes: ["devbox-2"] }));
+  expect(profileDevboxes({ FLEET_PROFILE_DIR: profile })).toEqual([]);
+  expect(profileDevboxes({})).toEqual([]);
 });
 
 test("the peer list needs only hub.alias, so Hub links works without the Boxes settings", () => {
@@ -91,14 +106,30 @@ test("every call to a peer over SSH and every local command gets an operation ti
   expect(shellLimitMs).toBeGreaterThan(0);
 });
 
-test("a devbox hands a box operation to the hub in one SSH call through the engine launcher, with the output passed through and a time limit", async () => {
-  const asked: Array<{ argv: string[]; timeoutMs: number; inherit?: boolean }> = [];
-  const capture: Capture = async (argv, options) => (asked.push({ argv, timeoutMs: options.timeoutMs, ...(options.inherit ? { inherit: true } : {}) }), { code: 3, stdout: "", stderr: "" });
-  const { toHub } = shellsWith(capture, "my-hub");
-  expect(await toHub(["box", "spawn", "Lane 7", "--for", "devbox-1"])).toBe(3);
-  expect(asked.map(({ argv, ...rest }) => ({ argv: argv.slice(0, 8), ...rest }))).toEqual([{ argv: ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10", "my-hub"], timeoutMs: hubCallLimitMs, inherit: true }]);
-  const echoed = Bun.spawnSync(["bash", "-c", asked[0]!.argv[8]!.replace("bash -lc", "bash -c")], { env: { HOME: "/home/someone", PATH: "/usr/bin:/bin" }, stdout: "pipe", stderr: "pipe" });
-  expect(echoed.stderr.toString()).toContain("/home/someone/.local/share/fleet/engine/fleet");
-  expect(asked[0]!.argv[8]).toBe(`bash -lc ${quote(`${remoteFleet("")}'box' 'spawn' 'Lane 7' '--for' 'devbox-1'`)}`);
+const loginShells = ["sh", "bash", "zsh"].filter((shell) => Bun.which(shell));
+
+test("a devbox hands a box operation to the hub in one batch SSH call, with each word kept whole in the hub's login shell, and gives back the hub's exit code", async () => {
+  for (const shell of loginShells) {
+    const heard: string[][] = [];
+    const hub: Host = async (args) => (heard.push(args), { code: 3, stdout: "", stderr: "" });
+    const { toHub } = shellsWith(fakeSsh(temp.make("fleet-remote-"), { "my-hub": hub }, shell) as Capture, "my-hub");
+    const words = ["box", "spawn", "Lane 7; rm -rf ~", "=printf", "--for", "devbox-1"];
+    expect(await toHub(words)).toBe(3);
+    expect(heard).toEqual([words]);
+  }
+});
+
+test("a hub call runs until the hub deadline, which is longer than a shell call's, and then stops with a timeout", async () => {
+  const bin = temp.make("fleet-bin-");
+  const ready = join(temp.make("fleet-ready-"), "ready");
+  writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho $$ > ${ready}.tmp && /bin/mv ${ready}.tmp ${ready}\nexec /bin/sleep 30\n`, { mode: 0o755 });
+  const pending: Array<{ ms: number; fire(): void }> = [];
+  const timer: Timer = (ms, fire) => (pending.push({ ms, fire }), () => void pending.splice(pending.findIndex((entry) => entry.fire === fire), 1));
+  const inShell: Capture = (argv, options) => captureWith(timer)(argv, { ...options, env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` } });
+  const call = shellsWith(inShell, "my-hub").toHub(["box", "spawn", "lane"]);
+  await appeared(ready);
+  expect(pending.map((entry) => entry.ms)).toEqual([hubCallLimitMs]);
   expect(hubCallLimitMs).toBeGreaterThan(shellLimitMs);
+  pending[0]!.fire();
+  expect(await call).toBe(124);
 });

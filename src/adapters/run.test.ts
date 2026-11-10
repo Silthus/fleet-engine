@@ -25,6 +25,7 @@ describe("the command runner", () => {
       else process.env.CLAUDE_CONFIG_DIR = before;
     }
   });
+
 });
 
 describe("account home lookup", () => {

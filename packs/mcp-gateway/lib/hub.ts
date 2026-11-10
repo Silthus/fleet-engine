@@ -14,7 +14,6 @@ export type Hub = {
   gid: number;
   hubName: () => string;
   devboxes: () => Promise<string[]>;
-  saveKey: (token: string) => Promise<void>;
   gateway: GatewaySettings;
   run: Run;
   fetch: Fetch;
@@ -29,7 +28,6 @@ export type Container = { Config: { Labels?: Record<string, string>; Env?: strin
 
 export const container = "fleet-mcphub";
 const loopback = "http://127.0.0.1:3317";
-const acceptCommand = 'sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcp-gateway accept';
 const secret = () => randomBytes(32).toString("base64url");
 
 export const dataDir = (home: string) => join(home, ".local/share/fleet-mcphub");
@@ -159,16 +157,6 @@ export async function issueKey(machine: string, hub: Hub) {
     await call(`auth/keys/${encodeURIComponent(key.id)}`, "PUT", { accessType: "groups", allowedGroups: [gatewayGroup], allowedServers: [] });
   }
   return key.token;
-}
-
-export async function grant(machine: string, hub: Hub) {
-  const token = await issueKey(machine, hub);
-  if (machine === hub.hubName()) await hub.saveKey(token);
-  else {
-    const result = await hub.run(["ssh", machine, acceptCommand], { input: JSON.stringify({ baseUrl: localGatewayUrl, token }) });
-    if (result.code) throw new Error(`${machine} could not save its MCP gateway key: ${result.stderr.trim()}. Run fleet apply on ${machine} first.`);
-  }
-  hub.print(`${machine}: saved its MCP gateway key.`);
 }
 
 export async function doctor(hub: Hub): Promise<boolean> {

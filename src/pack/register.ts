@@ -27,7 +27,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     if (found?.kind !== kind) throw new Error(`${label} names a ${kind} that the ${fields.name} pack did not declare`);
     return found.id;
   };
-  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), serviceId: (handle) => own(handle, "service", "ctx.use"), commands: Object.create(null), services: Object.create(null), checks: Object.create(null), credentials: Object.create(null), repairs: Object.create(null) };
+  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), serviceId: (handle) => own(handle, "service", "ctx.use"), commands: Object.create(null), hubCommands: [], services: Object.create(null), checks: Object.create(null), credentials: Object.create(null), repairs: Object.create(null) };
   const place = (scope: SdkScope, label: string): Scope & { after?: string } => {
     if (scope.on !== undefined && scope.on !== "hub") throw new Error(`${label}: on takes only "hub"`);
     return {
@@ -52,9 +52,11 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
       workflows.push({ ...def, ...(handles ? { settings: handles.map((handle) => own(handle, "setting", `workflow ${def.id}`)) } : {}) });
       return declare("workflow", def.id);
     },
-    command(name, { run }) {
+    command(name, { run, on }) {
       if (code.commands[name]) throw new Error(`command ${name} is declared twice`);
+      if (on !== undefined && on !== "hub") throw new Error(`command ${name}: on takes only "hub"`);
       code.commands[name] = run;
+      if (on === "hub") code.hubCommands.push(name);
     },
     service({ id, run, serve, ...scope }) {
       const label = `service ${id}`;
