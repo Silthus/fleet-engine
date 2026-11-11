@@ -19,6 +19,8 @@ import { packsCommand } from "./commands/packs.ts";
 import { setCommand, settingsCommand } from "./commands/settings.ts";
 import { devboxCommand } from "./commands/devbox.ts";
 import { hubCommand } from "./commands/hub.ts";
+import { triageCommand } from "./commands/triage.ts";
+import { recordSetup } from "./commands/triage-record.ts";
 import { realMachine } from "./setup/commands.ts";
 import { credentialName, packContext, secretStore, type Clock } from "./runner/context.ts";
 import { onHub } from "./hub/ssh.ts";
@@ -54,6 +56,8 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
                      Run a pack's service, test one of its checks, or run its repair
   fleet credential <pack>/<id> <node>
                      On the hub, print a served service's credential for a node
+  fleet triage [--note <text>] [--print | --save <file> | --send]
+                     Show a report of this machine's setup, then send it to the Fleet maintainer
   fleet <command>    Run a command that one of your packs ships`;
 
 const changes = { packs: packsCommand, settings: settingsCommand, set: setCommand };
@@ -69,12 +73,49 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
     if (command === "devbox") return await devbox(rest, options);
     if (command === "run") return await runItem(rest, options);
     if (command === "credential") return await credential(rest, options);
-    if (command === "setup") return await setup(rest, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, apply: (dir) => applyProfile(dir, options), doctor: (dir) => reconcile("doctor", ["--profile", dir], options), ...options.setup });
+    if (command === "setup") return await runSetup(rest, options);
+    if (command === "triage") return await triage(rest, options);
     return await runPackCommand(command, rest, options);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     (options.fail ?? options.print)(`fleet: ${error.message}`);
     return 1;
+  }
+}
+
+/** Runs fleet setup and records its transcript. A failed step's message names fleet triage. */
+async function runSetup(args: string[], options: CliOptions) {
+  const record = recordSetup(options.home, options.terminal ?? { ...ttyTerminal(), print: options.print }, args);
+  const fail = options.fail ?? options.print;
+  const recorded: CliOptions = { ...options, print: (line) => (record.print(line), options.print(line)), fail: (line) => (record.print(line), fail(line)) };
+  try {
+    return await setup(args, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: record.terminal, apply: (dir) => applyProfile(dir, recorded), doctor: (dir) => reconcile("doctor", ["--profile", dir], recorded), ...options.setup });
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    record.failed(error.message);
+    fail(`fleet: ${error.message}`);
+    fail("Stuck? Run fleet triage. It shows a report of this setup that you can send to the Fleet maintainer.");
+    return 1;
+  }
+}
+
+async function triage(args: string[], options: CliOptions) {
+  const doctor = async () => {
+    const lines: string[] = [];
+    const collect = (line: string) => void lines.push(line);
+    try {
+      await reconcile("doctor", [], { ...options, print: collect, fail: collect });
+    } catch (error) {
+      collect(`fleet: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return lines;
+  };
+  try {
+    return await triageCommand(args, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, terminal: options.terminal ?? { ...ttyTerminal(), print: options.print }, capture: options.capture ?? spawnRunner, hostname: (options.hostname ?? hostname)(), doctor });
+  } catch (error) {
+    if (!(error instanceof FlagError)) throw error;
+    options.print(`fleet triage: ${error.message}`);
+    return 2;
   }
 }
 
