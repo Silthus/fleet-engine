@@ -9,7 +9,7 @@ export type FakeMcpHub = {
   servers: string[];
   configs: Record<string, Record<string, unknown>>;
   keepsConfig: boolean;
-  groups: Array<{ id: string; name: string; servers: Array<string | { name: string; tools?: string[] }> }>;
+  groups: Array<{ id: string; name: string; servers: Array<string | ({ name: string } & Record<string, unknown>)> }>;
   calls: ApiCall[];
   healthy: boolean;
   openWithoutKey: boolean;

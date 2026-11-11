@@ -2,7 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { declaredUpstreams, registerUpstreams, upstreamsRegistered } from "./upstreams.ts";
+import { slack } from "./apps.ts";
+import { issueKey } from "./hub.ts";
+import { declaredUpstreams } from "./declared.ts";
+import { registerUpstreams, upstreamsRegistered } from "./upstreams.ts";
 import { dockerHost, fakeHub, fakeMcpHub, fakeRun, mcphubFetch, writeMcpHubSettings, type FakeContainer, type FakeMcpHub } from "./testing.ts";
 
 const temp = tempDirs();
@@ -89,10 +92,15 @@ test("a declared file that is not an upstream names its path and what is wrong",
     [{ ...notes, tools: ["read_*"] }, "tools of an oauth upstream must be exact tool names"],
     [{ ...mail, refusal: undefined }, "refusal must be a sentence"],
     [{ ...notes, name: "slack" }, "name slack belongs to a built-in upstream"],
+    [{ ...mail, app: slack.app }, "app, plugin and account must differ from those of the built-in Slack"],
+    [{ ...mail, plugin: slack.plugin }, "app, plugin and account must differ from those of the built-in Slack"],
+    [{ ...mail, account: "slack" }, "app, plugin and account must differ from those of the built-in Slack"],
+    [{ ...mail, account: undefined, name: "mail" }, ""],
   ];
   for (const [value, problem] of cases) {
     const { home } = hubWith({ "bad.json": value });
-    await expect(declaredUpstreams(home)).rejects.toThrow(`${join(home, ".config/fleet/mcp-gateway/upstreams/bad.json")}: ${problem}`);
+    if (!problem) expect(await declaredUpstreams(home)).toHaveLength(1);
+    else await expect(declaredUpstreams(home)).rejects.toThrow(`${join(home, ".config/fleet/mcp-gateway/upstreams/bad.json")}: ${problem}`);
   }
   const { home } = hubWith({ "a.json": notes, "b.json": notes });
   await expect(declaredUpstreams(home)).rejects.toThrow(`${join(home, ".config/fleet/mcp-gateway/upstreams/b.json")}: name notes is declared twice`);
@@ -104,4 +112,22 @@ test("with no declared upstreams the check holds without asking the gateway, and
   await registerUpstreams(hub);
   expect(api.calls).toEqual([]);
   expect(await declaredUpstreams(join(hub.home, "nowhere"))).toEqual([]);
+});
+
+test("every later sync of the Fleet group keeps a declared upstream's allowlist, also one that issues a machine key from an older view of the group", async () => {
+  const { api, hub } = hubWith({ "notes.json": notes });
+  await registerUpstreams(hub);
+  api.groups[0]!.servers = ["tickets", "calendar"];
+  await issueKey("box-1", hub);
+  expect(api.groups[0]!.servers).toEqual(["tickets", "calendar", { name: "notes", tools: ["search_notes", "read_note"] }]);
+  api.groups[0]!.servers = ["tickets", "calendar", "notes"];
+  await issueKey("box-1", hub);
+  expect(api.groups[0]!.servers).toEqual(["tickets", "calendar", { name: "notes", tools: ["search_notes", "read_note"] }]);
+});
+
+test("narrowing an upstream's tools keeps the rest of its group entry, and keeps only the pinned tools that stay allowed", async () => {
+  const { api, hub } = hubWith({ "notes.json": notes }, { servers: ["tickets", "calendar", "notes"], configs: { notes: { type: "streamable-http", url: notes.url, description: "Added by Fleet" } } });
+  api.groups[0]!.servers = ["tickets", { name: "notes", alias: "n", tools: "all", prompts: [], resources: [], pinnedTools: ["read_note", "delete_note"] }];
+  await registerUpstreams(hub);
+  expect(api.groups[0]!.servers).toEqual(["tickets", { name: "notes", alias: "n", tools: ["search_notes", "read_note"], prompts: [], resources: [], pinnedTools: ["read_note"] }, "calendar"]);
 });

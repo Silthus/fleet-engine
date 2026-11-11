@@ -95,6 +95,7 @@ export async function buildImage(hub: Hub, source = mcphubSource) {
       `RUN cd /fleet-sdk && pnpm install --frozen-lockfile --prod --ignore-scripts && ${links}`,
       ...compiledFiles.map((file) => `COPY ${file} /app/dist/${file}`),
       `COPY fleet-app-bridge.mjs ${bridgeFile}`,
+      `COPY fleet-app-bridge.mjs ${legacyBridgeFile}`,
       'LABEL org.fleet.patch="1.1.0-elicitation"',
       "",
     ].join("\n"));
