@@ -38,14 +38,16 @@ function packRows() {
 async function fleetCommands() {
   let usage = "";
   await main(["help"], { home: "/nonexistent", engineRoot: root, platform: "darwin", print: (line) => (usage += `${line}\n`) });
-  return new Set(["help", ...[...usage.matchAll(/^ {2}fleet ([a-z]+)/gm)].map((match) => match[1])]);
+  const commandFiles = (dir: string) => (existsSync(join(dir, "commands")) ? readdirSync(join(dir, "commands")).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts")).map((name) => name.slice(0, -3)) : []);
+  const shipped = (await loadPacks(root)).flatMap(({ dir, code }) => [...Object.keys(code?.commands ?? {}), ...commandFiles(dir)]);
+  return new Set(["help", ...shipped, ...[...usage.matchAll(/^ {2}fleet ([a-z][a-z-]*)/gm)].map((match) => match[1])]);
 }
 
 describe("the agent setup guide", () => {
   test("runs only fleet commands that exist", async () => {
     const known = await fleetCommands();
     const code = [guide(), ...notePaths().map((path) => readFileSync(join(root, path), "utf8"))].flatMap(codeIn);
-    const used = code.flatMap((span) => [...span.matchAll(/\bfleet ([a-z]+)\b/g)].map((match) => match[1]));
+    const used = code.flatMap((span) => [...span.matchAll(/\bfleet ([a-z][a-z-]*)\b/g)].map((match) => match[1]));
     expect(used.length).toBeGreaterThan(0);
     expect(used.filter((command) => !known.has(command!))).toEqual([]);
   });
@@ -106,7 +108,26 @@ describe("the agent setup guide", () => {
   });
 
   test("with a hub and a node, says how to add a node later", () => {
-    expect(words(hubStep())).toContain("To add a node later, when the load grows, run steps 3 to 6 again with a new name and a 500 GB disk");
+    expect(words(hubStep())).toContain("To add a node later, when the load grows, run steps 3, 4, 5 and 9 again with a new name and a 500 GB disk");
+  });
+
+  test("with a hub and a node, installs Fleet on the hub, names it the hub there, turns the hub packs on, and only then adds the node", () => {
+    const code = codeIn(hubStep()).join("\n");
+    const order = [
+      code.indexOf("fleet devbox add %s\\n' 'coder.<hub>'"),
+      code.indexOf(`ssh coder.<hub> 'export PATH="${guidePath}"; fleet hub here'`),
+      code.indexOf("fleet packs --add hub --workflows boxes=off"),
+      code.indexOf(`ssh coder.<hub> 'export PATH="${guidePath}"; fleet update'`),
+      code.indexOf("fleet devbox add %s\\n' 'coder.<node>'"),
+    ];
+    expect(order.every((at) => at >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  test("offers the Hub pack and the packs that need a running hub in step 9, each with its setup note", () => {
+    const later = packRows().filter((row) => ["hub", "mcp-gateway", "recovery"].includes(row.name));
+    expect(later.map((row) => row.note)).toEqual(["`packs/recovery/SETUP.md`", "`packs/hub/SETUP.md`", "`packs/mcp-gateway/SETUP.md`"]);
+    for (const name of ["hub", "mcp-gateway", "recovery", "slack"]) expect(words(hubStep())).toContain(`\`packs/${name}/SETUP.md\``);
   });
 
   test("gives every command in the guide and the pack notes the same PATH, with Bun's Homebrew folders on it", () => {
