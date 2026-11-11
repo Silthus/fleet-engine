@@ -2,7 +2,8 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CiResult, type CleanBaseMerge, type ProofIdentity, type PushedHead } from "./proof.ts";
+import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
+import { ciOf, pushedHeadOf, readPullRequest } from "./pr-ci.ts";
 import { askModel, family, familyOf, modelLabel, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge } from "./proof-judge.ts";
 import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO } from "./proof-panel.ts";
@@ -223,7 +224,11 @@ ${answerHelp}`,
 the judge weigh them. Exit 0 only on a pass: 1 means the owed proofs are not recorded, a proof is missing, the commit
 is not reviewed, a finding has no answer, the commit is not the PR's head on GitHub, its checks are red or pending,
 or the judge failed or was unavailable; 3 means only unaccepted gaps remain. No gap waives the head check. The last
-line is the verdict and names what it covered. A clean merge of the PR's base carries the review and the evidence of
+line is the verdict and names what it covered. fleet reads the PR and its CI over GitHub's REST API only. The
+required checks of the base branch, from its rulesets and branch protection, decide CI; other checks print as not
+required. A stacked PR whose base requires nothing is held to the default branch's required checks. When no branch
+requires any, every check counts. On a draft, a required check named "<workflow> / <job>" that never reported counts
+as withheld from drafts when its workflow reported other checks on the commit and all of them finished. A clean merge of the PR's base carries the review and the evidence of
 its other parent forward.
 When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
 picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's
@@ -239,7 +244,7 @@ FLEET_PROOF_JUDGE_MODEL its model.`,
     run: async ({ flags }, identity, context) => {
       const { print, home, run, now } = context;
       const head = identity();
-      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), ci: () => ciOf(head, run), pushedHead: () => pushedHeadOf(head, run), now: now?.() });
+      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), now: now?.() });
       for (const line of gate.lines) print(line);
       const judged = gate.code === 0 ? await judgeHead(head, gate, context) : { code: gate.code, lines: [], covered: "" };
       for (const line of judged.lines) print(line);
@@ -701,16 +706,16 @@ function diffOf(from: string, to: string, run: Run) {
 }
 
 function pullRequestDetails(identity: ProofIdentity, run: Run) {
-  const view = run(["gh", "pr", "view", String(identity.pr), "--repo", identity.repository, "--json", "title,body,baseRefName"]);
-  if (view.code !== 0) throw new Error(`Cannot read ${identity.repository}#${identity.pr} with gh (${firstLine(view.stderr)})`);
-  const { title = "", body = "", baseRefName = "" } = JSON.parse(view.stdout) as { title?: string; body?: string; baseRefName?: string };
-  return { title, body, baseRefName };
+  try {
+    const { title, body, base } = readPullRequest(identity, run);
+    return { title, body, baseRefName: base };
+  } catch (error) {
+    throw new Error(`Cannot read ${identity.repository}#${identity.pr} over GitHub's REST API (${(error as Error).message})`);
+  }
 }
 
 function baseRefs(identity: ProofIdentity, run: Run) {
-  const view = run(["gh", "pr", "view", String(identity.pr), "--repo", identity.repository, "--json", "baseRefName"]);
-  if (view.code !== 0) throw new Error(`Cannot read the base branch of ${identity.repository}#${identity.pr} with gh (${firstLine(view.stderr)})`);
-  const base = (JSON.parse(view.stdout) as { baseRefName: string }).baseRefName;
+  const base = pullRequestDetails(identity, run).baseRefName;
   return remotesOf(identity.repository, run).map((remote) => `refs/remotes/${remote}/${base}`);
 }
 
@@ -730,47 +735,6 @@ function cleanBaseMerge(identity: ProofIdentity, run: Run): CleanBaseMerge {
     const remerge = run(["git", "show", "--remerge-diff", "--format=", "--no-relative", "--no-ext-diff", "--no-textconv", commit]);
     return remerge.code === 0 && !remerge.stdout.trim() ? reviewedSide : undefined;
   };
-}
-
-function pushedHeadOf(identity: ProofIdentity, run: Run): PushedHead {
-  const view = run(["gh", "pr", "view", String(identity.pr), "--repo", identity.repository, "--json", "headRefOid"]);
-  if (view.code !== 0) return { error: `gh failed: ${firstLine(view.stderr)}` };
-  return { commit: (JSON.parse(view.stdout) as { headRefOid?: string }).headRefOid ?? "" };
-}
-
-type Check = { name: string; bucket: "pass" | "fail" | "pending" };
-type CheckRun = { name: string; status: string; conclusion: string | null };
-type CommitStatus = { context: string; state: string };
-const passing = ["success", "neutral", "skipped"];
-
-function commitRecords<T>(identity: ProofIdentity, run: Run, path: string, jq: string): T[] | string {
-  const result = run(["gh", "api", "--paginate", `repos/${identity.repository}/commits/${identity.commit}/${path}?per_page=100`, "--jq", jq]);
-  if (result.code !== 0) return `gh api ${path} failed (${firstLine(result.stderr)})`;
-  try { return result.stdout.split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line) as T); }
-  catch { return `gh api ${path} printed no JSON lines`; }
-}
-
-function checksOf(identity: ProofIdentity, run: Run): Check[] | string {
-  const runs = commitRecords<CheckRun>(identity, run, "check-runs", ".check_runs[] | {name, status, conclusion}");
-  const statuses = commitRecords<CommitStatus>(identity, run, "statuses", ".[] | {context, state}");
-  if (typeof runs === "string") return runs;
-  if (typeof statuses === "string") return statuses;
-  const latest = statuses.filter((status, index) => statuses.findIndex((other) => other.context === status.context) === index);
-  return [
-    ...runs.map((check): Check => ({ name: check.name, bucket: check.status !== "completed" ? "pending" : passing.includes(check.conclusion ?? "") ? "pass" : "fail" })),
-    ...latest.map((status): Check => ({ name: status.context, bucket: status.state === "success" ? "pass" : status.state === "pending" ? "pending" : "fail" })),
-  ];
-}
-
-function ciOf(identity: ProofIdentity, run: Run): CiResult {
-  const checks = checksOf(identity, run);
-  if (typeof checks === "string") return { state: "unknown", detail: checks };
-  if (!checks.length) return { state: "none", detail: `no checks reported on ${short(identity.commit)}` };
-  const named = (bucket: Check["bucket"]) => checks.filter((check) => check.bucket === bucket).map((check) => check.name);
-  const [failing, pending] = [named("fail"), named("pending")];
-  if (failing.length) return { state: "red", detail: `failing: ${failing.join(", ")}` };
-  if (pending.length) return { state: "pending", detail: `waiting on: ${pending.join(", ")}` };
-  return { state: "green", detail: `${checks.length} check(s) on ${short(identity.commit)}` };
 }
 
 const short = (commit: string) => commit.slice(0, 7);
