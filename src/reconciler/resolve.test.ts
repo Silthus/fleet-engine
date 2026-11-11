@@ -180,6 +180,14 @@ describe("resolve", () => {
     expect(result.unanswered.map((setting) => setting.key)).toEqual(["owner.project"]);
   });
 
+  test("a workflow stays off while a workflow it requires is off, also through a chain, and a cycle that is all on stays on", () => {
+    const flow = (id: string, requires: string[]) => ({ id, name: id, sentence: `${id}.`, default: true, requires });
+    const chain = withPack({ schema: 1, name: "chain", summary: "Chain.", workflows: [flow("top", ["middle"]), flow("middle", ["bottom"]), flow("bottom", []), flow("ping", ["pong"]), flow("pong", ["ping"])] });
+    const states = (workflows: Record<string, boolean>) => plan({ packs: ["chain"], workflows }, mac, [engine, chain]).workflows.filter((state) => state.pack === "chain").map(({ id, active, reason }) => [id, active, reason]);
+    expect(states({ bottom: false })).toEqual([["top", false, "needs workflow middle"], ["middle", false, "needs workflow bottom"], ["bottom", false, "turned off"], ["ping", true, undefined], ["pong", true, undefined]]);
+    expect(states({ pong: false }).slice(3)).toEqual([["ping", false, "needs workflow pong"], ["pong", false, "turned off"]]);
+  });
+
   test("limits items by os and role", () => {
     expect(plan({ packs: ["posthog"] }).human.map((step) => step.id)).toEqual(["coder"]);
     expect(plan({ packs: ["posthog"] }, devbox).human).toEqual([]);
