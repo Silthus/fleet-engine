@@ -178,12 +178,13 @@ export function coderAddress(whoami: string): string | undefined {
 async function coderOnBox(host: string, box: Machine, here: Machine) {
   const address = coderAddress((await here.exec(["coder", "whoami"])).output);
   if (!address) throw new Error(`Coder is not signed in on this machine. Run coder login <your Coder address> here, then fleet devbox add ${host} again.`);
-  if ((await box.exec(["coder", "whoami"])).code !== 0) {
+  const signedIn = await box.exec(["coder", "whoami"]);
+  if (signedIn.code !== 0 || coderAddress(signedIn.output) !== address) {
     const token = await here.exec(["coder", "tokens", "create"]);
     if (token.code !== 0 || !token.output.trim()) throw new Error(`Coder made no token for ${host}: ${token.output.trim()}`);
     const cli = `"$HOME/.local/bin/coder"`;
     const download = `command -v coder >/dev/null || { case $(uname -m) in x86_64) a=amd64;; aarch64|arm64) a=arm64;; *) exit 1;; esac; mkdir -p "$HOME/.local/bin" && curl -fsSL ${quote(`${address}/bin/coder-linux-`)}"$a" -o ${cli} && chmod +x ${cli}; }`;
-    const login = `IFS= read -r token && CODER_SESSION_TOKEN="$token" coder login ${quote(address)}`;
+    const login = `IFS= read -r token && CODER_SESSION_TOKEN="$token" coder login --use-token-as-session ${quote(address)}`;
     const signedIn = await box.exec(["sh", "-c", `${download} && ${login}`], { input: `${token.output.trim()}\n` });
     if (signedIn.code !== 0) throw new Error(`Coder did not sign in on ${host}: ${signedIn.output.trim()}`);
   }

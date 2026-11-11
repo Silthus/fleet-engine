@@ -170,7 +170,7 @@ describe("the devbox over SSH", () => {
     const box = fakeMachine(home, { "box:coder": 1 });
     expect(await main(["devbox", "add", "coder.fleet-node-1"], { ...options, setup: { machine: box.machine } })).toBe(0);
     expect(io.output()).toContain("  ✓ Sign in to Coder on coder.fleet-node-1: done");
-    expect(box.coderSsh).toEqual(["box"]);
+    expect(box.coderSsh).toEqual(["https://coder.example.com"]);
     const login = box.calls.find((call) => onBox(call.command)?.includes("coder login"));
     expect(login?.input).toBe(`${coderToken}\n`);
     expect(box.calls.flatMap((call) => call.command).join(" ")).not.toContain(coderToken);
@@ -179,7 +179,28 @@ describe("the devbox over SSH", () => {
     const again = fakeMachine(home);
     expect(await main(["devbox", "add", "coder.fleet-node-2"], { ...options, setup: { machine: again.machine } })).toBe(0);
     expect(again.calls.map((call) => call.command.join(" "))).not.toContain("coder tokens create");
-    expect(again.coderSsh).toEqual(["box"]);
+    expect(again.coderSsh).toEqual(["https://coder.example.com"]);
+  });
+
+  test("fleet devbox add again signs the workspace in anew when its Coder session has expired", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
+    const io = scripted([]);
+    const options = { home, engineRoot, platform: "linux" as const, print: io.terminal.print, terminal: io.terminal };
+    expect(await main(["devbox", "add", "coder.fleet-node-1"], { ...options, setup: { machine: fakeMachine(home, { "box:coder": 1 }).machine } })).toBe(0);
+    const expired = fakeMachine(home, { "box:coder": 1 });
+    expect(await main(["devbox", "add", "coder.fleet-node-1"], { ...options, setup: { machine: expired.machine } })).toBe(0);
+    expect(expired.coderSsh).toEqual(["https://coder.example.com"]);
+  });
+
+  test("fleet devbox add signs a workspace in to this machine's Coder deployment when it is signed in to another one", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
+    const io = scripted([]);
+    const options = { home, engineRoot, platform: "linux" as const, print: io.terminal.print, terminal: io.terminal };
+    const elsewhere = fakeMachine(home, {}, { boxCoderAt: "https://other-coder.example.com" });
+    expect(await main(["devbox", "add", "coder.fleet-node-1"], { ...options, setup: { machine: elsewhere.machine } })).toBe(0);
+    expect(elsewhere.coderSsh).toEqual(["https://coder.example.com"]);
   });
 
   test("fleet devbox add stops with what to run when this machine is not signed in to Coder, and leaves other SSH hosts alone", async () => {
