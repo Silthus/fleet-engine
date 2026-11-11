@@ -3,7 +3,7 @@
   "name": "pull-requests",
   "summary": "Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged.",
   "day": "You ask for a fix, and later find a draft pull request with its tests, its proof, and a review from a second model.",
-  "cost": "Needs GitHub, which setup signs in to. Each pull request spends extra usage on reviews: at least one round, often two, plus short final reads.",
+  "cost": "It needs GitHub, and setup signs you in. Each pull request spends extra usage on reviews. Expect at least one round, often two, and short final reads.",
   "risk": "Ship words merge without asking again. Say them only for work you would merge yourself.",
   "instructions": "AGENTS.md",
   "guides": [

@@ -7,6 +7,9 @@ import { cachedSource } from "../src/pack/sources.ts";
 import { sourceCache } from "../src/setup/setup.ts";
 import { fakeMachine, fleetSetup, savedAnswers } from "../src/setup/testing.ts";
 import { isolateGit, tempDirs } from "../src/testing/git.ts";
+import { needsHubPacks, prefersHubPacks } from "../src/setup/defaults.ts";
+import { presetPicks, promptLabels, promptText, setSetting, toggleWorkflow } from "../page/model.ts";
+import { pageData } from "./build-page.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -142,6 +145,34 @@ describe("the agent setup guide", () => {
     ];
     expect(order.every((at) => at >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
+  });
+
+  test("says how to use each line the page's prompt can carry", async () => {
+    const data = await pageData({ audience: "public" });
+    const picks = setSetting(data, toggleWorkflow(data, toggleWorkflow(data, presetPicks(data, "everything", {}, "hub"), "nightly-updates"), "dream"), "base.heavySlots", 4);
+    const prompt = promptText(data, picks);
+    const labels = [...prompt.matchAll(/^- ([^:]+): /gm)].map((match) => match[1]!);
+    expect(new Set(labels)).toEqual(new Set(Object.values(promptLabels).filter((label) => label !== promptLabels.intro)));
+    const [, intro] = prompt.split("\n\n");
+    expect(words(guide())).toContain(`\`${intro!.split("\n")[0]}\``);
+    const rows = [...guide().matchAll(/^\| `([^`|]+)` \| [^|]+ \|$/gm)].map((match) => match[1]!);
+    expect(labels.filter((label) => !rows.includes(label))).toEqual([]);
+  });
+
+  test("lets the page's workflow lines win over a setup note, and turns on no hub pack when the page names none", () => {
+    const text = words(guide());
+    expect(text).toContain("Add no workflow flag from a setup note");
+    expect(text).toContain("the line's value wins");
+    expect(text).toContain("`none` means no pack, so skip item 8");
+    expect(text).toContain("leave out `--add hub` when the line does not name `hub`");
+  });
+
+  test("offers in step 9 the packs the page keeps for a hub, and Slack with Mac only or in step 9", () => {
+    const offer = (name: string) => guide().match(new RegExp(`^\\| \`${name}\` \\| [^|]+ \\| ([^|]+) \\|`, "m"))?.[1];
+    expect(needsHubPacks.map(offer)).toEqual(needsHubPacks.map(() => "Step 9"));
+    expect(prefersHubPacks.map(offer)).toEqual(prefersHubPacks.map(() => "With Mac only, or in step 9"));
+    const others = packRows().map((row) => row.name).filter((name) => ![...needsHubPacks, ...prefersHubPacks].includes(name));
+    expect(others.map(offer)).toEqual(others.map(() => "Always"));
   });
 
   test("offers the Hub pack and the packs that need a running hub in step 9, each with its setup note", () => {

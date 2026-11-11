@@ -3,7 +3,7 @@
   "name": "memory",
   "summary": "Agents on all your machines share what they learn through your own private memory repo.",
   "day": "A trap one agent hits on your laptop is a note the next agent reads on your devbox, minutes later.",
-  "cost": "A small private GitHub repo, and a sync every five minutes.",
+  "cost": "You need a small private GitHub repo. It syncs every five minutes.",
   "risk": "Agents write notes about you and your work into the memory repo. Keep it private.",
   "instructions": "AGENTS.md",
   "guides": [

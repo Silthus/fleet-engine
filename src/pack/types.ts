@@ -7,7 +7,7 @@ export type SettingValue = string | number | boolean;
 export const needValues = ["gh", "devbox", "always-on devbox", "hub", "coder", "posthog-org"] as const;
 export type Need = (typeof needValues)[number];
 
-export type Preset = { id: string; name: string; blurb: string; packs: string[]; workflows: Record<string, boolean> };
+export type Preset = { id: string; name: string; blurb: string; packs: string[]; hubPacks?: string[]; hubWorkflows?: Record<string, boolean>; workflows: Record<string, boolean> };
 export type Concept = { word: string; note: string; audience?: Audience };
 
 export type PackSetting = {

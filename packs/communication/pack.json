@@ -3,8 +3,8 @@
   "name": "communication",
   "summary": "Agents write in your voice, give short updates, and share plans and previews as links.",
   "day": "Agents draft messages, pull request descriptions, and docs the way you write them. Plans and running apps reach other people as links.",
-  "cost": "No extra usage beyond the drafts you ask for.",
-  "risk": "Shared plans are secret gists: anyone with the link can read them.",
+  "cost": "It spends no extra usage beyond the drafts you ask for.",
+  "risk": "Shared plans are secret gists. Anyone with the link can read them.",
   "instructions": "AGENTS.md",
   "skills": [
     "skills/writing-voice",
