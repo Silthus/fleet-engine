@@ -15,6 +15,7 @@ ref=${FLEET_ENGINE_REF:-main}
 profile=
 install_only=
 bun_version=1.4.2
+gh_mac_version=2.103.3
 
 say() { printf 'Fleet: %s\n' "$*" >&2; }
 fail() {
@@ -73,21 +74,52 @@ mac_tools() {
     xcode-select --install >/dev/null 2>&1 || true
     until xcode-select -p >/dev/null 2>&1; do sleep 5; done
   fi
-  if ! has brew; then
-    say "Installing Homebrew. It asks for your Mac password once."
-    needed_you=needed-you
-    installer=$(download https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
-    # Under curl | sh, stdin is the script, so Homebrew could not ask for the password.
-    if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
-      /bin/bash "$installer" </dev/tty || fail "Homebrew did not install."
-    else
-      /bin/bash "$installer" || fail "Homebrew did not install."
-    fi
-    has brew || fail "Homebrew installed, but brew is not on PATH."
+  if ! t3_app; then
+    has brew || install_homebrew
+    brew install --cask t3-code
   fi
-  has gh || brew install gh
-  has bun || brew install bun
-  [ -d "/Applications/T3 Code.app" ] || brew install --cask t3-code
+  has gh || mac_gh
+  has bun || direct_bun
+}
+
+t3_app() {
+  [ -d "/Applications/T3 Code.app" ] || open -Ra "T3 Code" >/dev/null 2>&1
+}
+
+install_homebrew() {
+  say "Installing Homebrew. It asks for your Mac password once."
+  needed_you=needed-you
+  installer=$(download https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
+  # Under curl | sh, stdin is the script, so Homebrew could not ask for the password.
+  if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
+    /bin/bash "$installer" </dev/tty || fail "Homebrew did not install."
+  else
+    /bin/bash "$installer" || fail "Homebrew did not install."
+  fi
+  has brew || fail "Homebrew installed, but brew is not on PATH."
+}
+
+sha256() {
+  if has sha256sum; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -c1-64
+}
+
+unzip_to() {
+  python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$1" "$2"
+}
+
+mac_gh() {
+  case "$(uname -m)" in
+    arm64) name="gh_${gh_mac_version}_macOS_arm64"; sum=d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062 ;;
+    x86_64) name="gh_${gh_mac_version}_macOS_amd64"; sum=a2f86418f4350ae6e9ec60d5000bdf7665728436946a97fc27fe50e6ae752682 ;;
+    *) fail "no gh build for $(uname -m). Install gh from https://cli.github.com." ;;
+  esac
+  work=$(mktemp -d)
+  fetch "https://github.com/cli/cli/releases/download/v$gh_mac_version/$name.zip" -o "$work/gh.zip" || fail "could not download gh."
+  [ "$(sha256 "$work/gh.zip")" = "$sum" ] || fail "gh checksum mismatch."
+  unzip_to "$work/gh.zip" "$work"
+  mkdir -p "$HOME/.local/bin"
+  install -m 755 "$work/$name/bin/gh" "$HOME/.local/bin/gh"
+  rm -rf "$work"
 }
 
 linux_gh() {
@@ -109,16 +141,18 @@ linux_gh() {
   rm -rf "$work"
 }
 
-linux_bun() {
-  case "$(uname -m)" in
-    aarch64|arm64) target=linux-aarch64; sum=54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7 ;;
-    x86_64|amd64) target=linux-x64; sum=36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913 ;;
+direct_bun() {
+  case "$(uname -s) $(uname -m)" in
+    "Linux aarch64"|"Linux arm64") target=linux-aarch64; sum=54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7 ;;
+    "Linux x86_64"|"Linux amd64") target=linux-x64; sum=36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913 ;;
+    "Darwin arm64") target=darwin-aarch64; sum=90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f ;;
+    "Darwin x86_64") target=darwin-x64; sum=80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012 ;;
     *) fail "no Bun build for $(uname -m). Install Bun from https://bun.sh." ;;
   esac
   work=$(mktemp -d)
   fetch "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-$target.zip" -o "$work/bun.zip" || fail "could not download Bun."
-  echo "$sum  $work/bun.zip" | sha256sum -c --status - || fail "Bun checksum mismatch."
-  python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$work/bun.zip" "$work"
+  [ "$(sha256 "$work/bun.zip")" = "$sum" ] || fail "Bun checksum mismatch."
+  unzip_to "$work/bun.zip" "$work"
   mkdir -p "$HOME/.bun/bin"
   install -m 755 "$work/bun-$target/bun" "$HOME/.bun/bin/bun"
   rm -rf "$work"
@@ -221,7 +255,7 @@ case "$(uname -s)" in
   Linux)
     for tool in curl git tar sha256sum python3; do has "$tool" || fail "install $tool first."; done
     has gh || linux_gh
-    has bun || linux_bun ;;
+    has bun || direct_bun ;;
   *) fail "Fleet runs on macOS and Linux." ;;
 esac
 ended tools "$needed_you"

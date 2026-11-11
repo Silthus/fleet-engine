@@ -22,8 +22,9 @@ Open Terminal and run this as yourself, not with `sudo`:
 curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh
 ```
 
-`get.sh` installs the Command Line Tools, Homebrew, the GitHub CLI, Bun, and
-T3 Code when they are missing. Then it starts `fleet setup`. Setup asks
+`get.sh` installs the Command Line Tools, the GitHub CLI, Bun, and T3 Code
+when they are missing. It needs Homebrew, and installs it, only when the T3 Code
+app is missing. Then it starts `fleet setup`. Setup asks
 plain-language questions. Where it shows a default, press ↵ to take it.
 
 Setup asks you to sign in. Each sign-in opens a page in your browser, and
