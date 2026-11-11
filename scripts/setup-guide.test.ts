@@ -144,7 +144,7 @@ describe("the agent setup guide", () => {
   });
 
   test("with a hub and a node, says how to add a node later", () => {
-    expect(words(hubStep())).toContain("To add a node later, when the load grows, run items 3, 4, 5 and 9 above again with a new name and a 500 GB disk");
+    expect(words(hubStep())).toContain("To add a node later, when the load grows, run items 3, 4, 5 and 9 above again with the next node name and a 500 GB disk");
   });
 
   test("with a hub and a node, installs Fleet on the hub, names it the hub there, turns the hub packs on, and only then adds the node", () => {
