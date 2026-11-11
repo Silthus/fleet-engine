@@ -2,16 +2,38 @@ import type { Finding } from "../../pack/types.ts";
 import type { AdapterResult } from "../../reconciler/apply.ts";
 import type { CommandRunner } from "../run.ts";
 
-export const installT3 = ["/bin/sh", "-c", 'installer=$(mktemp) && curl -fsSL https://t3.codes/install.sh -o "$installer" && T3CODE_CHANNEL=nightly sh "$installer"; code=$?; rm -f "$installer"; exit $code'];
+export type Wait = (ms: number) => Promise<void>;
+
+const bounded = ["--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "60"];
+const releasesFeed = "https://github.com/pingdotgg/t3code/releases.atom";
+const nightlyTag = /\/releases\/tag\/v([0-9][0-9.]*-nightly\.[0-9]+\.[0-9]+)"/;
+const installScript = `installer=$(mktemp) && curl -fsSL ${bounded.join(" ")} https://t3.codes/install.sh -o "$installer" && T3CODE_CHANNEL=nightly sh "$installer"; code=$?; rm -f "$installer"; exit $code`;
+const tries = 3;
+
+const installT3 = (version: string) => ["env", `T3CODE_VERSION=${version}`, "/bin/sh", "-c", installScript];
+
+async function retried(attempt: () => ReturnType<CommandRunner>, wait: Wait) {
+  for (let tried = 1; ; tried++) {
+    const result = await attempt();
+    if (result.code === 0 || tried === tries) return result;
+    await wait(tried * 1000);
+  }
+}
+
+async function newestNightly(run: CommandRunner, wait: Wait) {
+  const feed = await retried(() => run(["curl", "-fsSL", ...bounded, releasesFeed]), wait);
+  return feed.code === 0 ? (feed.stdout.match(nightlyTag)?.[1] ?? "") : "";
+}
 
 const finding = (id: string, say: string, repair: Finding["repair"]): Finding => ({ id: `t3:${id}`, pack: "engine", say, repair });
 
-export async function reconcileService(run: CommandRunner, user: string, dryRun: boolean, result: AdapterResult) {
+export async function reconcileService(run: CommandRunner, wait: Wait, user: string, dryRun: boolean, result: AdapterResult) {
   const present = async () => (await run(["t3", "--version"])).code === 0;
   let cli = await present();
   if (!cli && dryRun) result.findings.push(finding("cli", "T3 Code needs to be installed from the nightly channel.", "apply"));
   else if (!cli) {
-    const installed = await run(installT3);
+    const version = await newestNightly(run, wait);
+    const installed = await retried(() => run(installT3(version)), wait);
     if (installed.code !== 0) return void result.findings.push(finding("cli", `T3 Code did not install (exit ${installed.code}). Run fleet apply again.`, "apply"));
     if (!(await present())) return void result.findings.push(finding("cli", "T3 Code installed, but t3 is not on your PATH. Add ~/.local/bin to PATH, then run fleet apply.", "human"));
     cli = true;
