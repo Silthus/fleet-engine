@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { cargoGitCliCommand } from "./lib/cargo-git-cli.ts";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -188,13 +188,24 @@ describe("Cargo on Linux", () => {
     expect(readdirSync(join(home, ".cargo"))).toEqual([file.slice(".cargo/".length)]);
   });
 
-  test.skipIf(process.getuid?.() === 0).each(["a read-only folder", "a file"])("leaves a Cargo home that is %s alone, and the later Base steps still run", async (kind) => {
+  test.skipIf(process.getuid?.() === 0).each(["a read-only folder", "a folder Fleet cannot enter", "a file", "a dangling link"])("leaves a Cargo home that is %s alone, and the later Base steps still run", async (kind) => {
     const home = temp.make("home-");
-    if (kind === "a file") writeFileSync(join(home, ".cargo"), "");
-    else mkdirSync(join(home, ".cargo"), { mode: 0o500 });
+    const cargo = join(home, ".cargo");
+    if (kind === "a file") writeFileSync(cargo, "");
+    else if (kind === "a dangling link") symlinkSync(join(home, "gone"), cargo);
+    else mkdirSync(cargo, { mode: kind === "a read-only folder" ? 0o500 : 0o600 });
     expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
-    if (kind !== "a file") expect(readdirSync(join(home, ".cargo"))).toEqual([]);
-    chmodSync(join(home, ".cargo"), 0o700);
+    if (kind.includes("folder")) {
+      chmodSync(cargo, 0o700);
+      expect(readdirSync(cargo)).toEqual([]);
+    }
+  });
+
+  test("leaves a CARGO_HOME alone whose parent is a file, even one anyone may run", async () => {
+    const home = temp.make("home-");
+    const parent = join(temp.make("cargo-"), "parent");
+    writeFileSync(parent, "", { mode: 0o755 });
+    for (const args of [[], ["--check"]]) expect(await cargoGitCliCommand(args, { home, cargoHome: join(parent, "cargo") })).toBe(0);
   });
 
   test("writes the config into CARGO_HOME when it is set, which is where Cargo reads it", async () => {

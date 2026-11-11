@@ -20,13 +20,15 @@ export async function cargoGitCliCommand(args: string[], cargo: Cargo): Promise<
 
 async function needsConfig(dir: string) {
   for (const name of ["config.toml", "config"]) if (await present(join(dir, name))) return false;
-  const found = await stat(dir).catch(() => undefined);
-  if (found && !found.isDirectory()) return false;
-  return writable(found ? dir : await nearestExisting(dirname(dir)));
+  return usableFolder((await present(dir)) ? dir : await nearestExisting(dirname(dir)));
 }
 
 const present = (path: string) => lstat(path).then(() => true, () => false);
-const writable = (path: string) => access(path, constants.W_OK).then(() => true, () => false);
+
+async function usableFolder(path: string) {
+  const found = await stat(path).catch(() => undefined);
+  return found?.isDirectory() === true && (await access(path, constants.W_OK | constants.X_OK).then(() => true, () => false));
+}
 
 async function nearestExisting(path: string): Promise<string> {
   return (await present(path)) || dirname(path) === path ? path : nearestExisting(dirname(path));
