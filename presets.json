@@ -2,22 +2,26 @@
   {
     "id": "starter",
     "name": "Starter",
-    "blurb": "Safe agent rules, tuned T3 defaults, and draft pull requests.",
+    "blurb": "You get safe agent rules, tuned T3 defaults, and draft pull requests.",
     "packs": ["pull-requests"],
+    "hubPacks": ["hub"],
     "workflows": {}
   },
   {
     "id": "everyday",
     "name": "Everyday",
-    "blurb": "Starter, plus maps of tickets, side threads, and agents that write in your voice.",
+    "blurb": "You get Starter, maps of tickets, side threads, and agents that write in your voice.",
     "packs": ["pull-requests", "orchestration", "communication"],
+    "hubPacks": ["hub"],
     "workflows": {}
   },
   {
-    "id": "michael",
-    "name": "Michael's",
-    "blurb": "Everything the author runs: shared memory, the nightly loops, and the morning PR digest on an always-on devbox.",
-    "packs": ["pull-requests", "orchestration", "communication", "memory"],
-    "workflows": { "quality-loop": true, "signal-loop": true, "pr-digest": true }
+    "id": "everything",
+    "name": "Everything",
+    "blurb": "You get every pack that a Mac can run: Everyday, shared memory, guards, and Slack. With a hub and a node, you also get the Hub, MCP gateway, and Recovery packs, Slack threads, and the nightly loops.",
+    "packs": ["pull-requests", "orchestration", "communication", "memory", "guards", "slack"],
+    "hubPacks": ["hub", "mcp-gateway", "recovery"],
+    "hubWorkflows": { "slack-thread": true, "own-account-balancing": true, "provider-recovery": true },
+    "workflows": { "quality-loop": true, "signal-loop": true, "pr-digest": true, "shell-guards": true, "package-age": true }
   }
 ]

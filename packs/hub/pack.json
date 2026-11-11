@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "name": "hub",
-  "summary": "One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks.",
-  "day": "Every machine reaches your MCP servers through the hub, and a devbox that fills its disk is cleaned before you notice.",
-  "cost": "One devbox that stays on, and some setup on it. Every other machine keeps working when the hub is down.",
+  "summary": "One always-on devbox manages the others. It keeps your devboxes linked and watches their disks.",
+  "day": "A thread on one devbox starts work on another, and the hub cleans a devbox that fills its disk before you notice.",
+  "cost": "You need one devbox that stays on, and some setup on it. Every other machine keeps working when the hub is down.",
   "risk": "The hub holds sign-ins for your MCP servers and reaches every devbox over SSH. Keep it as private as your laptop.",
   "skills": [
     "skills/dream",
@@ -121,7 +121,7 @@
     {
       "id": "boxes",
       "name": "Boxes",
-      "default": true,
+      "default": false,
       "needs": [
         "hub",
         "coder"
@@ -150,7 +150,8 @@
           "Coder",
           "thread"
         ]
-      }
+      },
+      "risk": "Each box is a full devbox, and takes its CPUs from your cloud quota while it runs. A warm pool can use up the quota, so your own devboxes fail to start. It starts off. Turn it on when your quota has room for the pool, and your agents need clean machines that your devboxes and worktrees do not give them."
     },
     {
       "id": "disk-watch",
