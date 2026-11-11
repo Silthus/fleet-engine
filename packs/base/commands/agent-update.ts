@@ -32,7 +32,6 @@ export async function updateAgents(run: Run): Promise<{ ok: boolean; lines: stri
 
 const pluginId = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** Updates the Claude Code marketplaces and user-scope plugins, and refreshes the Codex marketplaces. Skips a CLI that is not installed. */
 export async function updatePlugins(run: Run): Promise<{ ok: boolean; lines: string[] }> {
   const lines: string[] = [];
   let ok = true;
@@ -69,7 +68,6 @@ export type T3Options = { busy: () => boolean; service: boolean; origin: () => s
 
 const deferred = "T3 Code: an agent turn is running, so the update waits for the next run.";
 
-/** Moves T3 Code to the newest nightly while no agent turn runs, since the update restarts its service. Where the service runs, it compacts the state first and checks that the service answers after. */
 export async function updateT3(run: Run, options: T3Options): Promise<{ ok: boolean; lines: string[] }> {
   if ((await run(["t3", "--version"])).code !== 0) return { ok: true, lines: ["T3 Code: not installed, skipped."] };
   if (options.busy()) return { ok: false, lines: [deferred] };
@@ -103,7 +101,6 @@ function describesServer(out: string): boolean {
   }
 }
 
-/** Whether T3 Code runs an agent turn now. A state Fleet cannot read counts as busy. */
 export function t3Busy(statePath: string): boolean {
   if (!existsSync(statePath)) return false;
   let db: Database | undefined;
@@ -133,11 +130,17 @@ function t3State(userdata: string): string {
   return existsSync(current) ? current : join(userdata, "state.sqlite");
 }
 
+function t3Home({ home, env }: Machine): string {
+  const value = env.T3CODE_HOME?.trim() ?? "";
+  if (!value) return join(home, ".t3");
+  if (value === "~") return home;
+  return value.startsWith("~/") ? join(home, value.slice(2)) : value;
+}
+
 export type Machine = { home: string; env: Record<string, string | undefined>; wait: (ms: number) => Promise<void> };
 
-/** The nightly agent update: the agent CLIs, their plugins, then T3 Code, read from the T3 home that t3 itself uses. */
 export async function nightlyAgentUpdate(run: Run, machine: Machine): Promise<{ ok: boolean; lines: string[] }> {
-  const userdata = join(machine.env.T3CODE_HOME || join(machine.home, ".t3"), "userdata");
+  const userdata = join(t3Home(machine), "userdata");
   const service = existsSync(join(machine.home, ".config/systemd/user/t3code.service"));
   const results = [
     await updateAgents(run),

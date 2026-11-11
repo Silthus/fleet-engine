@@ -159,8 +159,7 @@ test("an agent turn counts as running from T3 Code's state, and a state Fleet ca
   expect(t3Busy(join(dir, "broken.sqlite"))).toBe(true);
 });
 
-function t3Machine(t3Home?: string) {
-  const home = temp.make("home-");
+function t3Machine(t3Home?: string, home = temp.make("home-")) {
   const userdata = join(t3Home ?? join(home, ".t3"), "userdata");
   mkdirSync(userdata, { recursive: true });
   mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
@@ -212,4 +211,16 @@ test("the nightly update stops before t3 update when an agent turn starts during
   expect(result.ok).toBe(false);
   expect(calls).toContain("t3 doctor --fix");
   expect(calls).not.toContain("t3 update --yes --channel nightly");
+});
+
+test("the nightly update finds T3 Code's home the way t3 does: trimmed, with ~ expanded, and blank as unset", async () => {
+  for (const [value, under] of [["~/.t3", ".t3"], ["  ~/custom-t3  ", "custom-t3"], ["   ", ".t3"], ["~", "."]] as const) {
+    const home = temp.make("home-");
+    const machine = t3Machine(join(home, under), home);
+    machine.startTurn();
+    const calls: string[] = [];
+    const result = await nightlyAgentUpdate(machineRun()(calls), { home: machine.home, env: { T3CODE_HOME: value }, wait: noWait });
+    expect(result.lines).toContain("T3 Code: an agent turn is running, so the update waits for the next run.");
+    expect(calls).not.toContain("t3 update --yes --channel nightly");
+  }
 });
