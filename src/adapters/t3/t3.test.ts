@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConfigEntry, ModelRow, Owned, PackJob, Plan, T3ProjectScript } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
@@ -191,7 +191,7 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
       if (systemd.restartFailures > 0) return systemd.restartFailures--, { code: 1, stdout: "", stderr: "Job for t3code.service failed" };
       return systemd.starts++, (systemd.tokenInT3 = systemd.loaded), { code: 0, stdout: "" };
     }
-    if (line === "systemctl --user show t3code.service --property=InvocationID --value") return { code: 0, stdout: `invocation${systemd.starts}\n` };
+    if (line === "systemctl --user show t3code.service --property=InvocationID --value") return { code: 0, stdout: `${String(systemd.starts).padStart(32, "0")}\n` };
     if (line === "loginctl show-user octo --property=Linger --value") return { code: 0, stdout: `${machine.linger ?? "yes"}\n` };
     if (command[0] === "t3" && command[1] === "project" && command[2] === "add") {
       server.state.projects.push({ id: `project-${server.state.projects.length}`, title: command[3]!, workspaceRoot: command[3]!, deletedAt: null, scripts: [] });
@@ -972,6 +972,55 @@ describe("T3 on Linux", () => {
       const before = commands.calls.length;
       await apply(plan("linux", []), { home, adapters: [adapter] });
       expect(commands.calls.slice(before).filter((line) => line.includes("t3code.service"))).toEqual([]);
+    });
+
+    test("leaves a drop-in it cannot read alone, and says so", async () => {
+      const home = temp.make("home-");
+      const { token, commands, adapter } = withToken();
+      const theirs = "[Service]\nEnvironmentFile=%h/.config/fleet/box-claude-token.env\n";
+      mkdirSync(join(home, ".config/systemd/user/t3code.service.d"), { recursive: true });
+      writeFileSync(join(home, dropInFile), theirs);
+      chmodSync(join(home, dropInFile), 0o000);
+      const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+      chmodSync(join(home, dropInFile), 0o600);
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe(theirs);
+      expect(existsSync(join(home, tokenFile))).toBe(false);
+      expect(restarts(commands.calls)).toEqual([]);
+      expect(report.findings.find((item) => item.id === "t3:claude-token")?.say).toContain("cannot read");
+      expect(JSON.stringify(report)).not.toContain(token);
+    });
+
+    test.each([
+      ["text it did not write", (path: string) => writeFileSync(path, "garbage")],
+      ["a folder", (path: string) => (rmSync(path), mkdirSync(path))],
+    ])("keeps a restart owed when its marker holds %s, and the next apply restarts T3 Code with the token", async (_what, spoil) => {
+      const home = temp.make("home-");
+      const { commands, adapter } = withToken({ reloadFailures: 1 });
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(commands.state.systemd.tokenInT3).toBe(false);
+      spoil(join(home, ".config/claude-env/restart-pending"));
+      const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(commands.state.systemd.tokenInT3).toBe(true);
+      expect(report.findings.map((item) => item.id)).not.toContain("t3:claude-token");
+    });
+
+    test("a dry run with the token writes nothing, restarts nothing, and says apply gives T3 Code the token", async () => {
+      const home = temp.make("home-");
+      const { token, commands, adapter } = withToken();
+      const report = await apply(plan("linux", []), { home, adapters: [adapter], dryRun: true });
+      expect(existsSync(join(home, ".config/claude-env"))).toBe(false);
+      expect(existsSync(join(home, dropInFile))).toBe(false);
+      expect(commands.calls.filter((line) => line.startsWith("systemctl --user") && !line.includes("show-environment"))).toEqual([]);
+      expect(report.findings.find((item) => item.id === "t3:claude-token")?.repair).toBe("apply");
+      expect(JSON.stringify(report)).not.toContain(token);
+    });
+
+    test("does not restart T3 Code when only T3 Code's port says the apply runs inside it", async () => {
+      const home = temp.make("home-");
+      const { commands, adapter } = withToken({}, { T3CODE_PORT: "3773" });
+      const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(restarts(commands.calls)).toEqual([]);
+      expect(report.findings.find((item) => item.id === "t3:claude-token")?.say).toContain("systemctl --user restart t3code.service");
     });
 
     test("leaves a drop-in with other content alone", async () => {
