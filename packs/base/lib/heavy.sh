@@ -151,7 +151,7 @@ fi
 slots=${FLEET_HEAVY_SLOTS:?}
 check_slots
 mkdir -m 700 "$locks" 2>/dev/null || true
-if [ -L "$locks" ] || [ ! -d "$locks" ] || [ ! -O "$locks" ] || ! chmod 700 "$locks"; then
+if [ -L "$locks" ] || [ ! -d "$locks" ] || [ "$(stat -c %u "$locks")" != "$(id -u)" ] || ! chmod 700 "$locks"; then
   echo "Fleet heavy: $locks is not a private folder of this user, so it cannot keep job records there." >&2
   exit 1
 fi
