@@ -115,14 +115,14 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
       if (step.pack === "base") report.ok = false;
     }
   };
-  const items = undoItems(plan, before.steps);
+  const skipped = new Set(options.skip ?? []);
+  const items = undoItems(plan, before.steps).filter((item) => !skipped.has(ledgerKey(item.step)));
   await undo(items.filter((item) => item.cause === "pack"));
   const waits = waiter(plan, run);
   const held = async (step: Plan["steps"][number]) => {
     if (step.undo && step.check) await record(ledgerKey(step), ledgerStep(plan, step));
   };
   const passes = async (step: Plan["steps"][number]) => step.check !== undefined && (await run(step.check)) === 0;
-  const skipped = new Set(options.skip ?? []);
   for (const step of context.dryRun ? [] : plan.steps) {
     if (skipped.has(`${step.pack}/${step.id}`) || failed.has(step.pack) || (await waits(step))) continue;
     if (await passes(step)) {
