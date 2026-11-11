@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../src/cli.ts";
 import { loadPacks } from "../src/pack/manifest.ts";
+import { cachedSource } from "../src/pack/sources.ts";
+import { sourceCache } from "../src/setup/setup.ts";
 import { fakeMachine, fleetSetup, savedAnswers } from "../src/setup/testing.ts";
 import { isolateGit, tempDirs } from "../src/testing/git.ts";
 
@@ -103,9 +105,18 @@ describe("the agent setup guide", () => {
     expect(words(hubStep())).toContain("When `coder templates pull` fails, open the template's page in the Coder web app");
   });
 
-  test("with a hub and a node, follows a team pack's own setup note first, because that pack may already have made a devbox", () => {
+  test("with a hub and a node, follows a team pack's own setup note first, at the path where setup keeps that team's pack", async () => {
     expect(words(hubStep())).toContain("When step 7 printed that a team pack is ticked");
-    expect(codeIn(hubStep())).toContain("~/.local/share/fleet/sources/<source>/packs/<pack>/SETUP.md\n");
+    const notePath = codeIn(hubStep()).find((code) => code.includes("/packs/<pack>/SETUP.md"))?.trim();
+    const home = temp.make("home-");
+    const cached = join(sourceCache(home), "team", "packs", "hub");
+    cpSync(join(root, "packs", "hub"), cached, { recursive: true });
+    mkdirSync(join(sourceCache(home), "team", ".git"));
+    const source = await cachedSource({ name: "team", repo: "example/team-pack", ref: "main" }, sourceCache(home));
+    const pack = "packs" in source ? source.packs.find((loaded) => loaded.manifest.name === "hub") : undefined;
+    const guidePathOfNote = notePath?.replace("~", home).replace("<source>", "team").replace("<pack>", "hub");
+    expect(guidePathOfNote).toBe(join(pack!.dir, "SETUP.md"));
+    expect(existsSync(guidePathOfNote!)).toBe(true);
   });
 
   test("with a hub and a node, keeps both running while the Mac sleeps", () => {
