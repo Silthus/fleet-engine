@@ -9,7 +9,7 @@
 #   sudo FLEET_PROOF_ENGINE=<git repo or bundle> sh proof/fresh-linux.sh
 #
 # FLEET_PROOF_ENGINE serves get.sh and the engine from that copy, at its HEAD
-# (or a bundle's first branch), while the engine repo is private. Without it,
+# (or a bundle's first branch), so CI proves a pull request's tree. Without it,
 # the proof uses the public repo. FLEET_PROOF_REF picks the ref (main). The
 # copy's main points at the same commit, because the profile pins main.
 set -eu
@@ -229,6 +229,29 @@ sign_in() {
     note "moved the real gh get.sh installed ($(as_user "$user" "$home/.proof/real/gh" --version | head -1)) to ~/.proof/real/gh"
   fi
   note "installed the sandbox gh at ~/.proof/bin/gh: signed in as fleet-proof"
+  [ -z "$engine_git" ] || serve_local_get_sh "$user"
+}
+
+serve_local_get_sh() {
+  user=$1
+  home=$(home_of "$user")
+  real_curl=$(PATH=/usr/local/bin:/usr/bin:/bin command -v curl)
+  : >"$work/$user-get-sh-fetches"
+  chmod 666 "$work/$user-get-sh-fetches"
+  cat >"$work/$user-curl" <<EOF
+#!/bin/sh
+for arg do
+  shift
+  case "\$arg" in
+    https://raw.githubusercontent.com/Silthus/fleet-engine/*/get.sh) echo "\$arg" >>"$work/$user-get-sh-fetches"; arg="file://$work/get.sh" ;;
+  esac
+  set -- "\$@" "\$arg"
+done
+exec "$real_curl" "\$@"
+EOF
+  chmod 755 "$work/$user-curl"
+  as_user "$user" install -m 755 "$work/$user-curl" "$home/.proof/bin/curl"
+  note "installed a curl at ~/.proof/bin/curl that serves Silthus/fleet-engine's raw get.sh from $work/get.sh"
 }
 
 home_files() {
@@ -391,6 +414,17 @@ check_port() {
   fi
 }
 
+check_get_sh_source() {
+  user=$1
+  if [ -z "$engine_git" ]; then
+    note "public mode: install.sh fetches get.sh from public GitHub"
+  elif grep -q . "$work/$user-get-sh-fetches" 2>/dev/null; then
+    pass "$user get.sh source" "install.sh ran this tree's get.sh, served from $work/get.sh for $(sort -u "$work/$user-get-sh-fetches" | tr '\n' ' ')"
+  else
+    fail "$user get.sh source" "install.sh did not fetch get.sh from this tree, so it ran public GitHub's get.sh"
+  fi
+}
+
 check_doctor() {
   user=$1
   log="$work/$user-doctor"
@@ -464,7 +498,7 @@ if [ -n "$source_engine" ]; then
   chmod -R a+rX "$work/engine.git" "$work/get.sh"
   engine_url="file://$engine_git"
   url="file://$work/get.sh"
-  note "pre-flip mode: get.sh and the engine come from a local copy at $commit (ref $ref)"
+  note "local mode: get.sh and the engine come from a local copy at $commit (ref $ref)"
 else
   url="https://raw.githubusercontent.com/Silthus/fleet-engine/$ref/get.sh"
   note "public mode: get.sh and the engine come from $url"
@@ -544,6 +578,7 @@ else
 fi
 
 say "User B: checks"
+check_get_sh_source "$user_b"
 check_identity "$user_b"
 check_standalone "$user_b"
 check_jobs "$user_b"
