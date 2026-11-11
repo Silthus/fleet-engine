@@ -12,6 +12,7 @@ const isTestFile = (path: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]
 function editedFiles(input: HookInput): string[] {
   const filePath = (input.tool_input as { file_path?: unknown } | undefined)?.file_path;
   if (/^(Write|Edit|MultiEdit)$/.test(input.tool_name ?? "")) return typeof filePath === "string" ? [filePath] : [];
+  if (input.tool_name !== "apply_patch") return [];
   return textsOf(input.tool_input).flatMap((text) => [...text.matchAll(/^\*\*\* (?:Add File|Update File|Move to): (.+)$/gm)].map((match) => match[1]!.trim()));
 }
 
@@ -25,7 +26,7 @@ function testsSection(home: string): string | undefined {
   const section: string[] = [];
   let fence: string | undefined;
   for (const line of guide.split(/\r?\n/)) {
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    const marker = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/.exec(line)?.[1];
     if (marker && (!fence || (marker[0] === fence[0] && marker.length >= fence.length))) fence = fence ? undefined : marker;
     else if (!fence && /^ {0,3}#{1,2}([ \t]|$)/.test(line)) {
       if (section.length) break;

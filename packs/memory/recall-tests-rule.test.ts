@@ -57,9 +57,11 @@ describe("the Tests rule before a test edit", () => {
     expect((await fire(home, "codex", "PreToolUse", { session_id: "s3", cwd: home, ...patch("*** Add File: tests/test_sync.py") })).context).toContain(testsRule);
   });
 
-  test("ignores a shell call that only names a test file", async () => {
+  test("ignores a shell call that only names a test file or prints a patch header, and still shows the rule at the first test edit", async () => {
     const home = await machineWithGuide();
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("bun test src/app.test.ts") })).context).toBe("");
+    expect((await fire(home, "codex", "PreToolUse", { session_id: "s1", cwd: home, ...bash("cat <<'PATCH'\n*** Add File: src/example.test.ts\nPATCH") })).context).toBe("");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...write("src/app.test.ts") })).context).toContain(testsRule);
   });
 
   test("shows the rule for a test file whose text names the memory folder, and shows it before the notes the call names", async () => {
@@ -93,7 +95,7 @@ describe("the Tests rule before a test edit", () => {
     const home = await machineWithGuide(fenced);
     const shown = (await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...write("src/app.test.ts") })).context;
     expect(shown).toEndWith(":\n\n## Tests\n\n- Drive the real entry point.\n\n```md\n## Not a heading\n```");
-    writeFileSync(guidePath(home), "## Tests\n\n- Drive the real entry point.\n\n##\tTech stack\n\n- Bun.\n");
+    writeFileSync(guidePath(home), "## Examples\n\n```inline``` code, not a fence.\n\n## Tests\n\n- Drive the real entry point.\n\n##\tTech stack\n\n- Bun.\n");
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s2", cwd: home, ...write("src/app.test.ts") })).context).toEndWith(":\n\n## Tests\n\n- Drive the real entry point.");
   });
 
