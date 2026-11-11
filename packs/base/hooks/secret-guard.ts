@@ -59,11 +59,13 @@ export function secretKinds(value: unknown): string[] {
   return [...kinds];
 }
 
-/** Replaces every secret-shaped value in a text with its kind. */
-export const redactSecrets = (text: string) => shapes.reduce((result, { kind, pattern }) => result.replace(pattern, `[redacted ${kind}]`), text);
+export const replaceSecrets = (text: string, replace: (kind: string, value: string) => string) =>
+  shapes.reduce((result, { kind, pattern }) => result.replace(pattern, (value) => replace(kind, value)), text);
 
-const redact = (value: unknown) =>
-  mapStrings(value, (text) => shapes.reduce((result, { kind, pattern }) => result.replace(pattern, `[redacted ${kind}]`), text));
+/** Replaces every secret-shaped value in a text with its kind. */
+export const redactSecrets = (text: string) => replaceSecrets(text, (kind) => `[redacted ${kind}]`);
+
+const redact = (value: unknown) => mapStrings(value, redactSecrets);
 
 function promptReason(kinds: string[]) {
   return `Fleet held this message back: it looks like it carries a ${kinds.join(", ")}. Send it again without the value. `

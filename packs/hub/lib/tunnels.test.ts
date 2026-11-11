@@ -203,3 +203,12 @@ test("remove on a devbox takes its hosts entry out through sudo, and left then r
   expect(await sshTunnels("remove", removing.deps)).toBe(0);
   expect(removing.calls).toHaveLength(1);
 });
+
+test("the hub treats every name fleet devbox add keeps for pool boxes as a box, even one listed by hand", async () => {
+  const home = roleHome(temp.make("fleet-tunnels-"), "hub");
+  const { deps, calls, printed } = machine("hub", { home, devboxes: ["devbox-1", "box-7.old"] });
+  expect(await sshTunnels("install", deps)).toBe(0);
+  expect(existsSync(unitPath(home, "box-7.old"))).toBe(false);
+  expect(calls.filter((call) => call.includes("box-7.old") && !call.includes("disable"))).toEqual([]);
+  expect(printed).toContain("box-7.old: skipped: a box gets the gateway and relay ports from its own box forward");
+});

@@ -1,9 +1,9 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
+import { boxPrefix } from "../../../src/hub/names.ts";
 import { heldLocks } from "./box-lock.ts";
 
-export const boxPrefix = "box-";
 const idleStopMs = 2 * 3_600_000;
 const idleStatuses = new Set(["stopped", "failed", "canceled"]);
 const tokenLifetime = "720h";

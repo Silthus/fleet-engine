@@ -1,5 +1,6 @@
 import type { MachineFile, Plan } from "../pack/types.ts";
-import { hubNodeName, onHub, poolBoxName } from "../hub/ssh.ts";
+import { isKeptForBoxes, isNodeName } from "../hub/names.ts";
+import { onHub } from "../hub/ssh.ts";
 import { loadProfile, pullProfile, saveAnswers, saveMachine, validHost } from "../profile/profile.ts";
 import type { Machine } from "../setup/commands.ts";
 import { devboxSteps, nameBox, overSsh, profileForBox } from "../setup/devbox.ts";
@@ -55,8 +56,8 @@ export async function devboxCommand(args: string[], context: DevboxCommandContex
 }
 
 function refuseUnusableName(host: string) {
-  if (!hubNodeName.test(host)) throw new FlagError(`${host} is not a name the hub can use. Give the devbox an SSH name in ~/.ssh/config of lowercase letters, digits, dots and dashes, starting with a letter or a digit.`);
-  if (poolBoxName.test(host)) throw new FlagError(`${host} is a pool box name. Names that start with box- are kept for the boxes the hub starts; give the devbox another SSH name.`);
+  if (!isNodeName(host)) throw new FlagError(`${host} is not a name the hub can use. Give the devbox an SSH name in ~/.ssh/config of lowercase letters, digits, dots and dashes, starting with a letter or a digit.`);
+  if (isKeptForBoxes(host)) throw new FlagError(`${host} is a pool box name. Names that start with box- are kept for the boxes the hub starts; give the devbox another SSH name.`);
 }
 
 const hubUpdateLimitMs = 15 * 60_000;
