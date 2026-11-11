@@ -68,4 +68,5 @@ export type Context = {
 
 export type ThreadStart = { key: string; title: string; prompt: string; modelRole: string };
 export type StartedThread = { id: string; url?: string };
-export type Threads = { start(def: ThreadStart): Promise<StartedThread> };
+export type ThreadSend = { id: string; text: string };
+export type Threads = { start(def: ThreadStart): Promise<StartedThread>; send(def: ThreadSend): Promise<boolean> };

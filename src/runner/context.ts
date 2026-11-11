@@ -35,7 +35,7 @@ export async function packContext({ home, plan, pack, code, workflows, print, cl
     log: (line) => print(`${new Date(clock.now()).toISOString()} ${line}`),
     now: clock.now,
     sleep: clock.sleep,
-    threads: { start: (request) => threads.start({ ...request, key: `${pack}:${request.key}` }) },
+    threads: { start: (request) => threads.start({ ...request, key: `${pack}:${request.key}` }), send: threads.send },
     stdin,
     use: async (service) => {
       const id = code.serviceId(service);

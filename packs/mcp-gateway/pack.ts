@@ -1,5 +1,7 @@
+import { join } from "node:path";
 import type { Context, Pack } from "../../src/sdk/index.ts";
 import { googleApps } from "./lib/apps.ts";
+import { defaultQuery } from "./lib/mail-watch.ts";
 import { gateway as host, gatewayKey } from "./lib/host.ts";
 
 const connect = ["-c", 'exec sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcp-connect'];
@@ -121,6 +123,45 @@ export default {
       });
       fleet.config({ provider: "codex", plans: ["codex", "both"], when: workflow, key: `apps.${app.app}.enabled`, value: false });
     }
+    const query = fleet.setting({
+      key: "mcp-gateway.mailQuery",
+      type: "string",
+      default: defaultQuery,
+      question: "Which Gmail search finds the mail that may be a reply to you? Mail watch adds the time window itself.",
+    });
+    const mail = fleet.workflow({
+      id: "mail-watch",
+      name: "Mail replies start threads",
+      default: false,
+      requires: ["gmail"],
+      settings: [query],
+      sentence: "A reply in a Gmail conversation that you wrote in starts a T3 thread about it, and later replies in that conversation go to the same thread.",
+      moment: {
+        time: "08:40",
+        title: "A reply waits in a thread",
+        body: "A customer answers the mail you sent yesterday. Two minutes later a thread sums up what they ask and proposes a reply. Their next answer lands in the same thread.",
+        words: ["hub", "thread"],
+      },
+      risk: "Mail from outside becomes agent prompts. The prompt treats every email as data, and the Gmail route can only read mail and write drafts.",
+    });
+    const watchOf = async (ctx: Context) => ({
+      gateway: await ctx.use(service), threads: ctx.threads, statePath: join(ctx.stateDir, "mail-watch.json"), query: ctx.get(query), now: ctx.now, log: ctx.log, fetch: (input: string | URL | Request, init?: RequestInit) => fetch(input, init),
+    });
+    fleet.service({
+      on: "hub",
+      os: "linux",
+      when: mail,
+      id: "mail-watch",
+      run: async (ctx) => (await import("./lib/mail-watch.ts")).watchMail(await watchOf(ctx), ctx.sleep),
+    });
+    fleet.command("mail-watch", {
+      on: "hub",
+      summary: "Say which Gmail replies the next mail watch check would start or follow up, and change nothing",
+      run: async (args, ctx) => {
+        if (args.length) return ctx.print("usage: fleet mail-watch"), 2;
+        return (await import("./lib/mail-watch.ts")).checkMail({ ...(await watchOf(ctx)), log: ctx.print }, true).then((ok) => (ok ? 0 : 1));
+      },
+    });
     fleet.check({
       when: flow,
       id: "mcp-gateway-client",
