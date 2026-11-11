@@ -126,7 +126,7 @@ Ask in one call:
 | `orchestration` | Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread. | Always |
 | `communication` | Agents write in your voice, give short updates, and share plans and previews as links. | Always |
 | `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always |
-| `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Always |
+| `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Later, once the hub runs |
 | `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always |
 | `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always |
 | `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | Later, once the hub and the node run |
