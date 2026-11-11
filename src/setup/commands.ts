@@ -3,7 +3,8 @@ import { closeSync, openSync } from "node:fs";
 import { platform } from "node:os";
 
 export type ExecResult = { code: number; output: string };
-export type Exec = (command: string[], options?: { cwd?: string; timeoutMs?: number }) => Promise<ExecResult>;
+/** input: text for the command's standard input, so a secret never goes on its command line. */
+export type Exec = (command: string[], options?: { cwd?: string; timeoutMs?: number; input?: string }) => Promise<ExecResult>;
 /** A command running in the background: stop ends it and everything it started, and exited gives its exit code, 127 when it could not start. */
 export type Started = { stop(): void; exited: Promise<number> };
 
@@ -22,7 +23,7 @@ export type Machine = {
 export const realMachine: Machine = {
   async exec(command, options = {}) {
     try {
-      const child = Bun.spawn(command, { cwd: options.cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: options.timeoutMs });
+      const child = Bun.spawn(command, { cwd: options.cwd, stdin: options.input === undefined ? "ignore" : new Blob([options.input]), stdout: "pipe", stderr: "pipe", timeout: options.timeoutMs });
       const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       return { code, output: `${stdout}${stderr}` };
     } catch {
