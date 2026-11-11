@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
@@ -62,4 +62,39 @@ test("a machine that is not a Mac leaves T3 Code's settings alone", async () => 
   expect(await add("coder.fleet-node-1")).toBe(0);
   expect(() => readFileSync(clientSettings(home))).toThrow();
   expect(io.output()).not.toContain("new threads");
+});
+
+test("Fleet changes no weight while it cannot tell which machine is the hub, and knows the hub by the id it recorded once the hub answered", async () => {
+  const { home, io, add } = await macWithT3();
+  expect(await add("coder.fleet-node-1", fakeMachine(home, {}, { unreachable: ["coder.fleet-hub"] }))).toBe(0);
+  expect(existsSync(clientSettings(home))).toBe(false);
+  expect(io.output()).toEndWith("· Fleet cannot reach T3 Code on the hub, coder.fleet-hub, so it left load balancing alone. In T3 Code, open Settings → Environments → Load balancing, turn it on, and set this Mac and the hub to Manual only.");
+
+  expect(await add("coder.fleet-node-2")).toBe(0);
+  writeFileSync(clientSettings(home), "{}");
+  expect(await add("coder.fleet-node-3", fakeMachine(home, {}, { unreachable: ["coder.fleet-hub"] }))).toBe(0);
+  expect(readSettings(home).loadBalancingWeights).toEqual({ "env-mac": 0, "env-coder.fleet-hub": 0, "env-coder.fleet-node-1": 50, "env-coder.fleet-node-2": 50, "env-coder.fleet-node-3": 50 });
+});
+
+test("Fleet balances inside the settings key an older T3 Code wrapped its settings in, and writes through a symlinked settings file", async () => {
+  const { home, add } = await macWithT3();
+  writeFileSync(clientSettings(home), JSON.stringify({ version: 1, settings: { chatWidth: "wide", loadBalancingWeights: { "env-elsewhere": 25 } } }));
+  expect(await add("coder.fleet-node-1")).toBe(0);
+  expect(readSettings(home)).toEqual({ version: 1, settings: { chatWidth: "wide", loadBalancingEnabled: true, loadBalancingWeights: { "env-elsewhere": 25, "env-mac": 0, "env-coder.fleet-hub": 0, "env-coder.fleet-node-1": 50 } } });
+
+  const shared = join(temp.make("dotfiles-"), "client-settings.json");
+  writeFileSync(shared, "{}");
+  rmSync(clientSettings(home));
+  symlinkSync(shared, clientSettings(home));
+  expect(await add("coder.fleet-node-2")).toBe(0);
+  expect(lstatSync(clientSettings(home)).isSymbolicLink()).toBe(true);
+  expect(JSON.parse(readFileSync(shared, "utf8")).loadBalancingWeights).toEqual({ "env-mac": 0, "env-coder.fleet-hub": 0, "env-coder.fleet-node-1": 50, "env-coder.fleet-node-2": 50 });
+});
+
+test("a Mac whose T3 Code id Fleet cannot read keeps its settings", async () => {
+  const { home, io, add } = await macWithT3();
+  rmSync(join(home, ".t3/userdata/environment-id"));
+  expect(await add("coder.fleet-node-1")).toBe(0);
+  expect(existsSync(clientSettings(home))).toBe(false);
+  expect(io.output()).toEndWith("· Fleet cannot read T3 Code's id on this Mac, so it left load balancing alone. In T3 Code, open Settings → Environments → Load balancing, turn it on, and set this Mac and the hub to Manual only.");
 });
