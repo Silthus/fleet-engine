@@ -17,8 +17,12 @@ the Fleet README. Set up Fleet with them, from nothing to a passing
   chat when you can (T3 Code shows HTML pages that agents publish). Otherwise
   describe it in three lines of text.
 - **One PATH.** Your shell started before the install. Begin every command
-  that runs `fleet`, `gh`, or `bun` with
-  `export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:$PATH";`.
+  that runs `fleet`, `gh`, `bun`, `claude`, or `codex` with
+  `export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";`.
+- **The keyboard in Terminal.** A command that needs the person's keyboard
+  runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
+  that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,
+  make it executable, and `open` it. Ask them to tell you when it ends.
 
 ## 1. Check the Mac
 
@@ -60,9 +64,10 @@ machine you add gets the same setup.
 
 Ask "Mac only, or Mac plus a hub and a node?", with these options:
 
-- **Mac only.** A full setup: every pack's skills, rules, and workflows run
-  on this Mac. Agents stop when the Mac sleeps. A hub and a node can come
-  later.
+- **Mac only.** A full setup: every pack's skills and rules, and the
+  workflows that run on a Mac, run on this Mac. Agents stop when the Mac
+  sleeps. Workflows that need an always-on machine, such as the loops and
+  the PR digest, wait until a node runs. A hub and a node can come later.
 - **Mac plus a hub and a node.** Two Linux devboxes in the cloud: one **hub**
   with a 200 GB disk, which keeps your machines linked and watches
   their disks, and one **node** with a 500 GB disk, where threads do the work.
@@ -138,7 +143,8 @@ Build the command from the answers, so setup asks nothing twice:
 fleet setup --non-interactive --preset <id> --plan <claude|codex|both> --devbox skip
 ```
 
-For one by one, use `--add <pack>` once per pack in place of `--preset`.
+For one by one, use `--preset starter`, add `--remove pull-requests` when
+they did not pick it, and add `--add <pack>` once per other pack they picked.
 Run it, and repeat this loop until it ends with code `0`:
 
 - **A line `--set <pack.key>=<value>   <question>`.** Ask the question with
@@ -146,7 +152,12 @@ Run it, and repeat this loop until it ends with code `0`:
 - **A line `Needs you: <sign-in>`, then `Run: <command>`.** Say what the sign-in is
   for, from the table below. Start the command in the background, read its
   output, and give the person any one-time code it prints. Open the URL it
-  names with `open <url>`. Wait until the command ends.
+  names with `open <url>`. Wait until the command ends. When it asks to
+  paste a code, stop it and run it in Terminal (see "The keyboard in
+  Terminal").
+- **A line `Needs you: <sign-in>`, then `In a terminal, run: <command>`.**
+  It needs the person's keyboard, for example to paste a token. Say what it
+  is for, then run it in Terminal (see "The keyboard in Terminal").
 - **Any other stop.** Read the last lines, explain them, and fix what they
   name.
 
@@ -186,7 +197,7 @@ creates something, show the command and ask whether to go on.
    a Terminal window:
 
    ```sh
-   printf '#!/bin/sh\ncoder login %s\n' '<coder address>' > ~/.cache/fleet-setup/coder.command && chmod +x ~/.cache/fleet-setup/coder.command && open ~/.cache/fleet-setup/coder.command
+   printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\ncoder login %s\n' '<coder address>' > ~/.cache/fleet-setup/coder.command && chmod +x ~/.cache/fleet-setup/coder.command && open ~/.cache/fleet-setup/coder.command
    ```
 
    The step is done when `coder whoami` passes.
@@ -216,7 +227,7 @@ creates something, show the command and ask whether to go on.
    keyboard, so run it in a Terminal window:
 
    ```sh
-   printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:$PATH"\nfleet devbox add %s\n' 'coder.<name>' > ~/.cache/fleet-setup/devbox.command && chmod +x ~/.cache/fleet-setup/devbox.command && open ~/.cache/fleet-setup/devbox.command
+   printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nfleet devbox add %s\n' 'coder.<name>' > ~/.cache/fleet-setup/devbox.command && chmod +x ~/.cache/fleet-setup/devbox.command && open ~/.cache/fleet-setup/devbox.command
    ```
 
    Before it opens, explain its sign-ins from the table in step 4 of

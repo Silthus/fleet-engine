@@ -1,9 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../src/cli.ts";
 import { loadPacks } from "../src/pack/manifest.ts";
-import { parseSetupFlags } from "../src/setup/flags.ts";
+import { fakeMachine, fleetSetup, savedAnswers } from "../src/setup/testing.ts";
+import { isolateGit, tempDirs } from "../src/testing/git.ts";
+
+isolateGit();
+const temp = tempDirs();
+afterEach(() => temp.cleanup());
 
 const root = join(import.meta.dir, "..");
 const guide = () => readFileSync(join(root, "SETUP.md"), "utf8");
@@ -14,7 +19,7 @@ function codeIn(text: string) {
   const spans = [...text.replace(/^ *```[\s\S]*?^ *```$/gm, "").matchAll(/`([^`\n]+)`/g)].map((match) => match[1]!);
   return [...blocks, ...spans];
 }
-const presets = () => (JSON.parse(readFileSync(join(root, "presets.json"), "utf8")) as Array<{ id: string }>).map((preset) => preset.id);
+const presets = () => JSON.parse(readFileSync(join(root, "presets.json"), "utf8")) as Array<{ id: string; packs: string[] }>;
 
 function packRows() {
   return [...guide().matchAll(/^\| `([a-z-]+)` \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$/gm)].map((match) => ({ name: match[1]!, summary: match[2]!, note: match[4]! }));
@@ -47,12 +52,14 @@ describe("the agent setup guide", () => {
     expect(named("--set").filter((key) => !settings.has(key))).toEqual([]);
   });
 
-  test("drives fleet setup with flags that fleet setup takes, without asking the person anything", () => {
+  test("its fleet setup command sets up each preset to the end without asking the person anything", async () => {
     const command = guide().match(/^fleet setup (.+)$/m);
     expect(command).not.toBeNull();
     for (const preset of presets()) {
-      const args = command![1]!.replace("<id>", preset).replace("<claude|codex|both>", "both").split(" ");
-      expect(parseSetupFlags(args)).toMatchObject({ preset, plan: "both", devbox: "skip", nonInteractive: true });
+      const home = temp.make("home-");
+      const args = command![1]!.replace("<id>", preset.id).replace("<claude|codex|both>", "both").split(" ");
+      const result = await fleetSetup(home, args, [], fakeMachine(home), undefined, 0, "darwin");
+      expect({ code: result.code, prompts: result.prompts, packs: savedAnswers(home).packs }).toEqual({ code: 0, prompts: [], packs: preset.packs });
     }
   });
 
@@ -80,6 +87,13 @@ describe("the agent setup guide", () => {
     expect(step).toContain("one **hub** with a 200 GB disk and one **node** with a 500 GB\ndisk");
     expect(codeIn(step)).toContain("coder schedule stop <name> manual");
     expect(step).toMatch(/To add a node later, when the load grows, run steps 3 to 6 again with a new\nname and a 500 GB disk/);
+  });
+
+  test("gives every command in the guide and the pack notes the same PATH, with Bun's Homebrew folders on it", () => {
+    const notes = readdirSync(join(root, "packs")).map((pack) => join(root, "packs", pack, "SETUP.md")).filter(existsSync);
+    const paths = [guide(), ...notes.map((path) => readFileSync(path, "utf8"))].flatMap((text) => [...text.matchAll(/export PATH="([^"]+)"/g)].map((match) => match[1]));
+    expect(paths.length).toBeGreaterThan(1);
+    expect(new Set(paths)).toEqual(new Set(["$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"]));
   });
 
   test("fetches only files that are in the repo", () => {

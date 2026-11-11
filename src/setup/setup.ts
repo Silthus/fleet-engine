@@ -97,7 +97,9 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
         continue;
       }
       catalog.add(fetched);
-      await context.answer({ sources: [...(progress.draft.sources ?? defaultSources), ref] });
+      const ticked = fetched.packs.map((pack) => pack.manifest.name).filter((name) => !flags.remove.includes(name));
+      const picked = progress.draft.packs ? { packs: [...new Set([...progress.draft.packs, ...ticked])] } : {};
+      await context.answer({ sources: [...(progress.draft.sources ?? defaultSources), ref], ...picked });
       terminal.print(`  ✓ You are in the ${ref.repo.split("/")[0]} org, so the ${packList(fetched.packs.map((pack) => pack.manifest.name), catalog)} pack is ticked`);
     }
     catalog.teamsKnown = true;
