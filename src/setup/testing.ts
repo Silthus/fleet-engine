@@ -65,6 +65,8 @@ export const coderToken = ["fleet", "test", "coder", "token"].join("-");
 
 const hostKeyAdded = (host: string) => `Warning: Permanently added '${host}' (ED25519) to the list of known hosts.\n`;
 
+export type HereLink = { environmentId: string; label: string };
+
 export const boxHome = (home: string, host: string) => join(home, "boxes", host);
 
 export const boxMachineFile = (home: string, host: string) => JSON.parse(readFileSync(join(boxHome(home, host), ".config/fleet/machine.json"), "utf8"));
@@ -96,8 +98,9 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * runtimePid or serverGone say otherwise. Its environment sets a proxy that
  * takes every curl request which does not turn proxies off, and its tunnel answers only after tunnelStartsAfter lookups.
  * Each box's T3 environment id is env-<host>, except on the hosts withoutT3, where T3 never ran.
+ * T3 here lists hereLinks as its linked environments, and unlink forgets one. ssh never reaches the hosts named unreachable.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: boolean; linked: boolean }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; boxTunnel?: string; withoutT3?: string[] } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: boolean; linked: boolean }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; boxTunnel?: string; withoutT3?: string[]; hereLinks?: HereLink[]; unreachable?: string[] } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -122,6 +125,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   };
   const claudeReply = (name: "claude" | "box:claude") => options.claude?.[name]?.reply ?? (passes(name) ? result(true, "ok") : claudeUnauthorized);
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
+  const hereLinks = [...(options.hereLinks ?? [])];
   const boxSessions: T3Session[] = [];
   const hereSessions: T3Session[] = [];
   const recorded = options.runtimeOrigin ?? "http://127.0.0.1:41773";
@@ -147,6 +151,9 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     const { sessions } = side;
     if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
     if (line.startsWith("t3 environment link ")) return result(true, "linked");
+    if (side.name === "here" && line === "t3 environment list --json") return result(true, JSON.stringify(hereLinks.map((link) => ({ ...link, urls: [], access: "full-access", status: "reachable" }))));
+    const forgotten = side.name === "here" ? hereLinks.findIndex((link) => line === `t3 environment unlink ${link.environmentId}`) : -1;
+    if (forgotten >= 0) return hereLinks.splice(forgotten, 1), result(true, "Unlinked.");
     const status = side.name === "box" && options.boxConnect ? options.boxConnect : { authenticated: side.linked, linked: side.linked };
     if (line === "t3 connect status --json") return result(true, JSON.stringify({ desired: side.linked, ...status, revoked: false, relayUrl: "https://relay.example", ...(options.cliPrintsTunnel && side.linked ? { tunnelHostname: side.tunnel } : {}) }));
     if (line.startsWith("sh -c ") && line.includes("server-runtime.json")) return runtimeRecord(line, side.home);
@@ -224,6 +231,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       const remote = onBox(command);
       if (remote !== undefined) {
         const host = command.at(-2)!;
+        if (options.unreachable?.includes(host)) return { code: 255, output: `ssh: Could not resolve hostname ${host}`, stdout: "" };
         const answer = await box(remote, run.input, host);
         const firstContact = !host.startsWith("coder.") && !reached.has(host);
         reached.add(host);
@@ -288,7 +296,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     has: () => true,
   };
-  return { machine, clock, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked, sessions: () => [...hereSessions, ...boxSessions] };
+  return { machine, clock, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked, sessions: () => [...hereSessions, ...boxSessions], hereLinks: () => hereLinks };
 }
 
 export const remote = (box: ReturnType<typeof fakeMachine>) => [...box.calls.map((call) => onBox(call.command)), ...box.starts.map(onBox), ...box.runs.map((run) => onBox(run.command))].filter(Boolean) as string[];

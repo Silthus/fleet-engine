@@ -337,12 +337,12 @@ whether to reuse a hub:
 workspace, clean up only after item 10 passes on the new one, and ask before
 you remove anything:
 
-1. Remove the old host from the `devboxes` list in
-   `~/.local/share/fleet/profile/fleet.json`, then commit and push it. The hub stops
-   its tunnel, disk watch, and link to that host at its next `fleet update`.
+1. Run `fleet devbox remove coder.<old name>` on this Mac. It takes the old
+   host out of their profile, unlinks it in T3 Code here, and drops it from
+   load balancing. The hub stops its tunnel, disk watch, and link to that
+   host at its next `fleet update`. An old hub can go only after
+   `fleet hub here` named the new one.
 2. Delete the old workspace with `coder delete <old name>`.
-3. Remove its environment from T3 Code's settings, so threads do not start
-   there.
 
 When devboxes were new to them, explain the hub first: it is the one devbox
 that looks after the others. It keeps an SSH tunnel and a T3 link to every

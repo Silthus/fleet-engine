@@ -30,7 +30,7 @@ export async function balanceThreads(context: BalanceContext) {
   const ids = new Map<string, string>();
   const here = idOf(await readFile(join(userdata, "environment-id"), "utf8").catch(() => ""));
   for (const host of new Set([...devboxes, ...(hub ? [hub] : [])])) {
-    const id = idOf((await overSsh(context.machine, host).exec(["sh", "-c", environmentIdScript])).stdout);
+    const id = await boxEnvironmentId(context.machine, host);
     if (id) ids.set(host, id);
   }
   if (here) weights[here] ??= manualOnly;
@@ -44,6 +44,22 @@ export async function balanceThreads(context: BalanceContext) {
   const share = (id: string | undefined) => (id === undefined ? normal : (weights[id] ?? normal)) > 0;
   const taking = [...nodes.filter((host) => share(ids.get(host))), ...(here && share(here) ? ["this Mac"] : [])];
   terminal.print(taking.length ? `✓ T3 Code on this Mac starts new threads on ${taking.join(" and ")}. Quit and reopen T3 Code so it reads this.` : `· Every node is set to Manual only in T3 Code on this Mac, so new threads start where you choose. ${manualSteps}`);
+}
+
+/** The id T3 Code on that host goes by, the key of its load balancing weight and of its link here. */
+export async function boxEnvironmentId(machine: Machine, host: string) {
+  return idOf((await overSsh(machine, host).exec(["sh", "-c", environmentIdScript])).stdout);
+}
+
+/** Drops a machine that left from T3 Code's load balancing on this Mac. */
+export async function forgetWeight(home: string, id: string) {
+  const path = join(home, ".t3", "userdata", "client-settings.json");
+  if (!existsSync(path)) return;
+  const settings = await readSettings(path);
+  const weights = settings?.loadBalancingWeights as Record<string, number> | undefined;
+  if (!weights || !(id in weights)) return;
+  const { [id]: _, ...kept } = weights;
+  await writeSettings(path, { ...settings, loadBalancingWeights: kept });
 }
 
 const environmentIdScript = `${t3HomeGuard} cat "\${T3CODE_HOME:-$HOME/.t3}/userdata/environment-id"`;

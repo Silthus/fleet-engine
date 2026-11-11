@@ -25,7 +25,7 @@ describe("fleet devbox add", () => {
 
     expect(await main(["devbox"], { ...options, setup: { machine: box.machine } })).toBe(0);
     expect(io.output()).toContain("Your devboxes: node-2");
-    expect(await main(["devbox", "remove", "node-2"], options)).toBe(2);
+    expect(await main(["devbox", "drop", "node-2"], options)).toBe(2);
     expect(await main(["devbox", "add", "-oProxyCommand=x"], options)).toBe(2);
     expect((await fleetSetup(temp.make("home-"), ["--devbox", "-oProxyCommand=x"])).output).toStartWith("fleet setup: --devbox takes an SSH host");
   });
