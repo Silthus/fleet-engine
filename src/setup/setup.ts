@@ -59,9 +59,9 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
   try {
     flags = parseSetupFlags(args);
-    const picked = picksFrom(flags, catalog);
-    const fromFlags = settingsFrom(flags, catalog);
     const saved = progress.draft;
+    const picked = picksFrom(flags, catalog, saved);
+    const fromFlags = settingsFrom(flags, catalog);
     const reopened = [
       ...(hasPicks(flags) && JSON.stringify(picked) !== JSON.stringify({ packs: saved.packs, workflows: saved.workflows ?? {} }) ? ["packs"] : []),
       ...(flags.plan && flags.plan !== saved.plan ? ["plans"] : []),
