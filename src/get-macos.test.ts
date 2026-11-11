@@ -67,12 +67,15 @@ describe("get.sh", () => {
     expect(existsSync(join(box.home, ".local/share/fleet/engine"))).toBe(false);
   });
 
-  onLinuxHost("on an Apple silicon Mac whose shell runs under Rosetta, downloads the arm64 gh and Bun", () => {
-    const box = sandbox("Darwin", { without: ["gh", "bun"], t3App: true });
+  onLinuxHost.each([
+    ["gh", "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_macOS_arm64.zip"],
+    ["bun", "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-darwin-aarch64.zip"],
+  ])("on an Apple silicon Mac whose shell runs under Rosetta, downloads the arm64 %s", (tool, url) => {
+    const box = sandbox("Darwin", { without: [tool], t3App: true });
     box.stub("sysctl", '[ "$*" = "-n sysctl.proc_translated" ] && echo 1');
     const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
-    expect(result.calls).toContain(" https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_macOS_arm64.zip -o ");
-    expect(result.calls).not.toContain("_macOS_amd64.zip");
+    expect(result.calls).toContain(` ${url} -o `);
+    expect(result.calls).not.toMatch(/_macOS_amd64\.zip|bun-darwin-x64\.zip/);
   });
 
   onLinuxHost("on macOS without sha256sum, checks the pinned checksum with shasum", () => {

@@ -277,7 +277,7 @@ describe("install-codex.sh", () => {
   });
 
   function onMac(box: { bin: string }, running = "/usr/bin/login") {
-    stub(box.bin, "lsof", `[ "$*" = "-nP -w -d txt -Fn" ] && printf 'p1\\nftxt\\nn%s\\n' "${running}"`);
+    stub(box.bin, "lsof", `[ "$*" = "-nP -w -u $(id -u) -d txt -Fn" ] && printf 'p1\\nftxt\\nn%s\\n' "${running}"`);
     stub(box.bin, "flock", "exit 1");
     stub(box.bin, "sha256sum", "exit 127");
     stub(box.bin, "mv", `case "$1" in -T) echo "mv: illegal option -- T" >&2; exit 64 ;; -h) shift; exec ${realMv} -T "$@" ;; esac\nexec ${realMv} "$@"`);
@@ -324,15 +324,33 @@ describe("install-codex.sh", () => {
       finished = true;
       return result;
     });
-    while (!finished && !waiter.test(readFileSync("/proc/locks", "utf8"))) await Bun.sleep(5);
-    const blocked = !finished;
-    holder.stdin.end();
-    await holder.exited;
+    let blocked = false;
+    try {
+      for (let polls = 0; polls < 2000 && !finished && !blocked; polls++) {
+        blocked = waiter.test(readFileSync("/proc/locks", "utf8"));
+        if (!blocked) await Bun.sleep(5);
+      }
+    } finally {
+      holder.stdin.end();
+      await holder.exited;
+    }
     expect(blocked).toBe(true);
     expect((await waiting).code).toBe(0);
   });
 
-  onLinux("on a Mac, keeps an older release that a running Codex uses, and prunes nothing when it cannot list running programs", async () => {
+  onLinux("on a Mac, still holds the lock when descriptors 3 to 8 are already open", async () => {
+    const box = await machine("arm64", ["aarch64-apple-darwin"], { os: "Darwin" });
+    onMac(box);
+    const lock = join(box.home, ".local/share/fleet/codex.lock");
+    stub(box.bin, "curl", `if ${realFlock} -n "${lock}" true; then echo "curl free" >> "${join(box.bin, "calls.log")}"; fi\nexec ${join(box.bin, "curl.real")} "$@"`, join(box.bin, "curl.real"));
+    const busy = Array.from({ length: 6 }, (_, index) => `${index + 3}</dev/null`).join(" ");
+    const child = Bun.spawn(["/bin/sh", "-c", `exec ${busy}; exec /bin/sh "$0"`, script], { env: { HOME: box.home, PATH: `${box.bin}:${box.home}/.local/bin:/usr/bin:/bin` }, stdout: "pipe", stderr: "pipe" });
+    expect(await child.exited).toBe(0);
+    expect(box.calls()).toContain("curl ");
+    expect(box.calls()).not.toContain("curl free");
+  });
+
+  onLinux("on a Mac, keeps an older release that a running Codex uses, and prunes nothing when it cannot list every running program", async () => {
     const box = await machine("arm64", ["aarch64-apple-darwin"], { os: "Darwin" });
     onMac(box, join(codexHome(box.home), "releases", tag, "bin/codex"));
     expect((await install(box)).code).toBe(0);
@@ -341,10 +359,18 @@ describe("install-codex.sh", () => {
     await box.publish("rust-v10.1.0");
     expect((await install(box)).code).toBe(0);
     expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual(["rust-v10.0.0", "rust-v10.1.0", tag]);
-    stub(box.bin, "lsof", "exit 1");
-    await box.publish("rust-v10.2.0");
-    expect((await install(box)).code).toBe(0);
-    expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual(["rust-v10.0.0", "rust-v10.1.0", "rust-v10.2.0", tag]);
+    const releases = ["rust-v10.0.0", "rust-v10.1.0"];
+    for (const [name, body] of [
+      ["rust-v10.2.0", "exit 1"],
+      ["rust-v10.3.0", "printf 'p1\\nftxt\\nn/usr/bin/login\\np2\\nftxt\\nnregion info error: Operation not permitted\\n'"],
+      ["rust-v10.4.0", "printf 'p1\\nftxt\\nn/usr/bin/login\\n'; exit 1"],
+    ]) {
+      stub(box.bin, "lsof", body!);
+      await box.publish(name!);
+      expect((await install(box)).code).toBe(0);
+      releases.push(name!);
+      expect(readdirSync(join(codexHome(box.home), "releases")).sort()).toEqual([...releases, tag].sort());
+    }
   });
 
   onLinux("removes Fleet's earlier Bun install of Codex only when it shadows the new one", async () => {

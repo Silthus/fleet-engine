@@ -91,12 +91,13 @@ describe("usable before the rest", () => {
     expect(result.output).not.toContain("Install Codex");
   });
 
-  test("a setup that finished before Codex waited for later does not apply again", async () => {
+  test.each(["check", "check:coder.node-9"])("a setup that finished with %s before Codex waited for later does not apply again", async (finished) => {
     const home = temp.make("home-");
     const box = fakeMachine(home, {}, { startedAt: start });
     expect((await fleetSetup(home, ["--chat", "--preset", "starter", "--plan", "both", "--devbox", "skip"], [], box)).code).toBe(0);
     const file = machineFile(home);
-    writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...file, setup: { ...file.setup, done: file.setup.done.filter((id: string) => id !== "apply-codex") } }));
+    const done = file.setup.done.filter((id: string) => id !== "apply-codex").map((id: string) => (id === "check" ? finished : id));
+    writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...file, setup: { ...file.setup, done } }));
     const again = await fleetSetup(home, ["--chat", "--devbox", "skip"], [], box);
     expect(again.code).toBe(0);
     expect(again.applied).toEqual([]);
@@ -108,11 +109,13 @@ describe("usable before the rest", () => {
     const box = fakeMachine(home, { chatgpt: 3 }, { startedAt: start });
     const first = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "both", "--devbox", "skip"], [], box);
     expect(first.code).toBe(2);
-    const usable = timings(home).usable;
+    const { usable, usableSeconds } = timings(home);
     expect(usable).not.toBeNull();
+    const later = box.clock.now() + 3_600_000;
+    box.clock.now = () => later;
     const again = await fleetSetup(home, ["--chat", "--devbox", "skip"], [], box);
     expect(again.code).toBe(0);
-    expect(timings(home)).toMatchObject({ usable });
+    expect(timings(home)).toMatchObject({ usable, usableSeconds });
     expect(timings(home).steps.map((step) => step.id)).toEqual(expect.arrayContaining(["github", "claude", "chatgpt", "check"]));
     expect(again.output).toContain("  Ready after ");
   });
