@@ -229,6 +229,24 @@ test("stamp hands its parsed arguments to the review-bot handler", () => {
   expect(result.code).toBe(0);
 });
 
+test("forecast hands its parsed arguments to the review-bot handler and exits with the handler's code", () => {
+  const box = sandbox();
+  box.reviewBot(0);
+  const result = box.run("forecast", "--pr", "12", "--request", "--repo", "acme/widgets");
+  expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--pr", "12", "--request"]);
+  expect(result).toEqual({ code: 0, out: "bot says hi", err: "" });
+  box.run("forecast", "--repo", "acme/widgets", "--pr", "12");
+  expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--pr", "12"]);
+});
+
+test("forecast refuses review and stamp flags, and says there is nothing to forecast without a review bot", () => {
+  const box = sandbox();
+  expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12", "--minutes", "5").code).not.toBe(0);
+  expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12", "--deep").code).not.toBe(0);
+  expect(box.run("review", "--repo", "acme/widgets", "--pr", "12", "--request").code).not.toBe(0);
+  expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine, so there is no forecast. Ask for a review the way the repo's docs say.", err: "" });
+});
+
 test("without a review-bot handler, review and stamp print the fallback the settings name and exit 2", () => {
   const box = sandbox();
   box.env.FLEET_SETTINGS = JSON.stringify({ "pull-requests.reviewFallback": "Comment `review please` on {repo}#{pr}.", "pull-requests.stampFallback": "Add the `approve-me` label to {repo}#{pr}." });
