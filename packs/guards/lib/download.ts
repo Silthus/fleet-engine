@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { pipelinesIn, shellInput, shells, type Command, type Scope } from "./shell-words.ts";
+import { basename, dirname, join } from "node:path";
+import { withDirectories } from "./directories.ts";
+import { pipelinesIn, shellInput, shells, type Command } from "./shell-words.ts";
 
 const downloaders = new Set(["curl", "wget"]);
 const stdinInterpreters = new Set(["python", "python3", "node", "bun", "deno", "perl", "ruby", "php", "pwsh"]);
@@ -199,27 +200,9 @@ function missingPackage(command: Command, cwd: string | undefined): { runner: st
   return undefined;
 }
 
-function changedDirectory(cwd: string | undefined, args: string[]): string | undefined {
-  const target = args.find((arg) => !/^-[LPe@]+$/.test(arg));
-  if (target === undefined || target === "-" || /[$`~]/.test(target)) return undefined;
-  if (isAbsolute(target)) return resolve(target);
-  return cwd === undefined ? undefined : resolve(cwd, target);
-}
-
 function unknownPackageRun(commands: Command[], cwd: string, person: string): string | undefined {
-  const directories = new Map<Scope, string | undefined>();
-  const directoryOf = (scope: Scope): string | undefined => {
-    if (!directories.has(scope)) {
-      const start = scope.parent ? directoryOf(scope.parent) : cwd;
-      directories.set(scope, scope.chdir === undefined ? start : changedDirectory(start, [scope.chdir]));
-    }
-    return directories.get(scope);
-  };
-  for (const command of commands) {
-    const directory = directoryOf(command.scope);
-    if (command.name === "cd" || command.name === "pushd") directories.set(command.scope, changedDirectory(directory, command.args));
-    else if (command.name === "popd") directories.set(command.scope, undefined);
-    const missing = missingPackage(command, command.chdir === undefined ? directory : changedDirectory(directory, [command.chdir]));
+  for (const [command, directory] of withDirectories(commands, cwd)) {
+    const missing = missingPackage(command, directory);
     if (missing) return runnerReason(missing.runner, missing.name, person);
   }
   return undefined;
