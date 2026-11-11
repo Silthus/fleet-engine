@@ -47,6 +47,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   const terminal: Terminal = { ...options.terminal, ask: (prompt) => (waits++, options.terminal.ask(prompt)) };
   let flags: SetupFlags;
   const machine: MachineFile = thisMachine(await loadMachine(options.home), options.platform, options.env ?? process.env);
+  const unfinished = Boolean(machine.setup?.done.length) && !machine.setup?.done.includes("check");
   const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
   const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
   const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, draft: progress.draft } });
@@ -81,6 +82,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     terminal.print(`fleet setup: ${error.message}`);
     return 2;
   }
+  const appliedWhole = progress.done.includes("check") && !progress.done.includes("apply-codex");
   const context: QuestionContext = {
     terminal,
     flags,
@@ -186,7 +188,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     }),
     steps: (host, plan) => {
       const hub = hubSteps(host, { terminal, machine: box, profileDir: machine.profileDir, took: hubTook });
-      return [hub.register, ...devboxSteps(host, { terminal, machine: box, nonInteractive: flags.nonInteractive, plan: plan.ai, models: plan.models, profile: () => profileForBox(box, machine.profileDir) }), hub.link];
+      return [hub.register, ...devboxSteps(host, { terminal, machine: box, nonInteractive: flags.nonInteractive, chat: flags.chat, waited: human.waited, plan: plan.ai, models: plan.models, profile: () => profileForBox(box, machine.profileDir) }), hub.link];
     },
   };
   const check = () =>
@@ -198,8 +200,8 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       devboxes: machine.devboxes ?? [],
       doctor: () => (machine.profileDir && options.doctor ? options.doctor(machine.profileDir) : Promise.resolve(1)),
     });
-  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, (codexOnly) => [profile, ...applySteps(codexOnly)], devbox), later(check())];
-  const timings = openTimings(options.home, clock.now());
+  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, (codexOnly) => [profile, ...applySteps(appliedWhole ? [] : codexOnly)], devbox), later(check())];
+  const timings = openTimings(options.home, clock.now(), unfinished);
   try {
     const result = await runSteps(steps, {
       terminal,
@@ -259,6 +261,7 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
   const box = human.machine;
   const sshDevbox = !makesOwnDevbox(profile.packs) && (machine.role === "mac" || machine.role === "linux");
   const waitsForSignIns = !human.nonInteractive || human.chat === true;
+  const devboxAsked = !sshDevbox || machine.devboxes !== undefined || context.flags.devbox !== undefined;
   const codexOnly = plan.ai === "both" && waitsForSignIns ? plan.steps.filter((step) => step.plans && !step.plans.includes("claude")).map((step) => `${step.pack}/${step.id}`) : [];
   const devboxAsk = sshDevbox && machine.devboxes?.length ? planFor(context, { ...machine, role: "devbox" }).plan.ask.filter((setting) => !plan.ask.some((asked) => asked.key === setting.key)) : [];
   return [
@@ -268,7 +271,7 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     plansStep(context),
     ...settingSteps(context, plan.ask),
     ...machineSteps(codexOnly),
-    ...plan.human.map((step) => later(humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human))),
+    ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human)).map((step) => (devboxAsked ? later(step) : step)),
     ...(sshDevbox ? [devbox.question] : []),
     ...settingSteps(context, devboxAsk).map(devbox.pushed),
     ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),

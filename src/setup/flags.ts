@@ -21,6 +21,7 @@ const plans: AiPlan[] = ["claude", "codex", "both"];
 
 export function parseSetupFlags(args: string[]): SetupFlags {
   const flags: SetupFlags = { add: [], remove: [], workflows: {}, set: {}, nonInteractive: false, chat: false };
+  let quiet = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     const value = () => {
@@ -45,10 +46,11 @@ export function parseSetupFlags(args: string[]): SetupFlags {
       if (!/^[\w][\w.@-]*$/.test(flags.devbox)) throw new FlagError(`--devbox takes an SSH host from ~/.ssh/config, or skip`);
       if (flags.devbox !== "skip") refuseUnusableDevbox(flags.devbox);
     }
-    else if (arg === "--non-interactive") flags.nonInteractive = true;
+    else if (arg === "--non-interactive") flags.nonInteractive = quiet = true;
     else if (arg === "--chat") flags.nonInteractive = flags.chat = true;
     else throw new FlagError(`unknown option ${arg}`);
   }
+  if (quiet && flags.chat) throw new FlagError("use --chat or --non-interactive, not both: --non-interactive never waits for a sign-in, and --chat does");
   return flags;
 }
 

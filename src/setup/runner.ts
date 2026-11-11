@@ -53,7 +53,7 @@ export async function runSteps(steps: () => Step[], options: RunOptions): Promis
   const open = new Set<string>();
   const first = steps();
   const resumed = first.filter((step) => done.has(step.id)).length;
-  const next = first.find((step) => !done.has(step.id));
+  const next = first.find((step) => !done.has(step.id) && !step.later) ?? first.find((step) => !done.has(step.id));
   if (resumed && next) options.terminal.print(`Welcome back. ${resumed} of ${first.length} done, picking up at ${next.title}.`);
   let usable = false;
   for (;;) {

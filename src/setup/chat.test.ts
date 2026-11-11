@@ -12,10 +12,10 @@ const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
 const start = Date.parse("2026-11-11T10:00:00Z");
-function teamSource(): (ref: SourceRef) => Promise<FetchedSource> {
+function teamSource(name = "posthog"): (ref: SourceRef) => Promise<FetchedSource> {
   const dir = temp.make("team-");
-  mkdirSync(join(dir, "packs/posthog"), { recursive: true });
-  writeFileSync(join(dir, "packs/posthog/pack.json"), JSON.stringify({ schema: 1, name: "posthog", summary: "Team repo prep.", human: [{ id: "coder", say: "Sign in to Coder", command: "coder login", probe: ["coder", "whoami"], interactive: true }] }));
+  mkdirSync(join(dir, "packs", name), { recursive: true });
+  writeFileSync(join(dir, "packs", name, "pack.json"), JSON.stringify({ schema: 1, name, summary: "Team repo prep.", human: [{ id: "coder", say: "Sign in to Coder", command: "coder login", probe: ["coder", "whoami"], interactive: true }] }));
   return async (ref) => ({ ref, dir, packs: await loadPacks(dir) });
 }
 
@@ -40,10 +40,30 @@ describe("fleet setup --chat", () => {
     const box = fakeMachine(home, { coder: 50 }, { org: true, startedAt: start });
     const result = await fleetSetup(home, ["--chat", "--plan", "claude", "--devbox", "skip"], [], box, teamSource());
     expect(result.code).toBe(2);
-    expect(box.runs).toEqual([]);
     expect(result.output).toContain("✓ Ready to use. Start a new thread in T3 Code now. Setup goes on with: Sign in to Coder, Check everything.");
     expect(result.output).toContain("  In a terminal, run: sh -c 'coder login'");
+    expect(timings(home).steps.find((step) => step.title === "Sign in to Coder")).toMatchObject({ outcome: "unanswered" });
     expect(timings(home).usable).toBe("2026-11-11T10:00:00.000Z");
+  });
+});
+
+describe("fleet setup --chat on a devbox", () => {
+  test("waits for the devbox's browser sign-ins too, and counts each one as a wait for the person", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, { "box:github": 2 }, { startedAt: start });
+    const result = await fleetSetup(home, ["--chat", "--preset", "starter", "--plan", "claude", "--devbox", "node-9"], [], box);
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("  ✓ Sign in to GitHub on node-9: done");
+    expect(timings(home).steps.find((step) => step.id === "devbox:node-9:github")).toMatchObject({ outcome: "done", blocked: true });
+  });
+
+  test("refuses --chat with --non-interactive, since one waits for sign-ins and the other never does", async () => {
+    const home = temp.make("home-");
+    for (const args of [["--chat", "--non-interactive"], ["--non-interactive", "--chat"]]) {
+      const result = await fleetSetup(home, args, [], fakeMachine(home));
+      expect(result.code).toBe(2);
+      expect(result.output).toContain("fleet setup: use --chat or --non-interactive, not both");
+    }
   });
 });
 
@@ -69,6 +89,41 @@ describe("usable before the rest", () => {
     expect(result.code).toBe(2);
     expect(result.skipped).toEqual([[]]);
     expect(result.output).not.toContain("Install Codex");
+  });
+
+  test("a setup that finished before Codex waited for later does not apply again", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, {}, { startedAt: start });
+    expect((await fleetSetup(home, ["--chat", "--preset", "starter", "--plan", "both", "--devbox", "skip"], [], box)).code).toBe(0);
+    const file = machineFile(home);
+    writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...file, setup: { ...file.setup, done: file.setup.done.filter((id: string) => id !== "apply-codex") } }));
+    const again = await fleetSetup(home, ["--chat", "--devbox", "skip"], [], box);
+    expect(again.code).toBe(0);
+    expect(again.applied).toEqual([]);
+    expect(again.output).not.toContain("Install Codex");
+  });
+
+  test("a run that resumes after the machine became usable keeps the timing record and its usable mark", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, { chatgpt: 3 }, { startedAt: start });
+    const first = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "both", "--devbox", "skip"], [], box);
+    expect(first.code).toBe(2);
+    const usable = timings(home).usable;
+    expect(usable).not.toBeNull();
+    const again = await fleetSetup(home, ["--chat", "--devbox", "skip"], [], box);
+    expect(again.code).toBe(0);
+    expect(timings(home)).toMatchObject({ usable });
+    expect(timings(home).steps.map((step) => step.id)).toEqual(expect.arrayContaining(["github", "claude", "chatgpt", "check"]));
+    expect(again.output).toContain("  Ready after ");
+  });
+
+  test("signs in to a pack before the devbox question, since that sign-in can add the SSH hosts the question offers", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, { coder: 1 }, { org: true, startedAt: start });
+    const result = await fleetSetup(home, ["--plan", "claude"], ["", "", "", "", ""], box, teamSource("acme"));
+    const signIn = result.output.indexOf("Sign in to Coder");
+    expect(signIn).toBeGreaterThan(-1);
+    expect(signIn).toBeLessThan(result.output.indexOf("No devbox for now"));
   });
 
   test("with one plan, installs everything in one apply", async () => {
