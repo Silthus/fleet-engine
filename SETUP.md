@@ -103,16 +103,28 @@ the person clicks **Install**. The step is done when
 
 ## 6. Ask what they want
 
-Read `presets.json` and each `packs/*/pack.json` in
-`~/.local/share/fleet/engine`, the same data as the page
-[A day with Fleet](https://silthus.github.io/fleet-engine/). Ask in one call:
+Ask in one call:
 
-- **Packs.** One option per preset, with its `blurb`, and "One by one". For
-  one by one, ask a multi-select question with each pack's `summary`. Offer
-  the `hub` pack only with a hub and a node. Base is always on.
+- **Packs.** One option per preset in `~/.local/share/fleet/engine/presets.json`,
+  with its `blurb`, and "One by one". For one by one, ask a multi-select
+  question with the packs below. Base is always on. The page
+  [A day with Fleet](https://silthus.github.io/fleet-engine/) shows each pack
+  during a workday.
 - **AI plan.** Claude, ChatGPT, or both: it decides the sign-ins and the
   model defaults. Recommend the agent they set up in T3 Code
   (`claude auth status` or `codex login status` passes).
+
+| Pack | What it does | Offer it |
+| --- | --- | --- |
+| `pull-requests` | Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged. | Always |
+| `orchestration` | Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread. | Always |
+| `communication` | Agents write in your voice, give short updates, and share plans and previews as links. | Always |
+| `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always |
+| `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Always |
+| `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always |
+| `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always |
+| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | With a hub and a node |
+| `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | With a hub and a node |
 
 ## 7. Run setup with their answers
 
