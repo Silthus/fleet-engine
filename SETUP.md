@@ -93,12 +93,11 @@ and ask:
 - **Change only what they name** (recommended): run `fleet packs` with
   `--add`, `--remove`, and `--workflows` for each change, then go on to step
   8. Everything else stays as it is.
-- **Run setup again**: setup reuses their profile repo. The packs and
-  workflow switches of this run replace the earlier ones, so a hub pack or a
-  workflow they turned on is off again unless the step 7 command names it.
-  Carry each one from the list into that command. Earlier settings stay
-  unless this run sets them again. Files they changed by hand are kept, and
-  step 8 shows them.
+- **Run setup again**: setup reuses their profile repo and starts from its
+  packs, workflows, and settings. In the step 7 command, leave out
+  `--preset`, and name only what changes with `--add`, `--remove`, and
+  `--workflows`. Everything else stays as it is. Files they changed by hand
+  are kept, and step 8 shows them.
 
 ## 2. Ask what they know
 
