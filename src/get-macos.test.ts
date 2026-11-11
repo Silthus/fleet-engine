@@ -21,7 +21,7 @@ describe("get.sh", () => {
 
   onLinuxHost("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {
     const box = sandbox("Darwin");
-    const command = `printf 'piped script\\n' | sh ${join(repoRoot, "get.sh")} --ref v0.1.0 --profile ${profile()}`;
+    const command = `printf 'piped script\\n' | sh ${join(repoRoot, "get.sh")} --ref v0.1.0 --install-only`;
     const env = { PATH: box.bin, HOME: box.home, SHELL: "/bin/sh", FLEET_ENGINE_REPO: engine.repo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
     const result = Bun.spawnSync([Bun.which("script") ?? "script", "-qec", command, "/dev/null"], { env, stdin: "ignore" });
     expect(result.exitCode).toBe(0);
