@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PackManifest, ProfileFile } from "../pack/types.ts";
-import { bothChanged, saveAnswers } from "../profile/profile.ts";
+import type { PackManifest, Profile, ProfileFile } from "../pack/types.ts";
+import { bothChanged, loadProfile, saveAnswers } from "../profile/profile.ts";
 import type { Machine } from "./commands.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
 import type { Draft } from "./questions.ts";
@@ -29,8 +29,8 @@ export function profileStep(context: ProfileContext): Step {
   return { id: "profile", title: "Make your profile", minutes: 1, kind: "auto", run: () => makeProfile(context) };
 }
 
-async function makeProfile(context: ProfileContext) {
-  const { terminal, machine, home, draft } = context;
+/** Finds this login's profile repo: the one this machine's clone uses, the team org's, or the personal one. */
+async function lookUp(machine: Machine, home: string, packs: PackManifest[], picked: string[]) {
   const gh = async (...args: string[]) => {
     const result = await machine.exec(["gh", ...args]);
     if (result.code !== 0) throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${lastLine(result.output)}`);
@@ -43,17 +43,30 @@ async function makeProfile(context: ProfileContext) {
     if (view.output.includes("Could not resolve to a Repository")) return false;
     throw new Error(`could not look up ${repo}: ${lastLine(view.output)}`);
   };
-  const same = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
-  const create = (repo: string, description: string) => machine.exec(["gh", "repo", "create", repo, "--private", "--description", description]);
   const personal = `${login}/${profileRepoName}`;
-  const org = profileOrg(context.packs(), draft.packs ?? []);
+  const org = profileOrg(packs, picked);
   const team = org && `${org}/${profileRepoName}-${login}`;
   const dir = profilePath(home);
   const inUse = await clonedProfile(machine, dir, login);
   const found = inUse && (await exists(inUse)) ? inUse : team && (await exists(team)) ? team : (await exists(personal)) ? personal : undefined;
-  let profileRepo = found ?? team ?? personal;
   if (found && !same(found, personal)) await requirePrivate(machine, found);
   if (found) await checkout(machine, dir, found);
+  return { gh, login, exists, personal, org, team, dir, found };
+}
+
+const same = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+
+/** Clones the profile repo another machine of this login already set up, and returns its answers; undefined when there is none. */
+export async function existingProfile(machine: Machine, home: string, packs: PackManifest[], picked: string[]): Promise<Profile | undefined> {
+  const { found, dir } = await lookUp(machine, home, packs, picked);
+  return found && existsSync(join(dir, "fleet.json")) ? loadProfile(dir) : undefined;
+}
+
+async function makeProfile(context: ProfileContext) {
+  const { terminal, machine, home, draft } = context;
+  const { gh, login, exists, personal, org, team, dir, found } = await lookUp(machine, home, context.packs(), draft.packs ?? []);
+  const create = (repo: string, description: string) => machine.exec(["gh", "repo", "create", repo, "--private", "--description", description]);
+  let profileRepo = found ?? team ?? personal;
   const saved = found ? savedSettings(dir) : {};
   const namedMemory = draft.settings?.["memory.repo"] ?? saved["memory.repo"];
   const memoryRepo = draft.packs?.includes("memory") ? (typeof namedMemory === "string" ? namedMemory : `${login}/${memoryRepoName}`) : undefined;

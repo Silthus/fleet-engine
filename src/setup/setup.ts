@@ -12,7 +12,7 @@ import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { devboxQuestion, devboxSteps, hubSteps, notTakenByHub, profileForBox, type DevboxContext } from "./devbox.ts";
 import { doneScreen, finalCheck, repoName, runsByItself } from "./done.ts";
 import { readTimings, usableSeconds } from "../commands/triage-record.ts";
-import { profileStep } from "./profile.ts";
+import { existingProfile, profileStep } from "./profile.ts";
 import { runSteps, type Step } from "./runner.ts";
 import { chatgptSignIn, claudeSignIn, githubSignIn, memberSources } from "./signins.ts";
 import { Stopped, type Terminal } from "./terminal.ts";
@@ -108,9 +108,17 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       terminal.print(`  ✓ You are in the ${ref.repo.split("/")[0]} org, so the ${packList(fetched.packs.map((pack) => pack.manifest.name), catalog)} pack is ticked`);
     }
     catalog.teamsKnown = true;
+    if (!machine.profileDir) await startFromExisting();
     picksFrom(flags, catalog);
     const fromFlags = settingsFrom(flags, catalog);
     if (Object.keys(fromFlags).length) await context.answer({ settings: { ...progress.draft.settings, ...fromFlags } });
+  };
+  const startFromExisting = async () => {
+    const existing = await existingProfile(box, options.home, catalog.packs.map((pack) => pack.manifest), progress.draft.packs ?? catalog.teamPacks);
+    if (!existing) return;
+    const saved = profileDraft(existing);
+    const sources = [...existing.sources, ...(progress.draft.sources ?? []).filter((ref) => !existing.sources.some((kept) => kept.name === ref.name))];
+    await context.answer({ ...saved, ...(hasPicks(flags) ? picksFrom(flags, catalog, saved) : {}), sources, settings: { ...existing.settings, ...progress.draft.settings } });
   };
   const profile = profileStep({
     terminal,
