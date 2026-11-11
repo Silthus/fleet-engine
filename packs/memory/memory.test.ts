@@ -15,7 +15,6 @@ beforeAll(async () => (engine = await engineSource()));
 const withPack = (fields = {}) =>
   resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs: ["memory"], settings: { "memory.repo": "me/notes" }, ...fields }, devbox);
 const lines = (count: number) => Array.from({ length: count }, (_, index) => `- note ${index}`).join("\n") + "\n";
-const fakeToken = () => "ghp_" + "a1B2c3D4e5".repeat(4).slice(0, 36);
 
 describe("the Memory pack", () => {
   test("asks for the memory repo at setup", () => {
