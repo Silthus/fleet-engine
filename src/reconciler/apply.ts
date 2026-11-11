@@ -58,7 +58,8 @@ export const filesAdapter: Adapter = {
   },
 };
 
-export async function apply(plan: Plan, options: { home: string; dryRun?: boolean; adopt?: string[]; adapters?: Adapter[]; run?: Runner; issue?: Issuer }): Promise<Report> {
+/** Skipped steps, named pack/id, wait for a later apply: this run neither runs nor undoes them. */
+export async function apply(plan: Plan, options: { home: string; dryRun?: boolean; adopt?: string[]; skip?: string[]; adapters?: Adapter[]; run?: Runner; issue?: Issuer }): Promise<Report> {
   const context = { home: options.home, dryRun: options.dryRun ?? false, adopt: options.adopt ?? [] };
   const adapters = options.adapters ?? [filesAdapter];
   const adoptable = new Set(adapters.flatMap((adapter) => adapter.targets(plan)));
@@ -121,8 +122,9 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     if (step.undo && step.check) await record(ledgerKey(step), ledgerStep(plan, step));
   };
   const passes = async (step: Plan["steps"][number]) => step.check !== undefined && (await run(step.check)) === 0;
+  const skipped = new Set(options.skip ?? []);
   for (const step of context.dryRun ? [] : plan.steps) {
-    if (failed.has(step.pack) || (await waits(step))) continue;
+    if (skipped.has(`${step.pack}/${step.id}`) || failed.has(step.pack) || (await waits(step))) continue;
     if (await passes(step)) {
       await held(step);
       continue;

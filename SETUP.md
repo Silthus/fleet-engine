@@ -274,7 +274,7 @@ wait (see "While something runs").
 | --- | --- |
 | GitHub | Once, with every permission Fleet needs: it creates their private `fleet-profile` repo, adds their SSH keys, and reads their org's packs. |
 | Claude | Claude Code on this Mac uses their Claude plan. |
-| ChatGPT | Codex on this Mac uses their ChatGPT plan. Setup checks it with a real request. With both plans, it comes after the Mac is ready to use. |
+| ChatGPT | Codex on this Mac uses their ChatGPT plan. Setup checks it with a real request. With both plans, it comes after the Mac is ready to use, right after setup installs Codex. |
 
 ## 8. Check the result
 

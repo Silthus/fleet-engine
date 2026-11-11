@@ -17,8 +17,8 @@ describe("fleet setup questions", () => {
     const home = temp.make("home-");
     const result = await fleetSetup(home, [], ["", "", ""]);
     expect(result.code).toBe(0);
-    expect(result.output).toContain("Fleet setup · 1 of 10 · about 15 min left");
-    expect(result.output).toContain("Fleet setup · 4 of 10 · about 9 min left");
+    expect(result.output).toContain("Fleet setup · 1 of 11 · about 16 min left");
+    expect(result.output).toContain("Fleet setup · 4 of 11 · about 10 min left");
     expect(result.output).toContain("  1) Everyday  Pull requests, Orchestration, Communication (default)");
     expect(result.output).toContain("  ✓ Claude and ChatGPT");
     expect(machine(home)).toEqual({
@@ -27,10 +27,11 @@ describe("fleet setup questions", () => {
       name: hostname(),
       profileDir: profilePath(home),
       devboxes: [],
-      setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "chatgpt", "check"] },
+      setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "apply-codex", "chatgpt", "check"] },
     });
     expect(savedAnswers(home)).toMatchObject({ packs: ["pull-requests", "orchestration", "communication"], workflows: {}, plan: "both" });
-    expect(result.applied).toEqual([profilePath(home)]);
+    expect(result.applied).toEqual([profilePath(home), profilePath(home)]);
+    expect(result.skipped).toEqual([["base/codex-cli"], []]);
   });
 
   test("on a Mac, saves the mac role, offers a devbox, and sets up this Mac", async () => {
@@ -40,8 +41,8 @@ describe("fleet setup questions", () => {
     expect(result.output).toContain("▶ Set up this Mac: fleet apply installs your packs");
     expect(result.output).not.toContain("Set up this machine");
     expect(result.output).toContain("  This Mac ");
-    expect(machine(home)).toMatchObject({ schema: 1, role: "mac", devboxes: [], setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "chatgpt", "check"] } });
-    expect(result.applied).toEqual([profilePath(home)]);
+    expect(machine(home)).toMatchObject({ schema: 1, role: "mac", devboxes: [], setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "apply-codex", "chatgpt", "check"] } });
+    expect(result.skipped).toEqual([["base/codex-cli-mac"], []]);
   });
 
   test("keeps the name and role that apply saves, though setup writes its progress after apply", async () => {
@@ -62,7 +63,7 @@ describe("fleet setup questions", () => {
 
     const resumed = await fleetSetup(home, [], ["3", ""]);
     expect(resumed.code).toBe(0);
-    expect(resumed.output).toContain("Welcome back. 3 of 10 done, picking up at Your AI plans.");
+    expect(resumed.output).toContain("Welcome back. 3 of 11 done, picking up at Your AI plans.");
     expect(resumed.prompts).toHaveLength(2);
     expect(machine(home).setup).toEqual({ done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "chatgpt", "check"] });
     expect(savedAnswers(home)).toMatchObject({ packs: ["pull-requests"], workflows: {}, plan: "codex" });

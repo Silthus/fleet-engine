@@ -246,11 +246,12 @@ export const remote = (box: ReturnType<typeof fakeMachine>) => [...box.calls.map
 export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>, doctorCode = 0, platform: NodeJS.Platform = "linux", onApply: (dir: string) => void | Promise<void> = () => {}) {
   const io = scripted(replies);
   const applied: string[] = [];
+  const skipped: string[][] = [];
   const doctored: string[] = [];
-  const apply = async (dir: string) => (applied.push(dir), await onApply(dir), 0);
+  const apply = async (dir: string, skip: string[] = []) => (applied.push(dir), skipped.push(skip), await onApply(dir), 0);
   const doctor = async (dir: string) => (doctored.push(dir), doctorCode);
   const code = await main(["setup", ...args], { home, engineRoot, platform, print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, clock: box.clock, doctor, env: {}, timeZone: "UTC", ...(fetchSource ? { fetchSource } : {}) } });
-  return { code, prompts: io.prompts, output: io.output(), applied, doctored };
+  return { code, prompts: io.prompts, output: io.output(), applied, skipped, doctored };
 }
 
 export const machineFile = (home: string) => JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8"));

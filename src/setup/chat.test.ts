@@ -53,12 +53,30 @@ describe("usable before the rest", () => {
     const box = fakeMachine(home, { github: 3, chatgpt: 4 }, { startedAt: start });
     const result = await fleetSetup(home, ["--chat", "--preset", "starter", "--plan", "both", "--devbox", "skip"], [], box);
     expect(result.code).toBe(0);
-    const ready = result.output.indexOf("✓ Ready to use. Start a new thread in T3 Code now. Setup goes on with: Sign in to ChatGPT, Check everything.");
+    const ready = result.output.indexOf("✓ Ready to use. Start a new thread in T3 Code now. Setup goes on with: Install Codex, Sign in to ChatGPT, Check everything.");
     expect(ready).toBeGreaterThan(result.output.indexOf("  ✓ Sign in to Claude: already done"));
-    expect(ready).toBeLessThan(result.output.indexOf("▶ Sign in to ChatGPT"));
+    expect(ready).toBeLessThan(result.output.indexOf("▶ Install Codex"));
+    expect(result.output.indexOf("▶ Install Codex")).toBeLessThan(result.output.indexOf("▶ Sign in to ChatGPT"));
+    expect(result.skipped).toEqual([["base/codex-cli"], []]);
     expect(result.output).toContain("  Ready after     6s\n");
     expect(timings(home).usableSeconds).toBe(6);
     expect(timings(home).steps.at(-1)).toMatchObject({ id: "check", outcome: "done", end: "2026-11-11T10:00:14.000Z" });
+  });
+
+  test("without a person to wait for, installs Codex in the first apply, since the run stops at an open sign-in", async () => {
+    const home = temp.make("home-");
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "both", "--devbox", "skip"], [], fakeMachine(home, { claude: 5 }, { startedAt: start }));
+    expect(result.code).toBe(2);
+    expect(result.skipped).toEqual([[]]);
+    expect(result.output).not.toContain("Install Codex");
+  });
+
+  test("with one plan, installs everything in one apply", async () => {
+    const home = temp.make("home-");
+    const result = await fleetSetup(home, ["--chat", "--preset", "starter", "--plan", "codex", "--devbox", "skip"], [], fakeMachine(home, {}, { startedAt: start }));
+    expect(result.code).toBe(0);
+    expect(result.skipped).toEqual([[]]);
+    expect(result.output).not.toContain("Install Codex");
   });
 
   test("asks the devbox question before the steps that can wait", async () => {

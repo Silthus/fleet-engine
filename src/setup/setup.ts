@@ -25,8 +25,8 @@ export type SetupOptions = {
   terminal: Terminal;
   machine?: Partial<Machine>;
   fetchSource?: (ref: SourceRef, cacheRoot: string) => Promise<FetchedSource>;
-  /** Runs fleet apply with this profile and prints its report. */
-  apply?: (profileDir: string) => Promise<number>;
+  /** Runs fleet apply with this profile, leaving the skipped steps (pack/id) for a later apply, and prints its report. */
+  apply?: (profileDir: string, skip?: string[]) => Promise<number>;
   /** Runs fleet doctor with this profile and prints its report. */
   doctor?: (profileDir: string) => Promise<number>;
   /** This machine's IANA time zone, which picks a setting's time-zone default. */
@@ -37,7 +37,7 @@ export type SetupOptions = {
 };
 
 /** Steps that run again when the command changes an answer: the profile saves it, apply puts it on this machine, and the check confirms it. */
-const answersChanged = ["profile", "apply", "check"];
+const answersChanged = ["profile", "apply", "apply-codex", "check"];
 
 export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
 
@@ -133,18 +133,35 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       await remember();
     },
   });
-  const applyStep: Step = {
-    id: "apply",
-    title: machine.role === "mac" ? "Set up this Mac" : "Set up this machine",
-    minutes: 3,
-    kind: "auto",
-    async run() {
-      if (!machine.profileDir || !options.apply) throw new Error("no profile to apply yet");
-      terminal.print(`▶ ${applyStep.title}: fleet apply installs your packs`);
-      if ((await options.apply(machine.profileDir)) !== 0) throw new Error("fleet apply could not set up this machine. Fix what it says above, then run fleet setup again.");
-      const applied = await loadMachine(options.home);
-      if (applied) Object.assign(machine, { role: applied.role }, applied.name ? { name: applied.name } : {});
-    },
+  const applyProfile = async (skip: string[]) => {
+    if (!machine.profileDir || !options.apply) throw new Error("no profile to apply yet");
+    if ((await options.apply(machine.profileDir, skip)) !== 0) throw new Error("fleet apply could not set up this machine. Fix what it says above, then run fleet setup again.");
+    const applied = await loadMachine(options.home);
+    if (applied) Object.assign(machine, { role: applied.role }, applied.name ? { name: applied.name } : {});
+  };
+  const applySteps = (codexOnly: string[]): Step[] => {
+    const title = machine.role === "mac" ? "Set up this Mac" : "Set up this machine";
+    const first: Step = {
+      id: "apply",
+      title,
+      minutes: 3,
+      kind: "auto",
+      async run() {
+        terminal.print(`▶ ${title}: fleet apply installs your packs`);
+        await applyProfile(codexOnly);
+      },
+    };
+    const codex: Step = {
+      id: "apply-codex",
+      title: "Install Codex",
+      minutes: 1,
+      kind: "auto",
+      async run() {
+        terminal.print("▶ Install Codex: fleet apply installs what only Codex needs");
+        await applyProfile([]);
+      },
+    };
+    return codexOnly.length ? [first, later(codex)] : [first];
   };
   const question = devboxQuestion({
     terminal,
@@ -181,7 +198,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       devboxes: machine.devboxes ?? [],
       doctor: () => (machine.profileDir && options.doctor ? options.doctor(machine.profileDir) : Promise.resolve(1)),
     });
-  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox), later(check())];
+  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, (codexOnly) => [profile, ...applySteps(codexOnly)], devbox), later(check())];
   const timings = openTimings(options.home, clock.now());
   try {
     const result = await runSteps(steps, {
@@ -237,10 +254,12 @@ function planFor(context: QuestionContext, machine: MachineFile) {
   return { profile, plan: resolve(profile, machine, [...context.catalog.sources, ...profile.sources.filter((ref) => !fetched.has(ref.name)).map(notFetched)]) };
 }
 
-function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>, machineSteps: Step[], devbox: Devbox): Step[] {
+function setupSteps(context: QuestionContext, machine: MachineFile, options: SetupOptions, human: HumanContext, signedIn: () => Promise<void>, machineSteps: (codexOnly: string[]) => Step[], devbox: Devbox): Step[] {
   const { profile, plan } = planFor(context, machine);
   const box = human.machine;
   const sshDevbox = !makesOwnDevbox(profile.packs) && (machine.role === "mac" || machine.role === "linux");
+  const waitsForSignIns = !human.nonInteractive || human.chat === true;
+  const codexOnly = plan.ai === "both" && waitsForSignIns ? plan.steps.filter((step) => step.plans && !step.plans.includes("claude")).map((step) => `${step.pack}/${step.id}`) : [];
   const devboxAsk = sshDevbox && machine.devboxes?.length ? planFor(context, { ...machine, role: "devbox" }).plan.ask.filter((setting) => !plan.ask.some((asked) => asked.key === setting.key)) : [];
   return [
     bootstrapStep(context.terminal, box.has),
@@ -248,7 +267,7 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     packsStep(context),
     plansStep(context),
     ...settingSteps(context, plan.ask),
-    ...machineSteps,
+    ...machineSteps(codexOnly),
     ...plan.human.map((step) => later(humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human))),
     ...(sshDevbox ? [devbox.question] : []),
     ...settingSteps(context, devboxAsk).map(devbox.pushed),
