@@ -3,61 +3,63 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>A day with Fleet</title>
-<meta name="description" content="Choose where Fleet runs and which packs you want, see your workday with them, and copy one prompt that sets it all up.">
+<title>Set up Fleet</title>
+<meta name="description" content="Choose where Fleet runs and which packs you want, read what each pack does, and copy one prompt that sets it all up.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%20role%3D%22img%22%20aria-label%3D%22Fleet%22%3E%3Crect%20x%3D%221%22%20y%3D%221%22%20width%3D%2230%22%20height%3D%2230%22%20rx%3D%228%22%20fill%3D%22%23f1a82c%22%20stroke%3D%22%23151515%22%20stroke-width%3D%222%22%2F%3E%3Cpath%20fill%3D%22%23151515%22%20d%3D%22M16.5%209.5%2027%2016l-10.5%206.5%202.6-6.5-2.6-6.5ZM6%205.5%2014.5%2010%206%2014.5l2-4.5-2-4.5ZM6%2017.5%2014.5%2022%206%2026.5l2-4.5-2-4.5Z%22%2F%3E%3C%2Fsvg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
 :root {
-  --bg: #f3f5f8;
-  --surface: #ffffff;
-  --sunk: #e8ecf2;
-  --fg: #131c2b;
-  --muted: #556074;
-  --line: #d2d9e3;
-  --accent: #2747d4;
+  --bg: #eeefe9;
+  --surface: #fdfdf8;
+  --sunk: #e5e7e0;
+  --fg: #151515;
+  --muted: #5c5d56;
+  --line: #d0d1c9;
+  --edge: #151515;
+  --shadow: #151515;
+  --accent: #1d4aff;
   --accent-ink: #ffffff;
-  --accent-soft: #e3e9fd;
-  --day: #c98300;
-  --night: #dde2f1;
-  --warn-bg: #fff3d9;
-  --warn-fg: #6f4400;
-  --code-bg: #0f1724;
-  --code-fg: #dbe4f3;
-  --slack-red: #e01e5a;
-  --slack-blue: #36c5f0;
-  --slack-green: #2eb67d;
-  --slack-yellow: #ecb22e;
-  --f-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --accent-soft: #dde4ff;
+  --link: #b83a00;
+  --yellow: #f1a82c;
+  --on-yellow: #151515;
+  --yellow-edge: #151515;
+  --warn-bg: #fbebc8;
+  --warn-fg: #6a4500;
+  --code-bg: #151515;
+  --code-fg: #eeefe9;
+  --code-line: #151515;
   --f-body: "IBM Plex Sans", "Helvetica Neue", Arial, system-ui, sans-serif;
   --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0d131c; --surface: #151d2a; --sunk: #1d2737; --fg: #e7ecf4; --muted: #9ba7ba; --line: #2b3649;
-    --accent: #8ea9ff; --accent-ink: #0b1220; --accent-soft: #1c2946; --day: #f2c14e; --night: #070b13;
-    --warn-bg: #3a2c10; --warn-fg: #f5d69a; --code-bg: #070b12; --code-fg: #dbe4f3;
+    --bg: #151515; --surface: #1f1f1f; --sunk: #2c2c2c; --fg: #eeefe9; --muted: #a9aaa2; --line: #4b4b4b;
+    --edge: #eeefe9; --shadow: #000000; --accent: #8aa2ff; --accent-ink: #0b1220; --accent-soft: #1e2747; --link: #ff8a52;
+    --yellow-edge: #a8700f; --warn-bg: #3a2c10; --warn-fg: #f5d69a; --code-bg: #0b0b0b; --code-line: #4b4b4b;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0d131c; --surface: #151d2a; --sunk: #1d2737; --fg: #e7ecf4; --muted: #9ba7ba; --line: #2b3649;
-  --accent: #8ea9ff; --accent-ink: #0b1220; --accent-soft: #1c2946; --day: #f2c14e; --night: #070b13;
-  --warn-bg: #3a2c10; --warn-fg: #f5d69a; --code-bg: #070b12; --code-fg: #dbe4f3;
+  --bg: #151515; --surface: #1f1f1f; --sunk: #2c2c2c; --fg: #eeefe9; --muted: #a9aaa2; --line: #4b4b4b;
+  --edge: #eeefe9; --shadow: #000000; --accent: #8aa2ff; --accent-ink: #0b1220; --accent-soft: #1e2747; --link: #ff8a52;
+  --yellow-edge: #a8700f; --warn-bg: #3a2c10; --warn-fg: #f5d69a; --code-bg: #0b0b0b; --code-line: #4b4b4b;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; scroll-padding-top: 76px; }
+html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; scroll-padding-top: 16px; }
+html:has(dialog[open]) { overflow: hidden; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 var(--f-body); overflow-wrap: anywhere; }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
-h1, h2, h3, h4 { font-family: var(--f-display); line-height: 1.15; text-wrap: balance; margin: 0; }
-h1 { font-size: clamp(2rem, 4.4vw, 3.05rem); font-weight: 700; letter-spacing: -0.02em; }
+h1, h2, h3, h4 { font-family: var(--f-body); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2rem, 4.6vw, 3.2rem); font-weight: 700; letter-spacing: -0.025em; }
 h2 { font-size: clamp(1.45rem, 3vw, 1.95rem); font-weight: 700; letter-spacing: -0.01em; }
 h3 { font-size: 1.12rem; font-weight: 700; }
 h4 { font-size: 1.08rem; font-weight: 700; }
 p, ul, ol { margin: 0; }
-a { color: var(--accent); text-underline-offset: 2px; }
+a { color: var(--link); font-weight: 600; text-underline-offset: 2px; }
 code { font-family: var(--f-mono); font-size: 0.88em; background: var(--sunk); padding: 0.05em 0.35em; border-radius: 4px; }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
@@ -71,39 +73,26 @@ svg { display: block; }
 .wrap { max-width: 1080px; margin-inline: auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 .badge { font: 600 0.68rem/1 var(--f-body); letter-spacing: 0.06em; text-transform: uppercase; padding: 5px 8px; border-radius: 5px; background: var(--sunk); color: var(--muted); white-space: nowrap; }
 
-.hero { padding-block: 44px 30px; }
-.hero-in { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr); gap: 36px; align-items: end; }
-.hero-copy { display: grid; gap: 16px; }
-.lede { font-size: 1.08rem; color: var(--muted); max-width: 58ch; }
-.route { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
-.route a { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px 7px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); text-decoration: none; font-weight: 500; font-size: 0.94rem; }
-.route a:hover { border-color: var(--accent); }
+.hero { padding-block: 36px 28px; }
+.hero-in { display: grid; gap: 20px; }
+.brand { display: flex; align-items: center; gap: 10px; font: 700 1.35rem/1 var(--f-body); letter-spacing: -0.01em; }
+.brand svg { width: 38px; height: 38px; }
+.hero h1 { max-width: 21ch; }
+.pitch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.pitch > div { display: grid; gap: 8px; align-content: start; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; font-size: 1.02rem; }
+.pitch > div + div { border-color: var(--edge); box-shadow: 0 4px 0 var(--shadow); }
+.overview { margin: 0; border: 1px solid var(--line); border-radius: 12px; padding: 4px; overflow-x: auto; }
+.overview img { display: block; width: 100%; max-width: 760px; height: auto; margin-inline: auto; }
+.btn, .route a, .btn-line, .btn-solid { border: 1.5px solid var(--edge); border-radius: 8px; box-shadow: 0 3px 0 var(--shadow); font-weight: 700; transition: transform 0.1s, box-shadow 0.1s; }
+.route a:hover, .btn-line:hover, .btn-solid:hover { transform: translateY(-1px); box-shadow: 0 4px 0 var(--shadow); }
+.route a:active, .btn-line:active, .btn-solid:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--shadow); }
+.route { display: flex; flex-wrap: wrap; gap: 10px; padding-bottom: 4px; }
+.route a { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px 8px 9px; background: var(--surface); color: var(--fg); text-decoration: none; font-size: 0.95rem; }
 .route b { font: 500 0.78rem var(--f-mono); width: 22px; height: 22px; border-radius: 50%; background: var(--fg); color: var(--bg); display: grid; place-items: center; }
-.daycard { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 10px; min-width: 0; }
-.daycount { font: 500 1rem var(--f-display); color: var(--muted); }
-.daycount b { font-size: 2.3rem; font-weight: 700; color: var(--fg); letter-spacing: -0.02em; margin-right: 4px; font-variant-numeric: tabular-nums; }
-.daynote { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 0.82rem; color: var(--muted); }
-.daynote a { margin-left: auto; font-weight: 600; }
-.key { display: inline-flex; align-items: center; gap: 6px; }
-.key .dot { width: 9px; }
-.ribbon { display: grid; gap: 6px; }
-.ribbon-track { display: grid; grid-template-columns: repeat(48, minmax(0, 1fr)); align-items: end; height: 58px; padding-bottom: 5px; border-bottom: 1.5px solid var(--fg); border-radius: 8px 8px 0 0; background: linear-gradient(90deg, var(--night) 0 25%, transparent 25% 83.33%, var(--night) 83.33%); }
-.bin { display: flex; flex-direction: column-reverse; align-items: center; gap: 3px; min-width: 0; }
-.dot { display: block; width: min(100%, 9px); aspect-ratio: 1; border-radius: 50%; border: 1.5px solid var(--muted); opacity: 0.55; }
-.dot.lit { background: var(--day); border-color: var(--day); opacity: 1; }
-.ribbon-hours { position: relative; height: 1.2em; font: 0.68rem/1.2 var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-.ribbon-hours span { position: absolute; top: 0; }
-.ribbon-hours .mid { transform: translateX(-50%); }
-
-.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-block: 1px solid var(--line); }
-.bar-in { display: flex; align-items: center; gap: 8px 16px; padding-block: 8px; min-height: 54px; }
-.bar-picks { display: flex; flex-wrap: wrap; gap: 4px 8px; flex: 1; min-width: 0; font-size: 0.86rem; }
-.bar-picks a { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); color: var(--fg); text-decoration: none; font-weight: 500; }
-.bar-picks a:hover { border-color: var(--accent); }
-.bar-picks svg { width: 15px; height: 15px; color: var(--muted); }
-.cta { flex: none; display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: var(--accent-ink); border-radius: 999px; padding: 8px 14px; font-weight: 600; font-size: 0.92rem; text-decoration: none; }
-.cta svg { width: 15px; height: 15px; }
-
+.route a.go, .btn-solid { background: var(--yellow); color: var(--on-yellow); border-color: var(--yellow-edge); box-shadow: 0 3px 0 var(--yellow-edge); }
+.route a.go:hover, .btn-solid:hover { box-shadow: 0 4px 0 var(--yellow-edge); }
+.route a.go:active, .btn-solid:active { box-shadow: 0 1px 0 var(--yellow-edge); }
+.route a.go b { background: var(--on-yellow); color: var(--yellow); }
 .step { padding-block: 44px; border-top: 1px solid var(--line); display: grid; gap: 20px; }
 main > .step:first-child { border-top: 0; }
 .step-head { display: flex; gap: 14px; align-items: flex-start; }
@@ -111,12 +100,13 @@ main > .step:first-child { border-top: 0; }
 .step-n { font: 500 0.95rem var(--f-mono); width: 34px; height: 34px; border-radius: 50%; background: var(--fg); color: var(--bg); display: grid; place-items: center; flex: none; margin-top: 2px; }
 
 .wheres { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; border: 0; padding: 0; margin: 0; min-width: 0; }
-.where { background: var(--surface); border: 1.5px solid var(--line); border-radius: 16px; padding: 18px; display: grid; gap: 14px; align-content: start; cursor: pointer; min-width: 0; }
+.where { background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; padding: 18px; display: grid; gap: 14px; align-content: start; cursor: pointer; min-width: 0; }
 .where:hover { border-color: var(--muted); }
-.where.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.where.on { border-color: var(--edge); box-shadow: 0 4px 0 var(--shadow); }
+.where.on .badge { background: var(--yellow); color: var(--on-yellow); }
 .where-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .where-top input { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; flex: none; }
-.where-top label { font: 700 1.2rem/1.2 var(--f-display); cursor: pointer; flex: 1; min-width: 0; }
+.where-top label { font: 700 1.2rem/1.2 var(--f-body); cursor: pointer; flex: 1; min-width: 0; }
 .where ul { padding-left: 1.15em; display: grid; gap: 6px; font-size: 0.94rem; }
 .where-map { width: 100%; height: auto; }
 .d-zone { fill: var(--sunk); stroke: none; }
@@ -130,93 +120,123 @@ main > .step:first-child { border-top: 0; }
 .d-nolink { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 4; fill: none; opacity: 0.6; }
 
 .presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.preset { text-align: left; background: var(--surface); border: 1.5px solid var(--line); border-radius: 14px; padding: 14px 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.preset { text-align: left; background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 8px; align-content: start; min-width: 0; }
 .preset:hover { border-color: var(--muted); }
-.preset[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.preset-name { font: 700 1.15rem/1.2 var(--f-display); }
+.preset[aria-pressed="true"] { border-color: var(--edge); box-shadow: 0 4px 0 var(--shadow); }
+.preset-name { font: 700 1.15rem/1.2 var(--f-body); }
 .preset-blurb { font-size: 0.88rem; color: var(--muted); }
 .preset-icons { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 2px; }
 .preset-count { font: 0.74rem var(--f-mono); color: var(--muted); }
 .preset-state { font-size: 0.9rem; }
 
-.icon { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; background: var(--sunk); color: var(--muted); flex: none; }
+.icon { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--sunk); color: var(--muted); flex: none; }
 .icon svg { width: 22px; height: 22px; }
 .icon.mini { width: 26px; height: 26px; border-radius: 7px; }
 .icon.mini svg { width: 15px; height: 15px; }
-.pack.on .pack-head .icon { background: var(--accent); color: var(--accent-ink); }
-.pack.on .pack-head .icon.brand { background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--accent); }
-.pack:not(.on) .pack-head .icon.brand svg { filter: grayscale(1); opacity: 0.65; }
+.icon.big { width: 52px; height: 52px; border-radius: 13px; }
+.icon.big svg { width: 28px; height: 28px; }
+.pack.on .icon, .sheet-head .icon, .preset[aria-pressed="true"] .icon { background: var(--yellow); color: var(--on-yellow); }
+.pack.on .icon.brand, .sheet-head .icon.brand, .preset[aria-pressed="true"] .icon.brand { background: #fdfdf8; box-shadow: inset 0 0 0 1.5px var(--yellow); }
+.pack:not(.on) .icon.brand svg { filter: grayscale(1); opacity: 0.65; }
 
 .group-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-top: 12px; }
 .group-head p { font-size: 0.92rem; flex: 1 1 240px; }
 .packs { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 14px; align-items: start; }
-.pack { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px 0; display: grid; gap: 8px; min-width: 0; }
-.pack.on { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
+.pack { position: relative; background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; min-width: 0; display: grid; }
+.pack:hover { border-color: var(--muted); }
+.pack.on { border-color: var(--edge); }
 .pack.locked { border-style: dashed; background: transparent; }
-.pack.locked .pack-head .icon, .pack.locked h4 { opacity: 0.6; }
-.pack-head { display: flex; align-items: center; gap: 12px; }
-.pack-head h4 { flex: 1; min-width: 0; }
-.pack-sum { font-size: 0.93rem; color: var(--muted); }
+.pack.locked .icon, .pack.locked .pack-name { opacity: 0.6; }
+.pack-open { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 10px 12px; align-items: center; align-content: start; text-align: left; background: none; border: 0; border-radius: 12px; padding: 14px 16px 16px; min-width: 0; }
+.pack-name { font: 700 1.08rem/1.15 var(--f-body); display: flex; align-items: center; gap: 6px; padding-right: 96px; min-width: 0; }
+.pack-name svg { width: 15px; height: 15px; color: var(--muted); flex: none; transition: transform 0.15s; }
+.pack-open:hover .pack-name svg, .pack-open:focus-visible .pack-name svg { color: var(--fg); transform: translateX(3px); }
+.pack-sum { grid-column: 1 / -1; font-size: 0.93rem; color: var(--muted); }
 .pack.on .pack-sum { color: var(--fg); }
-.pack-body { display: grid; gap: 12px; padding-bottom: 14px; font-size: 0.93rem; }
+.pack-ctl { position: absolute; top: 21px; right: 16px; display: flex; }
 .status { font: 0.76rem/1.5 var(--f-mono); color: var(--muted); }
-.status.live { color: var(--accent); }
-.status.none { color: var(--warn-fg); background: var(--warn-bg); padding: 0 6px; border-radius: 4px; }
-.fact { display: grid; gap: 4px; }
-.fact.warn { background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px; padding: 10px 12px; }
-.fact.warn .eyebrow { color: inherit; }
+
+dialog { color: var(--fg); }
+#pack-sheet { width: min(920px, calc(100vw - 32px)); max-width: none; height: min(720px, 88dvh); max-height: none; padding: 0; border: 1.5px solid var(--edge); border-radius: 14px; background: var(--surface); box-shadow: 0 6px 0 var(--shadow), 0 30px 80px rgb(0 0 0 / 0.3); overflow: hidden; }
+#pack-sheet[open] { display: flex; flex-direction: column; }
+#pack-sheet::backdrop { background: rgb(21 21 21 / 0.6); }
+.sheet-head { display: flex; align-items: center; gap: 14px; padding: 18px 18px 14px 24px; flex: none; }
+.sheet-title { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.sheet-title h2 { font-size: 1.6rem; }
+.sheet-x { width: 36px; height: 36px; flex: none; display: grid; place-items: center; background: var(--sunk); border: 0; border-radius: 8px; color: var(--muted); }
+.sheet-x:hover { color: var(--fg); }
+.sheet-x svg { width: 17px; height: 17px; }
+.sheet-tabs { display: flex; gap: 4px; padding-inline: 24px; border-bottom: 1.5px solid var(--edge); flex: none; overflow-x: auto; }
+.sheet-tabs [role="tab"] { background: none; border: 1.5px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; padding: 8px 14px; font-weight: 600; font-size: 0.94rem; color: var(--muted); white-space: nowrap; margin-bottom: -1.5px; }
+.sheet-tabs [role="tab"]:hover { color: var(--fg); }
+.sheet-tabs [role="tab"][aria-selected="true"] { color: var(--fg); background: var(--bg); border-color: var(--edge); border-bottom: 1.5px solid var(--bg); }
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: grid; gap: 18px; align-content: start; padding: 22px 24px 28px; background: var(--bg); }
+.sheet-lede { font-size: 1.22rem; line-height: 1.4; font-weight: 500; max-width: 46ch; text-wrap: balance; }
+.sheet-body .where-map { max-width: 420px; }
+.flow { list-style: none; padding: 16px; margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.flow li { display: flex; align-items: center; gap: 10px; font: 600 0.88rem/1.3 var(--f-body); }
+.flow li + li::before { content: ""; width: 20px; height: 10px; flex: none; background: var(--fg); clip-path: polygon(0 40%, 62% 40%, 62% 0, 100% 50%, 62% 100%, 62% 60%, 0 60%); }
+.flow-step { background: var(--surface); border: 1.5px solid var(--edge); border-radius: 8px; padding: 7px 11px; box-shadow: 0 2px 0 var(--shadow); }
+.flow li:last-child .flow-step { background: var(--yellow); color: var(--on-yellow); border-color: var(--yellow-edge); box-shadow: 0 2px 0 var(--yellow-edge); }
+.example { display: grid; gap: 6px; justify-items: start; border-left: 4px solid var(--yellow); padding: 2px 0 2px 14px; max-width: 65ch; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 12px; }
+.fact { display: grid; gap: 4px; align-content: start; justify-items: start; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: 0.93rem; min-width: 0; }
+.fact-big { font: 700 1.5rem/1.2 var(--f-body); letter-spacing: -0.01em; }
+.link { background: none; border: 0; padding: 0; color: var(--link); font-weight: 600; font-size: 0.9rem; text-decoration: underline; text-underline-offset: 2px; }
+.warn { display: grid; gap: 4px; background: var(--warn-bg); color: var(--warn-fg); border-radius: 10px; padding: 12px 14px; font-size: 0.93rem; }
+.warn .eyebrow { color: inherit; }
 
 details > summary { cursor: pointer; list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
-.more > summary { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-block: 10px; border-top: 1px solid var(--line); }
-.cue { font-size: 0.84rem; font-weight: 600; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
-.cue::after, .sub > summary::after { content: ""; width: 7px; height: 7px; border-right: 1.7px solid currentColor; border-bottom: 1.7px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform 0.15s; flex: none; }
-details[open] > summary .cue::after, .sub[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
 .sub > summary { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.92rem; padding-block: 6px; color: var(--muted); }
-.risk > summary { font-size: 0.84rem; padding-block: 2px; color: var(--warn-fg); }
-.risk > .warnbox { margin-top: 6px; }
-.sub > summary:hover, .more > summary:hover .cue { color: var(--fg); }
-
-.switch { position: relative; width: 44px; height: 26px; flex: none; border-radius: 999px; background: var(--line); border: 0; transition: background 0.15s; }
+.sub > summary::after { content: ""; width: 7px; height: 7px; border-right: 1.7px solid currentColor; border-bottom: 1.7px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform 0.15s; flex: none; }
+.sub[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
+.sub > summary:hover { color: var(--fg); }
+.switch { position: relative; width: 46px; height: 26px; flex: none; border-radius: 999px; background: var(--line); border: 0; transition: background 0.15s; }
 .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); transition: transform 0.15s; }
 .switch[aria-checked="true"] { background: var(--accent); }
-.switch[aria-checked="true"]::after { transform: translateX(18px); }
+.switch[aria-checked="true"]::after { transform: translateX(20px); }
 .switch.small { width: 36px; height: 21px; margin-top: 2px; }
 .switch.small::after { width: 15px; height: 15px; }
 .switch.small[aria-checked="true"]::after { transform: translateX(15px); }
 .switch:disabled { opacity: 0.45; cursor: not-allowed; }
-.wfs { display: grid; }
-.wf { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.wfs { display: grid; gap: 10px; }
+.wf { display: flex; gap: 14px; align-items: flex-start; padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.wf-off { background: transparent; }
 .wf-body { min-width: 0; flex: 1; display: grid; gap: 4px; }
-.wf-name { font-weight: 600; }
+.wf-name { font-weight: 700; font-size: 1rem; }
+.wf-sentence { font-size: 0.93rem; max-width: 65ch; }
+.risk > summary { color: var(--warn-fg); }
 .wf-off .wf-name, .wf-off .wf-sentence { color: var(--muted); }
 .wf-hint { font-size: 0.85rem; color: var(--muted); }
 .needs { display: flex; flex-wrap: wrap; gap: 6px; }
 .need { font: 500 0.72rem/1.5 var(--f-mono); color: var(--muted); border: 1px dashed var(--line); border-radius: 4px; padding: 0 6px; }
 .need.miss { color: var(--warn-fg); background: var(--warn-bg); border-style: solid; border-color: transparent; }
-.warnbox { background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px; padding: 10px 12px; font-size: 0.9rem; }
-.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 12px; padding-block: 8px 4px; }
-.setting { display: flex; flex-direction: column; gap: 4px; font-size: 0.86rem; min-width: 0; }
-.setting label { color: var(--muted); }
-.setting input, .setting select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; width: 100%; min-width: 0; }
+.settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 12px; }
+.setting { display: flex; flex-direction: column; justify-content: space-between; gap: 8px; font-size: 0.9rem; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.setting label { font-weight: 500; }
+.setting input, .setting select { background: var(--bg); border: 1.5px solid var(--line); border-radius: 8px; padding: 7px 9px; width: 100%; min-width: 0; }
 .setting input[aria-invalid="true"] { border-color: var(--warn-fg); outline-color: var(--warn-fg); }
-.mark { font-weight: 600; }
-.mark.changed { color: var(--accent); }
+.mark { font: 500 0.72rem/1.5 var(--f-mono); color: var(--muted); border: 1px dashed var(--line); border-radius: 4px; padding: 0 6px; white-space: nowrap; }
+.mark.changed { color: var(--accent); border-color: var(--accent); border-style: solid; }
 .aud { display: flex; gap: 10px; align-items: center; font-size: 0.9rem; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; padding: 10px 14px; }
 
-.btn-line { background: var(--surface); border: 1px solid var(--accent); color: var(--accent); border-radius: 8px; padding: 6px 12px; font-size: 0.88rem; font-weight: 600; }
-.btn-line:hover { background: var(--accent-soft); }
-.btn-solid { background: var(--code-fg); color: var(--code-bg); border: 0; border-radius: 8px; padding: 8px 14px; font-weight: 600; font-size: 0.9rem; }
-.btn-ghost { display: inline-flex; align-items: center; gap: 6px; color: var(--code-fg); border: 1px solid color-mix(in srgb, var(--code-fg) 35%, transparent); border-radius: 8px; padding: 7px 12px; font-weight: 600; font-size: 0.9rem; text-decoration: none; }
+.btn-line { background: var(--surface); color: var(--fg); padding: 6px 12px; font-size: 0.88rem; }
+.btn-solid { padding: 7px 14px; font-size: 0.9rem; }
+.out .btn-solid { border-color: var(--yellow); box-shadow: 0 3px 0 #a8700f; }
+.out .btn-solid:hover { box-shadow: 0 4px 0 #a8700f; }
+.out .btn-solid:active { box-shadow: 0 1px 0 #a8700f; }
+.btn-ghost { display: inline-flex; align-items: center; gap: 6px; color: var(--code-fg); border: 1.5px solid color-mix(in srgb, var(--code-fg) 45%, transparent); border-radius: 8px; padding: 7px 12px; font-weight: 700; font-size: 0.9rem; text-decoration: none; }
+.btn-ghost:hover { border-color: var(--code-fg); }
 .btn-ghost svg { width: 15px; height: 15px; }
 
 .steps { list-style: none; counter-reset: step; padding: 0; display: grid; gap: 26px; max-width: 780px; }
 .steps > li { counter-increment: step; display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 6px 12px; }
-.steps > li::before { content: counter(step); grid-column: 1; grid-row: 1 / span 6; font: 500 1.05rem/1.3 var(--f-mono); color: var(--accent); }
+.steps > li::before { content: counter(step); grid-column: 1; grid-row: 1 / span 6; font: 500 1.05rem/1.3 var(--f-mono); color: var(--link); }
 .steps > li > * { grid-column: 2; min-width: 0; }
 #start-out { display: grid; gap: 12px; margin-top: 6px; }
 .agent-steps { padding-left: 1.3em; display: grid; gap: 6px; font-size: 0.94rem; padding-block: 4px 8px; }
-.out { background: var(--code-bg); color: var(--code-fg); border-radius: 14px; overflow: hidden; }
+.out { background: var(--code-bg); color: var(--code-fg); border: 1.5px solid var(--code-line); border-radius: 12px; overflow: hidden; }
 .out-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 12px 16px 0; font-size: 0.8rem; }
 .out-title { font: 600 0.72rem/1.4 var(--f-body); letter-spacing: 0.12em; text-transform: uppercase; }
 .out-picks { opacity: 0.75; font-family: var(--f-mono); }
@@ -225,45 +245,31 @@ details[open] > summary .cue::after, .sub[open] > summary::after { transform: tr
 .out-tab[aria-selected="true"] { opacity: 1; background: color-mix(in srgb, var(--code-fg) 9%, transparent); }
 .out pre { margin: 0; padding: 14px 16px; font: 0.84rem/1.65 var(--f-mono); white-space: pre-wrap; word-break: break-word; }
 .out-tabs + pre { background: color-mix(in srgb, var(--code-fg) 5%, transparent); }
-.out-foot { display: flex; align-items: center; gap: 10px; padding: 4px 16px 14px; font-size: 0.82rem; flex-wrap: wrap; }
+.out-foot { display: flex; align-items: center; gap: 12px; padding: 4px 16px 16px; font-size: 0.82rem; flex-wrap: wrap; }
 .out-note { opacity: 0.85; flex: 1 1 240px; }
 .out code { background: color-mix(in srgb, var(--code-fg) 14%, transparent); color: inherit; }
 .out a:not(.btn-ghost) { color: inherit; }
 
-.line { display: grid; }
-.divider { padding-block: 18px 6px; }
-.empty { padding-block: 8px; }
-.moment { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 240px); gap: 20px; padding-block: 16px; border-top: 1px solid var(--line); }
-.moment-body { display: grid; gap: 6px; min-width: 0; align-content: start; }
-.time { font: 500 1.02rem var(--f-mono); color: var(--day); font-variant-numeric: tabular-nums; }
-.night .time { color: var(--accent); }
-.src { display: flex; align-items: center; gap: 8px; font-size: 0.84rem; color: var(--muted); }
-.notes { display: grid; gap: 8px; align-content: start; justify-items: start; }
-.note { background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; font-size: 0.86rem; display: grid; gap: 2px; }
-.note b { font-family: var(--f-display); }
-.wait { padding-block: 12px; align-items: center; }
-.wait .time, .wait h4 { color: var(--muted); }
-.wait h4 { font-size: 1rem; }
-.rest { margin-top: 8px; }
 .foot { border-top: 1px solid var(--line); padding-block: 28px 56px; font-size: 0.9rem; color: var(--muted); }
 
 @media (max-width: 860px) {
-  .hero-in { grid-template-columns: minmax(0, 1fr); gap: 24px; }
-  .hero { padding-block: 32px 24px; }
-  .presets, .wheres { grid-template-columns: minmax(0, 1fr); }
-  .moment { grid-template-columns: 52px minmax(0, 1fr); gap: 8px 12px; }
-  .moment .notes { grid-column: 2; }
-  .moment .notes:empty { display: none; }
-  .bar-day { display: none !important; }
+  .hero { padding-block: 28px 22px; }
+  .presets, .wheres, .pitch { grid-template-columns: minmax(0, 1fr); }
   .step { padding-block: 32px; }
 }
-@media (max-width: 480px) {
-  .bar-in { gap: 8px; }
-  .bar-picks { flex-wrap: nowrap; gap: 6px; font-size: 0.8rem; }
-  .bar-picks a { white-space: nowrap; min-width: 0; padding-inline: 8px; }
-  .bar-picks a span { overflow: hidden; text-overflow: ellipsis; }
-  .bar-picks svg, .cta svg { display: none; }
-  .cta { padding-inline: 12px; font-size: 0.86rem; }
+@media (max-width: 560px) {
+  .overview img { width: 640px; max-width: none; }
+  #pack-sheet { width: 100vw; height: 92dvh; margin: auto 0 0; border-radius: 14px 14px 0 0; border-width: 1.5px 0 0; box-shadow: none; padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .sheet-head { padding: 14px 12px 12px 16px; gap: 10px; }
+  .sheet-title h2 { font-size: 1.3rem; }
+  .icon.big { width: 44px; height: 44px; }
+  .sheet-tabs { padding-inline: 16px; }
+  .sheet-tabs [role="tab"] { padding-inline: 10px; }
+  .sheet-body { padding: 18px 16px 24px; }
+  .sheet-lede { font-size: 1.1rem; }
+  .flow { flex-direction: column; align-items: flex-start; }
+  .flow li { flex-direction: column; align-items: flex-start; }
+  .flow li + li::before { transform: rotate(90deg); margin-left: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
@@ -274,7 +280,8 @@ details[open] > summary .cue::after, .sub[open] > summary::after { transform: tr
 <body>
 <!-- Generated by scripts/build-page.ts from the pack data. Do not edit by hand. -->
 <div id="app"><noscript>This page needs JavaScript to pick packs. Without it, follow the three steps under Getting started in the README of the Fleet engine repo on GitHub.</noscript></div>
-<script id="fleet-data" type="application/json">{"engineRepo":"Silthus/fleet-engine","defaultPreset":"everyday","filledBySetup":["memory.repo"],"presets":[{"id":"starter","name":"Starter","blurb":"Safe agent rules, tuned T3 defaults, and draft pull requests.","packs":["pull-requests"],"hubPacks":["hub"],"workflows":{},"hubWorkflows":{}},{"id":"everyday","name":"Everyday","blurb":"Starter, plus maps of tickets, side threads, and agents that write in your voice.","packs":["pull-requests","orchestration","communication"],"hubPacks":["hub"],"workflows":{},"hubWorkflows":{}},{"id":"everything","name":"Everything","blurb":"Every pack: Everyday, plus shared memory, guards, Slack, and the nightly loops. With a hub, also the MCP gateway and recovery.","packs":["pull-requests","orchestration","communication","memory","guards","slack"],"hubPacks":["hub","mcp-gateway","recovery"],"hubWorkflows":{"slack-thread":true,"own-account-balancing":true,"provider-recovery":true},"workflows":{"quality-loop":true,"signal-loop":true,"pr-digest":true,"shell-guards":true,"package-age":true}}],"packs":[{"name":"base","title":"Base","summary":"Safety rules, the model table, T3 Code defaults, and the jobs that keep every machine current.","day":"Agents ask before they break things, pick the right model for each task, and every machine is up to date when you start.","cost":"Nothing to set up: every Fleet machine gets it.","risk":"Fleet owns its hooks in Claude Code and Codex. A hook you wrote yourself on the same event is kept until you adopt Fleet's.","requires":[],"always":true,"workflows":[{"id":"agent-rules","name":"Agent rules","default":true,"sentence":"Agents confirm destructive actions, keep private data out of public repos, and pick the right model for each task.","moment":{"time":"09:10","title":"An agent stops before it deletes","body":"You asked for a cleanup. The agent lists the branches it would delete and waits for your yes. It never pastes a key into a chat or a pull request.","words":["agent","model table"]},"needs":[],"requires":[],"settings":[]},{"id":"t3-tuned","name":"T3 Code tuned","default":true,"sentence":"Each thread gets its own worktree, and threads that hit a usage limit resume by themselves. A worktree without uncommitted changes is removed when its thread settles or after five days.","moment":{"time":"11:30","title":"A thread picks up after its limit","body":"A long thread hit your plan's usage limit before lunch. When the limit resets, it carries on where it stopped, in its own worktree.","words":["T3 Code","worktree"]},"needs":[],"requires":[],"settings":[]},{"id":"nightly-updates","name":"Nightly updates","default":true,"sentence":"Fleet, your profile, Claude Code, Codex, their plugins, and T3 Code update themselves every night. T3 Code waits until no agent turn runs. A failed update tries again each hour until 05:47 UTC.","moment":{"time":"03:17","title":"Everything updates while you sleep","body":"Fleet moves to its newest release, pulls your profile, applies it, and updates the agent CLIs, their plugins, and T3 Code. In the morning every machine matches.","night":true},"needs":[],"requires":[],"settings":[]},{"id":"linked-machines","name":"Linked machines","default":true,"needs":["devbox"],"sentence":"Your Mac and your devboxes see each other's threads.","moment":{"time":"08:45","title":"Your devbox's threads on your Mac","body":"You open T3 Code on your Mac and see the threads that ran overnight on your devbox, next to your own.","words":["devbox"]},"requires":[],"settings":[]},{"id":"worktree-cleanup","name":"Worktree cleanup","default":true,"sentence":"Idle worktrees whose work has merged are removed every few minutes.","moment":{"time":"16:00","title":"Merged work cleans itself up","body":"Your pull request merged an hour ago. Its worktree is gone, so your disk holds only work in progress.","words":["worktree"]},"needs":[],"requires":[],"settings":[]},{"id":"disk-guard","name":"Disk guard","default":true,"needs":["devbox"],"sentence":"Agents check free disk before big jobs and run builds and tests in a capped slot, so one job cannot fill or freeze a devbox.","moment":{"time":"14:20","title":"Two test suites, one calm devbox","body":"Two threads start full test runs at once. Each runs in a capped slot, so your devbox stays responsive and neither fills the disk.","words":["devbox"]},"requires":[],"settings":[]}],"settings":[{"key":"base.heavySlots","question":"How many heavy commands may run at once?","type":"number","default":2,"ask":"never"},{"key":"base.diskFloorGigabytes","question":"Below how many free gigabytes should Fleet refuse new worktrees and heavy jobs?","type":"number","default":10,"ask":"never"},{"key":"base.startFloorGigabytes","question":"Below how many free gigabytes should fleet disk --start refuse a new thread or scheduled run?","type":"number","default":25,"ask":"never"}]},{"name":"pull-requests","title":"Pull-requests","summary":"Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged.","day":"You ask for a fix, and later find a draft pull request with its tests, its proof, and a review from a second model.","cost":"Needs GitHub, which setup signs in to. Each pull request spends extra usage on reviews: at least one round, often two, plus short final reads.","risk":"Ship words merge without asking again. Say them only for work you would merge yourself.","requires":[],"always":false,"workflows":[{"id":"draft-prs","name":"Draft PR flow","default":true,"needs":["gh"],"settings":["pull-requests.freeReviews","pull-requests.reviewCeiling","pull-requests.reviewTimeoutMinutes","pull-requests.panelSlots"],"sentence":"Every fix or feature ends as a proven, reviewed draft pull request that you mark ready yourself.","moment":{"time":"10:30","title":"A draft pull request, already reviewed","body":"The fix you asked for at breakfast is a draft pull request: tests first, proof attached, and a second model's review answered.","words":["draft pull request","proof"]},"requires":[]},{"id":"pr-care","name":"PR care","default":true,"needs":["gh"],"settings":["pull-requests.commentApproval"],"sentence":"When you ask, an agent watches a pull request, fixes CI, and answers review comments, and it can refresh a stale one.","moment":{"time":"13:15","title":"CI went red, and it is already fixed","body":"You asked the agent to watch your pull request. A check failed over lunch, and by the time you are back it has found the cause, pushed a fix, and answered the reviewer."},"requires":[]},{"id":"ship-words","name":"Ship words","default":true,"needs":["gh"],"settings":["pull-requests.mergeCommand","pull-requests.approvalBot"],"sentence":"Say \"full send\" or \"stamp it\", and the agent takes a pull request to merged and rolled out.","moment":{"time":"17:00","title":"\"full send\"","body":"You read the draft, like it, and type two words. The agent marks it ready, waits for approval and green checks, merges, and watches the rollout.","words":["full send","stamp it"]},"risk":"The agent merges without asking again once you say the words.","requires":[]}],"settings":[{"key":"pull-requests.commentApproval","question":"Which comments should agents show you before they post them?","type":"choice","default":"people","ask":"never","choices":[{"value":"people","label":"Comments a person reads"},{"value":"all","label":"Every comment"},{"value":"none","label":"None"}]},{"key":"pull-requests.mergeCommand","question":"Which command merges a pull request when the repo names no merge method? Leave it empty to merge as the rollout skill says.","type":"string","ask":"never","optional":true},{"key":"pull-requests.freeReviews","question":"How many review rounds may run before the review arbiter decides whether another round is worth it?","type":"number","default":2,"ask":"never"},{"key":"pull-requests.reviewCeiling","question":"After how many review rounds does review stop for good?","type":"number","default":6,"ask":"never"},{"key":"pull-requests.reviewTimeoutMinutes","question":"How many minutes may one review run before it counts as failed?","type":"number","default":20,"ask":"never"},{"key":"pull-requests.panelSlots","question":"How many reviewers may run at once in a review panel?","type":"number","default":3,"ask":"never"},{"key":"pull-requests.reviewFallback","question":"What should fleet pr review tell an agent to do when no pack provides a review bot? {repo} and {pr} stand for the pull request.","type":"string","optional":true,"ask":"never"},{"key":"pull-requests.stampFallback","question":"What should fleet pr stamp tell an agent to do when no pack provides a review bot? {repo} and {pr} stand for the pull request.","type":"string","optional":true,"ask":"never"},{"key":"pull-requests.approvalBot","question":"Which bot or reviewer should approve a pull request when you say \"stamp it\"?","type":"string","optional":true,"ask":"never"}]},{"name":"orchestration","title":"Orchestration","summary":"Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread.","day":"You describe a large change once. A conductor thread splits it into tickets and starts one worker thread per ticket. Once you turn them on, the loops improve your repo overnight.","cost":"The loops run on an always-on devbox and spend your AI plan's usage each night, so they start off.","risk":"The loops open pull requests without you in the room. Each one stays a draft until you say otherwise.","requires":["pull-requests"],"always":false,"workflows":[{"id":"maps","name":"Planning maps","default":true,"settings":["orchestration.tracker","orchestration.lessonsLog","orchestration.rolloutLog","orchestration.goals","orchestration.analyticsProject"],"sentence":"Big work becomes a map of tickets, and a conductor thread works through it with one worker thread per ticket.","moment":{"time":"09:30","title":"One request, many threads","body":"You describe a change that spans a week of work. The conductor charts it as a map of tickets and starts a worker thread for each ticket that is ready.","words":["map","conductor","thread"]},"needs":[],"requires":[]},{"id":"side-threads","name":"Side threads","default":true,"sentence":"When you agree to a side fix, it starts in its own T3 thread, and this thread stays on its task.","moment":{"time":"12:00","title":"A side fix gets its own thread","body":"Mid-task, the agent spots an unrelated bug. You say yes, and the fix starts in its own thread while this one stays on its task.","words":["thread"]},"needs":[],"requires":[],"settings":[]},{"id":"quality-loop","name":"Quality loop","default":false,"needs":["always-on devbox"],"settings":["orchestration.loopProject","orchestration.qualityArea","orchestration.criticalPaths","orchestration.ledgerRepo"],"sentence":"Each night, agents improve one area of a repo through small, proven draft pull requests that you review.","moment":{"time":"01:00","title":"The quality loop","body":"Overnight, agents add tests to one area of your repo, then prune and refactor it, one small proven draft pull request at a time.","night":true,"words":["always-on devbox"]},"risk":"Spends your AI plan's usage every night.","requires":[]},{"id":"signal-loop","name":"Signal loop","default":false,"needs":["always-on devbox"],"settings":["orchestration.loopProject","orchestration.qualityArea","orchestration.criticalPaths","orchestration.ledgerRepo","orchestration.signalSource"],"sentence":"Each night, agents turn production errors and friction that nobody handles into small draft fix pull requests.","moment":{"time":"02:00","title":"The signal loop","body":"Overnight, agents read the errors and slow paths your users hit, pick the ones nobody handles, and open a small proven draft fix for each.","night":true},"risk":"Reads production signals and spends your AI plan's usage every night.","requires":[]},{"id":"pr-digest","name":"PR digest","default":false,"needs":["always-on devbox"],"settings":["orchestration.loopProject"],"sentence":"Each weekday morning, one thread lists your open pull requests and what blocks each one.","moment":{"time":"08:00","title":"Your pull requests on one page","body":"Before you start, one thread lists every open pull request of yours and the one thing each one waits for."},"requires":[]}],"settings":[{"key":"orchestration.tracker","question":"Which repo's issues hold your maps? Leave it empty to use your Fleet profile repo.","type":"string","optional":true,"ask":"never"},{"key":"orchestration.lessonsLog","question":"Which file holds the lessons log that maps read and write, such as a path in a private repo?","type":"string","optional":true,"ask":"never"},{"key":"orchestration.rolloutLog","question":"Which file logs your rollouts, one JSON line per stage, so fleet lessons can name holds and rollbacks? ~/ is allowed.","type":"string","default":"","ask":"never"},{"key":"orchestration.goals","question":"Where do your team's goals live, so a map can name the metric its work moves?","type":"string","optional":true,"ask":"never"},{"key":"orchestration.analyticsProject","question":"Which analytics project shows how people use your product?","type":"string","optional":true,"ask":"never"},{"key":"orchestration.loopProject","question":"Which T3 project do the loops and the PR digest run in?","type":"string"},{"key":"orchestration.qualityArea","question":"Which paths of the repo may the loops change, such as src/billing?","type":"string"},{"key":"orchestration.criticalPaths","question":"Which paths need your review before a loop's pull request is ready, such as src/payments?","type":"string","optional":true},{"key":"orchestration.ledgerRepo","question":"Which private repo holds the loops' ledger? It records production numbers, so keep it private.","type":"string"},{"key":"orchestration.signalSource","question":"Where should the signal loop read production errors and friction? Leave it empty to use an analytics MCP when one is connected.","type":"string","optional":true,"ask":"never"}]},{"name":"communication","title":"Communication","summary":"Agents write in your voice, give short updates, and share plans and previews as links.","day":"Agents draft messages, pull request descriptions, and docs the way you write them. Plans and running apps reach other people as links.","cost":"No extra usage beyond the drafts you ask for.","risk":"Shared plans are secret gists: anyone with the link can read them.","requires":[],"always":false,"workflows":[{"id":"voice","name":"Your voice","default":true,"sentence":"Agents write messages, pull request descriptions, and docs in your voice, from a skill you own.","moment":{"time":"11:00","title":"A draft that sounds like you","body":"You ask for a reply to a long thread. The agent drafts it in your voice, with the point first, and you send it with one edit.","words":["skill"]},"needs":[],"requires":[],"settings":[]},{"id":"updates","name":"Updates and shared plans","default":true,"sentence":"Agents give updates with the outcome first, and share plans and reports as one link. Type /explain-diff to have a change explained.","moment":{"time":"16:30","title":"One link for the team","body":"You ask for the plan as a page. The agent publishes it to an unlisted link that you paste into the team channel.","words":["agent"]},"needs":[],"requires":[],"settings":[]}],"settings":[]},{"name":"memory","title":"Memory","summary":"Agents on all your machines share what they learn through your own private memory repo.","day":"A trap one agent hits on your laptop is a note the next agent reads on your devbox, minutes later.","cost":"A small private GitHub repo, and a sync every five minutes.","risk":"Agents write notes about you and your work into the memory repo. Keep it private.","requires":[],"always":false,"workflows":[{"id":"shared-memory","name":"Shared memory","default":true,"needs":["gh"],"settings":["memory.repo","memory.subtree"],"sentence":"Agents on every machine read and write one private memory repo, which syncs every five minutes.","moment":{"time":"10:30","title":"It remembers","body":"An agent on your devbox already knows the trap another agent hit on your laptop this morning, because both read the same memory.","words":["agent","devbox"]},"requires":[]}],"settings":[{"key":"memory.repo","question":"Which private GitHub repo holds your agent memory, such as you/agent-notes?","type":"string","ask":"setup"},{"key":"memory.subtree","question":"Which folder of the memory repo holds the memory? Leave it empty when the memory is the whole repo.","type":"string","default":"","ask":"never"}]},{"name":"guards","title":"Guards","summary":"Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops.","day":"A prompt injection that tells an agent to pipe a script into a shell gets a refusal that names you, and the agent stops to ask.","cost":"Nothing to run: a hook checks each shell command before it starts.","risk":"A guard can refuse a command you meant. The refusal says why and what to do instead. Every guard is off until you turn it on.","requires":[],"always":false,"workflows":[{"id":"shell-guards","name":"Shell guards","default":false,"sentence":"Agents cannot pipe network code into a shell, run a package the project lacks, change how Git maps URLs, use gh outside your GitHub owners, poll in a loop of turns, kill their own shell with pkill -f, skip Git hooks, force-push without a lease, or push to main of a repository that takes pull requests.","moment":{"time":"13:40","title":"A README asks for curl | sh","body":"An agent reads a README that says to pipe an install script into a shell. Fleet refuses, and the agent stops to ask you instead.","words":["agent"]},"settings":["guards.owners","guards.main-push-repos"],"needs":[],"requires":[]},{"id":"git-allowlist","name":"Signed Git allowlist","default":false,"needs":["devbox"],"settings":["guards.owners","guards.signers"],"sentence":"Git refuses any remote whose GitHub owner is not on a list you signed. With the shell guards on, gh follows the same list.","moment":{"time":"15:05","title":"A clone of the wrong repo stops at Git","body":"A script in a repo tries to clone a fork from an owner you never allowed. Git refuses the remote and the agent stops to ask you, even though no hook saw the command.","words":["agent"]},"risk":"Git refuses every remote outside the signed list, including other hosts than GitHub. Root, or anyone with sudo, can remove it. It stops mistakes, not a hostile agent: an agent that runs as you can override it with its own Git config, or edit the staged script before you run it with sudo.","requires":[]},{"id":"package-age","name":"Package age","default":false,"sentence":"Package installs through pnpm and Bun take only versions at least three days old, unless a project or you set another age.","moment":{"time":"10:05","title":"A hijacked release never lands","body":"A popular package publishes a hijacked version at breakfast. Your agent adds the package before lunch and gets the version from last week, because the new one is not three days old yet.","words":["agent"]},"needs":[],"requires":[],"settings":[]},{"id":"oom-survival","name":"OOM survival","default":false,"needs":["devbox"],"sentence":"Before memory runs out, earlyoom stops a runaway test or build, and T3's agent threads survive when the kernel kills a process inside them.","moment":{"time":"17:20","title":"One test run, every thread alive","body":"A test run eats all the memory on your devbox. earlyoom stops it, and every other thread carries on.","words":["devbox","thread"]},"requires":[],"settings":[]}],"settings":[{"key":"guards.person","question":"Whom should a refusal tell the agent to ask, such as your first name?","type":"string","default":"the person who runs this machine","ask":"never"},{"key":"guards.owners","question":"Which GitHub owners may agents use, separated by commas, such as you,your-org?","type":"string","optional":true,"ask":"never"},{"key":"guards.main-push-repos","question":"Which GitHub repositories take pushes straight to main or master, as owner/name separated by commas?","type":"string","optional":true,"ask":"never"},{"key":"guards.signers","question":"Which SSH public keys may sign the Git allowlist, one per line?","type":"string","optional":true,"ask":"never"}]},{"name":"slack","title":"Slack","summary":"Your own message, reaction, or mention in Slack starts a T3 thread about it.","day":"A teammate reports a bug in a Slack thread. You react with :t3code:, and a thread starts to find the cause, with the whole Slack thread as its context.","cost":"Your own Slack app, made from a manifest in a few minutes, and one small process that stays connected to Slack.","risk":"Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread, and the prompt treats the rest of the Slack thread as data.","requires":[],"always":false,"workflows":[{"id":"slack-thread","name":"Start a thread from Slack","default":false,"sentence":"Your own Slack message with :t3code:, your :t3code: reaction, or a mention of your Slack app starts a T3 thread, and Slack shows you its link.","moment":{"time":"13:50","title":"A thread from a Slack emoji","body":"A teammate reports a bug in Slack. You react with one emoji, and a thread starts to find the cause. Slack shows you its link a few seconds later.","words":["thread"]},"risk":"Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread.","settings":["slack.userId"],"needs":[],"requires":[]}],"settings":[{"key":"slack.userId","type":"string","question":"What is your Slack member ID, so only your own messages start threads? In Slack, open your profile, then More, then Copy member ID."}]},{"name":"hub","title":"Hub","summary":"One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks.","day":"Every machine reaches your MCP servers through the hub, and a devbox that fills its disk is cleaned before you notice.","cost":"One devbox that stays on, and some setup on it. Every other machine keeps working when the hub is down.","risk":"The hub holds sign-ins for your MCP servers and reaches every devbox over SSH. Keep it as private as your laptop.","requires":[],"always":false,"workflows":[{"id":"disk-watch","name":"Disk watch","default":true,"needs":["hub"],"settings":["hub.alias","hub.diskSweepGigabytes","hub.diskAlertGigabytes","hub.threadFolder"],"sentence":"The hub cleans a devbox whose disk runs low with fleet prune and each tool's own cache cleaner, and names the largest folders only when that cannot free enough.","risk":"The sweep deletes only this. Through fleet prune: worktrees idle for 6 hours, or 24 when no T3 thread or agent owns them, whose commits are on the default branch or in a merged pull request, whose T3 thread is closed, or whose agent has been idle for a day. Their commits stay on their branch, but their lockfile and tool output changes are dropped. Also worktree folders that Git no longer tracks and no open T3 thread uses. Itself: the oldest part of a T3 boot log over 100 MB. Through pnpm store prune, uv cache prune and go clean -cache: caches those tools fill again. It never runs Nix garbage collection and never removes Cargo build output, the uv cache folder, old T3 versions, Docker data or Bun's cache, which projects can link into. It deletes no other file. For the rest, you decide.","moment":{"time":"15:10","title":"A full disk you never saw","body":"A devbox dropped under its free-space floor after a big build. The hub ran fleet prune, trimmed the T3 boot log, and ran the pnpm, uv and Go cache cleaners on it, so your threads kept running.","words":["hub","devbox","worktree"]},"requires":[]},{"id":"linked-hub","name":"Hub links","default":true,"needs":["hub"],"settings":["hub.alias","hub.httpsHost","hub.relayPort"],"sentence":"The hub keeps SSH tunnels and T3 links to every devbox open, so each one can start threads on the others.","moment":{"time":"08:50","title":"Every devbox reaches every other","body":"A thread on one devbox hands a task to another. The hub keeps the tunnels and links between them renewed every night.","words":["hub","devbox","T3 Code"]},"requires":[]},{"id":"dream","name":"Dream","default":false,"needs":["hub","gh"],"settings":["hub.alias","hub.dreamSessions"],"sentence":"Each night, the hub reads the day's agent sessions from every machine and opens one draft pull request that adds to, condenses, and prunes your shared memory.","moment":{"time":"04:10","title":"Memory that tidies itself","body":"Overnight, the hub reads what your agents did on every devbox. In the morning a draft pull request waits: two new rules for your call, and a few memories merged and trimmed.","night":true,"words":["hub","agent","draft pull request"]},"risk":"Every run sends your agent sessions to an analyst model and spends your AI plan's usage, so it starts off. Your session text stays on the hub for 14 days.","requires":[]},{"id":"own-account-balancing","name":"Own-account balancing","default":false,"needs":["hub"],"settings":["hub.alias","hub.relayPort","hub.proxyAccounts"],"sentence":"The hub holds your own Claude or Codex subscriptions in a local proxy, and Claude Code and Codex on the hub, your devboxes, and boxes go through it, spending the Claude subscription whose weekly quota resets first.","moment":{"time":"11:30","title":"No weekly quota left unused","body":"Your first subscription resets tomorrow and still has quota. Every thread spends it first. When it hits its limit, the next one takes over, and nobody signs in again.","words":["hub","devbox","thread"]},"risk":"On the Claude and both plans, the hub keeps your Claude sign-ins in CLIProxyAPI, and every machine in the workflow sends Claude Code through it. On the Codex and both plans, it keeps your ChatGPT sign-ins there, and every machine sends Codex through it. The balancer ranks only Claude subscriptions by reset date. Read Anthropic's terms first, and OpenAI's terms for your plan too. As read on 2026-11-05: the Anthropic Usage Policy, effective Nov 12, 2026, section \"Do Not Abuse Our Platform\" (https://www.anthropic.com/legal/aup), lists: \"Resell, proxy, or otherwise provide access to Claude through unauthorized means, including services that route requests through consumer subscriptions or misrepresent the product or client being used\". The Anthropic Consumer Terms, effective Oct 8, 2025, section 2 (https://www.anthropic.com/legal/consumer-terms), say: \"You may not share your Account login information, Anthropic API key, or Account credentials with anyone else. You also may not make your Account available to anyone else.\" Section 3, item 7 of the same terms lists: \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" Balancing is only for your own subscriptions, never for someone else's.","requires":[]}],"settings":[{"key":"hub.alias","question":"What is the SSH name of your hub, the always-on devbox that manages the others, such as my-hub?","type":"string"},{"key":"hub.diskSweepGigabytes","question":"Below how many free gigabytes does the hub clean a devbox's disk?","type":"number","default":15,"ask":"never"},{"key":"hub.diskAlertGigabytes","question":"Below how many free gigabytes after a cleanup does the hub tell you?","type":"number","default":10,"ask":"never"},{"key":"hub.httpsHost","question":"Which private host name does a browser on your own computer use to open the hub's sign-in pages over HTTPS, such as hub.internal.example.com? Devboxes always reach the hub through their SSH tunnels. Leave it empty to skip HTTPS.","type":"string","optional":true,"ask":"never"},{"key":"hub.relayPort","question":"Which port on the hub do the SSH tunnels from your devboxes use?","type":"number","default":60001,"ask":"never"},{"key":"hub.dreamSessions","question":"How many sessions may one Dream run send to an analyst model? Each one spends model tokens.","type":"number","default":150,"ask":"never"},{"key":"hub.threadFolder","question":"Which folder do the hub's threads start in, such as ~/notes? The hub starts its disk alerts there. Fleet adds it as a T3 Code project when T3 does not know it yet.","type":"string","default":"~","ask":"never"},{"key":"hub.proxyAccounts","question":"How many of your own subscriptions must the hub's proxy hold before fleet cli-proxy doctor passes? They are Claude subscriptions, or Codex ones on the Codex plan.","type":"number","default":2,"ask":"never"}]},{"name":"mcp-gateway","title":"MCP gateway","summary":"The hub signs in to your MCP servers once, and agents on every machine reach them through it.","day":"Every machine reaches your MCP servers through the hub, signed in once.","cost":"Docker on the hub. Every other machine reaches the gateway through its tunnel to the hub.","risk":"The hub holds the sign-ins for your MCP servers, and each machine holds a key that reaches all of them. Keep the hub as private as your laptop.","requires":[],"always":false,"workflows":[{"id":"mcp-gateway","name":"MCP gateway","default":true,"sentence":"The hub signs in to your MCP servers once, and agents on every machine reach them through it.","moment":{"time":"09:20","title":"Every tool, signed in once","body":"An agent on your laptop reads a Slack thread and an agent on a fresh box queries your analytics, both through the hub. You signed in to each tool once.","words":["hub","agent","MCP server"]},"needs":[],"requires":[],"settings":[]},{"id":"slack-bridge","name":"Slack bridge","default":false,"sentence":"Agents read Slack as you through the MCP gateway, and leave only unsent drafts and canvases.","moment":{"time":"11:40","title":"A reply waits for you, unsent","body":"An agent reads the incident thread and the canvas, fills the canvas in, and leaves a reply as a draft in the thread. You read it and press send.","words":["agent"]},"risk":"The bridge acts as your Slack account. It reads what you can read, and writes only drafts you send yourself and canvases.","needs":[],"requires":[],"settings":[]},{"id":"gmail","name":"Gmail","default":false,"requires":["mcp-gateway"],"sentence":"Agents read your mail and leave replies as unsent drafts, through the MCP gateway.","moment":{"time":"10:10","title":"Gmail, read through the hub","body":"An agent reads the thread a customer replied to and leaves a reply as a draft. You read it and press send.","words":["agent"]},"risk":"The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns Gmail off on every machine.","needs":[],"settings":[]},{"id":"google-calendar","name":"Google Calendar","default":false,"requires":["mcp-gateway"],"sentence":"Agents read your calendar through the MCP gateway, and change nothing.","moment":{"time":"10:10","title":"Google Calendar, read through the hub","body":"An agent finds a free hour for the review across both calendars, and tells you which one.","words":["agent"]},"risk":"The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns Google Calendar off on every machine.","needs":[],"settings":[]},{"id":"google-drive","name":"Google Drive","default":false,"requires":["mcp-gateway"],"sentence":"Agents read your documents, sheets and slides through the MCP gateway, and change nothing.","moment":{"time":"10:10","title":"Google Drive, read through the hub","body":"An agent reads the planning doc and the sheet behind it, and answers from both.","words":["agent"]},"risk":"The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns Google Drive off on every machine.","needs":[],"settings":[]},{"id":"mail-watch","name":"Mail replies start threads","default":false,"requires":["gmail"],"sentence":"A reply in a Gmail conversation that you wrote in starts a T3 thread about it, and later replies in that conversation go to the same thread.","moment":{"time":"08:40","title":"A reply waits in a thread","body":"A customer answers the mail you sent yesterday. Two minutes later a thread sums up what they ask and proposes a reply. Their next answer lands in the same thread.","words":["hub","thread"]},"risk":"Mail from outside becomes agent prompts. The prompt treats every email as data, and the Gmail route can only read mail and write drafts.","settings":["mcp-gateway.mailQuery"],"needs":[]},{"id":"review-wait","name":"Review wait wakes threads","default":false,"requires":["slack-bridge"],"sentence":"When a ready pull request of yours waits 4 hours on a review nobody gave, the T3 thread that links it wakes up, and again at 24 hours.","moment":{"time":"14:00","title":"A silent review request speaks up","body":"Your pull request has waited on the team since the morning. The thread that owns it wakes and asks whether to ping a named reviewer, nudge the team in Slack, or keep waiting.","words":["hub","thread"]},"risk":"Reads your pull requests on GitHub and your own Slack messages from the last 12 hours. It messages your threads and changes nothing on GitHub or Slack.","settings":["mcp-gateway.reviewWaitSearch","mcp-gateway.reviewWaitAsks"],"needs":[]}],"settings":[{"key":"mcp-gateway.mailQuery","type":"string","default":"in:inbox -from:me -category:promotions -category:social -category:forums","question":"Which Gmail search finds the mail that may be a reply to you? Mail watch adds the time window itself."},{"key":"mcp-gateway.reviewWaitSearch","type":"string","default":"","question":"Which GitHub search qualifiers narrow the ready pull requests that review wait watches, such as org:your-org? Leave it empty for all of yours."},{"key":"mcp-gateway.reviewWaitAsks","type":"string","question":"Which Slack search filter finds your own review asks, such as from:\u003c@U012ABCDEF> in:#your-team? Review wait holds a pull request you linked there in the last 12 hours."}]},{"name":"recovery","title":"Recovery","summary":"Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity.","day":"A thread that hits your plan's usage limit or a provider outage at night goes on by itself once your provider has capacity again, and a thread that keeps failing reaches you as one alert thread.","cost":"One small request per provider through the hub's proxy, at most every five minutes, while a thread waits on a limit or an outage.","risk":"Fleet sends continue messages to stopped threads without you in the room.","requires":[],"always":false,"workflows":[{"id":"provider-recovery","name":"Provider recovery","default":false,"needs":["hub"],"sentence":"Threads that stop on a usage limit or a provider outage continue by themselves once the provider answers again.","moment":{"time":"03:00","title":"A usage limit does not end the night","body":"A thread hits your plan's usage limit in the middle of the night. Once the hub's proxy serves its provider again, Fleet sends it one continue message and the work goes on.","night":true},"risk":"Sends continue messages to stopped threads without you in the room, and starts an alert thread in the hub's thread folder.","requires":[],"settings":[]}],"settings":[]}],"teamPacks":[],"ownDevboxPacks":[],"needsHubPacks":["hub","mcp-gateway","recovery"],"prefersHubPacks":["slack"],"concepts":[{"word":"agent","note":"An AI coding assistant, such as Claude Code or Codex, that reads, writes, and runs code for you."},{"word":"skill","note":"A folder of instructions an agent loads when a task needs it, such as how to open a pull request."},{"word":"model table","note":"Which model and effort agents use for each kind of work, such as a fast model for lookups and a strong one for reviews."},{"word":"T3 Code","note":"An app that runs agent threads on your machines and shows them on every device."},{"word":"thread","note":"One agent conversation in T3 Code, with its own task, often in its own worktree."},{"word":"worktree","note":"A separate checkout of the same repo, so several threads can change code at once without touching each other."},{"word":"devbox","note":"A Linux machine, local or in the cloud, where agents and threads run."},{"word":"always-on devbox","note":"A devbox that stays on overnight, so scheduled agent work can run while you sleep."},{"word":"hub","note":"One always-on devbox that manages your other machines: it shares your MCP servers, keeps your devboxes linked, and watches their disks. Only the Hub pack adds one."},{"word":"MCP server","note":"A connector that gives agents a tool, such as Slack or your analytics, through the Model Context Protocol."},{"word":"map","note":"A plan for big work: one issue that lists tickets, each small enough for one pull request."},{"word":"conductor","note":"The thread that works through a map. It starts one worker thread for each ticket that is ready."},{"word":"draft pull request","note":"A pull request that is not yet ready for review. Agents open drafts, and you decide when one is ready."},{"word":"proof","note":"Evidence beside each behavior a pull request changes: a test that failed before and passes after, or output from the real system."},{"word":"full send","note":"A phrase you type to tell the agent to take this pull request to merged and rolled out, without asking again."},{"word":"stamp it","note":"A phrase you type to tell the agent to get this pull request an approving review, then merge it."}],"needPacks":{"hub":"hub"},"needLabels":{"gh":"GitHub","devbox":"a devbox","always-on devbox":"an always-on devbox","hub":"the Hub pack"},"teamNote":"A team can add its own pack from a private pack source: a GitHub repo of packs. Setup ticks it for members of the team's GitHub org."}</script>
+<dialog id="pack-sheet" aria-labelledby="sheet-title"></dialog>
+<script id="fleet-data" type="application/json">{"engineRepo":"Silthus/fleet-engine","defaultPreset":"everyday","filledBySetup":["memory.repo"],"presets":[{"id":"starter","name":"Starter","blurb":"You get safe agent rules, tuned T3 defaults, and draft pull requests.","packs":["pull-requests"],"hubPacks":["hub"],"workflows":{},"hubWorkflows":{}},{"id":"everyday","name":"Everyday","blurb":"You get Starter, maps of tickets, side threads, and agents that write in your voice.","packs":["pull-requests","orchestration","communication"],"hubPacks":["hub"],"workflows":{},"hubWorkflows":{}},{"id":"everything","name":"Everything","blurb":"You get every pack. That is Everyday, shared memory, guards, Slack, and the nightly loops. With a hub, you also get the MCP gateway and recovery.","packs":["pull-requests","orchestration","communication","memory","guards","slack"],"hubPacks":["hub","mcp-gateway","recovery"],"hubWorkflows":{"slack-thread":true,"own-account-balancing":true,"provider-recovery":true},"workflows":{"quality-loop":true,"signal-loop":true,"pr-digest":true,"shell-guards":true,"package-age":true}}],"packs":[{"name":"base","title":"Base","summary":"Every machine gets safety rules, the model table, T3 Code defaults, and the jobs that keep it current.","day":"Agents ask before they break things, pick the right model for each task, and every machine is up to date when you start.","cost":"You set up nothing. Every Fleet machine gets it.","risk":"Fleet owns its hooks in Claude Code and Codex. Fleet keeps a hook that you wrote yourself on the same event until you adopt Fleet's.","requires":[],"always":true,"workflows":[{"id":"agent-rules","name":"Agent rules","sentence":"Agents confirm destructive actions, keep private data out of public repos, and pick the right model for each task.","needs":[],"requires":[],"default":true,"settings":[]},{"id":"t3-tuned","name":"T3 Code tuned","sentence":"Each thread gets its own worktree, and threads that hit a usage limit resume by themselves. A worktree without uncommitted changes is removed when its thread settles or after five days.","needs":[],"requires":[],"default":true,"settings":[]},{"id":"nightly-updates","name":"Nightly updates","sentence":"Fleet, your profile, Claude Code, Codex, their plugins, and T3 Code update themselves every night. T3 Code waits until no agent turn runs. A failed update tries again each hour until 05:47 UTC.","needs":[],"requires":[],"default":true,"settings":[]},{"id":"linked-machines","name":"Linked machines","sentence":"Your Mac and your devboxes see each other's threads.","needs":["devbox"],"requires":[],"default":true,"settings":[]},{"id":"worktree-cleanup","name":"Worktree cleanup","sentence":"Every few minutes, Fleet removes idle worktrees whose work has merged.","needs":[],"requires":[],"default":true,"settings":[]},{"id":"disk-guard","name":"Disk guard","sentence":"Agents check free disk before big jobs and run builds and tests in a capped slot, so one job cannot fill or freeze a devbox.","needs":["devbox"],"requires":[],"default":true,"settings":[]}],"settings":[{"key":"base.heavySlots","question":"How many heavy commands may run at once?","type":"number","default":2,"ask":"never"},{"key":"base.diskFloorGigabytes","question":"Below how many free gigabytes should Fleet refuse new worktrees and heavy jobs?","type":"number","default":10,"ask":"never"},{"key":"base.startFloorGigabytes","question":"Below how many free gigabytes should fleet disk --start refuse a new thread or scheduled run?","type":"number","default":25,"ask":"never"}]},{"name":"pull-requests","title":"Pull-requests","summary":"Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged.","day":"You ask for a fix, and later find a draft pull request with its tests, its proof, and a review from a second model.","cost":"It needs GitHub, and setup signs you in. Each pull request spends extra usage on reviews. Expect at least one round, often two, and short final reads.","risk":"Ship words merge without asking again. Say them only for work you would merge yourself.","requires":[],"always":false,"workflows":[{"id":"draft-prs","name":"Draft PR flow","sentence":"Every fix or feature ends as a proven, reviewed draft pull request that you mark ready yourself.","needs":["gh"],"requires":[],"default":true,"settings":["pull-requests.freeReviews","pull-requests.reviewCeiling","pull-requests.reviewTimeoutMinutes","pull-requests.panelSlots"]},{"id":"pr-care","name":"PR care","sentence":"When you ask, an agent watches a pull request, fixes CI, and answers review comments, and it can refresh a stale one.","needs":["gh"],"requires":[],"default":true,"settings":["pull-requests.commentApproval"]},{"id":"ship-words","name":"Ship words","sentence":"Say \"full send\" or \"stamp it\", and the agent takes a pull request to merged and rolled out.","needs":["gh"],"requires":[],"default":true,"settings":["pull-requests.mergeCommand","pull-requests.approvalBot"],"risk":"The agent merges without asking again once you say the words."}],"settings":[{"key":"pull-requests.commentApproval","question":"Which comments should agents show you before they post them?","type":"choice","default":"people","ask":"never","choices":[{"value":"people","label":"Comments a person reads"},{"value":"all","label":"Every comment"},{"value":"none","label":"None"}]},{"key":"pull-requests.mergeCommand","question":"Which command merges a pull request when the repo names no merge method? Leave it empty to merge as the rollout skill says.","type":"string","ask":"never","optional":true},{"key":"pull-requests.freeReviews","question":"How many review rounds may run before the review arbiter decides whether another round is worth it?","type":"number","default":2,"ask":"never"},{"key":"pull-requests.reviewCeiling","question":"After how many review rounds does review stop for good?","type":"number","default":6,"ask":"never"},{"key":"pull-requests.reviewTimeoutMinutes","question":"How many minutes may one review run before it counts as failed?","type":"number","default":20,"ask":"never"},{"key":"pull-requests.panelSlots","question":"How many reviewers may run at once in a review panel?","type":"number","default":3,"ask":"never"},{"key":"pull-requests.reviewFallback","question":"What should fleet pr review tell an agent to do when no pack provides a review bot? {repo} and {pr} stand for the pull request.","type":"string","optional":true,"ask":"never"},{"key":"pull-requests.stampFallback","question":"What should fleet pr stamp tell an agent to do when no pack provides a review bot? {repo} and {pr} stand for the pull request.","type":"string","optional":true,"ask":"never"},{"key":"pull-requests.approvalBot","question":"Which bot or reviewer should approve a pull request when you say \"stamp it\"?","type":"string","optional":true,"ask":"never"}]},{"name":"orchestration","title":"Orchestration","summary":"Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread.","day":"You describe a large change once. A conductor thread splits it into tickets and starts one worker thread per ticket. Once you turn them on, the loops improve your repo overnight.","cost":"The loops run on an always-on devbox and spend your AI plan's usage each night, so they start off.","risk":"The loops open pull requests without you in the room. Each one stays a draft until you say otherwise.","requires":["pull-requests"],"always":false,"workflows":[{"id":"maps","name":"Planning maps","sentence":"Big work becomes a map of tickets, and a conductor thread works through it with one worker thread per ticket.","needs":[],"requires":[],"default":true,"settings":["orchestration.tracker","orchestration.lessonsLog","orchestration.rolloutLog","orchestration.goals","orchestration.analyticsProject"]},{"id":"side-threads","name":"Side threads","sentence":"When you agree to a side fix, it starts in its own T3 thread, and this thread stays on its task.","needs":[],"requires":[],"default":true,"settings":[]},{"id":"quality-loop","name":"Quality loop","sentence":"Each night, agents improve one area of a repo through small, proven draft pull requests that you review.","needs":["always-on devbox"],"requires":[],"default":false,"settings":["orchestration.loopProject","orchestration.qualityArea","orchestration.criticalPaths","orchestration.ledgerRepo"],"risk":"Spends your AI plan's usage every night."},{"id":"signal-loop","name":"Signal loop","sentence":"Each night, agents turn production errors and friction that nobody handles into small draft fix pull requests.","needs":["always-on devbox"],"requires":[],"default":false,"settings":["orchestration.loopProject","orchestration.qualityArea","orchestration.criticalPaths","orchestration.ledgerRepo","orchestration.signalSource"],"risk":"Reads production signals and spends your AI plan's usage every night."},{"id":"pr-digest","name":"PR digest","sentence":"Each weekday morning, one thread lists your open pull requests and what blocks each one.","needs":["always-on devbox"],"requires":[],"default":false,"settings":["orchestration.loopProject"]}],"settings":[{"key":"orchestration.tracker","question":"Which repo's issues hold your maps? Leave it empty to use your Fleet profile repo.","type":"string","optional":true,"ask":"never"},{"key":"orchestration.lessonsLog","question":"Which file holds the lessons log that maps read and write, such as a path in a private repo?","type":"string","optional":true,"ask":"never"},{"key":"orchestration.rolloutLog","question":"Which file logs your rollouts, one JSON line per stage, so fleet lessons can name holds and rollbacks? ~/ is allowed.","type":"string","default":"","ask":"never"},{"key":"orchestration.goals","question":"Where do your team's goals live, so a map can name the metric its work moves?","type":"string","optional":true,"ask":"never"},{"key":"orchestration.analyticsProject","question":"Which analytics project shows how people use your product?","type":"string","optional":true,"ask":"never"},{"key":"orchestration.loopProject","question":"Which T3 project do the loops and the PR digest run in?","type":"string"},{"key":"orchestration.qualityArea","question":"Which paths of the repo may the loops change, such as src/billing?","type":"string"},{"key":"orchestration.criticalPaths","question":"Which paths need your review before a loop's pull request is ready, such as src/payments?","type":"string","optional":true},{"key":"orchestration.ledgerRepo","question":"Which private repo holds the loops' ledger? It records production numbers, so keep it private.","type":"string"},{"key":"orchestration.signalSource","question":"Where should the signal loop read production errors and friction? Leave it empty to use an analytics MCP when one is connected.","type":"string","optional":true,"ask":"never"}]},{"name":"communication","title":"Communication","summary":"Agents write in your voice, give short updates, and share plans and previews as links.","day":"Agents draft messages, pull request descriptions, and docs the way you write them. Plans and running apps reach other people as links.","cost":"It spends no extra usage beyond the drafts you ask for.","risk":"Shared plans are secret gists. Anyone with the link can read them.","requires":[],"always":false,"workflows":[{"id":"voice","name":"Your voice","sentence":"Agents write messages, pull request descriptions, and docs in your voice, from a skill you own.","needs":[],"requires":[],"default":true,"settings":[]},{"id":"updates","name":"Updates and shared plans","sentence":"Agents give updates with the outcome first, and share plans and reports as one link. Type /explain-diff to have a change explained.","needs":[],"requires":[],"default":true,"settings":[]}],"settings":[]},{"name":"memory","title":"Memory","summary":"Agents on all your machines share what they learn through your own private memory repo.","day":"A trap one agent hits on your laptop is a note the next agent reads on your devbox, minutes later.","cost":"You need a small private GitHub repo. It syncs every five minutes.","risk":"Agents write notes about you and your work into the memory repo. Keep it private.","requires":[],"always":false,"workflows":[{"id":"shared-memory","name":"Shared memory","sentence":"Agents on every machine read and write one private memory repo, which syncs every five minutes.","needs":["gh"],"requires":[],"default":true,"settings":["memory.repo","memory.subtree"]}],"settings":[{"key":"memory.repo","question":"Which private GitHub repo holds your agent memory, such as you/agent-notes?","type":"string","ask":"setup"},{"key":"memory.subtree","question":"Which folder of the memory repo holds the memory? Leave it empty when the memory is the whole repo.","type":"string","default":"","ask":"never"}]},{"name":"guards","title":"Guards","summary":"Hooks stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops.","day":"A prompt injection that tells an agent to pipe a script into a shell gets a refusal that names you, and the agent stops to ask.","cost":"You run nothing. A hook checks each shell command before it starts.","risk":"A guard can refuse a command you meant. The refusal says why and what to do instead. Every guard is off until you turn it on.","requires":[],"always":false,"workflows":[{"id":"shell-guards","name":"Shell guards","sentence":"Agents cannot pipe network code into a shell, run a package the project lacks, change how Git maps URLs, use gh outside your GitHub owners, poll in a loop of turns, kill their own shell with pkill -f, skip Git hooks, force-push without a lease, or push to main of a repository that takes pull requests.","needs":[],"requires":[],"default":false,"settings":["guards.owners","guards.main-push-repos"]},{"id":"git-allowlist","name":"Signed Git allowlist","sentence":"Git refuses any remote whose GitHub owner is not on a list you signed. With the shell guards on, gh follows the same list.","needs":["devbox"],"requires":[],"default":false,"settings":["guards.owners","guards.signers"],"risk":"Git refuses every remote outside the signed list, including other hosts than GitHub. Root, or anyone with sudo, can remove it. It stops mistakes, not a hostile agent. An agent that runs as you can override it with its own Git config, or edit the staged script before you run it with sudo."},{"id":"package-age","name":"Package age","sentence":"Package installs through pnpm and Bun take only versions at least three days old, unless a project or you set another age.","needs":[],"requires":[],"default":false,"settings":[]},{"id":"oom-survival","name":"OOM survival","sentence":"Before memory runs out, earlyoom stops a runaway test or build, and T3's agent threads survive when the kernel kills a process inside them.","needs":["devbox"],"requires":[],"default":false,"settings":[]}],"settings":[{"key":"guards.person","question":"Whom should a refusal tell the agent to ask, such as your first name?","type":"string","default":"the person who runs this machine","ask":"never"},{"key":"guards.owners","question":"Which GitHub owners may agents use, separated by commas, such as you,your-org?","type":"string","optional":true,"ask":"never"},{"key":"guards.main-push-repos","question":"Which GitHub repositories take pushes straight to main or master, as owner/name separated by commas?","type":"string","optional":true,"ask":"never"},{"key":"guards.signers","question":"Which SSH public keys may sign the Git allowlist, one per line?","type":"string","optional":true,"ask":"never"}]},{"name":"slack","title":"Slack","summary":"Your own message, reaction, or mention in Slack starts a T3 thread about it.","day":"A teammate reports a bug in a Slack thread. You react with :t3code:, and a thread starts to find the cause, with the whole Slack thread as its context.","cost":"You need your own Slack app, which you make from a manifest in a few minutes. One small process stays connected to Slack.","risk":"Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread, and the prompt treats the rest of the Slack thread as data.","requires":[],"always":false,"workflows":[{"id":"slack-thread","name":"Start a thread from Slack","sentence":"Your own Slack message with :t3code:, your :t3code: reaction, or a mention of your Slack app starts a T3 thread, and Slack shows you its link.","needs":[],"requires":[],"default":false,"settings":["slack.userId"],"risk":"Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread."}],"settings":[{"key":"slack.userId","type":"string","question":"What is your Slack member ID, so only your own messages start threads? In Slack, open your profile, then More, then Copy member ID."}]},{"name":"hub","title":"Hub","summary":"One always-on devbox manages the others. It signs in to your MCP servers once, keeps your devboxes linked, and watches their disks.","day":"Every machine reaches your MCP servers through the hub, and the hub cleans a devbox that fills its disk before you notice.","cost":"You need one devbox that stays on, and some setup on it. Every other machine keeps working when the hub is down.","risk":"The hub holds sign-ins for your MCP servers and reaches every devbox over SSH. Keep it as private as your laptop.","requires":[],"always":false,"workflows":[{"id":"disk-watch","name":"Disk watch","sentence":"The hub cleans a devbox whose disk runs low with fleet prune and each tool's own cache cleaner, and names the largest folders only when that cannot free enough.","needs":["hub"],"requires":[],"default":true,"settings":["hub.alias","hub.diskSweepGigabytes","hub.diskAlertGigabytes","hub.threadFolder"],"risk":"The sweep deletes only this. Through fleet prune: worktrees idle for 6 hours, or 24 when no T3 thread or agent owns them, whose commits are on the default branch or in a merged pull request, whose T3 thread is closed, or whose agent has been idle for a day. Their commits stay on their branch, but their lockfile and tool output changes are dropped. Also worktree folders that Git no longer tracks and no open T3 thread uses. Itself: the oldest part of a T3 boot log over 100 MB. Through pnpm store prune, uv cache prune and go clean -cache: caches those tools fill again. It never runs Nix garbage collection and never removes Cargo build output, the uv cache folder, old T3 versions, Docker data or Bun's cache, which projects can link into. It deletes no other file. For the rest, you decide."},{"id":"linked-hub","name":"Hub links","sentence":"The hub keeps SSH tunnels and T3 links to every devbox open, so each one can start threads on the others.","needs":["hub"],"requires":[],"default":true,"settings":["hub.alias","hub.httpsHost","hub.relayPort"]},{"id":"dream","name":"Dream","sentence":"Each night, the hub reads the day's agent sessions from every machine and opens one draft pull request that adds to, condenses, and prunes your shared memory.","needs":["hub","gh"],"requires":[],"default":false,"settings":["hub.alias","hub.dreamSessions"],"risk":"Every run sends your agent sessions to an analyst model and spends your AI plan's usage, so it starts off. Your session text stays on the hub for 14 days."},{"id":"own-account-balancing","name":"Own-account balancing","sentence":"The hub holds your own Claude or Codex subscriptions in a local proxy, and Claude Code and Codex on the hub, your devboxes, and boxes go through it, spending the Claude subscription whose weekly quota resets first.","needs":["hub"],"requires":[],"default":false,"settings":["hub.alias","hub.relayPort","hub.proxyAccounts"],"risk":"On the Claude and both plans, the hub keeps your Claude sign-ins in CLIProxyAPI, and every machine in the workflow sends Claude Code through it. On the Codex and both plans, it keeps your ChatGPT sign-ins there, and every machine sends Codex through it. The balancer ranks only Claude subscriptions by reset date. Read Anthropic's terms first, and OpenAI's terms for your plan too. As read on 2026-11-05: the Anthropic Usage Policy, effective Nov 12, 2026, section \"Do Not Abuse Our Platform\" (https://www.anthropic.com/legal/aup), lists: \"Resell, proxy, or otherwise provide access to Claude through unauthorized means, including services that route requests through consumer subscriptions or misrepresent the product or client being used\". The Anthropic Consumer Terms, effective Oct 8, 2025, section 2 (https://www.anthropic.com/legal/consumer-terms), say: \"You may not share your Account login information, Anthropic API key, or Account credentials with anyone else. You also may not make your Account available to anyone else.\" Section 3, item 7 of the same terms lists: \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" Balancing is only for your own subscriptions, never for someone else's."}],"settings":[{"key":"hub.alias","question":"What is the SSH name of your hub, the always-on devbox that manages the others, such as my-hub?","type":"string"},{"key":"hub.diskSweepGigabytes","question":"Below how many free gigabytes does the hub clean a devbox's disk?","type":"number","default":15,"ask":"never"},{"key":"hub.diskAlertGigabytes","question":"Below how many free gigabytes after a cleanup does the hub tell you?","type":"number","default":10,"ask":"never"},{"key":"hub.httpsHost","question":"Which private host name does a browser on your own computer use to open the hub's sign-in pages over HTTPS, such as hub.internal.example.com? Devboxes always reach the hub through their SSH tunnels. Leave it empty to skip HTTPS.","type":"string","optional":true,"ask":"never"},{"key":"hub.relayPort","question":"Which port on the hub do the SSH tunnels from your devboxes use?","type":"number","default":60001,"ask":"never"},{"key":"hub.dreamSessions","question":"How many sessions may one Dream run send to an analyst model? Each one spends model tokens.","type":"number","default":150,"ask":"never"},{"key":"hub.threadFolder","question":"Which folder do the hub's threads start in, such as ~/notes? The hub starts its disk alerts there. Fleet adds it as a T3 Code project when T3 does not know it yet.","type":"string","default":"~","ask":"never"},{"key":"hub.proxyAccounts","question":"How many of your own subscriptions must the hub's proxy hold before fleet cli-proxy doctor passes? They are Claude subscriptions, or Codex ones on the Codex plan.","type":"number","default":2,"ask":"never"}]},{"name":"mcp-gateway","title":"MCP gateway","summary":"The hub signs in to your MCP servers once, and agents on every machine reach them through it.","day":"Every machine reaches your MCP servers through the hub, signed in once.","cost":"The hub needs Docker. Every other machine reaches the gateway through its tunnel to the hub.","risk":"The hub holds the sign-ins for your MCP servers, and each machine holds a key that reaches all of them. Keep the hub as private as your laptop.","requires":[],"always":false,"workflows":[{"id":"mcp-gateway","name":"MCP gateway","sentence":"The hub signs in to your MCP servers once, and agents on every machine reach them through it.","needs":[],"requires":[],"default":true,"settings":[]},{"id":"slack-bridge","name":"Slack bridge","sentence":"Agents read Slack as you through the MCP gateway, and leave only unsent drafts and canvases.","needs":[],"requires":[],"default":false,"settings":[],"risk":"The bridge acts as your Slack account. It reads what you can read, and writes only drafts you send yourself and canvases."},{"id":"gmail","name":"Gmail","sentence":"Agents read your mail and leave replies as unsent drafts, through the MCP gateway.","needs":[],"requires":["mcp-gateway"],"default":false,"settings":[],"risk":"The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns Gmail off on every machine."},{"id":"google-calendar","name":"Google Calendar","sentence":"Agents read your calendar through the MCP gateway, and change nothing.","needs":[],"requires":["mcp-gateway"],"default":false,"settings":[],"risk":"The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns Google Calendar off on every machine."},{"id":"google-drive","name":"Google Drive","sentence":"Agents read your documents, sheets and slides through the MCP gateway, and change nothing.","needs":[],"requires":["mcp-gateway"],"default":false,"settings":[],"risk":"The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns Google Drive off on every machine."},{"id":"mail-watch","name":"Mail replies start threads","sentence":"A reply in a Gmail conversation that you wrote in starts a T3 thread about it, and later replies in that conversation go to the same thread.","needs":[],"requires":["gmail"],"default":false,"settings":["mcp-gateway.mailQuery"],"risk":"Mail from outside becomes agent prompts. The prompt treats every email as data, and the Gmail route can only read mail and write drafts."},{"id":"review-wait","name":"Review wait wakes threads","sentence":"When a ready pull request of yours waits 4 hours on a review nobody gave, the T3 thread that links it wakes up, and again at 24 hours.","needs":[],"requires":["slack-bridge"],"default":false,"settings":["mcp-gateway.reviewWaitSearch","mcp-gateway.reviewWaitAsks"],"risk":"Reads your pull requests on GitHub and your own Slack messages from the last 12 hours. It messages your threads and changes nothing on GitHub or Slack."}],"settings":[{"key":"mcp-gateway.mailQuery","type":"string","default":"in:inbox -from:me -category:promotions -category:social -category:forums","question":"Which Gmail search finds the mail that may be a reply to you? Mail watch adds the time window itself."},{"key":"mcp-gateway.reviewWaitSearch","type":"string","default":"","question":"Which GitHub search qualifiers narrow the ready pull requests that review wait watches, such as org:your-org? Leave it empty for all of yours."},{"key":"mcp-gateway.reviewWaitAsks","type":"string","question":"Which Slack search filter finds your own review asks, such as from:\u003c@U012ABCDEF> in:#your-team? Review wait holds a pull request you linked there in the last 12 hours."}]},{"name":"recovery","title":"Recovery","summary":"Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity.","day":"A thread that hits your plan's usage limit or a provider outage at night goes on by itself once your provider has capacity again, and a thread that keeps failing reaches you as one alert thread.","cost":"While a thread waits on a limit or an outage, Fleet sends one small request per provider through the hub's proxy, at most every five minutes.","risk":"Fleet sends continue messages to stopped threads without you in the room.","requires":[],"always":false,"workflows":[{"id":"provider-recovery","name":"Provider recovery","sentence":"Threads that stop on a usage limit or a provider outage continue by themselves once the provider answers again.","needs":["hub"],"requires":[],"default":false,"settings":[],"risk":"Sends continue messages to stopped threads without you in the room, and starts an alert thread in the hub's thread folder."}],"settings":[]}],"teamPacks":[],"ownDevboxPacks":[],"needsHubPacks":["hub","mcp-gateway","recovery"],"prefersHubPacks":["slack"],"needPacks":{"hub":"hub"},"needLabels":{"gh":"GitHub","devbox":"a devbox","always-on devbox":"an always-on devbox","hub":"the Hub pack"},"overview":{"image":"data:image/svg+xml,%3Csvg%20viewBox%3D%220%200%20760%20330%22%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20role%3D%22img%22%20aria-labelledby%3D%22title%20desc%22%3E%0A%20%20%3Ctitle%20id%3D%22title%22%3EWhat%20Fleet%20sets%20up%3C%2Ftitle%3E%0A%20%20%3Cdesc%20id%3D%22desc%22%3EYour%20Mac%20runs%20T3%20Code.%20It%20links%20to%20your%20devboxes%2C%20where%20agent%20threads%20work%20in%20their%20own%20worktrees.%20An%20optional%20hub%20shares%20MCP%20servers%20with%20them.%20Every%20machine%20reads%20the%20same%20private%20profile%20repo%20on%20GitHub.%3C%2Fdesc%3E%0A%20%20%3Cstyle%3E%0A%20%20%20%20svg%20%7B%20--bg%3A%20%23eeefe9%3B%20--surface%3A%20%23fdfdf8%3B%20--sunk%3A%20%23e5e7e0%3B%20--fg%3A%20%23151515%3B%20--muted%3A%20%235c5d56%3B%20--accent%3A%20%231d4aff%3B%20font-family%3A%20%22IBM%20Plex%20Sans%22%2C%20-apple-system%2C%20%22Segoe%20UI%22%2C%20Helvetica%2C%20Arial%2C%20sans-serif%3B%20%7D%0A%20%20%20%20%40media%20(prefers-color-scheme%3A%20dark)%20%7B%20svg%20%7B%20--bg%3A%20%23151515%3B%20--surface%3A%20%231f1f1f%3B%20--sunk%3A%20%232c2c2c%3B%20--fg%3A%20%23eeefe9%3B%20--muted%3A%20%23a9aaa2%3B%20--accent%3A%20%238aa2ff%3B%20%7D%20%7D%0A%20%20%20%20.bg%20%7B%20fill%3A%20var(--bg)%3B%20%7D%0A%20%20%20%20.node%20%7B%20fill%3A%20var(--surface)%3B%20stroke%3A%20var(--fg)%3B%20stroke-width%3A%201.5%3B%20%7D%0A%20%20%20%20.opt%20%7B%20fill%3A%20var(--surface)%3B%20stroke%3A%20var(--muted)%3B%20stroke-width%3A%201.5%3B%20stroke-dasharray%3A%206%205%3B%20%7D%0A%20%20%20%20.sub%20%7B%20fill%3A%20var(--sunk)%3B%20%7D%0A%20%20%20%20.txt%20%7B%20fill%3A%20var(--fg)%3B%20font-size%3A%2014px%3B%20font-weight%3A%20600%3B%20%7D%0A%20%20%20%20.small%20%7B%20fill%3A%20var(--muted)%3B%20font-size%3A%2012px%3B%20%7D%0A%20%20%20%20.mono%20%7B%20fill%3A%20var(--fg)%3B%20font%3A%2011px%20ui-monospace%2C%20Menlo%2C%20monospace%3B%20%7D%0A%20%20%20%20.link%20%7B%20stroke%3A%20var(--accent)%3B%20stroke-width%3A%202%3B%20fill%3A%20none%3B%20%7D%0A%20%20%20%20.optlink%20%7B%20stroke%3A%20var(--muted)%3B%20stroke-width%3A%201.5%3B%20fill%3A%20none%3B%20stroke-dasharray%3A%205%204%3B%20%7D%0A%20%20%20%20.lbl%20%7B%20fill%3A%20var(--accent)%3B%20font-size%3A%2012px%3B%20font-weight%3A%20600%3B%20%7D%0A%20%20%3C%2Fstyle%3E%0A%20%20%3Crect%20class%3D%22bg%22%20width%3D%22760%22%20height%3D%22330%22%20rx%3D%2214%22%2F%3E%0A%20%20%3Crect%20class%3D%22node%22%20x%3D%2220%22%20y%3D%2240%22%20width%3D%22200%22%20height%3D%22130%22%20rx%3D%2212%22%2F%3E%0A%20%20%3Ctext%20class%3D%22txt%22%20x%3D%2238%22%20y%3D%2268%22%3EYour%20Mac%3C%2Ftext%3E%0A%20%20%3Crect%20class%3D%22sub%22%20x%3D%2238%22%20y%3D%2282%22%20width%3D%22164%22%20height%3D%2234%22%20rx%3D%226%22%2F%3E%3Ctext%20class%3D%22mono%22%20x%3D%2250%22%20y%3D%22104%22%3ET3%20Code%20app%3C%2Ftext%3E%0A%20%20%3Ctext%20class%3D%22small%22%20x%3D%2238%22%20y%3D%22140%22%3EYou%20talk%20to%20your%20agents%20here%2C%3C%2Ftext%3E%3Ctext%20class%3D%22small%22%20x%3D%2238%22%20y%3D%22156%22%3Eor%20on%20your%20phone.%3C%2Ftext%3E%0A%20%20%3Cpath%20class%3D%22link%22%20d%3D%22M220%20105%20H310%22%2F%3E%3Ctext%20class%3D%22lbl%22%20x%3D%22228%22%20y%3D%2295%22%3ET3%20Connect%3C%2Ftext%3E%0A%20%20%3Crect%20class%3D%22node%22%20x%3D%22310%22%20y%3D%2222%22%20width%3D%22250%22%20height%3D%22170%22%20rx%3D%2212%22%2F%3E%0A%20%20%3Ctext%20class%3D%22txt%22%20x%3D%22328%22%20y%3D%2250%22%3EYour%20devboxes%3C%2Ftext%3E%0A%20%20%3Crect%20class%3D%22sub%22%20x%3D%22328%22%20y%3D%2264%22%20width%3D%22214%22%20height%3D%2228%22%20rx%3D%226%22%2F%3E%3Ctext%20class%3D%22mono%22%20x%3D%22340%22%20y%3D%2283%22%3Ethread%20%C2%B7%20worktree%20fix-login%3C%2Ftext%3E%0A%20%20%3Crect%20class%3D%22sub%22%20x%3D%22328%22%20y%3D%2298%22%20width%3D%22214%22%20height%3D%2228%22%20rx%3D%226%22%2F%3E%3Ctext%20class%3D%22mono%22%20x%3D%22340%22%20y%3D%22117%22%3Ethread%20%C2%B7%20worktree%20new-chart%3C%2Ftext%3E%0A%20%20%3Crect%20class%3D%22sub%22%20x%3D%22328%22%20y%3D%22132%22%20width%3D%22214%22%20height%3D%2228%22%20rx%3D%226%22%2F%3E%3Ctext%20class%3D%22mono%22%20x%3D%22340%22%20y%3D%22151%22%3Ethread%20%C2%B7%20worktree%20docs%3C%2Ftext%3E%0A%20%20%3Ctext%20class%3D%22small%22%20x%3D%22328%22%20y%3D%22180%22%3EAgents%20use%20skills%20from%20your%20packs.%3C%2Ftext%3E%0A%20%20%3Cpath%20class%3D%22optlink%22%20d%3D%22M435%20192%20V232%22%2F%3E%0A%20%20%3Crect%20class%3D%22opt%22%20x%3D%22310%22%20y%3D%22232%22%20width%3D%22250%22%20height%3D%2268%22%20rx%3D%2212%22%2F%3E%0A%20%20%3Ctext%20class%3D%22txt%22%20x%3D%22328%22%20y%3D%22258%22%3EHub%20(optional)%3C%2Ftext%3E%0A%20%20%3Ctext%20class%3D%22small%22%20x%3D%22328%22%20y%3D%22278%22%3EAn%20always-on%20devbox%20that%20shares%3C%2Ftext%3E%3Ctext%20class%3D%22small%22%20x%3D%22328%22%20y%3D%22293%22%3EMCP%20servers%20with%20the%20others.%3C%2Ftext%3E%0A%20%20%3Crect%20class%3D%22node%22%20x%3D%22590%22%20y%3D%2240%22%20width%3D%22150%22%20height%3D%22130%22%20rx%3D%2212%22%2F%3E%0A%20%20%3Ctext%20class%3D%22txt%22%20x%3D%22606%22%20y%3D%2268%22%3EYour%20profile%3C%2Ftext%3E%0A%20%20%3Crect%20class%3D%22sub%22%20x%3D%22606%22%20y%3D%2282%22%20width%3D%22118%22%20height%3D%2228%22%20rx%3D%226%22%2F%3E%3Ctext%20class%3D%22mono%22%20x%3D%22616%22%20y%3D%22101%22%3Efleet-profile%3C%2Ftext%3E%0A%20%20%3Ctext%20class%3D%22small%22%20x%3D%22606%22%20y%3D%22134%22%3EA%20private%20GitHub%20repo%3C%2Ftext%3E%3Ctext%20class%3D%22small%22%20x%3D%22606%22%20y%3D%22150%22%3Ewith%20your%20answers.%3C%2Ftext%3E%0A%20%20%3Cpath%20class%3D%22optlink%22%20d%3D%22M728%20170%20V316%20H120%20V170%20M435%20300%20V316%20M590%20105%20H560%22%2F%3E%0A%20%20%3Ctext%20class%3D%22small%22%20x%3D%22588%22%20y%3D%22190%22%3EEvery%20machine%20reads%20it%2C%3C%2Ftext%3E%3Ctext%20class%3D%22small%22%20x%3D%22588%22%20y%3D%22206%22%3Eso%20all%20of%20them%20match.%3C%2Ftext%3E%0A%3C%2Fsvg%3E%0A","alt":"Your Mac runs T3 Code. It links to your devboxes, where agent threads work in their own worktrees. An optional hub shares MCP servers with them. Every machine reads the same private profile repo on GitHub."},"teamNote":"A team can add its own pack from a private pack source, which is a GitHub repo of packs. Setup ticks the pack for members of the team's GitHub org."}</script>
 <script>
 // src/setup/flags.ts
 class FlagError extends Error {
@@ -307,6 +314,17 @@ function parseSettingValue(setting, raw) {
   return text;
 }
 
+// page/flows.ts
+var packFlows = {
+  "pull-requests": ["Your request", "Tests, then the fix", "Review by a second model", "Draft pull request"],
+  orchestration: ["A large change", "Map of tickets", "Conductor thread", "One worker thread per ticket", "Draft pull requests"],
+  memory: ["Agent on your Mac", "Your memory repo", "Agent on a devbox"],
+  guards: ["Agent's shell command", "Guard hook", "The command runs or stops"],
+  slack: ["Your Slack message or reaction", "Your Slack app", "T3 thread", "Link in Slack"],
+  "mcp-gateway": ["Agent on any machine", "Tunnel to the hub", "MCP gateway", "Your MCP servers"],
+  recovery: ["A thread hits a usage limit", "The hub asks the provider", "The provider answers", "The thread continues"]
+};
+
 // page/icons.ts
 var drawn = (shapes) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${shapes}</svg>`;
 var slackLogo = `<svg viewBox="0 0 24 24" aria-hidden="true">
@@ -331,13 +349,12 @@ var teamIcon = drawn(`<circle cx="9" cy="8" r="3.2"/><path d="M3 20c.4-3.4 2.9-5
 var brandIcons = new Set(["slack"]);
 var packIcon = (name) => packIcons[name] ?? teamIcon;
 var uiIcons = {
-  laptop: drawn(`<rect x="4.5" y="5" width="15" height="10.5" rx="1.5"/><path d="M2.5 19h19"/>`),
-  server: drawn(`<rect x="4" y="4" width="16" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="16" height="6.5" rx="1.5"/><path d="M7.5 7.25h.01"/><path d="M7.5 16.75h.01"/>`),
-  lock: drawn(`<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>`),
   arrow: drawn(`<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>`),
-  down: drawn(`<path d="M12 5v14"/><path d="m6 13 6 6 6-6"/>`),
-  check: drawn(`<path d="m5 12.5 4.5 4.5L19 7.5"/>`)
+  close: drawn(`<path d="m6 6 12 12"/><path d="M18 6 6 18"/>`)
 };
+
+// page/logo.ts
+var logoMark = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Fleet"><rect x="1" y="1" width="30" height="30" rx="8" fill="#f1a82c" stroke="#151515" stroke-width="2"/><path fill="#151515" d="M16.5 9.5 27 16l-10.5 6.5 2.6-6.5-2.6-6.5ZM6 5.5 14.5 10 6 14.5l2-4.5-2-4.5ZM6 17.5 14.5 22 6 26.5l2-4.5-2-4.5Z"/></svg>`;
 
 // page/model.ts
 var packOf = (data, name) => data.packs.find((pack) => pack.name === name);
@@ -353,16 +370,18 @@ var sameSet = (left, right) => left.length === right.length && left.every((item)
 var chosen = (picks, workflow) => picks.workflows[workflow.id] ?? workflow.default;
 function presetPicks(data, id, settings = {}, where = "mac") {
   const preset = presetOf(data, id);
-  return { preset: preset.id, where, packs: presetPacks(data, preset, where), workflows: { ...preset.workflows, ...where === "hub" ? preset.hubWorkflows : {} }, settings };
+  const hubWorkflows = where === "hub" ? preset.hubWorkflows : {};
+  return { preset: preset.id, where, packs: presetPacks(data, preset, where), workflows: { ...preset.workflows, ...hubWorkflows }, settings, hubPathWorkflows: Object.keys(hubWorkflows) };
 }
 function setWhere(data, picks, where) {
   if (picks.where === where)
     return picks;
   const preset = presetOf(data, picks.preset);
   const packs = where === "hub" ? [...picks.packs, ...preset.hubPacks] : picks.packs.filter((name) => !data.needsHubPacks.includes(name));
-  const kept = Object.entries(picks.workflows).filter(([id, on]) => preset.hubWorkflows[id] !== on || Object.hasOwn(preset.workflows, id));
-  const workflows = where === "hub" ? { ...preset.hubWorkflows, ...picks.workflows } : Object.fromEntries(kept);
-  return { ...picks, where, packs: inPageOrder(data, packs), workflows };
+  const fromPath = picks.hubPathWorkflows ?? [];
+  const added = Object.keys(preset.hubWorkflows).filter((id) => !Object.hasOwn(picks.workflows, id));
+  const workflows = where === "hub" ? { ...preset.hubWorkflows, ...picks.workflows } : Object.fromEntries(Object.entries(picks.workflows).filter(([id]) => !fromPath.includes(id)));
+  return { ...picks, where, packs: inPageOrder(data, packs), workflows, hubPathWorkflows: where === "hub" ? added : [] };
 }
 function setupSplit(data, picks) {
   const hubSide = [...data.needsHubPacks, ...data.prefersHubPacks];
@@ -411,7 +430,8 @@ function toggleWorkflow(data, picks, id) {
       data.packs.flatMap((pack) => pack.workflows).filter((item) => item.requires.includes(target.id)).forEach((item) => turn(item, false));
   };
   turn(workflow, !chosen(picks, workflow));
-  return { ...picks, workflows };
+  const untouched = (picks.hubPathWorkflows ?? []).filter((item) => workflows[item] === picks.workflows[item]);
+  return { ...picks, workflows, hubPathWorkflows: untouched };
 }
 function setSetting(_data, picks, key, value) {
   const settings = { ...picks.settings };
@@ -424,7 +444,7 @@ function setSetting(_data, picks, key, value) {
 function missingPack(data, picks, workflow) {
   return workflow.needs.map((need) => data.needPacks[need]).find((name) => !!name && !picks.packs.includes(name));
 }
-function momentState(data, picks, workflow, pack = data.packs.find((item) => item.workflows.includes(workflow))?.name, seen = new Set) {
+function workflowState(data, picks, workflow, pack = data.packs.find((item) => item.workflows.includes(workflow))?.name, seen = new Set) {
   const owner = pack ? packOf(data, pack) : undefined;
   if (owner && !owner.always && !picks.packs.includes(owner.name))
     return { on: false, fix: { pack: owner.name } };
@@ -436,7 +456,7 @@ function momentState(data, picks, workflow, pack = data.packs.find((item) => ite
   seen.add(workflow.id);
   for (const id of workflow.requires.filter((required) => !seen.has(required))) {
     const required = workflowOf(data, id);
-    const state = required ? momentState(data, picks, required, undefined, seen) : { on: false, fix: { workflow: id } };
+    const state = required ? workflowState(data, picks, required, undefined, seen) : { on: false, fix: { workflow: id } };
     if (!state.on)
       return state;
   }
@@ -444,8 +464,8 @@ function momentState(data, picks, workflow, pack = data.packs.find((item) => ite
 }
 var remoteNeeds = ["devbox", "always-on devbox", "hub"];
 var waitsForHub = (picks, workflow) => picks.where === "mac" && workflow.needs.some((need) => remoteNeeds.includes(need));
-function dayState(data, picks, workflow) {
-  const state = momentState(data, picks, workflow);
+function runState(data, picks, workflow) {
+  const state = workflowState(data, picks, workflow);
   const hubPack = !state.on && "pack" in state.fix && data.needsHubPacks.includes(state.fix.pack);
   if (picks.where === "mac" && (hubPack || state.on && waitsForHub(picks, workflow)))
     return { on: false, fix: { where: "hub" } };
@@ -458,8 +478,8 @@ function activePreset(data, picks) {
   return matches(own) ? own : data.presets.find(matches);
 }
 var devboxNeeds = ["devbox", "always-on devbox"];
-var onForMacSetup = (data, picks, workflow) => momentState(data, picks, workflow).on && !workflow.needs.some((need) => devboxNeeds.includes(need));
-function activeSettings(data, picks, pack, active = (workflow) => momentState(data, picks, workflow).on) {
+var onForMacSetup = (data, picks, workflow) => workflowState(data, picks, workflow).on && !workflow.needs.some((need) => devboxNeeds.includes(need));
+function activeSettings(data, picks, pack, active = (workflow) => workflowState(data, picks, workflow).on) {
   const workflows = picked(data, picks).flatMap((item) => item.workflows);
   const listed = new Set(workflows.flatMap((workflow) => workflow.settings));
   const wanted = new Set(workflows.filter(active).flatMap((workflow) => workflow.settings));
@@ -544,8 +564,8 @@ var promptLabels = {
   laterWorkflows: "Workflows once the hub runs",
   setting: "Setting"
 };
-function changedWorkflows(data, picks, packs, always) {
-  return data.packs.filter((pack) => pack.always ? always : packs.includes(pack.name)).flatMap((pack) => pack.workflows).filter((workflow) => chosen(picks, workflow) !== workflow.default).map((workflow) => `${workflow.id}=${chosen(picks, workflow) ? "on" : "off"}`);
+function namedWorkflows(data, picks, packs, firstSetup) {
+  return data.packs.filter((pack) => pack.always ? firstSetup : packs.includes(pack.name)).flatMap((pack) => pack.workflows).filter((workflow) => chosen(picks, workflow) !== workflow.default || !firstSetup && workflow.default).map((workflow) => `${workflow.id}=${chosen(picks, workflow) ? "on" : "off"}`);
 }
 function promptText(data, picks) {
   const { first, later } = setupSplit(data, picks);
@@ -557,8 +577,8 @@ function promptText(data, picks) {
     promptLabels.intro,
     `- ${promptLabels.where}: ${whereLabels[picks.where]}`,
     list(promptLabels.firstPacks, first),
-    ...optional(promptLabels.firstWorkflows, changedWorkflows(data, picks, first, true)),
-    ...picks.where === "hub" ? [list(promptLabels.laterPacks, later), ...optional(promptLabels.laterWorkflows, changedWorkflows(data, picks, later, false))] : [],
+    ...optional(promptLabels.firstWorkflows, namedWorkflows(data, picks, first, true)),
+    ...picks.where === "hub" ? [list(promptLabels.laterPacks, later), ...optional(promptLabels.laterWorkflows, namedWorkflows(data, picks, later, false))] : [],
     ...answered(data, picks).map((setting) => `- ${promptLabels.setting}: ${setting.key}=${String(picks.settings[setting.key])}`)
   ].join(`
 `);
@@ -569,6 +589,9 @@ var data = JSON.parse(document.getElementById("fleet-data").textContent);
 var picks = presetPicks(data, data.defaultPreset);
 var tab = "command";
 var opened = new Set;
+var openPack;
+var sheetTab = "overview";
+var sheet = document.getElementById("pack-sheet");
 var esc = (text) => String(text).replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 var fmt = (text) => esc(text).replace(/`([^`]+)`/g, "<code>$1</code>");
 var plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -578,49 +601,18 @@ var packOn = (pack) => pack.always || picks.packs.includes(pack.name);
 var needsHub = (pack) => data.needsHubPacks.includes(pack.name);
 var iconTile = (name, size = "") => `<span class="icon ${size} ${brandIcons.has(name) ? "brand" : ""}">${packIcon(name)}</span>`;
 var open = (key) => `data-open="${esc(key)}" ${opened.has(key) ? "open" : ""}`;
-var shortWhere = { mac: "Mac only", hub: "Hub and node" };
-var moments = data.packs.flatMap((pack) => pack.workflows.map((workflow) => ({ pack, workflow, moment: workflow.moment }))).filter((item) => item.moment).sort((left, right) => left.moment.time.localeCompare(right.moment.time));
-var isOn = (item) => dayState(data, picks, item.workflow).on;
 var hubButton = (focus, fallback) => `<button class="btn-line" data-act="where" data-id="hub" data-focus="${esc(focus)}" data-fallback="${esc(fallback)}">Add a hub and a node</button>`;
-function ribbon() {
-  const bins = Array.from({ length: 48 }, () => []);
-  for (const item of moments) {
-    const [hours = 0, minutes = 0] = item.moment.time.split(":").map(Number);
-    bins[hours * 2 + (minutes >= 30 ? 1 : 0)].push(isOn(item));
-  }
-  const dots = (lit) => lit.toSorted((left, right) => Number(right) - Number(left)).map((on) => `<i class="dot ${on ? "lit" : ""}"></i>`).join("");
-  return `<div class="ribbon" role="img" aria-label="${moments.filter(isOn).length} of ${moments.length} moments of the day are on with your picks">
-    <div class="ribbon-track">${bins.map((lit) => `<span class="bin">${dots(lit)}</span>`).join("")}</div>
-    <div class="ribbon-hours" aria-hidden="true"><span style="left:0">00:00</span><span class="mid" style="left:25%">06:00</span><span class="mid" style="left:50%">12:00</span><span class="mid" style="left:75%">18:00</span><span style="right:0">24:00</span></div>
-  </div>`;
-}
 function hero() {
-  const on = moments.filter(isOn).length;
   return `<header class="hero"><div class="wrap hero-in">
-    <div class="hero-copy">
-      <p class="eyebrow">Fleet · agent workflows on every machine</p>
-      <h1>Set up your coding agents once. Every machine gets the same.</h1>
-      <p class="lede">Fleet sets up T3 Code, Claude Code, Codex, and a set of agent workflows on your Mac and your Linux devboxes. Choose where it runs and what it does. Then paste one prompt, and an agent sets it up with you.</p>
-      <nav class="route" aria-label="On this page"><a href="#where"><b>1</b>Where it runs</a><a href="#packs"><b>2</b>Your packs</a><a href="#start"><b>3</b>Get started</a></nav>
+    <p class="brand">${logoMark}<span>Fleet</span></p>
+    <h1>Set up your coding agents once. Every machine gets the same setup.</h1>
+    <div class="pitch">
+      <div><p class="eyebrow">The problem</p><p>Coding agents get much better with good rules, skills, and a machine that stays on. Setting that up by hand takes a day for each machine, and the machines drift apart.</p></div>
+      <div><p class="eyebrow">What Fleet does</p><p>Fleet sets up T3 Code, Claude Code, Codex, and a set of agent workflows on your Mac and your Linux devboxes. You pick the workflows as <b>packs</b>. Your answers live in your own private <b>profile</b> repo, so every machine gets the same setup.</p></div>
     </div>
-    <div class="daycard">
-      <p class="eyebrow">A day with your picks</p>
-      <p class="daycount"><b>${on}</b> of ${moments.length} moments</p>
-      ${ribbon()}
-      <p class="daynote"><span class="key"><i class="dot lit"></i>yours</span><span class="key"><i class="dot"></i>with other picks</span><a href="#day">See the day</a></p>
-    </div>
+    <figure class="overview"><img src="${data.overview.image}" alt="${esc(data.overview.alt)}" width="760" height="330"></figure>
+    <nav class="route" aria-label="On this page"><a href="#where"><b>1</b>Choose where it runs</a><a href="#packs"><b>2</b>Choose your packs</a><a class="go" href="#start"><b>3</b>Get started</a></nav>
   </div></header>`;
-}
-function bar() {
-  const preset = activePreset(data, picks);
-  return `<div class="bar"><div class="wrap bar-in">
-    <div class="bar-picks" aria-label="Your picks">
-      <a href="#where">${picks.where === "mac" ? uiIcons.laptop : uiIcons.server}<span>${shortWhere[picks.where]}</span></a>
-      <a href="#packs"><span>${preset ? esc(preset.name) : "Custom"} · ${plural(picks.packs.length, "pack")}</span></a>
-      <a href="#day" class="bar-day"><span>${moments.filter(isOn).length} of ${moments.length} moments</span></a>
-    </div>
-    <a class="cta" href="#start"><span>Get started</span>${uiIcons.down}</a>
-  </div></div>`;
 }
 var stepHead = (number, id, title, sub) => `<header class="step-head"><span class="step-n" aria-hidden="true">${number}</span><div><h2 id="${id}-h">${title}</h2><p class="muted prose">${sub}</p></div></header>`;
 function whereDiagram(where) {
@@ -639,10 +631,10 @@ function whereDiagram(where) {
 function whereCard(where) {
   const on = picks.where === where;
   const hubTitles = data.needsHubPacks.map((name) => packOf2(name).title);
-  const facts = where === "mac" ? ["Every pack's skills and rules, and each workflow a Mac can run.", "Agents stop when the Mac sleeps.", "Workflows that need a machine that stays on, such as the nightly loops, wait until you add a node."] : [
+  const facts = where === "mac" ? ["Your Mac gets every pack's skills and rules, and each workflow that a Mac can run.", "Agents stop when the Mac sleeps.", "Workflows that need a machine that stays on, such as the nightly loops, wait until you add a node."] : [
     "Two Linux devboxes in the cloud stay on while the Mac sleeps.",
     "The node is where threads do the work. The hub links your machines and watches their disks.",
-    ...hubTitles.length ? [`Makes room for ${plural(hubTitles.length, "more pack")}: ${listed(hubTitles)}.`] : [],
+    ...hubTitles.length ? [`You can turn on ${plural(hubTitles.length, "more pack")}, ${listed(hubTitles)}.`] : [],
     "Add more nodes later, when the load grows."
   ];
   return `<div class="where ${on ? "on" : ""}" data-act="where" data-id="${where}">
@@ -653,7 +645,7 @@ function whereCard(where) {
 }
 function whereSection() {
   return `<section id="where" class="step" aria-labelledby="where-h">
-    ${stepHead(1, "where", "Where should your agents run?", "Start on your Mac. A hub and a node keep agents working while it sleeps, and you can add them later.")}
+    ${stepHead(1, "where", "Where should your agents run?", "Start on your Mac. A hub and a node keep agents working while the Mac sleeps. You can add them later.")}
     <fieldset class="wheres"><legend class="sr">Where Fleet runs</legend>${whereCard("mac")}${whereCard("hub")}</fieldset>
   </section>`;
 }
@@ -664,21 +656,20 @@ function presetCards() {
     const minis = data.packs.filter((pack) => pack.always || names.includes(pack.name)).map((pack) => iconTile(pack.name, "mini")).join("");
     return `<button class="preset" data-act="preset" data-id="${esc(preset.id)}" data-focus="preset:${esc(preset.id)}" aria-pressed="${active?.id === preset.id}">
         <span class="preset-name">${esc(preset.name)}</span><span class="preset-blurb">${esc(preset.blurb)}</span>
-        <span class="preset-icons" aria-hidden="true">${minis}</span><span class="preset-count">Base + ${plural(names.length, "pack")}</span>
+        <span class="preset-icons" aria-hidden="true">${minis}</span><span class="preset-count">Base and ${plural(names.length, "pack")}</span>
       </button>`;
   }).join("");
   return `<div class="presets" role="group" aria-label="Presets">${cards}</div>
-    <p class="preset-state muted" data-live="preset">${active ? `You are on the ${esc(active.name)} preset. Change any pack below to make it yours.` : "Your own picks. Choose a preset to start over from it."}</p>`;
+    <p class="preset-state muted" data-live="preset">${active ? `You are on the ${esc(active.name)} preset. Turn any pack on or off below.` : "These are your own picks. Choose a preset to start again from it."}</p>`;
 }
 function needChips(pack, workflow) {
   const live = packOn(pack) && chosen(picks, workflow);
   const unmet = (need) => live && (missingPack(data, picks, { ...workflow, needs: [need] }) !== undefined || waitsForHub(picks, { ...workflow, needs: [need] }));
   return workflow.needs.filter((need) => data.needPacks[need] !== pack.name).map((need) => `<span class="need ${unmet(need) ? "miss" : ""}">needs ${esc(data.needLabels[need] ?? need)}</span>`).join("");
 }
-var riskNote = (key, risk) => risk ? `<details class="sub risk" ${open(key)}><summary>Know before you turn it on</summary><div class="warnbox">${fmt(risk)}</div></details>` : "";
 function workflowRows(pack) {
   return pack.workflows.map((workflow) => {
-    const state = dayState(data, picks, workflow);
+    const state = runState(data, picks, workflow);
     const blocked = !packOn(pack) || missingPack(data, picks, workflow) !== undefined;
     const requires = !state.on && "workflow" in state.fix && state.fix.workflow !== workflow.id ? workflowOf(data, state.fix.workflow) : undefined;
     const chips = `${workflow.default ? "" : '<span class="need">off by default</span>'}${needChips(pack, workflow)}`;
@@ -688,7 +679,7 @@ function workflowRows(pack) {
           <div class="wf-sentence">${fmt(workflow.sentence)}</div>
           ${chips ? `<div class="needs">${chips}</div>` : ""}
           ${requires ? `<div class="wf-hint">Turn on ${esc(requires.name)} first.</div>` : ""}
-          ${riskNote(`risk:${workflow.id}`, workflow.risk)}
+          ${workflow.risk ? `<details class="sub risk" ${open(`risk:${workflow.id}`)}><summary>Read before you turn it on</summary><p class="warn">${fmt(workflow.risk)}</p></details>` : ""}
         </div></div>`;
   }).join("");
 }
@@ -707,7 +698,7 @@ function markFor(setting, asks = questions(data, picks)) {
   if (value !== undefined && value !== setting.default)
     return '<span class="mark changed">changed</span>';
   const note = settingAsks(asks, setting);
-  return note ? `<span class="mark">· ${note}</span>` : "";
+  return note ? `<span class="mark">${note}</span>` : "";
 }
 function settingsBlock(pack) {
   const shown = activeSettings(data, picks, pack);
@@ -718,7 +709,7 @@ function settingsBlock(pack) {
     const id = `s-${setting.key.replace(/\W/g, "-")}`;
     return `<div class="setting"><label for="${id}">${esc(setting.question)} <span data-mark="${esc(setting.key)}">${markFor(setting, asks)}</span></label>${control(setting, id)}</div>`;
   }).join("");
-  return `<details class="sub" ${open(`set:${pack.name}`)}><summary>${plural(shown.length, "setting")}, each with a default or a question at setup</summary><div class="settings">${fields}</div></details>`;
+  return `<p class="muted">Each setting has a default, or setup asks you for it.</p><div class="settings">${fields}</div>`;
 }
 function refreshMarks() {
   const asks = questions(data, picks);
@@ -730,38 +721,75 @@ function refreshMarks() {
   }
 }
 function packStatus(pack) {
-  const total = pack.workflows.length;
+  if (pack.always)
+    return "Always on";
   if (!packOn(pack))
-    return `<span class="status">${plural(total, "workflow")}</span>`;
-  const live = pack.workflows.filter((workflow) => dayState(data, picks, workflow).on).length;
-  return live ? `<span class="status live">${live} of ${plural(total, "workflow")} on</span>` : '<span class="status none">No workflow on yet</span>';
+    return "Off";
+  const live = pack.workflows.filter((workflow) => runState(data, picks, workflow).on).length;
+  return live ? `On, with ${live} of ${plural(pack.workflows.length, "workflow")}` : "On, with no workflow yet";
 }
 function packCard(pack) {
   const on = packOn(pack);
   const locked = needsHub(pack) && picks.where === "mac";
-  const toggle = pack.always ? '<span class="badge">Always on</span>' : `<button class="switch" role="switch" aria-label="${esc(pack.title)} pack" aria-checked="${on}" data-act="pack" data-id="${esc(pack.name)}" data-focus="pack:${esc(pack.name)}" ${locked ? "disabled" : ""}></button>`;
-  const required = pack.requires.map((name) => packOf2(name)?.title).filter(Boolean);
+  const control = pack.always ? '<span class="badge">Always on</span>' : `<button class="switch" role="switch" aria-label="${esc(pack.title)} pack" aria-checked="${on}" data-act="pack" data-id="${esc(pack.name)}" data-focus="pack:${esc(pack.name)}" ${locked ? "disabled" : ""}></button>`;
   return `<article class="pack ${on ? "on" : ""} ${locked ? "locked" : ""}">
-    <div class="pack-head">${iconTile(pack.name)}<h4>${esc(pack.title)}</h4>${toggle}</div>
-    <p class="pack-sum">${fmt(pack.summary)}</p>
-    <details class="more" ${open(`pack:${pack.name}`)}><summary>${packStatus(pack)}<span class="cue">Details</span></summary>
-      <div class="pack-body">
-        ${pack.day ? `<p>${fmt(pack.day)}</p>` : ""}
-        ${required.length ? `<p class="muted">Turns on with ${esc(listed(required))}.</p>` : ""}
-        <div class="wfs">${workflowRows(pack)}</div>
-        ${pack.cost ? `<p class="fact"><span class="eyebrow">What it costs</span>${fmt(pack.cost)}</p>` : ""}
-        ${pack.risk ? `<p class="fact warn"><span class="eyebrow">Know before you turn it on</span>${fmt(pack.risk)}</p>` : ""}
-        ${on ? settingsBlock(pack) : ""}
-      </div>
-    </details>
+    <button class="pack-open" data-act="open" data-id="${esc(pack.name)}" data-focus="open:${esc(pack.name)}" aria-haspopup="dialog">
+      ${iconTile(pack.name)}<span class="pack-name">${esc(pack.title)}${uiIcons.arrow}</span><span class="pack-sum">${fmt(pack.summary)}</span>
+    </button>
+    <div class="pack-ctl">${control}</div>
   </article>`;
+}
+var flowFigure = (steps) => `<ol class="flow">${steps.map((step) => `<li><span class="flow-step">${esc(step)}</span></li>`).join("")}</ol>`;
+function sheetOverview(pack, locked) {
+  const flow = packFlows[pack.name];
+  const live = pack.workflows.filter((workflow) => runState(data, picks, workflow).on).length;
+  const needs = [...new Set(pack.workflows.flatMap((workflow) => workflow.needs))].filter((need) => data.needPacks[need] !== pack.name).map((need) => data.needLabels[need] ?? need);
+  const required = pack.requires.map((name) => packOf2(name)?.title).filter(Boolean).map((title) => `the ${title} pack`);
+  const asks = listed([...needs, ...required]);
+  return `<p class="sheet-lede">${fmt(pack.summary)}</p>
+    ${flow ? flowFigure(flow) : pack.name === data.needPacks.hub ? `<div class="flow">${whereDiagram("hub")}</div>` : ""}
+    ${pack.day ? `<div class="example"><p class="eyebrow">For example</p><p>${fmt(pack.day)}</p></div>` : ""}
+    ${locked ? `<div class="example"><p>This pack runs on a hub. Add a hub and a node to turn it on.</p>${hubButton("sheet:unlock", `sheet:pack:${pack.name}`)}</div>` : ""}
+    <div class="facts">
+      <div class="fact"><p class="eyebrow">Workflows</p><p class="fact-big">${packOn(pack) ? `${live} of ${pack.workflows.length} on` : pack.workflows.length}</p><button class="link" data-act="sheet-tab" data-id="workflows" data-focus="sheet:see">See the workflows</button></div>
+      <div class="fact"><p class="eyebrow">Needs</p><p>${asks ? esc(asks[0].toUpperCase() + asks.slice(1)) : "Nothing extra"}</p></div>
+      ${pack.cost ? `<div class="fact"><p class="eyebrow">Cost</p><p>${fmt(pack.cost)}</p></div>` : ""}
+    </div>
+    ${pack.risk ? `<div class="warn"><p class="eyebrow">Know before you turn it on</p><p>${fmt(pack.risk)}</p></div>` : ""}`;
+}
+function sheetSettings(pack) {
+  if (!packOn(pack))
+    return '<p class="muted">Turn the pack on to change its settings.</p>';
+  return settingsBlock(pack) || '<p class="muted">The workflows that are on have no settings.</p>';
+}
+function packSheet(pack) {
+  const on = packOn(pack);
+  const locked = needsHub(pack) && picks.where === "mac";
+  const control = pack.always || locked ? "" : `<button class="switch" role="switch" aria-label="${esc(pack.title)} pack" aria-checked="${on}" data-act="pack" data-id="${esc(pack.name)}" data-focus="sheet:pack:${esc(pack.name)}"></button>`;
+  const tabs = [["overview", "Overview"], ["workflows", `Workflows (${pack.workflows.length})`], ...pack.settings.length ? [["settings", `Settings (${on ? activeSettings(data, picks, pack).length : pack.settings.length})`]] : []];
+  const tab = tabs.some(([id]) => id === sheetTab) ? sheetTab : "overview";
+  const hint = on || locked ? "" : '<p class="muted">Turn the pack on to choose its workflows.</p>';
+  const panel = tab === "overview" ? sheetOverview(pack, locked) : tab === "workflows" ? `${hint}<div class="wfs">${workflowRows(pack)}</div>` : sheetSettings(pack);
+  return `<header class="sheet-head">
+      ${iconTile(pack.name, "big")}
+      <div class="sheet-title"><h2 id="sheet-title">${esc(pack.title)}</h2><p class="status">${packStatus(pack)}</p></div>
+      ${control}
+      <button class="sheet-x" data-act="close" data-focus="sheet:close" aria-label="Close">${uiIcons.close}</button>
+    </header>
+    <div class="sheet-tabs" role="tablist" aria-label="${esc(pack.title)} pack">${tabs.map(([id, label]) => `<button role="tab" id="tab-${id}" aria-selected="${id === tab}" aria-controls="sheet-panel" tabindex="${id === tab ? 0 : -1}" data-act="sheet-tab" data-id="${id}" data-focus="sheet:tab:${id}">${label}</button>`).join("")}</div>
+    <div class="sheet-body" id="sheet-panel" role="tabpanel" aria-labelledby="tab-${tab}">${panel}</div>`;
+}
+function showSheet(keepScroll) {
+  const scrolled = keepScroll ? sheet.querySelector(".sheet-body")?.scrollTop ?? 0 : 0;
+  sheet.innerHTML = packSheet(packOf2(openPack));
+  sheet.querySelector(".sheet-body").scrollTop = scrolled;
 }
 function packsSection() {
   const anywhere = data.packs.filter((pack) => !needsHub(pack));
   const onHub = data.packs.filter(needsHub);
-  const hubHead = picks.where === "mac" ? `<p class="muted">These run on a hub, so they wait for the second path.</p>${hubButton("unlock", `pack:${onHub[0]?.name ?? ""}`)}` : '<p class="muted">These run on your hub. The agent turns them on once the hub runs.</p>';
+  const hubHead = picks.where === "mac" ? `<p class="muted">These packs run on a hub.</p>${hubButton("unlock", `pack:${onHub[0]?.name ?? ""}`)}` : '<p class="muted">These packs run on your hub. The agent turns them on after it sets up the hub.</p>';
   return `<section id="packs" class="step" aria-labelledby="packs-h">
-    ${stepHead(2, "packs", "What should they do?", "A pack is a set of workflows that you turn on as a whole. Start from a preset, then change any pack.")}
+    ${stepHead(2, "packs", "Which packs do you want?", "A pack is a set of workflows that you turn on as a whole. Start from a preset, then turn packs on or off. Select a pack to read what it does.")}
     ${presetCards()}
     <div class="group-head"><h3>On any machine</h3></div>
     <div class="packs">${anywhere.map(packCard).join("")}</div>
@@ -771,8 +799,8 @@ function packsSection() {
 }
 function promptPicks() {
   const { first, later } = setupSplit(data, picks);
-  const parts = [whereLabels[picks.where], `Base + ${plural(first.length, "pack")} on the first setup`, ...picks.where === "hub" ? [`${plural(later.length, "pack")} once the hub runs`] : []];
-  return parts.join(" · ");
+  const parts = [whereLabels[picks.where], `Base and ${plural(first.length, "pack")} on the first setup`, ...picks.where === "hub" ? [`${plural(later.length, "pack")} once the hub runs`] : []];
+  return parts.join(", ");
 }
 function agentSteps() {
   const asks = questions(data, picks);
@@ -807,65 +835,18 @@ function startOut() {
       <pre id="prompt-text">${esc(prompt)}</pre>
       <div class="out-foot"><button class="btn-solid" data-act="copy" data-id="prompt-text" data-focus="copy:prompt">Copy prompt</button><a class="btn-ghost" data-focus="open:t3" href="https://app.t3.codes/new?prompt=${encodeURIComponent(prompt)}" target="_blank" rel="noopener">Open in T3 Code${uiIcons.arrow}</a></div>
     </div>
-    <p class="prose">From here the agent leads. It explains each part and runs the steps itself. You answer its questions and do your own sign-ins.</p>
+    <p class="prose">The agent explains each part and runs the steps itself. You answer its questions and do your own sign-ins.</p>
     <details class="sub" ${open("start:agent")}><summary>What the agent does with you</summary>${agentSteps()}</details>
     <details class="sub" ${open("start:hand")}><summary>Set it up by hand</summary>${byHand()}</details>`;
 }
 function startSection() {
   return `<section id="start" class="step" aria-labelledby="start-h">
-    ${stepHead(3, "start", "Get started", "Three steps. The last one hands over to an agent that sets Fleet up with you.")}
+    ${stepHead(3, "start", "Get started", "There are three steps. In the last one, an agent takes over and sets up Fleet with you.")}
     <ol class="steps">
       <li><h3>Download T3 Code</h3><p>Get <a href="https://t3.codes" target="_blank" rel="noopener">T3 Code</a> and open it. Its Welcome page sets up one agent, Claude Code or Codex, and signs you in.</p></li>
       <li><h3>Sign in with T3 Connect</h3><p>In T3 Code, open <b>Settings → Sharing &amp; access</b>, sign in, and turn on <b>T3 Connect</b>. It links your Mac to your devboxes and your phone.</p></li>
       <li><h3>Paste this prompt</h3><p>Paste it into a new thread in T3 Code on your Mac. It carries your picks from this page, so the agent skips those questions.</p><div id="start-out">${startOut()}</div></li>
     </ol>
-  </section>`;
-}
-function fixButton(item) {
-  const state = dayState(data, picks, item.workflow);
-  if (state.on)
-    return "";
-  const focus = `fix:${item.workflow.id}`;
-  const fallback = `moment:${item.workflow.id}`;
-  if ("where" in state.fix)
-    return hubButton(focus, fallback);
-  const keys = `data-focus="${esc(focus)}" data-fallback="${esc(fallback)}"`;
-  if ("workflow" in state.fix) {
-    const target = workflowOf(data, state.fix.workflow) ?? item.workflow;
-    return `<button class="btn-line" data-act="wf" data-id="${esc(target.id)}" ${keys}>Turn on ${esc(target.name)}</button>`;
-  }
-  const pack = packOf2(state.fix.pack);
-  return `<button class="btn-line" data-act="pack" data-id="${esc(pack.name)}" ${keys}>Add the ${esc(pack.title)} pack</button>`;
-}
-var momentSource = (item) => `<div class="src">${iconTile(item.pack.name, "mini")}<span>${esc(item.pack.title)} · ${esc(item.workflow.name)}</span></div>`;
-function daySection() {
-  const seen = new Set;
-  const row = (item) => {
-    const words = (item.moment.words ?? []).filter((word) => !seen.has(word)).map((word) => data.concepts.find((concept) => concept.word === word)).filter((concept) => !!concept);
-    words.forEach((concept) => seen.add(concept.word));
-    return `<article class="moment ${item.moment.night ? "night" : ""}" data-focus="moment:${esc(item.workflow.id)}" tabindex="-1">
-      <div class="time">${esc(item.moment.time)}</div>
-      <div class="moment-body"><h4>${esc(item.moment.title)}</h4><p>${fmt(item.moment.body)}</p>${momentSource(item)}
-        ${riskNote(`dayrisk:${item.workflow.id}`, item.workflow.risk)}
-      </div>
-      <div class="notes">${words.map((concept) => `<div class="note"><span class="eyebrow">New word</span><b>${esc(concept.word)}</b><span>${fmt(concept.note)}</span></div>`).join("")}</div>
-    </article>`;
-  };
-  const waiting = (item) => `<article class="moment wait" data-focus="moment:${esc(item.workflow.id)}" tabindex="-1">
-      <div class="time">${esc(item.moment.time)}</div>
-      <div class="moment-body"><h4>${esc(item.moment.title)}</h4>${momentSource(item)}</div>
-      <div class="notes">${fixButton(item)}</div>
-    </article>`;
-  const on = moments.filter(isOn);
-  const off = moments.filter((item) => !isOn(item));
-  const part = (title, items, empty) => `<h3 class="divider eyebrow">${title}</h3>${items.map(row).join("") || `<p class="muted empty">${empty}</p>`}`;
-  return `<section id="day" class="step" aria-labelledby="day-h">
-    <header class="step-head"><div><h2 id="day-h">A day with your picks</h2><p class="muted prose">${on.length} of ${plural(moments.length, "moment")}. Each one comes from a workflow in a pack you picked.</p></div></header>
-    <div class="line">
-      ${part("Daytime", on.filter((item) => !item.moment.night), "No daytime moment with these picks.")}
-      ${part("While you sleep", on.filter((item) => item.moment.night), "Nothing runs at night with these picks.")}
-    </div>
-    ${off.length ? `<details class="sub rest" ${open("day:rest")}><summary>${plural(off.length, "more moment")} with other picks</summary><div class="line">${off.map(waiting).join("")}</div></details>` : ""}
   </section>`;
 }
 function footer() {
@@ -889,8 +870,10 @@ function render() {
   const focus = focusOf();
   const top = window.scrollY;
   rememberOpened();
-  document.getElementById("app").innerHTML = `${hero()}${bar()}<main class="wrap">${whereSection()}${packsSection()}${startSection()}${daySection()}</main>${footer()}`;
+  document.getElementById("app").innerHTML = `${hero()}<main class="wrap">${whereSection()}${packsSection()}${startSection()}</main>${footer()}`;
   window.scrollTo(0, top);
+  if (openPack)
+    showSheet(true);
   restoreFocus(focus);
 }
 function refreshOutputs() {
@@ -922,6 +905,18 @@ document.addEventListener("click", (event) => {
   const { act, id = "" } = target.dataset;
   if (act === "copy")
     return copy(target, id);
+  if (act === "close")
+    return sheet.close();
+  if (act === "open") {
+    openPack = id;
+    sheetTab = "overview";
+    showSheet(false);
+    if (!sheet.open)
+      sheet.showModal();
+    return;
+  }
+  if (act === "sheet-tab")
+    return showTab(id);
   if (act === "tab") {
     tab = id === "profile" ? "profile" : "command";
     return refreshOutputs();
@@ -939,6 +934,32 @@ document.addEventListener("click", (event) => {
   if (act === "wf")
     picks = toggleWorkflow(data, picks, id);
   render();
+});
+function showTab(tab) {
+  rememberOpened();
+  sheetTab = tab;
+  showSheet(false);
+  restoreFocus([`sheet:tab:${tab}`]);
+}
+sheet.addEventListener("keydown", (event) => {
+  const tab = event.target.closest('[role="tab"]');
+  if (!tab || event.key !== "ArrowRight" && event.key !== "ArrowLeft")
+    return;
+  const tabs = [...sheet.querySelectorAll('[role="tab"]')];
+  const next = tabs[(tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+  showTab(next.dataset.id);
+});
+sheet.addEventListener("click", (event) => {
+  if (event.target === sheet)
+    sheet.close();
+});
+sheet.addEventListener("close", () => {
+  if (sheet.open)
+    return;
+  const closed = openPack;
+  openPack = undefined;
+  sheet.innerHTML = "";
+  restoreFocus([`open:${closed}`]);
 });
 function onSetting(event, committed) {
   const input = event.target;

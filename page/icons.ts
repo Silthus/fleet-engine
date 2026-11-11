@@ -27,10 +27,6 @@ export const brandIcons = new Set(["slack"]);
 export const packIcon = (name: string) => packIcons[name] ?? teamIcon;
 
 export const uiIcons = {
-  laptop: drawn(`<rect x="4.5" y="5" width="15" height="10.5" rx="1.5"/><path d="M2.5 19h19"/>`),
-  server: drawn(`<rect x="4" y="4" width="16" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="16" height="6.5" rx="1.5"/><path d="M7.5 7.25h.01"/><path d="M7.5 16.75h.01"/>`),
-  lock: drawn(`<rect x="5" y="10.5" width="14" height="10" rx="2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>`),
   arrow: drawn(`<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>`),
-  down: drawn(`<path d="M12 5v14"/><path d="m6 13 6 6 6-6"/>`),
-  check: drawn(`<path d="m5 12.5 4.5 4.5L19 7.5"/>`),
+  close: drawn(`<path d="m6 6 12 12"/><path d="M18 6 6 18"/>`),
 };

@@ -5,7 +5,9 @@ import type { LoadedPack, PackManifest } from "../src/pack/types.ts";
 import { tempDirs } from "../src/testing/git.ts";
 import { spawnAsync } from "../src/testing/spawn.ts";
 import { presetPicks, commandFlags, setSetting, questions, setupAsks, settingAsks } from "../page/model.ts";
+import { packFlows } from "../page/flows.ts";
 import { packIcon, packIcons, teamIcon } from "../page/icons.ts";
+import { logoMark } from "../page/logo.ts";
 import { buildPage, pageData } from "./build-page.ts";
 
 const root = join(import.meta.dir, "..");
@@ -53,6 +55,49 @@ describe("the page build", () => {
     expect(icons).not.toContain(teamIcon);
   });
 
+  test("the page shows no day, moment, or word note, and ships none of their data", async () => {
+    const html = await buildPage({ audience: "public" });
+    expect(html).not.toMatch(/A day with|moments?\b|New word/i);
+    const data = await pageData({ audience: "public" });
+    expect(data.packs.flatMap((pack) => pack.workflows).filter((workflow) => "moment" in workflow)).toEqual([]);
+    expect(Object.keys(data)).not.toContain("concepts");
+  });
+
+  test("each pack opens in a dialog, and each flow belongs to a pack on the public page and is short", async () => {
+    const html = await buildPage({ audience: "public" });
+    expect(html).toContain('<dialog id="pack-sheet" aria-labelledby="sheet-title">');
+    const data = await pageData({ audience: "public" });
+    const names = data.packs.map((pack) => pack.name);
+    expect(Object.keys(packFlows).filter((name) => !names.includes(name))).toEqual([]);
+    for (const [name, steps] of Object.entries(packFlows)) {
+      expect([name, steps.length >= 3 && steps.length <= 5]).toEqual([name, true]);
+      expect([name, steps.filter((step) => step.split(" ").length > 7)]).toEqual([name, []]);
+    }
+  });
+
+  test("the page leads in with the problem, what Fleet does, and the overview picture from the README", async () => {
+    const html = await buildPage({ audience: "public" });
+    const data = await pageData({ audience: "public" });
+    const readme = readFileSync(join(root, "README.md"), "utf8").replace(/\s+/g, " ").replaceAll("**", "");
+    for (const text of ["Coding agents get much better with good rules, skills, and a machine that stays on.", "Fleet sets up T3 Code, Claude Code, Codex, and a set of agent workflows on your Mac and your Linux devboxes."]) {
+      expect(html).toContain(text);
+      expect(readme).toContain(text);
+    }
+    const picture = readFileSync(join(root, "docs", "fleet.svg"), "utf8");
+    expect(decodeURIComponent(data.overview.image)).toBe(`data:image/svg+xml,${picture}`);
+    expect(data.overview.alt.length).toBeGreaterThan(40);
+    expect(picture).toContain(`>${data.overview.alt}</desc>`);
+    expect(readme).toContain(`alt="${data.overview.alt}"`);
+  });
+
+  test("the page, its tab icon, and the README carry the same Fleet logo", async () => {
+    const html = await buildPage({ audience: "public" });
+    expect(html).toContain(`<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(logoMark)}">`);
+    expect(html.split(logoMark).length).toBe(2);
+    expect(readFileSync(join(root, "docs", "fleet-logo.svg"), "utf8").trim()).toBe(logoMark);
+    expect(readFileSync(join(root, "README.md"), "utf8")).toContain('src="docs/fleet-logo.svg"');
+  });
+
   test("the page gives the Getting started steps and a prompt that opens in T3 Code", async () => {
     const html = await buildPage({ audience: "public" });
     for (const text of ["Download T3 Code", "Sign in with T3 Connect", "Paste this prompt", "https://t3.codes", "https://app.t3.codes/new?prompt="]) expect(html).toContain(text);
@@ -62,10 +107,9 @@ describe("the page build", () => {
     expect(pageData({ audience: "public", team: [teamPack()] })).rejects.toThrow("no pack from a private source");
   });
 
-  test("a team build ticks the team pack in every preset and shows its words", async () => {
+  test("a team build ticks the team pack in every preset and shows its workflows", async () => {
     const data = await pageData({ audience: "posthog", team: [teamPack()] });
     for (const preset of data.presets) expect([preset.id, presetPicks(data, preset.id).packs]).toEqual([preset.id, expect.arrayContaining(["posthog"])]);
-    expect(data.concepts.map((concept) => concept.word)).toContain("Coder");
     expect(data.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id)).toContain("previews");
     const eu = setSetting(data, presetPicks(data, "everyday"), "posthog.region", "eu");
     expect(commandFlags(data, eu)).toEqual(["--preset", "everyday", "--set", "posthog.region=eu"]);

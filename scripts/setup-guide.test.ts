@@ -159,6 +159,14 @@ describe("the agent setup guide", () => {
     expect(labels.filter((label) => !rows.includes(label))).toEqual([]);
   });
 
+  test("lets the page's workflow lines win over a setup note, and turns on no hub pack when the page names none", () => {
+    const text = words(guide());
+    expect(text).toContain("Add no workflow flag from a setup note");
+    expect(text).toContain("the line's value wins");
+    expect(text).toContain("`none` means no pack, so skip item 8");
+    expect(text).toContain("leave out `--add hub` when the line does not name `hub`");
+  });
+
   test("offers in step 9 the packs the page keeps for a hub, and Slack with Mac only or in step 9", () => {
     const offer = (name: string) => guide().match(new RegExp(`^\\| \`${name}\` \\| [^|]+ \\| ([^|]+) \\|`, "m"))?.[1];
     expect(needsHubPacks.map(offer)).toEqual(needsHubPacks.map(() => "Step 9"));

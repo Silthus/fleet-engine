@@ -8,7 +8,6 @@ export type PageWorkflow = {
   requires: string[];
   default: boolean;
   settings: string[];
-  moment?: { time: string; title: string; body: string; words?: string[]; night?: boolean };
   risk?: string;
 };
 
@@ -40,18 +39,18 @@ export type PageData = {
   ownDevboxPacks: string[];
   needsHubPacks: string[];
   prefersHubPacks: string[];
-  concepts: Array<{ word: string; note: string }>;
   /** Needs that hold only while a pack is on, such as hub. */
   needPacks: Partial<Record<Need, string>>;
   needLabels: Partial<Record<Need, string>>;
   teamNote: string;
+  overview: { image: string; alt: string };
 };
 
-export type Picks = { preset: string; where: Where; packs: string[]; workflows: Record<string, boolean>; settings: Record<string, SettingValue> };
+export type Picks = { preset: string; where: Where; packs: string[]; workflows: Record<string, boolean>; settings: Record<string, SettingValue>; hubPathWorkflows?: string[] };
 
-export type MomentState = { on: true } | { on: false; fix: { pack: string } | { workflow: string } };
+export type WorkflowState = { on: true } | { on: false; fix: { pack: string } | { workflow: string } };
 
-export type DayState = MomentState | { on: false; fix: { where: "hub" } };
+export type RunState = WorkflowState | { on: false; fix: { where: "hub" } };
 
 const packOf = (data: PageData, name: string) => data.packs.find((pack) => pack.name === name);
 export const workflowOf = (data: PageData, id: string) => data.packs.flatMap((pack) => pack.workflows).find((workflow) => workflow.id === id);
@@ -68,16 +67,18 @@ export const chosen = (picks: Pick<Picks, "workflows">, workflow: PageWorkflow) 
 
 export function presetPicks(data: PageData, id: string, settings: Picks["settings"] = {}, where: Where = "mac"): Picks {
   const preset = presetOf(data, id);
-  return { preset: preset.id, where, packs: presetPacks(data, preset, where), workflows: { ...preset.workflows, ...(where === "hub" ? preset.hubWorkflows : {}) }, settings };
+  const hubWorkflows = where === "hub" ? preset.hubWorkflows : {};
+  return { preset: preset.id, where, packs: presetPacks(data, preset, where), workflows: { ...preset.workflows, ...hubWorkflows }, settings, hubPathWorkflows: Object.keys(hubWorkflows) };
 }
 
 export function setWhere(data: PageData, picks: Picks, where: Where): Picks {
   if (picks.where === where) return picks;
   const preset = presetOf(data, picks.preset);
   const packs = where === "hub" ? [...picks.packs, ...preset.hubPacks] : picks.packs.filter((name) => !data.needsHubPacks.includes(name));
-  const kept = Object.entries(picks.workflows).filter(([id, on]) => preset.hubWorkflows[id] !== on || Object.hasOwn(preset.workflows, id));
-  const workflows = where === "hub" ? { ...preset.hubWorkflows, ...picks.workflows } : Object.fromEntries(kept);
-  return { ...picks, where, packs: inPageOrder(data, packs), workflows };
+  const fromPath = picks.hubPathWorkflows ?? [];
+  const added = Object.keys(preset.hubWorkflows).filter((id) => !Object.hasOwn(picks.workflows, id));
+  const workflows = where === "hub" ? { ...preset.hubWorkflows, ...picks.workflows } : Object.fromEntries(Object.entries(picks.workflows).filter(([id]) => !fromPath.includes(id)));
+  return { ...picks, where, packs: inPageOrder(data, packs), workflows, hubPathWorkflows: where === "hub" ? added : [] };
 }
 
 export function setupSplit(data: PageData, picks: Picks) {
@@ -121,7 +122,8 @@ export function toggleWorkflow(data: PageData, picks: Picks, id: string): Picks 
     else data.packs.flatMap((pack) => pack.workflows).filter((item) => item.requires.includes(target.id)).forEach((item) => turn(item, false));
   };
   turn(workflow, !chosen(picks, workflow));
-  return { ...picks, workflows };
+  const untouched = (picks.hubPathWorkflows ?? []).filter((item) => workflows[item] === picks.workflows[item]);
+  return { ...picks, workflows, hubPathWorkflows: untouched };
 }
 
 export function setSetting(_data: PageData, picks: Picks, key: string, value: SettingValue | undefined): Picks {
@@ -136,7 +138,7 @@ export function missingPack(data: PageData, picks: Picks, workflow: PageWorkflow
   return workflow.needs.map((need) => data.needPacks[need]).find((name): name is string => !!name && !picks.packs.includes(name));
 }
 
-export function momentState(data: PageData, picks: Picks, workflow: PageWorkflow, pack = data.packs.find((item) => item.workflows.includes(workflow))?.name, seen = new Set<string>()): MomentState {
+export function workflowState(data: PageData, picks: Picks, workflow: PageWorkflow, pack = data.packs.find((item) => item.workflows.includes(workflow))?.name, seen = new Set<string>()): WorkflowState {
   const owner = pack ? packOf(data, pack) : undefined;
   if (owner && !owner.always && !picks.packs.includes(owner.name)) return { on: false, fix: { pack: owner.name } };
   if (!chosen(picks, workflow)) return { on: false, fix: { workflow: workflow.id } };
@@ -145,7 +147,7 @@ export function momentState(data: PageData, picks: Picks, workflow: PageWorkflow
   seen.add(workflow.id);
   for (const id of workflow.requires.filter((required) => !seen.has(required))) {
     const required = workflowOf(data, id);
-    const state = required ? momentState(data, picks, required, undefined, seen) : ({ on: false, fix: { workflow: id } } as const);
+    const state = required ? workflowState(data, picks, required, undefined, seen) : ({ on: false, fix: { workflow: id } } as const);
     if (!state.on) return state;
   }
   return { on: true };
@@ -155,8 +157,8 @@ const remoteNeeds: Need[] = ["devbox", "always-on devbox", "hub"];
 
 export const waitsForHub = (picks: Picks, workflow: PageWorkflow) => picks.where === "mac" && workflow.needs.some((need) => remoteNeeds.includes(need));
 
-export function dayState(data: PageData, picks: Picks, workflow: PageWorkflow): DayState {
-  const state = momentState(data, picks, workflow);
+export function runState(data: PageData, picks: Picks, workflow: PageWorkflow): RunState {
+  const state = workflowState(data, picks, workflow);
   const hubPack = !state.on && "pack" in state.fix && data.needsHubPacks.includes(state.fix.pack);
   if (picks.where === "mac" && (hubPack || (state.on && waitsForHub(picks, workflow)))) return { on: false, fix: { where: "hub" } };
   return state;
@@ -175,10 +177,10 @@ export function activePreset(data: PageData, picks: Picks) {
 const devboxNeeds: Need[] = ["devbox", "always-on devbox"];
 
 /** Setup on the Mac plans before it asks about a devbox, so a workflow that needs one is off while it asks. */
-const onForMacSetup = (data: PageData, picks: Picks, workflow: PageWorkflow) => momentState(data, picks, workflow).on && !workflow.needs.some((need) => devboxNeeds.includes(need));
+const onForMacSetup = (data: PageData, picks: Picks, workflow: PageWorkflow) => workflowState(data, picks, workflow).on && !workflow.needs.some((need) => devboxNeeds.includes(need));
 
 /** The settings of the picked packs that apply: each one no workflow lists, or one an active workflow lists. */
-export function activeSettings(data: PageData, picks: Picks, pack: PagePack, active = (workflow: PageWorkflow) => momentState(data, picks, workflow).on) {
+export function activeSettings(data: PageData, picks: Picks, pack: PagePack, active = (workflow: PageWorkflow) => workflowState(data, picks, workflow).on) {
   const workflows = picked(data, picks).flatMap((item) => item.workflows);
   const listed = new Set(workflows.flatMap((workflow) => workflow.settings));
   const wanted = new Set(workflows.filter(active).flatMap((workflow) => workflow.settings));
@@ -278,11 +280,11 @@ export const promptLabels = {
   setting: "Setting",
 };
 
-function changedWorkflows(data: PageData, picks: Picks, packs: string[], always: boolean) {
+function namedWorkflows(data: PageData, picks: Picks, packs: string[], firstSetup: boolean) {
   return data.packs
-    .filter((pack) => (pack.always ? always : packs.includes(pack.name)))
+    .filter((pack) => (pack.always ? firstSetup : packs.includes(pack.name)))
     .flatMap((pack) => pack.workflows)
-    .filter((workflow) => chosen(picks, workflow) !== workflow.default)
+    .filter((workflow) => chosen(picks, workflow) !== workflow.default || (!firstSetup && workflow.default))
     .map((workflow) => `${workflow.id}=${chosen(picks, workflow) ? "on" : "off"}`);
 }
 
@@ -296,8 +298,8 @@ export function promptText(data: PageData, picks: Picks) {
     promptLabels.intro,
     `- ${promptLabels.where}: ${whereLabels[picks.where]}`,
     list(promptLabels.firstPacks, first),
-    ...optional(promptLabels.firstWorkflows, changedWorkflows(data, picks, first, true)),
-    ...(picks.where === "hub" ? [list(promptLabels.laterPacks, later), ...optional(promptLabels.laterWorkflows, changedWorkflows(data, picks, later, false))] : []),
+    ...optional(promptLabels.firstWorkflows, namedWorkflows(data, picks, first, true)),
+    ...(picks.where === "hub" ? [list(promptLabels.laterPacks, later), ...optional(promptLabels.laterWorkflows, namedWorkflows(data, picks, later, false))] : []),
     ...answered(data, picks).map((setting) => `- ${promptLabels.setting}: ${setting.key}=${String(picks.settings[setting.key])}`),
   ].join("\n");
 }

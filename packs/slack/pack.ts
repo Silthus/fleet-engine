@@ -15,7 +15,7 @@ export default {
   title: "Slack",
   summary: "Your own message, reaction, or mention in Slack starts a T3 thread about it.",
   day: "A teammate reports a bug in a Slack thread. You react with :t3code:, and a thread starts to find the cause, with the whole Slack thread as its context.",
-  cost: "Your own Slack app, made from a manifest in a few minutes, and one small process that stays connected to Slack.",
+  cost: "You need your own Slack app, which you make from a manifest in a few minutes. One small process stays connected to Slack.",
   risk: "Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread, and the prompt treats the rest of the Slack thread as data.",
   register(fleet) {
     const userId = fleet.setting({

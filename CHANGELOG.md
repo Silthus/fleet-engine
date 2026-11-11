@@ -53,10 +53,11 @@ Everything.
 
 ### The page
 
-[A day with Fleet](https://silthus.github.io/fleet-engine/) asks where Fleet
-runs, Mac only or Mac plus a hub and a node, and which packs you want. It
-shows what the packs do during a workday, and gives the Getting started steps
-with a prompt that carries your picks to the agent that sets Fleet up.
+[The Fleet page](https://silthus.github.io/fleet-engine/) says what Fleet is
+and asks where Fleet runs, Mac only or Mac plus a hub and a node, and which
+packs you want. Each pack opens in a dialog that shows what it does, its
+workflows, and its settings. The page gives the Getting started steps with a
+prompt that carries your picks to the agent that sets Fleet up.
 
 ### Known gaps
 

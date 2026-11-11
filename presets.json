@@ -2,7 +2,7 @@
   {
     "id": "starter",
     "name": "Starter",
-    "blurb": "Safe agent rules, tuned T3 defaults, and draft pull requests.",
+    "blurb": "You get safe agent rules, tuned T3 defaults, and draft pull requests.",
     "packs": ["pull-requests"],
     "hubPacks": ["hub"],
     "workflows": {}
@@ -10,7 +10,7 @@
   {
     "id": "everyday",
     "name": "Everyday",
-    "blurb": "Starter, plus maps of tickets, side threads, and agents that write in your voice.",
+    "blurb": "You get Starter, maps of tickets, side threads, and agents that write in your voice.",
     "packs": ["pull-requests", "orchestration", "communication"],
     "hubPacks": ["hub"],
     "workflows": {}
@@ -18,7 +18,7 @@
   {
     "id": "everything",
     "name": "Everything",
-    "blurb": "Every pack: Everyday, plus shared memory, guards, Slack, and the nightly loops. With a hub, also the MCP gateway and recovery.",
+    "blurb": "You get every pack. That is Everyday, shared memory, guards, Slack, and the nightly loops. With a hub, you also get the MCP gateway and recovery.",
     "packs": ["pull-requests", "orchestration", "communication", "memory", "guards", "slack"],
     "hubPacks": ["hub", "mcp-gateway", "recovery"],
     "hubWorkflows": { "slack-thread": true, "own-account-balancing": true, "provider-recovery": true },

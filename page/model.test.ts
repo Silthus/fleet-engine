@@ -13,8 +13,8 @@ import {
   commandFlags,
   commandText,
   chosen,
-  dayState,
-  momentState,
+  runState,
+  workflowState,
   presetPicks,
   profileFile,
   questions,
@@ -109,14 +109,14 @@ describe("the picks", () => {
     expect(togglePack(data, everyday(), "pull-requests").packs.toSorted()).toEqual(["communication"]);
   });
 
-  test("a pack that is off fades its moments with a button that adds it back", () => {
+  test("a workflow of a pack that is off is off, and names the pack that turns it on", () => {
     const off = togglePack(data, everyday(), "orchestration");
-    expect(["maps", "side-threads"].map((id) => momentState(data, off, workflow(id)))).toEqual([
+    expect(["maps", "side-threads"].map((id) => workflowState(data, off, workflow(id)))).toEqual([
       { on: false, fix: { pack: "orchestration" } },
       { on: false, fix: { pack: "orchestration" } },
     ]);
-    expect(momentState(data, everyday(), workflow("maps"))).toEqual({ on: true });
-    expect(momentState(data, everyday(), workflow("quality-loop"))).toEqual({ on: false, fix: { workflow: "quality-loop" } });
+    expect(workflowState(data, everyday(), workflow("maps"))).toEqual({ on: true });
+    expect(workflowState(data, everyday(), workflow("quality-loop"))).toEqual({ on: false, fix: { workflow: "quality-loop" } });
   });
 
   test("a workflow that needs a pack stays off until that pack is on", () => {
@@ -126,9 +126,9 @@ describe("the picks", () => {
       needPacks: { hub: "hub" },
       needsHubPacks: [],
     };
-    const boxes = (packs: Picks) => momentState(hub, packs, { id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], requires: [], default: true, settings: [] }, "hub");
+    const boxes = (packs: Picks) => workflowState(hub, packs, { id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], requires: [], default: true, settings: [] }, "hub");
     const picks = presetPicks(hub, "everyday");
-    expect(momentState(hub, picks, hub.packs.at(-1)!.workflows[0]!)).toEqual({ on: false, fix: { pack: "hub" } });
+    expect(workflowState(hub, picks, hub.packs.at(-1)!.workflows[0]!)).toEqual({ on: false, fix: { pack: "hub" } });
     expect(boxes(togglePack(hub, picks, "hub"))).toEqual({ on: true });
   });
 
@@ -138,7 +138,7 @@ describe("the picks", () => {
       ...data,
       packs: [...data.packs, { name: "gate", title: "Gate", summary: "", requires: [], always: true, workflows: [flow("gateway", [], { default: true }), flow("mail", ["gateway"]), flow("ping", ["pong"]), flow("pong", ["ping"])], settings: [] }],
     };
-    const state = (picks: Picks, id: string) => momentState(gate, picks, gate.packs.at(-1)!.workflows.find((item) => item.id === id)!);
+    const state = (picks: Picks, id: string) => workflowState(gate, picks, gate.packs.at(-1)!.workflows.find((item) => item.id === id)!);
     const start = presetPicks(gate, "everyday");
     const unmet = { ...start, workflows: { ...start.workflows, gateway: false, mail: true } };
     expect(state(unmet, "mail")).toEqual({ on: false, fix: { workflow: "gateway" } });
@@ -200,10 +200,19 @@ describe("where Fleet runs", () => {
 
   test("Everything with a hub turns on the workflows that make Slack and Recovery do their work, and Mac only takes them back", () => {
     const hub = setWhere(data, presetPicks(data, "everything"), "hub");
-    expect(["slack-thread", "provider-recovery", "own-account-balancing"].map((id) => dayState(data, hub, workflow(id)))).toEqual([{ on: true }, { on: true }, { on: true }]);
+    expect(["slack-thread", "provider-recovery", "own-account-balancing"].map((id) => runState(data, hub, workflow(id)))).toEqual([{ on: true }, { on: true }, { on: true }]);
     expect(activePreset(data, hub)?.id).toBe("everything");
     const back = setWhere(data, hub, "mac");
     expect([chosen(back, workflow("slack-thread")), activePreset(data, back)?.id, commandFlags(data, back)]).toEqual([false, "everything", ["--preset", "everything"]]);
+  });
+
+  test("going back to Mac only keeps a workflow the person turned on themselves", () => {
+    const own = toggleWorkflow(data, presetPicks(data, "everything"), "slack-thread");
+    const back = setWhere(data, setWhere(data, own, "hub"), "mac");
+    expect([chosen(back, workflow("slack-thread")), chosen(back, workflow("provider-recovery"))]).toEqual([true, false]);
+    const hub = presetPicks(data, "everything", {}, "hub");
+    const again = toggleWorkflow(data, toggleWorkflow(data, hub, "slack-thread"), "slack-thread");
+    expect(chosen(setWhere(data, again, "mac"), workflow("slack-thread"))).toBe(true);
   });
 
   test("a pack that needs a hub stays off with Mac only", () => {
@@ -211,14 +220,14 @@ describe("where Fleet runs", () => {
     expect(togglePack(data, setWhere(data, everyday(), "hub"), "recovery").packs).toContain("recovery");
   });
 
-  test("with Mac only, a moment that needs a devbox or the hub waits for a hub and a node", () => {
+  test("with Mac only, a workflow that needs a devbox or the hub waits for a hub and a node", () => {
     const loop = toggleWorkflow(data, everyday(), "quality-loop");
-    expect(dayState(data, loop, workflow("quality-loop"))).toEqual({ on: false, fix: { where: "hub" } });
-    expect(dayState(data, setWhere(data, loop, "hub"), workflow("quality-loop"))).toEqual({ on: true });
-    expect(dayState(data, everyday(), workflow("disk-watch"))).toEqual({ on: false, fix: { where: "hub" } });
-    expect(dayState(data, setWhere(data, everyday(), "hub"), workflow("disk-watch"))).toEqual({ on: true });
-    expect(dayState(data, everyday(), workflow("maps"))).toEqual({ on: true });
-    expect(dayState(data, everyday(), workflow("shared-memory"))).toEqual({ on: false, fix: { pack: "memory" } });
+    expect(runState(data, loop, workflow("quality-loop"))).toEqual({ on: false, fix: { where: "hub" } });
+    expect(runState(data, setWhere(data, loop, "hub"), workflow("quality-loop"))).toEqual({ on: true });
+    expect(runState(data, everyday(), workflow("disk-watch"))).toEqual({ on: false, fix: { where: "hub" } });
+    expect(runState(data, setWhere(data, everyday(), "hub"), workflow("disk-watch"))).toEqual({ on: true });
+    expect(runState(data, everyday(), workflow("maps"))).toEqual({ on: true });
+    expect(runState(data, everyday(), workflow("shared-memory"))).toEqual({ on: false, fix: { pack: "memory" } });
   });
 
   test("the command by hand sets up the first machine, so it leaves out the packs that wait for the hub", () => {
@@ -247,8 +256,15 @@ describe("the prompt", () => {
       "- Packs on the first setup: pull-requests, orchestration, communication, memory, guards",
       "- Workflows on the first setup: quality-loop=on, signal-loop=on, pr-digest=on, shell-guards=on, package-age=on",
       "- Packs once the hub runs: hub, mcp-gateway, recovery, slack",
-      "- Workflows once the hub runs: slack-thread=on, dream=on, own-account-balancing=on, provider-recovery=on",
+      "- Workflows once the hub runs: slack-thread=on, disk-watch=on, linked-hub=on, dream=on, own-account-balancing=on, mcp-gateway=on, provider-recovery=on",
     ]);
+  });
+
+  test("for the hub, names every workflow that is on or starts on, so the list alone says what runs", () => {
+    const hub = presetPicks(data, "everything", {}, "hub");
+    expect(line(promptText(data, hub), "Workflows once the hub runs")).toBe("slack-thread=on, disk-watch=on, linked-hub=on, own-account-balancing=on, mcp-gateway=on, provider-recovery=on");
+    const quiet = toggleWorkflow(data, toggleWorkflow(data, hub, "slack-thread"), "mcp-gateway");
+    expect(line(promptText(data, quiet), "Workflows once the hub runs")).toBe("disk-watch=on, linked-hub=on, own-account-balancing=on, mcp-gateway=off, provider-recovery=on");
   });
 
   test("names no pack as none, and carries each changed setting on its own line", () => {
