@@ -7,7 +7,7 @@ import { sourceOutage } from "../provider-config/adapter.ts";
 import { withLock } from "../provider-config/store.ts";
 import { skipOtherHome, spawnRunner, type CommandRunner } from "../run.ts";
 import type { T3Rpc, T3Server } from "./port.ts";
-import { reconcileService, type Wait } from "./service.ts";
+import { reconcileClaudeToken, reconcileService, type Wait } from "./service.ts";
 import { reconcileScripts, settingProblems, waitingScripts } from "./scripts.ts";
 import { localT3Server } from "./session.ts";
 import { desktopTarget, reconcileSettings, settingsFields, settingsTarget } from "./settings.ts";
@@ -15,7 +15,7 @@ import { activeProjects, expandHome, realPath, t3Tasks } from "./tasks.ts";
 
 export { desktopTarget, recordTarget, settingsTarget } from "./settings.ts";
 
-export type T3Options = { run?: CommandRunner; wait?: Wait; accountHome?: () => Promise<string | undefined>; server?: T3Server; user?: string };
+export type T3Options = { run?: CommandRunner; wait?: Wait; accountHome?: () => Promise<string | undefined>; server?: T3Server; user?: string; env?: Record<string, string | undefined> };
 export type T3Adapter = Adapter & { tasks(): Promise<T3Tasks | undefined> };
 
 type Link = { environmentId: string; label: string; status: "reachable" | "unreachable" | "expired"; lastError: string | null };
@@ -41,6 +41,7 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
         const seeded = !(await server.answering(home));
         if (seeded) merge(result, await reconcileSettings(plan, home, settings));
         if (plan.os === "linux") await reconcileService(run, wait, user, dryRun, result);
+        if (plan.os === "linux") await reconcileClaudeToken(run, home, (options.env ?? process.env).CLAUDE_CODE_OAUTH_TOKEN, dryRun, result);
         result.findings.push(...settingProblems(plan));
         if (!(await server.answering(home))) {
           if (!seeded) merge(result, await reconcileSettings(plan, home, settings));
