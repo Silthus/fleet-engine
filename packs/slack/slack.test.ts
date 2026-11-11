@@ -9,7 +9,7 @@ import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { secretStore } from "../../src/runner/context.ts";
 import { listen, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
-import { launchOnBox, type Run } from "./lib/launch.ts";
+import { launchHere, launchOnBox, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
 import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
 import { startSlackStub, type Message } from "./testing.ts";
@@ -270,6 +270,27 @@ describe("a launch that fails", () => {
     expect(titles).toEqual(["Slack: why?", "Slack: why?", "Slack: why?"]);
     expect(new Set(commandIds).size).toBe(1);
     expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day.", "Started <https://app.t3.codes/threads/E1/T1|Slack: why?> on this machine."]);
+  });
+
+  test("still reports a thread T3 started before its answer was lost, after the disk fell below the start floor", async () => {
+    const { deps, replies, later } = rig([]);
+    const started = new Map<string, string>();
+    let answers = false;
+    let disk = { critical: false, message: "" };
+    deps.launch = launchHere({
+      async start({ key }) {
+        if (!started.has(key)) started.set(key, `T${started.size + 1}`);
+        if (!answers) throw new Error("T3 did not answer");
+        return { id: started.get(key)!, url: `https://app.t3.codes/threads/E1/${started.get(key)}` };
+      },
+    }, () => disk);
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    answers = true;
+    disk = { critical: true, message: "3.0G free, below the 25G floor." };
+    later(60_000);
+    await retryPending(deps);
+    expect([...started.values()]).toEqual(["T1"]);
+    expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/E1/T1|Slack: why?> on this machine.");
   });
 
   test("keeps a trigger whose Slack thread could not be read, and starts it on the next retry", async () => {

@@ -5,8 +5,8 @@ import type { Started } from "./trigger.ts";
 
 export type Run = (argv: string[], input?: string) => Promise<{ code: number; stdout: string; stderr: string }>;
 export type Claim = { box: string; environmentId?: string };
-export type Failed = { failed: string; claim?: Claim };
-export type LaunchRequest = { title: string; prompt: string; commandId: string; claim?: Claim };
+export type Failed = { failed: string; claim?: Claim; reachedT3?: true };
+export type LaunchRequest = { title: string; prompt: string; commandId: string; claim?: Claim; replay?: boolean };
 export type Launch = ((request: LaunchRequest) => Promise<Started | Failed>) & { release?: (claim: Claim) => Promise<void> };
 
 export const spawnRun: Run = async (argv, input) => {
@@ -23,14 +23,14 @@ const lastLine = (text: string) => text.trim().split("\n").at(-1)?.trim() ?? "";
 const why = (result: { code: number; stderr: string; stdout: string }) => lastLine(result.stderr) || lastLine(result.stdout) || `exit ${result.code}`;
 
 export function launchHere(threads: Threads, room: () => DiskStatus): Launch {
-  return async ({ title, prompt, commandId }) => {
+  return async ({ title, prompt, commandId, replay }) => {
+    const disk = replay ? undefined : room();
+    if (disk?.critical) return { failed: disk.message.replaceAll("\n", " ") };
     try {
-      const disk = room();
-      if (disk.critical) return { failed: disk.message.replaceAll("\n", " ") };
       const { id, url } = await threads.start({ key: commandId, title, prompt, modelRole: "implementation" });
       return { threadId: id, url, where: "this machine" };
     } catch (error) {
-      return { failed: (error as Error).message };
+      return { failed: (error as Error).message, reachedT3: true };
     }
   };
 }
