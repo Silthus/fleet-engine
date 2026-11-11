@@ -4,7 +4,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { overSsh, pairing, profileForBox, sshHosts } from "./devbox.ts";
-import { fakeMachine, fleetSetup, machineFile, onBox, remote } from "./testing.ts";
+import { deadEnvironmentToken, fakeMachine, fleetSetup, machineFile, onBox, remote } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -91,7 +91,7 @@ describe("the devbox over SSH", () => {
 
   test("a box whose Claude token from its environment is dead stops with how to refresh it, not with claude auth login", async () => {
     const home = homeWithHosts();
-    const box = fakeMachine(home, {}, { boxClaudeTokenDead: true });
+    const box = fakeMachine(home, {}, { claude: { "box:claude": deadEnvironmentToken } });
     const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
     expect(result.output).toContain("The CLAUDE_CODE_OAUTH_TOKEN that node-1 gets from its environment is no longer valid");
     expect(result.output).toContain("hogli devbox:setup --configure-claude");

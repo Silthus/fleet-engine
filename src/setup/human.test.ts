@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
-import { fakeMachine, fleetSetup, machineFile, savedAnswers } from "./testing.ts";
+import { deadEnvironmentToken, fakeMachine, fleetSetup, machineFile, savedAnswers } from "./testing.ts";
 import type { Machine } from "./commands.ts";
 import { humanStep, packSignIn } from "./human.ts";
 
@@ -119,6 +119,32 @@ describe("fleet setup sign-ins", () => {
     const quiet = await fleetSetup(quietHome, starter, ["", ""], box);
     expect(quiet.output).toContain("fleet: claude auth login ended, but Sign in to Claude still does not pass its check.");
     expect(box.sleeps).toHaveLength(16);
+  });
+
+  test("Claude whose token from the environment is dead stops with how to refresh it, and never starts claude auth login", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, {}, { claude: { claude: deadEnvironmentToken }, exits: { claude: 0 } });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], box);
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: The CLAUDE_CODE_OAUTH_TOKEN in this machine's environment is no longer valid, and claude auth login cannot replace it.");
+    expect(result.output).not.toContain("hogli devbox:setup");
+    expect([...box.starts, ...box.runs.map((run) => run.command)]).not.toContainEqual(["claude", "auth", "login"]);
+  });
+
+  test("a Claude reply that only mentions 401 counts as signed in", async () => {
+    const home = temp.make("home-");
+    const reply = { code: 0, output: "HTTP 401 means unauthorized.", stdout: "HTTP 401 means unauthorized." };
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], fakeMachine(home, {}, { claude: { claude: { authMethod: "oauth_token", reply } }, exits: { claude: 0 } }));
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("  ✓ Sign in to Claude: already done");
+  });
+
+  test("a Claude probe that times out still counts as signed in, as claude auth status says, so a slow network starts no sign-in loop", async () => {
+    const home = temp.make("home-");
+    const timedOut = { code: 143, output: "", stdout: "" };
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], fakeMachine(home, {}, { claude: { claude: { authMethod: "oauth_token", reply: timedOut } }, exits: { claude: 0 } }));
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("  ✓ Sign in to Claude: already done");
   });
 
   test("GitHub sets up Git's credentials before a team pack is fetched, and checks the active account", async () => {

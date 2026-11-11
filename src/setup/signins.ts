@@ -53,30 +53,39 @@ export async function memberSources(machine: Machine): Promise<SourceRef[]> {
   return sources;
 }
 
-export function claudeSignIn(machine: Machine): SignIn {
+export function claudeSignIn(machine: Machine, host?: string): SignIn {
   return {
     id: "claude",
     title: "Sign in to Claude",
     minutes: 1,
     why: "Each machine signs in to Claude itself. There is no shared proxy. Setup checks with a real request, because a stale sign-in still looks signed in.",
     command: ["claude", "auth", "login"],
-    probe: async () => (await claudeAuth(machine)) === "ok",
+    probe: () => claudeSignedIn(machine, host),
   };
 }
 
 export const claudeProbeTimeoutMs = 20_000;
 
-/** A token from the environment, such as one a Coder secret injects, looks signed in after it dies, and claude auth login cannot replace it. */
-export async function claudeAuth(machine: Machine): Promise<"ok" | "signed-out" | "token-dead"> {
+async function claudeSignedIn(machine: Machine, host: string | undefined): Promise<boolean> {
   const status = await machine.exec(["claude", "auth", "status"]);
   let state: { loggedIn?: unknown; authMethod?: unknown } = {};
   try {
     state = JSON.parse(status.stdout);
   } catch {}
-  if (status.code !== 0 || state.loggedIn !== true) return "signed-out";
+  if (status.code !== 0 || state.loggedIn !== true) return false;
+  if (!(await claudeRequestUnauthorized(machine))) return true;
+  if (state.authMethod === "oauth_token") throw new Error(environmentTokenDead(host));
+  return false;
+}
+
+async function claudeRequestUnauthorized(machine: Machine): Promise<boolean> {
   const reply = await machine.exec(["claude", "-p", "ok"], { timeoutMs: claudeProbeTimeoutMs });
-  if (!/\b401\b/.test(reply.output)) return "ok";
-  return state.authMethod === "oauth_token" ? "token-dead" : "signed-out";
+  return reply.code !== 0 && /\b401\b/.test(reply.output);
+}
+
+function environmentTokenDead(host: string | undefined) {
+  if (host) return `The CLAUDE_CODE_OAUTH_TOKEN that ${host} gets from its environment is no longer valid, and claude auth login cannot replace it. Make a new token with claude setup-token and give it to the box (on a PostHog devbox: hogli devbox:setup --configure-claude), then run fleet setup again.`;
+  return "The CLAUDE_CODE_OAUTH_TOKEN in this machine's environment is no longer valid, and claude auth login cannot replace it. Make a new token with claude setup-token, put it where your environment sets CLAUDE_CODE_OAUTH_TOKEN, then run fleet setup again in a new shell.";
 }
 
 export const codexProbeTimeoutMs = 20_000;

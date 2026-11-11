@@ -26,6 +26,12 @@ export function scripted(replies: string[]) {
   return { terminal, prompts, output: () => lines.join("\n") };
 }
 
+export type ClaudeSignedIn = { authMethod: string; reply: ExecResult };
+
+const claudeUnauthorized: ExecResult = { code: 1, output: "Failed to authenticate. API Error: 401 OAuth access token is invalid", stdout: "" };
+
+export const deadEnvironmentToken: ClaudeSignedIn = { authMethod: "oauth_token", reply: claudeUnauthorized };
+
 const scopes = "  - Token scopes: 'admin:public_key', 'admin:ssh_signing_key', 'read:org', 'repo'";
 
 /** The bare repo that stands in for github.com/<repo> under a test home. */
@@ -74,7 +80,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * until then it refuses a node's credential when the node applies its
  * profile, and its fleet peers link refuses the node.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxClaudeTokenDead?: boolean } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>> } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -91,6 +97,11 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const passes = (name: SignInName) => left[name] === 0;
   const result = (ok: boolean, output = ""): ExecResult => ({ code: ok ? 0 : 1, output, stdout: output });
   const reached = new Set<string>();
+  const claudeStatus = (name: "claude" | "box:claude") => {
+    const signedIn = options.claude?.[name];
+    return signedIn ? result(true, JSON.stringify({ loggedIn: true, authMethod: signedIn.authMethod })) : result(passes(name), JSON.stringify({ loggedIn: passes(name) }));
+  };
+  const claudeReply = (name: "claude" | "box:claude") => options.claude?.[name]?.reply ?? (passes(name) ? result(true, "ok") : claudeUnauthorized);
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
   const t3 = (line: string, token: string) => {
     if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
@@ -138,8 +149,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line === "coder config-ssh --yes") return passes("box:coder") ? (coderSsh.push(boxCoderAt), result(true, "Updated \"~/.ssh/config\"")) : result(false, "You are not logged in");
     if (line.startsWith("gh auth status")) return ghStatus("box:github", scopes);
     if (line === "gh auth setup-git") return result(true);
-    if (line === "claude auth status") return options.boxClaudeTokenDead ? result(true, JSON.stringify({ loggedIn: true, authMethod: "oauth_token" })) : result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
-    if (line === "claude -p ok") return options.boxClaudeTokenDead ? result(false, "Failed to authenticate. API Error: 401 OAuth access token is invalid") : result(true, "ok");
+    if (line === "claude auth status") return claudeStatus("box:claude");
+    if (line === "claude -p ok") return claudeReply("box:claude");
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
     if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
     if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
@@ -161,7 +172,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       if (line.startsWith("gh auth status")) return ghStatus("github", started.has("github") ? scopes : (options.scopes ?? scopes));
       if (line === "gh auth setup-git") return result(true);
       if (line.startsWith("gh api user/memberships/orgs/")) return options.org ? result(true, "active\n") : result(false, "Not Found");
-      if (line === "claude auth status") return result(passes("claude"), JSON.stringify({ loggedIn: passes("claude") }));
+      if (line === "claude auth status") return claudeStatus("claude");
+      if (line === "claude -p ok") return claudeReply("claude");
       if (line.startsWith("codex exec")) return result(passes("chatgpt"), "ok");
       if (line === "coder whoami") return passes("coder") ? result(true, coderWhoami) : result(false, "You are not logged in");
       if (line === "coder tokens create") return passes("coder") ? result(true, `${coderToken}\n`) : result(false, "You are not logged in");

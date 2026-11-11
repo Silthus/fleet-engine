@@ -9,7 +9,7 @@ import type { Machine } from "./commands.ts";
 import { engineRepo } from "./defaults.ts";
 import { type HumanContext, humanStep, type SignIn } from "./human.ts";
 import type { Step, StepOutcome } from "./runner.ts";
-import { chatgptSignIn, claudeAuth, claudeSignIn, githubSignIn } from "./signins.ts";
+import { chatgptSignIn, claudeSignIn, githubSignIn } from "./signins.ts";
 import type { Terminal } from "./terminal.ts";
 
 export const skipDevbox = "skip";
@@ -201,7 +201,7 @@ async function applyProfile(box: Machine, context: DevboxContext) {
 
 /** Claude signs in on the box in an SSH terminal: its sign-in asks for a code that the person pastes. */
 function claudeOnBox(host: string, box: Machine, context: DevboxContext): Step {
-  const signIn = claudeSignIn(box);
+  const signIn = claudeSignIn(box, host);
   const title = `${signIn.title} on ${host}`;
   return {
     id: `devbox:${host}:claude`,
@@ -210,9 +210,7 @@ function claudeOnBox(host: string, box: Machine, context: DevboxContext): Step {
     kind: "human",
     async run(): Promise<StepOutcome> {
       const { terminal } = context;
-      const auth = await claudeAuth(box);
-      if (auth === "ok") return terminal.print(`  ✓ ${title}: already done`);
-      if (auth === "token-dead") throw new Error(`The CLAUDE_CODE_OAUTH_TOKEN that ${host} gets from its environment is no longer valid, and claude auth login cannot replace it. Make a new token with claude setup-token and give it to the box (on a PostHog devbox: hogli devbox:setup --configure-claude), then run fleet setup again.`);
+      if (await signIn.probe()) return terminal.print(`  ✓ ${title}: already done`);
       if (context.nonInteractive) return "unanswered";
       terminal.print(`▶ ${title}  (step needs you, about 1 min)`);
       terminal.print("  Open the link it prints, sign in, then paste the code back here.");
