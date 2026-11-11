@@ -96,7 +96,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * runtimePid or serverGone say otherwise. Its environment sets a proxy that
  * takes every curl request which does not turn proxies off, and its tunnel answers only after tunnelStartsAfter lookups.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; tunnelStartsAfter?: number; boxTunnel?: string } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: boolean; linked: boolean }; tunnelStartsAfter?: number; boxTunnel?: string } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -131,9 +131,10 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     const { sessions } = side;
     if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
     if (line.startsWith("t3 environment link ")) return result(true, "linked");
-    if (line === "t3 connect status --json") return result(true, JSON.stringify({ desired: side.linked, authenticated: side.linked, linked: side.linked, revoked: false, relayUrl: "https://relay.example", ...(options.cliPrintsTunnel && side.linked ? { tunnelHostname: side.tunnel } : {}) }));
-    if (line === `sh -c 'cat "$HOME/.t3/userdata/server-runtime.json"'`) return result(true, JSON.stringify({ version: 1, pid: "runtimePid" in options ? options.runtimePid : 4242, port: Number(port), origin: recorded }));
-    if (line === "sh -c 'kill -0 4242'") return result(!options.serverGone);
+    const status = side.name === "box" && options.boxConnect ? options.boxConnect : { authenticated: side.linked, linked: side.linked };
+    if (line === "t3 connect status --json") return result(true, JSON.stringify({ desired: side.linked, ...status, revoked: false, relayUrl: "https://relay.example", ...(options.cliPrintsTunnel && side.linked ? { tunnelHostname: side.tunnel } : {}) }));
+    if (line === `sh -c '[ -z "$VITE_DEV_SERVER_URL" ] && cat "\${T3CODE_HOME:-$HOME/.t3}/userdata/server-runtime.json"'`) return result(true, JSON.stringify({ version: 1, pid: "runtimePid" in options ? options.runtimePid : 4242, port: Number(port), origin: recorded }));
+    if (/^sh -c 'kill -0 \S+'$/.test(line)) return result(!options.serverGone);
     if (line.startsWith("curl ") && !line.startsWith("curl -q --noproxy '*' ")) return { code: 22, output: "curl: (22) The requested URL returned error: 502 from the proxy", stdout: "" };
     if (line === "t3 auth session issue --json --ttl 5m --label fleet --subject fleet --scope relay:read") {
       const session = { sessionId: `session-${sessions.length + 1}`, token: `t3-bearer-${side.tunnel}-${sessions.length + 1}`, revoked: false };

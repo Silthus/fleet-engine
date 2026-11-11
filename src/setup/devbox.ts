@@ -301,19 +301,21 @@ function parsed<T>(result: ExecResult): T | undefined {
   }
 }
 
-/** The T3 server's own record of where it listens, trusted only on loopback and while its process runs: the same record T3's own CLI sends its relay sessions to. */
+/** The T3 server's own record of where it listens, read from the same base directory the t3 commands here use, trusted only at a numeric loopback address and while its process runs: the record T3's own CLI sends its relay sessions to. A dev server keeps its record elsewhere, so Fleet does not guess it. */
 async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
-  const runtime = parsed<{ origin?: unknown; pid?: unknown }>(await machine.exec(["sh", "-c", `cat "$HOME/.t3/userdata/server-runtime.json"`]));
+  const runtime = parsed<{ origin?: unknown; pid?: unknown }>(await machine.exec(["sh", "-c", runtimeRecord]));
   const url = loopbackUrl(runtime?.origin);
   const pid = runtime?.pid;
   if (!url || typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined;
   return (await machine.exec(["sh", "-c", `kill -0 ${pid}`])).code === 0 ? url.origin : undefined;
 }
 
+const runtimeRecord = `[ -z "$VITE_DEV_SERVER_URL" ] && cat "\${T3CODE_HOME:-$HOME/.t3}/userdata/server-runtime.json"`;
+
 function loopbackUrl(value: unknown) {
   try {
     const url = new URL(String(value));
-    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ? url : undefined;
+    return url.protocol === "http:" && ["127.0.0.1", "[::1]"].includes(url.hostname) ? url : undefined;
   } catch {
     return undefined;
   }

@@ -120,6 +120,10 @@ describe("the devbox over SSH", () => {
     ["userinfo in front of another host", { runtimeOrigin: "http://127.0.0.1@evil.example:41773" }],
     ["an https origin", { runtimeOrigin: "https://127.0.0.1:41773" }],
     ["a pid that is not a number", { runtimePid: "4242" }],
+    ["a pid that names every process", { runtimePid: -1 }],
+    ["a pid of 0", { runtimePid: 0 }],
+    ["a pid that is not whole", { runtimePid: 4242.5 }],
+    ["localhost, which curl and T3 may resolve to different listeners", { runtimeOrigin: "http://localhost:41773" }],
     ["a server record whose process is gone", { serverGone: true }],
   ])("never issues a T3 session for %s", async (_, server) => {
     const home = homeWithHosts();
@@ -131,11 +135,23 @@ describe("the devbox over SSH", () => {
 
   test("reads the tunnel from a T3 server that its record names in another spelling and at another port", async () => {
     const home = homeWithHosts();
-    const box = fakeMachine(home, {}, { runtimeOrigin: "http://LOCALHOST:52000/" });
+    const box = fakeMachine(home, {}, { runtimeOrigin: "HTTP://127.0.0.1:52000/path?q=x" });
     const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
     expect(result.code).toBe(0);
-    expect(remote(box)).toContainEqual(expect.stringContaining("http://localhost:52000/api/connect/link-state"));
+    expect(remote(box)).toContainEqual(expect.stringContaining("http://127.0.0.1:52000/api/connect/link-state"));
     expect(box.calls.map((call) => call.command.join(" "))).toContain("t3 environment link https://box-1.relay.example --pairing-code BOXCODE --access full-access");
+  });
+
+  test.each([
+    ["signed in but not linked", { authenticated: true, linked: false }],
+    ["linked but not signed in", { authenticated: false, linked: true }],
+  ])("never links a box whose T3 Connect is %s", async (_, boxConnect) => {
+    const home = homeWithHosts();
+    const box = fakeMachine(home, {}, { boxConnect, exits: { "box:t3": 0 } });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.output).toContain("but Link T3 Connect on node-1 still does not pass its check");
+    expect(box.calls.map((call) => call.command.join(" "))).not.toContainEqual(expect.stringContaining("t3 environment link"));
+    expect(box.sessions()).toEqual([]);
   });
 
   test("waits for a tunnel that is still starting after T3 Connect links", async () => {
@@ -147,7 +163,7 @@ describe("the devbox over SSH", () => {
     expect(box.sessions().filter((session) => !session.revoked)).toEqual([]);
   });
 
-  test.each(["a..b", ".", "-box.example", "box_1.example", `${"a".repeat(64)}.example`, "bücher.example", "box.example:8443", "user@box.example", "box.example/path", "box-.example", Array(4).fill("a".repeat(63)).join(".")])("refuses the tunnel hostname %s", async (tunnel) => {
+  test.each(["a..b", ".", "-box.example", "box_1.example", `${"a".repeat(64)}.example`, "bücher.example", "box.example:8443", "user@box.example", "box.example/path", "box-.example", "localhost", Array(4).fill("a".repeat(63)).join(".")])("refuses the tunnel hostname %s", async (tunnel) => {
     const home = homeWithHosts();
     const box = fakeMachine(home, {}, { cliPrintsTunnel: true, boxTunnel: tunnel });
     const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
