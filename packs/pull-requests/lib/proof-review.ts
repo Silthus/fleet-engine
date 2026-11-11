@@ -1,9 +1,13 @@
+import { redactSecrets } from "../../base/hooks/secret-guard.ts";
+
 export type ReviewInput = {
   scope: string; from: string; commit: string; diff: string; diffFile: string; crossFamily: boolean;
   title: string; body: string; rubric: string; references: string[]; reviewRules: string;
 };
 
 export const diffCap = 300_000;
+
+export const reviewedDiff = redactSecrets;
 
 export function capped(text: string, cap: number) {
   return text.length > cap ? `${text.slice(0, cap)}\n[cut at ${cap} characters]` : text;
