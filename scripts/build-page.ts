@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { engineSettings, loadPacks } from "../src/pack/manifest.ts";
 import type { Audience, Concept, LoadedPack, Need, PackManifest, Preset } from "../src/pack/types.ts";
-import { engineRepo, ownDevboxPacks } from "../src/setup/defaults.ts";
+import { engineRepo, needsHubPacks, ownDevboxPacks, prefersHubPacks } from "../src/setup/defaults.ts";
 import { choosablePacks, defaultPreset, filledBySetup, packTitle, type Catalog } from "../src/setup/questions.ts";
 import type { PageData, PagePack } from "../page/model.ts";
 
@@ -46,11 +46,15 @@ export async function pageData({ audience, team = [] }: PageOptions): Promise<Pa
     presets: presets.map((preset) => ({
       ...preset,
       packs: preset.packs.filter((name) => names.has(name)),
+      hubPacks: (preset.hubPacks ?? []).filter((name) => names.has(name)),
+      hubWorkflows: Object.fromEntries(Object.entries(preset.hubWorkflows ?? {}).filter(([id]) => workflowIds.has(id))),
       workflows: Object.fromEntries(Object.entries(preset.workflows).filter(([id]) => workflowIds.has(id))),
     })),
     packs,
     teamPacks,
     ownDevboxPacks: ownDevboxPacks.filter((name) => names.has(name)),
+    needsHubPacks: needsHubPacks.filter((name) => names.has(name)),
+    prefersHubPacks: prefersHubPacks.filter((name) => names.has(name)),
     concepts: concepts.filter(shown).filter((concept) => words.has(concept.word)).map(({ word, note }) => ({ word, note })),
     needPacks: Object.fromEntries(Object.entries(needPacks).filter(([need]) => used.has(need as Need))),
     needLabels: Object.fromEntries(Object.entries(needLabels).filter(([need]) => used.has(need as Need))),

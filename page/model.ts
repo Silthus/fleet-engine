@@ -25,7 +25,9 @@ export type PagePack = {
   settings: PackSetting[];
 };
 
-export type PagePreset = { id: string; name: string; blurb: string; packs: string[]; workflows: Record<string, boolean> };
+export type PagePreset = { id: string; name: string; blurb: string; packs: string[]; hubPacks: string[]; hubWorkflows: Record<string, boolean>; workflows: Record<string, boolean> };
+
+export type Where = "mac" | "hub";
 
 export type PageData = {
   engineRepo: string;
@@ -36,6 +38,8 @@ export type PageData = {
   /** Packs from a team's private source, which setup ticks in every preset. */
   teamPacks: string[];
   ownDevboxPacks: string[];
+  needsHubPacks: string[];
+  prefersHubPacks: string[];
   concepts: Array<{ word: string; note: string }>;
   /** Needs that hold only while a pack is on, such as hub. */
   needPacks: Partial<Record<Need, string>>;
@@ -43,26 +47,50 @@ export type PageData = {
   teamNote: string;
 };
 
-export type Picks = { preset: string; packs: string[]; workflows: Record<string, boolean>; settings: Record<string, SettingValue> };
+export type Picks = { preset: string; where: Where; packs: string[]; workflows: Record<string, boolean>; settings: Record<string, SettingValue> };
 
 export type MomentState = { on: true } | { on: false; fix: { pack: string } | { workflow: string } };
+
+export type DayState = MomentState | { on: false; fix: { where: "hub" } };
 
 const packOf = (data: PageData, name: string) => data.packs.find((pack) => pack.name === name);
 export const workflowOf = (data: PageData, id: string) => data.packs.flatMap((pack) => pack.workflows).find((workflow) => workflow.id === id);
 const presetOf = (data: PageData, id: string) => data.presets.find((preset) => preset.id === id) ?? data.presets.find((preset) => preset.id === data.defaultPreset)!;
-const presetPacks = (data: PageData, preset: PagePreset) => [...new Set([...preset.packs, ...data.teamPacks])];
+const presetPacks = (data: PageData, preset: PagePreset, where: Where) => [...new Set([...preset.packs, ...data.teamPacks, ...(where === "hub" ? preset.hubPacks : [])])];
+const inPageOrder = (data: PageData, names: Iterable<string>) => {
+  const wanted = new Set(names);
+  return data.packs.map((pack) => pack.name).filter((name) => wanted.has(name));
+};
 const picked = (data: PageData, picks: Picks) => data.packs.filter((pack) => pack.always || picks.packs.includes(pack.name));
 const sameSet = (left: string[], right: string[]) => left.length === right.length && left.every((item) => right.includes(item));
 
 export const chosen = (picks: Pick<Picks, "workflows">, workflow: PageWorkflow) => picks.workflows[workflow.id] ?? workflow.default;
 
-export function presetPicks(data: PageData, id: string, settings: Picks["settings"] = {}): Picks {
+export function presetPicks(data: PageData, id: string, settings: Picks["settings"] = {}, where: Where = "mac"): Picks {
   const preset = presetOf(data, id);
-  return { preset: preset.id, packs: presetPacks(data, preset), workflows: { ...preset.workflows }, settings };
+  return { preset: preset.id, where, packs: presetPacks(data, preset, where), workflows: { ...preset.workflows, ...(where === "hub" ? preset.hubWorkflows : {}) }, settings };
 }
+
+export function setWhere(data: PageData, picks: Picks, where: Where): Picks {
+  if (picks.where === where) return picks;
+  const preset = presetOf(data, picks.preset);
+  const packs = where === "hub" ? [...picks.packs, ...preset.hubPacks] : picks.packs.filter((name) => !data.needsHubPacks.includes(name));
+  const kept = Object.entries(picks.workflows).filter(([id, on]) => preset.hubWorkflows[id] !== on || Object.hasOwn(preset.workflows, id));
+  const workflows = where === "hub" ? { ...preset.hubWorkflows, ...picks.workflows } : Object.fromEntries(kept);
+  return { ...picks, where, packs: inPageOrder(data, packs), workflows };
+}
+
+export function setupSplit(data: PageData, picks: Picks) {
+  const hubSide = [...data.needsHubPacks, ...data.prefersHubPacks];
+  const waits = (name: string) => picks.where === "hub" && hubSide.includes(name);
+  return { first: inPageOrder(data, picks.packs.filter((name) => !waits(name))), later: hubSide.filter((name) => waits(name) && picks.packs.includes(name)) };
+}
+
+const firstSetup = (data: PageData, picks: Picks): Picks => ({ ...picks, packs: setupSplit(data, picks).first });
 
 export function togglePack(data: PageData, picks: Picks, name: string): Picks {
   if (packOf(data, name)?.always) return picks;
+  if (picks.where === "mac" && data.needsHubPacks.includes(name)) return picks;
   const packs = new Set(picks.packs);
   if (packs.has(name)) {
     const drop = (target: string) => {
@@ -79,7 +107,7 @@ export function togglePack(data: PageData, picks: Picks, name: string): Picks {
     };
     add(name);
   }
-  return { ...picks, packs: data.packs.map((pack) => pack.name).filter((pack) => packs.has(pack)) };
+  return { ...picks, packs: inPageOrder(data, packs) };
 }
 
 export function toggleWorkflow(data: PageData, picks: Picks, id: string): Picks {
@@ -123,12 +151,23 @@ export function momentState(data: PageData, picks: Picks, workflow: PageWorkflow
   return { on: true };
 }
 
-const presetChoice = (preset: PagePreset, workflow: PageWorkflow) => preset.workflows[workflow.id] ?? workflow.default;
+const remoteNeeds: Need[] = ["devbox", "always-on devbox", "hub"];
+
+export const waitsForHub = (picks: Picks, workflow: PageWorkflow) => picks.where === "mac" && workflow.needs.some((need) => remoteNeeds.includes(need));
+
+export function dayState(data: PageData, picks: Picks, workflow: PageWorkflow): DayState {
+  const state = momentState(data, picks, workflow);
+  const hubPack = !state.on && "pack" in state.fix && data.needsHubPacks.includes(state.fix.pack);
+  if (picks.where === "mac" && (hubPack || (state.on && waitsForHub(picks, workflow)))) return { on: false, fix: { where: "hub" } };
+  return state;
+}
+
+const presetChoice = (preset: PagePreset, workflow: PageWorkflow, where: Where = "mac") => (where === "hub" ? preset.hubWorkflows[workflow.id] : undefined) ?? preset.workflows[workflow.id] ?? workflow.default;
 
 export function activePreset(data: PageData, picks: Picks) {
   const matches = (preset: PagePreset) =>
-    sameSet(presetPacks(data, preset), picks.packs) &&
-    picked(data, picks).every((pack) => pack.workflows.every((workflow) => chosen(picks, workflow) === presetChoice(preset, workflow)));
+    sameSet(presetPacks(data, preset, picks.where), picks.packs) &&
+    picked(data, picks).every((pack) => pack.workflows.every((workflow) => chosen(picks, workflow) === presetChoice(preset, workflow, picks.where)));
   const own = presetOf(data, picks.preset);
   return matches(own) ? own : data.presets.find(matches);
 }
@@ -157,7 +196,8 @@ function answered(data: PageData, picks: Picks) {
 }
 
 /** The questions setup on the Mac still asks after it reads the command: the AI plans, then each setting the command leaves open. Settings only a devbox needs are asked when you add a devbox. */
-export function questions(data: PageData, picks: Picks) {
+export function questions(data: PageData, all: Picks) {
+  const picks = firstSetup(data, all);
   const set = new Set(answered(data, picks).map((setting) => setting.key));
   const open = (setting: PackSetting) => asked(setting) && !data.filledBySetup.includes(setting.key) && !set.has(setting.key);
   const settings = picked(data, picks).flatMap((pack) => activeSettings(data, picks, pack, (workflow) => onForMacSetup(data, picks, workflow))).filter(open);
@@ -177,12 +217,13 @@ export function setupAsks(data: PageData, picks: Picks) {
   const asks = `asks ${count} more question${count === 1 ? "" : "s"}`;
   if (!devbox.length) return asks;
   if (devboxStep) return `${asks}, plus ${devbox.length} when you add a devbox`;
-  return `${asks}. Set the ${devbox.length === 1 ? "setting" : `${devbox.length} settings`} only a devbox needs in Tune it, or later with fleet set`;
+  return `${asks}. Set the ${devbox.length === 1 ? "setting" : `${devbox.length} settings`} only a devbox needs in its pack, or later with fleet set`;
 }
 
-export function commandFlags(data: PageData, picks: Picks): string[] {
-  const preset = activePreset(data, picks) ?? presetOf(data, picks.preset);
-  const base = presetPacks(data, preset);
+export function commandFlags(data: PageData, all: Picks): string[] {
+  const preset = activePreset(data, all) ?? presetOf(data, all.preset);
+  const picks = firstSetup(data, all);
+  const base = presetPacks(data, preset, "mac");
   const flags = ["--preset", preset.id];
   for (const name of picks.packs.filter((pack) => !base.includes(pack))) flags.push("--add", name);
   for (const name of base.filter((pack) => !picks.packs.includes(pack))) flags.push("--remove", name);
@@ -206,9 +247,10 @@ export function commandText(data: PageData, picks: Picks) {
 }
 
 /** The picks part of the fleet.json that setup writes from the command. */
-export function profileFile(data: PageData, picks: Picks) {
-  const preset = activePreset(data, picks) ?? presetOf(data, picks.preset);
-  const flags = commandFlags(data, picks);
+export function profileFile(data: PageData, all: Picks) {
+  const preset = activePreset(data, all) ?? presetOf(data, all.preset);
+  const picks = firstSetup(data, all);
+  const flags = commandFlags(data, all);
   const flagged = Object.fromEntries(
     flags
       .flatMap((flag, index) => (flag === "--workflows" ? flags[index + 1]!.split(",") : []))
@@ -218,6 +260,44 @@ export function profileFile(data: PageData, picks: Picks) {
   const defaults = Object.fromEntries(data.packs.flatMap((pack) => pack.workflows).map((workflow) => [workflow.id, workflow.default]));
   const workflows = Object.fromEntries(Object.entries({ ...preset.workflows, ...flagged }).filter(([id, on]) => id in defaults && defaults[id] !== on));
   const settings = Object.fromEntries(answered(data, picks).map((setting) => [setting.key, picks.settings[setting.key]!]));
-  const packs = [...new Set([...presetPacks(data, preset), ...picks.packs])].filter((name) => picks.packs.includes(name));
+  const packs = [...new Set([...presetPacks(data, preset, "mac"), ...picks.packs])].filter((name) => picks.packs.includes(name));
   return { packs, workflows, settings };
+}
+
+export const whereLabels: Record<Where, string> = { mac: "Mac only", hub: "Mac plus a hub and a node" };
+
+export const setupPrompt = (data: PageData) => `Set up Fleet on this Mac with me. Read https://raw.githubusercontent.com/${data.engineRepo}/main/SETUP.md and follow it step by step.`;
+
+export const promptLabels = {
+  intro: "My picks from the Fleet page:",
+  where: "Where Fleet runs",
+  firstPacks: "Packs on the first setup",
+  firstWorkflows: "Workflows on the first setup",
+  laterPacks: "Packs once the hub runs",
+  laterWorkflows: "Workflows once the hub runs",
+  setting: "Setting",
+};
+
+function changedWorkflows(data: PageData, picks: Picks, packs: string[], always: boolean) {
+  return data.packs
+    .filter((pack) => (pack.always ? always : packs.includes(pack.name)))
+    .flatMap((pack) => pack.workflows)
+    .filter((workflow) => chosen(picks, workflow) !== workflow.default)
+    .map((workflow) => `${workflow.id}=${chosen(picks, workflow) ? "on" : "off"}`);
+}
+
+export function promptText(data: PageData, picks: Picks) {
+  const { first, later } = setupSplit(data, picks);
+  const list = (label: string, items: string[]) => `- ${label}: ${items.join(", ") || "none"}`;
+  const optional = (label: string, items: string[]) => (items.length ? [list(label, items)] : []);
+  return [
+    setupPrompt(data),
+    "",
+    promptLabels.intro,
+    `- ${promptLabels.where}: ${whereLabels[picks.where]}`,
+    list(promptLabels.firstPacks, first),
+    ...optional(promptLabels.firstWorkflows, changedWorkflows(data, picks, first, true)),
+    ...(picks.where === "hub" ? [list(promptLabels.laterPacks, later), ...optional(promptLabels.laterWorkflows, changedWorkflows(data, picks, later, false))] : []),
+    ...answered(data, picks).map((setting) => `- ${promptLabels.setting}: ${setting.key}=${String(picks.settings[setting.key])}`),
+  ].join("\n");
 }

@@ -49,13 +49,14 @@ packs, and your answers live in your own private profile repo.
   thread about it.
 
 Team packs plug in as pack sources. The presets are Starter, Everyday, and
-Michael's.
+Everything.
 
 ### The page
 
-[A day with Fleet](https://silthus.github.io/fleet-engine/) shows what each
-pack does during a workday and builds the one command that sets up the packs
-you pick.
+[A day with Fleet](https://silthus.github.io/fleet-engine/) asks where Fleet
+runs, Mac only or Mac plus a hub and a node, and which packs you want. It
+shows what the packs do during a workday, and gives the Getting started steps
+with a prompt that carries your picks to the agent that sets Fleet up.
 
 ### Known gaps
 

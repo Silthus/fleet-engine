@@ -1,8 +1,8 @@
 # Set up Fleet with the person
 
 You are an agent in T3 Code on the person's Mac. They pasted the prompt from
-the Fleet README. Set up Fleet with them, from nothing to a passing
-`fleet doctor` on this Mac.
+the Fleet README or the Fleet page. Set up Fleet with them, from nothing to a
+passing `fleet doctor` on this Mac.
 
 ## How you work
 
@@ -23,6 +23,25 @@ the Fleet README. Set up Fleet with them, from nothing to a passing
   runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
   that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,
   make it executable, and `open` it. Ask them to tell you when it ends.
+
+## Picks from the page
+
+The prompt can end with a list that starts with `My picks from the Fleet
+page:`. The person chose these on the Fleet page, so do not ask for them
+again. When a step uses a line, say the pick back in one sentence and go on.
+Ask everything else as the steps say. Without the list, ask every question.
+
+| Line | How to use it |
+| --- | --- |
+| `Where Fleet runs` | The answer to step 4. |
+| `Packs on the first setup` | The packs for step 6, picked one by one. `none` means no pack. Still ask the AI plan, and read each pack's setup note. |
+| `Workflows on the first setup` | Add the list to the setup command in step 7 as `--workflows`, without the spaces. |
+| `Setting` | Add `--set <key>=<value>` to the setup command in step 7, once for each line. |
+| `Packs once the hub runs` | The answer to item 8 of step 9. `none` means they picked no pack for the hub: in item 8, ask about the Hub pack only. |
+| `Workflows once the hub runs` | Add the list to the `--workflows` of the command in item 8 of step 9. |
+
+A pack's setup note still asks what the list does not answer, and a
+workflow that a note turns on stays on.
 
 ## 1. Check the Mac
 
@@ -62,7 +81,8 @@ machine you add gets the same setup.
 
 ## 4. Ask where Fleet runs
 
-Ask "Mac only, or Mac plus a hub and a node?", with these options:
+Ask "Mac only, or Mac plus a hub and a node?", with these options, unless
+the picks from the page say where Fleet runs:
 
 - **Mac only.** A full setup: every pack's skills and rules, and the
   workflows that run on a Mac, run on this Mac. Agents stop when the Mac
@@ -108,7 +128,8 @@ the person clicks **Install**. The step is done when
 
 ## 6. Ask what they want
 
-Ask in one call:
+Ask in one call. Skip the packs question when the picks from the page name
+the packs:
 
 - **Packs.** One option per preset in `~/.local/share/fleet/engine/presets.json`,
   with its `blurb`, and "One by one". For one by one, ask a multi-select
@@ -250,7 +271,8 @@ the work. Each machine keeps working when the hub is down.
    ```
 
 8. **Hub packs.** Ask with a multi-select question which of these to turn
-   on, recommending Hub. Read the setup note of each one they pick, now:
+   on, recommending Hub, unless the picks from the page name the packs for
+   once the hub runs. Read the setup note of each one they pick, now:
 
    - **Hub**: the hub links the machines and watches their disks.
      `packs/hub/SETUP.md`

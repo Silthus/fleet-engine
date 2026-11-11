@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { AvailableSource } from "../src/pack/types.ts";
+import { readFileSync } from "node:fs";
 import { parseSetupFlags } from "../src/setup/flags.ts";
 import { filledBySetup, picksFrom, settingsFrom } from "../src/setup/questions.ts";
 import { loadCatalog } from "../src/setup/setup.ts";
@@ -11,12 +12,17 @@ import {
   activePreset,
   commandFlags,
   commandText,
+  chosen,
+  dayState,
   momentState,
   presetPicks,
   profileFile,
   questions,
+  promptText,
   setSetting,
   setupAsks,
+  setupSplit,
+  setWhere,
   togglePack,
   toggleWorkflow,
   type PageData,
@@ -61,7 +67,7 @@ describe("the command", () => {
       everyday(),
       togglePack(data, everyday(), "memory"),
       togglePack(data, everyday(), "orchestration"),
-      toggleWorkflow(data, presetPicks(data, "michael"), "signal-loop"),
+      toggleWorkflow(data, presetPicks(data, "everything"), "signal-loop"),
       toggleWorkflow(data, togglePack(data, presetPicks(data, "starter"), "orchestration"), "quality-loop"),
       setSetting(data, setSetting(data, everyday(), "pull-requests.commentApproval", "all"), "pull-requests.mergeCommand", "gh pr merge --squash 'now'"),
       setSetting(data, everyday(), "base.heavySlots", 4),
@@ -77,11 +83,11 @@ describe("the command", () => {
     const back = togglePack(data, togglePack(data, everyday(), "orchestration"), "orchestration");
     expect(activePreset(data, back)?.id).toBe("everyday");
     expect(commandFlags(data, back)).toEqual(["--preset", "everyday"]);
-    let michael = togglePack(data, presetPicks(data, "starter"), "memory");
-    for (const id of ["orchestration", "communication"]) michael = togglePack(data, michael, id);
-    for (const id of ["quality-loop", "signal-loop", "pr-digest"]) michael = toggleWorkflow(data, michael, id);
-    expect(activePreset(data, michael)?.id).toBe("michael");
-    expect(commandFlags(data, michael)).toEqual(["--preset", "michael"]);
+    let everything = presetPicks(data, "starter");
+    for (const id of ["orchestration", "communication", "memory", "guards", "slack"]) everything = togglePack(data, everything, id);
+    for (const id of ["quality-loop", "signal-loop", "pr-digest", "shell-guards", "package-age"]) everything = toggleWorkflow(data, everything, id);
+    expect(activePreset(data, everything)?.id).toBe("everything");
+    expect(commandFlags(data, everything)).toEqual(["--preset", "everything"]);
   });
 
   test("turns a workflow on or off against the preset, and quotes values for the shell", () => {
@@ -118,6 +124,7 @@ describe("the picks", () => {
       ...data,
       packs: [...data.packs, { name: "hub", title: "Hub", summary: "", requires: [], always: false, workflows: [{ id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], requires: [], default: true, settings: [] }], settings: [] }],
       needPacks: { hub: "hub" },
+      needsHubPacks: [],
     };
     const boxes = (packs: Picks) => momentState(hub, packs, { id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], requires: [], default: true, settings: [] }, "hub");
     const picks = presetPicks(hub, "everyday");
@@ -159,18 +166,120 @@ describe("the questions setup still asks", () => {
   });
 
   test("say setup asks the settings only a devbox needs when you add one", () => {
-    const michael = presetPicks(data, "michael");
-    expect(setupAsks(data, michael)).toBe("asks 1 more question, plus 4 when you add a devbox");
-    expect(setupAsks(data, setSetting(data, michael, "orchestration.loopProject", "app"))).toBe("asks 1 more question, plus 3 when you add a devbox");
+    const everything = presetPicks(data, "everything");
+    expect(setupAsks(data, everything)).toBe("asks 1 more question, plus 4 when you add a devbox");
+    expect(setupAsks(data, setSetting(data, everything, "orchestration.loopProject", "app"))).toBe("asks 1 more question, plus 3 when you add a devbox");
     expect(setupAsks(data, presetPicks(data, "starter"))).toBe("asks 1 more question");
   });
 
   test("count the AI plans question, and keep the settings only a devbox asks apart until the command answers them", () => {
-    const michael = presetPicks(data, "michael");
-    const before = questions(data, michael);
+    const everything = presetPicks(data, "everything");
+    const before = questions(data, everything);
     expect(before.count).toBe(before.settings.length + 1);
     expect(before.devbox.map((setting) => setting.key)).toEqual(["orchestration.loopProject", "orchestration.qualityArea", "orchestration.criticalPaths", "orchestration.ledgerRepo"]);
-    const after = questions(data, setSetting(data, michael, "orchestration.loopProject", "app"));
+    const after = questions(data, setSetting(data, everything, "orchestration.loopProject", "app"));
     expect([after.count, after.devbox.map((setting) => setting.key)]).toEqual([before.count, ["orchestration.qualityArea", "orchestration.criticalPaths", "orchestration.ledgerRepo"]]);
+  });
+});
+
+describe("where Fleet runs", () => {
+  const optional = () => data.packs.filter((pack) => !pack.always).map((pack) => pack.name);
+
+  test("Everything holds every pack once there is a hub, and every pack a Mac can run with Mac only", () => {
+    expect(presetPicks(data, "everything", {}, "hub").packs.toSorted()).toEqual(optional().toSorted());
+    expect(presetPicks(data, "everything").packs.toSorted()).toEqual(optional().filter((name) => !data.needsHubPacks.includes(name)).toSorted());
+    expect(data.needsHubPacks.length).toBeGreaterThan(0);
+  });
+
+  test("adding a hub turns on the preset's hub packs and keeps the preset, and Mac only drops every pack that needs a hub", () => {
+    const hub = setWhere(data, everyday(), "hub");
+    expect([hub.where, hub.packs.toSorted(), activePreset(data, hub)?.id]).toEqual(["hub", ["communication", "hub", "orchestration", "pull-requests"], "everyday"]);
+    const back = setWhere(data, togglePack(data, hub, "recovery"), "mac");
+    expect([back.where, back.packs.toSorted(), activePreset(data, back)?.id]).toEqual(["mac", ["communication", "orchestration", "pull-requests"], "everyday"]);
+  });
+
+  test("Everything with a hub turns on the workflows that make Slack and Recovery do their work, and Mac only takes them back", () => {
+    const hub = setWhere(data, presetPicks(data, "everything"), "hub");
+    expect(["slack-thread", "provider-recovery", "own-account-balancing"].map((id) => dayState(data, hub, workflow(id)))).toEqual([{ on: true }, { on: true }, { on: true }]);
+    expect(activePreset(data, hub)?.id).toBe("everything");
+    const back = setWhere(data, hub, "mac");
+    expect([chosen(back, workflow("slack-thread")), activePreset(data, back)?.id, commandFlags(data, back)]).toEqual([false, "everything", ["--preset", "everything"]]);
+  });
+
+  test("a pack that needs a hub stays off with Mac only", () => {
+    expect(togglePack(data, everyday(), "hub")).toEqual(everyday());
+    expect(togglePack(data, setWhere(data, everyday(), "hub"), "recovery").packs).toContain("recovery");
+  });
+
+  test("with Mac only, a moment that needs a devbox or the hub waits for a hub and a node", () => {
+    const loop = toggleWorkflow(data, everyday(), "quality-loop");
+    expect(dayState(data, loop, workflow("quality-loop"))).toEqual({ on: false, fix: { where: "hub" } });
+    expect(dayState(data, setWhere(data, loop, "hub"), workflow("quality-loop"))).toEqual({ on: true });
+    expect(dayState(data, everyday(), workflow("disk-watch"))).toEqual({ on: false, fix: { where: "hub" } });
+    expect(dayState(data, setWhere(data, everyday(), "hub"), workflow("disk-watch"))).toEqual({ on: true });
+    expect(dayState(data, everyday(), workflow("maps"))).toEqual({ on: true });
+    expect(dayState(data, everyday(), workflow("shared-memory"))).toEqual({ on: false, fix: { pack: "memory" } });
+  });
+
+  test("the command by hand sets up the first machine, so it leaves out the packs that wait for the hub", () => {
+    expect(commandFlags(data, presetPicks(data, "everything", {}, "hub"))).toEqual(["--preset", "everything", "--remove", "slack"]);
+    expect(commandFlags(data, setWhere(data, everyday(), "hub"))).toEqual(["--preset", "everyday"]);
+  });
+});
+
+describe("the prompt", () => {
+  const readmePrompt = () => readFileSync(join(import.meta.dir, "../README.md"), "utf8").match(/```text\n\s*(Set up Fleet[^\n]+)\n/)![1]!;
+  const line = (text: string, label: string) => text.match(new RegExp(`^- ${label}: (.*)$`, "m"))?.[1];
+
+  test("opens with the README's prompt, so both start the same setup guide", () => {
+    expect(promptText(data, everyday()).split("\n")[0]).toBe(readmePrompt());
+  });
+
+  test("with Mac only, names where Fleet runs and the packs for the first setup", () => {
+    expect(promptText(data, everyday())).toBe(`${readmePrompt()}\n\nMy picks from the Fleet page:\n- Where Fleet runs: Mac only\n- Packs on the first setup: pull-requests, orchestration, communication`);
+  });
+
+  test("with a hub, keeps the packs that need one, and Slack, for once the hub runs, each with its own workflows", () => {
+    const picks = toggleWorkflow(data, presetPicks(data, "everything", {}, "hub"), "dream");
+    expect(promptText(data, picks).split("\n").slice(2)).toEqual([
+      "My picks from the Fleet page:",
+      "- Where Fleet runs: Mac plus a hub and a node",
+      "- Packs on the first setup: pull-requests, orchestration, communication, memory, guards",
+      "- Workflows on the first setup: quality-loop=on, signal-loop=on, pr-digest=on, shell-guards=on, package-age=on",
+      "- Packs once the hub runs: hub, mcp-gateway, recovery, slack",
+      "- Workflows once the hub runs: slack-thread=on, dream=on, own-account-balancing=on, provider-recovery=on",
+    ]);
+  });
+
+  test("names no pack as none, and carries each changed setting on its own line", () => {
+    const bare = togglePack(data, presetPicks(data, "starter"), "pull-requests");
+    expect(line(promptText(data, bare), "Packs on the first setup")).toBe("none");
+    const tuned = setSetting(data, setSetting(data, everyday(), "base.heavySlots", 4), "pull-requests.mergeCommand", "gh pr merge --squash, now");
+    expect(promptText(data, tuned).split("\n").slice(-2)).toEqual(["- Setting: base.heavySlots=4", "- Setting: pull-requests.mergeCommand=gh pr merge --squash, now"]);
+  });
+
+  test("its first setup picks, as the guide's one by one command, are read by setup as the packs and workflows the page shows", async () => {
+    const tuned = [
+      everyday(),
+      togglePack(data, presetPicks(data, "starter"), "pull-requests"),
+      toggleWorkflow(data, presetPicks(data, "everything"), "nightly-updates"),
+      toggleWorkflow(data, presetPicks(data, "everything", {}, "hub"), "slack-thread"),
+      setSetting(data, togglePack(data, everyday(), "memory"), "base.heavySlots", 4),
+    ];
+    const catalog = await loadCatalog(join(import.meta.dir, ".."), [], temp.make("home-"));
+    for (const picks of tuned) {
+      const text = promptText(data, picks);
+      const packs = line(text, "Packs on the first setup")!.split(", ").filter((name) => name !== "none");
+      const flags = ["--preset", "starter", ...(packs.includes("pull-requests") ? [] : ["--remove", "pull-requests"]), ...packs.filter((name) => name !== "pull-requests").flatMap((name) => ["--add", name])];
+      const workflows = line(text, "Workflows on the first setup");
+      if (workflows) flags.push("--workflows", workflows.replaceAll(", ", ","));
+      for (const [, pair] of text.matchAll(/^- Setting: (.*)$/gm)) flags.push("--set", pair!);
+      const parsed = parseSetupFlags(flags);
+      const read = picksFrom(parsed, catalog);
+      const first = setupSplit(data, picks).first;
+      const shown = data.packs.filter((pack) => pack.always || first.includes(pack.name)).flatMap((pack) => pack.workflows);
+      expect({ text, packs: read.packs.toSorted(), workflows: shown.map((item) => [item.id, read.workflows[item.id] ?? item.default]) }).toEqual({ text, packs: first.toSorted(), workflows: shown.map((item) => [item.id, chosen(picks, item)]) });
+      expect([text, settingsFrom(parsed, catalog)]).toEqual([text, Object.fromEntries(Object.entries(picks.settings))]);
+    }
   });
 });

@@ -113,4 +113,4 @@ your devbox and runs the same steps. `fleet devbox` lists your devboxes.
   runs it every night.
 
 [A day with Fleet](https://silthus.github.io/fleet-engine/) shows what each
-pack does during a workday.
+pack does during a workday, and builds the setup prompt with your picks.

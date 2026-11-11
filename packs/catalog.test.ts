@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { needValues, type AvailableSource, type Concept, type PackManifest, type Preset } from "../src/pack/types.ts";
+import { needsHubPacks } from "../src/setup/defaults.ts";
 import { tempDirs } from "../src/testing/git.ts";
 import { skillSources, devbox, engineSource, resolveEngine } from "../src/testing/packs.ts";
 
@@ -53,8 +54,8 @@ describe("the catalog", () => {
     }
   });
 
-  test("offers Starter, Everyday, and Michael's, each resolving with every pack it names", () => {
-    expect(presets.map((preset) => preset.id)).toEqual(["starter", "everyday", "michael"]);
+  test("offers Starter, Everyday, and Everything, each resolving with every pack it names", () => {
+    expect(presets.map((preset) => preset.id)).toEqual(["starter", "everyday", "everything"]);
     const names = manifests.map((manifest) => manifest.name);
     for (const preset of presets) {
       expect([preset.id, preset.packs.filter((pack) => !names.includes(pack))]).toEqual([preset.id, []]);
@@ -64,6 +65,19 @@ describe("the catalog", () => {
       expect([preset.id, plan.packs.filter((pack) => !pack.available)]).toEqual([preset.id, []]);
       const on = new Set(plan.workflows.filter((workflow) => workflow.active).map((workflow) => workflow.id));
       expect([preset.id, Object.keys(preset.workflows).filter((id) => preset.workflows[id] && !on.has(id))]).toEqual([preset.id, []]);
+    }
+  });
+
+  test("Everything names every pack, on the first machine or once a hub runs, and each preset's hub packs and hub workflows exist", () => {
+    const everything = presets.find((preset) => preset.id === "everything")!;
+    const optional = manifests.map((manifest) => manifest.name).filter((name) => name !== "base");
+    expect([...everything.packs, ...(everything.hubPacks ?? [])].toSorted()).toEqual(optional.toSorted());
+    for (const preset of presets) {
+      const later = [...preset.packs, ...(preset.hubPacks ?? [])];
+      expect([preset.id, (preset.hubPacks ?? []).filter((name) => !needsHubPacks.includes(name))]).toEqual([preset.id, []]);
+      expect([preset.id, preset.packs.filter((name) => needsHubPacks.includes(name))]).toEqual([preset.id, []]);
+      const offered = workflows().filter((workflow) => later.includes(workflow.pack)).map((workflow) => workflow.id);
+      expect([preset.id, Object.keys(preset.hubWorkflows ?? {}).filter((id) => !offered.includes(id))]).toEqual([preset.id, []]);
     }
   });
 

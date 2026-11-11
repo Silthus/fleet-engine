@@ -5,6 +5,7 @@ import type { LoadedPack, PackManifest } from "../src/pack/types.ts";
 import { tempDirs } from "../src/testing/git.ts";
 import { spawnAsync } from "../src/testing/spawn.ts";
 import { presetPicks, commandFlags, setSetting, questions, setupAsks, settingAsks } from "../page/model.ts";
+import { packIcon, packIcons, teamIcon } from "../page/icons.ts";
 import { buildPage, pageData } from "./build-page.ts";
 
 const root = join(import.meta.dir, "..");
@@ -39,8 +40,22 @@ describe("the page build", () => {
     const html = await buildPage({ audience: "public" });
     expect(html.match(/posthog|hogli|coder|stamphog|reviewhog/gi)).toBeNull();
     const data = await pageData({ audience: "public" });
-    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "guards", "hub", "mcp-gateway", "recovery", "slack"]);
+    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "guards", "slack", "hub", "mcp-gateway", "recovery"]);
     expect(data.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id)).not.toContain("previews");
+  });
+
+  test("every pack on the public page has its own icon, and a team pack gets the team icon", async () => {
+    const data = await pageData({ audience: "public" });
+    const icons = data.packs.map((pack) => packIcon(pack.name));
+    expect(data.packs.filter((pack) => !packIcons[pack.name]).map((pack) => pack.name)).toEqual([]);
+    expect(new Set(icons).size).toBe(icons.length);
+    expect(packIcon("acme")).toBe(teamIcon);
+    expect(icons).not.toContain(teamIcon);
+  });
+
+  test("the page gives the Getting started steps and a prompt that opens in T3 Code", async () => {
+    const html = await buildPage({ audience: "public" });
+    for (const text of ["Download T3 Code", "Sign in with T3 Connect", "Paste this prompt", "https://t3.codes", "https://app.t3.codes/new?prompt="]) expect(html).toContain(text);
   });
 
   test("the public build refuses a private pack source", async () => {
@@ -59,15 +74,15 @@ describe("the page build", () => {
 
   test("a team build whose pack makes its own devbox promises no devbox questions, since setup asks for no devbox then", async () => {
     const data = await pageData({ audience: "posthog", team: [teamPack()] });
-    const michael = presetPicks(data, "michael");
-    const open = questions(data, michael);
+    const everything = presetPicks(data, "everything");
+    const open = questions(data, everything);
     expect(open.devbox.map((setting) => setting.key)).toContain("orchestration.loopProject");
-    expect(setupAsks(data, michael)).not.toContain("when you add a devbox");
-    expect(setupAsks(data, michael)).toEndWith(`. Set the ${open.devbox.length} settings only a devbox needs in Tune it, or later with fleet set`);
+    expect(setupAsks(data, everything)).not.toContain("when you add a devbox");
+    expect(setupAsks(data, everything)).toEndWith(`. Set the ${open.devbox.length} settings only a devbox needs in its pack, or later with fleet set`);
     expect(settingAsks(open, open.devbox[0]!)).toBe("set it here or later with fleet set");
     const without = await pageData({ audience: "posthog", team: [teamPack({ name: "acme" })] });
-    const acme = questions(without, presetPicks(without, "michael"));
-    expect(setupAsks(without, presetPicks(without, "michael"))).toEndWith(`, plus ${acme.devbox.length} when you add a devbox`);
+    const acme = questions(without, presetPicks(without, "everything"));
+    expect(setupAsks(without, presetPicks(without, "everything"))).toEndWith(`, plus ${acme.devbox.length} when you add a devbox`);
     expect(settingAsks(acme, acme.devbox[0]!)).toBe("setup asks when you add a devbox");
   });
 

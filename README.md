@@ -31,9 +31,11 @@ sign-ins.
 
 ## See what it does
 
-Read [A day with Fleet](https://silthus.github.io/fleet-engine/) to see what
-each pack does for you during a workday. The page is `page/index.html`,
-generated from the pack data by `bun scripts/build-page.ts`.
+Open [A day with Fleet](https://silthus.github.io/fleet-engine/) to choose
+where Fleet runs and which packs you want, and to see what they do for you
+during a workday. The page builds the prompt above with your picks in it, so
+the agent skips those questions. The page is `page/index.html`, generated
+from the pack data by `bun scripts/build-page.ts`.
 
 ## Status
 
