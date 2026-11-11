@@ -86,12 +86,12 @@ describe("setup timings", () => {
     expect(second.output).toContain("  Ready after     1m 30s\n");
   });
 
-  test("records a step that failed, with its error, and leaves the machine not usable", async () => {
+  test("records a step that failed, with its error; a failed final check comes after the machine is usable", async () => {
     const home = temp.make("home-");
     const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home, {}, { startedAt: start }), undefined, 1);
     expect(result.code).toBe(1);
     const saved = timings(home);
-    expect(saved.usable).toBeNull();
+    expect(saved.usable).toBe("2026-11-11T10:00:00.000Z");
     expect(saved.steps.at(-1)).toMatchObject({ id: "check", outcome: "failed", error: expect.stringContaining("fleet doctor found something to fix") });
   });
 

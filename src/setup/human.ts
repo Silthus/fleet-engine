@@ -33,7 +33,8 @@ export type SignIn = {
   after?(): Promise<void>;
 };
 
-export type HumanContext = { terminal: Terminal; machine: Machine; nonInteractive: boolean; waited?(): void };
+/** chat: setup runs in an agent's chat, so it waits for a browser sign-in though it asks nothing. */
+export type HumanContext = { terminal: Terminal; machine: Machine; nonInteractive: boolean; chat?: boolean; waited?(): void };
 
 /**
  * A step that needs the person: it checks first, then starts the sign-in,
@@ -44,12 +45,12 @@ export function humanStep(signIn: SignIn, context: HumanContext): Step {
   return { id: signIn.id, title: signIn.title, minutes: signIn.minutes, kind: "human", run: () => waitForPerson(signIn, context) };
 }
 
-async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive, waited }: HumanContext): Promise<StepOutcome> {
+async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive, chat, waited }: HumanContext): Promise<StepOutcome> {
   if (await signIn.probe()) {
     terminal.print(`  ✓ ${signIn.title}: already done`);
     return signIn.after?.();
   }
-  if (nonInteractive) {
+  if (nonInteractive && !(chat && !signIn.interactive)) {
     terminal.print(`  Needs you: ${signIn.title}`);
     terminal.print(`  ${howToStart(signIn)}`);
     return "unanswered";

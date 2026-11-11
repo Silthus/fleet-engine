@@ -12,6 +12,8 @@ export type Step = {
   title: string;
   minutes: number;
   kind: StepKind;
+  /** Not needed to start a first thread: it runs after every other step, once the machine is usable. */
+  later?: true;
   run(): Promise<StepOutcome>;
 };
 
@@ -26,6 +28,8 @@ export type RunOptions = {
   /** How many times setup has waited for the person so far, from questions and sign-ins. */
   waits?: () => number;
   record?(step: StepRecord): Promise<void>;
+  /** Called once, when every step that is not for later is done. It gets the titles of the steps still to run. */
+  usable?(later: string[]): Promise<void>;
 };
 
 const heartbeatMs = 15_000;
@@ -51,9 +55,16 @@ export async function runSteps(steps: () => Step[], options: RunOptions): Promis
   const resumed = first.filter((step) => done.has(step.id)).length;
   const next = first.find((step) => !done.has(step.id));
   if (resumed && next) options.terminal.print(`Welcome back. ${resumed} of ${first.length} done, picking up at ${next.title}.`);
+  let usable = false;
   for (;;) {
     const list = steps();
-    const step = list.find((item) => !done.has(item.id) && !open.has(item.id));
+    const waiting = list.filter((item) => !done.has(item.id) && !open.has(item.id));
+    const step = waiting.find((item) => !item.later) ?? waiting[0];
+    const onlyLaterLeft = !step || step.later === true;
+    if (!usable && !open.size && onlyLaterLeft) {
+      usable = true;
+      await options.usable?.(waiting.map((item) => item.title));
+    }
     if (!step) return { finished: open.size === 0, unanswered: [...open] };
     if (open.size && step.kind !== "question") return { finished: false, unanswered: [...open] };
     options.terminal.print("");

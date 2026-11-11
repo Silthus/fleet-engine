@@ -92,7 +92,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       await remember();
     },
   };
-  const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive, waited: () => void waits++ };
+  const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive, chat: flags.chat, waited: () => void waits++ };
   const addTeamSources = async () => {
     for (const ref of await memberSources(box)) {
       if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
@@ -173,7 +173,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       devboxes: machine.devboxes ?? [],
       doctor: () => (machine.profileDir && options.doctor ? options.doctor(machine.profileDir) : Promise.resolve(1)),
     });
-  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox), check()];
+  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox), later(check())];
   const timings = openTimings(options.home, clock.now());
   try {
     const result = await runSteps(steps, {
@@ -181,6 +181,10 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       clock,
       waits: () => waits,
       record: (step) => timings.record(step),
+      async usable(later) {
+        await timings.usable(clock.now());
+        if (later.length) terminal.print(`\n✓ Ready to use. Start a new thread in T3 Code now. Setup goes on with: ${later.join(", ")}.`);
+      },
       done: progress.done,
       async save(done) {
         progress.done = done.filter((id) => !notTakenByHub(id, hubTook));
@@ -188,7 +192,6 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       },
     });
     if (result.unanswered.length) return printNeeds(terminal, steps(), result.unanswered), 2;
-    await timings.usable(clock.now());
     const { plan } = planFor(context, machine);
     const summary = {
       role: machine.role,
@@ -238,14 +241,16 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     plansStep(context),
     ...settingSteps(context, plan.ask),
     ...machineSteps,
-    ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human)),
+    ...plan.human.map((step) => later(humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human))),
     ...(sshDevbox ? [devbox.question] : []),
     ...settingSteps(context, devboxAsk).map(devbox.pushed),
     ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),
-    ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)]),
-    ...(sshDevbox ? (machine.devboxes ?? []).flatMap((host) => devbox.steps(host, plan)) : []),
+    ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)].map((step) => (plan.ai === "both" ? later(step) : step))),
+    ...(sshDevbox ? (machine.devboxes ?? []).flatMap((host) => devbox.steps(host, plan)).map(later) : []),
   ];
 }
+
+const later = (step: Step): Step => ({ ...step, later: true });
 
 function profileDraft(profile: Profile): Draft {
   return { packs: profile.packs, plan: profile.plan, settings: profile.settings, workflows: profile.workflows, sources: profile.sources };

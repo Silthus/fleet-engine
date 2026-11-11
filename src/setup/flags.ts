@@ -11,6 +11,8 @@ export type SetupFlags = {
   /** An SSH host for the devbox, or "skip". */
   devbox?: string;
   nonInteractive: boolean;
+  /** Run by an agent in a chat: ask nothing, as --non-interactive, but wait for each sign-in that the browser finishes. */
+  chat: boolean;
 };
 
 export class FlagError extends Error {}
@@ -18,7 +20,7 @@ export class FlagError extends Error {}
 const plans: AiPlan[] = ["claude", "codex", "both"];
 
 export function parseSetupFlags(args: string[]): SetupFlags {
-  const flags: SetupFlags = { add: [], remove: [], workflows: {}, set: {}, nonInteractive: false };
+  const flags: SetupFlags = { add: [], remove: [], workflows: {}, set: {}, nonInteractive: false, chat: false };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     const value = () => {
@@ -44,6 +46,7 @@ export function parseSetupFlags(args: string[]): SetupFlags {
       if (flags.devbox !== "skip") refuseUnusableDevbox(flags.devbox);
     }
     else if (arg === "--non-interactive") flags.nonInteractive = true;
+    else if (arg === "--chat") flags.nonInteractive = flags.chat = true;
     else throw new FlagError(`unknown option ${arg}`);
   }
   return flags;

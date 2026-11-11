@@ -35,7 +35,7 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
   fleet setup [--preset <id>] [--add <pack>]... [--remove <pack>]...
               [--workflows <id=on|off,...>] [--set <pack.key=value>]...
-              [--plan <claude|codex|both>] [--non-interactive]
+              [--plan <claude|codex|both>] [--non-interactive | --chat]
                      Answer a few questions and set up this machine
   fleet apply [--profile <dir>] [--adopt <path>]... [--dry-run]
                      Put your profile's packs onto this machine
