@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import { basename, dirname, join } from "node:path";
 import { anchorCheck } from "./finding-anchors.ts";
 import { readJson, roundId, storeCapturedFindings, writeJson, type ProofIdentity } from "./proof.ts";
-import { askModel, familyOf, reviewerRow, sameFamilyRow, type Family } from "./proof-models.ts";
+import { askModel, familyOf, isQuotaExhausted, quotaExitCode, reviewerRow, sameFamilyRow, type Family } from "./proof-models.ts";
 import type { ModelRow } from "../../base/lib/models.ts";
 import { capped, diffCap } from "./proof-review.ts";
 
@@ -181,8 +181,9 @@ export async function runLens(directory: string, name: string, io: PanelIO) {
         return void await finishPanel(directory);
       }
       await save({ cause: cause = problem });
+      if (isQuotaExhausted(problem)) break;
     }
-    await save({ state: "failed", finishedAt: io.now().toISOString(), cause: `${cause} (after ${status.attempts} attempts)` });
+    await save({ state: "failed", finishedAt: io.now().toISOString(), cause: `${cause} (after ${status.attempts} attempt${status.attempts === 1 ? "" : "s"})` });
   });
 }
 
@@ -333,9 +334,10 @@ export async function waitForPanel(directory: string, io: PanelIO, restart: Rest
       if (status.attempts < attemptsPerLens) await restart(name);
       else await writeStatus(directory, name, { ...status, state: "failed", finishedAt: io.now().toISOString(), cause: "the worker exited without an answer" });
     }
-    const states = (await lensStates(directory)).map(({ status }) => status.state);
+    const statuses = (await lensStates(directory)).map(({ status }) => status);
+    const states = statuses.map(({ state }) => state);
     if (states.every((state) => state === "done")) { await finishPanel(directory); return 0; }
-    if (states.every((state) => state === "done" || state === "failed")) return 1;
+    if (states.every((state) => state === "done" || state === "failed")) return statuses.some(({ state, cause }) => state === "failed" && isQuotaExhausted(cause)) ? quotaExitCode : 1;
     if (poll >= polls) return 2;
     await io.pause();
   }

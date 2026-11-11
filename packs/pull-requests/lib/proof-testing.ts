@@ -219,3 +219,5 @@ export function recordingModel(pr: Checkout, provider: "claude" | "codex", answe
   writeFileSync(join(pr.env.PATH!.split(":")[0]!, provider), `#!/bin/sh\necho "$*" >> "${calls}"\ncat > "${calls}-prompt"\n${reply}\n`, { mode: 0o755 });
   return { calls: () => readFileSync(calls, "utf8").trim().split("\n"), prompt: () => readFileSync(`${calls}-prompt`, "utf8") };
 }
+
+export const stalledOnQuota = (line = "ERROR: Reconnecting... 1/5") => `cat >/dev/null; printf 'codex\\nreading the diff\\n%s' '${line}' >&2; exec sleep 9`;

@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startT3Stub } from "../../base/lib/t3/testing.ts";
-import { cleanFixtures, settings, lookup, checkout, fakeModel, reviewHead, finishRound, recordingModel, type Checkout } from "./proof-testing.ts";
+import { cleanFixtures, settings, lookup, checkout, fakeModel, reviewHead, finishRound, recordingModel, stalledOnQuota, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -85,6 +85,37 @@ test("only an override round may review the whole PR diff again, so a reviewed H
   expect(prompt).toContain(`${await pr.git("rev-parse", "origin/main")}..${reviewed} (scope: full)`);
   expect(prompt).toContain("+new");
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/2/round.json"), "utf8"))).toMatchObject({ round: 2, commit: reviewed, scope: "full", override: answer });
+});
+
+test("fleet proof review stops a reviewer stuck on spent quota, exits 4, and keeps the round reserved for a retry", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  pr.env.FLEET_PROOF_QUOTA_GRACE_MS = "50";
+
+  pr.env.FLEET_PROOF_REVIEWER = stalledOnQuota();
+  const stalled = await pr.fleet("review");
+  expect(stalled.code).toBe(4);
+  expect(stalled.output).toContain('quota exhausted: no progress after "ERROR: Reconnecting... 1/5"');
+  expect(stalled.output).toContain("Round 1 stays reserved");
+
+  pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo 'API Error: Request rejected (429) · All credentials for model review-model are cooling down' >&2; exit 1";
+  expect((await pr.fleet("review")).code).toBe(4);
+
+  pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo 'API Error: 503 no auth available' >&2; exit 1";
+  await expect(pr.fleet("review")).rejects.toThrow("gave no findings (exit 1: API Error: 503 no auth available)");
+
+  pr.env.FLEET_PROOF_QUOTA_GRACE_MS = "200";
+  pr.env.FLEET_PROOF_REVIEWER_TIMEOUT_MS = "400";
+  pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo 'ERROR: Reconnecting... 1/5' >&2; echo 'exec rg -n greet' >&2; exec sleep 9";
+  await expect(pr.fleet("review")).rejects.toThrow("stopped by SIGKILL at the 0 s limit");
+  pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo '+  \"ERROR: Reconnecting... 1/5\"'; exec sleep 9";
+  await expect(pr.fleet("review")).rejects.toThrow("stopped by SIGKILL");
+
+  fakeModel(pr, "REVIEWER", "1. [low] feature.txt:1 is fine.\n");
+  const retried = await pr.fleet("review");
+  expect(retried.code).toBe(0);
+  expect(JSON.parse(retried.output.split("\n")[0]!)).toMatchObject({ round: 1 });
 });
 
 test("fleet proof review runs the reviewer of the model table on the PR diff and stores its answer as the findings", async () => {

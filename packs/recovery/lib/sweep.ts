@@ -1,7 +1,7 @@
 import { listLocalThreads, recoveryScopes, sendContinue, withT3Session, type ContinueMessage, type StoppedThread, type T3Client, type T3SessionOptions } from "../../base/lib/t3/index.ts";
 import { currentAvailability, type Availability, type ProvidersContext, type Provider } from "./availability.ts";
 import { alertOutages, readOutageState, saveOutageState, type OutageEntry, type OutageState } from "./outage.ts";
-import { isQuotaError } from "./quota.ts";
+import { isQuotaError } from "../../base/lib/quota.ts";
 
 export type RecoverContext = ProvidersContext & { session?: T3SessionOptions };
 

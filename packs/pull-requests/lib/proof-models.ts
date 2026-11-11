@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { modelFor, modelTable, type ModelRow } from "../../base/lib/models.ts";
+import { quotaGraceMs, quotaWatch } from "../../base/lib/quota.ts";
 
 export const families = ["claude", "gpt"] as const;
 export type Family = (typeof families)[number];
@@ -49,7 +50,7 @@ export async function askModel(role: Role, row: ModelRow, request: ModelRequest,
   try {
     const output = join(scratch, "answer.txt");
     const command = replacement ? ["sh", "-c", replacement] : await modelCommand({ ...row, model }, request, scratch, output);
-    const answer = await spawnWithLimit(command, request, env, timeout);
+    const answer = await spawnWithLimit(command, request, env, { timeout, grace: Number(env.FLEET_PROOF_QUOTA_GRACE_MS) || quotaGraceMs });
     if (answer.cause !== undefined) return { ok: false, cause: answer.cause, model };
     const answersOnStdout = Boolean(replacement) || row.provider === "claude";
     const text = answersOnStdout ? answer.stdout : await readFile(output, "utf8").catch(() => "");
@@ -69,21 +70,41 @@ async function modelCommand(row: ModelRow, request: ModelRequest, scratch: strin
 }
 
 type Spawned = { stdout: string; cause?: undefined } | { stdout?: undefined; cause: string };
+type Limits = { timeout: number; grace: number };
 
-async function spawnWithLimit(command: string[], request: ModelRequest, env: Record<string, string | undefined>, timeout: number): Promise<Spawned> {
+export const quotaExhausted = "quota exhausted";
+export const isQuotaExhausted = (cause: string | undefined) => Boolean(cause?.startsWith(quotaExhausted));
+export const quotaExitCode = 4;
+
+async function spawnWithLimit(command: string[], request: ModelRequest, env: Record<string, string | undefined>, { timeout, grace }: Limits): Promise<Spawned> {
   let child: Bun.Subprocess<Blob, "pipe", "pipe"> | undefined;
   let stop: ReturnType<typeof setTimeout> | undefined;
+  let stalled: string | undefined;
+  const watch = quotaWatch(grace, (line) => { stalled = line; if (child) stopGroup(child.pid); });
   try {
     const running = child = Bun.spawn(command, { cwd: request.cwd, env: env as Record<string, string>, stdin: new Blob([request.prompt]), stdout: "pipe", stderr: "pipe", detached: true });
     stop = setTimeout(() => stopGroup(running.pid), timeout);
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited, request.started?.(child.pid)]);
+    const [stdout, stderr, code] = await Promise.all([watched(child.stdout, watch.observe), watched(child.stderr, watch.observe), child.exited, request.started?.(child.pid)]);
+    if (stalled) return { cause: `${quotaExhausted}: no progress after "${stalled}"` };
     if (child.signalCode) return { cause: `stopped by ${child.signalCode} at the ${Math.round(timeout / 1000)} s limit` };
+    if (code !== 0 && watch.waiting()) return { cause: `${quotaExhausted}: exit ${code} after "${watch.waiting()}"` };
     if (code !== 0) return { cause: `exit ${code}${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)!.slice(0, 200)}` : ""}` };
     return { stdout };
   } catch (error) {
     if (child) { stopGroup(child.pid); await child.exited; }
     return { cause: (error as Error).message };
-  } finally { clearTimeout(stop); }
+  } finally { clearTimeout(stop); watch.stop(); }
+}
+
+async function watched(stream: ReadableStream<Uint8Array>, observe: (chunk: string) => void) {
+  const decoder = new TextDecoder();
+  let text = "";
+  for await (const chunk of stream) {
+    const part = decoder.decode(chunk, { stream: true });
+    observe(part);
+    text += part;
+  }
+  return text + decoder.decode();
 }
 
 function stopGroup(group: number) {

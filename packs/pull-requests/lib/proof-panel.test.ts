@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture } from "./proof-testing.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
 
@@ -83,6 +83,27 @@ test("a lens without a FINDINGS block or a full COVERED list runs once more, the
   await pr.fleet("review", "--lens", "design", "--lens", "correctness:same");
   expect((await pr.fleet("review", "--wait")).output).toContain("correctness: done by claude");
   expect((await pr.fleet("show")).output.split("\n")[0]).toMatch(/^round 1 on \w+: finished by command: .*, captured by fleet/);
+});
+
+test("a lens stuck on spent quota fails at once without a second attempt, and --wait exits 4 until the rerun passes", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const attempts = join(pr.home, "attempts");
+  pr.env.FLEET_PROOF_QUOTA_GRACE_MS = "50";
+  pr.env.FLEET_PROOF_REVIEWER = `echo attempt >> "${attempts}"; ${stalledOnQuota("exceeded retry limit, last status: 429 Too Many Requests")}`;
+
+  await pr.fleet("review", "--lens", "correctness");
+  expect(readFileSync(attempts, "utf8")).toBe("attempt\n");
+  const failed = await pr.fleet("review", "--wait");
+  expect(failed.code).toBe(4);
+  expect(failed.output).toContain('correctness: failed by gpt (command: echo attempt');
+  expect(failed.output).toContain('quota exhausted: no progress after "exceeded retry limit, last status: 429 Too Many Requests" (after 1 attempt)');
+  expect(failed.output).toContain("A lens stopped on spent quota");
+
+  fakeModel(pr, "REVIEWER", clean);
+  await pr.fleet("review", "--lens", "correctness");
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
 });
 
 test("a lens waits for a free panel slot of the machine, and --wait restarts a lens whose worker died", async () => {
