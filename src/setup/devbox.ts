@@ -279,13 +279,17 @@ async function linkBothWays(host: string, box: Machine, context: DevboxContext) 
 
 export type HubContext = { terminal: Terminal; machine: Machine };
 
+const registerId = (host: string) => `devbox:${host}:register`;
+
+export const notTakenByHub = (id: string, took: Map<string, boolean>) => [...took].some(([host, taken]) => !taken && id === registerId(host));
+
 export function hubSteps(host: string, context: HubContext & { profileDir: string | undefined; took: Map<string, boolean> }): { register: Step; link: Step } {
   const hubOf = async () => {
     const hub = context.profileDir ? (await loadProfile(context.profileDir)).hub : undefined;
     return hub && hub !== host ? hub : undefined;
   };
   const register: Step = {
-    id: `devbox:${host}:register`,
+    id: registerId(host),
     title: `List ${host} in your profile`,
     minutes: 1,
     kind: "auto",

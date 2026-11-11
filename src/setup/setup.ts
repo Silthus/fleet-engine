@@ -9,7 +9,7 @@ import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.t
 import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, waitsForTeams, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
-import { devboxQuestion, devboxSteps, hubSteps, profileForBox, type DevboxContext } from "./devbox.ts";
+import { devboxQuestion, devboxSteps, hubSteps, notTakenByHub, profileForBox, type DevboxContext } from "./devbox.ts";
 import { doneScreen, finalCheck, repoName, runsByItself } from "./done.ts";
 import { profileStep } from "./profile.ts";
 import { runSteps, type Step } from "./runner.ts";
@@ -174,7 +174,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       terminal,
       done: progress.done,
       async save(done) {
-        progress.done = done;
+        progress.done = done.filter((id) => !notTakenByHub(id, hubTook));
         await remember();
       },
     });
