@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import type { AvailableSource, ProfileFile } from "../pack/types.ts";
@@ -27,7 +27,14 @@ async function machineWithProfile(settings: Record<string, unknown> = {}) {
   await spawnGit(dir, "push", "-q", "-u", "origin", "main");
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "linux", profileDir: dir }));
-  return { home, pushed: async () => JSON.parse(await spawnGit(home, "--git-dir", remote, "show", "main:fleet.json")) };
+  const elsewhere = async (change: (file: ProfileFile) => ProfileFile) => {
+    const other = temp.make("other-");
+    await spawnGit(other, "clone", "-q", remote, ".");
+    writeFileSync(join(other, "fleet.json"), JSON.stringify(change(JSON.parse(readFileSync(join(other, "fleet.json"), "utf8"))), null, 2) + "\n");
+    await spawnGit(other, "commit", "-q", "-am", "Elsewhere");
+    await spawnGit(other, "push", "-q");
+  };
+  return { home, elsewhere, pushed: async () => JSON.parse(await spawnGit(home, "--git-dir", remote, "show", "main:fleet.json")) };
 }
 
 async function fleet(home: string, args: string[], applyCode = 0) {
@@ -61,6 +68,14 @@ describe("fleet packs", () => {
     const removed = await fleet(home, ["packs", "--remove", "communication", "--workflows", "pr-care=on"]);
     expect(removed.code).toBe(0);
     expect(await pushed()).toMatchObject({ packs: ["pull-requests"], workflows: { "quality-loop": true } });
+  });
+
+  test("works on the packs and workflows another machine pushed, so a change here keeps theirs", async () => {
+    const { home, elsewhere, pushed } = await machineWithProfile();
+    await elsewhere((file) => ({ ...file, packs: [...file.packs, "memory"], workflows: { "pr-care": false } }));
+    const result = await fleet(home, ["packs", "--add", "communication"]);
+    expect(result.code).toBe(0);
+    expect(await pushed()).toMatchObject({ packs: ["pull-requests", "memory", "communication"], workflows: { "pr-care": false } });
   });
 
   test("shows a workflow's terms note in the list and again when it is turned on", async () => {

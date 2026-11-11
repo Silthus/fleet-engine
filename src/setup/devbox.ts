@@ -103,7 +103,7 @@ export function devboxSteps(host: string, context: DevboxContext): Step[] {
   const on = (signIn: SignIn): SignIn => Object.assign(Object.create(signIn) as SignIn, { id: `devbox:${host}:${signIn.id}`, title: `${signIn.title} on ${host}` });
   const chatgpt = chatgptSignIn(box, context.models);
   return [
-    auto(host, "install", `Install Fleet on ${host}`, 4, context.terminal, () => install(box, context)),
+    auto(host, "install", `Install Fleet on ${host}`, 4, context.terminal, () => install(box, host, context)),
     ...(host.startsWith(coderPrefix) && context.machine.has("coder") ? [auto(host, "coder", `Sign in to Coder on ${host}`, 1, context.terminal, () => coderOnBox(host, box, context.machine))] : []),
     humanStep(on(githubSignIn(box, async () => {})), human),
     auto(host, "profile", `Apply your profile on ${host}`, 3, context.terminal, () => applyProfile(box, context)),
@@ -132,12 +132,38 @@ async function shown(box: Machine, script: string, failure: string) {
   if ((await box.run(["sh", "-c", script])) !== 0) throw new Error(failure);
 }
 
-async function install(box: Machine, context: DevboxContext) {
+/** Installs Fleet on the devbox and names it by the SSH host this machine reaches it by, the name the profile lists it by. */
+async function install(box: Machine, host: string, context: DevboxContext) {
   const { engineRef } = await context.profile();
   const getSh = `https://raw.githubusercontent.com/${engineRepo}/${engineRef}/get.sh`;
-  const role = `mkdir -p "$HOME/.config/fleet" && { [ -f "$HOME/.config/fleet/machine.json" ] || printf '{"schema":1,"role":"devbox"}\\n' > "$HOME/.config/fleet/machine.json"; }`;
+  await nameBox(box, host);
   const download = `installer=$(mktemp) && { curl -fsSL ${quote(getSh)} -o "$installer" && sh "$installer" --ref ${quote(engineRef)} --install-only; s=$?; rm -f "$installer"; exit $s; }`;
-  await shown(box, `${role} && ${download}`, "Fleet did not install on the devbox. Fix what it says above, then run fleet setup again.");
+  await shown(box, download, "Fleet did not install on the devbox. Fix what it says above, then run fleet setup again.");
+}
+
+const roleFolder = `"$HOME/.config/fleet"`;
+const roleFile = `"$HOME/.config/fleet/machine.json"`;
+
+export async function nameBox(box: Machine, host: string) {
+  const read = await box.exec(["sh", "-c", `[ ! -f ${roleFile} ] || cat ${roleFile}`]);
+  if (read.code !== 0) throw new Error(`Fleet could not reach ${host} over SSH: ${read.output.trim()}`);
+  const saved = read.stdout.trim() ? roleOf(host, read.stdout) : undefined;
+  if (saved?.name === host) return;
+  if (saved?.name !== undefined) throw new Error(`${host} already calls itself ${String(saved.name)} in ~/.config/fleet/machine.json. Run fleet devbox add ${String(saved.name)} to keep that name, or set its name there to ${host} and run fleet devbox add ${host} again.`);
+  const named = { schema: 1, role: "devbox", ...saved, name: host };
+  const written = await box.exec(["sh", "-c", `mkdir -p ${roleFolder} && cat > ${roleFile}`], { input: `${JSON.stringify(named)}\n` });
+  if (written.code !== 0) throw new Error(`Fleet could not write the role file on ${host}: ${written.output.trim()}`);
+}
+
+function roleOf(host: string, text: string): Record<string, unknown> {
+  const unreadable = new Error(`Fleet cannot read ~/.config/fleet/machine.json on ${host}. Fix or remove it, then run fleet devbox add ${host} again.`);
+  try {
+    const role: unknown = JSON.parse(text);
+    if (typeof role !== "object" || role === null || Array.isArray(role)) throw unreadable;
+    return role as Record<string, unknown>;
+  } catch {
+    throw unreadable;
+  }
 }
 
 const coderPrefix = "coder.";
@@ -213,7 +239,7 @@ async function connectAddress(machine: Machine): Promise<string | undefined> {
   const status = await machine.exec(["t3", "connect", "status", "--json"]);
   if (status.code !== 0) return undefined;
   try {
-    const state = JSON.parse(status.output) as { authenticated?: unknown; linked?: unknown; relayUrl?: unknown };
+    const state = JSON.parse(status.stdout) as { authenticated?: unknown; linked?: unknown; relayUrl?: unknown };
     return state.authenticated === true && state.linked === true && typeof state.relayUrl === "string" ? new URL(state.relayUrl).origin : undefined;
   } catch {
     return undefined;

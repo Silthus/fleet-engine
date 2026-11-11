@@ -4,7 +4,7 @@ import { join, resolve as resolvePath } from "node:path";
 import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
 import type { AvailableSource, CatalogEntry, FetchedSource, Finding, LoadedPack, MachineFile, PackCode, Plan, Report } from "./pack/types.ts";
-import { loadMachine, loadProfile, saveMachine, thisMachine } from "./profile/profile.ts";
+import { loadMachine, loadProfile, pullProfile, saveMachine, thisMachine } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
 import { apply, check, type Adapter, type Issuer, type Runner } from "./reconciler/apply.ts";
 import { resolve } from "./reconciler/resolve.ts";
@@ -106,12 +106,16 @@ async function devbox(args: string[], options: CliOptions) {
   }
 }
 
+function changesProfile(command: keyof typeof changes | "hub", args: string[]) {
+  return command === "set" || (command === "packs" && args.length > 0) || (command === "hub" && args[0] === "here");
+}
+
 function applyProfile(dir: string, options: CliOptions) {
   return options.apply ? options.apply(dir) : reconcile("apply", ["--profile", dir], options);
 }
 
 async function change(command: keyof typeof changes | "hub", args: string[], options: CliOptions) {
-  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, pull: changesProfile(command, args) });
   const profileDir = plan.machine.profileDir!;
   const context: ChangeContext = {
     profileDir,
@@ -316,12 +320,13 @@ function handlerPaths(plan: Plan) {
   return Object.fromEntries(Object.entries(plan.handlers).map(([seam, handler]) => [seam, handler.path]));
 }
 
-async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean; inherit?: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
+async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean; inherit?: boolean; pull?: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
   const saved = await loadMachine(options.home);
   const inherited = mode.inherit && !profileFlag ? options.env?.FLEET_PROFILE_DIR : undefined;
   const profileDir = profileFlag ? resolvePath(profileFlag) : inherited ? resolvePath(inherited) : saved?.profileDir;
   if (!profileDir) throw new Error("no profile on this machine. Run get.sh, or pass --profile <dir>.");
   const machine: MachineFile = { ...thisMachine(saved, options.platform, options.env ?? {}, (options.hostname ?? hostname)()), profileDir };
+  if (mode.pull) await pullProfile(profileDir);
   const profile = await loadProfile(profileDir);
   const cache = join(options.home, ".local", "share", "fleet", "sources");
   const engine: AvailableSource = { ref: { name: "engine", repo: profile.engine.repo, ref: profile.engine.ref }, dir: options.engineRoot, packs: await loadPacks(options.engineRoot) };
