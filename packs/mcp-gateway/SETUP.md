@@ -26,3 +26,12 @@ hub, and it starts with no servers.
    port fails while the tunnel runs.
 
    `fleet mcp-gateway doctor` on the hub says what does not work.
+
+5. The `gmail`, `google-calendar`, and `google-drive` workflows start off.
+   They reach Google through the person's ChatGPT sign-in, so the app must
+   be connected in ChatGPT first, which Fleet cannot do. In ChatGPT, open
+   **Settings**, then **Apps**, and connect the app. In a Business or
+   Enterprise workspace, an admin first allows the app in the workspace
+   settings, under **Apps**. Then turn the workflow on with
+   `--workflows gmail=on`, and run `fleet mcp-gateway sign-in gmail` on the
+   hub as in item 4.

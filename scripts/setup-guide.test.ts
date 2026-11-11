@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../src/cli.ts";
 import { loadPacks } from "../src/pack/manifest.ts";
 import { cachedSource } from "../src/pack/sources.ts";
 import { sourceCache } from "../src/setup/setup.ts";
+import { profilePath } from "../src/setup/profile.ts";
+import { devboxesOf } from "../packs/hub/lib/machine.ts";
+import { cliFixtures } from "../src/testing/cli.ts";
 import { fakeMachine, fleetSetup, savedAnswers } from "../src/setup/testing.ts";
 import { isolateGit, tempDirs } from "../src/testing/git.ts";
 import { needsHubPacks, prefersHubPacks } from "../src/setup/defaults.ts";
@@ -13,6 +16,7 @@ import { pageData } from "./build-page.ts";
 
 isolateGit();
 const temp = tempDirs();
+const cli = cliFixtures(temp);
 afterEach(() => temp.cleanup());
 
 const root = join(import.meta.dir, "..");
@@ -131,7 +135,7 @@ describe("the agent setup guide", () => {
   });
 
   test("with a hub and a node, says how to add a node later", () => {
-    expect(words(hubStep())).toContain("To add a node later, when the load grows, run steps 3, 4, 5 and 9 again with a new name and a 500 GB disk");
+    expect(words(hubStep())).toContain("To add a node later, when the load grows, run items 3, 4, 5 and 9 above again with a new name and a 500 GB disk");
   });
 
   test("with a hub and a node, installs Fleet on the hub, names it the hub there, turns the hub packs on, and only then adds the node", () => {
@@ -201,6 +205,81 @@ describe("the agent setup guide", () => {
     const files = [...guide().matchAll(/`([\w./-]+\.(?:json|md|svg|ts|sh|html))`|\]\((?!https?:|#)([^)#\s]+)/g)].map((match) => (match[1] ?? match[2])!);
     expect(files.length).toBeGreaterThan(0);
     expect(files.filter((file) => !existsSync(join(root, file)))).toEqual([]);
+  });
+
+  test("signs in to Coder with a token from the secret prompt, and says where to make it", () => {
+    expect(words(hubStep())).toContain("make one at `<coder address>/cli-auth`");
+    expect(codeIn(hubStep())).toContain('CODER_SESSION_TOKEN="$(cat <file>)" coder login <coder address>\n');
+  });
+
+  test("explains a workflow in one plain line the first time it tells the person what Fleet is, whatever they know", () => {
+    const show = words(guide().slice(guide().indexOf("## 3. Show what Fleet is"), guide().indexOf("## 4. Ask where Fleet runs")));
+    expect(show).toContain("A **workflow** is one way of working that agents follow, such as a draft pull request for every fix.");
+    expect(show.indexOf("**workflow**")).toBeLessThan(show.indexOf("**pack**"));
+  });
+
+  test("uses each long wait to explain one thing, from each step that waits", () => {
+    const waits = words(guide().slice(guide().indexOf("## While something runs"), guide().indexOf("## 1. Check the Mac")));
+    for (const topic of ["**T3 Code's inbox.**", "**The Slack trigger.**", "**Threads on nodes.**", "**What runs each night.**"]) expect(waits).toContain(topic);
+    for (const step of ["## 5. Install the tools", "## 7. Run setup with their answers", "## 9. Add the hub and the node"]) {
+      const body = guide().slice(guide().indexOf(step));
+      expect(words(body.slice(0, body.indexOf("\n## ", 3)))).toContain("(see \"While something runs\")");
+    }
+  });
+
+  test("when the person takes Fleet's version of a kept file, the old file is in the backup folder the guide names", async () => {
+    const backups = codeIn(guide()).find((code) => code.startsWith("~/.local/state/fleet/backups"));
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex/AGENTS.md"), "my own codex rules\n");
+    const kept = await cli.fleet(["apply", "--profile", cli.profileDir()], home);
+    const adopt = kept.output.match(/Run (fleet apply --adopt \S+) to take Fleet's version/)?.[1];
+    expect(adopt).toBe("fleet apply --adopt .codex/AGENTS.md");
+    expect((await cli.fleet([...adopt!.split(" ").slice(1), "--profile", cli.profileDir()], home)).code).toBe(0);
+    const folder = backups!.replace("~", home).replace(/\/$/, "");
+    expect(readdirSync(folder).map((run) => readFileSync(join(folder, run, ".codex/AGENTS.md"), "utf8"))).toEqual(["my own codex rules\n"]);
+  });
+
+  test("rules moved to the profile's About me file reach the agents after the packs' rules", async () => {
+    expect(words(guide())).toContain("to the \"About me\" file in their profile, which agents read after the packs' rules");
+    const home = temp.make("home-");
+    expect((await cli.fleet(["apply", "--profile", cli.profileDir([], "# About me\n\nI like small diffs.\n")], home)).code).toBe(0);
+    expect(readFileSync(join(home, ".claude/rules/fleet.md"), "utf8")).toContain("I like small diffs.");
+  });
+
+  test("a second setup reuses the profile, keeps earlier settings, and turns workflows the run does not name off, as the guide says", async () => {
+    const step1 = words(guide().slice(guide().indexOf("## 1. Check the Mac"), guide().indexOf("## 2. Ask what they know")));
+    expect(step1).toContain("The packs and workflow switches of this run replace the earlier ones");
+    expect(step1).toContain("Earlier settings stay unless this run sets them again.");
+    const command = guide().match(/^fleet setup (.+)$/m)![1]!.replace("<claude|codex|both>", "both");
+    const home = temp.make("home-");
+    const box = fakeMachine(home);
+    const first = await fleetSetup(home, [...command.replace("<id>", "everyday").split(" "), "--add", "guards", "--workflows", "package-age=on", "--set", "orchestration.tracker=nora/maps"], [], box, undefined, 0, "darwin");
+    const again = await fleetSetup(home, command.replace("<id>", "starter").split(" "), [], box, undefined, 0, "darwin");
+    expect({ first: first.code, again: again.code }).toEqual({ first: 0, again: 0 });
+    expect(again.output).toContain("Reusing your repo nora/fleet-profile");
+    expect(savedAnswers(home).packs).toEqual(presets().find((preset) => preset.id === "starter")!.packs);
+    expect(savedAnswers(home).workflows["package-age"]).not.toBe(true);
+    expect(savedAnswers(home).settings["orchestration.tracker"]).toBe("nora/maps");
+  });
+
+  test("a host removed from devboxes in the profile's fleet.json leaves the hub's list of machines", () => {
+    expect(words(hubStep())).toContain("Remove the old host from the `devboxes` list in `~/.local/share/fleet/profile/fleet.json`");
+    const home = temp.make("home-");
+    const profile = profilePath(home);
+    expect(codeIn(hubStep())).toContain(`${profilePath("~")}/fleet.json`);
+    mkdirSync(profile, { recursive: true });
+    const save = (devboxes: string[]) => writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, hub: "coder.hub", devboxes }));
+    save(["coder.hub", "coder.old-node", "coder.node"]);
+    expect(devboxesOf({ FLEET_PROFILE_DIR: profile }, home)).toContain("coder.old-node");
+    save(["coder.hub", "coder.node"]);
+    expect(devboxesOf({ FLEET_PROFILE_DIR: profile }, home)).toEqual(["coder.hub", "coder.node"]);
+  });
+
+  test("adds the profile as a T3 Code project at the folder where setup keeps it, under the name the habits use", () => {
+    const add = codeIn(guide()).find((code) => code.startsWith("t3 project add "))?.trim();
+    expect(add).toBe(`t3 project add --title fleet-profile ${profilePath("~")}`);
+    expect(words(guide().slice(guide().indexOf("## 10. Hand over")))).toContain("open a thread in the `fleet-profile` project");
   });
 
   test("fetches only files that are in the repo", () => {
