@@ -282,10 +282,16 @@ the work. Each machine keeps working when the hub is down.
    printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nfleet devbox add %s\n' 'coder.<node>' > ~/.cache/fleet-setup/devbox.command && chmod +x ~/.cache/fleet-setup/devbox.command && open ~/.cache/fleet-setup/devbox.command
    ```
 
-   It lists the node in their profile and has the hub take it, so the hub's
-   tunnels, links, and disk watch include it. It prints a line that starts
-   with `✓ The hub` when the hub took it. When it says the hub did not
-   answer, run the `fleet update` command from step 8 again.
+   It lists the node in their profile and has the hub take it before the
+   node applies, so the hub's tunnels, disk watch, and credentials include
+   it. At the end, the hub links the node in T3 Code. It prints two lines
+   that start with `✓ The hub` when both worked. When it says the hub did
+   not answer, run the `fleet update` command from step 8 again. When it
+   says the hub has not linked the node yet, run this, with the node's name:
+
+   ```sh
+   ssh coder.<hub> 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet peers link coder.<node>'
+   ```
 10. **Check.** Run `fleet doctor` on the Mac, and on each workspace over SSH.
     A command over SSH does not read the workspace's login files, so it sets
     the `PATH` itself:
