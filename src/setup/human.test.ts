@@ -180,7 +180,7 @@ describe("fleet setup sign-ins", () => {
     mkdirSync(join(home, ".config/fleet"), { recursive: true });
     writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "devbox" }));
     const box = fakeMachine(home, {}, { org: true });
-    const result = await fleetSetup(home, ["--non-interactive", "--preset", "michael"], [], box, teamSource());
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "everything"], [], box, teamSource());
     expect(result.code).toBe(2);
     expect(result.output).toContain("  --set orchestration.loopProject=<value>");
     expect(box.calls.map((call) => call.command.join(" "))).not.toContain("hogli devbox:start");

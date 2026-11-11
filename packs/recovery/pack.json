@@ -3,7 +3,7 @@
   "name": "recovery",
   "summary": "Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity.",
   "day": "A thread that hits your plan's usage limit or a provider outage at night goes on by itself once your provider has capacity again, and a thread that keeps failing reaches you as one alert thread.",
-  "cost": "One small request per provider through the hub's proxy, at most every five minutes, while a thread waits on a limit or an outage.",
+  "cost": "While a thread waits on a limit or an outage, Fleet sends one small request per provider through the hub's proxy, at most every five minutes.",
   "risk": "Fleet sends continue messages to stopped threads without you in the room.",
   "workflows": [
     {
