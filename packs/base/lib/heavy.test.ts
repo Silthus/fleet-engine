@@ -214,6 +214,54 @@ onLinux("frees the slot when a stop reaches the job's process group, with every 
   }
 });
 
+const recordsStop = `trap 'kill $tail; echo TERM >> "$0"; exit 143' TERM; echo $$; tail -f /dev/null & tail=$!; wait $tail`;
+
+onLinux("runs the job as the fleet heavy process itself, so a stop sent only to that process reaches the job and frees the slot", async () => {
+  const box = machine();
+  const stops = join(box.home, "stops");
+  try {
+    const job = box.start(["--", "sh", "-c", recordsStop, stops]);
+    await job.out.until("\n");
+    expect(job.out.text()).toBe(`${job.child.pid}\n`);
+    process.kill(job.child.pid, "SIGTERM");
+    expect(await job.child.exited).toBe(143);
+    expect(readFileSync(stops, "utf8")).toBe("TERM\n");
+    const next = box.start(["--", "sh", "-c", "echo next"]);
+    await next.out.until("next\n");
+    expect(await next.child.exited).toBe(0);
+  } finally {
+    await box.stopAll();
+  }
+});
+
+onLinux("lets a writer in the job end on a closed pipe, as it does outside fleet heavy", async () => {
+  const box = machine();
+  const job = box.start(["--", "sh", "-c", "(yes; echo $? >&2) | head -n 1"]);
+  expect(await job.child.exited).toBe(0);
+  await job.err.until("\n");
+  expect(job.err.text()).toEndWith("\n141\n");
+});
+
+onLinux("takes a waiting job off the queue when a stop is sent only to its fleet heavy process", async () => {
+  const box = machine();
+  try {
+    const first = box.start(holdSlot);
+    await first.out.until("ready\n");
+    const waiting = box.start(["--", "sh", "-c", "echo ran"]);
+    await waiting.err.until("this job is number 1 of 1 in the queue");
+    process.kill(waiting.child.pid, "SIGTERM");
+    expect(await waiting.child.exited).toBe(143);
+    expect(await box.holders()).toEndWith("No job waits.\n");
+    process.kill(-first.child.pid, "SIGTERM");
+    await first.child.exited;
+    const next = box.start(["--", "sh", "-c", "echo next"]);
+    await next.out.until("next\n");
+    expect(waiting.out.text()).toBe("");
+  } finally {
+    await box.stopAll();
+  }
+});
+
 onLinux("lists the job in each slot with its thread, folder and command, and the waiting jobs in the order they came, each with its place", async () => {
   const box = machine();
   try {
