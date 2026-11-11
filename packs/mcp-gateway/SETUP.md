@@ -14,10 +14,15 @@ hub, and it starts with no servers.
    It opens the Mac's tunnel to the hub, so agents here reach the gateway.
 4. Servers live in `~/.local/share/fleet-mcphub/data/mcp_settings.json`
    on the hub. When a server needs a sign-in, run this on the hub and open
-   each address it prints, with the forward it names running on the Mac:
+   each address it prints:
 
    ```sh
    ssh coder.<hub> 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet mcp-gateway sign-in'
    ```
+
+   The Mac's hub tunnel from step 3 already forwards the gateway's port, so
+   skip the `coder port-forward` line it prints. Run that line only when
+   `fleet hub-tunnel doctor` on this Mac fails; a second forward on the same
+   port fails while the tunnel runs.
 
    `fleet mcp-gateway doctor` on the hub says what does not work.
