@@ -18,11 +18,11 @@ type Message = { id?: number | string; method?: string; params?: Record<string, 
 const node = Bun.which("node");
 let bundled = "";
 beforeAll(async () => {
-  bundled = join(mkdtempSync(join(tmpdir(), "bridge-bundle-")), "fleet-slack-bridge.mjs");
+  bundled = join(mkdtempSync(join(tmpdir(), "bridge-bundle-")), "fleet-app-bridge.mjs");
   writeFileSync(bundled, await bridgeBundle(join(import.meta.dir, "..")));
 });
 afterAll(() => rmSync(join(bundled, ".."), { recursive: true, force: true }));
-const runtimes = { "the source under Bun": () => [process.execPath, join(import.meta.dir, "slack-upstream.ts")], "the image's bundle under Node": () => [node!, bundled] };
+const runtimes = { "the source under Bun": () => [process.execPath, join(import.meta.dir, "app-bridge.ts")], "the image's bundle under Node": () => [node!, bundled] };
 let launch = runtimes["the source under Bun"];
 
 function upstream(config = "", backendEnv: Record<string, string> = {}) {
@@ -130,6 +130,18 @@ for (const [runtime, command] of Object.entries(runtimes)) describe.skipIf(!node
     for (const message of ["one", "two", "three"]) await bridge.request("tools/call", { name: "slack_send_message_draft", arguments: { message } });
     expect(bridge.called()).toHaveLength(3);
     expect(bridge.backend().filter((entry) => entry.method === "thread/start")).toHaveLength(1);
+  });
+
+  test("an app that its definition names serves only the tools of its allowlist, and refuses the rest with its own sentence", async () => {
+    const mail = { kind: "codex-app", name: "mail", title: "Mail", app: "connector_mail", plugin: "gmail@openai-curated-remote", prefix: "gmail.", tools: ["read_*"], refusal: "Mail is read-only here." };
+    const bridge = upstream("", { FLEET_APP: JSON.stringify(mail) });
+    await bridge.initialize();
+    expect(((await bridge.request("tools/list")).result.tools as Array<{ name: string }>).map((tool) => tool.name)).toEqual(["read_email"]);
+    expect((await bridge.request("tools/call", { name: "send_email", arguments: {} })).result).toEqual({ isError: true, content: [{ type: "text", text: "Mail is read-only here." }] });
+    expect((await bridge.request("tools/call", { name: "read_email", arguments: { id: "1", text: ":+1::skin-tone-2:" } })).result).toEqual({ content: [{ type: "text", text: "gmail.read_email done" }] });
+    expect(bridge.called()).toEqual(["gmail.read_email"]);
+    expect(bridge.backend().find((entry) => entry.method === "mcpServer/tool/call")!.params.arguments).toEqual({ id: "1", text: ":+1::skin-tone-2:" });
+    expect(bridge.backend()[0]!.argv).toContain("apps.connector_mail.enabled=true");
   });
 
   test("the bridge ends when the gateway closes it, even while the Codex backend has not answered yet", async () => {
