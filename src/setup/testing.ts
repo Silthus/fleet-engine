@@ -26,7 +26,7 @@ export function scripted(replies: string[]) {
   return { terminal, prompts, output: () => lines.join("\n") };
 }
 
-export type ClaudeSignedIn = { authMethod: string; reply: ExecResult };
+export type ClaudeSignedIn = { authMethod: string; apiKeySource?: string; reply: ExecResult };
 
 const claudeUnauthorized: ExecResult = { code: 1, output: "Failed to authenticate. API Error: 401 OAuth access token is invalid", stdout: "" };
 
@@ -86,7 +86,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * until then it refuses a node's credential when the node applies its
  * profile, and its fleet peers link refuses the node.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>> } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -98,6 +98,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const starts: string[][] = [];
   const runs: Array<{ command: string[]; input: boolean }> = [];
   const sleeps: number[] = [];
+  let now = options.startedAt ?? 0;
+  const clock = { now: () => now };
   const opened: string[] = [];
   let devbox = false;
   const passes = (name: SignInName) => left[name] === 0;
@@ -105,7 +107,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const reached = new Set<string>();
   const claudeStatus = (name: "claude" | "box:claude") => {
     const signedIn = options.claude?.[name];
-    return signedIn ? result(true, JSON.stringify({ loggedIn: true, authMethod: signedIn.authMethod })) : result(passes(name), JSON.stringify({ loggedIn: passes(name) }));
+    return signedIn ? result(true, JSON.stringify({ loggedIn: true, authMethod: signedIn.authMethod, apiKeySource: signedIn.apiKeySource })) : result(passes(name), JSON.stringify({ loggedIn: passes(name) }));
   };
   const claudeReply = (name: "claude" | "box:claude") => options.claude?.[name]?.reply ?? (passes(name) ? result(true, "ok") : claudeUnauthorized);
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
@@ -228,6 +230,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     async sleep(ms) {
       sleeps.push(ms);
+      now += ms;
       for (const name of started) if (left[name] > 0) left[name]--;
     },
     async openUrl(url) {
@@ -235,7 +238,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     has: () => true,
   };
-  return { machine, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked };
+  return { machine, clock, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked };
 }
 
 export const remote = (box: ReturnType<typeof fakeMachine>) => [...box.calls.map((call) => onBox(call.command)), ...box.starts.map(onBox), ...box.runs.map((run) => onBox(run.command))].filter(Boolean) as string[];
@@ -246,7 +249,7 @@ export async function fleetSetup(home: string, args: string[], replies: string[]
   const doctored: string[] = [];
   const apply = async (dir: string) => (applied.push(dir), await onApply(dir), 0);
   const doctor = async (dir: string) => (doctored.push(dir), doctorCode);
-  const code = await main(["setup", ...args], { home, engineRoot, platform, print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, doctor, env: {}, timeZone: "UTC", ...(fetchSource ? { fetchSource } : {}) } });
+  const code = await main(["setup", ...args], { home, engineRoot, platform, print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, clock: box.clock, doctor, env: {}, timeZone: "UTC", ...(fetchSource ? { fetchSource } : {}) } });
   return { code, prompts: io.prompts, output: io.output(), applied, doctored };
 }
 

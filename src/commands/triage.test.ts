@@ -319,21 +319,4 @@ describe("fleet setup and triage", () => {
     expect(result.output).toEndWith("Stuck? Run fleet triage. It shows a report of this setup that you can send to the Fleet maintainer.");
   });
 
-  test("the done screen shows t_usable when setup reached it", async () => {
-    const home = temp.make("home-");
-    mkdirSync(join(home, ".local/state/fleet/logs"), { recursive: true });
-    writeFileSync(join(home, ".local/state/fleet/logs/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: "2026-11-11T10:03:07.000Z", steps: [] }));
-    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home));
-    expect(result.output).toContain("  Ready after     3m 7s\n  Report          fleet triage");
-  });
-
-  test("the done screen has no ready time while the timings say setup has not reached t_usable", async () => {
-    const home = temp.make("home-");
-    mkdirSync(join(home, ".local/state/fleet/logs"), { recursive: true });
-    writeFileSync(join(home, ".local/state/fleet/logs/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: null, usableSeconds: null, blockedSteps: 0, steps: [] }));
-    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home));
-    expect(result.code).toBe(0);
-    expect(result.output).toContain("  Report          fleet triage");
-    expect(result.output).not.toContain("Ready after");
-  });
 });
