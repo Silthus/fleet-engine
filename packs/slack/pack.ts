@@ -1,9 +1,10 @@
+import { homedir } from "node:os";
 import type { Context, Pack, Setting } from "../../src/sdk/index.ts";
 
 async function commandDeps(ctx: Context, userId: Setting<string>) {
   const { everyOn } = await import("./lib/command.ts");
   return {
-    env: process.env, slackUserId: () => ctx.get(userId), secrets: ctx.secrets, stateDir: ctx.stateDir, threads: ctx.threads,
+    env: process.env, home: homedir(), slackUserId: () => ctx.get(userId), secrets: ctx.secrets, stateDir: ctx.stateDir, threads: ctx.threads,
     print: ctx.print, now: ctx.now, sleep: ctx.sleep, every: everyOn(ctx.sleep), readStdin: () => Bun.stdin.text(),
   };
 }

@@ -2,7 +2,14 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { registerSlackBridge, signInSlackBridge, slackBridgeRegistered, slackBridgeSignedIn } from "./slack-bridge.ts";
+import { slack } from "./apps.ts";
+import type { Hub } from "./hub.ts";
+import { appSignedIn, registerUpstream, signInApp, upstreamRegistered } from "./upstreams.ts";
+
+const registerSlackBridge = (hub: Hub) => registerUpstream(hub, slack);
+const slackBridgeRegistered = (hub: Hub) => upstreamRegistered(hub, slack);
+const slackBridgeSignedIn = (hub: Pick<Hub, "home">) => appSignedIn(hub, slack);
+const signInSlackBridge = (hub: Hub) => signInApp(hub, slack);
 import { dockerHost, fakeHub, fakeMcpHub, fakeRun, mcphubFetch, writeMcpHubSettings, type FakeContainer, type FakeMcpHub } from "./testing.ts";
 
 const temp = tempDirs();
@@ -12,12 +19,13 @@ const bridgeHome = (home: string) => join(home, ".local/share/fleet-mcphub/data/
 const stored = {
   type: "stdio",
   command: "node",
-  args: ["/app/fleet-slack-bridge.mjs"],
-  env: { HOME: "/app/data/slack-codex", CODEX_HOME: "/app/data/slack-codex", FLEET_CODEX_BIN: "/opt/fleet-codex/current/bin/codex" },
+  args: ["/app/fleet-app-bridge.mjs"],
+  description: "Added by Fleet",
+  env: { HOME: "/app/data/slack-codex", CODEX_HOME: "/app/data/slack-codex", FLEET_CODEX_BIN: "/opt/fleet-codex/current/bin/codex", FLEET_APP: JSON.stringify(slack) },
   startOnDemand: true,
   options: { timeout: 300000 },
 };
-const signInHint = "Sign the Slack bridge in to ChatGPT, with the account whose Slack app it should use. On the hub, run: fleet mcp-gateway slack-bridge sign-in";
+const signInHint = "Sign Slack in to ChatGPT, with the account whose Slack app it should use. On the hub, run: fleet mcp-gateway sign-in slack";
 
 const olderGateway: FakeContainer = { Config: { Labels: { "org.fleet.service": "mcphub" }, Env: [] }, Image: "sha256:older", State: { Running: true }, Mounts: [] };
 
@@ -38,7 +46,7 @@ test("puts the bridge into the gateway as its own server, adds it to the Fleet g
   expect(api.configs).toEqual({ tickets: { type: "streamable-http", url: "https://tickets.example.com/mcp" }, slack: stored });
   expect(api.groups).toEqual([{ id: "g", name: "fleet", servers: ["tickets", "calendar", "slack"] }]);
   expect(statSync(bridgeHome(home)).mode & 0o777).toBe(0o700);
-  expect(hub.printed).toEqual(["MCPHub installed: http://127.0.0.1:3317/mcphub/", "The Slack bridge is in the MCP gateway.", signInHint]);
+  expect(hub.printed).toEqual(["MCPHub installed: http://127.0.0.1:3317/mcphub/", "Slack is in the MCP gateway.", signInHint]);
   expect(await slackBridgeRegistered(hub)).toBe(true);
 });
 
@@ -55,7 +63,7 @@ test("a second run changes nothing, and a run after someone edited the bridge pu
   api.calls.length = 0;
   await registerSlackBridge(hub);
   expect(writes(api)).toEqual([]);
-  api.configs.slack = { enabled: true, startOnDemand: true, options: { timeout: 300000 }, env: { FLEET_CODEX_BIN: stored.env.FLEET_CODEX_BIN, CODEX_HOME: stored.env.CODEX_HOME, HOME: stored.env.HOME }, args: stored.args, command: "node", type: "stdio" };
+  api.configs.slack = { enabled: true, startOnDemand: true, options: { timeout: 300000 }, env: { FLEET_APP: stored.env.FLEET_APP, FLEET_CODEX_BIN: stored.env.FLEET_CODEX_BIN, CODEX_HOME: stored.env.CODEX_HOME, HOME: stored.env.HOME }, args: stored.args, description: stored.description, command: "node", type: "stdio" };
   expect(await slackBridgeRegistered(hub)).toBe(true);
   api.configs.slack = { ...stored, env: { ...stored.env, NODE_OPTIONS: "--require /tmp/other.js" } };
   expect(await slackBridgeRegistered(hub)).toBe(false);
@@ -69,19 +77,19 @@ test("a second run changes nothing, and a run after someone edited the bridge pu
 test("keeps a slack server that Fleet did not add", async () => {
   const theirs = { type: "stdio", command: "npx", args: ["some-slack-mcp"] };
   const { api, hub } = hubWith({ servers: ["tickets", "calendar", "slack"], configs: { slack: theirs } });
-  await expect(registerSlackBridge(hub)).rejects.toThrow("Keep the MCP gateway's slack server: Fleet did not add it. Remove it in the gateway's dashboard to use the Slack bridge.");
+  await expect(registerSlackBridge(hub)).rejects.toThrow("Keep the MCP gateway's slack server: Fleet did not add it. Remove it in the gateway's dashboard to use Slack.");
   expect(api.calls.filter((call) => call.method !== "GET")).toEqual([]);
   expect(api.configs.slack).toEqual(theirs);
 });
 
 test("fails when the gateway does not keep the bridge's settings", async () => {
   const { hub } = hubWith({ keepsConfig: false });
-  await expect(registerSlackBridge(hub)).rejects.toThrow("The MCP gateway did not keep the Slack bridge's settings. Run: fleet mcp-gateway doctor");
+  await expect(registerSlackBridge(hub)).rejects.toThrow("The MCP gateway did not keep the settings of Slack. Run: fleet mcp-gateway doctor");
 });
 
 test("needs the Codex that Fleet installs on the hub, and adds nothing without it", async () => {
   const { api, hub } = hubWith({}, false);
-  await expect(registerSlackBridge(hub)).rejects.toThrow("The Slack bridge runs Codex, and this hub has no Codex from Fleet. Run: fleet install-codex");
+  await expect(registerSlackBridge(hub)).rejects.toThrow("Slack runs through Codex, and this hub has no Codex from Fleet. Run: fleet install-codex");
   expect(writes(api)).toEqual([]);
 });
 

@@ -30,6 +30,7 @@ const service = "fleet-cli-proxy.service";
 const keyPattern = /^([0-9a-f]{64})\n?$/;
 const address = `127.0.0.1:${proxyPort}`;
 const answerTries = 20;
+const claudeCodeVersion = "2.1.322";
 
 function layout(home: string) {
   const dir = proxyDir(home);
@@ -46,7 +47,8 @@ function wanted(paths: Layout, key: string): Managed[] {
   const config = [
     marker, `host: "127.0.0.1"`, `port: ${proxyPort}`, "tls:", "  enable: false", "remote-management:", "  allow-remote: false", `  secret-key: ""`, "  disable-control-panel: true",
     `auth-dir: "${paths.auth}"`, "api-keys:", `  - "${key}"`, "debug: false", "commercial-mode: true", "logging-to-file: false", "usage-statistics-enabled: true", "request-retry: 3",
-    "quota-exceeded:", "  switch-project: true", "  switch-preview-model: true", "routing:", `  strategy: "fill-first"`, "  session-affinity: true", `  session-affinity-ttl: "1h"`, "",
+    "quota-exceeded:", "  switch-project: true", "  switch-preview-model: true", "routing:", `  strategy: "fill-first"`, "  session-affinity: true", `  session-affinity-ttl: "1h"`,
+    "claude-header-defaults:", `  user-agent: "claude-cli/${claudeCodeVersion} (external, cli)"`, "",
   ].join("\n");
   const unit = [
     marker, "[Unit]", "Description=Fleet CLI proxy for your own subscriptions", "After=network-online.target", "Wants=network-online.target", "", "[Service]",

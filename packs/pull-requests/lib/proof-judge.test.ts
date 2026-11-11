@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanFixtures, lookup, checkout, verdict, fakeModel, reviewHead, decideRule, withDecideRule, finishRound, recordingModel } from "./proof-testing.ts";
+import { cleanFixtures, lookup, checkout, verdict, fakeModel, reviewHead, decideRule, withDecideRule, finishRound, recordingModel, stalledOnQuota } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -201,4 +201,17 @@ test("a judge gap on a new commit needs a new answer", async () => {
   await pr.commit("feature.txt", "greet every new member\n");
   await pr.fleet("gap", "--kind", "judge", "--reason", reason);
   await expect(accept()).rejects.toThrow("Ask the user again");
+});
+
+test("the gate stops a judge stuck on spent quota and reports it unavailable", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  pr.env.FLEET_PROOF_QUOTA_GRACE_MS = "0";
+  pr.env.FLEET_PROOF_JUDGE = stalledOnQuota("All credentials for model judge-model are cooling down");
+
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(1);
+  expect(gate.output).toContain('judge: unavailable (quota exhausted: no progress after "All credentials for model judge-model are cooling down")');
 });

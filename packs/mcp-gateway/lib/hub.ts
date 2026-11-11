@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { declaredUpstreams } from "./declared.ts";
 import { browserGatewayUrl, gatewayGroup, gatewayPort, isGatewayUrl, localGatewayUrl, refuseLinks, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
@@ -122,7 +123,7 @@ export type Api = ReturnType<typeof api>;
 export async function managementApi(hub: Hub) {
   return api(hub, await installedSettings(hub));
 }
-type Group = { id: string; name: string; servers: Array<string | { name: string }> };
+type Group = { id: string; name: string; servers: Array<string | ({ name: string; tools?: string[] | "all"; pinnedTools?: string[] } & Record<string, unknown>)> };
 
 async function groupGap(call: Api) {
   const servers = (await call<Array<{ name: string; status: string; tools?: unknown[] }>>("servers"));
@@ -131,17 +132,31 @@ async function groupGap(call: Api) {
   return { servers, group, missing: servers.map((server) => server.name).filter((name) => !members.has(name)) };
 }
 
-export async function syncGatewayGroup(call: Api) {
+type Entry = Group["servers"][number];
+const entryName = (entry: Entry) => (typeof entry === "string" ? entry : entry.name);
+
+function narrowed(entry: Entry, tools: string[]): Entry {
+  const kept = typeof entry === "string" ? { name: entry } : entry;
+  return { ...kept, tools, ...(kept.pinnedTools && { pinnedTools: kept.pinnedTools.filter((tool) => tools.includes(tool)) }) };
+}
+
+/** Puts every server into the Fleet group, and narrows the entry of each declared upstream with an allowlist to its tools. */
+export async function syncGatewayGroup(call: Api, home: string) {
+  const tools = new Map((await declaredUpstreams(home)).flatMap((upstream) => (upstream.kind === "oauth" && upstream.tools ? [[upstream.name, upstream.tools] as const] : [])));
   const { servers, group, missing } = await groupGap(call);
-  const names = servers.map((server) => server.name);
-  if (!group) await call("groups", "POST", { name: gatewayGroup, description: "Every server, for Fleet's machine keys", servers: names });
-  else if (missing.length) await call(`groups/${encodeURIComponent(group.id)}`, "PUT", { servers: names });
+  const entry = (server: Entry): Entry => {
+    const allowed = tools.get(entryName(server));
+    return allowed ? narrowed(server, allowed) : server;
+  };
+  if (!group) return void (await call("groups", "POST", { name: gatewayGroup, description: "Every server, for Fleet's machine keys", servers: servers.map((server) => entry(server.name)) }));
+  const kept = group.servers.map(entry);
+  if (missing.length || kept.some((server, index) => !Bun.deepEquals(server, group.servers[index]))) await call(`groups/${encodeURIComponent(group.id)}`, "PUT", { servers: [...kept, ...missing.map(entry)] });
 }
 
 export async function syncWhenReady(hub: Hub) {
   const call = api(hub, await installedSettings(hub));
   for (let attempt = 1; ; attempt++) {
-    try { return await syncGatewayGroup(call); }
+    try { return await syncGatewayGroup(call, hub.home); }
     catch (error) { if (attempt === 30) throw error; await hub.sleep(500); }
   }
 }
@@ -153,7 +168,7 @@ export async function issueKey(machine: string, hub: Hub) {
   if (machine !== hubName && !devboxes.includes(machine)) throw new Error(`Name the hub (${hubName}) or a devbox from your profile: ${devboxes.join(", ") || "none"}.`);
   const settings = await installedSettings(hub);
   const call = api(hub, settings);
-  await syncGatewayGroup(call);
+  await syncGatewayGroup(call, hub.home);
   const name = `Fleet ${machine}`;
   let key = settings.bearerKeys.find((item) => item.name === name && item.enabled);
   if (!key) key = await call<BearerKey>("auth/keys", "POST", { name, kind: "system", accessType: "groups", allowedGroups: [gatewayGroup] });
@@ -191,7 +206,7 @@ export async function signIn(hub: Hub) {
   const settings = await installedSettings(hub);
   const waiting = Object.entries(settings.mcpServers).flatMap(([name, config]) => (config.oauth?.pendingAuthorization?.authorizationUrl ? [[name, config.oauth.pendingAuthorization.authorizationUrl] as const] : []));
   if (!waiting.length) return hub.print("No upstream server waits for a sign-in.");
-  hub.print(`On your computer, keep this running while you sign in: coder port-forward ${hub.hubName()} --tcp ${gatewayPort}`);
+  hub.print(`On your computer, keep this running while you sign in: coder port-forward ${hub.hubName().replace(/^coder\./, "")} --tcp ${gatewayPort}`);
   for (const [name, url] of waiting) hub.print(`${name}: ${url}`);
 }
 

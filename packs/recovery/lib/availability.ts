@@ -6,7 +6,7 @@ import { modelTable, type ModelRow } from "../../base/lib/models.ts";
 import { proxyUrl } from "../../hub/lib/cli-proxy-balance.ts";
 import type { Fetch } from "../../mcp-gateway/lib/client.ts";
 import { availabilityPath, providers, readAvailability, type Availability, type Provider, type ProviderStatus } from "../../base/lib/t3/index.ts";
-import { isQuotaError } from "./quota.ts";
+import { isQuotaError } from "../../base/lib/quota.ts";
 
 export type { Availability, Provider } from "../../base/lib/t3/index.ts";
 export type ProbeContext = { home: string; env: Record<string, string | undefined>; fetch: Fetch; now: () => number };

@@ -73,7 +73,7 @@ function pagePack(manifest: PackManifest, holds: (need: Need) => boolean): PageP
     ...(manifest.risk ? { risk: manifest.risk } : {}),
     requires: (manifest.requires ?? []).filter((name) => name !== "base"),
     always: manifest.name === "base",
-    workflows: shownWorkflows.map((workflow) => ({ ...workflow, needs: workflow.needs ?? [], settings: workflow.settings ?? [] })),
+    workflows: shownWorkflows.map((workflow) => ({ ...workflow, needs: workflow.needs ?? [], requires: workflow.requires ?? [], settings: workflow.settings ?? [] })),
     settings: (manifest.settings ?? []).filter((setting) => !engineSettings.includes(setting.key) && !listedOnlyByHidden(setting.key)),
   };
 }

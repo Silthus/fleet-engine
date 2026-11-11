@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { freeBytes, startRoom } from "../../base/lib/disk.ts";
 import { optionalStringSetting } from "../../base/lib/settings.ts";
 import type { Secrets, Threads } from "../../../src/sdk/index.ts";
 import { launchHere, launchOnBox, spawnRun, type Launch, type LaunchRequest, type Run } from "./launch.ts";
@@ -11,6 +12,8 @@ export type Every = (work: () => void, ms: number) => () => void;
 
 export type SlackCommandDeps = {
   env: Env;
+  home: string;
+  freeBytes?: (path: string) => number;
   slackUserId: () => string;
   secrets: Secrets;
   stateDir: string;
@@ -52,9 +55,11 @@ export async function ownerOf(deps: Pick<SlackCommandDeps, "slackUserId">, run: 
   return { name, slackUserId };
 }
 
-export function launcher(env: Env, run: Run, threads: Threads): Launch {
-  if (optionalStringSetting("hub.boxTemplate", env) !== undefined) return launchOnBox(join(env.FLEET_ENGINE_DIR ?? "", "fleet"), run);
-  return launchHere(threads);
+const roomHere = (deps: SlackCommandDeps) => startRoom(deps.home, deps.env, deps.freeBytes ?? freeBytes);
+
+export function launcher(deps: SlackCommandDeps, run: Run): Launch {
+  if (optionalStringSetting("hub.boxTemplate", deps.env) !== undefined) return launchOnBox(join(deps.env.FLEET_ENGINE_DIR ?? "", "fleet"), run);
+  return launchHere(deps.threads, roomHere(deps));
 }
 
 export async function slackTrigger(args: string[], deps: SlackCommandDeps): Promise<number> {
@@ -80,7 +85,7 @@ export async function listen(deps: SlackCommandDeps): Promise<void> {
   const { appToken, userToken } = slackApp(saved);
   const replaced = new AbortController();
   const stop = deps.stop ? AbortSignal.any([deps.stop, replaced.signal]) : replaced.signal;
-  const trigger: TriggerDeps = { owner, now, log, slack: slackApi(userToken, deps.slackBase, deps.sleep), launch: launcher(deps.env, run, deps.threads), statePath: join(deps.stateDir, "slack-trigger.json") };
+  const trigger: TriggerDeps = { owner, now, log, slack: slackApi(userToken, deps.slackBase, deps.sleep), launch: launcher(deps, run), statePath: join(deps.stateDir, "slack-trigger.json") };
   const active = new Set<Promise<void>>();
   const track = (work: Promise<void>, failed: (error: unknown) => void) => {
     const tracked = work.catch(failed).finally(() => active.delete(tracked));
@@ -180,8 +185,8 @@ async function checkApp(owner: Owner, deps: SlackCommandDeps): Promise<number> {
 async function launchFromStdin(deps: SlackCommandDeps): Promise<number> {
   const request = JSON.parse(await deps.readStdin()) as Partial<LaunchRequest>;
   if (typeof request.title !== "string" || typeof request.prompt !== "string" || typeof request.commandId !== "string") throw new Error("fleet slack-trigger launch reads {\"title\", \"prompt\", \"commandId\"} as JSON on standard input");
-  const launched = await launchHere(deps.threads)({ title: request.title, prompt: request.prompt, commandId: request.commandId });
-  if ("failed" in launched) return deps.print(launched.failed), 1;
+  const launched = await launchHere(deps.threads, roomHere(deps))({ title: request.title, prompt: request.prompt, commandId: request.commandId, replay: request.replay === true });
+  if ("failed" in launched) return deps.print(JSON.stringify({ failed: launched.failed, ...(launched.reachedT3 ? { reachedT3: true } : {}) })), 1;
   deps.print(JSON.stringify({ threadId: launched.threadId }));
   return 0;
 }

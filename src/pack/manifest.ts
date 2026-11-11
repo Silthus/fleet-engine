@@ -154,6 +154,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("workflows", (item, label) => {
     need(typeof item.name === "string" && typeof item.sentence === "string", `${label}: needs a name and a sentence`);
     need(item.needs === undefined || isStrings(item.needs), `${label}: needs must list needs`);
+    need(item.requires === undefined || isStrings(item.requires), `${label}: requires must list workflow ids`);
     need(item.settings === undefined || isStrings(item.settings), `${label}: settings must list keys`);
   });
   each("jobs", (item, label) => {

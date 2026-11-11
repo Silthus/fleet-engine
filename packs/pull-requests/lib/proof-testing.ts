@@ -28,20 +28,42 @@ export async function checkout() {
   for (const path of [home, repository, bin, github]) mkdirSync(path);
   writeFileSync(join(bin, "gh"), `#!/bin/sh
 echo "$*" >> "${github}/calls"
-case "$*" in "api "*)
-  sha=$(printf '%s' "$*" | sed -n 's#.*/commits/\\([0-9a-f]*\\)/.*#\\1#p')
-  case "$*" in *"/check-runs"*) kind=check-runs;; *) kind=statuses;; esac
-  file="${github}/$kind-$sha"; [ -f "$file" ] || file="${github}/$kind-any"
-  cat "$file" 2>/dev/null; exit 0;;
-esac
 head=$(cat "${github}/head" 2>/dev/null || git -C "${repository}" rev-parse HEAD)
-case "$*" in *headRefOid*) [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head";; esac
-printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRefName":"main","headRefOid":"%s","title":"Greet new members","body":"Adds the greeting."}\\n' "$head"
+base=$(cat "${github}/base" 2>/dev/null || echo main)
+case "$*" in
+  "api "*"/pulls/"[0-9]*)
+    [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head"
+    draft=false; [ -f "${github}/draft" ] && draft=true
+    printf '{"number":42,"title":"Greet new members","body":"Adds the greeting.","draft":%s,"head":{"sha":"%s"},"base":{"ref":"%s","repo":{"default_branch":"main"}}}\\n' "$draft" "$head" "$base"; exit 0;;
+  "api "*"/rules/branches/"*)
+    all="$*"; branch=\${all##*/rules/branches/}; page=\${all##*page=}; branch=\${branch%%\\?*}
+    [ -f "${github}/rules-error-$branch" ] && { cat "${github}/rules-error-$branch" >&2; exit 1; }
+    cat "${github}/rules-$branch-$page" 2>/dev/null || echo '[]'; exit 0;;
+  "api "*"/branches/"*)
+    all="$*"; branch=\${all##*/branches/}; branch=\${branch%% *}
+    cat "${github}/branch-$branch" 2>/dev/null || echo '{"protected":false}'; exit 0;;
+  "api "*)
+    sha=$(printf '%s' "$*" | sed -n 's#.*/commits/\\([0-9a-f]*\\)/.*#\\1#p')
+    case "$*" in *"/check-runs"*) kind=check-runs;; *) kind=statuses;; esac
+    file="${github}/$kind-$sha"; [ -f "$file" ] || file="${github}/$kind-any"
+    cat "$file" 2>/dev/null; exit 0;;
+esac
+printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRefName":"%s","headRefOid":"%s","title":"Greet new members","body":"Adds the greeting."}\\n' "$base" "$head"
 `, { mode: 0o755 });
   for (const model of ["claude", "codex"]) writeFileSync(join(bin, model), `#!/bin/sh\necho "the test ran the real ${model}" >&2\nexit 97\n`, { mode: 0o755 });
   const runs: Record<string, { status: string; conclusion: string | null }> = { pass: { status: "completed", conclusion: "success" }, fail: { status: "completed", conclusion: "failure" }, cancel: { status: "completed", conclusion: "cancelled" }, pending: { status: "in_progress", conclusion: null } };
   const lines = (items: object[]) => items.map((item) => JSON.stringify(item) + "\n").join("");
-  const ci = (checks: { name: string; bucket: string }[] | "none", commit = "any") => writeFileSync(join(github, `check-runs-${commit}`), checks === "none" ? "" : lines(checks.map(({ name, bucket }) => ({ name, ...runs[bucket] }))));
+  const ci = (checks: { name: string; bucket: string; app?: number }[] | "none", commit = "any") => writeFileSync(join(github, `check-runs-${commit}`), checks === "none" ? "" : lines(checks.map(({ name, bucket, app = 1 }, index) => ({ id: index + 1, name, ...runs[bucket], app }))));
+  const required = (branch: string, rules: { context: string; integration_id?: number }[] | { error: string }, { classic, page = 1, others = 0 }: { classic?: string[]; page?: number; others?: number } = {}) => {
+    rmSync(join(github, `rules-error-${branch}`), { force: true });
+    if ("error" in rules) writeFileSync(join(github, `rules-error-${branch}`), rules.error);
+    else writeFileSync(join(github, `rules-${branch}-${page}`), JSON.stringify([...Array.from({ length: others }, () => ({ type: "deletion" })), ...(rules.length ? [{ type: "required_status_checks", parameters: { required_status_checks: rules } }] : [])]));
+    if (classic) writeFileSync(join(github, `branch-${branch}`), JSON.stringify({ protected: true, protection: { required_status_checks: { enforcement_level: "everyone", contexts: classic, checks: classic.map((context) => ({ context, app_id: null })) } } }));
+  };
+  const pullRequestState = ({ draft, base }: { draft?: boolean; base?: string }) => {
+    if (draft !== undefined) { if (draft) writeFileSync(join(github, "draft"), ""); else rmSync(join(github, "draft"), { force: true }); }
+    if (base !== undefined) writeFileSync(join(github, "base"), base);
+  };
   const statuses = (list: { context: string; state: string }[], commit = "any") => writeFileSync(join(github, `statuses-${commit}`), lines(list));
   const githubHead = (commit: string | undefined, next?: string) => {
     if (commit) writeFileSync(join(github, "head"), commit); else rmSync(join(github, "head"), { force: true });
@@ -111,7 +133,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   await commit("shared.txt", "one\n");
   await git("update-ref", "refs/remotes/origin/main", "HEAD");
   await git("checkout", "-q", "-b", "feature");
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;
@@ -219,3 +241,8 @@ export function recordingModel(pr: Checkout, provider: "claude" | "codex", answe
   writeFileSync(join(pr.env.PATH!.split(":")[0]!, provider), `#!/bin/sh\necho "$*" >> "${calls}"\ncat > "${calls}-prompt"\n${reply}\n`, { mode: 0o755 });
   return { calls: () => readFileSync(calls, "utf8").trim().split("\n"), prompt: () => readFileSync(`${calls}-prompt`, "utf8") };
 }
+
+export const stalledOnQuota = (first = "ERROR: Reconnecting... 1/5", second = first.replace("1/5", "2/5")) =>
+  `cat >/dev/null; printf 'codex\\nreading the diff\\n%s\\n%s\\n' '${first}' '${second}' >&2; exec tail -f /dev/null`;
+
+export const blanks = (stream: 1 | 2) => `head -c 200000 /dev/zero | tr '\\0' ' ' >&${stream}`;

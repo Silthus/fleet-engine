@@ -9,7 +9,8 @@ they turn one on. Ask with your question tool, in one call:
 
 - **Which guards to turn on.** Recommend both of these on the Mac:
   - `shell-guards`: refuses network code piped into a shell, packages the
-    project lacks, and GitHub owners outside their list. Add
+    project lacks, GitHub owners outside their list, `pkill -f`, skipped Git
+    hooks, force pushes without a lease, and pushes to `main`. Add
     `--workflows shell-guards=on`.
   - `package-age`: installs only package versions at least three days old.
     Add `--workflows package-age=on`.
@@ -17,6 +18,10 @@ they turn one on. Ask with your question tool, in one call:
   `--set guards.person=<name>`.
 - **Which GitHub owners agents may use**: their login and their orgs,
   separated by commas. Add `--set guards.owners=<owners>`.
+- **Which repositories take pushes straight to `main`**, if any, as
+  `owner/name` separated by commas. The shell guards refuse a push to `main`
+  or `master` of any other GitHub repository, unless its `AGENTS.md` says to
+  push there. Add `--set guards.main-push-repos=<repos>`.
 
 Two more guards run only on a Linux devbox and need root and the person's
 keyboard there: `git-allowlist`, a signed list of the GitHub owners Git may

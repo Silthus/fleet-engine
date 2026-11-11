@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { answerHook, claimNote, clip, type HookInput, logShown, memoryRoot, repoOf } from "../lib/notes.ts";
+import { testsRuleFor } from "../lib/tests-rule.ts";
 import { names, readTriggers, stripFrontmatter, textsOf } from "../lib/triggers.ts";
 
 const notesPerCall = 2;
@@ -9,8 +10,15 @@ const noteLimit = 3000;
 
 export async function recallNotes(input: HookInput, home: string): Promise<string | undefined> {
   const session = input.session_id;
+  if (!session) return undefined;
+  const notes = await triggeredNotes(input, home, session).catch(() => undefined);
+  const shown = [testsRuleFor(input, home, session), notes].filter(Boolean);
+  return shown.length ? shown.join("\n\n") : undefined;
+}
+
+async function triggeredNotes(input: HookInput, home: string, session: string): Promise<string | undefined> {
   const root = memoryRoot(home);
-  if (!session || !existsSync(root)) return undefined;
+  if (!existsSync(root)) return undefined;
   const texts = [input.tool_name ?? "", ...textsOf(input.tool_input)];
   if (texts.some((text) => text.includes(".agents/memory"))) return undefined;
   let repo: string | undefined | null = null;

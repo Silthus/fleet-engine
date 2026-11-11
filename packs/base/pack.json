@@ -729,6 +729,20 @@
         "codex",
         "both"
       ]
+    },
+    {
+      "id": "node-runtime",
+      "run": [
+        "fleet",
+        "install-node"
+      ],
+      "check": [
+        "npx",
+        "--version"
+      ],
+      "on": [
+        "linux"
+      ]
     }
   ]
 }
