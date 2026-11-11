@@ -1,4 +1,5 @@
 import type { HumanStep, Owned, PackStep } from "../pack/types.ts";
+import { quote } from "../hub/ssh.ts";
 import { engineCommand, engineShellCommand } from "../reconciler/engine-command.ts";
 import type { Machine } from "./commands.ts";
 import type { Step, StepOutcome } from "./runner.ts";
@@ -48,7 +49,11 @@ async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive
     terminal.print(`  ✓ ${signIn.title}: already done`);
     return signIn.after?.();
   }
-  if (nonInteractive) return "unanswered";
+  if (nonInteractive) {
+    terminal.print(`  Needs you: ${signIn.title}`);
+    terminal.print(`  ${howToStart(signIn)}`);
+    return "unanswered";
+  }
   terminal.print(`▶ ${signIn.title}  (step needs you, about ${signIn.minutes} min)`);
   terminal.print(`  ${signIn.why}`);
   if (signIn.interactive && signIn.command) return withKeyboard(signIn, { terminal, machine, nonInteractive });
@@ -73,6 +78,12 @@ async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive
   if (signIn.finishes && started && exit === undefined) await started.exited;
   terminal.print(`  ✓ ${signIn.title}: done`);
   return signIn.after?.();
+}
+
+function howToStart({ command, interactive, url, why }: SignIn) {
+  const open = url ? `open ${url}` : undefined;
+  if (!command) return open ? `Open ${url}` : why;
+  return `${interactive ? "In a terminal, run" : "Run"}: ${command.map(quote).join(" ")}${open ? `, and ${open}` : ""}`;
 }
 
 async function withKeyboard(signIn: SignIn, { terminal, machine }: HumanContext): Promise<StepOutcome> {

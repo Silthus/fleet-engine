@@ -4,7 +4,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { profilePath } from "./profile.ts";
-import { fleetSetup, machineFile, pushedAnswers, savedAnswers } from "./testing.ts";
+import { fakeMachine, fleetSetup, machineFile, pushedAnswers, savedAnswers } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -123,6 +123,20 @@ describe("fleet setup questions", () => {
     expect(answered.prompts).toEqual([]);
     expect(answered.output).toContain("Set up this machine");
     expect(savedAnswers(home).settings).toEqual({ "orchestration.loopProject": "~/code/app", "orchestration.qualityArea": "src/api", "orchestration.ledgerRepo": "me/ledger", "memory.repo": "nora/fleet-memory" });
+  });
+
+  test("--non-interactive names the command that starts each sign-in it cannot wait for, so an agent can run it", async () => {
+    const github = temp.make("home-");
+    const signedOut = await fleetSetup(github, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"], [], fakeMachine(github, { github: 1 }));
+    expect(signedOut.code).toBe(2);
+    expect(signedOut.output).toContain("  Needs you: Sign in to GitHub\n  Run: gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,admin:public_key,admin:ssh_signing_key, and open https://github.com/login/device");
+    expect(signedOut.output).toContain("  Sign in to GitHub: do it once in a terminal, then run fleet setup again");
+
+    const claude = temp.make("home-");
+    const noClaude = await fleetSetup(claude, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"], [], fakeMachine(claude, { claude: 1 }));
+    expect(noClaude.code).toBe(2);
+    expect(noClaude.output).toContain("  Needs you: Sign in to Claude\n  Run: claude auth login\n");
+    expect(machine(claude).setup.done).toContain("apply");
   });
 
   test("a rerun keeps answers saved before Ctrl-C marked their step done", async () => {

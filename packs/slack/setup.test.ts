@@ -285,6 +285,6 @@ describe("the Slack app step", () => {
     const outcome = await humanStep(packSignIn(step, [], context, undefined), context).run();
     expect(outcome).toBe("unanswered");
     expect(ran).toEqual([step.probe]);
-    expect(printed).toEqual([]);
+    expect(printed).toEqual([`  Needs you: ${step.say}`, "  In a terminal, run: sh -c 'fleet slack-trigger setup'"]);
   });
 });
