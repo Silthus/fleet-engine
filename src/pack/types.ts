@@ -216,6 +216,8 @@ export type Plan = {
   onHub?: boolean;
   /** This machine is a node that the profile names, not the hub: it reaches the hub's services through its forward and pulls its credentials from the hub. */
   reachesHub?: true;
+  /** This machine pulls its credentials from the hub: a node that reaches the hub, or a Mac on a profile with a hub, which reaches the hub through its own tunnel. */
+  pullsFromHub?: true;
   /** The engine whose launcher a leading fleet in a pack's commands runs. */
   engineRoot?: string;
   os: Os;

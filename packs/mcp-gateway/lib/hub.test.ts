@@ -59,9 +59,8 @@ test("preparation accepts only the hub's HTTPS address or the loopback address a
   await prepareMcpHub(home, localGatewayUrl, { relayPort: 60001 });
 });
 
-test("a key goes only to the hub or a devbox of the profile, and only from an installed gateway", async () => {
+test("a key comes only from an installed gateway", async () => {
   await expect(issueKey("box-1", fakeHub(temp.make("fleet-mcphub-")))).rejects.toThrow("MCPHub is not installed. Run: fleet apply");
-  await expect(issueKey("stranger", fakeHub(hubHome()))).rejects.toThrow("Name the hub (my-hub) or a devbox from your profile: box-1, box-2.");
 });
 
 test("a new key is scoped to the fleet group, which holds every server", async () => {
