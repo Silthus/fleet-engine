@@ -17,8 +17,15 @@ const healthTries = 10;
 const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const string = (value: string) => `<string>${escape(value)}</string>`;
 
+/** The Coder workspace behind a hub name: the bare workspace name, or the coder.<workspace> SSH name coder config-ssh writes. */
+export function hubWorkspace(alias: string): string {
+  const workspace = alias.replace(/^coder\./, "");
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(workspace)) throw new Error(`hub.alias must be the hub's Coder workspace name or its coder.<workspace> SSH name, not ${JSON.stringify(alias)}.`);
+  return workspace;
+}
+
 export function agentPlist(coder: string, alias: string, relayPort: number, log: string): string {
-  const program = [coder, "port-forward", alias, "--tcp", `127.0.0.1:${gatewayPort}:${gatewayPort}`, "--tcp", `127.0.0.1:${relayPort}:${relayPort}`, "--disable-autostart"];
+  const program = [coder, "port-forward", hubWorkspace(alias), "--tcp", `127.0.0.1:${gatewayPort}:${gatewayPort}`, "--tcp", `127.0.0.1:${relayPort}:${relayPort}`, "--disable-autostart"];
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     marker,
@@ -73,7 +80,7 @@ export async function hubTunnel(mode: MacTunnelMode, mac: MacTunnel): Promise<nu
 }
 
 function wantedAgent(mac: MacTunnel, agent: string): Managed {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(mac.alias)) throw new Error(`hub.alias must be the hub's Coder workspace name, not ${JSON.stringify(mac.alias)}.`);
+  hubWorkspace(mac.alias);
   if (!mac.coder) throw new Error("Install the Coder CLI first, then run coder login.");
   return { path: agent, content: agentPlist(mac.coder, mac.alias, mac.relayPort, join(mac.home, "Library/Logs/fleet-hub-tunnel.log")) };
 }
