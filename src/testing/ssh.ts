@@ -28,9 +28,12 @@ export function fakeSsh(home: string, hosts: Record<string, Host | "down">, shel
     const target = hosts[host];
     if (!target || target === "down") return { code: 255, stdout: "", stderr: `ssh: connect to host ${host} port 22: Connection refused\n` };
     const { signal } = options;
-    const killed = new Promise<Answer>((settle) => signal?.addEventListener("abort", () => settle({ code: 143, stdout: "", stderr: "" }), { once: true }));
+    const killedSsh: Answer = { code: 143, stdout: "", stderr: "" };
+    if (signal?.aborted) return killedSsh;
+    const killed = new Promise<Answer>((settle) => signal?.addEventListener("abort", () => settle(killedSsh), { once: true }));
     const answer = async () => {
-      const login = await spawnAsync([shell, "-c", line], { cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
+      const login = await spawnAsync([shell, "-c", line], { cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" }, signal });
+      if (signal?.aborted) return killedSsh;
       if (login.exitCode !== 0) return { code: login.exitCode, stdout: "", stderr: login.stderr };
       return target(login.stdout.split("\0").slice(0, -1));
     };
