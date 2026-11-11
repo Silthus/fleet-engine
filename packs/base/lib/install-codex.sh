@@ -27,35 +27,35 @@ published() {
   [ -x "$1/bin/codex" ] && "$1/bin/codex" --version >/dev/null 2>&1 9>&-
 }
 
-case "$os $(uname -m)" in
+chip=$(uname -m)
+[ "$os" != Darwin ] || [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" != 1 ] || chip=arm64
+case "$os $chip" in
   "Linux x86_64"|"Linux amd64") target=x86_64-unknown-linux-musl ;;
   "Linux aarch64"|"Linux arm64") target=aarch64-unknown-linux-musl ;;
   "Darwin x86_64") target=x86_64-apple-darwin ;;
   "Darwin arm64") target=aarch64-apple-darwin ;;
-  *) fail "no Codex build for $(uname -m). Install Codex from https://github.com/openai/codex." ;;
+  *) fail "no Codex build for $chip. Install Codex from https://github.com/openai/codex." ;;
 esac
 
-[ "$os" = Darwin ] || command -v flock >/dev/null 2>&1 || fail "needs flock to install Codex safely. Install util-linux or BusyBox, then run fleet apply."
 share="$HOME/.local/share/fleet"
+if [ "$os" = Darwin ] && [ "${FLEET_CODEX_LOCKED:-}" != "$$" ]; then
+  command -v python3 >/dev/null 2>&1 || fail "needs python3 to install Codex safely. Install the Command Line Tools with xcode-select --install, then run fleet apply."
+  mkdir -p "$share" || fail "could not create $share."
+  FLEET_CODEX_LOCKED=$$ exec python3 -c 'import fcntl, os, sys; lock = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT, 0o644); fcntl.flock(lock, fcntl.LOCK_EX); os.dup2(lock, 9); os.execv("/bin/sh", ["sh"] + sys.argv[2:])' "$share/codex.lock" "$0" "$@"
+fi
+unset FLEET_CODEX_LOCKED
+[ "$os" = Darwin ] || command -v flock >/dev/null 2>&1 || fail "needs flock to install Codex safely. Install util-linux or BusyBox, then run fleet apply."
 package="$share/codex"
 releases="$package/releases"
 current="$package/current"
 link="$HOME/.local/bin/codex"
 mkdir -p "$share" || fail "could not create $share."
-lock=""
 work=""
-trap 'rm -rf "$work"; rm -f "$current.new.$$" "$link.new.$$"; [ -z "$lock" ] || rm -rf "$lock"' EXIT
+trap 'rm -rf "$work"; rm -f "$current.new.$$" "$link.new.$$"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-if [ "$os" = Darwin ]; then
-  until mkdir "$share/codex.lock.d" 2>/dev/null; do
-    holder=$(cat "$share/codex.lock.d/pid" 2>/dev/null || true)
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$share/codex.lock.d"; else sleep 1; fi
-  done
-  lock="$share/codex.lock.d"
-  echo $$ >"$lock/pid"
-else
+if [ "$os" != Darwin ]; then
   exec 9>"$share/codex.lock" || fail "could not open $share/codex.lock."
   flock 9 || fail "could not lock $share/codex.lock."
 fi
@@ -94,7 +94,14 @@ mkdir -p "$(dirname "$link")"
 point "$current" "releases/$tag"
 point "$link" "$current/bin/codex"
 if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
-  running=$(QUOTING_STYLE=literal ls -l /proc/[0-9]*/exe 2>/dev/null || true)
+  if [ "$os" = Darwin ]; then
+    running=$(lsof -nP -w -d txt -Fn 2>/dev/null | sed -n 's/^n/ -> /p' || true)
+  else
+    running=$(QUOTING_STYLE=literal ls -l /proc/[0-9]*/exe 2>/dev/null || true)
+  fi
+  [ -n "$running" ] || previous=""
+fi
+if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
   for entry in "$package"/* "$releases"/*; do
     case "$entry" in
       "$releases"|"$current"|"$package/$previous"|"$releases/$tag") continue ;;
@@ -107,8 +114,6 @@ if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
   done
 fi
 exec 9>&-
-[ -z "$lock" ] || rm -rf "$lock"
-lock=""
 
 if [ "$(command -v codex || true)" = "$HOME/.bun/bin/codex" ] && command -v bun >/dev/null 2>&1; then
   bun remove -g @openai/codex >/dev/null 2>&1 || fail "$HOME/.bun/bin/codex comes before $link on PATH. Run bun remove -g @openai/codex."
