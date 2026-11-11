@@ -8,8 +8,21 @@ passing `fleet doctor` on this Mac.
 
 - **Guide.** Before each step, say in one or two plain sentences what it does
   and why. Size it to what they know (step 2).
-- **Ask with your question tool.** Every choice goes through it, with options
-  that say what each one means. Put independent questions in one call.
+- **Ask with your question tool.** Every choice goes through it. Each option
+  says what the person gets and what they give up, and one option is marked
+  as recommended. Put independent questions in one call.
+- **Secrets go through the secret prompt.** Ask for every secret, such as an
+  API key or a token, with the host's secret prompt (in T3 Code, its
+  `request_secret` tool), never in chat. Say in one line what the secret is
+  for and where to make it. A command that asks for a hidden secret itself,
+  such as `fleet slack-trigger setup`, runs in Terminal instead.
+- **Say a word before you use it.** The first time you say a Fleet word to the
+  person, such as workflow, pack, profile, hub, or node, explain it in one
+  plain line.
+- **Speak to their choice.** Once they answer step 4, describe only the setup
+  they chose. When they chose a hub and a node, never call the hub optional or
+  something for later.
+- **Keep it short.** One or two sentences per explanation.
 - **Run every command yourself.** The person answers, approves, and does their
   own sign-ins in their browser. Just before a sign-in opens, say what it is
   for.
@@ -48,11 +61,44 @@ A prompt from an earlier page can carry more lines. Use them too:
 - `Setting`: add `--set <key>=<value>` to the setup command in step 7, once
   for each line.
 
+## While something runs
+
+Steps 5, 7, and 9 run commands that take minutes. While one runs in the
+background, explain one of these, in two or three lines, and do not repeat
+one. Skip a topic that does not fit their picks:
+
+- **T3 Code's inbox.** A thread that finishes or waits for them shows up in
+  the inbox. They answer it there, on the Mac or the phone.
+- **The Slack trigger.** With the Slack pack, their own Slack message with
+  `:t3code:` starts a thread about it.
+- **Threads on nodes.** T3 Code starts a thread on any linked machine. On a
+  node, the thread keeps working while the Mac sleeps.
+- **What runs each night.** Each machine runs `fleet update` every night, so
+  it takes the newest engine and their profile by itself. The last screen of
+  setup lists the other jobs under "Runs by itself".
+
+Say whether the step runs once or again later. The install and each sign-in
+run once per machine. `fleet update` runs again every night by itself.
+
 ## 1. Check the Mac
 
 Run `uname -s` and `id -u`. Go on when the output is `Darwin` and a user ID
 other than `0`. On another system, tell the person that this guide is for a
 Mac, and point them at "Set it up by hand" in the README.
+
+Then check for an earlier setup: `~/.local/bin/fleet packs` lists the packs
+and their workflows when Fleet already runs here. When it does, show the list
+and ask:
+
+- **Change only what they name** (recommended): run `fleet packs` with
+  `--add`, `--remove`, and `--workflows` for each change, then go on to step
+  8. Everything else stays as it is.
+- **Run setup again**: setup reuses their profile repo. The packs and
+  workflow switches of this run replace the earlier ones, so a hub pack or a
+  workflow they turned on is off again unless the step 7 command names it.
+  Carry each one from the list into that command. Earlier settings stay
+  unless this run sets them again. Files they changed by hand are kept, and
+  step 8 shows them.
 
 ## 2. Ask what they know
 
@@ -69,7 +115,7 @@ Each "New to me" adds an explainer to a later step:
 | New to | Add |
 | --- | --- |
 | T3 Code | In step 3: a **thread** is one agent conversation with its own task. A **worktree** is a separate checkout of the same repo, so several threads change code at once without touching each other. T3 Code shows every machine's threads on the Mac and the phone. |
-| Fleet | In step 3: the picture, then what a pack, a workflow, and the profile are. A **workflow** is one way of working that a pack offers, such as a draft pull request for every fix. |
+| Fleet | In step 3: the picture, and one pack from step 6 with one of its workflows as an example. |
 | Devboxes | In step 4: what a hub and a node are, and why agents run better on them. |
 
 ## 3. Show what Fleet is
@@ -77,11 +123,12 @@ Each "New to me" adds an explainer to a later step:
 Fetch the picture from
 `https://raw.githubusercontent.com/Silthus/fleet-engine/main/docs/fleet.svg`
 and show it. Then say: Fleet installs agent rules, skills, and workflows. A
-**pack** is a set of workflows that you turn on as a whole. Your answers go
-to your **profile**, a private GitHub repo named `fleet-profile`, so every
-machine you add gets the same setup. A team pack can keep its members'
-profiles in the team's GitHub org instead, as `fleet-profile-<login>`, so
-teammates can read each other's setup.
+**workflow** is one way of working that agents follow, such as a draft pull
+request for every fix. A **pack** is a set of workflows that you turn on as
+a whole. Your answers go to your **profile**, a private GitHub repo named
+`fleet-profile`, so every machine you add gets the same setup. A team pack
+can keep its members' profiles in the team's GitHub org instead, as
+`fleet-profile-<login>`, so teammates can read each other's setup.
 
 ## 4. Ask where Fleet runs
 
@@ -97,7 +144,8 @@ the picks from the page say where Fleet runs:
   machines and watches their disks, and one **node** with a 500 GB disk,
   where threads do the work. Add more nodes later, when the load grows.
 
-Use their answer. Set up the Mac first in both cases.
+Recommend a hub and a node when they use Coder, and Mac only otherwise.
+When you do not know, ask whether they use Coder in the same call. Use their answer. Set up the Mac first in both cases.
 
 ## 5. Install the tools
 
@@ -128,7 +176,8 @@ printf '#!/bin/sh\nsh ~/.cache/fleet-setup/get.sh --install-only\n' > ~/.cache/f
 
 When the Command Line Tools are missing, a Mac window asks to install them;
 the person clicks **Install**. The step is done when
-`~/.local/bin/fleet help` prints the list of commands.
+`~/.local/bin/fleet help` prints the list of commands. Use the wait (see
+"While something runs").
 
 ## 6. Ask what they want
 
@@ -188,7 +237,8 @@ Run it, and repeat this loop until it ends with code `0`:
 - **Any other stop.** Read the last lines, explain them, and fix what they
   name.
 
-Then run the same command again. Every step skips what is done.
+Then run the same command again. Every step skips what is done. Use each
+wait (see "While something runs").
 
 | Sign-in | What it is for |
 | --- | --- |
@@ -209,14 +259,58 @@ The step is done when every line is explained to the person:
 - `Note:` information only.
 - `Everything matches your profile.` The Mac is set up.
 
+### When Fleet kept something of theirs
+
+A line that starts with `Kept your` names a file or a setting that the person
+had before Fleet, which Fleet left as it was. Never show the raw key alone.
+Say in plain words what it controls, what Fleet's value does instead, and
+whether `fleet doctor` passes while it stays. Then ask:
+
+- **Take Fleet's version**: run the `fleet apply --adopt <path>` that the
+  line names. A line that says `Removed item changed locally` names a file
+  that Fleet no longer installs, so there is nothing to take: keep it, or
+  move it away by hand. Fleet keeps the new file up to date, and their old file stays
+  in `~/.local/state/fleet/backups/`. When the old file holds their own
+  skills or rules, agents stop reading them. Say which ones they lose, and
+  offer to move the ones they still want to the "About me" file in their
+  profile, which agents read after the packs' rules.
+- **Keep theirs**: nothing changes, and the line stays in `fleet doctor`. This
+  makes sense when they set the value on purpose, such as a model proxy their
+  company needs.
+
+Recommend taking Fleet's version, unless they set the value on purpose.
+
 Tell them that a new Terminal window has `fleet` on its `PATH`. With Mac
-only, setup is done. With a hub and a node, go on to step 9.
+only, go on to step 10. With a hub and a node, go on to step 9.
 
 ## 9. Add the hub and the node
 
 The default is one **hub** with a 200 GB disk and one **node** with a 500 GB
 disk, both Coder workspaces. Run each step on this Mac. Before each step that
-creates something, show the command and ask whether to go on.
+creates something, show the command and ask whether to go on. Creating a
+workspace and `fleet devbox add` take minutes; use each wait (see "While
+something runs").
+
+Before item 3 below, run `fleet hub status` and `coder list`, and ask
+whether to reuse a hub:
+
+- **Reuse** the hub that `fleet hub status` names: skip items 3 to 7 for
+  it. It keeps its links and disk watch. A Coder workspace that runs Fleet
+  but is not named as the hub skips items 3 to 6 only.
+- **Make a new one** (recommended when no hub is named): when there is no
+  hub, or the old one is on another Coder deployment, another account, or a
+  disk under 200 GB.
+
+**Clean up what you replace.** When a new hub or node replaces an old
+workspace, clean up only after item 10 passes on the new one, and ask before
+you remove anything:
+
+1. Remove the old host from the `devboxes` list in
+   `~/.local/share/fleet/profile/fleet.json`, then commit and push it. The hub stops
+   its tunnel, disk watch, and link to that host at its next `fleet update`.
+2. Delete the old workspace with `coder delete <old name>`.
+3. Remove its environment from T3 Code's settings, so threads do not start
+   there.
 
 When devboxes were new to them, explain the hub first: it is the one devbox
 that looks after the others. It keeps an SSH tunnel and a T3 link to every
@@ -238,8 +332,16 @@ the steps below, follow the note.
 
 1. **Coder CLI.** When `command -v coder` finds nothing, install it with
    `brew install coder`. When `coder whoami` fails, ask for their Coder
-   address and sign in. `coder login` asks them to paste a token, so run it in
-   a Terminal window:
+   address and sign in. Coder needs a session token: it lets this Mac act as
+   them in Coder, and they make one at `<coder address>/cli-auth`. Ask for it
+   with the secret prompt, delivered as a file, and sign in with it:
+
+   ```sh
+   CODER_SESSION_TOKEN="$(cat <file>)" coder login <coder address>
+   ```
+
+   Without a secret prompt, run `coder login` in a Terminal window, where it
+   asks for the token itself:
 
    ```sh
    printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\ncoder login %s\n' '<coder address>' > ~/.cache/fleet-setup/coder.command && chmod +x ~/.cache/fleet-setup/coder.command && open ~/.cache/fleet-setup/coder.command
@@ -349,5 +451,30 @@ the steps below, follow the note.
     their keyboard runs in a Terminal window as `ssh -t coder.<hub>` with the
     same `PATH` line.
 
-To add a node later, when the load grows, run steps 3, 4, 5 and 9 again with
-a new name and a 500 GB disk, then `fleet doctor` on it.
+To add a node later, when the load grows, run items 3, 4, 5 and 9 above
+again with a new name and a 500 GB disk, then `fleet doctor` on it.
+
+Then go on to step 10.
+
+## 10. Hand over
+
+Add their profile as a T3 Code project named `fleet-profile`, so they can
+open a thread there. Skip it when T3 Code already lists that project:
+
+```sh
+t3 project add --title fleet-profile ~/.local/share/fleet/profile
+```
+
+Then give them these habits, one line each:
+
+- When something does not fit how you work, open a thread in the
+  `fleet-profile` project and say what to change. Every machine takes the
+  change.
+- Fleet keeps itself up to date: each machine runs `fleet update` every night.
+- **Side fix.** When an agent finds an unrelated problem, it hands the fix to
+  a new thread with its own pull request, and stays on its task.
+- **Conductor.** For big work, one thread writes a map of tickets and starts
+  one worker thread per ticket.
+
+Leave out a habit whose pack they did not pick: the last two need the
+Orchestration pack.

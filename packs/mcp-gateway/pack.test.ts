@@ -127,7 +127,7 @@ function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}) {
   return { state, bridged, spawned, dockerHomes };
 }
 
-function machine(saved: MachineFile, fields: Partial<Profile> = {}, hosts: Record<string, Host | "down"> = {}) {
+function machine(saved: MachineFile, fields: Partial<Profile> = {}, hosts: Record<string, Host | "down"> = {}, platform: NodeJS.Platform = "linux") {
   const home = temp.make("home-");
   const profile = temp.make("profile-");
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["mcp-gateway"], plan: "codex", settings: {}, workflows: {}, hub: "hub-1", devboxes: ["node-2"], ...fields }));
@@ -139,7 +139,7 @@ function machine(saved: MachineFile, fields: Partial<Profile> = {}, hosts: Recor
   const options: CliOptions = {
     home,
     engineRoot: repoRoot,
-    platform: "linux",
+    platform,
     env: {},
     print: (line) => lines.push(line),
     fail: (line) => errors.push(line),
@@ -161,6 +161,7 @@ function machine(saved: MachineFile, fields: Partial<Profile> = {}, hosts: Recor
 const initialize = `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } })}\n`;
 const hubMachine: MachineFile = { schema: 1, role: "linux", name: "hub-1" };
 const nodeMachine: MachineFile = { schema: 1, role: "devbox", coder: true, name: "node-2" };
+const macMachine: MachineFile = { schema: 1, role: "mac", name: "laptop-3" };
 
 describe("on the hub", () => {
   test("apply issues the hub's own key, writes the client file from it, and the bridge reaches the gateway with it", async () => {
@@ -247,7 +248,7 @@ describe("on the hub", () => {
   });
 });
 
-describe("on a devbox", () => {
+describe("on a node", () => {
   test("apply adopts the key that today's client file holds into the store, at loopback or at the hub's old HTTPS address, and the bridge uses it", async () => {
     for (const baseUrl of ["http://127.0.0.1:3317/mcphub", "https://hub.internal.example.com:60001/mcphub"]) {
       const { home, fleet } = machine(nodeMachine);
@@ -263,15 +264,18 @@ describe("on a devbox", () => {
     }
   });
 
-  test("apply pulls this machine's key from the hub over ssh, the client file follows the store, and the bridge uses the key", async () => {
+  test.each([
+    ["a devbox of the profile", nodeMachine, "linux"],
+    ["a Mac that no devbox list names", macMachine, "darwin"],
+  ] as const)("on %s, apply pulls this machine's key from the hub over ssh, the client file follows the store, and the bridge uses the key", async (_, saved, platform) => {
     const hub = machine(hubMachine);
     writeMcpHubSettings(hub.home);
     const { state, bridged } = gatewayServer({ home: hub.home });
     expect((await hub.fleet(["apply"])).code).toBe(0);
-    const { home, fleet } = machine(nodeMachine, {}, { "hub-1": hub.host });
+    const { home, fleet } = machine(saved, {}, { "hub-1": hub.host }, platform);
     const applied = await fleet(["apply"]);
     expect(applied.output).not.toContain("Could not pull");
-    expect(state.calls.filter((call) => call.path === "auth/keys").map((call) => call.body)).toEqual([expect.objectContaining({ name: "Fleet hub-1" }), expect.objectContaining({ name: "Fleet node-2" })]);
+    expect(state.calls.filter((call) => call.path === "auth/keys").map((call) => call.body)).toEqual([expect.objectContaining({ name: "Fleet hub-1" }), expect.objectContaining({ name: `Fleet ${saved.name}` })]);
     expect(readFileSync(storeFile(home), "utf8")).toBe(issued);
     expect(JSON.parse(readFileSync(clientFile(home), "utf8"))).toEqual({ baseUrl: "http://127.0.0.1:3317/mcphub", token: issued });
     expect(statSync(clientFile(home)).mode & 0o777).toBe(0o600);

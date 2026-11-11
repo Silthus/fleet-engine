@@ -5,6 +5,7 @@ import type { MachineRole, PackJob, PackManifest, Plan } from "../pack/types.ts"
 import type { Machine } from "./commands.ts";
 import { overSsh } from "./devbox.ts";
 import type { Step } from "./runner.ts";
+import { duration } from "../commands/triage-record.ts";
 import type { Terminal } from "./terminal.ts";
 
 export const firstPrompt = "Look around this repo and suggest three small improvements. When I pick one, make it on a branch and open a draft pull request for me to review.";
@@ -114,6 +115,8 @@ export type DoneSummary = {
   devboxes: string[];
   profileRepo: string;
   runsByItself: string[];
+  /** Seconds from the start of setup until the user could start a first thread, when the timings reached it. */
+  usableSeconds?: number;
 };
 
 const machineNames: Record<MachineRole, string> = { mac: "This Mac", linux: "This machine", devbox: "This devbox", hub: "This hub" };
@@ -130,6 +133,8 @@ export function doneScreen(summary: DoneSummary): string[] {
     row("Profile", `${summary.profileRepo}, private. Change it with fleet packs and fleet set.`),
     row("Runs by itself", summary.runsByItself.length ? summary.runsByItself[0]! : "nothing yet"),
     ...summary.runsByItself.slice(1).map((text) => row("", text)),
+    ...(summary.usableSeconds === undefined ? [] : [row("Ready after", duration(summary.usableSeconds))]),
+    row("Report", "fleet triage sends a report of this setup to the Fleet maintainer."),
     "",
     "Paste this into a new thread in T3 Code to start:",
     "",

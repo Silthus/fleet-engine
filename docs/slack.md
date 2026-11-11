@@ -2,14 +2,34 @@
 
 The Slack pack starts a T3 thread from Slack in three ways:
 
-- your own message with the emoji `:t3code:`, which then is the task;
+- your own message with your trigger emoji, which then is the task;
 - a mention of your Slack app, such as `@T3Code - Nora Example`, which also is
   the task;
-- your own `:t3code:` reaction to any message, which asks the thread to find
-  the cause of the problem in that message and propose the fix.
+- your own reaction with your trigger emoji to any message, which asks the
+  thread to find the cause of the problem in that message and propose the fix.
 
-Only your own Slack member ID, the setting `slack.userId`, counts. A message or
-reaction from anyone else starts nothing.
+The trigger emoji is `:t3code:` by default. Only your own Slack member ID, the
+setting `slack.userId`, counts. A message or reaction from anyone else starts
+nothing.
+
+## Choose the trigger emoji
+
+The setting `slack.emoji` names the trigger emoji. Its default is `t3code`, a
+custom emoji that your workspace must have. To use another emoji, such as
+`:eye:`, run:
+
+```sh
+fleet set slack.emoji=eye
+```
+
+Give the emoji's name, with or without the colons: `eye` and `:eye:` are the
+same. Names such as `+1` and `thumbsup` work. A reaction with a skin tone, such
+as `:thumbsup::skin-tone-2:`, counts as `thumbsup`. A value with a space or a
+colon inside it is not an emoji name: the trigger does not start, and its log
+and `fleet slack-trigger check` say why.
+
+`fleet set` applies the change, and the running trigger starts again with the
+new emoji. The hub takes the change at its next `fleet update`.
 
 ## How it works
 

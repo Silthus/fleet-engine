@@ -118,6 +118,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
     }
   }
   if (forwardsToHub(profile, machine, os)) plan.reachesHub = true;
+  if (plan.reachesHub || macOnHub(profile, machine, os)) plan.pullsFromHub = true;
   if (plan.reachesHub && plan.catalog.length) plan.jobs.push(hubForward(profile.hub!, plan.catalog));
   for (const entry of profile.overrides?.config ?? []) {
     if (!fits("profile", entry, `config ${entry.provider}:${entry.key}`)) continue;
@@ -165,6 +166,11 @@ function forwardsToHub(profile: Profile, machine: MachineFile, os: Os) {
 }
 
 const boxName = /^box-/;
+
+/** A Mac keeps its own tunnel to the hub, so it gets no forward, but it pulls its credentials from the hub like any node. */
+function macOnHub(profile: Profile, machine: MachineFile, os: Os) {
+  return os === "darwin" && profile.hub !== undefined && machine.name !== undefined && machine.name !== profile.hub;
+}
 
 /** Workflow and job ids are global: the profile and the Jobs adapter key on them alone. */
 function checkUniqueIds(order: Candidate[]) {

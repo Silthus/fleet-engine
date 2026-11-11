@@ -1,4 +1,3 @@
-import { triggerEmoji } from "./trigger.ts";
 
 export type Tokens = { appToken: string; userToken: string };
 export type SlackApi = (method: string, args: Record<string, string | undefined>) => Promise<Record<string, any>>;
@@ -71,7 +70,7 @@ export async function serve({ appToken, onEvent, log, base = slackApiBase, sleep
 export function manifest(name: string) {
   const app = `T3Code - ${name}`.slice(0, 35);
   return {
-    display_information: { name: app, description: `Starts a T3 Code thread on ${name}'s machines from :${triggerEmoji}: in Slack.` },
+    display_information: { name: app, description: `Starts a T3 Code thread on ${name}'s machines from its trigger emoji in Slack.` },
     features: { bot_user: { display_name: app, always_online: true } },
     oauth_config: {
       scopes: {
