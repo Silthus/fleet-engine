@@ -11,6 +11,7 @@ import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { devboxQuestion, devboxSteps, hubSteps, notTakenByHub, profileForBox, type DevboxContext } from "./devbox.ts";
 import { doneScreen, finalCheck, repoName, runsByItself } from "./done.ts";
+import { readTimings, usableSeconds } from "../commands/triage-record.ts";
 import { profileStep } from "./profile.ts";
 import { runSteps, type Step } from "./runner.ts";
 import { chatgptSignIn, claudeSignIn, githubSignIn, memberSources } from "./signins.ts";
@@ -62,9 +63,9 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
   try {
     flags = parseSetupFlags(args);
-    const picked = picksFrom(flags, catalog);
-    const fromFlags = settingsFrom(flags, catalog);
     const saved = progress.draft;
+    const picked = picksFrom(flags, catalog, saved);
+    const fromFlags = settingsFrom(flags, catalog);
     const reopened = [
       ...(hasPicks(flags) && JSON.stringify(picked) !== JSON.stringify({ packs: saved.packs, workflows: saved.workflows ?? {} }) ? ["packs"] : []),
       ...(flags.plan && flags.plan !== saved.plan ? ["plans"] : []),
@@ -187,6 +188,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       },
     });
     if (result.unanswered.length) return printNeeds(terminal, steps(), result.unanswered), 2;
+    await timings.usable(clock.now());
     const { plan } = planFor(context, machine);
     const summary = {
       role: machine.role,
@@ -198,10 +200,9 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
         catalog.packs.map((pack) => pack.manifest),
         (machine.devboxes ?? []).map((host) => ({ host, plan: planFor(context, { ...machine, role: "devbox" }).plan })),
       ),
+      usableSeconds: usableSeconds(readTimings(options.home)),
     };
-    const usable = await timings.usable(clock.now());
     for (const line of doneScreen(summary)) terminal.print(line);
-    if (usable) terminal.print(usable);
     return 0;
   } catch (error) {
     if (error instanceof FlagError) {

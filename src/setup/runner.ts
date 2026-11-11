@@ -1,5 +1,6 @@
 import { Stopped, type Terminal } from "./terminal.ts";
-import { duration, type StepRecord } from "./timings.ts";
+import { duration } from "../commands/triage-record.ts";
+import type { StepRecord } from "./timings.ts";
 
 export type StepKind = "auto" | "question" | "human";
 

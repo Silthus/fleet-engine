@@ -89,23 +89,24 @@ export function choosablePacks(catalog: Catalog) {
     .sort((left, right) => rank(left.name) - rank(right.name));
 }
 
-/** Turns a preset plus --add, --remove and --workflows into packs and workflow overrides, and checks every name. */
-export function picksFrom(flags: SetupFlags, catalog: Catalog): Required<Pick<Draft, "packs" | "workflows">> {
+/** Turns --add, --remove and --workflows into packs and workflow overrides, on top of the saved picks, or of a preset on the first run or with --preset. Checks every name. */
+export function picksFrom(flags: SetupFlags, catalog: Catalog, saved: Draft = {}): Required<Pick<Draft, "packs" | "workflows">> {
   const presetId = flags.preset ?? defaultPreset;
   const preset = catalog.presets.find((item) => item.id === presetId);
   if (!preset) throw new FlagError(`--preset ${presetId}: choose ${catalog.presets.map((item) => item.id).join(", ")}`);
+  const start = saved.packs && flags.preset === undefined ? { packs: saved.packs, workflows: saved.workflows ?? {} } : { packs: presetPacks(preset, catalog), workflows: preset.workflows };
   const names = new Set([...choosablePacks(catalog).map((manifest) => manifest.name), ...teamSources.map((team) => team.source.name)]);
   for (const name of [...flags.add, ...flags.remove]) {
     if (name === "base") throw new FlagError("the base pack is always on");
     if (!names.has(name)) throw new FlagError(`no pack named ${name}. Packs: ${[...names].join(", ")}`);
   }
-  const packs = [...new Set([...presetPacks(preset, catalog), ...flags.add])].filter((name) => !flags.remove.includes(name));
+  const packs = [...new Set([...start.packs, ...flags.add])].filter((name) => !flags.remove.includes(name));
   const [unmet] = unmetNeeds(packs, catalog);
   if (unmet) throw new FlagError(`${title(unmet.pack, catalog.packs)} needs ${unmet.needs.map((name) => title(name, catalog.packs)).join(", ")}. Add ${unmet.needs.join(", ")}, or remove ${unmet.pack}.`);
   const manifests = catalog.packs.map((pack) => pack.manifest);
   const known = workflowDefaults(manifests);
   for (const id of Object.keys(flags.workflows)) if (!Object.hasOwn(known, id) && !laterWorkflow(catalog)) throw new FlagError(`--workflows: no workflow named ${id}`);
-  return { packs, workflows: workflowOverrides({ ...preset.workflows, ...flags.workflows }, manifests) };
+  return { packs, workflows: workflowOverrides({ ...start.workflows, ...flags.workflows }, manifests) };
 }
 
 /** Picked packs whose required packs are not picked. */
@@ -133,7 +134,7 @@ export function settingsFrom(flags: SetupFlags, catalog: Pick<Catalog, "packs"> 
 async function askPacks(context: QuestionContext): Promise<StepOutcome> {
   const { terminal, flags, catalog, draft } = context;
   const last = draft.packs && !hasPicks(flags) ? { packs: draft.packs, workflows: draft.workflows ?? {} } : undefined;
-  const picked = last ?? picksFrom(flags, catalog);
+  const picked = last ?? picksFrom(flags, catalog, draft);
   const show = (picks: typeof picked) => terminal.print(`  ✓ ${packList(picks.packs, catalog)}`);
   if (flags.nonInteractive) return context.answer(picked).then(() => show(picked));
   terminal.print("? Which packs do you want?");

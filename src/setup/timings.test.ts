@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { runSteps, type Step } from "./runner.ts";
@@ -36,7 +36,7 @@ describe("setup timings", () => {
     ]);
     expect(saved.steps[1]).toMatchObject({ title: "Sign in to GitHub", kind: "human", outcome: "done", start: "2026-11-11T10:00:00.000Z", end: "2026-11-11T10:00:06.000Z", seconds: 6 });
     expect(saved.blockedSteps).toBe(3);
-    expect(result.output).toContain("  Usable 6 s after the start. 3 steps needed you.");
+    expect(result.output).toContain("  Ready after     6s\n");
   });
 
   test("starts the clock when get.sh started, and lists its phases first", async () => {
@@ -56,7 +56,7 @@ describe("setup timings", () => {
       ["install:packages", 5, false],
     ]);
     expect(saved.usableSeconds).toBe(200);
-    expect(result.output).toContain("  Usable 3 min 20 s after the start. 1 step needed you.");
+    expect(result.output).toContain("  Ready after     3m 20s\n");
   });
 
   test("ignores an install log from an earlier install", async () => {
@@ -83,7 +83,7 @@ describe("setup timings", () => {
     expect(saved.started).toBe("2026-11-11T10:00:00.000Z");
     expect(saved.usableSeconds).toBe(90);
     expect(saved.blockedSteps).toBe(1);
-    expect(second.output).toContain("  Usable 1 min 30 s after the start. 1 step needed you.");
+    expect(second.output).toContain("  Ready after     1m 30s\n");
   });
 
   test("records a step that failed, with its error, and leaves the machine not usable", async () => {
@@ -95,14 +95,19 @@ describe("setup timings", () => {
     expect(saved.steps.at(-1)).toMatchObject({ id: "check", outcome: "failed", error: expect.stringContaining("fleet doctor found something to fix") });
   });
 
-  test("a finished setup run again starts a new record and prints nothing when no step ran", async () => {
+  test("keeps the timings readable only by the person", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home, {}, { startedAt: start }))).code).toBe(0);
+    expect(statSync(timingsPath(home)).mode & 0o777).toBe(0o600);
+  });
+
+  test("running a finished setup again leaves its record as it was", async () => {
     const home = temp.make("home-");
     const args = ["--non-interactive", "--preset", "starter", "--plan", "claude"];
     expect((await fleetSetup(home, args, [], fakeMachine(home, {}, { startedAt: start }))).code).toBe(0);
-    const again = await fleetSetup(home, args, [], fakeMachine(home, {}, { startedAt: start + 3_600_000 }));
-    expect(again.code).toBe(0);
-    expect(again.output).not.toContain("Usable");
-    expect(timings(home).started).toBe("2026-11-11T10:00:00.000Z");
+    const first = readFileSync(timingsPath(home), "utf8");
+    expect((await fleetSetup(home, args, [], fakeMachine(home, {}, { startedAt: start + 3_600_000 }))).code).toBe(0);
+    expect(readFileSync(timingsPath(home), "utf8")).toBe(first);
   });
 });
 
@@ -132,8 +137,8 @@ describe("live progress", () => {
       every: (ms, tick) => (expect(ms).toBe(15_000), ticks.push(tick), () => ticks.splice(0)),
     });
     expect(result.finished).toBe(true);
-    expect(io.output()).toContain("  … Set up this Mac: still running, 15 s so far");
-    expect(io.output()).toContain("  … Set up this Mac: still running, 1 min 15 s so far");
+    expect(io.output()).toContain("  … Set up this Mac: still running, 15s so far");
+    expect(io.output()).toContain("  … Set up this Mac: still running, 1m 15s so far");
     expect(ticks).toEqual([]);
   });
 });

@@ -1,9 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { timingsPath } from "../commands/triage-record.ts";
 import type { StepKind } from "./runner.ts";
 
-export const timingsPath = (home: string) => join(home, ".local/state/fleet/logs/setup-timings.json");
+export { timingsPath };
 /** get.sh writes this: a line "start <epoch s>", then one line "<phase> <epoch s when it ended> [needed-you]" per phase. */
 export const installLogPath = (home: string) => join(home, ".local/state/fleet/logs/install-timings");
 
@@ -43,10 +43,11 @@ const installTitles: Record<string, string> = {
 
 export type StepRecord = Pick<StepTiming, "id" | "title" | "kind" | "blocked" | "outcome" | "error"> & { start: number; end: number };
 
+/** A timings file that cannot be written never stops setup. */
 export type TimingsLog = {
   record(step: StepRecord): Promise<void>;
-  /** Marks the machine usable and returns the line to print, or nothing when no step ran in this record. */
-  usable(at: number): Promise<string | undefined>;
+  /** Marks the machine usable, when a step ran in this record. */
+  usable(at: number): Promise<void>;
 };
 
 /** Continues the record of a setup that is not usable yet, or starts a new one at the start of get.sh, or now. */
@@ -56,9 +57,12 @@ export function openTimings(home: string, now: number): TimingsLog {
   let timings: Timings = earlier && earlier.usable === null ? earlier : fresh(home, now);
   let wrote = timings === earlier;
   const save = async () => {
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify(timings, null, 2)}\n`);
-    wrote = true;
+    try {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      writeFileSync(path, `${JSON.stringify(timings, null, 2)}\n`, { mode: 0o600 });
+      chmodSync(path, 0o600);
+      wrote = true;
+    } catch {}
   };
   return {
     async record(step) {
@@ -67,11 +71,9 @@ export function openTimings(home: string, now: number): TimingsLog {
       await save();
     },
     async usable(at) {
-      if (!wrote) return undefined;
-      const total = seconds(at - Date.parse(timings.started));
-      timings = { ...timings, usable: iso(at), usableSeconds: total };
+      if (!wrote) return;
+      timings = { ...timings, usable: iso(at), usableSeconds: seconds(at - Date.parse(timings.started)) };
       await save();
-      return `  Usable ${duration(total)} after the start. ${timings.blockedSteps} ${timings.blockedSteps === 1 ? "step" : "steps"} needed you.`;
     },
   };
 }
@@ -116,10 +118,3 @@ function read(path: string): Timings | undefined {
 const iso = (ms: number) => new Date(ms).toISOString();
 const seconds = (ms: number) => Math.round(ms / 1000);
 
-/** 75 → "1 min 15 s". */
-export function duration(total: number) {
-  const minutes = Math.floor(total / 60);
-  const rest = total % 60;
-  if (!minutes) return `${rest} s`;
-  return rest ? `${minutes} min ${rest} s` : `${minutes} min`;
-}

@@ -26,6 +26,12 @@ export function scripted(replies: string[]) {
   return { terminal, prompts, output: () => lines.join("\n") };
 }
 
+export type ClaudeSignedIn = { authMethod: string; reply: ExecResult };
+
+const claudeUnauthorized: ExecResult = { code: 1, output: "Failed to authenticate. API Error: 401 OAuth access token is invalid", stdout: "" };
+
+export const deadEnvironmentToken: ClaudeSignedIn = { authMethod: "oauth_token", reply: claudeUnauthorized };
+
 const scopes = "  - Token scopes: 'admin:public_key', 'admin:ssh_signing_key', 'read:org', 'repo'";
 
 /** The bare repo that stands in for github.com/<repo> under a test home. */
@@ -47,6 +53,10 @@ type SignInName = "github" | "claude" | "chatgpt" | "coder" | "box:github" | "bo
 
 /** What coder whoami prints when signed in, as the Coder CLI writes it. */
 export const coderWhoami = "Coder is running at https://coder.example.com, You're authenticated as nora !\n";
+const coderUserId = "5b6f2a3e-8f4c-4d1a-9c7e-2f1b0a9d8e71";
+const otherCoderUserId = "c0a8e4d2-1b3f-4e5a-8d6c-7f9e0a1b2c3d";
+/** What coder whoami -o json prints when signed in, as the Coder CLI writes it. */
+const coderWhoamiJson = (url: string, userId: string) => `${JSON.stringify([{ url: `${url}/`, username: "nora", user_id: userId, organization_ids: [], roles: {} }], null, 2)}\n`;
 /** The one token coder tokens create prints, alone on its line. */
 export const coderToken = ["fleet", "test", "coder", "token"].join("-");
 
@@ -63,7 +73,8 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * A machine signed in to GitHub as nora, whose sign-ins pass after a number
  * of 2 s polls: 0 means already signed in, and a sign-in that is never
  * started never passes. Its gh makes repos as bare repos under the home,
- * except in the org named by createFails, and
+ * except in the org named by createFails (createFailsAfterMaking makes the
+ * repo, then reports a 502), and
  * git runs for real with github.com rewritten to them. Its ssh reaches a fake
  * devbox whose sign-ins work the same way, and which, like real ssh, warns
  * on stderr that it added the host key the first time it reaches a host
@@ -74,7 +85,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * until then it refuses a node's credential when the node applies its
  * profile, and its fleet peers link refuses the node.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; startedAt?: number } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -93,6 +104,11 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const passes = (name: SignInName) => left[name] === 0;
   const result = (ok: boolean, output = ""): ExecResult => ({ code: ok ? 0 : 1, output, stdout: output });
   const reached = new Set<string>();
+  const claudeStatus = (name: "claude" | "box:claude") => {
+    const signedIn = options.claude?.[name];
+    return signedIn ? result(true, JSON.stringify({ loggedIn: true, authMethod: signedIn.authMethod })) : result(passes(name), JSON.stringify({ loggedIn: passes(name) }));
+  };
+  const claudeReply = (name: "claude" | "box:claude") => options.claude?.[name]?.reply ?? (passes(name) ? result(true, "ok") : claudeUnauthorized);
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
   const t3 = (line: string, token: string) => {
     if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
@@ -128,19 +144,22 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     return { code, output: `${stdout}${stderr}`, stdout };
   };
   let boxCoderAt = options.boxCoderAt ?? "https://coder.example.com";
+  let boxCoderUser = options.boxCoderAt && !options.boxCoderSameUser ? otherCoderUserId : coderUserId;
   const box = async (line: string, input: string | undefined, host: string): Promise<ExecResult> => {
     const hub = await onTheHub(line, host);
     if (hub) return hub;
     if (line === "coder whoami") return passes("box:coder") ? result(true, coderWhoami.replace("https://coder.example.com", boxCoderAt)) : result(false, "You are not logged in");
+    if (line === "coder whoami -o json") return passes("box:coder") ? result(true, coderWhoamiJson(boxCoderAt, boxCoderUser)) : result(false, "You are not logged in");
     if (line.includes('CODER_SESSION_TOKEN="$token" coder login ') && line.startsWith("sh -c ")) {
       if (!line.includes("coder login --use-token-as-session https://coder.example.com")) return result(false, "CODER_SESSION_TOKEN is set. Unset it, or pass --use-token-as-session to save it as your session.");
-      if (input === `${coderToken}\n`) (left["box:coder"] = 0), (boxCoderAt = "https://coder.example.com");
+      if (input === `${coderToken}\n`) (left["box:coder"] = 0), (boxCoderAt = "https://coder.example.com"), (boxCoderUser = coderUserId);
       return result(passes("box:coder"), passes("box:coder") ? "Welcome to Coder, nora! You're authenticated." : "invalid token");
     }
     if (line === "coder config-ssh --yes") return passes("box:coder") ? (coderSsh.push(boxCoderAt), result(true, "Updated \"~/.ssh/config\"")) : result(false, "You are not logged in");
     if (line.startsWith("gh auth status")) return ghStatus("box:github", scopes);
     if (line === "gh auth setup-git") return result(true);
-    if (line === "claude auth status") return result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
+    if (line === "claude auth status") return claudeStatus("box:claude");
+    if (line === "claude -p ok") return claudeReply("box:claude");
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
     if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
     if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
@@ -162,20 +181,23 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       if (line.startsWith("gh auth status")) return ghStatus("github", started.has("github") ? scopes : (options.scopes ?? scopes));
       if (line === "gh auth setup-git") return result(true);
       if (line.startsWith("gh api user/memberships/orgs/")) return options.org ? result(true, "active\n") : result(false, "Not Found");
-      if (line === "claude auth status") return result(passes("claude"), JSON.stringify({ loggedIn: passes("claude") }));
+      if (line === "claude auth status") return claudeStatus("claude");
+      if (line === "claude -p ok") return claudeReply("claude");
       if (line.startsWith("codex exec")) return result(passes("chatgpt"), "ok");
       if (line === "coder whoami") return passes("coder") ? result(true, coderWhoami) : result(false, "You are not logged in");
+      if (line === "coder whoami -o json") return passes("coder") ? result(true, coderWhoamiJson("https://coder.example.com", coderUserId)) : result(false, "You are not logged in");
       if (line === "coder tokens create") return passes("coder") ? result(true, `${coderToken}\n`) : result(false, "You are not logged in");
       if (line === "hogli devbox:status") return result(devbox);
       if (line === "hogli devbox:start") return (devbox = true), result(true, "up");
       if (line === "gh api user --jq .login") return result(true, "nora\n");
-      if (line.startsWith("gh repo view ")) return result(existsSync(githubRepo(home, command[3]!)), "");
+      if (line.startsWith("gh repo view ")) return existsSync(githubRepo(home, command[3]!)) ? result(true, line.endsWith("--json visibility --jq .visibility") ? `${options.publicRepos?.includes(command[3]!) ? "PUBLIC" : "PRIVATE"}\n` : "") : result(false, "Could not resolve to a Repository");
       if (line.startsWith("gh repo create ")) {
         const owner = command[3]!.split("/")[0]!;
         if (owner === options.createFails) return result(false, `GraphQL: you cannot create repos in ${owner}`);
         const bare = githubRepo(home, command[3]!);
         mkdirSync(bare, { recursive: true });
-        return realGit(home, ["init", "-q", "--bare", "-b", "main", bare]);
+        const made = await realGit(home, ["init", "-q", "--bare", "-b", "main", bare]);
+        return owner === options.createFailsAfterMaking ? result(false, "HTTP 502: Bad Gateway") : made;
       }
       if (command[0] === "git") return realGit(home, command.slice(1), run.cwd);
       if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: Boolean(options.connectHere), linked: Boolean(options.connectHere), relayUrl: options.connectHere ? "https://here.relay.example/" : null }));
