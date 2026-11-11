@@ -11,7 +11,8 @@ const noteLimit = 3000;
 export async function recallNotes(input: HookInput, home: string): Promise<string | undefined> {
   const session = input.session_id;
   if (!session) return undefined;
-  const shown = [testsRuleFor(input, home, session), await triggeredNotes(input, home, session)].filter(Boolean);
+  const notes = await triggeredNotes(input, home, session).catch(() => undefined);
+  const shown = [testsRuleFor(input, home, session), notes].filter(Boolean);
   return shown.length ? shown.join("\n\n") : undefined;
 }
 

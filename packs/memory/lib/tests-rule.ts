@@ -7,7 +7,7 @@ const testsRule = "guides/coding-standards.md#tests";
 const guideFile = ".agents/guides/coding-standards.md";
 const ruleLimit = 4000;
 
-const isTestFile = (path: string) => /(^|\/)(tests|__tests__)\/|(^|\/)test_[^/]*\.py$|_test\.(py|go)$|\.(test|spec)\.[cm]?[jt]sx?$/.test(path);
+const isTestFile = (path: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]*\.py$|_test\.(py|go)$|\.(test|spec)\.[cm]?[jt]sx?$/.test(path);
 
 function editedFiles(input: HookInput): string[] {
   const filePath = (input.tool_input as { file_path?: unknown } | undefined)?.file_path;
@@ -22,8 +22,20 @@ function testsSection(home: string): string | undefined {
   } catch {
     return undefined;
   }
-  const section = /^## Tests[ \t]*\r?\n[\s\S]*?(?=^## |(?![\s\S]))/m.exec(guide)?.[0].trim();
-  return section && section !== "## Tests" ? section : undefined;
+  const section: string[] = [];
+  let fence: string | undefined;
+  for (const line of guide.split(/\r?\n/)) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (marker && (!fence || (marker[0] === fence[0] && marker.length >= fence.length))) fence = fence ? undefined : marker;
+    else if (!fence && /^ {0,3}#{1,2}([ \t]|$)/.test(line)) {
+      if (section.length) break;
+      if (/^ {0,3}##[ \t]+Tests[ \t#]*$/.test(line)) section.push(line.trim());
+      continue;
+    }
+    if (section.length) section.push(line);
+  }
+  const text = section.join("\n").trim();
+  return section.length && text !== section[0] ? text : undefined;
 }
 
 export function testsRuleFor(input: HookInput, home: string, session: string): string | undefined {

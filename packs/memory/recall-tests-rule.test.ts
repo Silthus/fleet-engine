@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isolateGit } from "../../src/testing/git.ts";
 import { type Provider, bash, fire, notes, recallHarness, shownLog } from "./recall-testing.ts";
@@ -81,6 +81,36 @@ describe("the Tests rule before a test edit", () => {
     expect(await fire(home, provider, "PreToolUse", { session_id: "s1", cwd: home, ...call })).toEqual({ code: 0, stderr: "", context: "" });
     writeFileSync(guidePath(home), guide);
     expect((await fire(home, provider, "PreToolUse", { session_id: "s1", cwd: home, ...call })).context).toContain(testsRule);
+  });
+
+  test("shows the rule for a singular test folder", async () => {
+    const home = await machineWithGuide();
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...write("test/helpers.ts") })).context).toContain(testsRule);
+  });
+
+  test("skips a Tests heading inside a code fence, and ends the section at the next level-one or level-two heading", async () => {
+    const fenced = "# Coding standards\n\n## Examples\n\n```md\n## Tests\n\n- Fenced example.\n```\n\n## Tests\n\n- Drive the real entry point.\n\n```md\n## Not a heading\n```\n\n#\tAppendix\n\n- Leaked.\n";
+    const home = await machineWithGuide(fenced);
+    const shown = (await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...write("src/app.test.ts") })).context;
+    expect(shown).toEndWith(":\n\n## Tests\n\n- Drive the real entry point.\n\n```md\n## Not a heading\n```");
+    writeFileSync(guidePath(home), "## Tests\n\n- Drive the real entry point.\n\n##\tTech stack\n\n- Bun.\n");
+    expect((await fire(home, "claude", "PreToolUse", { session_id: "s2", cwd: home, ...write("src/app.test.ts") })).context).toEndWith(":\n\n## Tests\n\n- Drive the real entry point.");
+  });
+
+  test("still shows the rule when the memory folder cannot be read, and only once", async () => {
+    const home = await machineWithGuide();
+    const locked = join(home, ".agents/memory/locked");
+    mkdirSync(locked);
+    chmodSync(locked, 0o000);
+    try {
+      const call = { session_id: "s1", cwd: home, ...write("src/app.test.ts", "// fleet proof 12\n") };
+      const first = await fire(home, "claude", "PreToolUse", call);
+      expect(first.code).toBe(0);
+      expect(first.context).toContain(testsRule);
+      expect((await fire(home, "claude", "PreToolUse", call)).context).toBe("");
+    } finally {
+      chmodSync(locked, 0o755);
+    }
   });
 
   test("shows the Tests section of the guide the base pack ships", async () => {
