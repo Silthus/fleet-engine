@@ -247,7 +247,7 @@ async function runItem(args: string[], options: CliOptions) {
 
 /** Fills this machine's credential for each served service in the list: the hub asks the service when its pack's secret store holds none, and a node pulls its own from the hub at every apply. A failed issue's finding copies nothing the service threw, since its error may hold its key. */
 async function issueCredentials(entries: CatalogEntry[], node: string, plan: Plan, sources: FetchedSource[], options: CliOptions): Promise<Finding[]> {
-  if (plan.reachesHub) return pullCredentials(entries, node, plan.hub!, options);
+  if (plan.pullsFromHub) return pullCredentials(entries, node, plan.hub!, options);
   const findings: Finding[] = [];
   for (const entry of entries) {
     const loaded = loadedPack(sources, entry.pack);
@@ -311,8 +311,6 @@ async function credential(args: string[], options: CliOptions) {
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false });
   if (!plan.onHub) throw new Error(`fleet credential runs on the hub${plan.hub ? `, ${plan.hub}` : ""}.`);
   if (!plan.catalog?.some((entry) => entry.pack === pack && entry.id === id)) throw new Error(`the service catalog has no ${item}: its workflow or plan is off in your profile.`);
-  const profile = await loadProfile(plan.machine.profileDir!);
-  if (![profile.hub ?? plan.machine.name, ...(profile.devboxes ?? [])].includes(node)) throw new Error(`${node} is not a node of your profile. Name it in devboxes, or run fleet devbox add ${node}.`);
   const loaded = loadedPack(sources, pack)!;
   const issue = loaded.code!.credentials[id]!;
   const said = { ...options, print: options.fail ?? (() => {}) };

@@ -20,7 +20,7 @@ export type ProfileContext = {
   engineRoot: string;
   nonInteractive: boolean;
   draft: Draft;
-  packs: PackManifest[];
+  packs(): PackManifest[];
   /** Called once fleet.json holds every answer and is pushed: the draft is no longer needed. */
   saved(dir: string): Promise<void>;
 };
@@ -37,26 +37,43 @@ async function makeProfile(context: ProfileContext) {
     return result.output.trim();
   };
   const login = await gh("api", "user", "--jq", ".login");
-  const profileRepo = `${login}/${profileRepoName}`;
   const exists = async (repo: string) => (await machine.exec(["gh", "repo", "view", repo, "--json", "name"])).code === 0;
+  const create = (repo: string, description: string) => machine.exec(["gh", "repo", "create", repo, "--private", "--description", description]);
+  const personal = `${login}/${profileRepoName}`;
+  const org = profileOrg(context.packs(), draft.packs ?? []);
+  const team = org && `${org}/${profileRepoName}-${login}`;
   const dir = profilePath(home);
-  const profileExists = await exists(profileRepo);
-  if (profileExists) await checkout(machine, dir, profileRepo);
-  const saved = profileExists ? savedSettings(dir) : {};
+  const found = team && (await exists(team)) ? team : (await exists(personal)) ? personal : undefined;
+  let profileRepo = found ?? team ?? personal;
+  if (found) await checkout(machine, dir, found);
+  const saved = found ? savedSettings(dir) : {};
   const namedMemory = draft.settings?.["memory.repo"] ?? saved["memory.repo"];
   const memoryRepo = draft.packs?.includes("memory") ? (typeof namedMemory === "string" ? namedMemory : `${login}/${memoryRepoName}`) : undefined;
-  const missing = [...(profileExists ? [] : [profileRepo]), ...(memoryRepo && !(await exists(memoryRepo)) ? [memoryRepo] : [])];
-  await confirm(context, missing);
-  for (const repo of missing) {
-    await gh("repo", "create", repo, "--private", "--description", repo === profileRepo ? "My Fleet profile" : "My agents' shared memory");
-    terminal.print(`  ✓ Created the private repo ${repo}`);
+  const memoryMissing = memoryRepo !== undefined && !(await exists(memoryRepo));
+  await confirm(context, [...(found ? [] : [profileRepo]), ...(memoryMissing ? [memoryRepo] : [])], org && !found ? org : undefined);
+  if (!found) {
+    const made = await create(profileRepo, "My Fleet profile");
+    if (made.code !== 0 && profileRepo === team) {
+      terminal.print(`  · The ${org} org did not let you create ${team} (${lastLine(made.output).replace(/^GraphQL: /, "")}), so Fleet uses your own account.`);
+      profileRepo = personal;
+      await gh("repo", "create", personal, "--private", "--description", "My Fleet profile");
+    } else if (made.code !== 0) throw new Error(`gh repo create failed: ${lastLine(made.output)}`);
+    terminal.print(`  ✓ Created the private repo ${profileRepo}${profileRepo === team ? `. Members of the ${org} org can read it.` : ""}`);
+  } else terminal.print(`  ✓ Reusing your repo ${found}`);
+  if (memoryRepo && memoryMissing) {
+    await gh("repo", "create", memoryRepo, "--private", "--description", "My agents' shared memory");
+    terminal.print(`  ✓ Created the private repo ${memoryRepo}`);
+  } else if (memoryRepo) terminal.print(`  ✓ Reusing your repo ${memoryRepo}`);
+  if (team && found === personal) {
+    terminal.print(`  · Your team keeps profiles in the ${org} org, where its members can read them. To move yours there, run:`);
+    terminal.print(`      gh api -X POST repos/${personal}/transfer -f new_owner=${org} -f new_name=${profileRepoName}-${login}`);
+    terminal.print(`      git -C ${dir} remote set-url origin https://github.com/${team}.git`);
   }
-  for (const repo of [profileRepo, memoryRepo]) if (repo && !missing.includes(repo)) terminal.print(`  ✓ Reusing your repo ${repo}`);
 
-  if (!profileExists) await checkout(machine, dir, profileRepo);
+  if (!found) await checkout(machine, dir, profileRepo);
   await git(machine, dir, "config", "user.name", login);
   await git(machine, dir, "config", "user.email", `${login}@users.noreply.github.com`);
-  await startFiles(dir, context);
+  await startFiles(dir, context, profileRepo === team ? org : undefined);
   const started = await untracked(machine, dir, startFileNames);
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, settings: {}, workflows: {} }),
@@ -74,9 +91,15 @@ async function makeProfile(context: ProfileContext) {
   await context.saved(dir);
 }
 
-async function confirm({ terminal, nonInteractive }: ProfileContext, missing: string[]) {
+/** The GitHub org where the first picked pack that names one keeps its members' profiles. */
+function profileOrg(packs: PackManifest[], picked: string[]) {
+  return packs.find((pack) => pack.profileOrg && picked.includes(pack.name))?.profileOrg;
+}
+
+async function confirm({ terminal, nonInteractive }: ProfileContext, missing: string[], org: string | undefined) {
   if (!missing.length || nonInteractive) return;
-  terminal.print(`  Fleet creates ${missing.length === 1 ? "the private repo" : "the private repos"} ${missing.join(" and ")} in your GitHub account and pushes your answers there.`);
+  const where = org ? `in the ${org} GitHub org, where its members can read it,` : "in your GitHub account";
+  terminal.print(`  Fleet creates ${missing.length === 1 ? "the private repo" : "the private repos"} ${missing.join(" and ")} ${where} and pushes your answers there.`);
   for (;;) {
     const reply = (await terminal.ask("  Go ahead? (Y/n) ")).toLowerCase();
     if (reply === "" || reply === "y" || reply === "yes") return;
@@ -126,7 +149,7 @@ async function untracked(machine: Machine, dir: string, names: string[]) {
 }
 
 /** Writes the shim, "about me", and the guide when the profile lacks them. */
-async function startFiles(dir: string, context: ProfileContext) {
+async function startFiles(dir: string, context: ProfileContext, sharedWith: string | undefined) {
   const write = async (name: string, make: (path: string) => Promise<void>) => {
     const path = join(dir, name);
     if (existsSync(path)) return;
@@ -134,7 +157,7 @@ async function startFiles(dir: string, context: ProfileContext) {
   };
   await write("install.sh", (path) => copyFile(join(context.engineRoot, "templates/profile/install.sh"), path));
   await write("about-me.md", (path) => writeFile(path, "# About me\n\nWrite how you like to work here. Agents read it after your packs' rules.\n"));
-  await write("README.md", (path) => writeFile(path, profileGuide(context.packs)));
+  await write("README.md", (path) => writeFile(path, profileGuide(context.packs(), sharedWith)));
 }
 
 /** The engine ref this profile pins: the release tag the engine runs on, or main on the track channel. */
@@ -151,7 +174,7 @@ async function git(machine: Machine, dir: string, ...args: string[]) {
 
 const lastLine = (text: string) => text.trim().split("\n").at(-1) ?? "";
 
-export function profileGuide(packs: PackManifest[]) {
+export function profileGuide(packs: PackManifest[], sharedWith?: string) {
   const sections = packs
     .filter((pack) => pack.settings?.length)
     .map((pack) => {
@@ -163,6 +186,7 @@ export function profileGuide(packs: PackManifest[]) {
     "",
     "Fleet reads this repo on every machine of mine. Fleet's commands change it for me, so I rarely edit it by hand.",
     "",
+    ...(sharedWith ? [`Members of the ${sharedWith} org can read this repo, so keep secrets out of it.`, ""] : []),
     "- `fleet.json`: my packs, my AI plans, my settings, and the workflows I turned on or off.",
     "- `about-me.md`: how I like to work. Agents read it after my packs' rules.",
     "- `install.sh`: installs Fleet from this profile. A Coder devbox runs it as my dotfiles.",
