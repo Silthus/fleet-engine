@@ -66,7 +66,7 @@ describe("get.sh", () => {
     const box = sandbox("Linux");
     expect(getSh(box, ["--preset", "everyday"])).toMatchObject({ code: 1, output: expect.stringContaining("unknown option --preset. Put flags for fleet after --.") });
     const result = getSh(box, ["--ref", "v0.1.0", "--", "--preset", "nope"]);
-    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("fleet setup: --preset nope: choose starter, everyday, michael") });
+    expect(result).toMatchObject({ code: 2, output: expect.stringContaining("fleet setup: --preset nope: choose starter, everyday, everything") });
   });
 });
 

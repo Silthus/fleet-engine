@@ -1,8 +1,8 @@
 # Set up Fleet with the person
 
 You are an agent in T3 Code on the person's Mac. They pasted the prompt from
-the Fleet README. Set up Fleet with them, from nothing to a passing
-`fleet doctor` on this Mac.
+the Fleet README or the Fleet page. Set up Fleet with them, from nothing to a
+passing `fleet doctor` on this Mac.
 
 ## How you work
 
@@ -23,6 +23,28 @@ the Fleet README. Set up Fleet with them, from nothing to a passing
   runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
   that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,
   make it executable, and `open` it. Ask them to tell you when it ends.
+
+## Picks from the page
+
+The prompt can end with a list that starts with `My picks from the Fleet
+page:`. The person chose these on the Fleet page, so do not ask for them
+again. When a step uses a line, say the pick back in one sentence and go on.
+Ask everything else as the steps say. Without the list, ask every question.
+
+| Line | How to use it |
+| --- | --- |
+| `Where Fleet runs` | The answer to step 4. |
+| `Packs on the first setup` | The packs for step 6, picked one by one. `none` means no pack. Still ask the AI plan, and read each pack's setup note. |
+| `Workflows on the first setup` | Add the list to the setup command in step 7 as `--workflows`, without the spaces. A workflow that it does not name keeps its default. |
+| `Setting` | Add `--set <key>=<value>` to the setup command in step 7, once for each line. |
+| `Packs once the hub runs` | The answer to item 8 of step 9. `none` means no pack, so skip item 8. |
+| `Workflows once the hub runs` | Add the list to the `--workflows` of the command in item 8 of step 9. It names every workflow that runs, so each other workflow of these packs stays off. |
+
+The workflow lines are complete, and the person saw them on the page. Add no
+workflow flag from a setup note, and do not ask which workflows to turn on.
+When a command in this guide or a setup note names a workflow that a line
+names too, the line's value wins. A setup note still asks for the settings
+that a pack or a workflow needs.
 
 ## 1. Check the Mac
 
@@ -62,10 +84,11 @@ machine you add gets the same setup.
 
 ## 4. Ask where Fleet runs
 
-Ask "Mac only, or Mac plus a hub and a node?", with these options:
+Ask "Mac only, or Mac plus a hub and a node?", with these options, unless
+the picks from the page say where Fleet runs:
 
-- **Mac only.** A full setup: every pack's skills and rules, and the
-  workflows that run on a Mac, run on this Mac. Agents stop when the Mac
+- **Mac only.** A full setup: the skills and rules of every pack they pick,
+  and the workflows that run on a Mac, run on this Mac. Agents stop when the Mac
   sleeps. Workflows that need an always-on machine, such as the loops and
   the PR digest, wait until a node runs. A hub and a node can come later.
 - **Mac plus a hub and a node.** Two Linux devboxes in the cloud that stay
@@ -108,15 +131,16 @@ the person clicks **Install**. The step is done when
 
 ## 6. Ask what they want
 
-Ask in one call:
+Ask in one call. Skip the packs question when the picks from the page name
+the packs:
 
 - **Packs.** One option per preset in `~/.local/share/fleet/engine/presets.json`,
   with its `blurb`, and "One by one". For one by one, ask a multi-select
   question with the packs below whose row says "Always", plus those whose
   row fits their answer in step 4. A pack whose row says "Step 9" needs a
-  hub that runs, so step 9 offers it. Base is always on. The page
-  [A day with Fleet](https://silthus.github.io/fleet-engine/) shows each pack
-  during a workday.
+  hub that runs, so step 9 offers it. Base is always on.
+  [The Fleet page](https://silthus.github.io/fleet-engine/) shows what each
+  pack does.
 - **AI plan.** Claude, ChatGPT, or both: it decides the sign-ins and the
   model defaults. Recommend the agent they set up in T3 Code
   (`claude auth status` or `codex login status` passes).
@@ -132,9 +156,9 @@ notes of the packs they picked.
 | `communication` | Agents write in your voice, give short updates, and share plans and previews as links. | Always | None |
 | `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always | `packs/memory/SETUP.md` |
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Step 9 | `packs/recovery/SETUP.md` |
-| `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops. | Always | `packs/guards/SETUP.md` |
+| `guards` | Hooks stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops. | Always | `packs/guards/SETUP.md` |
 | `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | With Mac only, or in step 9 | `packs/slack/SETUP.md` |
-| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | Step 9 | `packs/hub/SETUP.md` |
+| `hub` | One always-on devbox manages the others. It keeps your devboxes linked and watches their disks. | Step 9 | `packs/hub/SETUP.md` |
 | `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | Step 9 | `packs/mcp-gateway/SETUP.md` |
 
 ## 7. Run setup with their answers
@@ -268,7 +292,8 @@ the steps below, follow the note.
    ```
 
 8. **Hub packs.** Ask with a multi-select question which of these to turn
-   on, recommending Hub. Read the setup note of each one they pick, now:
+   on, recommending Hub, unless the picks from the page name the packs for
+   once the hub runs. Read the setup note of each one they pick, now:
 
    - **Hub**: the hub links the machines and watches their disks.
      `packs/hub/SETUP.md`
@@ -281,7 +306,8 @@ the steps below, follow the note.
 
    Turn them on here on the Mac. Start from this command, add
    `--add <pack>` for each other pack they picked, and change or add the
-   flags their notes name:
+   flags their notes name. With picks from the page, leave out `--add hub`
+   when the line does not name `hub`:
 
    ```sh
    fleet packs --add hub --workflows mcp-gateway=off
