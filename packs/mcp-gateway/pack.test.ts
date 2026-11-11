@@ -99,7 +99,7 @@ describe("the plan", () => {
   });
 });
 
-function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}) {
+function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}, docker: "fake" | "on-path" = "fake") {
   const state = fakeMcpHub({ groups: [{ id: "g", name: "fleet", servers: ["tickets", "calendar"] }], ...fields });
   const api = mcphubFetch(state);
   const bridged: string[] = [];
@@ -114,6 +114,7 @@ function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}) {
     return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "mcphub", version: "1.1.0" } } }, { headers: { "mcp-session-id": "session-1" } });
   }) as typeof fetch);
   const spawned: string[][] = [];
+  if (docker === "on-path") return { state, bridged, spawned };
   const spawn = Bun.spawn;
   spyOn(Bun, "spawn").mockImplementation(((command: string[], options: never) => {
     if (command[0] !== "docker") return spawn(command, options);
@@ -195,6 +196,20 @@ describe("on the hub", () => {
     spyOn(console, "error").mockImplementation((line: string) => { errors.push(line); });
     expect(await fleet(["mcp-connect"], initialize)).toEqual({ code: 1, output: "" });
     expect(errors).toEqual(["mcp-gateway/mcp-gateway has no credential on this machine yet. Run fleet apply on the hub."]);
+  });
+
+  test("the docker commands of the install repair run with the home Fleet runs the pack in", async () => {
+    const { home, fleet } = machine(hubMachine);
+    writeMcpHubSettings(home);
+    gatewayServer({ home, healthy: false }, "on-path");
+    const bin = temp.make("bin-");
+    const seen = join(bin, "home-seen");
+    writeFileSync(join(bin, "docker"), `#!/bin/sh\nprintf %s "$HOME" > '${seen}'\nexit 1\n`, { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try { await fleet(["apply"]); }
+    finally { process.env.PATH = path; }
+    expect(readFileSync(seen, "utf8")).toBe(home);
   });
 
   test("a gateway installed at an HTTPS address fails the install check, and apply reinstalls it at loopback", async () => {
