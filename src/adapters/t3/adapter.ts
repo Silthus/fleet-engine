@@ -15,7 +15,7 @@ import { activeProjects, expandHome, realPath, t3Tasks } from "./tasks.ts";
 
 export { desktopTarget, recordTarget, settingsTarget } from "./settings.ts";
 
-export type T3Options = { run?: CommandRunner; accountHome?: () => string | undefined; server?: T3Server; user?: string };
+export type T3Options = { run?: CommandRunner; accountHome?: () => Promise<string | undefined>; server?: T3Server; user?: string };
 export type T3Adapter = Adapter & { tasks(): Promise<T3Tasks | undefined> };
 
 type Link = { environmentId: string; label: string; status: "reachable" | "unreachable" | "expired"; lastError: string | null };
@@ -33,7 +33,7 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
     async apply(plan, { home, dryRun, adopt }) {
       live = undefined;
       const result: AdapterResult = { actions: [], findings: [] };
-      const skipped = skipOtherHome("t3", "T3 Code", home, options);
+      const skipped = await skipOtherHome("t3", "T3 Code", home, options);
       if (skipped) return skipped;
       const reconcile = async () => {
         const settings = { adopt, dryRun, outage: sourceOutage(plan) };

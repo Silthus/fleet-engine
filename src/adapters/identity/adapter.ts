@@ -13,7 +13,7 @@ import { coderScript, signer, signerNames, signerSetting, sshKeyTarget, type Sig
 
 export { signerSetting } from "./signers.ts";
 
-export type IdentityOptions = { run?: CommandRunner; accountHome?: () => string | undefined; engineRoot?: string; hostname?: string };
+export type IdentityOptions = { run?: CommandRunner; accountHome?: () => Promise<string | undefined>; engineRoot?: string; hostname?: string };
 
 type Context = { home: string; dryRun: boolean; run: CommandRunner; result: AdapterResult; host: string; engineRoot: string };
 
@@ -28,7 +28,7 @@ export function identityAdapter(options: IdentityOptions = {}): Adapter {
     targets: () => [],
     async apply(plan, { home, dryRun }) {
       const result: AdapterResult = { actions: [], findings: [] };
-      const skipped = skipOtherHome("identity", "your git identity", home, options);
+      const skipped = await skipOtherHome("identity", "your git identity", home, options);
       if (skipped) return skipped;
       const name = String(plan.settings[signerSetting] ?? "ssh");
       if (!signerNames.includes(name as SignerName)) {

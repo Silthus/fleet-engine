@@ -12,16 +12,17 @@ export const repoIndexPath = (repo: string) => `projects/${repo}/INDEX.md`;
 
 const shownFile = (home: string, session: string) => join(stateDir(home), "shown", `${session.replace(/[^\w-]/g, "")}.jsonl`);
 
-function gitOutput(cwd: string, args: string[]) {
-  const result = Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "ignore" });
-  return result.exitCode === 0 ? result.stdout.toString().trim() : "";
+async function gitOutput(cwd: string, args: string[]) {
+  const child = Bun.spawn(["git", "-C", cwd, ...args], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+  const [text, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  return code === 0 ? text.trim() : "";
 }
 
-export function repoOf(cwd: string): string | undefined {
+export async function repoOf(cwd: string): Promise<string | undefined> {
   if (!existsSync(cwd)) return undefined;
-  const origin = gitOutput(cwd, ["remote", "get-url", "origin"]);
+  const origin = await gitOutput(cwd, ["remote", "get-url", "origin"]);
   if (origin) return origin.replace(/\/+$/, "").replace(/\.git$/, "").split(/[/:]/).pop() || undefined;
-  const common = gitOutput(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const common = await gitOutput(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
   return common ? basename(dirname(common)) : undefined;
 }
 
@@ -83,11 +84,11 @@ export function clip(text: string, limit: number) {
   return text.length <= limit ? text : `${text.slice(0, limit)}\n[… open the file for the rest]`;
 }
 
-export async function answerHook(event: string, answer: (input: HookInput, provider: Provider) => string | undefined) {
+export async function answerHook(event: string, answer: (input: HookInput, provider: Provider) => Promise<string | undefined>) {
   try {
     const provider = process.argv[2];
     if (provider !== "claude" && provider !== "codex") return;
-    const context = answer(JSON.parse(await Bun.stdin.text()) as HookInput, provider);
+    const context = await answer(JSON.parse(await Bun.stdin.text()) as HookInput, provider);
     if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } })}\n`);
   } catch {
     return;
