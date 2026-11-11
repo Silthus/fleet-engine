@@ -3,6 +3,7 @@ import type { ModelRow } from "../../pack/types.ts";
 import type { StartedThread, Threads } from "../../sdk/index.ts";
 import { exhaustedRefusal } from "./availability.ts";
 import { launchScratchThread } from "./launch.ts";
+import { findThread, sendMessage } from "./threads.ts";
 import { withT3Session, type T3HttpClient, type T3SessionOptions } from "./session.ts";
 
 const startScopes = ["orchestration:read", "orchestration:operate", "access:read"];
@@ -26,6 +27,13 @@ export function t3Threads(models: ModelRow[], session: T3SessionOptions = {}): T
         if (started) return started;
         throw error;
       }
+    },
+    async send({ id, text }) {
+      await withT3Session(async (client) => {
+        const thread = await findThread(client, id);
+        if (!thread) throw new Error(`T3 has no thread ${id} on this machine.`);
+        await sendMessage(client, thread, text);
+      }, { ...session, scopes: startScopes });
     },
   };
 }

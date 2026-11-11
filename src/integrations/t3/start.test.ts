@@ -102,3 +102,25 @@ test("a report over five minutes old, or one that says unknown, refuses nothing"
   writeReport(stub.home, { claude: "unknown", codex: "unknown" });
   expect((await t3Threads(models, { home: stub.home }).start({ ...request, key: "k2" })).id).toBe("thread-2");
 });
+
+test("a send delivers the text to the thread as a message T3 starts a turn for", async () => {
+  const stub = await t3({
+    shell: { projects: [], threads: [{ id: "thread-7", title: "Mail", projectId: "scratch-1", status: "idle" }] },
+    rpc: (tag) => (tag === "orchestration.dispatchCommand" ? {} : undefined),
+  });
+  await t3Threads(models, { home: stub.home }).send({ id: "thread-7", text: "A new reply arrived." });
+  expect(stub.rpcCalls.filter((call) => call.tag === "orchestration.dispatchCommand").map((call) => call.payload)).toEqual([
+    expect.objectContaining({ type: "message.dispatch", threadId: "thread-7", text: "A new reply arrived.", dispatchMode: { type: "start_immediately" } }),
+  ]);
+});
+
+test("a send to a thread that T3 no longer has, or has archived, fails and delivers nothing", async () => {
+  const stub = await t3({
+    archived: { projects: [], threads: [{ id: "thread-8", title: "Mail", projectId: "scratch-1", status: "idle", archivedAt: "2026-11-10T08:00:00Z" }] },
+    rpc: (tag) => (tag === "orchestration.dispatchCommand" ? {} : undefined),
+  });
+  const threads = t3Threads(models, { home: stub.home });
+  await expect(threads.send({ id: "thread-gone", text: "hello" })).rejects.toThrow("T3 has no thread thread-gone on this machine.");
+  await expect(threads.send({ id: "thread-8", text: "hello" })).rejects.toThrow("Thread thread-8 is archived.");
+  expect(stub.rpcTags).not.toContain("orchestration.dispatchCommand");
+});

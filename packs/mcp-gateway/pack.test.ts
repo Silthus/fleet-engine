@@ -80,6 +80,17 @@ describe("the plan", () => {
     expect(plan(hub, { gmail: true }).human.find((step) => step.id === "gmail-sign-in")).toMatchObject({ command: "fleet mcp-gateway sign-in gmail" });
   });
 
+  test("mail watch stays off until the profile turns it on, needs the Gmail route, and then runs only on the hub", () => {
+    const hub: MachineFile = { schema: 1, role: "hub", name: "hub-1" };
+    const plan = (machine: MachineFile, workflows: Record<string, boolean>) => resolveEngine(sources, { packs: ["mcp-gateway"], hub: "hub-1", workflows }, machine);
+    const watch = (machine: MachineFile, workflows: Record<string, boolean>) => plan(machine, workflows).jobs.filter((job) => job.id === "mail-watch").map((job) => job.id);
+    expect(watch(hub, { gmail: true })).toEqual([]);
+    expect(plan(hub, { "mail-watch": true }).workflows.find((state) => state.id === "mail-watch")).toMatchObject({ active: false, reason: "needs workflow gmail" });
+    expect(watch(hub, { "mail-watch": true })).toEqual([]);
+    expect(watch(hub, { gmail: true, "mail-watch": true })).toEqual(["mail-watch"]);
+    expect(watch(devbox, { gmail: true, "mail-watch": true })).toEqual([]);
+  });
+
   test("a profile that lists the Hub pack keeps the gateway until it turns the mcp-gateway workflow off", () => {
     const hubKeys = (workflows: Record<string, boolean>) => resolveEngine(sources, { packs: ["hub"], settings: hubAnswers, workflows }, devbox).config.filter((entry) => entry.pack === "mcp-gateway").length;
     expect(hubKeys({})).toBe(2);
