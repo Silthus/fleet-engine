@@ -140,6 +140,17 @@ describe("saving answers", () => {
     expect(await spawnGit(remote, "rev-parse", "main")).toBe(await spawnGit(dir, "rev-parse", "HEAD"));
   });
 
+  test("a change computed before another machine pushed the same answer refuses to replace it, and says to run the command again", async () => {
+    const { dir, remote, elsewhere } = await profileBehind();
+    const loaded = await loadProfile(dir);
+    await elsewhere((file) => ({ ...file, packs: [...(file.packs as string[]), "memory"] }));
+    const error = await saveAnswers(dir, { packs: [...loaded.packs, "hub"] }, { push: true }).catch((caught: Error) => caught);
+    expect(error).toBeInstanceOf(ProfileError);
+    expect((error as Error).message).toBe(`${dir}: another machine changed packs in your profile while this command ran. Run the command again to change them on top of that.`);
+    expect(JSON.parse(await spawnGit(remote, "show", "main:fleet.json")).packs).toEqual(["orchestration", "memory"]);
+    expect(await spawnGit(dir, "status", "--porcelain")).toBe("");
+  });
+
   test("a change that clashes with one another machine pushed says why and how to recover, and leaves the profile as it was", async () => {
     const { dir, elsewhere } = await profileBehind();
     await saveAnswers(dir, { plan: "codex" });
