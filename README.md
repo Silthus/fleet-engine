@@ -1,29 +1,49 @@
-# Fleet engine
+# Fleet
 
-Fleet sets up T3 Code, Claude Code, Codex, and a set of agent workflows on a
-Mac and on Linux devboxes. You pick the workflows as **packs**. Your answers
-live in your own private **profile** repo, so every machine you own gets the
+<img src="docs/fleet.svg" alt="Your Mac runs T3 Code and links to your devboxes, where agent threads work in their own worktrees. An optional hub shares MCP servers. Every machine reads your private profile repo." width="760">
+
+Coding agents get much better with good rules, skills, and a machine that
+stays on. Setting that up by hand takes a day per machine, and the machines
+drift apart.
+
+**Fleet** sets up T3 Code, Claude Code, Codex, and a set of agent workflows on
+your Mac and your Linux devboxes. You pick the workflows as **packs**. Your
+answers live in your own private **profile** repo, so every machine gets the
 same setup.
 
-This repository is the **engine**: the `fleet` command, the bootstrap script,
-and the public packs.
+## Getting started
 
-## Status
+1. **Download [T3 Code](https://t3.codes)** and open it. Its Welcome page sets
+   up one agent, Claude Code or Codex, and signs you in.
+2. **Sign in with T3 Connect.** In T3 Code, open **Settings → Sharing &
+   access**, sign in, and turn on **T3 Connect**. It links your Mac to your
+   devboxes and your phone.
+3. **Paste this prompt** into a new thread in T3 Code on your Mac, or
+   [open it in T3 Code](https://app.t3.codes/new?prompt=Set%20up%20Fleet%20on%20this%20Mac%20with%20me.%20Read%20https%3A%2F%2Fraw.githubusercontent.com%2FSilthus%2Ffleet-engine%2Fmain%2FSETUP.md%20and%20follow%20it%20step%20by%20step.):
 
-Version 0.1.0 is the first public release. It is early. On every pull
-request, CI runs the install below as a new Linux user, then `fleet setup` and
-`fleet doctor`, with a sandbox GitHub account. Other paths are built but not
-yet proved end to end, such as a run on a clean Mac user and the real
-sign-ins. The [changelog](CHANGELOG.md) lists them under "Known gaps".
+   ```text
+   Set up Fleet on this Mac with me. Read https://raw.githubusercontent.com/Silthus/fleet-engine/main/SETUP.md and follow it step by step.
+   ```
+
+From here the agent leads. It asks what you know and what you want, explains
+each part, and runs the steps itself. You answer its questions and do your own
+sign-ins.
 
 ## See what it does
 
 Read [A day with Fleet](https://silthus.github.io/fleet-engine/) to see what
-each pack does for you during a workday, pick yours, and copy the one command
-that sets them up. The page is `page/index.html`, generated from the pack data
-by `bun scripts/build-page.ts`.
+each pack does for you during a workday. The page is `page/index.html`,
+generated from the pack data by `bun scripts/build-page.ts`.
 
-## Install
+## Status
+
+Version 0.1.0 is the first public release. It is early. On every pull
+request, CI runs the install as a new Linux user, then `fleet setup` and
+`fleet doctor`, with a sandbox GitHub account. Other paths are built but not
+yet proved end to end, such as a run on a clean Mac user and the real
+sign-ins. The [changelog](CHANGELOG.md) lists them under "Known gaps".
+
+## Set it up by hand
 
 Run this as your login user, not with `sudo`, on macOS or on Linux (x64 or
 arm64):
@@ -48,9 +68,9 @@ Read [`get.sh`](get.sh) first if you want to know what runs. It:
 
 `fleet setup` asks plain-language questions. It asks you to sign in to
 GitHub, and to Claude, ChatGPT, or both, depending on the plan you pick. It
-then creates the private repo `fleet-profile`
-in your GitHub account, pushes your answers there, and applies your packs to
-this machine. Running `get.sh` again picks up where it stopped.
+then creates the private repo `fleet-profile` in your GitHub account, pushes
+your answers there, and applies your packs to this machine. Running `get.sh`
+again picks up where it stopped.
 
 [Getting started](docs/getting-started.md) walks through it step by step, from
 a new Mac to a linked Coder devbox, with what each sign-in asks.

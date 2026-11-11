@@ -1,0 +1,40 @@
+<svg viewBox="0 0 760 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">What Fleet sets up</title>
+  <desc id="desc">Your Mac runs T3 Code. It links to your devboxes, where agent threads work in their own worktrees. An optional hub shares MCP servers with them. Every machine reads the same private profile repo on GitHub.</desc>
+  <style>
+    svg { --bg: #f6f7f9; --surface: #ffffff; --sunk: #eef1f5; --fg: #1c2430; --muted: #5b6676; --accent: #1d4ed8; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    @media (prefers-color-scheme: dark) { svg { --bg: #0e141d; --surface: #151d29; --sunk: #1b2533; --fg: #e6ebf2; --muted: #9aa6b8; --accent: #7ea2ff; } }
+    .bg { fill: var(--bg); }
+    .node { fill: var(--surface); stroke: var(--fg); stroke-width: 1.5; }
+    .opt { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 6 5; }
+    .sub { fill: var(--sunk); }
+    .txt { fill: var(--fg); font-size: 14px; font-weight: 600; }
+    .small { fill: var(--muted); font-size: 12px; }
+    .mono { fill: var(--fg); font: 11px ui-monospace, Menlo, monospace; }
+    .link { stroke: var(--accent); stroke-width: 2; fill: none; }
+    .optlink { stroke: var(--muted); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+    .lbl { fill: var(--accent); font-size: 12px; font-weight: 600; }
+  </style>
+  <rect class="bg" width="760" height="330" rx="14"/>
+  <rect class="node" x="20" y="40" width="200" height="130" rx="12"/>
+  <text class="txt" x="38" y="68">Your Mac</text>
+  <rect class="sub" x="38" y="82" width="164" height="34" rx="6"/><text class="mono" x="50" y="104">T3 Code app</text>
+  <text class="small" x="38" y="140">You talk to your agents here,</text><text class="small" x="38" y="156">or on your phone.</text>
+  <path class="link" d="M220 105 H310"/><text class="lbl" x="228" y="95">T3 Connect</text>
+  <rect class="node" x="310" y="22" width="250" height="170" rx="12"/>
+  <text class="txt" x="328" y="50">Your devboxes</text>
+  <rect class="sub" x="328" y="64" width="214" height="28" rx="6"/><text class="mono" x="340" y="83">thread · worktree fix-login</text>
+  <rect class="sub" x="328" y="98" width="214" height="28" rx="6"/><text class="mono" x="340" y="117">thread · worktree new-chart</text>
+  <rect class="sub" x="328" y="132" width="214" height="28" rx="6"/><text class="mono" x="340" y="151">thread · worktree docs</text>
+  <text class="small" x="328" y="180">Agents use skills from your packs.</text>
+  <path class="optlink" d="M435 192 V232"/>
+  <rect class="opt" x="310" y="232" width="250" height="68" rx="12"/>
+  <text class="txt" x="328" y="258">Hub (optional)</text>
+  <text class="small" x="328" y="278">An always-on devbox that shares</text><text class="small" x="328" y="293">MCP servers with the others.</text>
+  <rect class="node" x="590" y="40" width="150" height="130" rx="12"/>
+  <text class="txt" x="606" y="68">Your profile</text>
+  <rect class="sub" x="606" y="82" width="118" height="28" rx="6"/><text class="mono" x="616" y="101">fleet-profile</text>
+  <text class="small" x="606" y="134">A private GitHub repo</text><text class="small" x="606" y="150">with your answers.</text>
+  <path class="optlink" d="M728 170 V316 H120 V170 M435 300 V316"/>
+  <text class="small" x="588" y="190">Every machine reads it,</text><text class="small" x="588" y="206">so all of them match.</text>
+</svg>
