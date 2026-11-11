@@ -270,11 +270,16 @@ function workflowStates(profile: Profile, machine: MachineFile, order: Candidate
     const reason = !chosen ? "turned off" : unmet.length ? `needs ${unmet.join(", ")}` : undefined;
     return { id: workflow.id, pack, active: !reason, ...(reason ? { reason } : {}) };
   });
-  const on = activeIds(own);
-  return own.map((state, index) => {
-    const missing = state.active ? (workflows[index]!.workflow.requires ?? []).filter((id) => !on.has(id)) : [];
-    return missing.length ? { id: state.id, pack: state.pack, active: false, reason: `needs workflow ${missing.join(", ")}` } : state;
-  });
+  let states: Plan["workflows"] = own;
+  for (;;) {
+    const on = activeIds(states);
+    const next = states.map((state, index) => {
+      const missing = state.active ? (workflows[index]!.workflow.requires ?? []).filter((id) => !on.has(id)) : [];
+      return missing.length ? { id: state.id, pack: state.pack, active: false, reason: `needs workflow ${missing.join(", ")}` } : state;
+    });
+    if (next.every((state, index) => state === states[index])) return states;
+    states = next;
+  }
 }
 
 function activeSettings(order: Candidate[], active: Set<string>): Array<PackSetting & { pack: string }> {

@@ -135,7 +135,7 @@ test("narrowing an upstream's tools keeps the rest of its group entry, and keeps
   expect(api.groups[0]!.servers).toEqual(["tickets", { name: "notes", alias: "n", tools: ["search_notes", "read_note"], prompts: [], resources: [], pinnedTools: ["read_note"] }, "calendar"]);
 });
 
-test("one ChatGPT sign-in serves every Google route: the gateway reloads all three, and signing in a second route runs no second device sign-in", async () => {
+test("one ChatGPT sign-in serves every Google route and the gateway reloads all three, and signing in again replaces a broken sign-in", async () => {
   const { api, home, hub } = hubWith({});
   for (const app of googleApps) await registerUpstream(hub, app);
   const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
@@ -146,9 +146,11 @@ test("one ChatGPT sign-in serves every Google route: the gateway reloads all thr
   for (const app of googleApps) expect(await appSignedIn(hub, app)).toBe(true);
   expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
   expect(await appSignedIn(hub, slack)).toBe(false);
+  writeFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "broken");
   api.calls.length = 0;
   expect(await signInApp(hub, googleCalendar)).toBe(0);
-  expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/logins"), "utf8")).toBe("login --device-auth\n");
+  expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/logins"), "utf8")).toBe("login --device-auth\nlogin --device-auth\n");
+  expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "utf8")).toBe("{}\n");
   expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
 });
 

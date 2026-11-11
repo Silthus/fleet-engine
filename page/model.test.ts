@@ -116,13 +116,31 @@ describe("the picks", () => {
   test("a workflow that needs a pack stays off until that pack is on", () => {
     const hub: PageData = {
       ...data,
-      packs: [...data.packs, { name: "hub", title: "Hub", summary: "", requires: [], always: false, workflows: [{ id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], default: true, settings: [] }], settings: [] }],
+      packs: [...data.packs, { name: "hub", title: "Hub", summary: "", requires: [], always: false, workflows: [{ id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], requires: [], default: true, settings: [] }], settings: [] }],
       needPacks: { hub: "hub" },
     };
-    const boxes = (packs: Picks) => momentState(hub, packs, { id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], default: true, settings: [] }, "hub");
+    const boxes = (packs: Picks) => momentState(hub, packs, { id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], requires: [], default: true, settings: [] }, "hub");
     const picks = presetPicks(hub, "everyday");
     expect(momentState(hub, picks, hub.packs.at(-1)!.workflows[0]!)).toEqual({ on: false, fix: { pack: "hub" } });
     expect(boxes(togglePack(hub, picks, "hub"))).toEqual({ on: true });
+  });
+
+  test("a workflow that requires another stays off until that one is on, and turning it on or off carries the workflows it requires or that require it", () => {
+    const flow = (id: string, requires: string[], fields: Partial<PageData["packs"][number]["workflows"][number]> = {}) => ({ id, name: id.toUpperCase(), sentence: `${id}.`, needs: [], requires, default: false, settings: [], ...fields });
+    const gate: PageData = {
+      ...data,
+      packs: [...data.packs, { name: "gate", title: "Gate", summary: "", requires: [], always: true, workflows: [flow("gateway", [], { default: true }), flow("mail", ["gateway"]), flow("ping", ["pong"]), flow("pong", ["ping"])], settings: [] }],
+    };
+    const state = (picks: Picks, id: string) => momentState(gate, picks, gate.packs.at(-1)!.workflows.find((item) => item.id === id)!);
+    const start = presetPicks(gate, "everyday");
+    const unmet = { ...start, workflows: { ...start.workflows, gateway: false, mail: true } };
+    expect(state(unmet, "mail")).toEqual({ on: false, fix: { workflow: "gateway" } });
+    const mailOn = toggleWorkflow(gate, { ...start, workflows: { ...start.workflows, gateway: false } }, "mail");
+    expect([mailOn.workflows.gateway, mailOn.workflows.mail, state(mailOn, "mail")]).toEqual([true, true, { on: true }]);
+    const gatewayOff = toggleWorkflow(gate, mailOn, "gateway");
+    expect([gatewayOff.workflows.gateway, gatewayOff.workflows.mail]).toEqual([false, false]);
+    const cycle = toggleWorkflow(gate, start, "ping");
+    expect([state(cycle, "ping"), state(cycle, "pong")]).toEqual([{ on: true }, { on: true }]);
   });
 });
 
