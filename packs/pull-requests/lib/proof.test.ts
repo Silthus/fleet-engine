@@ -67,6 +67,54 @@ test("a clean merge of the base carries the review of the PR forward and records
   expect((await pr.fleet("review-start", "--scope", "final", "--base", merge.slice(0, 8))).output).toContain(`"round":"final"`);
 });
 
+test("commits that change only tests or only comments carry the final read, and a final read of them needs a decision", async () => {
+  const pr = await checkout();
+  withDecideRule(pr);
+  await pr.fleet("standing", "--kind", "review", "--until", "2026-11-26", "--rule", decideRule);
+  await pr.commit("feature.ts", "export const greet = (name: string) => `hi ${name}`;\n");
+  const reviewed = await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  const testOnly = await pr.commit("feature.test.ts", "expect(greet(\"a\")).toBe(\"hi a\");\n");
+
+  const afterTest = await pr.fleet("gate");
+
+  expect(afterTest.code).toBe(0);
+  expect(afterTest.output).toContain(`review: final read carried from ${reviewed.slice(0, 7)}: test-only delta`);
+
+  const commentOnly = await pr.commit("feature.ts", "// Greets one member by name.\nexport const greet = (name: string) => `hi ${name}`;\n\n");
+  const afterComment = await pr.fleet("gate");
+
+  expect(afterComment.code).toBe(0);
+  expect(afterComment.output).toContain(`final read carried from ${reviewed.slice(0, 7)}: test-only and comment-only delta`);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${commentOnly}.json`), "utf8"))).toMatchObject({ commit: commentOnly, from: reviewed, quiet: [commentOnly, testOnly], reason: "test-only and comment-only delta" });
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed)).rejects.toThrow(`HEAD needs no final read: final read carried from ${reviewed.slice(0, 7)}: test-only and comment-only delta`);
+  expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--standing", "The comment names a rule the code must keep.")).code).toBe(0);
+});
+
+test("a comment marker inside a string, a trailing comment, code moved into a comment, or another language needs a new review", async () => {
+  const pr = await checkout();
+  const source = "export const help = `\n// run it\n`;\nexport const limit = 3;\n";
+  await pr.commit("feature.ts", source);
+  await pr.commit("notes.md", "# Notes\n");
+  const reviewed = await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  const changes: [string, string][] = [
+    ["feature.ts", source.replace("// run it", "// run it twice")],
+    ["feature.ts", source.replace("= 3;", "= 3; // most")],
+    ["feature.ts", source.replace("export const limit = 3;\n", "/*\nexport const limit = 3;\n*/\n")],
+    ["notes.md", "# Notes\n<!-- later -->\n"],
+  ];
+
+  for (const [file, content] of changes) {
+    await pr.git("reset", "-q", "--hard", reviewed);
+    await pr.commit(file, content);
+    const gate = await pr.fleet("gate");
+    expect(gate.code).toBe(1);
+    expect(gate.output).toContain(`review: HEAD not reviewed, last review covered ${reviewed.slice(0, 7)}`);
+  }
+  expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed)).output).toContain(`"round":"final"`);
+});
+
 test("a merge that changes code while it resolves the base keeps HEAD unreviewed, even from a subdirectory with relative diffs", async () => {
   const pr = await checkout();
   await pr.commit("shared.txt", "feature\n");
