@@ -145,7 +145,7 @@ describe("the install prompt", () => {
     const mac = await macWithFleet();
     expect(await mac.fleet(["hub", "status"])).toBe(0);
     expect(mac.output()).toContain("\nThe hub: not named.");
-    expect(readFileSync(join(root, "SETUP.md"), "utf8")).toContain("\n## 9. Add the hub and the node\n");
+    expect(readFileSync(join(root, "SETUP.md"), "utf8")).toContain("\n## 9. Add the hub and the nodes\n");
   });
 
   test("for a pack that needs a hub, updates the hub after the command and before the steps a note puts after it", () => {

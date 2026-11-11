@@ -20,7 +20,7 @@ passing `fleet doctor` on this Mac.
   person, such as workflow, pack, profile, hub, or node, explain it in one
   plain line.
 - **Speak to their choice.** Once they answer step 4, describe only the setup
-  they chose. When they chose a hub and a node, never call the hub optional or
+  they chose. When they chose a hub and nodes, never call the hub optional or
   something for later.
 - **Keep it short.** One or two sentences per explanation.
 - **Run every command yourself.** The person answers, approves, and does their
@@ -177,19 +177,30 @@ can keep its members' profiles in the team's GitHub org instead, as
 
 ## 4. Where Fleet runs
 
-Step 2 asks "Mac only, or Mac plus a hub and a node?", with these options,
+Step 2 asks "Mac only, or Mac plus a hub and nodes?", with these options,
 unless the picks from the page say where Fleet runs:
 
 - **Mac only.** A full setup: the skills and rules of every pack they pick,
   and the workflows that run on a Mac, run on this Mac. Agents stop when the Mac
   sleeps. Workflows that need an always-on machine, such as the loops and
   the PR digest, wait until a node runs. A hub and a node can come later.
-- **Mac plus a hub and a node.** Two Linux devboxes in the cloud that stay
+- **Mac plus a hub and one node.** Two Linux devboxes in the cloud that stay
   on while the Mac sleeps: one **hub** with a 200 GB disk, which links your
   machines and watches their disks, and one **node** with a 500 GB disk,
   where threads do the work. Add more nodes later, when the load grows.
+- **Mac plus a hub and two nodes.** The same, with two nodes, so twice as
+  many threads run at once. Another answer can name more nodes.
 
-Recommend a hub and a node when they use Coder, and Mac only otherwise.
+Recommend a hub and one node when they use Coder, and Mac only otherwise.
+The picks from the page line `Mac plus a hub and a node` means one node.
+Below, "the nodes" means as many as they chose.
+
+T3 Code on the Mac starts new threads on the nodes, not on the Mac or the
+hub: each `fleet devbox add` of a node sets this up. A free T3 Connect
+account links up to 3 machines: the hub and each node use one, and the Mac
+uses one when T3 Connect is on there. When their choice needs more, say so
+before you create anything: a paid T3 Chat plan raises the limit, or they
+choose fewer nodes.
 When you do not know, ask whether they use Coder in the same call. Use their answer. Set up the Mac first in both cases.
 
 ## 5. Install the tools
@@ -199,8 +210,8 @@ The install from step 1 runs in the background. It is done when
 an error, explain its last lines, fix what they name, and run it again: it
 picks up where it stopped. Use the wait (see "While something runs").
 
-With a hub and a node, use this wait to start them: run items 1 to 5 of
-step 9 now, and start each `coder create` in the background, both at once.
+With a hub and nodes, use this wait to start them: run items 1 to 5 of
+step 9 now, and start each `coder create` in the background, all at once.
 They take minutes and run on while you go on with step 6. On a first setup,
 skip the question about reusing a hub: there is none yet. Check that item 5
 passes before item 6 of step 9.
@@ -313,15 +324,15 @@ whether `fleet doctor` passes while it stays. Then ask:
 Recommend taking Fleet's version, unless they set the value on purpose.
 
 Tell them that a new Terminal window has `fleet` on its `PATH`. With Mac
-only, go on to step 10. With a hub and a node, go on to step 9.
+only, go on to step 10. With a hub and nodes, go on to step 9.
 
-## 9. Add the hub and the node
+## 9. Add the hub and the nodes
 
 The default is one **hub** with a 200 GB disk and one **node** with a 500 GB
-disk, both Coder workspaces. Run each item on this Mac. Items 1 to 5 start
+disk, all Coder workspaces, with as many nodes as they chose in step 4. Run each item on this Mac. Items 1 to 5 start
 early, in step 5, so the workspaces are made while the Mac is set up. Items 6
-to 10 run here, after the Mac is ready to use. Their choice of a hub and a
-node in step 2 is the go-ahead to create them: show each command as you start
+to 10 run here, after the Mac is ready to use. Their choice of a hub and
+nodes in step 2 is the go-ahead to create them: show each command as you start
 it. Creating a workspace and `fleet devbox add` take minutes; use each wait
 (see "While something runs").
 
@@ -396,10 +407,13 @@ the steps below, follow the note.
    When `coder templates pull` fails, open the template's page in the Coder
    web app, `<coder address>/templates/<template>`, and ask the person to
    read you the parameters and their allowed values from it.
-3. **Names.** Use `fleet-hub` and `fleet-node-1`. Ask for a name only when
-   `coder list` already has a workspace by that name that they do not reuse.
-   Below, `<hub>` and `<node>` stand for them, and `<name>` for either.
-4. **Create.** Create the hub with a 200 GB disk and the node with a 500 GB
+3. **Names.** Use `fleet-hub` and `fleet-node-1`, `fleet-node-2`, and so on.
+   When `coder list` already has a workspace by that name that they do not
+   reuse, add the next free number instead, such as `fleet-hub-2`, so the new
+   machine and the one it replaces never share a name. Ask for a name only
+   when they want another. Below, `<hub>` and `<node>` stand for them, and
+   `<name>` for any of them.
+4. **Create.** Create the hub with a 200 GB disk and each node with a 500 GB
    disk, with every parameter on the command line, so Coder asks nothing.
    `--preset none` stops the preset question that `--yes` does not skip, and
    `--use-parameter-defaults` takes the default of every other parameter:
@@ -408,12 +422,12 @@ the steps below, follow the note.
    coder create <name> --template <template> --preset none --use-parameter-defaults --parameter <disk parameter>=<200 or 500> --yes
    ```
 
-   Start both at once, each in the background.
+   Start them all at once, each in the background.
 
    Then keep each one running, because agents work there while the Mac
    sleeps: `coder schedule stop <name> manual`.
 5. **SSH.** Run `coder config-ssh --yes`. The step is done when
-   `ssh coder.<name> true` passes for both workspaces.
+   `ssh coder.<name> true` passes for each workspace.
 6. **Fleet on the hub.** `fleet devbox add` installs Fleet, applies their
    profile, and links T3 Code. It also signs the workspace in to Coder, so
    the hub reaches the node over SSH. Its sign-ins need their keyboard, so
@@ -461,8 +475,8 @@ the steps below, follow the note.
    ssh coder.<hub> 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet update'
    ```
 
-9. **Fleet on the node.** Run `fleet devbox add` again in a Terminal window,
-   for the node:
+9. **Fleet on the nodes.** Run `fleet devbox add` again in a Terminal window,
+   for each node, one after the other:
 
    ```sh
    printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nfleet devbox add %s\n' 'coder.<node>' > ~/.cache/fleet-setup/devbox.command && chmod +x ~/.cache/fleet-setup/devbox.command && open ~/.cache/fleet-setup/devbox.command
@@ -478,6 +492,9 @@ the steps below, follow the note.
    ```sh
    ssh coder.<hub> 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet peers link coder.<node>'
    ```
+
+   Its last line says which machines T3 Code on the Mac starts new threads
+   on. Ask them to quit and reopen T3 Code, so it reads that.
 10. **Check.** Run `fleet doctor` on the Mac, and on each workspace over SSH.
     A command over SSH does not read the workspace's login files, so it sets
     the `PATH` itself:
@@ -491,7 +508,7 @@ the steps below, follow the note.
     same `PATH` line.
 
 To add a node later, when the load grows, run items 3, 4, 5 and 9 above
-again with a new name and a 500 GB disk, then `fleet doctor` on it.
+again with the next node name and a 500 GB disk, then `fleet doctor` on it.
 
 Then go on to step 10.
 
