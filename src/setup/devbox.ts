@@ -240,8 +240,8 @@ async function connectAddress(machine: Machine): Promise<string | undefined> {
   const status = await machine.exec(["t3", "connect", "status", "--json"]);
   if (status.code !== 0) return undefined;
   try {
-    const state = JSON.parse(status.stdout) as { authenticated?: unknown; linked?: unknown; relayUrl?: unknown };
-    return state.authenticated === true && state.linked === true && typeof state.relayUrl === "string" ? new URL(state.relayUrl).origin : undefined;
+    const state = JSON.parse(status.stdout) as { authenticated?: unknown; linked?: unknown; tunnelHostname?: unknown };
+    return state.authenticated === true && state.linked === true && typeof state.tunnelHostname === "string" && state.tunnelHostname !== "" ? `https://${state.tunnelHostname}` : undefined;
   } catch {
     return undefined;
   }

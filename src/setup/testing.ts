@@ -141,7 +141,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
     if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
     if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
-    if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: passes("box:t3"), linked: passes("box:t3"), relayUrl: passes("box:t3") ? "https://box-1.relay.example/" : null }));
+    if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: passes("box:t3"), linked: passes("box:t3"), relayUrl: "https://relay.example", tunnelHostname: passes("box:t3") ? "box-1.relay.example" : null }));
     return t3(line, "BOXCODE") ?? result(false, `unexpected on the box: ${line}`);
   };
   const machine: Machine = {
@@ -173,7 +173,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
         return realGit(home, ["init", "-q", "--bare", "-b", "main", bare]);
       }
       if (command[0] === "git") return realGit(home, command.slice(1), run.cwd);
-      if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: Boolean(options.connectHere), linked: Boolean(options.connectHere), relayUrl: options.connectHere ? "https://here.relay.example/" : null }));
+      if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: Boolean(options.connectHere), linked: Boolean(options.connectHere), relayUrl: "https://relay.example", tunnelHostname: options.connectHere ? "here.relay.example" : null }));
       return t3(line, "HERECODE") ?? result(false, `unexpected ${line}`);
     },
     start(command) {
