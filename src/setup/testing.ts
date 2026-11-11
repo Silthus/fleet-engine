@@ -211,6 +211,9 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   return { machine, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked };
 }
 
+/** Every command a fake machine ran on the box, without the PATH prefix. */
+export const remote = (box: ReturnType<typeof fakeMachine>) => [...box.calls.map((call) => onBox(call.command)), ...box.starts.map(onBox), ...box.runs.map((run) => onBox(run.command))].filter(Boolean) as string[];
+
 export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>, doctorCode = 0, platform: NodeJS.Platform = "linux", onApply: (dir: string) => void | Promise<void> = () => {}) {
   const io = scripted(replies);
   const applied: string[] = [];
