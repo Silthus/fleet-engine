@@ -1,3 +1,5 @@
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Finding } from "../../pack/types.ts";
 import type { AdapterResult } from "../../reconciler/apply.ts";
 import type { CommandRunner } from "../run.ts";
@@ -26,6 +28,38 @@ async function newestNightly(run: CommandRunner, wait: Wait) {
 }
 
 const finding = (id: string, say: string, repair: Finding["repair"]): Finding => ({ id: `t3:${id}`, pack: "engine", say, repair });
+
+const tokenFile = ".config/claude-env/oauth.env";
+const tokenDropIn = ".config/systemd/user/t3code.service.d/claude-token.conf";
+const dropInText = `[Service]\nEnvironmentFile=%h/${tokenFile}\n`;
+
+const readOr = (path: string) => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+/** T3 Code's user service does not inherit the session, so a Claude token that the session gets from its environment reaches T3 through a file. A drop-in that Fleet did not write stays. */
+export async function reconcileClaudeToken(run: CommandRunner, home: string, token: string | undefined, dryRun: boolean, result: AdapterResult) {
+  if (!token) return;
+  const file = join(home, tokenFile);
+  const dropIn = join(home, tokenDropIn);
+  const present = readOr(dropIn);
+  if (present !== undefined && present !== dropInText) return;
+  const wanted = `CLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
+  if (present === dropInText && readOr(file) === wanted) return;
+  if (dryRun) return void result.findings.push(finding("claude-token", "T3 Code's service needs the Claude token that this session has.", "apply"));
+  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  writeFileSync(file, wanted, { mode: 0o600 });
+  chmodSync(file, 0o600);
+  mkdirSync(dirname(dropIn), { recursive: true });
+  writeFileSync(dropIn, dropInText);
+  await run(["systemctl", "--user", "daemon-reload"]);
+  await run(["systemctl", "--user", "try-restart", "t3code.service"]);
+  result.actions.push({ target: "t3 claude token", operation: present === undefined ? "create" : "replace" });
+}
 
 export async function reconcileService(run: CommandRunner, wait: Wait, user: string, dryRun: boolean, result: AdapterResult) {
   const present = async () => (await run(["t3", "--version"])).code === 0;

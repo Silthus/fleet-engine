@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConfigEntry, ModelRow, Owned, PackJob, Plan, T3ProjectScript } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
@@ -143,7 +143,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
   return { state, calls, tags, server };
 }
 
-type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean; feed?: string; installFailures?: number };
+type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean; feed?: string; installFailures?: number; env?: Record<string, string> };
 
 const releasesFeed = ["mobile-android-build%2F2.3.0%2Fabc", "v0.1.9-nightly.20990102.7", "v0.1.9-nightly.20990101.3"]
   .map((tag) => `<entry><link rel="alternate" type="text/html" href="https://github.com/pingdotgg/t3code/releases/tag/${tag}"/></entry>`)
@@ -181,6 +181,7 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
     }
     if (line === "t3 service install") return (state.service = "installed"), { code: 0, stdout: "" };
     if (line === "systemctl --user show-environment") return machine.manager === false ? { code: 1, stdout: "", stderr: "Failed to connect to bus" } : { code: 0, stdout: "HOME=/home/octo\n" };
+    if (line === "systemctl --user daemon-reload" || line === "systemctl --user try-restart t3code.service") return { code: 0, stdout: "" };
     if (line === "loginctl show-user octo --property=Linger --value") return { code: 0, stdout: `${machine.linger ?? "yes"}\n` };
     if (command[0] === "t3" && command[1] === "project" && command[2] === "add") {
       server.state.projects.push({ id: `project-${server.state.projects.length}`, title: command[3]!, workspaceRoot: command[3]!, deletedAt: null, scripts: [] });
@@ -200,13 +201,13 @@ function setup(options: Parameters<typeof fakeServer>[0] = {}, machine: Machine 
   const server = fakeServer(options);
   const commands = runner(server, machine);
   const waits: number[] = [];
-  const adapter = t3Adapter({ run: commands.run, server: server.server, user: "octo", wait: async (ms) => void waits.push(ms) });
+  const adapter = t3Adapter({ run: commands.run, server: server.server, user: "octo", wait: async (ms) => void waits.push(ms), env: machine.env ?? {} });
   return { server, commands, adapter, waits };
 }
 
 function seed(target: Plan, home: string, options: { adopt?: string[] } = {}) {
   const stopped = fakeServer({ up: false });
-  return t3Adapter({ run: runner(stopped).run, server: stopped.server, user: "octo" }).apply(target, { home, dryRun: false, adopt: options.adopt ?? [] });
+  return t3Adapter({ run: runner(stopped).run, server: stopped.server, user: "octo", env: {} }).apply(target, { home, dryRun: false, adopt: options.adopt ?? [] });
 }
 
 describe("T3 settings while T3 Code is stopped", () => {
@@ -813,7 +814,7 @@ describe("T3 on Linux", () => {
       seen.push({ line: command.join(" "), settings: existsSync(join(home, settingsFile)) ? read(home, settingsFile) : undefined });
       return commands.run(command);
     };
-    const watched = t3Adapter({ run, server: server.server, user: "octo" });
+    const watched = t3Adapter({ run, server: server.server, user: "octo", env: {} });
     const report = await apply(plan("linux", base), { home, adapters: [watched] });
     const starts = seen.filter(({ line }) => line.includes("t3.codes/install.sh") || line === "t3 service install");
     expect(starts).toHaveLength(2);
@@ -828,6 +829,20 @@ describe("T3 on Linux", () => {
     expect(commands.calls).toContain("t3 service install");
     expect(report.ok).toBe(true);
     expect(report.findings).toContainEqual({ id: "t3:linger", pack: "engine", say: "T3 Code stops when you log out, because lingering is off for octo. Run: sudo loginctl enable-linger octo", repair: "human" });
+  });
+
+  test("hands the session's Claude token to T3 Code's service through a private file, and restarts it once", async () => {
+    const home = temp.make("home-");
+    const token = ["sk", "test", "claude"].join("-");
+    const { commands, adapter } = setup({}, { env: { CLAUDE_CODE_OAUTH_TOKEN: token } });
+    const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+    const file = join(home, ".config/claude-env/oauth.env");
+    expect(readFileSync(file, "utf8")).toBe(`CLAUDE_CODE_OAUTH_TOKEN=${token}\n`);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(home, ".config/systemd/user/t3code.service.d/claude-token.conf"), "utf8")).toBe("[Service]\nEnvironmentFile=%h/.config/claude-env/oauth.env\n");
+    expect(JSON.stringify(report)).not.toContain(token);
+    await apply(plan("linux", []), { home, adapters: [adapter] });
+    expect(commands.calls.filter((line) => line.includes("try-restart"))).toEqual(["systemctl --user try-restart t3code.service"]);
   });
 
   test("reports a missing user manager and leaves the service alone", async () => {
