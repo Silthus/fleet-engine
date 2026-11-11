@@ -36,7 +36,7 @@ queue_place() {
     name=${file##*/wait-}
     at=${name%%-*} pid=${name#*-}
     case "$at$pid" in ''|*[!0-9]*) rm -f "$file"; continue ;; esac
-    kill -0 "$pid" 2>/dev/null || { rm -f "$file"; continue; }
+    if (flock -n 7) 7<"$file" 2>/dev/null; then rm -f "$file"; continue; fi
     queued=$((queued + 1))
     if [ "$at" -lt "$queued_at" ] || { [ "$at" -eq "$queued_at" ] && [ "$pid" -lt $$ ]; }; then ahead=$((ahead + 1)); fi
   done
@@ -160,6 +160,7 @@ run_in_slot() {
   describe_job "$@" > "$holder.$$" && mv -f "$holder.$$" "$holder"
   disk_has_room
   rm -f "$waiting"
+  exec 8>&-
   trap - EXIT INT TERM
   echo "Fleet heavy: runs in slot $slot after $(age $(($(date +%s) - queued_at))) in the queue." >&2
   exec systemd-run --user --scope --quiet --collect ${unit:+--unit="$unit"} --slice=fleet-heavy.slice -- "$@"
@@ -167,7 +168,10 @@ run_in_slot() {
 
 queued_at=$(date +%s)
 waiting="$locks/wait-$queued_at-$$"
-describe_job "$@" > "$waiting"
+exec 8>"$locks/new-$queued_at-$$"
+flock -n 8
+describe_job "$@" >&8
+mv "$locks/new-$queued_at-$$" "$waiting"
 trap 'rm -f "$waiting"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM

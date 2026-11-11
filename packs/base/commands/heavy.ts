@@ -9,7 +9,12 @@ await runCommand(() => {
   const route = routed ? undefined : (JSON.parse(Bun.env.FLEET_HANDLERS || "{}") as Record<string, string>)["heavy-route"];
   const env = { ...inherited, FLEET_HEAVY_SLOTS: Bun.env.FLEET_HEAVY_SLOTS || String(numberSetting("base.heavySlots")), ...(route ? { FLEET_HEAVY_ROUTE: route } : {}) };
   const script = join(import.meta.dir, "../lib/heavy.sh");
-  const child = Bun.spawn(["sh", script, ...Bun.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"], env });
-  for (const signal of forwarded) process.on(signal, () => child.kill(signal));
+  const child = Bun.spawn(["sh", script, ...Bun.argv.slice(2)], { stdio: ["inherit", "inherit", "inherit"], env, detached: true });
+  const toGroup = (signal: (typeof forwarded)[number]) => {
+    try {
+      process.kill(-child.pid, signal);
+    } catch {}
+  };
+  for (const signal of forwarded) process.on(signal, () => toGroup(signal));
   return child.exited;
 });
