@@ -101,6 +101,17 @@ for (const [runtime, command] of Object.entries(runtimes)) describe.skipIf(!node
     });
   });
 
+  test("a stray backtick pairs with no backtick past a blank line or inside a fenced block, so neither prose nor code changes the wrong way", async () => {
+    const bridge = upstream();
+    await bridge.initialize();
+    for (const message of ["`before\n\n```\nconst x = `x`; :+1::skin-tone-6:\n```", "`before\n```\nconst x = `x`; :+1::skin-tone-6:\n```", "`after\n\n:wave::skin-tone-2: done`"]) await bridge.request("tools/call", { name: "slack_send_message_draft", arguments: { message } });
+    expect(bridge.backend().filter((entry) => entry.method === "mcpServer/tool/call").map((entry) => entry.params.arguments.message)).toEqual([
+      "`before\n\n```\nconst x = `x`; :+1::skin-tone-6:\n```",
+      "`before\n```\nconst x = `x`; :+1::skin-tone-6:\n```",
+      "`after\n\n\u{1F44B}\u{1F3FB} done`",
+    ]);
+  });
+
   test("the Codex backend serves only the Slack app: every MCP server and every other plugin stays off, and it uses its own OpenAI sign-in", async () => {
     const bridge = upstream('[mcp_servers.fleet-hub]\ncommand = "sh"\n[mcp_servers.other]\ncommand = "x"\n[plugins."slack@openai-curated-remote"]\nenabled = false\n[plugins."gmail@openai-curated-remote"]\nenabled = true\n');
     await bridge.initialize();

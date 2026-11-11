@@ -1,6 +1,7 @@
 import { skinToneEmoji } from "./skin-tone-emoji.ts";
 
-const codeOrTonedShortcode = /(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)|:([a-z0-9_+-]+)::skin-tone-([2-6]):/g;
+const fencedBlock = /(```[\s\S]*?```)/;
+const codeOrTonedShortcode = /(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)|:([a-z0-9_+-]+)::skin-tone-([2-6]):/g;
 const lightestTone = "\u{1F3FB}";
 
 function toned(match: string, code: string | undefined, name: string, tone: string) {
@@ -9,7 +10,7 @@ function toned(match: string, code: string | undefined, name: string, tone: stri
 }
 
 export function unicodeSkinTones(text: string) {
-  return text.replace(codeOrTonedShortcode, toned);
+  return text.split(fencedBlock).map((part, index) => (index % 2 ? part : part.replace(codeOrTonedShortcode, toned))).join("");
 }
 
 export function withUnicodeSkinTones(args: Record<string, unknown>) {
