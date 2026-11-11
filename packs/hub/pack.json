@@ -140,17 +140,6 @@
         "hub.relayPort"
       ],
       "sentence": "An agent borrows a short-lived devbox from a warm pool for a big job, links it to T3 Code, and gives it back when the job ends.",
-      "moment": {
-        "time": "10:00",
-        "title": "A fresh box in a minute",
-        "body": "A thread needs a clean machine for a long test run. It borrows a warm box from the pool, runs there, and returns the box when it is done.",
-        "words": [
-          "hub",
-          "devbox",
-          "Coder",
-          "thread"
-        ]
-      },
       "risk": "Each box is a full devbox, and takes its CPUs from your cloud quota while it runs. A warm pool can use up the quota, so your own devboxes fail to start. It starts off. Turn it on when your quota has room for the pool, and your agents need clean machines that your devboxes and worktrees do not give them."
     },
     {
@@ -167,17 +156,7 @@
         "hub.threadFolder"
       ],
       "sentence": "The hub cleans a devbox whose disk runs low with fleet prune and each tool's own cache cleaner, and names the largest folders only when that cannot free enough.",
-      "risk": "The sweep deletes only this. Through fleet prune: worktrees idle for 6 hours, or 24 when no T3 thread or agent owns them, whose commits are on the default branch or in a merged pull request, whose T3 thread is closed, or whose agent has been idle for a day. Their commits stay on their branch, but their lockfile and tool output changes are dropped. Also worktree folders that Git no longer tracks and no open T3 thread uses. Itself: the oldest part of a T3 boot log over 100 MB. Through pnpm store prune, uv cache prune and go clean -cache: caches those tools fill again. It never runs Nix garbage collection and never removes Cargo build output, the uv cache folder, old T3 versions, Docker data or Bun's cache, which projects can link into. It deletes no other file. For the rest, you decide.",
-      "moment": {
-        "time": "15:10",
-        "title": "A full disk you never saw",
-        "body": "A devbox dropped under its free-space floor after a big build. The hub ran fleet prune, trimmed the T3 boot log, and ran the pnpm, uv and Go cache cleaners on it, so your threads kept running.",
-        "words": [
-          "hub",
-          "devbox",
-          "worktree"
-        ]
-      }
+      "risk": "The sweep deletes only this. Through fleet prune: worktrees idle for 6 hours, or 24 when no T3 thread or agent owns them, whose commits are on the default branch or in a merged pull request, whose T3 thread is closed, or whose agent has been idle for a day. Their commits stay on their branch, but their lockfile and tool output changes are dropped. Also worktree folders that Git no longer tracks and no open T3 thread uses. Itself: the oldest part of a T3 boot log over 100 MB. Through pnpm store prune, uv cache prune and go clean -cache: caches those tools fill again. It never runs Nix garbage collection and never removes Cargo build output, the uv cache folder, old T3 versions, Docker data or Bun's cache, which projects can link into. It deletes no other file. For the rest, you decide."
     },
     {
       "id": "linked-hub",
@@ -191,17 +170,7 @@
         "hub.httpsHost",
         "hub.relayPort"
       ],
-      "sentence": "The hub keeps SSH tunnels and T3 links to every devbox open, so each one can start threads on the others.",
-      "moment": {
-        "time": "08:50",
-        "title": "Every devbox reaches every other",
-        "body": "A thread on one devbox hands a task to another. The hub keeps the tunnels and links between them renewed every night.",
-        "words": [
-          "hub",
-          "devbox",
-          "T3 Code"
-        ]
-      }
+      "sentence": "The hub keeps SSH tunnels and T3 links to every devbox open, so each one can start threads on the others."
     },
     {
       "id": "dream",
@@ -216,17 +185,6 @@
         "hub.dreamSessions"
       ],
       "sentence": "Each night, the hub reads the day's agent sessions from every machine and opens one draft pull request that adds to, condenses, and prunes your shared memory.",
-      "moment": {
-        "time": "04:10",
-        "title": "Memory that tidies itself",
-        "body": "Overnight, the hub reads what your agents did on every devbox. In the morning a draft pull request waits: two new rules for your call, and a few memories merged and trimmed.",
-        "night": true,
-        "words": [
-          "hub",
-          "agent",
-          "draft pull request"
-        ]
-      },
       "risk": "Every run sends your agent sessions to an analyst model and spends your AI plan's usage, so it starts off. Your session text stays on the hub for 14 days."
     },
     {
@@ -242,16 +200,6 @@
         "hub.proxyAccounts"
       ],
       "sentence": "The hub holds your own Claude or Codex subscriptions in a local proxy, and Claude Code and Codex on the hub, your devboxes, and boxes go through it, spending the Claude subscription whose weekly quota resets first.",
-      "moment": {
-        "time": "11:30",
-        "title": "No weekly quota left unused",
-        "body": "Your first subscription resets tomorrow and still has quota. Every thread spends it first. When it hits its limit, the next one takes over, and nobody signs in again.",
-        "words": [
-          "hub",
-          "devbox",
-          "thread"
-        ]
-      },
       "risk": "On the Claude and both plans, the hub keeps your Claude sign-ins in CLIProxyAPI, and every machine in the workflow sends Claude Code through it. On the Codex and both plans, it keeps your ChatGPT sign-ins there, and every machine sends Codex through it. The balancer ranks only Claude subscriptions by reset date. Read Anthropic's terms first, and OpenAI's terms for your plan too. As read on 2026-11-05: the Anthropic Usage Policy, effective Nov 12, 2026, section \"Do Not Abuse Our Platform\" (https://www.anthropic.com/legal/aup), lists: \"Resell, proxy, or otherwise provide access to Claude through unauthorized means, including services that route requests through consumer subscriptions or misrepresent the product or client being used\". The Anthropic Consumer Terms, effective Oct 8, 2025, section 2 (https://www.anthropic.com/legal/consumer-terms), say: \"You may not share your Account login information, Anthropic API key, or Account credentials with anyone else. You also may not make your Account available to anyone else.\" Section 3, item 7 of the same terms lists: \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" Balancing is only for your own subscriptions, never for someone else's."
     }
   ],

@@ -66,12 +66,9 @@ Each "New to me" adds an explainer to a later step:
 
 | New to | Add |
 | --- | --- |
-| T3 Code | In step 3: threads, worktrees, and that T3 Code shows every machine's threads on the Mac and the phone. |
-| Fleet | In step 3: the picture, then what a pack, a workflow, and the profile are. |
+| T3 Code | In step 3: a **thread** is one agent conversation with its own task. A **worktree** is a separate checkout of the same repo, so several threads change code at once without touching each other. T3 Code shows every machine's threads on the Mac and the phone. |
+| Fleet | In step 3: the picture, then what a pack, a workflow, and the profile are. A **workflow** is one way of working that a pack offers, such as a draft pull request for every fix. |
 | Devboxes | In step 4: what a hub and a node are, and why agents run better on them. |
-
-Take the plain words for each term from `concepts.json` in the engine. Skip
-what they know.
 
 ## 3. Show what Fleet is
 

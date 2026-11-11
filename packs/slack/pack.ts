@@ -29,12 +29,6 @@ export default {
       default: false,
       settings: [userId],
       sentence: "Your own Slack message with :t3code:, your :t3code: reaction, or a mention of your Slack app starts a T3 thread, and Slack shows you its link.",
-      moment: {
-        time: "13:50",
-        title: "A thread from a Slack emoji",
-        body: "A teammate reports a bug in Slack. You react with one emoji, and a thread starts to find the cause. Slack shows you its link a few seconds later.",
-        words: ["thread"],
-      },
       risk: "Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread.",
     });
     const hub = { on: "hub", when: threads } as const;

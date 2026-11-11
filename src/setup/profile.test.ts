@@ -31,7 +31,7 @@ describe("fleet setup profile", () => {
       plan: "claude",
     });
     const guide = await spawnGit(githubRepo(home, "nora/fleet-profile"), "show", "main:README.md");
-    expect(guide).toContain("### pull-requests");
+    expect(guide).toContain("### Pull requests");
     expect(guide).toContain("| `pull-requests.freeReviews` |");
   });
 

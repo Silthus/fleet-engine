@@ -39,16 +39,7 @@
         "memory.repo",
         "memory.subtree"
       ],
-      "sentence": "Agents on every machine read and write one private memory repo, which syncs every five minutes.",
-      "moment": {
-        "time": "10:30",
-        "title": "It remembers",
-        "body": "An agent on your devbox already knows the trap another agent hit on your laptop this morning, because both read the same memory.",
-        "words": [
-          "agent",
-          "devbox"
-        ]
-      }
+      "sentence": "Agents on every machine read and write one private memory repo, which syncs every five minutes."
     }
   ],
   "config": [

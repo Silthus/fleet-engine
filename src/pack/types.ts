@@ -8,7 +8,6 @@ export const needValues = ["gh", "devbox", "always-on devbox", "hub", "coder", "
 export type Need = (typeof needValues)[number];
 
 export type Preset = { id: string; name: string; blurb: string; packs: string[]; hubPacks?: string[]; hubWorkflows?: Record<string, boolean>; workflows: Record<string, boolean> };
-export type Concept = { word: string; note: string; audience?: Audience };
 
 export type PackSetting = {
   key: string;
@@ -32,7 +31,6 @@ export type Workflow = {
   requires?: string[];
   default: boolean;
   settings?: string[];
-  moment?: { time: string; title: string; body: string; words?: string[]; night?: boolean };
   risk?: string;
 };
 

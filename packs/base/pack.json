@@ -185,43 +185,19 @@
       "id": "agent-rules",
       "name": "Agent rules",
       "default": true,
-      "sentence": "Agents confirm destructive actions, keep private data out of public repos, and pick the right model for each task.",
-      "moment": {
-        "time": "09:10",
-        "title": "An agent stops before it deletes",
-        "body": "You asked for a cleanup. The agent lists the branches it would delete and waits for your yes. It never pastes a key into a chat or a pull request.",
-        "words": [
-          "agent",
-          "model table"
-        ]
-      }
+      "sentence": "Agents confirm destructive actions, keep private data out of public repos, and pick the right model for each task."
     },
     {
       "id": "t3-tuned",
       "name": "T3 Code tuned",
       "default": true,
-      "sentence": "Each thread gets its own worktree, and threads that hit a usage limit resume by themselves. A worktree without uncommitted changes is removed when its thread settles or after five days.",
-      "moment": {
-        "time": "11:30",
-        "title": "A thread picks up after its limit",
-        "body": "A long thread hit your plan's usage limit before lunch. When the limit resets, it carries on where it stopped, in its own worktree.",
-        "words": [
-          "T3 Code",
-          "worktree"
-        ]
-      }
+      "sentence": "Each thread gets its own worktree, and threads that hit a usage limit resume by themselves. A worktree without uncommitted changes is removed when its thread settles or after five days."
     },
     {
       "id": "nightly-updates",
       "name": "Nightly updates",
       "default": true,
-      "sentence": "Fleet, your profile, Claude Code, Codex, their plugins, and T3 Code update themselves every night. T3 Code waits until no agent turn runs. A failed update tries again each hour until 05:47 UTC.",
-      "moment": {
-        "time": "03:17",
-        "title": "Everything updates while you sleep",
-        "body": "Fleet moves to its newest release, pulls your profile, applies it, and updates the agent CLIs, their plugins, and T3 Code. In the morning every machine matches.",
-        "night": true
-      }
+      "sentence": "Fleet, your profile, Claude Code, Codex, their plugins, and T3 Code update themselves every night. T3 Code waits until no agent turn runs. A failed update tries again each hour until 05:47 UTC."
     },
     {
       "id": "linked-machines",
@@ -230,29 +206,13 @@
       "needs": [
         "devbox"
       ],
-      "sentence": "Your Mac and your devboxes see each other's threads.",
-      "moment": {
-        "time": "08:45",
-        "title": "Your devbox's threads on your Mac",
-        "body": "You open T3 Code on your Mac and see the threads that ran overnight on your devbox, next to your own.",
-        "words": [
-          "devbox"
-        ]
-      }
+      "sentence": "Your Mac and your devboxes see each other's threads."
     },
     {
       "id": "worktree-cleanup",
       "name": "Worktree cleanup",
       "default": true,
-      "sentence": "Every few minutes, Fleet removes idle worktrees whose work has merged.",
-      "moment": {
-        "time": "16:00",
-        "title": "Merged work cleans itself up",
-        "body": "Your pull request merged an hour ago. Its worktree is gone, so your disk holds only work in progress.",
-        "words": [
-          "worktree"
-        ]
-      }
+      "sentence": "Every few minutes, Fleet removes idle worktrees whose work has merged."
     },
     {
       "id": "disk-guard",
@@ -261,15 +221,7 @@
       "needs": [
         "devbox"
       ],
-      "sentence": "Agents check free disk before big jobs and run builds and tests in a capped slot, so one job cannot fill or freeze a devbox.",
-      "moment": {
-        "time": "14:20",
-        "title": "Two test suites, one calm devbox",
-        "body": "Two threads start full test runs at once. Each runs in a capped slot, so your devbox stays responsive and neither fills the disk.",
-        "words": [
-          "devbox"
-        ]
-      }
+      "sentence": "Agents check free disk before big jobs and run builds and tests in a capped slot, so one job cannot fill or freeze a devbox."
     }
   ],
   "config": [

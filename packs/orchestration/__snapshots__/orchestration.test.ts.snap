@@ -1,6 +1,6 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
-exports[`the Orchestration pack adds its rules after the Pull-requests pack 1`] = `
+exports[`the Orchestration pack adds its rules after the Pull requests pack 1`] = `
 "# Orchestration
 
 - When I agree to a **side fix**, an unrelated fix in its own pull request, my yes is also my request for its new thread. Hand it off as the T3 guide says, and keep this thread on its own task.

@@ -19,7 +19,7 @@ describe("fleet setup questions", () => {
     expect(result.code).toBe(0);
     expect(result.output).toContain("Fleet setup · 1 of 10 · about 15 min left");
     expect(result.output).toContain("Fleet setup · 4 of 10 · about 9 min left");
-    expect(result.output).toContain("  1) Everyday  Pull-requests, Orchestration, Communication (default)");
+    expect(result.output).toContain("  1) Everyday  Pull requests, Orchestration, Communication (default)");
     expect(result.output).toContain("  ✓ Claude and ChatGPT");
     expect(machine(home)).toEqual({
       schema: 1,
@@ -73,7 +73,7 @@ describe("fleet setup questions", () => {
     const home = temp.make("home-");
     const kept = await fleetSetup(home, args, ["", ""]);
     expect(kept.code).toBe(0);
-    expect(kept.output).toContain("  From your command: Pull-requests, Orchestration, Communication, Guards, Slack\n");
+    expect(kept.output).toContain("  From your command: Pull requests, Orchestration, Communication, Guards, Slack\n");
     expect(kept.output).toContain("  Workflows: pr-digest off");
     expect(kept.prompts).toEqual(["Press ↵ to keep them, or e to change them: ", "  Go ahead? (Y/n) "]);
     expect(savedAnswers(home)).toMatchObject({
@@ -98,7 +98,7 @@ describe("fleet setup questions", () => {
 
     const needs = temp.make("home-");
     const picked = await fleetSetup(needs, [], ["4", "n", "y", "n", "n", "n", "n", "n", "n", "n", "", ""]);
-    expect(picked.output).toContain("  Orchestration needs Pull-requests, so it is on too.");
+    expect(picked.output).toContain("  Orchestration needs Pull requests, so it is on too.");
     expect(savedAnswers(needs).packs).toEqual(["orchestration", "pull-requests"]);
   });
 
@@ -151,7 +151,7 @@ describe("fleet setup questions", () => {
     mkdirSync(join(asked, ".config/fleet"), { recursive: true });
     writeFileSync(join(asked, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "linux", setup: { done: ["bootstrap"], draft: { packs: ["pull-requests"], workflows: {} } } }));
     const kept = await fleetSetup(asked, [], ["", "", ""]);
-    expect(kept.output).toContain("  From your last answer: Pull-requests");
+    expect(kept.output).toContain("  From your last answer: Pull requests");
     expect(savedAnswers(asked).packs).toEqual(["pull-requests"]);
   });
 
@@ -172,7 +172,7 @@ describe("fleet setup questions", () => {
     const home = temp.make("home-");
     const result = await fleetSetup(home, ["--non-interactive", "--remove", "pull-requests"]);
     expect(result.code).toBe(2);
-    expect(result.output).toStartWith("fleet setup: Orchestration needs Pull-requests. Add pull-requests, or remove orchestration.");
+    expect(result.output).toStartWith("fleet setup: Orchestration needs Pull requests. Add pull-requests, or remove orchestration.");
   });
 
   test("refuses unknown packs, workflows, and settings before it asks anything; an unknown workflow waits for GitHub sign-in, which may find a team pack", async () => {

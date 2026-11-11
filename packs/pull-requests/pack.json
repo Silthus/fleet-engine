@@ -1,6 +1,7 @@
 {
   "schema": 1,
   "name": "pull-requests",
+  "title": "Pull requests",
   "summary": "Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged.",
   "day": "You ask for a fix, and later find a draft pull request with its tests, its proof, and a review from a second model.",
   "cost": "It needs GitHub, and setup signs you in. Each pull request spends extra usage on reviews. Expect at least one round, often two, and short final reads.",
@@ -127,16 +128,7 @@
         "pull-requests.reviewTimeoutMinutes",
         "pull-requests.panelSlots"
       ],
-      "sentence": "Every fix or feature ends as a proven, reviewed draft pull request that you mark ready yourself.",
-      "moment": {
-        "time": "10:30",
-        "title": "A draft pull request, already reviewed",
-        "body": "The fix you asked for at breakfast is a draft pull request: tests first, proof attached, and a second model's review answered.",
-        "words": [
-          "draft pull request",
-          "proof"
-        ]
-      }
+      "sentence": "Every fix or feature ends as a proven, reviewed draft pull request that you mark ready yourself."
     },
     {
       "id": "pr-care",
@@ -148,12 +140,7 @@
       "settings": [
         "pull-requests.commentApproval"
       ],
-      "sentence": "When you ask, an agent watches a pull request, fixes CI, and answers review comments, and it can refresh a stale one.",
-      "moment": {
-        "time": "13:15",
-        "title": "CI went red, and it is already fixed",
-        "body": "You asked the agent to watch your pull request. A check failed over lunch, and by the time you are back it has found the cause, pushed a fix, and answered the reviewer."
-      }
+      "sentence": "When you ask, an agent watches a pull request, fixes CI, and answers review comments, and it can refresh a stale one."
     },
     {
       "id": "ship-words",
@@ -167,15 +154,6 @@
         "pull-requests.approvalBot"
       ],
       "sentence": "Say \"full send\" or \"stamp it\", and the agent takes a pull request to merged and rolled out.",
-      "moment": {
-        "time": "17:00",
-        "title": "\"full send\"",
-        "body": "You read the draft, like it, and type two words. The agent marks it ready, waits for approval and green checks, merges, and watches the rollout.",
-        "words": [
-          "full send",
-          "stamp it"
-        ]
-      },
       "risk": "The agent merges without asking again once you say the words."
     }
   ]
