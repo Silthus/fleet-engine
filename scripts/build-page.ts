@@ -1,9 +1,11 @@
-import { logoMark } from "../page/logo.ts";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { landingExtras } from "../page/landing.ts";
+import { logoMark } from "../page/logo.ts";
 import { engineSettings, loadPacks } from "../src/pack/manifest.ts";
 import type { Audience, LoadedPack, Need, PackManifest, Preset } from "../src/pack/types.ts";
-import { engineRepo, needsHubPacks, ownDevboxPacks, prefersHubPacks } from "../src/setup/defaults.ts";
-import { choosablePacks, defaultPreset, filledBySetup, packTitle, type Catalog } from "../src/setup/questions.ts";
+import { engineRepo, needsHubPacks, prefersHubPacks } from "../src/setup/defaults.ts";
+import { choosablePacks, defaultPreset, packTitle, type Catalog } from "../src/setup/questions.ts";
 import type { PageData, PagePack } from "../page/model.ts";
 
 const engineRoot = join(import.meta.dir, "..");
@@ -34,37 +36,33 @@ export async function pageData({ audience, team = [] }: PageOptions): Promise<Pa
   const manifests = [...base, ...choosablePacks({ presets, packs: engine } as Catalog), ...teamManifests].filter(shown);
   const names = new Set(manifests.map((manifest) => manifest.name));
   const holds = (need: Need) => !needPacks[need] || names.has(needPacks[need]!);
-  const packs = manifests.map((manifest) => pagePack(manifest, holds));
-  const workflowIds = new Set(packs.flatMap((pack) => pack.workflows.map((workflow) => workflow.id)));
+  const noteOn = (loaded: LoadedPack[], folder: string) => loaded.filter((pack) => existsSync(join(pack.dir, "SETUP.md"))).map((pack) => [pack.manifest.name, `${folder}/packs/${pack.manifest.name}/SETUP.md`]);
+  const setupNotes: Record<string, string> = Object.fromEntries([...noteOn(engine, "~/.local/share/fleet/engine"), ...noteOn(team, "~/.local/share/fleet/sources/<source>")]);
+  const packs = manifests.map((manifest) => pagePack(manifest, holds, setupNotes[manifest.name]));
   const used = new Set(packs.flatMap((pack) => pack.workflows.flatMap((workflow) => workflow.needs)));
   const teamPacks = teamManifests.map((manifest) => manifest.name);
+  const start = presets.find((preset) => preset.id === defaultPreset)!;
+  const shownNames = (list: string[]) => list.filter((name) => names.has(name));
   const overview = await Bun.file(join(engineRoot, "docs/fleet.svg")).text();
   return {
     engineRepo,
-    defaultPreset,
-    filledBySetup: [...filledBySetup],
-    presets: presets.map((preset) => ({
-      ...preset,
-      packs: preset.packs.filter((name) => names.has(name)),
-      hubPacks: (preset.hubPacks ?? []).filter((name) => names.has(name)),
-      hubWorkflows: Object.fromEntries(Object.entries(preset.hubWorkflows ?? {}).filter(([id]) => workflowIds.has(id))),
-      workflows: Object.fromEntries(Object.entries(preset.workflows).filter(([id]) => workflowIds.has(id))),
-    })),
     packs,
     teamPacks,
-    ownDevboxPacks: ownDevboxPacks.filter((name) => names.has(name)),
-    needsHubPacks: needsHubPacks.filter((name) => names.has(name)),
-    prefersHubPacks: prefersHubPacks.filter((name) => names.has(name)),
+    startPacks: shownNames([...start.packs, ...teamPacks]),
+    hubStartPacks: shownNames(start.hubPacks ?? []),
+    extraPacks: shownNames(Object.keys(landingExtras)),
+    needsHubPacks: shownNames(needsHubPacks),
+    prefersHubPacks: shownNames(prefersHubPacks),
     needPacks: Object.fromEntries(Object.entries(needPacks).filter(([need]) => used.has(need as Need))),
     needLabels: Object.fromEntries(Object.entries(needLabels).filter(([need]) => used.has(need as Need))),
     overview: { image: `data:image/svg+xml,${encodeURIComponent(overview)}`, alt: overview.match(/<desc[^>]*>([^<]+)<\/desc>/)?.[1] ?? "" },
     teamNote: teamPacks.length
-      ? `The ${teamManifests.map(packTitle).join(" and ")} pack comes from your team's private pack source. Setup ticks it when GitHub shows you are in the team's org.`
-      : "A team can add its own pack from a private pack source, which is a GitHub repo of packs. Setup ticks the pack for members of the team's GitHub org.",
+      ? `The ${teamManifests.map(packTitle).join(" and ")} pack comes from your team's private pack source. Setup turns it on when GitHub shows you are in the team's org.`
+      : "A team can add its own pack from a private pack source, which is a GitHub repo of packs. Setup turns the pack on for members of the team's GitHub org.",
   };
 }
 
-function pagePack(manifest: PackManifest, holds: (need: Need) => boolean): PagePack {
+function pagePack(manifest: PackManifest, holds: (need: Need) => boolean, setupNote?: string): PagePack {
   const workflows = manifest.workflows ?? [];
   const shownWorkflows = workflows.filter((workflow) => (workflow.needs ?? []).every(holds));
   const listedOnlyByHidden = (key: string) => workflows.some((workflow) => workflow.settings?.includes(key)) && !shownWorkflows.some((workflow) => workflow.settings?.includes(key));
@@ -77,7 +75,8 @@ function pagePack(manifest: PackManifest, holds: (need: Need) => boolean): PageP
     ...(manifest.risk ? { risk: manifest.risk } : {}),
     requires: (manifest.requires ?? []).filter((name) => name !== "base"),
     always: manifest.name === "base",
-    workflows: shownWorkflows.map(({ id, name, sentence, needs = [], requires = [], settings = [], risk, ...workflow }) => ({ id, name, sentence, needs, requires, default: workflow.default, settings, ...(risk ? { risk } : {}) })),
+    ...(setupNote ? { setupNote } : {}),
+    workflows: shownWorkflows.map(({ id, name, sentence, needs = [], risk, ...workflow }) => ({ id, name, sentence, needs, default: workflow.default, ...(risk ? { risk } : {}) })),
     settings: (manifest.settings ?? []).filter((setting) => !engineSettings.includes(setting.key) && !listedOnlyByHidden(setting.key)),
   };
 }

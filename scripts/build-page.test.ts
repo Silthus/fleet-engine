@@ -4,7 +4,8 @@ import { join } from "node:path";
 import type { LoadedPack, PackManifest } from "../src/pack/types.ts";
 import { tempDirs } from "../src/testing/git.ts";
 import { spawnAsync } from "../src/testing/spawn.ts";
-import { presetPicks, commandFlags, setSetting, questions, setupAsks, settingAsks } from "../page/model.ts";
+import { firstStart, installPrompt, startPrompt, toggleSelected } from "../page/model.ts";
+import { landingExtras } from "../page/landing.ts";
 import { packFlows } from "../page/flows.ts";
 import { packIcon, packIcons, teamIcon } from "../page/icons.ts";
 import { logoMark } from "../page/logo.ts";
@@ -32,10 +33,6 @@ const teamPack = (manifest: Partial<PackManifest> = {}): LoadedPack => ({
 describe("the page build", () => {
   test("the committed public page is the generator's output", async () => {
     expect(await buildPage({ audience: "public" })).toBe(readFileSync(join(root, "page/index.html"), "utf8"));
-  });
-
-  test("the page never says setup leaves a devbox setting unasked", async () => {
-    expect(await buildPage({ audience: "public" })).not.toMatch(/does not ask|your devbox needs it/);
   });
 
   test("the public build names no PostHog item, Coder, or hogli anywhere", async () => {
@@ -99,31 +96,26 @@ describe("the page build", () => {
     for (const text of ["Download T3 Code", "Sign in with T3 Connect", "Paste this prompt", "https://t3.codes", "https://app.t3.codes/new?prompt="]) expect(html).toContain(text);
   });
 
+  test("each extra on the landing has its own short line", async () => {
+    const data = await pageData({ audience: "public" });
+    expect(Object.keys(landingExtras)).toEqual(data.extraPacks);
+    expect(Object.values(landingExtras).filter((text) => text.split(" ").length > 9 || !text.endsWith("."))).toEqual([]);
+  });
+
   test("the public build refuses a private pack source", async () => {
     expect(pageData({ audience: "public", team: [teamPack()] })).rejects.toThrow("no pack from a private source");
   });
 
-  test("a team build ticks the team pack in every preset and shows its workflows", async () => {
-    const data = await pageData({ audience: "posthog", team: [teamPack()] });
-    for (const preset of data.presets) expect([preset.id, presetPicks(data, preset.id).packs]).toEqual([preset.id, expect.arrayContaining(["posthog"])]);
+  test("a team build puts the team pack in the Getting started prompt, shows its workflows, and names its setup note in the install prompt", async () => {
+    const source = temp.make("source-");
+    mkdirSync(join(source, "packs", "posthog"), { recursive: true });
+    writeFileSync(join(source, "packs", "posthog", "SETUP.md"), "# Setup note\n");
+    const data = await pageData({ audience: "posthog", team: [{ ...teamPack(), dir: join(source, "packs", "posthog") }] });
+    expect(startPrompt(data, firstStart)).toEndWith("- Packs on the first setup: pull-requests, orchestration, communication, posthog");
     expect(data.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id)).toContain("previews");
-    const eu = setSetting(data, presetPicks(data, "everyday"), "posthog.region", "eu");
-    expect(commandFlags(data, eu)).toEqual(["--preset", "everyday", "--set", "posthog.region=eu"]);
-    expect(questions(data, eu).count).toBe(questions(data, presetPicks(data, "everyday")).count - 1);
-  });
-
-  test("a team build whose pack makes its own devbox promises no devbox questions, since setup asks for no devbox then", async () => {
-    const data = await pageData({ audience: "posthog", team: [teamPack()] });
-    const everything = presetPicks(data, "everything");
-    const open = questions(data, everything);
-    expect(open.devbox.map((setting) => setting.key)).toContain("orchestration.loopProject");
-    expect(setupAsks(data, everything)).not.toContain("when you add a devbox");
-    expect(setupAsks(data, everything)).toEndWith(`. Set the ${open.devbox.length} settings only a devbox needs in its pack, or later with fleet set`);
-    expect(settingAsks(open, open.devbox[0]!)).toBe("set it here or later with fleet set");
-    const without = await pageData({ audience: "posthog", team: [teamPack({ name: "acme" })] });
-    const acme = questions(without, presetPicks(without, "everything"));
-    expect(setupAsks(without, presetPicks(without, "everything"))).toEndWith(`, plus ${acme.devbox.length} when you add a devbox`);
-    expect(settingAsks(acme, acme.devbox[0]!)).toBe("setup asks when you add a devbox");
+    const prompt = installPrompt(data, toggleSelected(data, [], "posthog"));
+    expect(prompt).toContain("   - Posthog: ~/.local/share/fleet/sources/<source>/packs/posthog/SETUP.md\n   `<source>` is the folder in `~/.local/share/fleet/sources` that holds the pack.\n");
+    expect(installPrompt(await pageData({ audience: "public" }), ["memory"])).not.toContain("<source>");
   });
 
   test("a team build shows a pack by its title, and by its capitalised name without one", async () => {

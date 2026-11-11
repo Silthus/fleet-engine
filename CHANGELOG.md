@@ -58,10 +58,15 @@ Everything.
 ### The page
 
 [The Fleet page](https://silthus.github.io/fleet-engine/) says what Fleet is
-and asks where Fleet runs, Mac only or Mac plus a hub and a node, and which
-packs you want. Each pack opens in a dialog that shows what it does, its
-workflows, and its settings. The page gives the Getting started steps with a
-prompt that carries your picks to the agent that sets Fleet up.
+and asks one question: where Fleet runs, Mac only or Mac plus a hub and a
+node. The Getting started prompt sits beside that choice and changes with
+it. Pull requests, Orchestration, and Communication are on in both setups,
+and Memory, Guards, and Slack are the extras you can add there.
+
+The page lists every pack. Each pack opens in a dialog that shows what it
+does, its workflows, and its settings. For a fleet that already runs, select
+packs, and the page builds an install prompt that adds them with
+`fleet packs --add`.
 
 ### Known gaps
 

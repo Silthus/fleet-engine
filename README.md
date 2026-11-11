@@ -32,10 +32,13 @@ sign-ins.
 ## See what it does
 
 Open [the Fleet page](https://silthus.github.io/fleet-engine/) to choose
-where Fleet runs and which packs you want. Select a pack to read what it
-does, what it needs, and what it costs. The page builds the prompt above with
-your picks in it, so the agent skips those questions. The page is `page/index.html`, generated
-from the pack data by `bun scripts/build-page.ts`.
+where Fleet runs: Mac only, or Mac plus a hub and a node. The page builds
+the prompt above with your choice in it, so the agent skips those questions.
+The page also lists every pack. Select a pack to read what it does, what it
+needs, and what it costs. When you already run Fleet, select the packs you
+want, and the page builds a prompt that adds them. The page is
+`page/index.html`, generated from the pack data by
+`bun scripts/build-page.ts`.
 
 ## Status
 
