@@ -231,19 +231,24 @@ test("stamp hands its parsed arguments to the review-bot handler", () => {
 
 test("forecast hands its parsed arguments to the review-bot handler and exits with the handler's code", () => {
   const box = sandbox();
-  box.reviewBot(0);
+  box.reviewBot(7);
   const result = box.run("forecast", "--pr", "12", "--request", "--repo", "acme/widgets");
   expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--pr", "12", "--request"]);
-  expect(result).toEqual({ code: 0, out: "bot says hi", err: "" });
+  expect(result).toEqual({ code: 7, out: "bot says hi", err: "" });
   box.run("forecast", "--repo", "acme/widgets", "--pr", "12");
   expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--pr", "12"]);
 });
 
 test("forecast refuses review and stamp flags, and says there is nothing to forecast without a review bot", () => {
   const box = sandbox();
-  expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12", "--minutes", "5").code).not.toBe(0);
-  expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12", "--deep").code).not.toBe(0);
-  expect(box.run("review", "--repo", "acme/widgets", "--pr", "12", "--request").code).not.toBe(0);
+  box.reviewBot(0);
+  for (const args of [["forecast", "--minutes", "5"], ["forecast", "--deep"], ["review", "--request"], ["stamp", "--request"]]) {
+    const result = box.run(args[0]!, "--repo", "acme/widgets", "--pr", "12", ...args.slice(1));
+    expect(result.code).toBe(1);
+    expect(`${result.out}\n${result.err}`).toContain("Usage: fleet pr");
+  }
+  expect(existsSync(join(box.home, "..", "bot-args.json"))).toBe(false);
+  box.env.FLEET_HANDLERS = "{}";
   expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine, so there is no forecast. Ask for a review the way the repo's docs say.", err: "" });
 });
 
