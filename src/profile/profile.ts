@@ -210,6 +210,7 @@ function checkMachine(file: Record<string, unknown>, path: string): MachineFile 
   if (file.coder !== undefined && file.coder !== true) fail("coder must be true or left out");
   if (file.profileDir !== undefined && typeof file.profileDir !== "string") fail("profileDir must be a path");
   if (file.devboxes !== undefined && !(Array.isArray(file.devboxes) && file.devboxes.every((host) => typeof host === "string"))) fail("devboxes must list SSH hosts");
+  if (file.t3Environments !== undefined && !(isRecord(file.t3Environments) && Object.values(file.t3Environments).every((id) => typeof id === "string"))) fail("t3Environments must map SSH hosts to T3 environment ids");
   const setup = file.setup;
   if (setup !== undefined && (!isRecord(setup) || !Array.isArray(setup.done) || !setup.done.every((step) => typeof step === "string") || (setup.draft !== undefined && !isRecord(setup.draft)))) {
     fail("setup needs a done list and an optional draft object");
