@@ -143,17 +143,37 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
   return { state, calls, tags, server };
 }
 
-type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean };
+type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean; feed?: string; installFailures?: number };
+
+const releasesFeed = ["mobile-android-build%2F2.3.0%2Fabc", "v0.1.9-nightly.20990102.7", "v0.1.9-nightly.20990101.3"]
+  .map((tag) => `<entry><link rel="alternate" type="text/html" href="https://github.com/pingdotgg/t3code/releases/tag/${tag}"/></entry>`)
+  .join("\n");
+
+function envOf(command: string[]) {
+  const env: Record<string, string> = {};
+  if (command[0] !== "env") return env;
+  for (const word of command.slice(1)) {
+    const assignment = word.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+    if (!assignment) break;
+    env[assignment[1]!] = assignment[2]!;
+  }
+  return env;
+}
 
 function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
   const calls: string[] = [];
-  const state = { t3: machine.t3 ?? true, service: machine.service ?? "installed" };
+  const state = { t3: machine.t3 ?? true, service: machine.service ?? "installed", installFailures: machine.installFailures ?? 0, installerVersions: [] as string[] };
   const run: CommandRunner = async (command) => {
     const line = command.join(" ");
     calls.push(line);
     if (command[0] === "t3" && !state.t3) return { code: 127, stdout: "" };
     if (line === "t3 --version") return { code: 0, stdout: "0.9.0-nightly\n" };
-    if (command[0] === "/bin/sh" && line.includes("t3.codes/install.sh")) return (state.t3 = true), { code: 0, stdout: "" };
+    if (command[0] === "curl" && command.at(-1) === "https://github.com/pingdotgg/t3code/releases.atom") return machine.feed === undefined ? { code: 0, stdout: releasesFeed } : machine.feed ? { code: 0, stdout: machine.feed } : { code: 22, stdout: "", stderr: "curl: (22) The requested URL returned error: 503" };
+    if (line.includes("t3.codes/install.sh")) {
+      state.installerVersions.push(envOf(command).T3CODE_VERSION ?? "unset");
+      if (state.installFailures > 0) return state.installFailures--, { code: 1, stdout: "", stderr: "GET https://api.github.com/repos/pingdotgg/t3code/releases returned HTTP 403" };
+      return (state.t3 = true), { code: 0, stdout: "" };
+    }
     if (line === "t3 service status") {
       if (state.service === "unavailable") return { code: 0, stdout: "T3 Code service\n  Status: unavailable on this machine\n" };
       if (state.service === "not installed") return { code: 0, stdout: "T3 Code service\n  Status: not installed\n  Next: Run `t3 service install`.\n" };
@@ -179,8 +199,9 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
 function setup(options: Parameters<typeof fakeServer>[0] = {}, machine: Machine = {}) {
   const server = fakeServer(options);
   const commands = runner(server, machine);
-  const adapter = t3Adapter({ run: commands.run, server: server.server, user: "octo" });
-  return { server, commands, adapter };
+  const waits: number[] = [];
+  const adapter = t3Adapter({ run: commands.run, server: server.server, user: "octo", wait: async (ms) => void waits.push(ms) });
+  return { server, commands, adapter, waits };
 }
 
 function seed(target: Plan, home: string, options: { adopt?: string[] } = {}) {
@@ -753,6 +774,35 @@ describe("T3 on Linux", () => {
     ]);
     const again = await apply(plan("linux", []), { home, adapters: [adapter] });
     expect(again.actions).toEqual([]);
+  });
+
+  test("installs the newest nightly the release feed names, so the installer skips GitHub's rate-limited releases API", async () => {
+    const { commands, adapter } = setup({}, { t3: false });
+    const report = await apply(plan("linux", []), { home: temp.make("home-"), adapters: [adapter] });
+    expect(commands.state.installerVersions).toEqual(["0.1.9-nightly.20990102.7"]);
+    expect(report.actions).toContainEqual({ target: "t3", operation: "create", reason: "nightly channel" });
+  });
+
+  test("lets the installer find the version itself when the feed is down or names no nightly", async () => {
+    for (const feed of ["", "<feed></feed>"]) {
+      const { commands, adapter } = setup({}, { t3: false, feed });
+      const report = await apply(plan("linux", []), { home: temp.make("home-"), adapters: [adapter] });
+      expect(commands.state.installerVersions).toEqual([""]);
+      expect(report.actions).toContainEqual({ target: "t3", operation: "create", reason: "nightly channel" });
+    }
+  });
+
+  test("runs the installer up to three times, waiting longer before each new try, before it reports a failed install", async () => {
+    const flaky = setup({}, { t3: false, installFailures: 2 });
+    const report = await apply(plan("linux", []), { home: temp.make("home-"), adapters: [flaky.adapter] });
+    expect(flaky.commands.state.installerVersions).toHaveLength(3);
+    expect(flaky.waits).toEqual([1000, 2000]);
+    expect(report.actions).toContainEqual({ target: "t3", operation: "create", reason: "nightly channel" });
+
+    const down = setup({}, { t3: false, installFailures: 3 });
+    const failed = await apply(plan("linux", []), { home: temp.make("home-"), adapters: [down.adapter] });
+    expect(down.commands.state.installerVersions).toHaveLength(3);
+    expect(failed.findings).toContainEqual({ id: "t3:cli", pack: "engine", say: "T3 Code did not install (exit 1). Run fleet apply again.", repair: "apply" });
   });
 
   test("writes Fleet's settings before it installs t3 or its service, so T3 Code's first start reads them", async () => {
