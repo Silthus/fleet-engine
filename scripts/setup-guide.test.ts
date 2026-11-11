@@ -86,6 +86,15 @@ describe("the agent setup guide", () => {
     }
   });
 
+  test("its fleet setup command finishes in one run while the person signs in to GitHub, Claude, and ChatGPT in the browser", async () => {
+    const command = guide().match(/^fleet setup (.+)$/m)![1]!;
+    const home = temp.make("home-");
+    const args = command.replace("<id>", "everyday").replace("<claude|codex|both>", "both").split(" ");
+    const result = await fleetSetup(home, args, [], fakeMachine(home, { github: 5, claude: 3, chatgpt: 4 }), undefined, 0, "darwin");
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("✓ Ready to use. Start a new thread in T3 Code now.");
+  });
+
   test("offers every pack setup can turn on, in the words of its own summary", async () => {
     const rows = packRows();
     const packs = (await loadPacks(root)).map((pack) => pack.manifest).filter((manifest) => manifest.name !== "base");
@@ -213,7 +222,7 @@ describe("the agent setup guide", () => {
   });
 
   test("explains a workflow in one plain line the first time it tells the person what Fleet is, whatever they know", () => {
-    const show = words(guide().slice(guide().indexOf("## 3. Show what Fleet is"), guide().indexOf("## 4. Ask where Fleet runs")));
+    const show = words(guide().slice(guide().indexOf("## 3. Show what Fleet is"), guide().indexOf("## 4. Where Fleet runs")));
     expect(show).toContain("A **workflow** is one way of working that agents follow, such as a draft pull request for every fix.");
     expect(show.indexOf("**workflow**")).toBeLessThan(show.indexOf("**pack**"));
   });
@@ -221,7 +230,7 @@ describe("the agent setup guide", () => {
   test("uses each long wait to explain one thing, from each step that waits", () => {
     const waits = words(guide().slice(guide().indexOf("## While something runs"), guide().indexOf("## 1. Check the Mac")));
     for (const topic of ["**T3 Code's inbox.**", "**The Slack trigger.**", "**Threads on nodes.**", "**What runs each night.**"]) expect(waits).toContain(topic);
-    for (const step of ["## 5. Install the tools", "## 7. Run setup with their answers", "## 9. Add the hub and the node"]) {
+    for (const step of ["## 1. Check the Mac and start the install", "## 5. Install the tools", "## 7. Run setup with their answers", "## 9. Add the hub and the node"]) {
       const body = guide().slice(guide().indexOf(step));
       expect(words(body.slice(0, body.indexOf("\n## ", 3)))).toContain("(see \"While something runs\")");
     }
