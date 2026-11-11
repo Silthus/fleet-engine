@@ -23,12 +23,14 @@ export function memoryTemp(env: Record<string, string | undefined>, { memory, pi
 }
 
 function mountedNoexec(path: string, mounts: string) {
-  const covering = mounts
-    .split("\n")
-    .map((line) => line.split(" "))
-    .filter(([, point]) => point !== undefined && (path === point || path.startsWith(point.endsWith("/") ? point : `${point}/`)))
-    .sort(([, a], [, b]) => b!.length - a!.length)[0];
-  return covering?.[3]?.split(",").includes("noexec") ?? false;
+  let covering: { point: string; options: string[] } | undefined;
+  for (const [, escaped, , options] of mounts.split("\n").map((line) => line.split(" "))) {
+    if (escaped === undefined || options === undefined) continue;
+    const point = escaped.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+    const holds = path === point || path.startsWith(point.endsWith("/") ? point : `${point}/`);
+    if (holds && point.length >= (covering?.point.length ?? 0)) covering = { point, options: options.split(",") };
+  }
+  return covering?.options.includes("noexec") ?? false;
 }
 
 function ownRoot(memory: string) {
