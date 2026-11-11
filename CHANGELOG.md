@@ -22,6 +22,8 @@ packs, and your answers live in your own private profile repo.
 - `fleet apply` puts your profile's packs onto the machine. `fleet doctor`
   checks the machine against the same plan without changing it. `fleet update`
   moves the engine and your profile forward, then applies.
+  When `fleet apply` installs T3 Code on Linux, it finds the nightly the same
+  way `get.sh` does and runs the installer up to three times.
 - `fleet packs`, `fleet settings`, and `fleet set` turn packs and workflows on
   and off and change their settings. `fleet devbox add` makes an SSH host one
   of your devboxes.
