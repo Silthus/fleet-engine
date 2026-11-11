@@ -33,6 +33,17 @@ describe("get.sh", () => {
     expect(existsSync(join(box.home, ".config/fleet/machine.json"))).toBe(false);
   });
 
+  test("logs when the install started and when each phase ended, for fleet setup's timings", () => {
+    const box = sandbox("Linux");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    const lines = readFileSync(join(box.home, ".local/state/fleet/install-timings"), "utf8").trim().split("\n").map((line) => line.split(" "));
+    expect(lines.map((words) => words[0])).toEqual(["start", "tools", "t3", "engine", "packages"]);
+    const times = lines.map((words) => Number(words[1]));
+    expect(times.every((time, index) => time >= (times[index - 1] ?? 0) && Math.abs(time * 1000 - Date.now()) < 600_000)).toBe(true);
+    expect(lines.every((words) => words.length === 2)).toBe(true);
+  });
+
   test("installs the engine's packages in the engine directory", () => {
     const box = sandbox("Linux");
     const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);

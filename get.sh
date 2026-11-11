@@ -33,6 +33,13 @@ done
 [ "$(id -u)" -ne 0 ] || fail "run this as your login user, without sudo."
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
 
+# fleet setup reads this log to time the whole install, from this line on.
+install_log="$HOME/.local/state/fleet/install-timings"
+needed_you=
+mkdir -p "${install_log%/*}"
+printf 'start %s\n' "$(date +%s)" >"$install_log"
+ended() { printf '%s %s%s\n' "$1" "$(date +%s)" "${2:+ $2}" >>"$install_log"; }
+
 retry() {
   tries=1
   until "$@"; do
@@ -58,11 +65,13 @@ mac_tools() {
   export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
   if ! xcode-select -p >/dev/null 2>&1; then
     say "Installing the Command Line Tools. Finish the window that opens; this script waits."
+    needed_you=needed-you
     xcode-select --install >/dev/null 2>&1 || true
     until xcode-select -p >/dev/null 2>&1; do sleep 5; done
   fi
   if ! has brew; then
     say "Installing Homebrew. It asks for your Mac password once."
+    needed_you=needed-you
     installer=$(download https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
     # Under curl | sh, stdin is the script, so Homebrew could not ask for the password.
     if [ ! -t 0 ] && (: </dev/tty) 2>/dev/null; then
@@ -211,10 +220,14 @@ case "$(uname -s)" in
     has bun || linux_bun ;;
   *) fail "Fleet runs on macOS and Linux." ;;
 esac
+ended tools "$needed_you"
 t3_cli
+ended t3
 has git || fail "git is missing."
 fetch_engine
+ended engine
 install_packages
+ended packages
 link_fleet
 login_path
 say "Engine ready at $ref in $engine_dir."

@@ -6,7 +6,7 @@ import { git, isolateGit, tempDirs } from "./git.ts";
 export const repoRoot = join(import.meta.dir, "..", "..");
 export const onLinuxHost = test.if(process.platform === "linux");
 
-const systemTools = ["sh", "env", "id", "cat", "mkdir", "mktemp", "rm", "chmod", "dirname", "sed", "grep", "head", "install", "tar", "gzip", "git", "bun", "sha256sum", "tr", "tail", "ls", "cp", "mv", "basename", "sleep", "python3"];
+const systemTools = ["sh", "env", "id", "cat", "mkdir", "mktemp", "rm", "chmod", "dirname", "sed", "grep", "head", "install", "tar", "gzip", "git", "bun", "sha256sum", "tr", "tail", "ls", "cp", "mv", "basename", "sleep", "python3", "date"];
 
 type SandboxOptions = { without?: string[]; brewInstaller?: string; t3Failures?: number; releasesFeed?: string };
 export type Sandbox = { root: string; bin: string; home: string; log: string; stub: (name: string, body: string) => void; failDownloads: (pattern: string, times: number) => void; stallDownloads: (pattern: string, times: number) => void };

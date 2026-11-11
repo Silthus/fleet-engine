@@ -1,4 +1,5 @@
 import type { Terminal } from "./terminal.ts";
+import { duration, type StepRecord } from "./timings.ts";
 
 export type StepKind = "auto" | "question" | "human";
 
@@ -18,6 +19,19 @@ export type RunOptions = {
   done: string[];
   /** Saves the done list. A step saves its own answers before it returns, so a stop between the two loses nothing. */
   save(done: string[]): Promise<void>;
+  clock?: { now(): number };
+  /** Calls tick every ms until the returned stop runs. */
+  every?: (ms: number, tick: () => void) => () => void;
+  /** How many times setup has waited for the person so far, from questions and sign-ins. */
+  waits?: () => number;
+  record?(step: StepRecord): Promise<void>;
+};
+
+const heartbeatMs = 15_000;
+
+const intervals = (ms: number, tick: () => void) => {
+  const timer = setInterval(tick, ms);
+  return () => clearInterval(timer);
 };
 
 export type RunResult = { finished: boolean; unanswered: string[] };
@@ -43,13 +57,33 @@ export async function runSteps(steps: () => Step[], options: RunOptions): Promis
     if (open.size && step.kind !== "question") return { finished: false, unanswered: [...open] };
     options.terminal.print("");
     options.terminal.print(header(list, done));
-    if ((await step.run()) === "unanswered") {
+    const outcome = await timed(step, options);
+    if (outcome === "unanswered") {
       open.add(step.id);
       continue;
     }
     done.add(step.id);
     await options.save([...done]);
   }
+}
+
+async function timed(step: Step, options: RunOptions): Promise<StepOutcome> {
+  const clock = options.clock ?? Date;
+  const start = clock.now();
+  const waitsBefore = options.waits?.() ?? 0;
+  const stop =
+    step.kind === "auto"
+      ? (options.every ?? intervals)(heartbeatMs, () => options.terminal.print(`  … ${step.title}: still running, ${duration(Math.round((clock.now() - start) / 1000))} so far`))
+      : () => {};
+  let outcome: StepOutcome;
+  try {
+    outcome = await step.run();
+  } finally {
+    stop();
+  }
+  const unanswered = outcome === "unanswered";
+  await options.record?.({ id: step.id, title: step.title, kind: step.kind, start, end: clock.now(), neededYou: unanswered || (options.waits?.() ?? 0) > waitsBefore, ...(unanswered ? { outcome: "unanswered" as const } : {}) });
+  return outcome;
 }
 
 export function header(steps: Step[], done: Set<string>) {

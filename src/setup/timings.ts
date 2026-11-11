@@ -1,0 +1,124 @@
+import { existsSync, readFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import type { StepKind } from "./runner.ts";
+
+export const timingsPath = (home: string) => join(home, ".local/state/fleet/setup-timings.json");
+/** get.sh writes this: a line "start <epoch s>", then one line "<phase> <epoch s when it ended> [needed-you]" per phase. */
+export const installLogPath = (home: string) => join(home, ".local/state/fleet/install-timings");
+
+/** An install log older than this belongs to an earlier install, not to this setup. */
+const installLogMaxAgeMs = 2 * 3600 * 1000;
+
+export type StepTiming = {
+  id: string;
+  title: string;
+  kind: StepKind;
+  start: string;
+  end: string;
+  seconds: number;
+  /** The step waited for the person: a question, a confirmation, or a sign-in. */
+  neededYou: boolean;
+  outcome?: "unanswered";
+};
+
+/** The time from the start of the install to a machine the person can use, step by step. fleet setup writes it after each step. */
+export type Timings = {
+  schema: 1;
+  started: string;
+  steps: StepTiming[];
+  usable: string | null;
+  usableSeconds: number | null;
+  /** How many steps needed the person at least once. */
+  neededYou: number;
+};
+
+const installTitles: Record<string, string> = {
+  tools: "Install the tools",
+  t3: "Install the t3 command",
+  engine: "Fetch the engine",
+  packages: "Install the engine's packages",
+};
+
+export type StepRecord = Pick<StepTiming, "id" | "title" | "kind" | "neededYou" | "outcome"> & { start: number; end: number };
+
+export type TimingsLog = {
+  record(step: StepRecord): Promise<void>;
+  /** Marks the machine usable and returns the line to print, or nothing when no step ran in this record. */
+  usable(at: number): Promise<string | undefined>;
+};
+
+/** Continues the record of a setup that is not usable yet, or starts a new one at the start of get.sh, or now. */
+export function openTimings(home: string, now: number): TimingsLog {
+  const path = timingsPath(home);
+  const earlier = read(path);
+  let timings: Timings = earlier && earlier.usable === null ? earlier : fresh(home, now);
+  let wrote = timings === earlier;
+  const save = async () => {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify(timings, null, 2)}\n`);
+    wrote = true;
+  };
+  return {
+    async record(step) {
+      const entry: StepTiming = { id: step.id, title: step.title, kind: step.kind, start: iso(step.start), end: iso(step.end), seconds: seconds(step.end - step.start), neededYou: step.neededYou, ...(step.outcome ? { outcome: step.outcome } : {}) };
+      timings = { ...timings, steps: [...timings.steps, entry], neededYou: new Set([...timings.steps, entry].filter((item) => item.neededYou).map((item) => item.id)).size };
+      await save();
+    },
+    async usable(at) {
+      if (!wrote) return undefined;
+      const total = seconds(at - Date.parse(timings.started));
+      timings = { ...timings, usable: iso(at), usableSeconds: total };
+      await save();
+      return `  Usable ${duration(total)} after the start. ${timings.neededYou} ${timings.neededYou === 1 ? "step" : "steps"} needed you.`;
+    },
+  };
+}
+
+function fresh(home: string, now: number): Timings {
+  const install = installPhases(home, now);
+  const started = install?.started ?? now;
+  const steps = install?.steps ?? [];
+  return { schema: 1, started: iso(started), steps, usable: null, usableSeconds: null, neededYou: steps.filter((step) => step.neededYou).length };
+}
+
+function installPhases(home: string, now: number): { started: number; steps: StepTiming[] } | undefined {
+  const path = installLogPath(home);
+  if (!existsSync(path)) return undefined;
+  const lines = readFileSync(path, "utf8")
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/))
+    .filter((words) => words.length >= 2 && /^\d+$/.test(words[1]!));
+  const first = lines[0];
+  if (first?.[0] !== "start") return undefined;
+  const started = Number(first[1]) * 1000;
+  if (now - started > installLogMaxAgeMs || started > now) return undefined;
+  const steps: StepTiming[] = [];
+  let previous = started;
+  for (const [phase, ended, flag] of lines.slice(1)) {
+    const end = Number(ended) * 1000;
+    steps.push({ id: `install:${phase}`, title: installTitles[phase!] ?? phase!, kind: flag === "needed-you" ? "human" : "auto", start: iso(previous), end: iso(end), seconds: seconds(end - previous), neededYou: flag === "needed-you" });
+    previous = end;
+  }
+  return { started, steps };
+}
+
+function read(path: string): Timings | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Timings;
+    return parsed.schema === 1 && Array.isArray(parsed.steps) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const iso = (ms: number) => new Date(ms).toISOString();
+const seconds = (ms: number) => Math.round(ms / 1000);
+
+/** 75 → "1 min 15 s". */
+export function duration(total: number) {
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  if (!minutes) return `${rest} s`;
+  return rest ? `${minutes} min ${rest} s` : `${minutes} min`;
+}
