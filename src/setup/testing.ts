@@ -37,7 +37,7 @@ async function realGit(home: string, args: string[], cwd?: string): Promise<Exec
   const run = async (command: string[]) => {
     const child = Bun.spawn(command, { cwd, env: gitEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { code, output: `${stdout}${stderr}` };
+    return { code, output: `${stdout}${stderr}`, stdout };
   };
   const result = await run(["git", "-c", `url.${remotes}.insteadOf=https://github.com/`, ...args]);
   if (args[0] === "clone" && result.code === 0) await run(["git", "-C", args.at(-1)!, "config", `url.${remotes}.insteadOf`, "https://github.com/"]);
@@ -51,6 +51,12 @@ export const coderWhoami = "Coder is running at https://coder.example.com, You'r
 /** The one token coder tokens create prints, alone on its line. */
 export const coderToken = ["fleet", "test", "coder", "token"].join("-");
 
+const hostKeyAdded = (host: string) => `Warning: Permanently added '${host}' (ED25519) to the list of known hosts.\n`;
+
+export const boxHome = (home: string, host: string) => join(home, "boxes", host);
+
+export const boxMachineFile = (home: string, host: string) => JSON.parse(readFileSync(join(boxHome(home, host), ".config/fleet/machine.json"), "utf8"));
+
 /** The command an SSH call runs on the box, without the PATH prefix. */
 export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-1)!.replace(/^PATH=[^;]*; /, "") : undefined);
 
@@ -59,29 +65,70 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * of 2 s polls: 0 means already signed in, and a sign-in that is never
  * started never passes. Its gh makes repos as bare repos under the home, and
  * git runs for real with github.com rewritten to them. Its ssh reaches a fake
- * devbox whose sign-ins work the same way; Claude there signs in when its
- * foreground sign-in runs.
+ * devbox whose sign-ins work the same way, and which, like real ssh, warns
+ * on stderr that it added the host key the first time it reaches a host
+ * other than a coder. one; Claude there signs in when its
+ * foreground sign-in runs. A command on the box that reads or writes its
+ * role file runs for real in a home folder of its own under the test home.
+ * The hub takes the nodes the pushed profile lists at each fleet update;
+ * until then it refuses a node's credential when the node applies its
+ * profile, and its fleet peers link refuses the node.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; boxCoderAt?: string } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
   const coderSsh: string[] = [];
+  const hubUpdates: string[] = [];
+  const hubTook = new Set<string>();
+  const credentials: Array<{ node: string; issued: boolean }> = [];
+  const hubLinked: string[] = [];
   const starts: string[][] = [];
   const runs: Array<{ command: string[]; input: boolean }> = [];
   const sleeps: number[] = [];
   const opened: string[] = [];
   let devbox = false;
   const passes = (name: SignInName) => left[name] === 0;
-  const result = (ok: boolean, output = ""): ExecResult => ({ code: ok ? 0 : 1, output });
+  const result = (ok: boolean, output = ""): ExecResult => ({ code: ok ? 0 : 1, output, stdout: output });
+  const reached = new Set<string>();
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
   const t3 = (line: string, token: string) => {
     if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
     if (line.startsWith("t3 environment link ")) return result(true, "linked");
     return undefined;
   };
+  const pushedProfile = async (): Promise<{ hub?: string; devboxes?: string[] }> => {
+    try {
+      return await pushedAnswers(home);
+    } catch {
+      return {};
+    }
+  };
+  const onTheHub = async (line: string, host: string): Promise<ExecResult | undefined> => {
+    const fleet = line.match(/\/\.local\/share\/fleet\/engine\/fleet" (.+)$/)?.[1];
+    if (fleet === undefined) return undefined;
+    if (options.hubDown) return { code: 255, output: "ssh: connect to host: Connection refused", stdout: "" };
+    if (fleet === "update" && options.hubUpdateFails) return result(false, `${options.hubUpdateFails}\n`);
+    if (fleet === "update") {
+      hubUpdates.push(host);
+      for (const node of (await pushedProfile()).devboxes ?? []) hubTook.add(node);
+      return result(true, "✓ Up to date");
+    }
+    const linked = fleet.match(/^peers link (\S+)$/)?.[1];
+    if (linked === undefined) return result(false, `unexpected on the hub: ${fleet}`);
+    if (!hubTook.has(linked) || !passes("box:t3")) return result(false, `${linked}: not linked`);
+    hubLinked.push(linked);
+    return result(true, `linked ${linked}`);
+  };
+  const forReal = async (line: string, host: string, input?: string): Promise<ExecResult> => {
+    const child = Bun.spawn(["sh", "-c", line], { env: { HOME: boxHome(home, host), PATH: process.env.PATH ?? "" }, stdin: input === undefined ? "ignore" : new Blob([input]), stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { code, output: `${stdout}${stderr}`, stdout };
+  };
   let boxCoderAt = options.boxCoderAt ?? "https://coder.example.com";
-  const box = (line: string, input?: string): ExecResult => {
+  const box = async (line: string, input: string | undefined, host: string): Promise<ExecResult> => {
+    const hub = await onTheHub(line, host);
+    if (hub) return hub;
     if (line === "coder whoami") return passes("box:coder") ? result(true, coderWhoami.replace("https://coder.example.com", boxCoderAt)) : result(false, "You are not logged in");
     if (line.includes('CODER_SESSION_TOKEN="$token" coder login ') && line.startsWith("sh -c ")) {
       if (!line.includes("coder login --use-token-as-session https://coder.example.com")) return result(false, "CODER_SESSION_TOKEN is set. Unset it, or pass --use-token-as-session to save it as your session.");
@@ -94,6 +141,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line === "claude auth status") return result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
     if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
+    if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
     if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: passes("box:t3"), linked: passes("box:t3"), relayUrl: passes("box:t3") ? "https://box-1.relay.example/" : null }));
     return t3(line, "BOXCODE") ?? result(false, `unexpected on the box: ${line}`);
   };
@@ -101,7 +149,13 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     async exec(command, run = {}) {
       calls.push({ command, ...run });
       const remote = onBox(command);
-      if (remote !== undefined) return box(remote, run.input);
+      if (remote !== undefined) {
+        const host = command.at(-2)!;
+        const answer = await box(remote, run.input, host);
+        const firstContact = !host.startsWith("coder.") && !reached.has(host);
+        reached.add(host);
+        return firstContact ? { ...answer, output: `${answer.output}${hostKeyAdded(host)}` } : answer;
+      }
       const line = command.join(" ");
       if (line.startsWith("gh auth status")) return ghStatus("github", started.has("github") ? scopes : (options.scopes ?? scopes));
       if (line === "gh auth setup-git") return result(true);
@@ -137,7 +191,11 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     async run(command, run = {}) {
       runs.push({ command, input: run.input ?? false });
-      if (onBox(command) === "claude auth login") left["box:claude"] = 0;
+      const remote = onBox(command);
+      if (remote === "claude auth login") left["box:claude"] = 0;
+      const node = command.at(-2)!;
+      const { hub } = remote?.includes(" --profile ") ? await pushedProfile() : {};
+      if (hub && hub !== node && !options.hubDown) credentials.push({ node, issued: hubTook.has(node) });
       if (options.failRun) return 1;
       if (command.join(" ") === "sh -c coder login") left.coder = 0;
       return 0;
@@ -151,7 +209,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     has: () => true,
   };
-  return { machine, calls, starts, runs, sleeps, opened, coderSsh };
+  return { machine, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked };
 }
 
 export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>, doctorCode = 0, platform: NodeJS.Platform = "linux", onApply: (dir: string) => void = () => {}) {
