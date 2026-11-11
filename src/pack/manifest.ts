@@ -6,7 +6,7 @@ import { handlerSeams, needValues, type LoadedPack, type ModelRow, type PackMani
 export class PackError extends Error {}
 
 const settingTypes = ["string", "number", "boolean", "choice"];
-const packName = /^[a-z][a-z0-9-]*$/;
+export const packName = /^[a-z][a-z0-9-]*$/;
 
 /** Settings the engine reads, which any pack may declare to set their default. */
 export const engineSettings = ["identity.signer"];
@@ -186,6 +186,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(item.interactive === undefined || item.command !== undefined, `${label}: interactive needs a command to run`);
     need(item.repair === undefined || isStrings(item.repair), `${label}: repair must be a command list`);
     need(item.undo === undefined || filled(item.undo), `${label}: undo must say what a person does`);
+    need(item.left === undefined || (isStrings(item.left) && item.left.length > 0), `${label}: left must be a command list`);
+    need(item.left === undefined || item.undo !== undefined, `${label}: left needs an undo`);
     filters(item, label);
   });
   each("steps", (item, label) => {
