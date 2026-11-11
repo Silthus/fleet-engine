@@ -7,6 +7,8 @@ export type ThreadLaunch = { title: string; prompt: string; row: ModelRow; comma
 const instances = { claude: { instanceId: "claudeAgent", effort: "effort" }, codex: { instanceId: "codex", effort: "reasoningEffort" } } as const;
 const launchTimeoutMs = 120_000;
 
+export class UnansweredLaunch extends Error {}
+
 export async function launchScratchThread(client: Pick<T3Client, "call">, launch: ThreadLaunch): Promise<string> {
   const { projectId } = await client.call<{ projectId: string }>("projects.ensureScratch", {});
   const instance = instances[launch.row.provider];
@@ -20,6 +22,8 @@ export async function launchScratchThread(client: Pick<T3Client, "call">, launch
     interactionMode: "default",
     workspaceStrategy: { type: "root" },
     initialMessage: { text: launch.prompt, attachments: [] },
-  }, launchTimeoutMs);
+  }, launchTimeoutMs).catch((error: Error) => {
+    throw new UnansweredLaunch(error.message);
+  });
   return threadId;
 }

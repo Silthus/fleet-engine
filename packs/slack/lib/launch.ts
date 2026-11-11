@@ -1,4 +1,4 @@
-import { threadUrl } from "../../../src/integrations/t3/index.ts";
+import { threadUrl, UnansweredLaunch } from "../../../src/integrations/t3/index.ts";
 import type { Threads } from "../../../src/sdk/index.ts";
 import type { DiskStatus } from "../../base/lib/disk.ts";
 import type { Started } from "./trigger.ts";
@@ -30,7 +30,7 @@ export function launchHere(threads: Threads, room: () => DiskStatus): Launch {
       const { id, url } = await threads.start({ key: commandId, title, prompt, modelRole: "implementation" });
       return { threadId: id, url, where: "this machine" };
     } catch (error) {
-      return { failed: (error as Error).message, reachedT3: true };
+      return error instanceof UnansweredLaunch ? { failed: error.message, reachedT3: true } : { failed: (error as Error).message };
     }
   };
 }
@@ -46,19 +46,24 @@ export function launchOnBox(fleet: string, run: Run): Launch {
       claim = { box, environmentId };
     }
     const ran = await run([fleet, "box", "run", claim.box, "--", "fleet", "slack-trigger", "launch"], JSON.stringify(request));
-    const threadId = ran.code === 0 ? threadOf(lastLine(ran.stdout)) : undefined;
-    if (threadId) return { threadId, url: claim.environmentId ? threadUrl(claim.environmentId, threadId) : undefined, where: claim.box };
-    return { failed: `fleet slack-trigger launch on ${claim.box}: ${why(ran)}`, claim };
+    const answer = answerOf(lastLine(ran.stdout));
+    if (ran.code === 0 && answer.threadId) return { threadId: answer.threadId, url: claim.environmentId ? threadUrl(claim.environmentId, answer.threadId) : undefined, where: claim.box };
+    const failed = `fleet slack-trigger launch on ${claim.box}: ${answer.failed ?? why(ran)}`;
+    return answer.reachedT3 ? { failed, claim, reachedT3: true } : { failed, claim };
   };
   launch.release = async (claim) => void (await run([fleet, "box", "release", claim.box]));
   return launch;
 }
 
-function threadOf(line: string): string | undefined {
+function answerOf(line: string): { threadId?: string; failed?: string; reachedT3?: true } {
   try {
-    const value = JSON.parse(line) as { threadId?: unknown };
-    return typeof value.threadId === "string" && value.threadId ? value.threadId : undefined;
+    const value = JSON.parse(line) as { threadId?: unknown; failed?: unknown; reachedT3?: unknown };
+    return {
+      ...(typeof value.threadId === "string" && value.threadId ? { threadId: value.threadId } : {}),
+      ...(typeof value.failed === "string" ? { failed: value.failed } : {}),
+      ...(value.reachedT3 === true ? { reachedT3: true } : {}),
+    };
   } catch {
-    return undefined;
+    return {};
   }
 }

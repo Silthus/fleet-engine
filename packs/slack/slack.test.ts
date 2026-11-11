@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
-import { t3CliRunner, t3Threads } from "../../src/integrations/t3/index.ts";
+import { t3CliRunner, t3Threads, UnansweredLaunch } from "../../src/integrations/t3/index.ts";
 import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { secretStore } from "../../src/runner/context.ts";
@@ -280,7 +280,7 @@ describe("a launch that fails", () => {
     deps.launch = launchHere({
       async start({ key }) {
         if (!started.has(key)) started.set(key, `T${started.size + 1}`);
-        if (!answers) throw new Error("T3 did not answer");
+        if (!answers) throw new UnansweredLaunch("T3 did not answer");
         return { id: started.get(key)!, url: `https://app.t3.codes/threads/E1/${started.get(key)}` };
       },
     }, () => disk);
@@ -291,6 +291,43 @@ describe("a launch that fails", () => {
     await retryPending(deps);
     expect([...started.values()]).toEqual(["T1"]);
     expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/E1/T1|Slack: why?> on this machine.");
+  });
+
+  test("checks the start floor again on a retry whose launch failed before it reached T3", async () => {
+    const { deps, later } = rig([]);
+    const started: string[] = [];
+    let ready = false;
+    let disk = { critical: false, message: "" };
+    deps.launch = launchHere({
+      async start({ key }) {
+        if (!ready) throw new Error("The model table of your AI plan has no implementation row.");
+        started.push(key);
+        return { id: "T1" };
+      },
+    }, () => disk);
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    ready = true;
+    disk = { critical: true, message: "3.0G free, below the 25G floor." };
+    later(60_000);
+    await retryPending(deps);
+    expect(started).toEqual([]);
+  });
+
+  test("on a box, retries a launch whose T3 answer was lost as a replay", async () => {
+    let answers = 0;
+    const fleet = processes((argv) => {
+      if (argv.slice(1).join(" ") === "box spawn") return { code: 0, stdout: "box-8 env-box-8\n" };
+      if (argv[2] === "run") return answers++ === 1 ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-on-box" })}\n` } : { code: 1, stdout: `${JSON.stringify({ failed: "T3 did not answer", reachedT3: true })}\n` };
+      return undefined;
+    });
+    const { deps, replies, later } = rig([]);
+    deps.launch = launchOnBox("/opt/fleet-engine/fleet", fleet.run);
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    later(60_000);
+    await retryPending(deps);
+    const sent = fleet.calls.filter((call) => call.argv[2] === "run").map((call) => JSON.parse(call.input!));
+    expect(sent.map((request) => request.replay)).toEqual([undefined, true]);
+    expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/env-box-8/thread-on-box|Slack: why?> on box-8.");
   });
 
   test("keeps a trigger whose Slack thread could not be read, and starts it on the next retry", async () => {
@@ -437,6 +474,13 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
     expect(await slackTrigger(["launch"], deps)).toBe(0);
     expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1" });
     expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")?.payload).toMatchObject({ commandId: "command-1", title: "Slack: hi", initialMessage: { text: "Do it." } });
+  });
+
+  test("launch on a box replays a launch below the start floor, so T3 answers with the thread it already started", async () => {
+    const t3 = await t3Server();
+    const deps = commandDeps(temp.make("home-"), { threads: t3Threads(models, { home: t3.home }), freeBytes: gigabytes(3), readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1", replay: true }) });
+    expect(await slackTrigger(["launch"], deps)).toBe(0);
+    expect(t3.rpcCalls.filter((call) => call.tag === "orchestration.launchThread").map((call) => (call.payload as { commandId: string }).commandId)).toEqual(["command-1"]);
   });
 
   test("launch on a box below the start floor starts no thread and prints why on one line", async () => {

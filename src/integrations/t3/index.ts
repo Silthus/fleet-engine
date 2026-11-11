@@ -12,7 +12,7 @@ export {
   findThread, lastActivityAt, matchThread, readSnapshots, readThread, readThreadWords, readTurnItems, sendMessage,
   type SentMessage, type ShellProject, type ShellPullRequest, type ShellSnapshot, type ShellThread, type ThreadWord, type TurnItem,
 } from "./threads.ts";
-export { launchScratchThread, type ThreadLaunch } from "./launch.ts";
+export { launchScratchThread, UnansweredLaunch, type ThreadLaunch } from "./launch.ts";
 export { t3Threads, threadUrl } from "./start.ts";
 export {
   continueText, listLocalThreads, readProviderInstances, recoveryScopes, sendContinue, settingsScopes, upsertProviderInstance,
