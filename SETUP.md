@@ -113,7 +113,8 @@ Ask in one call:
 
 - **Packs.** One option per preset in `~/.local/share/fleet/engine/presets.json`,
   with its `blurb`, and "One by one". For one by one, ask a multi-select
-  question with the packs below. Base is always on. The page
+  question with the packs below whose row says "Always". The others need a
+  hub that runs, so they come later. Base is always on. The page
   [A day with Fleet](https://silthus.github.io/fleet-engine/) shows each pack
   during a workday.
 - **AI plan.** Claude, ChatGPT, or both: it decides the sign-ins and the
