@@ -63,7 +63,7 @@ A prompt from an earlier page can carry more lines. Use them too:
 
 ## While something runs
 
-Steps 5, 7, and 9 run commands that take minutes. While one runs in the
+Steps 1, 7, and 9 start commands that take minutes. While one runs in the
 background, explain one of these, in two or three lines, and do not repeat
 one. Skip a topic that does not fit their picks:
 
@@ -80,7 +80,7 @@ one. Skip a topic that does not fit their picks:
 Say whether the step runs once or again later. The install and each sign-in
 run once per machine. `fleet update` runs again every night by itself.
 
-## 1. Check the Mac
+## 1. Check the Mac and start the install
 
 Run `uname -s` and `id -u`. Go on when the output is `Darwin` and a user ID
 other than `0`. On another system, tell the person that this guide is for a
@@ -93,30 +93,68 @@ and ask:
 - **Change only what they name** (recommended): run `fleet packs` with
   `--add`, `--remove`, and `--workflows` for each change, then go on to step
   8. Everything else stays as it is.
-- **Run setup again**: setup reuses their profile repo. The packs and
-  workflow switches of this run replace the earlier ones, so a hub pack or a
-  workflow they turned on is off again unless the step 7 command names it.
-  Carry each one from the list into that command. Earlier settings stay
-  unless this run sets them again. Files they changed by hand are kept, and
-  step 8 shows them.
+- **Run setup again**: setup reuses their profile repo and starts from its
+  packs, workflows, and settings. In the step 7 command, leave out
+  `--preset`, and name only what changes with `--add`, `--remove`, and
+  `--workflows`. Everything else stays as it is. Files they changed by hand
+  are kept, and step 8 shows them.
 
-## 2. Ask what they know
+Without an earlier setup, start the install now, so it runs while you ask
+and explain. Download the install script and the presets in one command,
+and read the script. Keep it in view, because a pipe into `sh` hides what
+runs:
 
-Ask three questions in one call, each with the options "New to me" and "I
-know it":
+```sh
+mkdir -p ~/.cache/fleet-setup && curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh -o ~/.cache/fleet-setup/get.sh && curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/presets.json -o ~/.cache/fleet-setup/presets.json && cat ~/.cache/fleet-setup/get.sh
+```
 
-1. T3 Code, the app you are talking in.
-2. Fleet, what it sets up.
-3. Devboxes: Linux machines in the cloud, such as Coder workspaces, where
-   agents keep working while the Mac sleeps.
+Tell the person in two lines what it adds when missing: the GitHub CLI, Bun,
+and the `t3` command, the engine in `~/.local/share/fleet/engine`, `fleet` in
+`~/.local/bin`, and one `PATH` line in their login file. They asked for this
+setup, so start it at once, in the background, and say they can tell you to
+stop it.
 
-Each "New to me" adds an explainer to a later step:
+When `command -v brew` finds Homebrew, start it in the background yourself:
+
+```sh
+sh ~/.cache/fleet-setup/get.sh --install-only
+```
+
+When Homebrew is missing, its installer needs the person's Mac password, so
+run the script in a Terminal window and ask them to tell you when it ends.
+When the Command Line Tools are missing, a Mac window asks to install them;
+the person clicks **Install**:
+
+```sh
+printf '#!/bin/sh\nsh ~/.cache/fleet-setup/get.sh --install-only\n' > ~/.cache/fleet-setup/install.command && chmod +x ~/.cache/fleet-setup/install.command && open ~/.cache/fleet-setup/install.command
+```
+
+Go on to step 2 while it runs. Use the wait (see "While something runs").
+
+## 2. Ask everything in one call
+
+Every answer setup needs comes now, in one call of your question tool, so
+nothing waits for the person later. Leave out a question that the picks from
+the page answer:
+
+1. **New to you.** A multi-select question: "Which of these are new to you?"
+   with T3 Code (the app you are talking in), Fleet (what it sets up), and
+   Devboxes (Linux machines in the cloud, such as Coder workspaces, where
+   agents keep working while the Mac sleeps). Nothing picked means they know
+   all three.
+2. **Where Fleet runs**, with the options of step 4.
+3. **Packs**, with the options of step 6.
+4. **AI plan**, with the options of step 6.
+
+Each pick in question 1 adds an explainer to a later step:
 
 | New to | Add |
 | --- | --- |
 | T3 Code | In step 3: a **thread** is one agent conversation with its own task. A **worktree** is a separate checkout of the same repo, so several threads change code at once without touching each other. T3 Code shows every machine's threads on the Mac and the phone. |
 | Fleet | In step 3: the picture, and one pack from step 6 with one of its workflows as an example. |
 | Devboxes | In step 4: what a hub and a node are, and why agents run better on them. |
+
+When the packs are "One by one", ask the multi-select of step 6 right after.
 
 ## 3. Show what Fleet is
 
@@ -130,10 +168,10 @@ a whole. Your answers go to your **profile**, a private GitHub repo named
 can keep its members' profiles in the team's GitHub org instead, as
 `fleet-profile-<login>`, so teammates can read each other's setup.
 
-## 4. Ask where Fleet runs
+## 4. Where Fleet runs
 
-Ask "Mac only, or Mac plus a hub and a node?", with these options, unless
-the picks from the page say where Fleet runs:
+Step 2 asks "Mac only, or Mac plus a hub and a node?", with these options,
+unless the picks from the page say where Fleet runs:
 
 - **Mac only.** A full setup: the skills and rules of every pack they pick,
   and the workflows that run on a Mac, run on this Mac. Agents stop when the Mac
@@ -149,42 +187,17 @@ When you do not know, ask whether they use Coder in the same call. Use their ans
 
 ## 5. Install the tools
 
-Download the install script to a file. Keep the script in view, because a
-pipe into `sh` hides what runs:
+The install from step 1 runs in the background. It is done when
+`~/.local/bin/fleet help` prints the list of commands. When it stopped with
+an error, explain its last lines, fix what they name, and run it again: it
+picks up where it stopped. Use the wait (see "While something runs").
 
-```sh
-mkdir -p ~/.cache/fleet-setup && curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh -o ~/.cache/fleet-setup/get.sh
-```
+## 6. What they want
 
-Read it, then tell the person what it installs when missing: the Command Line
-Tools, Homebrew, the GitHub CLI, Bun, and the `t3` command. It puts the
-engine in `~/.local/share/fleet/engine` and `fleet` in `~/.local/bin`, and
-adds one `PATH` line to their login file. Ask whether to go on.
-
-When `command -v brew` finds Homebrew, run it yourself:
-
-```sh
-sh ~/.cache/fleet-setup/get.sh --install-only
-```
-
-When Homebrew is missing, its installer needs the person's Mac password, so
-run the script in a Terminal window and ask them to tell you when it ends:
-
-```sh
-printf '#!/bin/sh\nsh ~/.cache/fleet-setup/get.sh --install-only\n' > ~/.cache/fleet-setup/install.command && chmod +x ~/.cache/fleet-setup/install.command && open ~/.cache/fleet-setup/install.command
-```
-
-When the Command Line Tools are missing, a Mac window asks to install them;
-the person clicks **Install**. The step is done when
-`~/.local/bin/fleet help` prints the list of commands. Use the wait (see
-"While something runs").
-
-## 6. Ask what they want
-
-Ask in one call. Skip the packs question when the picks from the page name
+Step 2 asks these. Skip the packs question when the picks from the page name
 the packs:
 
-- **Packs.** One option per preset in `~/.local/share/fleet/engine/presets.json`,
+- **Packs.** One option per preset in `~/.cache/fleet-setup/presets.json`,
   with its `blurb`, and "One by one". For one by one, ask a multi-select
   question with the packs below whose row says "Always", plus those whose
   row fits their answer in step 4. A pack whose row says "Step 9" needs a
@@ -196,8 +209,9 @@ the packs:
   (`claude auth status` or `codex login status` passes).
 
 For each pack they pick whose row names a setup note, read that note in
-`~/.local/share/fleet/engine` now, and follow it in step 7. Read only the
-notes of the packs they picked.
+`~/.local/share/fleet/engine` once the install is done, and follow it in
+step 7. Read only the notes of the packs they picked. When a note asks a
+question, ask it then.
 
 | Pack | What it does | Offer it | Setup note |
 | --- | --- | --- | --- |
@@ -216,35 +230,40 @@ notes of the packs they picked.
 Build the command from the answers, so setup asks nothing twice:
 
 ```sh
-fleet setup --non-interactive --preset <id> --plan <claude|codex|both> --devbox skip
+fleet setup --chat --preset <id> --plan <claude|codex|both> --devbox skip
 ```
 
 For one by one, use `--preset starter`, add `--remove pull-requests` when
 they did not pick it, and add `--add <pack>` once per other pack they picked.
-Run it, and repeat this loop until it ends with code `0`:
+
+Start it in the background and read its output as it comes. It runs the whole
+setup in one go: it waits for each sign-in that ends in the browser and opens
+the browser itself. While it runs:
+
+- **A sign-in starts** (`▶ Sign in to …`). Say what it is for, from the table
+  below, and give the person any one-time code the output shows. Setup goes
+  on by itself once they finish in the browser.
+- **`✓ Ready to use.`** Tell the person they can start a new thread in T3
+  Code now. The steps it names go on in the background; say what each one
+  does.
+
+When it ends with code `2`, it lists what it still needs:
 
 - **A line `--set <pack.key>=<value>   <question>`.** Ask the question with
   your question tool, then add `--set <pack.key>=<answer>` to the command.
-- **A line `Needs you: <sign-in>`, then `Run: <command>`.** Say what the sign-in is
-  for, from the table below. Start the command in the background, read its
-  output, and give the person any one-time code it prints. Open the URL it
-  names with `open <url>`. Wait until the command ends. When it asks to
-  paste a code, stop it and run it in Terminal (see "The keyboard in
-  Terminal").
 - **A line `Needs you: <sign-in>`, then `In a terminal, run: <command>`.**
   It needs the person's keyboard, for example to paste a token. Say what it
   is for, then run it in Terminal (see "The keyboard in Terminal").
-- **Any other stop.** Read the last lines, explain them, and fix what they
-  name.
 
-Then run the same command again. Every step skips what is done. Use each
+Then run the same command again. Every step skips what is done. On any other
+stop, read the last lines, explain them, and fix what they name. Use each
 wait (see "While something runs").
 
 | Sign-in | What it is for |
 | --- | --- |
 | GitHub | Once, with every permission Fleet needs: it creates their private `fleet-profile` repo, adds their SSH keys, and reads their org's packs. |
 | Claude | Claude Code on this Mac uses their Claude plan. |
-| ChatGPT | Codex on this Mac uses their ChatGPT plan. Setup checks it with a real request. |
+| ChatGPT | Codex on this Mac uses their ChatGPT plan. Setup checks it with a real request. With both plans, it comes after the Mac is ready to use. |
 
 ## 8. Check the result
 

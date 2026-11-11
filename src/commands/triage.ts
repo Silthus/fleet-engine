@@ -27,7 +27,8 @@ export type TriageReport = { title: string; body: string; clean(text: string): s
 const transcriptLines = 400;
 const bodyLimit = 60_000;
 const noteLimit = 4_000;
-const doctorLines = 200;
+const factsLimit = 12_000;
+const doctorLimit = 12_000;
 const issueUrl = `https://github.com/${engineRepo}/issues/new`;
 
 /** fleet triage: builds a redacted report of this machine's setup, shows it, and with a yes opens an issue on the engine repo or saves it to a file. */
@@ -77,30 +78,13 @@ export async function triageReport(context: TriageContext, note?: string): Promi
   ]);
   const known = knownNames(context.hostname, machine, profile, gitName, origin);
   const clean = (text: string) => redact(text, context.home, known);
-  const described = note?.trim() ? shortenTo(note.trim(), noteLimit) : "Not described.";
-  const head = clean(
-    [
-      "## What happened",
-      "",
-      described,
-      "",
-      "## Setup",
-      "",
-      ...setupLines(machine, failure, timings),
-      "",
-      "## Versions",
-      "",
-      ...versions,
-      "",
-      "## fleet doctor",
-      "",
-      fence(doctor.length > doctorLines ? [...doctor.slice(0, doctorLines), `(${doctor.length - doctorLines} more lines cut)`] : doctor),
-      "",
-    ].join("\n"),
-  );
+  const described = note?.trim() ? shortenTo(clean(note.trim()), noteLimit) : "Not described.";
+  const facts = shortenTo(clean([...setupLines(machine, failure, timings), "", "## Versions", "", ...versions].join("\n")), factsLimit);
+  const checked = keepFirst(clean(doctor.join("\n")).split("\n"), doctorLimit);
+  const head = ["## What happened", "", described, "", "## Setup", "", facts, "", "## fleet doctor", "", fence(checked), "", ""].join("\n");
   const ending = "\n\nMade by `fleet triage`.";
   const transcript = transcriptTail(context.home, transcriptLines);
-  const lines = transcript.lines.map(clean);
+  const lines = transcript.lines.length ? clean(transcript.lines.join("\n")).split("\n") : [];
   const room = bodyLimit - head.length - ending.length - 200;
   let kept = lines.length;
   let size = lines.reduce((sum, line) => sum + line.length + 1, 0);
@@ -109,7 +93,19 @@ export async function triageReport(context: TriageContext, note?: string): Promi
   const cut = transcript.cut + lines.length - kept;
   const tail = [`## Setup transcript${cut ? ` (newest ${shown.length} lines)` : ""}`, "", shown.length ? fence(shown) : lines.length ? "The setup transcript is too long to include." : "No setup transcript on this machine."].join("\n");
   const title = shortenTo(clean(`fleet triage: ${note?.trim() || (failure ? `setup failed: ${failure.error}` : "setup report")}`).split("\n")[0]!, 120);
-  return { title, body: `${head}\n${tail}${ending}`, clean };
+  return { title, body: `${head}${tail}${ending}`, clean };
+}
+
+/** The first lines of a text that fit in a number of characters. */
+function keepFirst(lines: string[], limit: number) {
+  const kept: string[] = [];
+  let size = 0;
+  for (const line of lines) {
+    if (size + line.length + 1 > limit) return [...kept, `(${lines.length - kept.length} more lines cut)`];
+    kept.push(line);
+    size += line.length + 1;
+  }
+  return kept;
 }
 
 function setupLines(machine: MachineFile | undefined, failure: ReturnType<typeof readFailure>, timings: SetupTimings | undefined) {
@@ -172,12 +168,12 @@ function knownNames(hostname: string, machine: MachineFile | undefined, profile:
     const repo = typeof value === "string" ? value.match(/^(?:https:\/\/github\.com\/|git@github\.com:)?([\w.-]+\/[\w.-]+?)(?:\.git)?$/)?.[1] : undefined;
     if (repo) names.push({ text: repo, as: "<private repo>" });
   }
-  if (hostname && hostname !== "localhost") names.push({ text: hostname, as: "<this machine>" }, { text: hostname.split(".")[0]!, as: "<this machine>" });
+  for (const name of [hostname, machine?.name]) if (name && name !== "localhost") names.push({ text: name, as: "<this machine>" }, { text: name.split(".")[0]!, as: "<this machine>" });
   if (profile?.hub) names.push({ text: profile.hub, as: "<hub>" });
   const devboxes = [...new Set([...(machine?.devboxes ?? []), ...(profile?.devboxes ?? [])])].filter((host) => host !== profile?.hub);
   devboxes.forEach((host, index) => names.push({ text: host, as: `<devbox ${index + 1}>` }));
   const publicRepos = new Set([engineRepo, ...defaultSources.map((source) => source.repo)]);
-  for (const source of profile?.sources ?? []) if (!publicRepos.has(source.repo)) names.push({ text: source.repo, as: `<${source.name} source>` });
+  for (const source of [...(machine?.setup?.draft?.sources ?? []), ...(profile?.sources ?? [])]) if (!publicRepos.has(source.repo)) names.push({ text: source.repo, as: `<${source.name} source>` });
   if (gitName) names.push({ text: gitName, as: "<name>" });
   return names;
 }

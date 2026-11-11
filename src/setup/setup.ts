@@ -12,10 +12,11 @@ import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { devboxQuestion, devboxSteps, hubSteps, notTakenByHub, profileForBox, type DevboxContext } from "./devbox.ts";
 import { doneScreen, finalCheck, repoName, runsByItself } from "./done.ts";
 import { readTimings, usableSeconds } from "../commands/triage-record.ts";
-import { profileStep } from "./profile.ts";
+import { existingProfile, profileStep } from "./profile.ts";
 import { runSteps, type Step } from "./runner.ts";
 import { chatgptSignIn, claudeSignIn, githubSignIn, memberSources } from "./signins.ts";
 import { Stopped, type Terminal } from "./terminal.ts";
+import { openTimings } from "./timings.ts";
 
 export type SetupOptions = {
   home: string;
@@ -32,6 +33,7 @@ export type SetupOptions = {
   timeZone?: string;
   /** The environment the standalone check reads, and that tells a Coder workspace apart. */
   env?: Record<string, string | undefined>;
+  clock?: { now(): number };
 };
 
 /** Steps that run again when the command changes an answer: the profile saves it, apply puts it on this machine, and the check confirms it. */
@@ -40,7 +42,9 @@ const answersChanged = ["profile", "apply", "check"];
 export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
 
 export async function setup(args: string[], options: SetupOptions): Promise<number> {
-  const { terminal } = options;
+  const clock = options.clock ?? Date;
+  let waits = 0;
+  const terminal: Terminal = { ...options.terminal, ask: (prompt) => (waits++, options.terminal.ask(prompt)) };
   let flags: SetupFlags;
   const machine: MachineFile = thisMachine(await loadMachine(options.home), options.platform, options.env ?? process.env);
   const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
@@ -59,9 +63,9 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   }
   try {
     flags = parseSetupFlags(args);
-    const picked = picksFrom(flags, catalog);
-    const fromFlags = settingsFrom(flags, catalog);
     const saved = progress.draft;
+    const picked = picksFrom(flags, catalog, saved);
+    const fromFlags = settingsFrom(flags, catalog);
     const reopened = [
       ...(hasPicks(flags) && JSON.stringify(picked) !== JSON.stringify({ packs: saved.packs, workflows: saved.workflows ?? {} }) ? ["packs"] : []),
       ...(flags.plan && flags.plan !== saved.plan ? ["plans"] : []),
@@ -88,7 +92,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       await remember();
     },
   };
-  const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive };
+  const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive, chat: flags.chat, waited: () => void waits++ };
   const addTeamSources = async () => {
     for (const ref of await memberSources(box)) {
       if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
@@ -104,9 +108,17 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       terminal.print(`  ✓ You are in the ${ref.repo.split("/")[0]} org, so the ${packList(fetched.packs.map((pack) => pack.manifest.name), catalog)} pack is ticked`);
     }
     catalog.teamsKnown = true;
-    picksFrom(flags, catalog);
+    if (!machine.profileDir) await startFromExisting();
+    picksFrom(flags, catalog, progress.draft);
     const fromFlags = settingsFrom(flags, catalog);
     if (Object.keys(fromFlags).length) await context.answer({ settings: { ...progress.draft.settings, ...fromFlags } });
+  };
+  const startFromExisting = async () => {
+    const existing = await existingProfile(box, options.home, catalog.packs.map((pack) => pack.manifest), progress.draft.packs ?? catalog.teamPacks);
+    if (!existing) return;
+    const saved = profileDraft(existing);
+    const sources = [...existing.sources, ...(progress.draft.sources ?? []).filter((ref) => !existing.sources.some((kept) => kept.name === ref.name))];
+    await context.answer({ ...saved, ...(hasPicks(flags) ? picksFrom(flags, catalog, saved) : {}), sources, settings: { ...existing.settings, ...progress.draft.settings } });
   };
   const profile = profileStep({
     terminal,
@@ -169,10 +181,18 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       devboxes: machine.devboxes ?? [],
       doctor: () => (machine.profileDir && options.doctor ? options.doctor(machine.profileDir) : Promise.resolve(1)),
     });
-  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox), check()];
+  const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox), later(check())];
+  const timings = openTimings(options.home, clock.now());
   try {
     const result = await runSteps(steps, {
       terminal,
+      clock,
+      waits: () => waits,
+      record: (step) => timings.record(step),
+      async usable(later) {
+        await timings.usable(clock.now());
+        if (later.length) terminal.print(`\n✓ Ready to use. Start a new thread in T3 Code now. Setup goes on with: ${later.join(", ")}.`);
+      },
       done: progress.done,
       async save(done) {
         progress.done = done.filter((id) => !notTakenByHub(id, hubTook));
@@ -229,14 +249,16 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
     plansStep(context),
     ...settingSteps(context, plan.ask),
     ...machineSteps,
-    ...plan.human.map((step) => humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human)),
+    ...plan.human.map((step) => later(humanStep(packSignIn(step, plan.steps, human, plan.engineRoot), human))),
     ...(sshDevbox ? [devbox.question] : []),
     ...settingSteps(context, devboxAsk).map(devbox.pushed),
     ...(plan.ai === "codex" ? [] : [humanStep(claudeSignIn(box), human)]),
-    ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)]),
-    ...(sshDevbox ? (machine.devboxes ?? []).flatMap((host) => devbox.steps(host, plan)) : []),
+    ...(plan.ai === "claude" ? [] : [humanStep(chatgptSignIn(box, plan.models), human)].map((step) => (plan.ai === "both" ? later(step) : step))),
+    ...(sshDevbox ? (machine.devboxes ?? []).flatMap((host) => devbox.steps(host, plan)).map(later) : []),
   ];
 }
+
+const later = (step: Step): Step => ({ ...step, later: true });
 
 function profileDraft(profile: Profile): Draft {
   return { packs: profile.packs, plan: profile.plan, settings: profile.settings, workflows: profile.workflows, sources: profile.sources };

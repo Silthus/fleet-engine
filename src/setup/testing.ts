@@ -27,7 +27,7 @@ export function scripted(replies: string[]) {
   return { terminal, prompts, output: () => lines.join("\n") };
 }
 
-export type ClaudeSignedIn = { authMethod: string; reply: ExecResult };
+export type ClaudeSignedIn = { authMethod: string; apiKeySource?: string; reply: ExecResult };
 
 const claudeUnauthorized: ExecResult = { code: 1, output: "Failed to authenticate. API Error: 401 OAuth access token is invalid", stdout: "" };
 
@@ -77,7 +77,8 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * of 2 s polls: 0 means already signed in, and a sign-in that is never
  * started never passes. Its gh makes repos as bare repos under the home,
  * except in the org named by createFails (createFailsAfterMaking makes the
- * repo, then reports a 502), and
+ * repo, then reports a 502; lookupFails answers a lookup of a repo that
+ * exists there with a 502), and
  * git runs for real with github.com rewritten to them. Its ssh reaches a fake
  * devbox whose sign-ins work the same way, and which, like real ssh, warns
  * on stderr that it added the host key the first time it reaches a host
@@ -94,7 +95,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * names a loopback server, process 4242, listening at its port unless
  * runtimeOrigin, runtimePid, listenerPid or serverGone say otherwise, and its tunnel answers only after tunnelStartsAfter lookups.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; listenerPid?: number; serverGone?: boolean; tunnelStartsAfter?: number; boxTunnel?: string } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; listenerPid?: number; serverGone?: boolean; tunnelStartsAfter?: number; boxTunnel?: string } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -106,6 +107,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const starts: string[][] = [];
   const runs: Array<{ command: string[]; input: boolean }> = [];
   const sleeps: number[] = [];
+  let now = options.startedAt ?? 0;
+  const clock = { now: () => now };
   const opened: string[] = [];
   let devbox = false;
   const passes = (name: SignInName) => left[name] === 0;
@@ -113,7 +116,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const reached = new Set<string>();
   const claudeStatus = (name: "claude" | "box:claude") => {
     const signedIn = options.claude?.[name];
-    return signedIn ? result(true, JSON.stringify({ loggedIn: true, authMethod: signedIn.authMethod })) : result(passes(name), JSON.stringify({ loggedIn: passes(name) }));
+    return signedIn ? result(true, JSON.stringify({ loggedIn: true, authMethod: signedIn.authMethod, apiKeySource: signedIn.apiKeySource })) : result(passes(name), JSON.stringify({ loggedIn: passes(name) }));
   };
   const claudeReply = (name: "claude" | "box:claude") => options.claude?.[name]?.reply ?? (passes(name) ? result(true, "ok") : claudeUnauthorized);
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
@@ -221,6 +224,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       if (line === "hogli devbox:status") return result(devbox);
       if (line === "hogli devbox:start") return (devbox = true), result(true, "up");
       if (line === "gh api user --jq .login") return result(true, "nora\n");
+      if (line.startsWith("gh repo view ") && existsSync(githubRepo(home, command[3]!)) && command[3]!.split("/")[0] === options.lookupFails) return result(false, "HTTP 502: Bad Gateway");
       if (line.startsWith("gh repo view ")) return existsSync(githubRepo(home, command[3]!)) ? result(true, line.endsWith("--json visibility --jq .visibility") ? `${options.publicRepos?.includes(command[3]!) ? "PUBLIC" : "PRIVATE"}\n` : "") : result(false, "Could not resolve to a Repository");
       if (line.startsWith("gh repo create ")) {
         const owner = command[3]!.split("/")[0]!;
@@ -258,6 +262,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     async sleep(ms) {
       sleeps.push(ms);
+      now += ms;
       for (const name of started) if (left[name] > 0) left[name]--;
     },
     async openUrl(url) {
@@ -265,7 +270,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     has: () => true,
   };
-  return { machine, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked, sessions: () => [...hereSessions, ...boxSessions] };
+  return { machine, clock, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked, sessions: () => [...hereSessions, ...boxSessions] };
 }
 
 export const remote = (box: ReturnType<typeof fakeMachine>) => [...box.calls.map((call) => onBox(call.command)), ...box.starts.map(onBox), ...box.runs.map((run) => onBox(run.command))].filter(Boolean) as string[];
@@ -276,7 +281,7 @@ export async function fleetSetup(home: string, args: string[], replies: string[]
   const doctored: string[] = [];
   const apply = async (dir: string) => (applied.push(dir), await onApply(dir), 0);
   const doctor = async (dir: string) => (doctored.push(dir), doctorCode);
-  const code = await main(["setup", ...args], { home, engineRoot, platform, print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, doctor, env: {}, timeZone: "UTC", ...(fetchSource ? { fetchSource } : {}) } });
+  const code = await main(["setup", ...args], { home, engineRoot, platform, print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, clock: box.clock, doctor, env: {}, timeZone: "UTC", ...(fetchSource ? { fetchSource } : {}) } });
   return { code, prompts: io.prompts, output: io.output(), applied, doctored };
 }
 

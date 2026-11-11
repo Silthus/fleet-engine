@@ -1,7 +1,7 @@
 /** A text that names this machine or its owner, and the label that replaces it. */
 export type KnownName = { text: string; as: string };
 
-type Rule = [RegExp, string | ((match: string, ...groups: string[]) => string)];
+type Rule = [RegExp, string | ((match: string, ...groups: Array<string | number | undefined>) => string)];
 
 const secretKey = String.raw`[A-Za-z_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIALS?|SESSION)[A-Za-z_]*`;
 
@@ -13,15 +13,16 @@ const rules: Rule[] = [
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "<key>"],
   [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "<token>"],
   [/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, "$1 <token>"],
-  [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, "$1<credentials>@"],
+  [/((?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, "$1<credentials>@"],
   [/([?&#][A-Za-z_]*(?:token|key|secret|password|auth|code|sig)[A-Za-z_]*=)[^\s&#"']+/gi, "$1<redacted>"],
-  [new RegExp(String.raw`\b(${secretKey})(["']?\s*[:=]\s*)(?:(")(?:[^"\\\n]|\\.)*"|(')[^'\n]*'|[^\s"']+)`, "gi"), (_match, key: string, separator: string, double?: string, single?: string) => `${key}${separator}${double ?? single ?? ""}<redacted>${double ?? single ?? ""}`],
-  [/\b[\w.+-]+(?:@|%40)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/gi, (email) => (email.startsWith("git@") ? email : "<email>")],
-  [/\b[\w.-]+\/fleet-profile(?:-[\w-]+)?\b/g, "<profile repo>"],
-  [/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, (ip) => (ip === "127.0.0.1" || ip === "0.0.0.0" ? ip : "<ip>")],
-  [/\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:internal|local|lan|corp|home\.arpa|coder|ts\.net|tailscale\.net)\b/g, "<host>"],
-  [/(\/Users|\/home)\/[^/\s"'`:]+/g, "$1/<user>"],
-  [/\b([A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/))[^\\/\s"'`:]+/gi, "$1<user>"],
+  [new RegExp(String.raw`\b(${secretKey})(["']?\s*[:=]\s*)(?:(")(?:[^"\\]|\\.){0,4096}"|(')[^']{0,4096}'|[^\s"']+)`, "gi"), (_match, key, separator, double, single) => `${key}${separator}${double ?? single ?? ""}<redacted>${double ?? single ?? ""}`],
+  [/(?<![\w.+%-])[\w.+%-]+(?:@|%40)[A-Za-z0-9-]+(?:(?:\.|%2E)[A-Za-z0-9-]+)*(?:\.|%2E)[A-Za-z]{2,}\b/gi, (email, offset, text) => (email.startsWith("git@") && String(text)[Number(offset) + email.length] === ":" ? email : "<email>")],
+  [/(?<![\w.-])[\w.-]+\/fleet-(profile|memory)(?:-[\w-]+)?\b/g, "<$1 repo>"],
+  [/(private repos? )[\w.-]+\/[\w.-]+(?: and [\w.-]+\/[\w.-]+)?/g, "$1<private repo>"],
+  [/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, (ip: string) => (ip === "127.0.0.1" || ip === "0.0.0.0" ? ip : "<ip>")],
+  [/(?<![A-Za-z0-9-]|[A-Za-z0-9-]\.)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:internal|local|lan|corp|home\.arpa|coder|ts\.net|tailscale\.net)\b/g, "<host>"],
+  [/(\/Users|\/home)\/(?:[^/\n"'`:]{1,64}?(?=\/)|[^/\s"'`:]+)/g, "$1/<user>"],
+  [/\b([A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/))(?:[^\\/\n"'`:]{1,64}?(?=[\\/])|[^\\/\s"'`:]+)/gi, "$1<user>"],
   [/[A-Za-z0-9+/_-]{32,}={0,2}/g, (text) => (/^[0-9a-f]+$/.test(text) || !/[A-Z]/.test(text) || !/[a-z]/.test(text) || !/[0-9]/.test(text) ? text : "<secret>")],
 ];
 

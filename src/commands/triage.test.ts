@@ -26,10 +26,14 @@ function secrets() {
     jwt: ["ey", "J", pick(mixed, 20), ".", pick(mixed, 30), ".", pick(mixed, 30)].join(""),
     opaque: pick(mixed, 44),
     password: pick(mixed, 14),
-    privateKey: ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\n", pick(mixed, 64), "\n-----END OPENSSH ", "PRIVATE KEY-----"].join(""),
+    privateKey: ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\n", pick(mixed, 64).match(/.{16}/g)!.join("\n"), "\n-----END OPENSSH ", "PRIVATE KEY-----"].join(""),
+    multiline: [pick(mixed, 10), " river\npearl ", pick(mixed, 10)].join(""),
     email: ["nora.", pick("abcdefgh", 5), "@", "example-corp.io"].join(""),
   };
 }
+
+/** Each line of each secret, without the markers around a private key. */
+const secretParts = (leaked: ReturnType<typeof secrets>) => Object.values(leaked).flatMap((secret) => secret.split("\n")).filter((line) => !line.startsWith("-----")).map((line) => line.replace(/^(?:pearl | river)/, ""));
 
 type Sent = { command: string[]; input?: string };
 
@@ -70,6 +74,9 @@ function failedMachine(home: string, leaked = secrets()) {
       `  cloning https://nora:${leaked.password}@github.com/nora/fleet-profile.git`,
       `  Pairing URL: http://127.0.0.1:3773/pair#token=${leaked.password}`,
       leaked.privateKey,
+      `  PASSWORD="${leaked.multiline}"`,
+      "  mailto first%2Elast%40mail%2Eexample%2Ecom and git@example.com, cloned git@github.com:acme/tools.git",
+      "  read /Users/Taylor Smith/.ssh/config and C:\\Users\\Taylor Smith\\.ssh\\id_ed25519",
       `  author ${leaked.email} at noras-mbp.local, Nora Quill`,
       `  ssh node-west-7.corp.internal (10.20.30.40) fleet doctor`,
       `  {"password":"${leaked.password} horse, battery staple"} and {'client_secret': '${leaked.opaque.slice(0, 12)}'}`,
@@ -131,20 +138,23 @@ describe("fleet triage", () => {
     expect(shown).toContain("fleet doctor: Everything matches. engine 0123456789abcdef0123456789abcdef01234567 v1.4.0 at git@github.com:<profile repo>.git");
     expect(shown).toContain("ssh <devbox 1>.<host> (<ip>) fleet doctor");
     expect(shown).toContain("wrote ~/.claude/settings.json and /Users/<user>/.zshrc");
+    expect(shown).toContain("<private key>\n  PASSWORD=\"<redacted>\"\n");
+    expect(shown).toContain("mailto <email> and <email>, cloned git@github.com:acme/tools.git");
+    expect(shown).toContain("read /Users/<user>/.ssh/config and C:\\Users\\<user>\\.ssh\\id_ed25519");
     expect(shown).toContain("fetched <team source> at main");
     expect(shown).toContain("at <this machine>, <name>");
     expect(shown).toContain("engine at 0123456789abcdef0123456789abcdef01234567");
     expect(shown).toContain("- Token scopes: 'repo', 'read:org'");
     expect(shown).toContain("Fleet removed tokens, keys, email addresses, hostnames and home paths from this report.");
     const report = shown.slice(0, shown.indexOf("Send this report"));
-    for (const secret of Object.values(leaked)) expect(report).not.toContain(secret.split("\n")[1] ?? secret);
-    for (const name of ["noras-mbp", "node-west-7", "hub-big-box", "10.20.30.40", "secret-org", "Nora Quill", "Nora%20Quill", "NoraQ", "horse", "team-dotfiles", "agent-notes", leaked.opaque.slice(0, 12), home]) expect(report).not.toContain(name);
+    for (const part of secretParts(leaked)) expect(report).not.toContain(part);
+    for (const name of ["noras-mbp", "node-west-7", "hub-big-box", "10.20.30.40", "secret-org", "Nora Quill", "Nora%20Quill", "NoraQ", "horse", "Taylor", "Smith", "first", "mail%2E", "example.com", "team-dotfiles", "agent-notes", leaked.opaque.slice(0, 12), home]) expect(report).not.toContain(name);
 
     const [file] = savedReports(home);
     expect(shown).toContain(`✓ Saved the report to ${join(home, file!)}.`);
     const saved = readFileSync(join(home, file!), "utf8");
     expect(saved).toStartWith("# fleet triage: setup hangs at step 4\n\n## What happened");
-    for (const secret of Object.values(leaked)) expect(saved).not.toContain(secret.split("\n")[1] ?? secret);
+    for (const part of secretParts(leaked)) expect(saved).not.toContain(part);
     expect(saved).not.toContain(home);
     expect(result.sent.some((call) => call.command[1] === "issue")).toBe(false);
   });
@@ -158,9 +168,33 @@ describe("fleet triage", () => {
     expect(issue.command).toEqual(["gh", "issue", "create", "--repo", "Silthus/fleet-engine", "--title", "fleet triage: setup failed: fleet apply could not set up this machine on <this machine> for <email>.", "--body-file", "-"]);
     expect(issue.input).toStartWith("## What happened\n\nNot described.\n\n## Setup");
     expect(result.output).toContain(issue.input!.split("\n").slice(0, 12).join("\n"));
-    for (const secret of Object.values(leaked)) expect(issue.input).not.toContain(secret.split("\n")[1] ?? secret);
+    for (const part of secretParts(leaked)) expect(issue.input).not.toContain(part);
     expect(result.output).toEndWith("✓ Opened https://github.com/Silthus/fleet-engine/issues/999");
     expect(savedReports(home)).toEqual([]);
+  });
+
+  test("a long note is redacted before it is cut, so a cut never leaves part of a secret", async () => {
+    const home = temp.make("home-");
+    failedMachine(home);
+    const password = pick(mixed, 8);
+    const result = await triage(home, ["--send", "--note", `${"x".repeat(3_970)} PASSWORD="${password} river pearl mountain"`], []);
+    const body = result.sent.find((call) => call.command[1] === "issue")!.input!;
+    expect(body).toContain(`${"x".repeat(3_970)} PASSWORD="<redacted>"`);
+    expect(body).not.toContain(password);
+  });
+
+  test("names what setup saved before a profile exists: the machine name, draft sources, and the repos it created", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".config/fleet"), { recursive: true });
+    writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "mac", name: "ssh-silver-fox", setup: { done: ["bootstrap", "github"], draft: { sources: [{ name: "acme", repo: "acme/private-packs", ref: "main" }], settings: { "orchestration.ledgerRepo": "acme/loop-ledger" } } } }));
+    mkdirSync(join(home, ".local/state/fleet/logs"), { recursive: true });
+    writeFileSync(join(home, ".local/state/fleet/logs/setup.log"), "  on ssh-silver-fox: fetched acme/private-packs, ledger acme/loop-ledger\n  ✓ Created the private repo acme/fleet-memory\n  Fleet creates the private repos acme/one and acme/two in your account\n");
+    writeFileSync(join(home, ".local/state/fleet/logs/setup-failed.json"), JSON.stringify({ at: "2026-11-11T10:03:00.000Z", error: "could not push acme/private-packs from ssh-silver-fox" }));
+    const result = await triage(home, ["--send"], []);
+    const issue = result.sent.find((call) => call.command[1] === "issue")!;
+    expect(issue.command[6]).toBe("fleet triage: setup failed: could not push <acme source> from <this machine>");
+    expect(issue.input).toContain("  on <this machine>: fetched <acme source>, ledger <private repo>\n  ✓ Created the private repo <memory repo>\n  Fleet creates the private repos <private repo> in your account\n");
+    for (const name of ["silver-fox", "private-packs", "loop-ledger", "acme/"]) expect(`${issue.command[6]}\n${issue.input}`).not.toContain(name);
   });
 
   test("a long title is cut after redaction, so no part of a secret reaches the issue", async () => {
@@ -261,6 +295,19 @@ describe("fleet triage", () => {
     expect(body).toEndWith("Made by `fleet triage`.");
   });
 
+  test("long step errors and a huge dotted transcript line still give a report that fits", async () => {
+    const home = temp.make("home-");
+    failedMachine(home);
+    const steps = Array.from({ length: 20 }, (_, index) => ({ id: `step-${index}`, start: "2026-11-11T10:00:00.000Z", end: "2026-11-11T10:00:01.000Z", blocked: false, outcome: "failed", error: "command-output ".repeat(5_000) }));
+    writeFileSync(join(home, ".local/state/fleet/logs/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: null, steps }));
+    writeFileSync(join(home, ".local/state/fleet/logs/setup.log"), `${"a.".repeat(1_048_576)}\nthe newest line\n`);
+    const result = await triage(home, ["--send"], []);
+    const body = result.sent.find((call) => call.command[1] === "issue")!.input!;
+    expect(body.length).toBeLessThanOrEqual(60_000);
+    expect(body).toContain("## Setup transcript (newest 1 lines)\n\n```text\nthe newest line\n```\n\nMade by `fleet triage`.");
+    expect(body).toContain("## fleet doctor");
+  }, 2_000);
+
   test("a very long note is cut, and the report still fits once, with its transcript", async () => {
     const home = temp.make("home-");
     failedMachine(home);
@@ -319,21 +366,4 @@ describe("fleet setup and triage", () => {
     expect(result.output).toEndWith("Stuck? Run fleet triage. It shows a report of this setup that you can send to the Fleet maintainer.");
   });
 
-  test("the done screen shows t_usable when setup reached it", async () => {
-    const home = temp.make("home-");
-    mkdirSync(join(home, ".local/state/fleet/logs"), { recursive: true });
-    writeFileSync(join(home, ".local/state/fleet/logs/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: "2026-11-11T10:03:07.000Z", steps: [] }));
-    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home));
-    expect(result.output).toContain("  Ready after     3m 7s\n  Report          fleet triage");
-  });
-
-  test("the done screen has no ready time while the timings say setup has not reached t_usable", async () => {
-    const home = temp.make("home-");
-    mkdirSync(join(home, ".local/state/fleet/logs"), { recursive: true });
-    writeFileSync(join(home, ".local/state/fleet/logs/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: null, usableSeconds: null, blockedSteps: 0, steps: [] }));
-    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home));
-    expect(result.code).toBe(0);
-    expect(result.output).toContain("  Report          fleet triage");
-    expect(result.output).not.toContain("Ready after");
-  });
 });
