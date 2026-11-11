@@ -1,13 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../src/cli.ts";
 import { loadPacks } from "../src/pack/manifest.ts";
-import { parseSetupFlags } from "../src/setup/flags.ts";
+import { fakeMachine, fleetSetup, savedAnswers } from "../src/setup/testing.ts";
+import { isolateGit, tempDirs } from "../src/testing/git.ts";
+
+isolateGit();
+const temp = tempDirs();
+afterEach(() => temp.cleanup());
 
 const root = join(import.meta.dir, "..");
 const guide = () => readFileSync(join(root, "SETUP.md"), "utf8");
-const presets = () => (JSON.parse(readFileSync(join(root, "presets.json"), "utf8")) as Array<{ id: string }>).map((preset) => preset.id);
+const presets = () => JSON.parse(readFileSync(join(root, "presets.json"), "utf8")) as Array<{ id: string; packs: string[] }>;
 
 async function fleetCommands() {
   let usage = "";
@@ -25,12 +30,14 @@ describe("the agent setup guide", () => {
     expect(used.filter((command) => !known.has(command!))).toEqual([]);
   });
 
-  test("drives fleet setup with flags that fleet setup takes, without asking the person anything", () => {
+  test("its fleet setup command sets up each preset to the end without asking the person anything", async () => {
     const command = guide().match(/^fleet setup (.+)$/m);
     expect(command).not.toBeNull();
     for (const preset of presets()) {
-      const args = command![1]!.replace("<id>", preset).replace("<claude|codex|both>", "both").split(" ");
-      expect(parseSetupFlags(args)).toMatchObject({ preset, plan: "both", devbox: "skip", nonInteractive: true });
+      const home = temp.make("home-");
+      const args = command![1]!.replace("<id>", preset.id).replace("<claude|codex|both>", "both").split(" ");
+      const result = await fleetSetup(home, args, [], fakeMachine(home), undefined, 0, "darwin");
+      expect({ code: result.code, prompts: result.prompts, packs: savedAnswers(home).packs }).toEqual({ code: 0, prompts: [], packs: preset.packs });
     }
   });
 
