@@ -67,6 +67,22 @@ describe("get.sh", () => {
     expect(existsSync(join(box.home, ".local/share/fleet/engine"))).toBe(false);
   });
 
+  onLinuxHost("on an Apple silicon Mac whose shell runs under Rosetta, downloads the arm64 gh and Bun", () => {
+    const box = sandbox("Darwin", { without: ["gh", "bun"], t3App: true });
+    box.stub("sysctl", '[ "$*" = "-n sysctl.proc_translated" ] && echo 1');
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.calls).toContain(" https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_macOS_arm64.zip -o ");
+    expect(result.calls).not.toContain("_macOS_amd64.zip");
+  });
+
+  onLinuxHost("on macOS without sha256sum, checks the pinned checksum with shasum", () => {
+    const box = sandbox("Darwin", { without: ["gh", "sha256sum"], t3App: true });
+    box.stub("shasum", `[ "$1 $2" = "-a 256" ] && exec ${Bun.which("sha256sum") ?? "/usr/bin/sha256sum"} "$3"`);
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.calls).toMatch(/^shasum -a 256 .*gh\.zip$/m);
+    expect(result.output).toContain("Fleet: gh checksum mismatch.");
+  });
+
   onLinuxHost("on macOS stops when the Homebrew installer leaves no brew on PATH", () => {
     const box = sandbox("Darwin", { brewInstaller: "exit 0" });
     const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);

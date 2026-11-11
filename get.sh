@@ -99,6 +99,10 @@ install_homebrew() {
   has brew || fail "Homebrew installed, but brew is not on PATH."
 }
 
+chip() {
+  if [ "$(uname -s)" = Darwin ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || true)" = 1 ]; then echo arm64; else uname -m; fi
+}
+
 sha256() {
   if has sha256sum; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -c1-64
 }
@@ -108,10 +112,10 @@ unzip_to() {
 }
 
 mac_gh() {
-  case "$(uname -m)" in
+  case "$(chip)" in
     arm64) name="gh_${gh_mac_version}_macOS_arm64"; sum=d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062 ;;
     x86_64) name="gh_${gh_mac_version}_macOS_amd64"; sum=a2f86418f4350ae6e9ec60d5000bdf7665728436946a97fc27fe50e6ae752682 ;;
-    *) fail "no gh build for $(uname -m). Install gh from https://cli.github.com." ;;
+    *) fail "no gh build for $(chip). Install gh from https://cli.github.com." ;;
   esac
   work=$(mktemp -d)
   fetch "https://github.com/cli/cli/releases/download/v$gh_mac_version/$name.zip" -o "$work/gh.zip" || fail "could not download gh."
@@ -142,12 +146,12 @@ linux_gh() {
 }
 
 direct_bun() {
-  case "$(uname -s) $(uname -m)" in
+  case "$(uname -s) $(chip)" in
     "Linux aarch64"|"Linux arm64") target=linux-aarch64; sum=54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7 ;;
     "Linux x86_64"|"Linux amd64") target=linux-x64; sum=36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913 ;;
     "Darwin arm64") target=darwin-aarch64; sum=90987a3a16d7db556d886ac3d551e7b6d3edf0a1cf43acaed622e8676be1d12f ;;
     "Darwin x86_64") target=darwin-x64; sum=80520d7e17526308c9185d261679ac6d27798d3803a0e9f7ff9121ab8affb012 ;;
-    *) fail "no Bun build for $(uname -m). Install Bun from https://bun.sh." ;;
+    *) fail "no Bun build for $(chip). Install Bun from https://bun.sh." ;;
   esac
   work=$(mktemp -d)
   fetch "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-$target.zip" -o "$work/bun.zip" || fail "could not download Bun."
