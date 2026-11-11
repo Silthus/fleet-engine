@@ -39,7 +39,7 @@ export function overSsh(machine: Machine, host: string): Machine {
   };
   const batch = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", host];
   return {
-    exec: (command, options = {}) => machine.exec(["ssh", "-T", ...batch, line(command, options.cwd !== undefined)], options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+    exec: (command, options = {}) => machine.exec(["ssh", "-T", ...batch, line(command, options.cwd !== undefined)], { ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}), ...(options.input === undefined ? {} : { input: options.input }) }),
     start: (command) => machine.start(["ssh", "-T", ...batch, line(command)]),
     run: (command, options = {}) => machine.run(["ssh", options.input ? "-t" : "-T", ...batch, line(command)], options),
     sleep: (ms) => machine.sleep(ms),
@@ -104,6 +104,7 @@ export function devboxSteps(host: string, context: DevboxContext): Step[] {
   const chatgpt = chatgptSignIn(box, context.models);
   return [
     auto(host, "install", `Install Fleet on ${host}`, 4, context.terminal, () => install(box, context)),
+    ...(host.startsWith(coderPrefix) && context.machine.has("coder") ? [auto(host, "coder", `Sign in to Coder on ${host}`, 1, context.terminal, () => coderOnBox(host, box, context.machine))] : []),
     humanStep(on(githubSignIn(box, async () => {})), human),
     auto(host, "profile", `Apply your profile on ${host}`, 3, context.terminal, () => applyProfile(box, context)),
     ...(context.plan === "codex" ? [] : [claudeOnBox(host, box, context)]),
@@ -137,6 +138,31 @@ async function install(box: Machine, context: DevboxContext) {
   const role = `mkdir -p "$HOME/.config/fleet" && { [ -f "$HOME/.config/fleet/machine.json" ] || printf '{"schema":1,"role":"devbox"}\\n' > "$HOME/.config/fleet/machine.json"; }`;
   const download = `installer=$(mktemp) && { curl -fsSL ${quote(getSh)} -o "$installer" && sh "$installer" --ref ${quote(engineRef)} --install-only; s=$?; rm -f "$installer"; exit $s; }`;
   await shown(box, `${role} && ${download}`, "Fleet did not install on the devbox. Fix what it says above, then run fleet setup again.");
+}
+
+const coderPrefix = "coder.";
+
+/** The Coder address in what coder whoami prints: "Coder is running at <address>, You're authenticated as <user> !". */
+export function coderAddress(whoami: string): string | undefined {
+  const address = whoami.match(/Coder is running at (https?:\/\/[^\s,]+)/)?.[1];
+  return address?.replace(/\/+$/, "");
+}
+
+/** Signs the workspace in to Coder with a new token from this machine, sent on standard input, then writes its SSH config, so it reaches every coder.<workspace> by name. */
+async function coderOnBox(host: string, box: Machine, here: Machine) {
+  const address = coderAddress((await here.exec(["coder", "whoami"])).output);
+  if (!address) throw new Error(`Coder is not signed in on this machine. Run coder login <your Coder address> here, then fleet devbox add ${host} again.`);
+  if ((await box.exec(["coder", "whoami"])).code !== 0) {
+    const token = await here.exec(["coder", "tokens", "create"]);
+    if (token.code !== 0 || !token.output.trim()) throw new Error(`Coder made no token for ${host}: ${token.output.trim()}`);
+    const cli = `"$HOME/.local/bin/coder"`;
+    const download = `command -v coder >/dev/null || { case $(uname -m) in x86_64) a=amd64;; aarch64|arm64) a=arm64;; *) exit 1;; esac; mkdir -p "$HOME/.local/bin" && curl -fsSL ${quote(`${address}/bin/coder-linux-`)}"$a" -o ${cli} && chmod +x ${cli}; }`;
+    const login = `IFS= read -r token && CODER_SESSION_TOKEN="$token" coder login ${quote(address)}`;
+    const signedIn = await box.exec(["sh", "-c", `${download} && ${login}`], { input: `${token.output.trim()}\n` });
+    if (signedIn.code !== 0) throw new Error(`Coder did not sign in on ${host}: ${signedIn.output.trim()}`);
+  }
+  const ssh = await box.exec(["coder", "config-ssh", "--yes"]);
+  if (ssh.code !== 0) throw new Error(`coder config-ssh failed on ${host}: ${ssh.output.trim()}`);
 }
 
 async function applyProfile(box: Machine, context: DevboxContext) {
