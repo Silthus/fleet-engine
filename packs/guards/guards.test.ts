@@ -695,6 +695,7 @@ describe("the Git guard", () => {
     ["a push to main whose GitHub push URL comes before another one", "feature", { "remote.origin.pushurl": ["https://github.com/acme/app.git", "/srv/mirror.git"] }, "git push origin HEAD:main", "pushes to `main` of acme/app"],
     ["a wildcard push that lands on main", "main", {}, "git push --force-with-lease origin 'refs/heads/*:refs/heads/*'", "pushes to `main` of acme/app"],
     ["a push to a mirror remote, which forces every ref", "feature", { "remote.origin.mirror": "true" }, "git push origin", "force-pushes without a lease"],
+    ["a push from main whose --no-tags cancels --tags", "main", {}, "git push --tags --no-tags origin", "pushes to `main` of acme/app"],
     ["a push to a remote whose mirror setting says yes", "feature", { "remote.origin.mirror": "yes" }, "git push origin", "force-pushes without a lease"],
     ["a push to main that a -c setting adds a second push URL to", "feature", { "remote.origin.pushurl": "https://github.com/acme/app.git" }, "git -c remote.origin.pushurl=/srv/mirror.git push origin HEAD:main", "pushes to `main` of acme/app"],
     ["a bare push that --config-env sends to main", "feature", tracksMain, "MODE=upstream git --config-env=push.default=MODE push", "push.default is upstream"],

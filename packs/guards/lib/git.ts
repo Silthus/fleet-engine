@@ -168,7 +168,7 @@ function parsePush(args: string[]): Push {
     else if (arg === "--force" || shortCluster(arg, "f", "o")) push.force = true;
     else if (arg === "--mirror") push.force = push.all = true;
     else if (arg === "--all" || arg === "--branches") push.all = true;
-    else if (arg === "--tags") push.tags = true;
+    else if (arg === "--tags" || arg === "--no-tags") push.tags = arg === "--tags";
     else if (arg === "--delete" || shortCluster(arg, "d", "o")) push.deletes = true;
     else if (!arg.startsWith("-")) operands.push(arg);
   }
