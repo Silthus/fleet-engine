@@ -68,24 +68,32 @@ export const claudeProbeTimeoutMs = 20_000;
 
 async function claudeSignedIn(machine: Machine, host: string | undefined): Promise<boolean> {
   const status = await machine.exec(["claude", "auth", "status"]);
-  let state: { loggedIn?: unknown; authMethod?: unknown } = {};
+  let state: { loggedIn?: unknown; authMethod?: unknown; apiKeySource?: unknown } = {};
   try {
     state = JSON.parse(status.stdout);
   } catch {}
   if (status.code !== 0 || state.loggedIn !== true) return false;
-  if (!(await claudeRequestUnauthorized(machine))) return true;
+  if (!(await claudeRequestRejected(machine))) return true;
+  if (state.apiKeySource === "ANTHROPIC_API_KEY") throw new Error(environmentApiKeyDead(host));
   if (state.authMethod === "oauth_token") throw new Error(environmentTokenDead(host));
   return false;
 }
 
-async function claudeRequestUnauthorized(machine: Machine): Promise<boolean> {
+const claudeAuthRejection = /\b401\b|Please run \/login|Invalid API key|OAuth token (?:has )?(?:been )?(?:revoked|expired)/i;
+
+async function claudeRequestRejected(machine: Machine): Promise<boolean> {
   const reply = await machine.exec(["claude", "-p", "ok"], { timeoutMs: claudeProbeTimeoutMs });
-  return reply.code !== 0 && /\b401\b/.test(reply.output);
+  return reply.code !== 0 && claudeAuthRejection.test(reply.output);
 }
 
 function environmentTokenDead(host: string | undefined) {
   if (host) return `The CLAUDE_CODE_OAUTH_TOKEN that ${host} gets from its environment is no longer valid, and claude auth login cannot replace it. Make a new token with claude setup-token and give it to the box (on a PostHog devbox: hogli devbox:setup --configure-claude), then run fleet setup again.`;
   return "The CLAUDE_CODE_OAUTH_TOKEN in this machine's environment is no longer valid, and claude auth login cannot replace it. Make a new token with claude setup-token, put it where your environment sets CLAUDE_CODE_OAUTH_TOKEN, then run fleet setup again in a new shell.";
+}
+
+function environmentApiKeyDead(host: string | undefined) {
+  if (host) return `The ANTHROPIC_API_KEY that ${host} gets from its environment is no longer valid, and claude auth login cannot replace it. Put a working key where the box's environment sets ANTHROPIC_API_KEY, or unset ANTHROPIC_API_KEY there to use a Claude sign-in, then run fleet setup again.`;
+  return "The ANTHROPIC_API_KEY in this machine's environment is no longer valid, and claude auth login cannot replace it. Put a working key where your environment sets ANTHROPIC_API_KEY, or unset ANTHROPIC_API_KEY to use a Claude sign-in, then run fleet setup again in a new shell.";
 }
 
 export const codexProbeTimeoutMs = 20_000;

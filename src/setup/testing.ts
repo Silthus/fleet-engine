@@ -26,7 +26,7 @@ export function scripted(replies: string[]) {
   return { terminal, prompts, output: () => lines.join("\n") };
 }
 
-export type ClaudeSignedIn = { authMethod: string; reply: ExecResult };
+export type ClaudeSignedIn = { authMethod: string; apiKeySource?: string; reply: ExecResult };
 
 const claudeUnauthorized: ExecResult = { code: 1, output: "Failed to authenticate. API Error: 401 OAuth access token is invalid", stdout: "" };
 
@@ -104,7 +104,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const reached = new Set<string>();
   const claudeStatus = (name: "claude" | "box:claude") => {
     const signedIn = options.claude?.[name];
-    return signedIn ? result(true, JSON.stringify({ loggedIn: true, authMethod: signedIn.authMethod })) : result(passes(name), JSON.stringify({ loggedIn: passes(name) }));
+    return signedIn ? result(true, JSON.stringify({ loggedIn: true, authMethod: signedIn.authMethod, apiKeySource: signedIn.apiKeySource })) : result(passes(name), JSON.stringify({ loggedIn: passes(name) }));
   };
   const claudeReply = (name: "claude" | "box:claude") => options.claude?.[name]?.reply ?? (passes(name) ? result(true, "ok") : claudeUnauthorized);
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
