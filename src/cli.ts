@@ -3,6 +3,7 @@ import { homedir, hostname } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
+import { cannotTell } from "./pack/types.ts";
 import type { AvailableSource, CatalogEntry, FetchedSource, Finding, LoadedPack, MachineFile, PackCode, Plan, Report } from "./pack/types.ts";
 import { loadMachine, loadProfile, pullProfile, saveMachine, thisMachine } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
@@ -153,7 +154,8 @@ async function runUpdate(options: CliOptions) {
 async function runPackCommand(name: string, args: string[], options: CliOptions) {
   const typed = ["fleet", name, ...args];
   const undoing = await undoingPack(options.home, options.env ?? {}, typed);
-  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true, ...(undoing ? { withPack: undoing } : {}) });
+  if (undoing) return runUndo(name, args, undoing, options);
+  const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true });
   const command = plan.commands[name];
   if (!command) {
     const owner = sources.flatMap((source) => ("error" in source ? [] : source.packs)).find((pack) => existsSync(join(pack.dir, "commands", `${name}.ts`)) || Object.hasOwn(pack.code?.commands ?? {}, name));
@@ -163,10 +165,28 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   if (command.on === "hub" && !plan.onHub) return runOnHub(name, args, plan, options);
   const loaded = loadedPack(sources, command.pack);
   const run = loaded?.code?.commands[name];
-  const repairs = !undoing && plan.human.some((step) => step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
+  const repairs = plan.human.some((step) => step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
   if (!run && !repairs && options.become) return options.become(["bun", command.path, ...args], { ...Bun.env, ...packEnvironment(plan, options) });
   const exit = run ? await inPack(plan, loaded!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
   return exit === 0 && repairs ? applyProfile(plan.machine.profileDir!, options) : exit;
+}
+
+/** Runs the undo, check or prerequisite of a ledger step whose pack is off, with that pack's own command on this machine. When Fleet cannot run it here, it exits cannotTell, so the ledger keeps the step for a later apply. */
+async function runUndo(name: string, args: string[], pack: string, options: CliOptions) {
+  const cannot = (why: string) => (options.print(`fleet ${name}: cannot run the ${pack} pack's command to undo its step: ${why}`), cannotTell);
+  let loaded: Awaited<ReturnType<typeof loadPlan>>;
+  try {
+    loaded = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true, withPack: pack });
+  } catch (error) {
+    return cannot((error as Error).message);
+  }
+  const { plan, sources } = loaded;
+  const command = plan.commands[name];
+  const owner = command?.pack === pack ? loadedPack(sources, pack) : undefined;
+  if (!command || !owner) return cannot(`the ${pack} pack has no command ${name} here`);
+  if (command.on === "hub" && !plan.onHub) return cannot("it runs on the hub");
+  const run = owner.code?.commands[name];
+  return run ? await inPack(plan, owner, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
 }
 
 /** A node of the profile runs a hub command on the hub over the one SSH path, with this terminal. Any other machine is told where it runs. */

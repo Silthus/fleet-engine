@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, relative } from "node:path";
 import { main } from "./cli.ts";
@@ -437,6 +437,25 @@ else process.exit((await Bun.file(file).exists()) ? 0 : 1);
       expect(await run(["box", "off"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(0);
       expect(existsSync(join(home, "box.txt"))).toBe(false);
       expect(await run(["box", "on"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(2);
+      expect(existsSync(join(home, "box.txt"))).toBe(false);
+    });
+
+    test("keeps the step to undo while Fleet cannot run its pack's command, and never runs another pack's command of that name", async () => {
+      const home = temp.make("home-");
+      const engine = engineWithBox();
+      const profile = profileDir(["tools"]);
+      expect(await run(["apply", "--profile", profile], home, engine)).toBe(0);
+      writeFileSync(join(engine, "packs/rival/commands/box.ts"), `await Bun.write(Bun.env.HOME + "/rival.txt", "ran");\n`);
+      const away = join(temp.make("away-"), "tools");
+      renameSync(join(engine, "packs/tools"), away);
+      writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8")), packs: ["rival"] }));
+      expect(await run(["box", "status"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(3);
+      await run(["apply"], home, engine);
+      expect(existsSync(join(home, "rival.txt"))).toBe(false);
+      expect(existsSync(join(home, "box.txt"))).toBe(true);
+      renameSync(away, join(engine, "packs/tools"));
+      drop(profile);
+      expect(await run(["apply"], home, engine)).toBe(0);
       expect(existsSync(join(home, "box.txt"))).toBe(false);
     });
   });
