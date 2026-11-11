@@ -21,7 +21,16 @@ export async function loadProfile(dir: string): Promise<Profile> {
  * key; every other field, workflows included, replaces the saved one, so a
  * caller removes a workflow override by saving the full override set.
  */
+/** Takes what other machines pushed before a change here, so the change lands on top of theirs. A profile without a remote has nothing to take, and an unreachable remote leaves the push to say why. */
+export async function pullProfile(dir: string) {
+  if (!(await run(dir, "git", "rev-parse", "--abbrev-ref", "@{upstream}")).ok) return;
+  if ((await run(dir, "git", "pull", "-q", "--rebase")).ok) return;
+  if (!(await run(dir, "git", "rebase", "--abort")).ok) return;
+  throw new ProfileError(`${dir}: could not take the changes another machine pushed. ${bothChanged(dir, "its remote")} Run git -C ${dir} pull --rebase, then try again.`);
+}
+
 export async function saveAnswers(dir: string, answers: Partial<ProfileFile>, options: { push?: boolean } = {}) {
+  if (options.push) await pullProfile(dir);
   const path = join(dir, "fleet.json");
   const current = (await readJson(path)) ?? { schema: 1 };
   if (current.schema !== 1) throw new ProfileError(`${path}: unknown schema ${String(current.schema)}`);

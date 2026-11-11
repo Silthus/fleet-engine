@@ -1,6 +1,6 @@
 import type { MachineFile, Plan } from "../pack/types.ts";
 import { onHub } from "../hub/ssh.ts";
-import { loadProfile, saveAnswers, saveMachine, validHost } from "../profile/profile.ts";
+import { loadProfile, pullProfile, saveAnswers, saveMachine, validHost } from "../profile/profile.ts";
 import type { Machine } from "../setup/commands.ts";
 import { devboxSteps, profileForBox } from "../setup/devbox.ts";
 import { FlagError } from "../setup/flags.ts";
@@ -55,6 +55,7 @@ const hubUpdateLimitMs = 15 * 60_000;
 /** Lists the devbox in the profile, so the hub and every node know it, and returns the hub the profile names. */
 async function listInProfile(profileDir: string | undefined, host: string): Promise<string | undefined> {
   if (!profileDir) return undefined;
+  await pullProfile(profileDir);
   const profile = await loadProfile(profileDir);
   if (!profile.devboxes?.includes(host)) await saveAnswers(profileDir, { devboxes: [...(profile.devboxes ?? []), host] }, { push: true });
   return profile.hub;
