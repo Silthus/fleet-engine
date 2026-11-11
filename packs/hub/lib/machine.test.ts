@@ -7,6 +7,7 @@ import { captureWith, type Capture, type Timer } from "./coder.ts";
 import { appeared } from "./testing.ts";
 import { fakeSsh, type Host } from "../../../src/testing/ssh.ts";
 import { boxSettings } from "./testing.ts";
+import { boxCommand } from "./box-command.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -132,4 +133,13 @@ test("a hub call runs until the hub deadline, which is longer than a shell call'
   expect(hubCallLimitMs).toBeGreaterThan(shellLimitMs);
   pending[0]!.fire();
   expect(await call).toBe(124);
+});
+
+test("a devbox asks the hub for a box by the SSH name its machine file saves, which the hub knows it by, not by its host name", async () => {
+  const home = homeWithMachine({ schema: 1, role: "devbox", name: "coder.worker-1" });
+  const heard: string[][] = [];
+  const machine = { ...thisMachine({ FLEET_SETTINGS: JSON.stringify(boxSettings) }, home), toHub: async (args: string[]) => (heard.push(args), 0) };
+  const deps = { machine: () => machine, coder: () => { throw new Error("no coder on a devbox"); }, readStdin: async () => "", hooks: {} } as unknown as Parameters<typeof boxCommand>[1];
+  expect(await boxCommand(["spawn", "lane"], deps)).toBe(0);
+  expect(heard).toEqual([["box", "spawn", "lane", "--for", "coder.worker-1"]]);
 });

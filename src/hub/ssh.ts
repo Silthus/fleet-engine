@@ -14,9 +14,6 @@ export function hubForward(hub: string, catalog: CatalogEntry[]): Owned<PackJob>
   return { id: forwardId, pack: "engine", schedule: { every: "always" }, command: ["ssh", "-NT", ...batch, ...keepAlive, ...ports.flatMap(local), hub] };
 }
 
-export const hubNodeName = /^[a-z0-9][a-z0-9.-]*$/;
-export const poolBoxName = /^box-/;
-
 export function quote(word: string) {
   return /^[\w@%+:,./-][\w@%+=:,./-]*$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
 }
