@@ -5,6 +5,7 @@ import { secretStore } from "./context.ts";
 import { main, type CliOptions } from "../cli.ts";
 import { startT3Stub } from "../integrations/t3/testing.ts";
 import { tempDirs } from "../testing/git.ts";
+import { engineSteps } from "../testing/packs.ts";
 
 const temp = tempDirs();
 const stops: (() => Promise<void>)[] = [];
@@ -43,14 +44,13 @@ async function machine(packs = ["kit"], settings: Record<string, string> = {}, f
   let now = start;
   let asleep = async (_now: number) => {};
   let lines: string[] = [];
-  const engineFleet = join(engine, "fleet");
   const options: CliOptions = {
     home,
     engineRoot: engine,
     platform: "linux",
     env: {},
     print: (line) => lines.push(line),
-    run: async (command) => (command[0] === "/bin/sh" && command[1] === engineFleet ? main(command.slice(2), { ...options, print: () => {} }) : spawned(command, { HOME: home, PATH: `${bin}:/usr/bin:/bin` })),
+    run: engineSteps(engine, (args) => main(args, { ...options, print: () => {} }), (command) => spawned(command, { HOME: home, PATH: `${bin}:/usr/bin:/bin` })),
     clock: { now: () => now, sleep: async (ms) => ((now += ms), await asleep(now)) },
   };
   const fleet = async (...args: string[]) => {

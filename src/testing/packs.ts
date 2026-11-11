@@ -1,7 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import type { AiPlan, AvailableSource, MachineFile, Plan, Profile } from "../pack/types.ts";
+import type { Runner } from "../reconciler/apply.ts";
 import { resolve } from "../reconciler/resolve.ts";
 
 const engineDir = join(import.meta.dir, "../..");
@@ -45,6 +46,14 @@ export function resolveEngine(sources: AvailableSource[], fields: Partial<Profil
     ...fields,
   };
   return resolve(profile, machine, sources);
+}
+
+export function engineSteps(engineRoot: string, fleet: (args: string[]) => Promise<number>, other: Runner = async () => 0): Runner {
+  const launcher = join(engineRoot, "fleet");
+  return async (command) => {
+    if (command[0] !== "/bin/sh" || command[1] !== launcher) return other(command);
+    return existsSync(join(engineRoot, "packs/base/commands", `${command[2]}.ts`)) ? 0 : fleet(command.slice(2));
+  };
 }
 
 export function fileContent(plan: Plan, target: string) {

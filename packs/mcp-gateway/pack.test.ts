@@ -6,7 +6,7 @@ import { main, type CliOptions } from "../../src/cli.ts";
 import type { AvailableSource, MachineFile, Profile } from "../../src/pack/types.ts";
 import { filesAdapter } from "../../src/reconciler/apply.ts";
 import { tempDirs } from "../../src/testing/git.ts";
-import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
+import { devbox, engineSource, engineSteps, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
 import { fakeSsh, remoteFleet, type Host } from "../../src/testing/ssh.ts";
 import { fakeMcpHub, mcphubFetch, writeMcpHubSettings } from "./lib/testing.ts";
 
@@ -142,7 +142,7 @@ function machine(saved: MachineFile, fields: Partial<Profile> = {}, hosts: Recor
     hostname: () => saved.name!,
     stdin: () => new Response(input).body!,
     capture: fakeSsh(temp.make("ssh-"), hosts),
-    run: async (command) => (command[0] === "/bin/sh" && command[1] === join(repoRoot, "fleet") ? main(command.slice(2), { ...options, print: () => {} }) : 0),
+    run: engineSteps(repoRoot, (args) => main(args, { ...options, print: () => {} })),
     adapters: () => [filesAdapter, providerConfigAdapter({ run: async () => ({ code: 0, stdout: "" }) })],
   };
   const fleet = async (args: string[], stdin = "") => {

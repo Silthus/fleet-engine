@@ -5,6 +5,7 @@ import { jobsAdapter } from "../adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../cli.ts";
 import type { CommandRunner } from "../adapters/run.ts";
 import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
+import { engineSteps } from "../testing/packs.ts";
 import { fakeSystemd } from "../testing/systemd.ts";
 import { filesAdapter } from "./apply.ts";
 
@@ -38,7 +39,6 @@ function machine(repair = "fleet gated setup", platform: "linux" | "darwin" = "l
   const profile = temp.make("profile-");
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["gated", ...Object.keys(extra).map(dirname)], plan: "claude", settings: {}, workflows: {} }));
   const home = temp.make("home-");
-  const engineFleet = join(engine, "fleet");
   let lines: string[] = [];
   const mac = launchd();
   const linux = fakeSystemd();
@@ -48,7 +48,7 @@ function machine(repair = "fleet gated setup", platform: "linux" | "darwin" = "l
     platform,
     env: {},
     print: (line) => lines.push(line),
-    run: async (command) => (command[0] === "/bin/sh" && command[1] === engineFleet ? main(command.slice(2), { ...options, print: () => {} }) : 0),
+    run: engineSteps(engine, (args) => main(args, { ...options, print: () => {} })),
     adapters: () => [filesAdapter, jobsAdapter({ run: platform === "darwin" ? mac.run : linux.run, engineRoot: engine, uid: 501 })],
   };
   const fleet = async (...args: string[]) => {

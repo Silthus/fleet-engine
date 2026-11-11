@@ -5,6 +5,7 @@ import { filesAdapter } from "../reconciler/apply.ts";
 import type { MachineFile } from "../pack/types.ts";
 import type { Clock } from "../runner/context.ts";
 import type { tempDirs } from "./git.ts";
+import { engineSteps } from "./packs.ts";
 import { fakeSsh, remoteFleet, type Host } from "./ssh.ts";
 
 const repoRoot = join(import.meta.dir, "../..");
@@ -34,7 +35,7 @@ export function linkedFleets(temp: ReturnType<typeof tempDirs>, port?: number, n
       print: () => {},
       hostname: () => saved.name!,
       capture: ssh,
-      run: async (command) => (command[0] === "/bin/sh" && command[1] === join(engine, "fleet") ? main(command.slice(2), options) : 0),
+      run: engineSteps(engine, (args) => main(args, options)),
       adapters: () => [filesAdapter],
       ...(clock ? { clock } : {}),
     };
