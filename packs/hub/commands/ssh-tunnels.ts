@@ -1,5 +1,5 @@
 import { homedir, hostname } from "node:os";
-import { runCommand } from "../../base/lib/command.ts";
+import { failedExit, runCommand } from "../../base/lib/command.ts";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { peerMachine, profileDevboxes, proxyOn } from "../lib/machine.ts";
 import { run } from "../lib/run.ts";
@@ -16,4 +16,4 @@ await runCommand(() => {
     home: homedir(), devboxes: tunnelTargets(alias, peerMachine().devboxes, hostname()), dialsHub: profileDevboxes(Bun.env), relayPort: numberSetting("hub.relayPort"),
     httpsHost: optionalStringSetting("hub.httpsHost"), proxy: proxyOn(Bun.env), hosts: "/etc/hosts", run, print: (line) => console.log(line),
   });
-}, "fleet ssh-tunnels");
+}, "fleet ssh-tunnels", failedExit(Bun.argv[2]));

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { runCommand } from "../../base/lib/command.ts";
+import { failedExit, runCommand } from "../../base/lib/command.ts";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { gatewayOn, hubTunnel, type MacTunnelMode } from "../lib/hub-tunnel.ts";
 import { run } from "../lib/run.ts";
@@ -23,4 +23,4 @@ await runCommand(() => {
     ...(httpsHost ? { httpsHost } : {}), ...(coder ? { coder } : {}),
     run, fetch, sleep: (ms) => Bun.sleep(ms), print: (line) => console.log(line),
   });
-}, "fleet hub-tunnel");
+}, "fleet hub-tunnel", failedExit(Bun.argv[2]));

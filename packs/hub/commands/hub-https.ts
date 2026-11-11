@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { runCommand } from "../../base/lib/command.ts";
+import { failedExit, runCommand } from "../../base/lib/command.ts";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { hubHttps, type HttpsMode } from "../lib/https.ts";
 import { run } from "../lib/run.ts";
@@ -16,4 +16,4 @@ await runCommand(() => {
     home: homedir(), alias: settled ? stringSetting("hub.alias") : "", httpsHost: settled ? optionalStringSetting("hub.httpsHost") : undefined, relayPort: settled ? numberSetting("hub.relayPort") : 0, user: userInfo().username, uid: process.getuid?.() ?? 0,
     caddyInstalled: () => existsSync("/usr/bin/caddy"), run, sleep: (ms) => Bun.sleep(ms), print: (line) => console.log(line),
   });
-}, "fleet hub-https");
+}, "fleet hub-https", failedExit(Bun.argv[2]));
