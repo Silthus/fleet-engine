@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { jobsAdapter } from "../../src/adapters/jobs/adapter.ts";
@@ -148,6 +148,14 @@ describe("the Linux session", () => {
     expect(await shell(home, ["/bin/sh", "-c", twice], set)).toBe(`/run/custom|unix:path=/run/custom/other-bus|${home}/.local/bin:${home}/.bun/bin:/usr/bin:/bin`);
   });
 
+  test("a session turns off agent-browser's Chrome version check, which fetches a web page on each start, and keeps a value the person set", async () => {
+    const home = temp.make("home-");
+    await fleet(["apply", "--profile", profileWith()], home);
+    const seen = 'printf %s "$AGENT_BROWSER_NO_VERSION_CHECK"';
+    expect(await shell(home, ["bash", "-lc", seen])).toBe("1");
+    expect(await shell(home, ["bash", "-lc", seen], { AGENT_BROWSER_NO_VERSION_CHECK: "0" })).toBe("0");
+  });
+
   test("a cron job started with only HOME and PATH sees the user bus", async () => {
     const home = temp.make("home-");
     await fleet(["apply", "--profile", profileWith()], home);
@@ -158,6 +166,25 @@ describe("the Linux session", () => {
     const cronCommand = crontab.text.split("\n").find((line) => line.includes("bus-check"))!.split(" ").slice(5).join(" ");
     await shell(home, ["/bin/sh", "-c", cronCommand]);
     expect(read(home, ".local/state/fleet/jobs/bus-check.log")).toBe(userBus);
+  });
+});
+
+describe("Cargo on Linux", () => {
+  const cargoConfig = (home: string) => join(home, ".cargo/config.toml");
+
+  test("fetches Git dependencies with the Git CLI, so they use Fleet's SSH command instead of only the SSH agent", async () => {
+    const home = temp.make("home-");
+    expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
+    expect(parseToml(readFileSync(cargoConfig(home), "utf8"))).toEqual({ net: { "git-fetch-with-cli": true } });
+  });
+
+  test.each([".cargo/config.toml", ".cargo/config"])("keeps the person's own %s as it is, and apply still passes", async (file) => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".cargo"));
+    writeFileSync(join(home, file), "[build]\njobs = 4\n");
+    expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
+    expect(readFileSync(join(home, file), "utf8")).toBe("[build]\njobs = 4\n");
+    expect(readdirSync(join(home, ".cargo"))).toEqual([file.slice(".cargo/".length)]);
   });
 });
 
