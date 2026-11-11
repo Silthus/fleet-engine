@@ -14,10 +14,11 @@ await runCommand(() => {
   const relayPort = numberSetting("hub.relayPort");
   const coder = Bun.which("coder") ?? undefined;
   const profile = Bun.env.FLEET_PROFILE_DIR ? join(Bun.env.FLEET_PROFILE_DIR, "fleet.json") : undefined;
-  const gateway = profile && existsSync(profile) && gatewayOn(JSON.parse(readFileSync(profile, "utf8"))) ? { gateway: { httpsHost: optionalStringSetting("hub.httpsHost"), relayPort } } : {};
+  const gateway = Boolean(profile && existsSync(profile) && gatewayOn(JSON.parse(readFileSync(profile, "utf8"))));
+  const httpsHost = optionalStringSetting("hub.httpsHost") || undefined;
   return hubTunnel(mode as MacTunnelMode, {
-    home: homedir(), platform: process.platform, uid: process.getuid?.() ?? 0, alias: stringSetting("hub.alias"), relayPort,
-    ...gateway, ...(coder ? { coder } : {}),
+    home: homedir(), platform: process.platform, uid: process.getuid?.() ?? 0, alias: stringSetting("hub.alias"), relayPort, gateway,
+    ...(httpsHost ? { httpsHost } : {}), ...(coder ? { coder } : {}),
     run, fetch, sleep: (ms) => Bun.sleep(ms), print: (line) => console.log(line),
   });
 }, "fleet hub-tunnel");
