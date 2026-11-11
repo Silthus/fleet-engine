@@ -56,10 +56,8 @@ function chooser(form: HTMLFormElement, data: PromptData) {
 
 function picker(form: HTMLFormElement, data: PromptData) {
   const boxes = [...form.querySelectorAll<HTMLInputElement>('input[name="pack"]')];
-  const known = new Set(boxes.map((box) => box.value));
-  let selected = storedSelection()
-    .filter((name) => known.has(name))
-    .reduce((picked, name) => (picked.includes(name) ? picked : toggleSelected(data, picked, name)), [] as string[]);
+  const stored = () => storedSelection().reduce((picked, name) => (picked.includes(name) ? picked : toggleSelected(data, picked, name)), [] as string[]);
+  let selected = stored();
 
   const show = () => {
     for (const box of boxes) box.checked = selected.includes(box.value);
@@ -76,6 +74,11 @@ function picker(form: HTMLFormElement, data: PromptData) {
 
   form.addEventListener("change", (event) => {
     selected = toggleSelected(data, selected, (event.target as HTMLInputElement).value);
+    show();
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (!event.persisted) return;
+    selected = stored();
     show();
   });
   show();

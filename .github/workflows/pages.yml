@@ -3,7 +3,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: [page/**, packs/**, presets.json, scripts/build-page.ts, .github/workflows/pages.yml]
   workflow_dispatch:
 permissions:
   contents: read

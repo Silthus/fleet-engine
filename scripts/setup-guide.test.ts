@@ -147,7 +147,7 @@ describe("the agent setup guide", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
-  test("says how to use each line the page's prompt can carry, and no line that the page stopped sending", async () => {
+  test("says how to use each line the page's prompt can carry", async () => {
     const data = await pageData({ audience: "public" });
     const prompt = startPrompt(data, { where: "hub", off: [] });
     const labels = [...prompt.matchAll(/^- ([^:]+): /gm)].map((match) => match[1]!);
@@ -157,6 +157,15 @@ describe("the agent setup guide", () => {
     const picks = guide().slice(guide().indexOf("## Picks from the page"), guide().indexOf("## 1. Check the Mac"));
     const rows = [...picks.matchAll(/^\| `([^`|]+)` \| [^|]+ \|$/gm)].map((match) => match[1]!);
     expect(rows).toEqual(labels);
+  });
+
+  test("still says how to use each line that only a prompt from the earlier page carries, and skips the hub packs when that prompt names none", () => {
+    const picks = words(guide().slice(guide().indexOf("## Picks from the page"), guide().indexOf("## 1. Check the Mac")));
+    expect(picks).toContain("A prompt from an earlier page can carry more lines. Use them too:");
+    expect(picks).toContain("- `Workflows on the first setup` and `Workflows once the hub runs`: add the list to the command of that step as `--workflows`, without the spaces.");
+    expect(picks).toContain("- `Setting`: add `--set <key>=<value>` to the setup command in step 7, once for each line.");
+    expect(picks).toContain("`none` means no pack, so skip item 8.");
+    expect(words(guide())).toContain("With picks from the page, leave out `--add hub` when the line does not name `hub`:");
   });
 
   test("takes a first setup with every pack switched off, and leaves workflows and settings to each pack's setup note", async () => {

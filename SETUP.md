@@ -35,10 +35,18 @@ Ask everything else as the steps say. Without the list, ask every question.
 | --- | --- |
 | `Where Fleet runs` | The answer to step 4. |
 | `Packs on the first setup` | The packs for step 6, picked one by one. `none` means no pack. Still ask the AI plan, and read each pack's setup note. |
-| `Packs once the hub runs` | The answer to item 8 of step 9. |
+| `Packs once the hub runs` | The answer to item 8 of step 9. `none` means no pack, so skip item 8. |
 
 The page names packs only. Each pack's setup note still asks which of its
 workflows to turn on and which settings it needs.
+
+A prompt from an earlier page can carry more lines. Use them too:
+
+- `Workflows on the first setup` and `Workflows once the hub runs`: add the
+  list to the command of that step as `--workflows`, without the spaces. Such
+  a line wins over a workflow flag from a setup note.
+- `Setting`: add `--set <key>=<value>` to the setup command in step 7, once
+  for each line.
 
 ## 1. Check the Mac
 
@@ -297,7 +305,8 @@ the steps below, follow the note.
 
    Turn them on here on the Mac. Start from this command, add
    `--add <pack>` for each other pack they picked, and change or add the
-   flags their notes name:
+   flags their notes name. With picks from the page, leave out `--add hub`
+   when the line does not name `hub`:
 
    ```sh
    fleet packs --add hub --workflows mcp-gateway=off

@@ -18,10 +18,10 @@ const workflow = () => Bun.YAML.parse(read(".github/workflows/pages.yml")) as Wo
 const actions = (job: Job) => job.steps.flatMap((step) => (step.uses ? [step.uses.split("@")[0]] : []));
 
 describe("GitHub Pages", () => {
-  test("runs on every push to main, so the first push after the repo turns public deploys, and on pull requests that change what the site is built from", () => {
+  test("runs on every push to main, so the first push after the repo turns public deploys, and on every pull request, since the build reads the packs and the engine's own code", () => {
     const { on } = workflow();
     expect(on.push).toEqual({ branches: ["main"] });
-    expect(on.pull_request?.paths).toEqual(["page/**", "packs/**", "presets.json", "scripts/build-page.ts", ".github/workflows/pages.yml"]);
+    expect(on).toHaveProperty("pull_request", null);
     expect(on).toHaveProperty("workflow_dispatch");
   });
 

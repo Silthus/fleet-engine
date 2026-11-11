@@ -231,7 +231,7 @@ mark { color: inherit; background: linear-gradient(transparent 56%, var(--yellow
 .pack-card:has(input:checked) { border-color: var(--edge); box-shadow: 0 7px 0 var(--shadow); transform: translateY(-3px); }
 .pack-card:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 3px; }
 .pack-card .stage { height: 150px; padding: 12px 12px 0; border-radius: 12px; border-width: 1.5px; box-shadow: none; }
-.pack-main { display: flex; align-items: center; gap: 10px; }
+.pack-main { display: flex; align-items: center; gap: 10px; min-height: 28px; }
 label.pack-main { cursor: pointer; }
 label.pack-main::after { content: ""; position: absolute; inset: 0; border-radius: 20px; }
 .pack-name { font: 700 1.15rem/1.15 var(--f-body); letter-spacing: -0.01em; }

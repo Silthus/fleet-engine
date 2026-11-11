@@ -4,9 +4,6 @@ import { join, posix } from "node:path";
 import type { LoadedPack, PackManifest } from "../src/pack/types.ts";
 import { tempDirs } from "../src/testing/git.ts";
 import { spawnAsync } from "../src/testing/spawn.ts";
-import { artFiles, packCast } from "../page/cast.ts";
-import { packFlows } from "../page/flows.ts";
-import { packIcon, packIcons, teamIcon } from "../page/icons.ts";
 import { logoMark } from "../page/logo.ts";
 import { firstStart, installPrompt, startPrompt, toggleSelected, type PageData, type PromptData } from "../page/model.ts";
 import { t3Link } from "../page/prompt.ts";
@@ -153,17 +150,23 @@ describe("the site build", () => {
     }
   });
 
-  test("every pack has its own icon and its own hedgehog, and a team pack gets the team icon", () => {
-    const icons = data.packs.map((pack) => packIcon(pack.name));
-    expect(data.packs.filter((pack) => !packIcons[pack.name]).map((pack) => pack.name)).toEqual([]);
-    expect(new Set(icons).size).toBe(icons.length);
-    expect(packIcon("acme")).toBe(teamIcon);
-    expect(icons).not.toContain(teamIcon);
-    expect(Object.keys(packCast).toSorted()).toEqual(data.packs.map((pack) => pack.name).toSorted());
-    for (const pack of data.packs) {
-      expect(page("packs/index.html")).toContain(`assets/art/${packCast[pack.name]!.art.file}`);
-      expect(page(`packs/${pack.name}/index.html`)).toContain(`assets/art/${packCast[pack.name]!.art.file}`);
-    }
+  test("every pack shows its own icon and its own hedgehog, the same on its card and on its page, and a team pack gets the team's", async () => {
+    const iconOf = (html: string) => html.match(/<span class="icon [^"]*">([\s\S]*?)<\/span>/)![1]!;
+    const hogOf = (html: string) => html.match(/<div class="stage tone-\w+"><img src="[^"]*assets\/art\/([\w.-]+)"/)![1]!;
+    const cardsOf = (html: string) => html.split('<li class="pack-card').slice(1);
+    const cards = cardsOf(page("packs/index.html"));
+    expect(cards).toHaveLength(data.packs.length);
+    expect(new Set(cards.map(iconOf)).size).toBe(cards.length);
+    expect(new Set(cards.map(hogOf)).size).toBe(cards.length);
+    data.packs.forEach((pack, index) => {
+      const own = page(`packs/${pack.name}/index.html`);
+      expect([pack.name, iconOf(own.slice(own.indexOf("<h1"))), hogOf(own)]).toEqual([pack.name, iconOf(cards[index]!), hogOf(cards[index]!)]);
+    });
+    const team = await buildSite({ audience: "posthog", team: [teamPack({ name: "acme", audience: undefined, workflows: [], settings: [] })] });
+    const teamCard = cardsOf(page("packs/index.html", team)).at(-1)!;
+    expect(teamCard).toContain('value="acme"');
+    expect(cards.map(iconOf)).not.toContain(iconOf(teamCard));
+    expect(cards.map(hogOf)).not.toContain(hogOf(teamCard));
   });
 
   test("a build ships each picture its pages show, unchanged, and no other picture", async () => {
@@ -182,22 +185,23 @@ describe("the site build", () => {
   test("the credits name the source of every picture in the art folder, and the folder holds no picture that no build shows", async () => {
     const artDir = join(root, "page/art");
     const held = readdirSync(artDir).filter((name) => !name.endsWith(".md") && name !== "LICENSE");
-    expect(held.toSorted()).toEqual(artFiles().toSorted());
     const credits = readFileSync(join(artDir, "README.md"), "utf8");
     expect(held.filter((name) => !new RegExp(`^\\| \`${name}\` \\| \`[^\`]+/${name}\` \\| \`[0-9a-f]{40}\` \\|$`, "m").test(credits))).toEqual([]);
     expect(readFileSync(join(artDir, "LICENSE"), "utf8")).toStartWith("Copyright (c) 2020-2026 PostHog Inc.");
     const team = await buildSite({ audience: "posthog", team: [teamPack()] });
     expect(held.filter((name) => !(`assets/art/${name}` in team))).toEqual([]);
+    expect(held.length).toBeGreaterThan(15);
   });
 
-  test("each flow belongs to a pack of the public site, is short, and shows on that pack's page", () => {
-    const names = data.packs.map((pack) => pack.name);
-    expect(Object.keys(packFlows).filter((name) => !names.includes(name))).toEqual([]);
-    for (const [name, steps] of Object.entries(packFlows)) {
+  test("a pack's page shows how the pack works in three to five short steps", () => {
+    const flows = data.packs.flatMap((pack) => {
+      const flow = page(`packs/${pack.name}/index.html`).match(/<ol class="flow">([\s\S]*?)<\/ol>/)?.[1];
+      return flow ? [[pack.name, [...flow.matchAll(/<span class="flow-step">([^<]+)<\/span>/g)].map((match) => unescaped(match[1]!))] as const] : [];
+    });
+    expect(flows.map(([name]) => name)).toEqual(expect.arrayContaining(["pull-requests", "orchestration", "memory"]));
+    for (const [name, steps] of flows) {
       expect([name, steps.length >= 3 && steps.length <= 5]).toEqual([name, true]);
       expect([name, steps.filter((step) => step.split(" ").length > 7)]).toEqual([name, []]);
-      const text = visibleText(page(`packs/${name}/index.html`));
-      expect([name, steps.filter((step) => !text.includes(step))]).toEqual([name, []]);
     }
   });
 
