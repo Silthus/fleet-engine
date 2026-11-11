@@ -88,6 +88,19 @@ for (const [runtime, command] of Object.entries(runtimes)) describe.skipIf(!node
     expect(bridge.backend().find((entry) => entry.method === "mcpServer/tool/call")!.params).toEqual({ threadId: "thread-1", server: "codex_apps", tool: "slack.slack_send_message_draft", arguments: { channel_id: "C1", message: "hi" } });
   });
 
+  test("a draft's skin-tone shortcodes reach Slack as Unicode emoji, so Slack's markdown cannot double the tone, and code keeps them as written", async () => {
+    const bridge = upstream();
+    await bridge.initialize();
+    const message = "Thanks :+1::skin-tone-2: and :wave::skin-tone-6: :unknown::skin-tone-3: `:+1::skin-tone-4:`\n```\n:clap::skin-tone-5:\n```";
+    await bridge.request("tools/call", { name: "slack_send_message_draft", arguments: { channel_id: "C1", message, text: ":ok_hand::skin-tone-3:", title: ":+1::skin-tone-2:" } });
+    expect(bridge.backend().find((entry) => entry.method === "mcpServer/tool/call")!.params.arguments).toEqual({
+      channel_id: "C1",
+      message: "Thanks \u{1F44D}\u{1F3FB} and \u{1F44B}\u{1F3FF} :unknown::skin-tone-3: `:+1::skin-tone-4:`\n```\n:clap::skin-tone-5:\n```",
+      text: "\u{1F44C}\u{1F3FC}",
+      title: ":+1::skin-tone-2:",
+    });
+  });
+
   test("the Codex backend serves only the Slack app: every MCP server and every other plugin stays off, and it uses its own OpenAI sign-in", async () => {
     const bridge = upstream('[mcp_servers.fleet-hub]\ncommand = "sh"\n[mcp_servers.other]\ncommand = "x"\n[plugins."slack@openai-curated-remote"]\nenabled = false\n[plugins."gmail@openai-curated-remote"]\nenabled = true\n');
     await bridge.initialize();
