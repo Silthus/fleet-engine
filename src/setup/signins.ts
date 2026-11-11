@@ -58,18 +58,25 @@ export function claudeSignIn(machine: Machine): SignIn {
     id: "claude",
     title: "Sign in to Claude",
     minutes: 1,
-    why: "Each machine signs in to Claude itself. There is no shared proxy.",
+    why: "Each machine signs in to Claude itself. There is no shared proxy. Setup checks with a real request, because a stale sign-in still looks signed in.",
     command: ["claude", "auth", "login"],
-    async probe() {
-      const status = await machine.exec(["claude", "auth", "status"]);
-      if (status.code !== 0) return false;
-      try {
-        return (JSON.parse(status.stdout) as { loggedIn?: unknown }).loggedIn === true;
-      } catch {
-        return false;
-      }
-    },
+    probe: async () => (await claudeAuth(machine)) === "ok",
   };
+}
+
+export const claudeProbeTimeoutMs = 20_000;
+
+/** A token from the environment, such as one a Coder secret injects, looks signed in after it dies, and claude auth login cannot replace it. */
+export async function claudeAuth(machine: Machine): Promise<"ok" | "signed-out" | "token-dead"> {
+  const status = await machine.exec(["claude", "auth", "status"]);
+  let state: { loggedIn?: unknown; authMethod?: unknown } = {};
+  try {
+    state = JSON.parse(status.stdout);
+  } catch {}
+  if (status.code !== 0 || state.loggedIn !== true) return "signed-out";
+  const reply = await machine.exec(["claude", "-p", "ok"], { timeoutMs: claudeProbeTimeoutMs });
+  if (!/\b401\b/.test(reply.output)) return "ok";
+  return state.authMethod === "oauth_token" ? "token-dead" : "signed-out";
 }
 
 export const codexProbeTimeoutMs = 20_000;
