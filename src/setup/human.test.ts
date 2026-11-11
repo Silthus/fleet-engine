@@ -72,6 +72,18 @@ describe("fleet setup sign-ins", () => {
     expect(machineFile(home).setup.done).toContain("human:posthog:coder");
   });
 
+  test("a run without a person that picked packs before the GitHub sign-in still ticks the team pack the sign-in finds", async () => {
+    const home = temp.make("home-");
+    const args = ["--non-interactive", "--preset", "starter", "--plan", "claude"];
+    expect((await fleetSetup(home, args, [], fakeMachine(home, { github: 1 }, { org: true }), teamSource())).code).toBe(2);
+    expect(machineFile(home).setup.draft.packs).toEqual(["pull-requests"]);
+    const box = fakeMachine(home, { coder: 1 }, { org: true });
+    const result = await fleetSetup(home, args, [], box, teamSource());
+    expect(result.output).toContain("  ✓ You are in the PostHog org, so the Posthog pack is ticked");
+    expect(savedAnswers(home).packs).toEqual(["pull-requests", "posthog"]);
+    expect(result.output).toContain("  Needs you: Sign in to Coder");
+  });
+
   test("an interactive pack sign-in runs in the foreground with the keyboard, then its probe decides, with no polling", async () => {
     const home = temp.make("home-");
     const box = fakeMachine(home, { coder: 50 }, { org: true });

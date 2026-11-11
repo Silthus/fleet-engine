@@ -136,7 +136,7 @@ describe("fleet setup questions", () => {
     const noClaude = await fleetSetup(claude, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"], [], fakeMachine(claude, { claude: 1 }));
     expect(noClaude.code).toBe(2);
     expect(noClaude.output).toContain("  Needs you: Sign in to Claude\n  Run: claude auth login\n");
-    expect(machine(claude).setup.done).toContain("apply");
+    expect(noClaude.applied).toEqual([profilePath(claude)]);
   });
 
   test("a rerun keeps answers saved before Ctrl-C marked their step done", async () => {
