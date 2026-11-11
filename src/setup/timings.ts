@@ -3,9 +3,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { StepKind } from "./runner.ts";
 
-export const timingsPath = (home: string) => join(home, ".local/state/fleet/setup-timings.json");
+export const timingsPath = (home: string) => join(home, ".local/state/fleet/logs/setup-timings.json");
 /** get.sh writes this: a line "start <epoch s>", then one line "<phase> <epoch s when it ended> [needed-you]" per phase. */
-export const installLogPath = (home: string) => join(home, ".local/state/fleet/install-timings");
+export const installLogPath = (home: string) => join(home, ".local/state/fleet/logs/install-timings");
 
 /** An install log older than this belongs to an earlier install, not to this setup. */
 const installLogMaxAgeMs = 2 * 3600 * 1000;

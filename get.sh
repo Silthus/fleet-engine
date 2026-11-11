@@ -34,7 +34,7 @@ done
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
 
 # fleet setup reads this log to time the whole install, from this line on.
-install_log="$HOME/.local/state/fleet/install-timings"
+install_log="$HOME/.local/state/fleet/logs/install-timings"
 needed_you=
 mkdir -p "${install_log%/*}"
 printf 'start %s\n' "$(date +%s)" >"$install_log"

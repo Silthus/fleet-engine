@@ -42,7 +42,7 @@ describe("setup timings", () => {
   test("starts the clock when get.sh started, and lists its phases first", async () => {
     const home = temp.make("home-");
     const epoch = start / 1000;
-    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    mkdirSync(join(home, ".local/state/fleet/logs"), { recursive: true });
     writeFileSync(installLogPath(home), `start ${epoch - 200}\ntools ${epoch - 80} needed-you\nt3 ${epoch - 30}\nengine ${epoch - 10}\npackages ${epoch - 5}\n`);
     const box = fakeMachine(home, {}, { startedAt: start });
     const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], box);
@@ -61,7 +61,7 @@ describe("setup timings", () => {
 
   test("ignores an install log from an earlier install", async () => {
     const home = temp.make("home-");
-    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    mkdirSync(join(home, ".local/state/fleet/logs"), { recursive: true });
     writeFileSync(installLogPath(home), `start ${start / 1000 - 3 * 3600}\ntools ${start / 1000 - 3 * 3600 + 10}\n`);
     const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home, {}, { startedAt: start }));
     expect(result.code).toBe(0);
