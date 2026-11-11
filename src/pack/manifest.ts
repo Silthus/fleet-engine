@@ -192,6 +192,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(item.check === undefined || isStrings(item.check), `${label}: check must be a command list`);
     need(item.undo === undefined || (isStrings(item.undo) && item.undo.length > 0), `${label}: undo must be a command list`);
     need(item.undo === undefined || (isStrings(item.check) && item.check.length > 0), `${label}: undo needs a check`);
+    need(item.left === undefined || (isStrings(item.left) && item.left.length > 0), `${label}: left must be a command list`);
+    need(item.left === undefined || item.undo !== undefined, `${label}: left needs an undo`);
     waitsWithin(item, label);
     filters(item, label);
   });
