@@ -570,6 +570,10 @@ as today's human step, with `fleet run <pack>/<id>` as its probe.
   answer returns the same thread. When T3 does not run, `start` rejects
   with a sentence that says so, and the caller keeps its key for the next
   try. Declared tasks and scripts wait with a finding, as today.
+- **A script's project comes back.** When a project script names a folder
+  by path, Fleet adds the folder back as a T3 project on the next apply,
+  and `fleet apply` notes each script and task that needs it. To keep it
+  removed, turn off the workflow or pack that owns each of them.
 
 ## 7. Mapping today's packs
 
