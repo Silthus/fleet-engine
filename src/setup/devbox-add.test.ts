@@ -71,6 +71,16 @@ describe("fleet devbox add", () => {
     expect(elsewhere.coderSsh).toEqual(["https://coder.example.com"]);
   });
 
+  test("fleet devbox add keeps a workspace's Coder session when it reaches the same deployment at another address", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
+    const io = scripted([]);
+    const options = { home, engineRoot, platform: "linux" as const, print: io.terminal.print, terminal: io.terminal };
+    const internal = fakeMachine(home, {}, { boxCoderAt: "http://coder.internal", boxCoderSameUser: true });
+    expect(await main(["devbox", "add", "coder.fleet-node-1"], { ...options, setup: { machine: internal.machine } })).toBe(0);
+    expect(internal.coderSsh).toEqual(["http://coder.internal"]);
+  });
+
   test("fleet devbox add stops with what to run when this machine is not signed in to Coder, and leaves other SSH hosts alone", async () => {
     const home = temp.make("home-");
     expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
