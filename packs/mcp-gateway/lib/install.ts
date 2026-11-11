@@ -11,7 +11,8 @@ export const mcphubSource = {
   sha256: "5543020667fdbc71e183dee6144a182318ff8f1368c0a479adacc7c1f010613e",
 };
 export const codexMount = "/opt/fleet-codex";
-export const bridgeFile = "/app/fleet-slack-bridge.mjs";
+export const bridgeFile = "/app/fleet-app-bridge.mjs";
+export const legacyBridgeFile = "/app/fleet-slack-bridge.mjs";
 export const codexPackage = (home: string) => join(home, ".local/share/fleet/codex");
 const sdkPackages = ["client", "core", "node", "server", "server-legacy"];
 const compiledFiles = ["clients/legacyMcpClient.js", "services/mcpService.js"];
@@ -43,8 +44,8 @@ export async function install(hub: Hub) {
 }
 
 export async function bridgeBundle(root: string) {
-  const build = await Bun.build({ entrypoints: [join(root, "lib/slack-upstream.ts")], target: "node", format: "esm" });
-  if (!build.success) throw new Error(`The Slack bridge did not build: ${build.logs.join("; ")}`);
+  const build = await Bun.build({ entrypoints: [join(root, "lib/app-bridge.ts")], target: "node", format: "esm" });
+  if (!build.success) throw new Error(`The app bridge did not build: ${build.logs.join("; ")}`);
   return Buffer.from(await build.outputs[0]!.arrayBuffer());
 }
 
@@ -86,14 +87,14 @@ export async function buildImage(hub: Hub, source = mcphubSource) {
     await mkdir(join(build, "sdk"), { recursive: true });
     await writeFile(join(build, "sdk/package.json"), sdkManifest);
     await writeFile(join(build, "sdk/pnpm-lock.yaml"), sdkLock);
-    await writeFile(join(build, "fleet-slack-bridge.mjs"), bridge);
+    await writeFile(join(build, "fleet-app-bridge.mjs"), bridge);
     const links = sdkPackages.map((name) => `ln -sfn /fleet-sdk/node_modules/@modelcontextprotocol/${name} /app/node_modules/@modelcontextprotocol/${name}`).join(" && ");
     await writeFile(join(build, "Dockerfile"), [
       `FROM ${mcphubImage}`,
       "COPY sdk/ /fleet-sdk/",
       `RUN cd /fleet-sdk && pnpm install --frozen-lockfile --prod --ignore-scripts && ${links}`,
       ...compiledFiles.map((file) => `COPY ${file} /app/dist/${file}`),
-      `COPY fleet-slack-bridge.mjs ${bridgeFile}`,
+      `COPY fleet-app-bridge.mjs ${bridgeFile}`,
       'LABEL org.fleet.patch="1.1.0-elicitation"',
       "",
     ].join("\n"));

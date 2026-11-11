@@ -122,7 +122,7 @@ export type Api = ReturnType<typeof api>;
 export async function managementApi(hub: Hub) {
   return api(hub, await installedSettings(hub));
 }
-type Group = { id: string; name: string; servers: Array<string | { name: string }> };
+type Group = { id: string; name: string; servers: Array<string | { name: string; tools?: string[] | "all" }> };
 
 async function groupGap(call: Api) {
   const servers = (await call<Array<{ name: string; status: string; tools?: unknown[] }>>("servers"));
@@ -131,11 +131,18 @@ async function groupGap(call: Api) {
   return { servers, group, missing: servers.map((server) => server.name).filter((name) => !members.has(name)) };
 }
 
-export async function syncGatewayGroup(call: Api) {
+type Entry = Group["servers"][number];
+const entryName = (entry: Entry) => (typeof entry === "string" ? entry : entry.name);
+const entryTools = (entry: Entry) => (typeof entry === "string" ? "all" : entry.tools ?? "all");
+
+/** Puts every server into the Fleet group. tools names the servers whose group entry serves only the listed tools; other entries keep theirs. */
+export async function syncGatewayGroup(call: Api, tools: Record<string, string[]> = {}) {
   const { servers, group, missing } = await groupGap(call);
-  const names = servers.map((server) => server.name);
-  if (!group) await call("groups", "POST", { name: gatewayGroup, description: "Every server, for Fleet's machine keys", servers: names });
-  else if (missing.length) await call(`groups/${encodeURIComponent(group.id)}`, "PUT", { servers: names });
+  const entry = (name: string): Entry => (tools[name] ? { name, tools: tools[name] } : name);
+  if (!group) return void (await call("groups", "POST", { name: gatewayGroup, description: "Every server, for Fleet's machine keys", servers: servers.map((server) => entry(server.name)) }));
+  const kept = group.servers.map((server) => (tools[entryName(server)] ? entry(entryName(server)) : server));
+  const narrowed = group.servers.some((server, index) => !Bun.deepEquals(entryTools(server), entryTools(kept[index]!)));
+  if (missing.length || narrowed) await call(`groups/${encodeURIComponent(group.id)}`, "PUT", { servers: [...kept, ...missing.map(entry)] });
 }
 
 export async function syncWhenReady(hub: Hub) {

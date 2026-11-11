@@ -126,7 +126,7 @@ test("the build checks the pinned source archive, applies the approval patch, an
       const output = call.command[call.command.indexOf("-v", call.command.indexOf("-v") + 1) + 1]!.split(":")[0]!;
       for (const file of ["clients/legacyMcpClient.js", "services/mcpService.js"]) mkdirSync(join(output, file, ".."), { recursive: true }), writeFileSync(join(output, file), file);
     }
-    if (tool === "docker" && noun === "build") dockerfile = readFileSync(join(call.command[4]!, "Dockerfile"), "utf8"), bridge = readFileSync(join(call.command[4]!, "fleet-slack-bridge.mjs"));
+    if (tool === "docker" && noun === "build") dockerfile = readFileSync(join(call.command[4]!, "Dockerfile"), "utf8"), bridge = readFileSync(join(call.command[4]!, "fleet-app-bridge.mjs"));
     return {};
   });
   const fetched: string[] = [];
@@ -139,7 +139,7 @@ test("the build checks the pinned source archive, applies the approval patch, an
   expect(calls[3]!.command).toContain(mcphubImage);
   expect(calls[4]!.command.slice(0, 4)).toEqual(["docker", "build", "-t", image]);
   expect(dockerfile).toStartWith(`FROM ${mcphubImage}\nCOPY sdk/ /fleet-sdk/\n`);
-  expect(dockerfile).toEndWith("COPY fleet-slack-bridge.mjs /app/fleet-slack-bridge.mjs\nLABEL org.fleet.patch=\"1.1.0-elicitation\"\n");
+  expect(dockerfile).toEndWith("COPY fleet-app-bridge.mjs /app/fleet-app-bridge.mjs\nLABEL org.fleet.patch=\"1.1.0-elicitation\"\n");
   expect(bridge.equals(await bridgeBundle(hub.root))).toBe(true);
   expect(dockerfile).not.toMatch(/grafana/i);
   expect(existsSync(calls[4]!.command[4]!)).toBe(false);
