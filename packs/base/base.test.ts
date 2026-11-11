@@ -84,11 +84,11 @@ describe("the Base pack", () => {
     expect(plan("codex", devbox).steps.map((step) => step.id).filter(isAgentCli)).toEqual(["codex-cli"]);
   });
 
-  test("installs the agent CLIs on a Mac too, Codex from its Homebrew cask, so a clean Mac without Node can sign in", () => {
-    expect(plan("both").steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli", "codex-cli-mac"]);
+  test("installs the agent CLIs on a Mac too, Codex from its release package, so a clean Mac without Node or Homebrew can sign in", () => {
+    expect(plan("both").steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli", "codex-cli"]);
     expect(plan("claude").steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli"]);
-    expect(plan("codex").steps.map((step) => step.id).filter(isAgentCli)).toEqual(["codex-cli-mac"]);
-    expect(plan("both").steps.find((step) => step.id === "codex-cli-mac")).toMatchObject({ run: ["brew", "install", "--cask", "codex"], check: ["codex", "--version"] });
+    expect(plan("codex").steps.map((step) => step.id).filter(isAgentCli)).toEqual(["codex-cli"]);
+    expect(plan("both").steps.find((step) => step.id === "codex-cli")).toMatchObject({ run: ["fleet", "install-codex"], check: ["codex", "--version"] });
   });
 
   test("installs Codex on Linux from its release package, which needs no Node", () => {
