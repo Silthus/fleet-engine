@@ -74,7 +74,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * until then it refuses a node's credential when the node applies its
  * profile, and its fleet peers link refuses the node.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxClaudeTokenDead?: boolean } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -138,7 +138,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line === "coder config-ssh --yes") return passes("box:coder") ? (coderSsh.push(boxCoderAt), result(true, "Updated \"~/.ssh/config\"")) : result(false, "You are not logged in");
     if (line.startsWith("gh auth status")) return ghStatus("box:github", scopes);
     if (line === "gh auth setup-git") return result(true);
-    if (line === "claude auth status") return result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
+    if (line === "claude auth status") return options.boxClaudeTokenDead ? result(true, JSON.stringify({ loggedIn: true, authMethod: "oauth_token" })) : result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
+    if (line === "claude -p ok") return options.boxClaudeTokenDead ? result(false, "Failed to authenticate. API Error: 401 OAuth access token is invalid") : result(true, "ok");
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
     if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
     if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
