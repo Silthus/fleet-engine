@@ -96,7 +96,7 @@ async function makeProfile(context: ProfileContext) {
   await startFiles(dir, context, same(profileRepo, team) ? org : undefined);
   const started = await untracked(machine, dir, startFileNames);
   const answers: Partial<ProfileFile> = {
-    ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, settings: {}, workflows: {} }),
+    ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, plan: "both", settings: {}, workflows: {} }),
     ...draft,
     ...(memoryRepo && namedMemory === undefined ? { settings: { ...draft.settings, "memory.repo": memoryRepo } } : {}),
   };

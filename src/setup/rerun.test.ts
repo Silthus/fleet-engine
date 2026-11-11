@@ -115,6 +115,20 @@ describe("fleet setup on a new machine whose profile repo exists", () => {
     expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests"], plan: "codex" });
   });
 
+  test("keeps the plan a stopped run set with --plan when the next run leaves it out", async () => {
+    const home = await newMachineWithProfile();
+    expect((await fleetSetup(home, ["--non-interactive", "--plan", "codex", "--devbox", "skip"], [], fakeMachine(home, { github: 1 }))).code).toBe(2);
+    expect((await fleetSetup(home, ["--non-interactive", "--devbox", "skip"])).code).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "guards"], plan: "codex" });
+  });
+
+  test("takes the profile's plan when no run named one", async () => {
+    const home = await newMachineWithProfile();
+    expect((await fleetSetup(home, ["--non-interactive", "--devbox", "skip"], [], fakeMachine(home, { github: 1 }))).code).toBe(2);
+    expect((await fleetSetup(home, ["--non-interactive", "--devbox", "skip"])).code).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "guards"], plan: "claude" });
+  });
+
   test("keeps a workflow switch of a team source the person is no longer a member of", async () => {
     const home = forgetMachine(await withTeamSwitch());
     expect((await fleetSetup(home, ["--non-interactive", "--add", "communication", "--devbox", "skip"])).code).toBe(0);
