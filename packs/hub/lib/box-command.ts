@@ -1,11 +1,11 @@
-import { boxPrefix, grant, reap, type Coder } from "./coder.ts";
+import { boxPrefix, checkSession, grant, reap, type Coder } from "./coder.ts";
 import { assertBox, link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
 import { quote, requireHub, type Machine } from "./machine.ts";
 import { LockBusy, userWaitMs, withBoxLock } from "./box-lock.ts";
 import { idle, list, lockWait, nightly, nightlySteps, ownership, refreshPool, release, saveToken, spawn, startBox, sweep, threads, type BoxHooks } from "./box.ts";
 import * as registry from "./pool.ts";
 
-export type CommandCoder = BoxCoder & Pick<Coder, "env" | "token">;
+export type CommandCoder = BoxCoder & Pick<Coder, "env" | "token" | "sessionFrom" | "sessionKey">;
 export type BoxDeps = { machine(): Machine; coder(here: Machine): CommandCoder; readStdin(): Promise<string>; hooks: BoxHooks };
 
 const usage = `Usage: fleet box spawn [<name>] [--new]
@@ -33,12 +33,14 @@ const usage = `Usage: fleet box spawn [<name>] [--new]
                                    each free box (hub)
        fleet box grant <devbox> [--if-expiring]
                                    Mint a Coder token on the hub and give it to a devbox (hub)
-       fleet box nightly           Reap, grant each devbox a token that expires soon, and refresh the pool (hub, nightly)
+       fleet box session           Check that the hub's Coder session does not expire soon, and name the fix when it does (hub)
+       fleet box nightly           Check the Coder session, reap, grant each devbox a token that expires soon, and refresh
+                                   the pool (hub, nightly)
 
 spawn, start and release change boxes only on the hub. On a devbox they run there over SSH, with --for <this devbox>
 so the hub links the box to it.`;
 
-const hubOnly = ["sweep", "reap", "pool", "grant", "nightly"];
+const hubOnly = ["sweep", "reap", "pool", "grant", "nightly", "session"];
 const onHub = ["spawn", "start", "release"];
 const option = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
 const sshName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -54,7 +56,7 @@ function caller(args: string[]): { plain: string[]; devbox?: string; valid: bool
 function valid(args: string[]): boolean {
   const [command, name, ...rest] = args;
   switch (command) {
-    case "list": case "idle": case "threads": case "restore": case "token": case "sweep": case "nightly":
+    case "list": case "idle": case "threads": case "restore": case "token": case "sweep": case "nightly": case "session":
       return args.length === 1;
     case "link": case "unlink": case "start":
       return !!name && !rest.length;
@@ -102,7 +104,9 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
       }
     });
   };
+  const session = () => checkSession(coder(), { now: here.now(), print: here.print });
   switch (command) {
+    case "session": return session();
     case "token": return await saveToken(here.home, await deps.readStdin()), here.say("saved the Claude token for new boxes"), 0;
     case "idle": return idle(here);
     case "threads": return threads(here);
@@ -116,7 +120,7 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
       return 0;
     case "grant": return grantTo(name!, rest.includes("--if-expiring"));
     case "reap": return reapNow(Number(option(plain, "--days") ?? here.settings.reapDays), plain.includes("--dry-run"));
-    case "nightly": return nightly(nightlySteps(here, { reap: () => reapNow(here.settings.reapDays, false), grant: (devbox) => grantTo(devbox, true), refresh: () => refreshPool(coder(), here) }), here);
+    case "nightly": return nightly(nightlySteps(here, { session, reap: () => reapNow(here.settings.reapDays, false), grant: (devbox) => grantTo(devbox, true), refresh: () => refreshPool(coder(), here) }), here);
     case "run": return coder().run(name!, `bash -lc ${quote(rest.slice(1).join(" "))}`);
     case "link": return await holding(name!, () => link(coder(), here, name!)), 0;
     case "start": return startBox(coder(), here, name!, by);
