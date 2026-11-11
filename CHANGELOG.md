@@ -10,7 +10,11 @@ packs, and your answers live in your own private profile repo.
 
 - `get.sh` installs what Fleet needs, fetches the engine (`main`, or the tag
   or commit you give with `--ref`), puts `fleet` on the login PATH, and starts
-  `fleet setup`. Running it again picks up where it stopped.
+  `fleet setup`. Running it again picks up where it stopped. It tries each
+  download up to three times, and stops a download that cannot connect in 20
+  seconds or stalls for a minute. It finds the newest T3 Code nightly in the
+  releases feed, so the T3 Code installer does not use the GitHub API quota
+  that shared networks run out of.
 - `fleet setup` asks plain-language questions and offers a default wherever a
   pack has one. `--preset` starts from a preset's packs.
   `--non-interactive` asks nothing and lists what it still needs, such as
