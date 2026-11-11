@@ -4,7 +4,9 @@
 Fleet from the public one-liner, and that a devbox gets the same setup from
 the profile repo. Run it as root on a throwaway Linux box with systemd, cron,
 `ss`, and python3. It never touches the box owner's files, accounts, crontab,
-or T3 Code.
+or T3 Code. It stops cron while it runs and starts it again at the end, so a
+scheduled job cannot change a home between two snapshots or move the engine
+off the copy under proof.
 
 ```sh
 sudo sh proof/fresh-linux.sh
@@ -56,10 +58,7 @@ sudo sh proof/fresh-linux.sh
      changes.`, and the one-liner again exits 2 with only sign-ins open. None
      of them changes the home: file contents, modes, and symlink targets stay
      the same. Caches, logs, and Codex's scratch folder `~/.codex/tmp` do not
-     count. Neither does what the scheduled jobs write while the proof runs:
-     their state in `~/.local/state/fleet/jobs`, the nightly jobs' daily
-     stamps and locks in `~/.local/state/fleet/nightly`, and the
-     `worktree-prune` records. `fleet apply` writes none of them. For the runtime folders `~/.bun` and `~/.local/share/claude`, the
+     count. For the runtime folders `~/.bun` and `~/.local/share/claude`, the
      proof compares the versions and link targets of `bun`, `claude`,
      `codex`, and `t3` instead.
 5. It removes both users, their crontabs, and the work folder with their

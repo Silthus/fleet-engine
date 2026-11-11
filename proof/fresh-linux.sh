@@ -48,6 +48,7 @@ fails="$work/fails"
 created=
 clean_uids=
 cleanup_failed=
+paused_cron=
 
 home_of() { getent passwd "$1" | cut -d: -f6; }
 
@@ -80,12 +81,32 @@ remove_user() {
   note "removed $user (uid $uid), its home $home, and its crontab"
 }
 
+pause_cron() {
+  for unit in cron.service crond.service; do
+    if systemctl is-active --quiet "$unit"; then
+      if systemctl stop "$unit"; then
+        paused_cron=$unit
+        note "stopped $unit, so no scheduled job changes the machine while the proof compares it"
+      else
+        note "could not stop $unit, so a scheduled job may run during the proof"
+      fi
+      return
+    fi
+  done
+}
+
+resume_cron() {
+  [ -n "$paused_cron" ] || return 0
+  systemctl start "$paused_cron" && note "started $paused_cron again"
+}
+
 cleanup() {
   code=$?
   set +e
   trap '' HUP INT TERM
   say "Cleanup"
   for entry in $created; do remove_user "${entry%%:*}" "${entry#*:}"; done
+  resume_cron
   if [ -n "$cleanup_failed" ]; then
     note "kept $work, because an account in it is still there"
     [ "$code" -ne 0 ] || code=1
@@ -99,6 +120,7 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+pause_cron
 
 pass() { printf 'PASS %s: %s\n' "$1" "$2"; }
 fail() {
@@ -249,7 +271,7 @@ EOF
 home_files() {
   find . \( -path ./.t3 -o -path ./.cache -o -path ./.bun -o -path ./.npm -o -path ./.proof \
     -o -path ./.local/share/fleet/sources -o -path ./.local/share/fleet/engine/.git -o -path ./.local/state/fleet/logs \
-    -o -path ./.local/state/fleet/jobs -o -path ./.local/state/fleet/nightly -o -path ./.local/state/fleet/worktree-prune.last -o -path './.local/state/fleet/worktree-sightings.json*' \
+    -o -path ./.local/state/fleet/jobs -o -path ./.local/state/fleet/worktree-prune.last -o -path './.local/state/fleet/worktree-sightings.json*' \
     -o -path ./.local/share/claude -o -path ./.local/share/t3code -o -path ./.claude/statsig -o -path ./.claude/todos -o -path ./.codex/tmp \) -prune \
     -o "$@"
 }
