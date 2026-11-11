@@ -19,7 +19,7 @@ passing `fleet doctor` on this Mac.
 - **Say a word before you use it.** The first time you say a Fleet word to the
   person, such as workflow, pack, profile, hub, or node, explain it in one
   plain line.
-- **Speak to their choice.** Once they answer step 4, describe only the setup
+- **Speak to their choice.** Once they answer step 2, describe only the setup
   they chose. When they chose a hub and nodes, never call the hub optional or
   something for later.
 - **Keep it short.** One or two sentences per explanation.
@@ -30,13 +30,16 @@ passing `fleet doctor` on this Mac.
   chat when you can (T3 Code shows HTML pages that agents publish). Otherwise
   describe it in three lines of text.
 - **One PATH.** Your shell started before the install. Begin every command
-  that runs `fleet`, `gh`, `bun`, `claude`, or `codex` with
+  that runs `fleet`, `gh`, `bun`, `claude`, `codex`, or `coder` with
   `export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";`.
 - **When a step fails.** Explain its last lines and fix what they name. When
-  it still fails, or the cause is not clear, offer `fleet triage`: run
-  `fleet triage --print`, show the person the report, and run
-  `fleet triage --send` only after they say yes. It opens an issue for the
-  Fleet maintainer, with private details taken out.
+  it still fails, or the cause is not clear, offer `fleet triage`. It exists
+  once the install made `~/.local/bin/fleet`. Run
+  `fleet triage --print --note "<the failed step and its last line>"` and
+  show the person the report. It opens a **public** issue for the Fleet
+  maintainer, with private details taken out, so ask before you run the same
+  command with `--send`. Before the GitHub sign-in of step 7, `--send` saves
+  the report to a file instead, and says where.
 - **The keyboard in Terminal.** A command that needs the person's keyboard
   runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
   that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,
@@ -117,7 +120,8 @@ Tell the person in two lines what it adds when missing: the GitHub CLI, Bun,
 and the `t3` command, the engine in `~/.local/share/fleet/engine`, `fleet` in
 `~/.local/bin`, and one `PATH` line in their login file. They asked for this
 setup, so start it at once, in the background, and say they can tell you to
-stop it.
+stop it. When the script does more than this, tell them what, and ask before
+you start it.
 
 You run in T3 Code, so the app is there, and the script needs no Homebrew
 and no password. When `xcode-select -p` succeeds, start it in the background
@@ -140,18 +144,22 @@ Go on to step 2 while it runs. Use the wait (see "While something runs").
 
 ## 2. Ask everything in one call
 
-Every answer setup needs comes now, in one call of your question tool, so
-nothing waits for the person later. Leave out a question that the picks from
-the page answer:
+Ask these questions now, in one call of your question tool. Then the install
+and the setup do not wait for the person. Setup notes can add questions
+later (step 6). Leave out each question that the picks from the page
+already answer. On a rerun of setup (step 1), leave out the Packs question:
+setup starts from the packs in their profile.
 
 1. **New to you.** A multi-select question: "Which of these are new to you?"
-   with T3 Code (the app you are talking in), Fleet (what it sets up), and
+   with T3 Code (the app you are talking in), Fleet (what it sets up),
    Devboxes (Linux machines in the cloud, such as Coder workspaces, where
-   agents keep working while the Mac sleeps). Nothing picked means they know
-   all three.
+   agents keep working while the Mac sleeps), and "None, I know all three".
 2. **Where Fleet runs**, with the options of step 4.
 3. **Packs**, with the options of step 6.
 4. **AI plan**, with the options of step 6.
+
+When your question tool takes fewer questions in one call, ask the rest in a
+second call right after the first.
 
 Each pick in question 1 adds an explainer to a later step:
 
@@ -187,12 +195,16 @@ unless the picks from the page say where Fleet runs:
 - **Mac plus a hub and one node.** Two Linux devboxes in the cloud that stay
   on while the Mac sleeps: one **hub** with a 200 GB disk, which links your
   machines and watches their disks, and one **node** with a 500 GB disk,
-  where threads do the work. Add more nodes later, when the load grows.
+  where threads do the work. Setup creates them right away, while the Mac is
+  set up. Add more nodes later, when the load grows.
 - **Mac plus a hub and two nodes.** The same, with two nodes, so twice as
-  many threads run at once. Another answer can name more nodes.
+  many threads run at once. The hub and two nodes use all 3 machines of a
+  free T3 Connect account, so T3 Connect on this Mac then needs a paid T3
+  Chat plan. Another answer can name more nodes.
 
 Recommend a hub and one node when they use Coder, and Mac only otherwise.
-When you do not know, ask whether they use Coder in the same call. Use their answer. Set up the Mac first in both cases.
+They use Coder when `command -v coder` finds the Coder CLI. Check it before
+step 2, so the recommendation is ready in the same call.
 The picks from the page line `Mac plus a hub and a node` means one node.
 Below, "the nodes" means as many as they chose.
 
@@ -211,18 +223,32 @@ nodes, removing a machine they no longer use from that page, or a paid T3
 Chat plan, which they link in T3 Code's account menu under **T3 Chat** →
 **Link T3 Chat** (up to 10 machines with Pro).
 
+The Mac is ready to use first in both cases. With a hub and nodes, step 5
+creates them while the Mac is set up, and step 9 sets them up after.
+
+When a pick from the page names a hub and nodes, say it back with the disk
+sizes, and that you create them in step 5. They can tell you to stop.
+
 ## 5. Install the tools
 
 The install from step 1 runs in the background. It is done when
-`~/.local/bin/fleet help` prints the list of commands. When it stopped with
-an error, explain its last lines, fix what they name, and run it again: it
-picks up where it stopped. Use the wait (see "While something runs").
+`~/.local/bin/fleet help` prints the list of commands. When it stops with an
+error, explain its last lines, fix what they name, and run it again: it
+continues from where it stopped. Use the wait (see "While something runs").
 
-With a hub and nodes, use this wait to start them: run items 1 to 5 of
-step 9 now, and start each `coder create` in the background, all at once.
-They take minutes and run on while you go on with step 6. On a first setup,
-skip the question about reusing a hub: there is none yet. Check that item 5
-passes before item 6 of step 9.
+With a hub and nodes, use this wait to create them. Run items 1 to 5 of
+step 9 now:
+
+- After item 1, run `coder list`. When it lists a workspace named
+  `fleet-hub` or `fleet-node-<n>`, an earlier setup made it: ask the
+  question about reusing a hub of step 9 now, and show the list. Reuse means
+  no `coder create` for that workspace. When it lists none, there is no hub
+  to reuse, so do not ask.
+- In item 4, start each `coder create` in the background, all at once. They
+  take minutes. Go on with step 6 while they run, and read each one's output
+  when it ends.
+- In item 5, run only `coder config-ssh --yes`. Before item 6 of step 9,
+  check that `ssh coder.<name> true` passes for each workspace.
 
 ## 6. What they want
 
@@ -242,8 +268,8 @@ the packs:
 
 For each pack they pick whose row names a setup note, read that note in
 `~/.local/share/fleet/engine` once the install is done, and follow it in
-step 7. Read only the notes of the packs they picked. When a note asks a
-question, ask it then.
+step 7. Read only the notes of the packs they picked. Ask the questions of
+all the notes together, in one call, before step 7.
 
 | Pack | What it does | Offer it | Setup note |
 | --- | --- | --- | --- |
@@ -268,8 +294,8 @@ fleet setup --chat --preset <id> --plan <claude|codex|both> --devbox skip
 For one by one, use `--preset starter`, add `--remove pull-requests` when
 they did not pick it, and add `--add <pack>` once per other pack they picked.
 
-Start it in the background and read its output as it comes. It runs the whole
-setup in one go: it waits for each sign-in that ends in the browser and opens
+Start it in the background and read its output as it comes. One run does
+the whole setup: it waits for each sign-in that ends in the browser and opens
 the browser itself. While it runs:
 
 - **A sign-in starts** (`▶ Sign in to …`). Say what it is for, from the table
@@ -320,8 +346,8 @@ whether `fleet doctor` passes while it stays. Then ask:
 - **Take Fleet's version**: run the `fleet apply --adopt <path>` that the
   line names. A line that says `Removed item changed locally` names a file
   that Fleet no longer installs, so there is nothing to take: keep it, or
-  move it away by hand. Fleet keeps the new file up to date, and their old file stays
-  in `~/.local/state/fleet/backups/`. When the old file holds their own
+  move it away by hand. Fleet keeps the new file up to date, and their old
+  file stays in `~/.local/state/fleet/backups/`. When the old file holds their own
   skills or rules, agents stop reading them. Say which ones they lose, and
   offer to move the ones they still want to the "About me" file in their
   profile, which agents read after the packs' rules.
@@ -337,14 +363,16 @@ only, go on to step 10. With a hub and nodes, go on to step 9.
 ## 9. Add the hub and the nodes
 
 The default is one **hub** with a 200 GB disk and one **node** with a 500 GB
-disk, all Coder workspaces, with as many nodes as they chose in step 4. Run each item on this Mac. Items 1 to 5 start
-early, in step 5, so the workspaces are made while the Mac is set up. Items 6
-to 10 run here, after the Mac is ready to use. Their choice of a hub and
-nodes in step 2 is the go-ahead to create them: show each command as you start
-it. Creating a workspace and `fleet devbox add` take minutes; use each wait
+disk, all Coder workspaces, with as many nodes as they chose in step 4. Run
+each item on this Mac. Items 1 to 5 start early, in step 5, so the
+workspaces are made while the Mac is set up. Items 6 to 10 run here, after
+the Mac is ready to use. The person chose a hub and nodes in step 2, so
+create them without asking again. Show each command as you start it.
+Creating a workspace and `fleet devbox add` take minutes; use each wait
 (see "While something runs").
 
-Before item 3 below, run `fleet hub status` and `coder list`, and ask
+Before item 3 below, run `coder list`, and `fleet hub status` once Fleet is
+set up on this Mac. When either names a hub or a Fleet workspace, ask
 whether to reuse a hub:
 
 - **Reuse** the hub that `fleet hub status` names: skip items 3 to 7 for
@@ -383,16 +411,23 @@ when it has one:
 `<source>` is the folder in `~/.local/share/fleet/sources` that holds the
 pack. A team pack may already have made a devbox in step 7, and its note
 says which template, parameters, and devbox to use. Where it differs from
-the steps below, follow the note.
+the steps below, follow the note. Step 5 made the workspaces before step 7,
+so when the note names another template, or a devbox that the pack already
+made, replace the early workspaces: see "Clean up what you replace".
 
-1. **Coder CLI.** When `command -v coder` finds nothing, install it with
-   `brew install coder` when `command -v brew` finds Homebrew. Without
-   Homebrew, download `https://coder.com/install.sh` to
-   `~/.cache/fleet-setup/coder-install.sh`, read it, and run
-   `sh ~/.cache/fleet-setup/coder-install.sh --method standalone --prefix "$HOME/.local"`. When `coder whoami` fails, ask for their Coder
-   address and sign in. Coder needs a session token: it lets this Mac act as
-   them in Coder, and they make one at `<coder address>/cli-auth`. Ask for it
-   with the secret prompt, delivered as a file, and sign in with it:
+1. **Coder CLI.** When `command -v coder` finds nothing, download
+   `https://coder.com/install.sh` to
+   `~/.cache/fleet-setup/coder-install.sh`, read it, and run it. It needs
+   no Homebrew and no password:
+
+   ```sh
+   sh ~/.cache/fleet-setup/coder-install.sh --method standalone --prefix "$HOME/.local"
+   ```
+
+   When `coder whoami` fails, ask for their Coder address and sign in.
+   Coder needs a session token: it lets this Mac act as them in Coder, and
+   they make one at `<coder address>/cli-auth`. Ask for it with the secret
+   prompt, delivered as a file, and sign in with it:
 
    ```sh
    CODER_SESSION_TOKEN="$(cat <file>)" coder login <coder address>
@@ -407,7 +442,8 @@ the steps below, follow the note.
 
    The step is done when `coder whoami` passes.
 2. **Template.** List them with `coder templates list`. When there is one,
-   use it; ask only when there are more. Read its parameters, the `coder_parameter` blocks in its files:
+   use it; ask only when there are more. Read its parameters, the
+   `coder_parameter` blocks in its files:
 
    ```sh
    coder templates pull <template> ~/.cache/fleet-setup/template-<template>
@@ -434,8 +470,9 @@ the steps below, follow the note.
 
    Start them all at once, each in the background.
 
-   Then keep each one running, because agents work there while the Mac
-   sleeps: `coder schedule stop <name> manual`.
+   Read each create's output when it ends. Once its workspace exists, keep
+   it running, because agents work there while the Mac sleeps:
+   `coder schedule stop <name> manual`.
 5. **SSH.** Run `coder config-ssh --yes`. The step is done when
    `ssh coder.<name> true` passes for each workspace.
 6. **Fleet on the hub.** `fleet devbox add` installs Fleet, applies their

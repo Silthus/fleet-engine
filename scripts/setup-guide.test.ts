@@ -257,7 +257,7 @@ describe("the agent setup guide", () => {
   });
 
   test("a second setup without --preset, as the guide says, reuses the profile and keeps its packs, workflows, and settings", async () => {
-    const step1 = words(guide().slice(guide().indexOf("## 1. Check the Mac"), guide().indexOf("## 2. Ask what they know")));
+    const step1 = words(guide().slice(guide().indexOf("## 1. Check the Mac"), guide().indexOf("## 2. Ask everything in one call")));
     expect(step1).toContain("In the step 7 command, leave out `--preset`, and name only what changes with `--add`, `--remove`, and `--workflows`.");
     const command = guide().match(/^fleet setup (.+)$/m)![1]!.replace("<claude|codex|both>", "both");
     const home = temp.make("home-");
