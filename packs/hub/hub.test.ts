@@ -3,8 +3,11 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import { providerConfigAdapter } from "../../src/adapters/provider-config/adapter.ts";
-import { apply } from "../../src/reconciler/apply.ts";
+import { apply, check } from "../../src/reconciler/apply.ts";
+import { boxCommand } from "./lib/box-command.ts";
 import { cliProxy, codexProviderTable, type ProxyMachine } from "./lib/cli-proxy.ts";
+import { Coder } from "./lib/coder.ts";
+import { fakeMachine } from "./lib/testing.ts";
 import type { AvailableSource, MachineFile, MachineRole, Plan, Profile } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
@@ -104,6 +107,27 @@ describe("the Hub pack", () => {
     expect(items(mac)).toEqual({ jobs: [], human: [] });
     expect(items(hub, { workflows: { boxes: false } })).toEqual({ jobs: [], human: [] });
     expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes")).toEqual([]);
+  });
+
+  test("fleet doctor on the hub checks the hub's Coder session while Boxes is on, and names the fix when Coder rejects it", async () => {
+    const hub: MachineFile = { schema: 1, role: "hub" };
+    const sessionChecks = (result: Plan) => result.checks.filter((item) => item.pack === "hub").map((item) => `${item.id}: ${item.run.join(" ")}`);
+    expect(sessionChecks(withBoxes({}, hub))).toEqual(["coder-session: fleet box session"]);
+    expect(sessionChecks(withBoxes({}, devbox))).toEqual([]);
+    expect(sessionChecks(withBoxes({ workflows: { boxes: false } }, hub))).toEqual([]);
+    expect(sessionChecks(plan({ packs: ["hub"] }, hub))).toEqual([]);
+    const home = temp.make("hub-session-");
+    for (const dir of [".config/fleet", ".config/coderv2"]) mkdirSync(join(home, dir), { recursive: true });
+    writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "hub" }));
+    writeFileSync(join(home, ".config/coderv2/session"), `${["Ab3dE6gH9k", "x".repeat(22)].join("-")}\n`);
+    const rejecting = (async () => Response.json({ message: "API key expired." }, { status: 401 })) as unknown as typeof fetch;
+    const { machine } = fakeMachine(home, { self: "my-hub", isHub: true });
+    const coder = new Coder({ home, env: {}, coderUrl: "https://coder.example.com", template: "linux", fetch: rejecting });
+    const run = async (command: string[]) => (command.join(" ").endsWith("fleet box session") ? boxCommand(["session"], { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} }) : 0);
+    const report = await check(withBoxes({ workflows: { "linked-hub": false } }, hub), { home, adapters: [], run });
+    const finding = report.findings.find((item) => item.id === "check:coder-session");
+    expect(report.ok).toBe(false);
+    expect(finding?.say).toContain("coder login");
   });
 
   test("plans the disk watch job only on the hub and only while Disk watch is on, and the threads' folder defaults to home", () => {
