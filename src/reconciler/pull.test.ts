@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { tempDirs } from "../testing/git.ts";
 import { linkedFleets } from "../testing/linked.ts";
 import type { Clock } from "../runner/context.ts";
+import { leakedKey } from "./fixtures/issued/pack.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -92,7 +93,7 @@ test("a pull's finding copies nothing that the hub printed, so a key that a serv
   await hub("issued", "leak");
   const leaked = await node("apply");
   expect(leaked.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (fleet credential exited 1 there. Run fleet credential issued/issued-api node-2 on the hub to see why). Kept the one this machine has.");
-  expect(leaked.output).not.toContain("leaked-key");
+  expect(leaked.output).not.toContain(leakedKey);
 });
 
 test("a pull's finding names only the exit code, and for 255 points at ssh", async () => {

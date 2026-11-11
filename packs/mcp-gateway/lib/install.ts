@@ -10,6 +10,9 @@ export const mcphubSource = {
   url: "https://codeload.github.com/samanhappy/mcphub/tar.gz/7d7df2599b0361b2b0238ff3f4e6c0f162da0943",
   sha256: "5543020667fdbc71e183dee6144a182318ff8f1368c0a479adacc7c1f010613e",
 };
+export const codexMount = "/opt/fleet-codex";
+export const bridgeFile = "/app/fleet-slack-bridge.mjs";
+export const codexPackage = (home: string) => join(home, ".local/share/fleet/codex");
 const sdkPackages = ["client", "core", "node", "server", "server-legacy"];
 const compiledFiles = ["clients/legacyMcpClient.js", "services/mcpService.js"];
 
@@ -21,26 +24,49 @@ export async function install(hub: Hub) {
   let current = await ownedContainer(hub);
   const wanted = (JSON.parse(await must(hub, ["docker", "image", "inspect", image])) as Array<{ Id: string }>)[0]!.Id;
   const environment = (await readFile(paths.environment, "utf8")).split("\n").filter(Boolean);
-  if (current && (current.Image !== wanted || !environment.every((line) => current!.Config.Env?.includes(line)))) {
+  const mounted = current?.Mounts?.some((mount) => mount.Destination === codexMount);
+  if (current && (current.Image !== wanted || !mounted || !environment.every((line) => current!.Config.Env?.includes(line)))) {
     await must(hub, ["docker", "stop", container]);
     await must(hub, ["docker", "rm", container]);
     current = undefined;
   }
   const directory = dataDir(hub.home);
   if (!current) {
+    await mkdir(codexPackage(hub.home), { recursive: true });
     await must(hub, ["docker", "run", "-d", "--name", container, "--label", "org.fleet.service=mcphub", "--restart", "unless-stopped",
       "--user", `${hub.uid}:${hub.gid}`, "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--env-file", paths.environment,
-      "-p", "127.0.0.1:3317:3000", "-v", `${directory}/data:/app/data`, "-v", `${directory}/logs:/app/logs`, "--entrypoint", "node", image, "dist/index.js"]);
+      "-p", "127.0.0.1:3317:3000", "-v", `${directory}/data:/app/data`, "-v", `${directory}/logs:/app/logs`,
+      "-v", `${codexPackage(hub.home)}:${codexMount}:ro`, "--entrypoint", "node", image, "dist/index.js"]);
   } else if (!current.State.Running) await must(hub, ["docker", "start", container]);
   await syncWhenReady(hub);
   hub.print(`MCPHub installed: ${baseUrl}/`);
 }
 
+export async function bridgeBundle(root: string) {
+  const build = await Bun.build({ entrypoints: [join(root, "lib/slack-upstream.ts")], target: "node", format: "esm" });
+  if (!build.success) throw new Error(`The Slack bridge did not build: ${build.logs.join("; ")}`);
+  return Buffer.from(await build.outputs[0]!.arrayBuffer());
+}
+
+async function imageParts(root: string) {
+  const patchPath = join(root, "mcphub/1.1.0-elicitation.patch");
+  const sdkRoot = join(root, "mcphub/sdk");
+  const [patch, sdkManifest, sdkLock, bridge] = await Promise.all([readFile(patchPath), readFile(join(sdkRoot, "package.json")), readFile(join(sdkRoot, "pnpm-lock.yaml")), bridgeBundle(root)]);
+  const image = `fleet-mcphub:1.1.0-${createHash("sha256").update(patch).update(sdkManifest).update(sdkLock).update(bridge).digest("hex").slice(0, 12)}`;
+  return { patchPath, sdkManifest, sdkLock, bridge, image };
+}
+
+/** Whether the running gateway container is Fleet's, of the image this engine builds, with Fleet's Codex mounted. */
+export async function gatewayCurrent(hub: Hub) {
+  const { image } = await imageParts(hub.root);
+  const built = await hub.run(["docker", "image", "inspect", image]);
+  const running = await ownedContainer(hub).catch(() => undefined);
+  if (built.code || !running?.State.Running) return false;
+  return running.Image === (JSON.parse(built.stdout) as Array<{ Id: string }>)[0]!.Id && Boolean(running.Mounts?.some((mount) => mount.Destination === codexMount));
+}
+
 export async function buildImage(hub: Hub, source = mcphubSource) {
-  const patchPath = join(hub.root, "mcphub/1.1.0-elicitation.patch");
-  const sdkRoot = join(hub.root, "mcphub/sdk");
-  const [patch, sdkManifest, sdkLock] = await Promise.all([readFile(patchPath), readFile(join(sdkRoot, "package.json")), readFile(join(sdkRoot, "pnpm-lock.yaml"))]);
-  const image = `fleet-mcphub:1.1.0-${createHash("sha256").update(patch).update(sdkManifest).update(sdkLock).digest("hex").slice(0, 12)}`;
+  const { patchPath, sdkManifest, sdkLock, bridge, image } = await imageParts(hub.root);
   if ((await hub.run(["docker", "image", "inspect", image])).code === 0) return image;
   const response = await hub.fetch(source.url, { signal: AbortSignal.timeout(60000) });
   if (!response.ok) throw new Error(`MCPHub source download failed: ${response.status}`);
@@ -60,12 +86,14 @@ export async function buildImage(hub: Hub, source = mcphubSource) {
     await mkdir(join(build, "sdk"), { recursive: true });
     await writeFile(join(build, "sdk/package.json"), sdkManifest);
     await writeFile(join(build, "sdk/pnpm-lock.yaml"), sdkLock);
+    await writeFile(join(build, "fleet-slack-bridge.mjs"), bridge);
     const links = sdkPackages.map((name) => `ln -sfn /fleet-sdk/node_modules/@modelcontextprotocol/${name} /app/node_modules/@modelcontextprotocol/${name}`).join(" && ");
     await writeFile(join(build, "Dockerfile"), [
       `FROM ${mcphubImage}`,
       "COPY sdk/ /fleet-sdk/",
       `RUN cd /fleet-sdk && pnpm install --frozen-lockfile --prod --ignore-scripts && ${links}`,
       ...compiledFiles.map((file) => `COPY ${file} /app/dist/${file}`),
+      `COPY fleet-slack-bridge.mjs ${bridgeFile}`,
       'LABEL org.fleet.patch="1.1.0-elicitation"',
       "",
     ].join("\n"));

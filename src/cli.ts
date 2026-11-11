@@ -212,7 +212,7 @@ async function runItem(args: string[], options: CliOptions) {
   });
 }
 
-/** Fills this machine's credential for each served service in the list: the hub asks the service when its pack's secret store holds none, and a node pulls its own from the hub at every apply. */
+/** Fills this machine's credential for each served service in the list: the hub asks the service when its pack's secret store holds none, and a node pulls its own from the hub at every apply. A failed issue's finding copies nothing the service threw, since its error may hold its key. */
 async function issueCredentials(entries: CatalogEntry[], node: string, plan: Plan, sources: FetchedSource[], options: CliOptions): Promise<Finding[]> {
   if (plan.reachesHub) return pullCredentials(entries, node, plan.hub!, options);
   const findings: Finding[] = [];
@@ -227,8 +227,9 @@ async function issueCredentials(entries: CatalogEntry[], node: string, plan: Pla
         await ctx.secrets.write(name, await issued(issue(ctx, node)));
         return 0;
       });
-    } catch (error) {
-      findings.push({ id: `credential:${entry.pack}/${entry.id}`, pack: entry.pack, say: `Could not issue the credential of ${entry.pack}/${entry.id}: ${error instanceof Error ? error.message : String(error)}. Fleet tries again at the next apply.`, repair: "apply" });
+    } catch {
+      const service = `${entry.pack}/${entry.id}`;
+      findings.push({ id: `credential:${service}`, pack: entry.pack, say: `Could not issue the credential of ${service}. Run fleet credential ${service} ${node} to see why. Fleet tries again at the next apply.`, repair: "apply" });
     }
   }
   return findings;

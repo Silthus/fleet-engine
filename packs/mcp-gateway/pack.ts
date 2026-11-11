@@ -2,7 +2,8 @@ import type { Context, Pack } from "../../src/sdk/index.ts";
 import { gateway as host, gatewayKey } from "./lib/host.ts";
 
 const connect = ["-c", 'exec sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcp-connect'];
-const usage = "usage: fleet mcp-gateway [doctor|sign-in|restart], or fleet mcp-gateway reconnect <server>";
+const usage = "usage: fleet mcp-gateway [doctor|sign-in|restart], fleet mcp-gateway reconnect <server>, or fleet mcp-gateway slack-bridge [sign-in]";
+const bridge = () => import("./lib/slack-bridge.ts");
 
 export default {
   sdk: 1,
@@ -42,6 +43,37 @@ export default {
       after: installed,
       serve: { port: 3317, health: "/health", credential: async (ctx, node) => (await import("./lib/hub.ts")).issueKey(node, await host(ctx)) },
     });
+    const slack = fleet.workflow({
+      id: "slack-bridge",
+      name: "Slack bridge",
+      default: false,
+      sentence: "Agents read Slack as you through the MCP gateway, and leave only unsent drafts and canvases.",
+      moment: {
+        time: "11:40",
+        title: "A reply waits for you, unsent",
+        body: "An agent reads the incident thread and the canvas, fills the canvas in, and leaves a reply as a draft in the thread. You read it and press send.",
+        words: ["agent"],
+      },
+      risk: "The bridge acts as your Slack account. It reads what you can read, and writes only drafts you send yourself and canvases.",
+    });
+    fleet.check({
+      on: "hub",
+      os: "linux",
+      when: slack,
+      id: "slack-bridge",
+      say: "The MCP gateway has no Slack bridge, or not Fleet's. Run fleet mcp-gateway slack-bridge on the hub to see why.",
+      test: async (ctx) => (await bridge()).slackBridgeRegistered(await host(ctx)).catch(() => false),
+      repair: { ask: "Put the Slack bridge into the MCP gateway.", run: async (ctx) => (await bridge()).registerSlackBridge(await host(ctx)) },
+    });
+    fleet.check({
+      on: "hub",
+      os: "linux",
+      when: slack,
+      id: "slack-bridge-sign-in",
+      say: "The Slack bridge has no ChatGPT sign-in. Sign in with the account whose Slack app it should use.",
+      test: async (ctx) => (await bridge()).slackBridgeSignedIn(await host(ctx)),
+      repair: { ask: "Sign the Slack bridge in to ChatGPT.", command: "fleet mcp-gateway slack-bridge sign-in", interactive: true },
+    });
     fleet.check({
       when: flow,
       id: "mcp-gateway-client",
@@ -79,10 +111,12 @@ export default {
 
 async function admin(args: string[], ctx: Context) {
   const [mode = "doctor", name, ...extra] = args;
-  const plain = ["doctor", "sign-in", "restart"].includes(mode) && name === undefined;
+  const plain = ["doctor", "sign-in", "restart", "slack-bridge"].includes(mode) && name === undefined;
   const named = mode === "reconnect" && name !== undefined && !extra.length;
-  if (!plain && !named) return ctx.print(usage), 2;
+  const bridgeSignIn = mode === "slack-bridge" && name === "sign-in" && !extra.length;
+  if (!plain && !named && !bridgeSignIn) return ctx.print(usage), 2;
   const hub = await host(ctx);
+  if (mode === "slack-bridge") return bridgeSignIn ? (await bridge()).signInSlackBridge(hub) : ((await (await bridge()).registerSlackBridge(hub)), 0);
   const gateway = await import("./lib/hub.ts");
   if (mode === "doctor") return (await gateway.doctor(hub)) ? 0 : 1;
   if (mode === "sign-in") await gateway.signIn(hub);
