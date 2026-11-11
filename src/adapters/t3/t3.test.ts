@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConfigEntry, ModelRow, Owned, PackJob, Plan, T3ProjectScript } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
@@ -844,14 +844,22 @@ describe("T3 on Linux", () => {
     const home = temp.make("home-");
     const token = ["sk", "test", "claude"].join("-");
     const { commands, adapter } = setup({}, { env: { CLAUDE_CODE_OAUTH_TOKEN: token } });
-    const report = await apply(plan("linux", []), { home, adapters: [adapter] });
     const file = join(home, ".config/claude-env/oauth.env");
+    const elsewhere = join(home, "elsewhere");
+    writeFileSync(elsewhere, "keep\n");
+    mkdirSync(join(home, ".config/claude-env"), { recursive: true });
+    symlinkSync(elsewhere, file);
+    const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+    expect(readFileSync(elsewhere, "utf8")).toBe("keep\n");
     expect(readFileSync(file, "utf8")).toBe(`CLAUDE_CODE_OAUTH_TOKEN=${token}\n`);
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(readFileSync(join(home, ".config/systemd/user/t3code.service.d/claude-token.conf"), "utf8")).toBe("[Service]\nEnvironmentFile=%h/.config/claude-env/oauth.env\n");
     expect(JSON.stringify(report)).not.toContain(token);
     await apply(plan("linux", []), { home, adapters: [adapter] });
     expect(commands.calls.filter((line) => line.includes("try-restart"))).toEqual(["systemctl --user try-restart t3code.service"]);
+    chmodSync(file, 0o644);
+    await apply(plan("linux", []), { home, adapters: [adapter] });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
   test("reports a missing user manager and leaves the service alone", async () => {

@@ -1,5 +1,6 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { writePrivateFile } from "../../files/private.ts";
 import type { Finding } from "../../pack/types.ts";
 import type { AdapterResult } from "../../reconciler/apply.ts";
 import type { CommandRunner } from "../run.ts";
@@ -49,15 +50,14 @@ export async function reconcileClaudeToken(run: CommandRunner, home: string, tok
   const present = readOr(dropIn);
   if (present !== undefined && present !== dropInText) return;
   const wanted = `CLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
-  if (present === dropInText && readOr(file) === wanted) return;
+  if (present === dropInText && readOr(file) === wanted && (lstatSync(file).mode & 0o777) === 0o600) return;
   if (dryRun) return void result.findings.push(finding("claude-token", "T3 Code's service needs the Claude token that this session has.", "apply"));
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, wanted, { mode: 0o600 });
-  chmodSync(file, 0o600);
+  await writePrivateFile(file, wanted);
   mkdirSync(dirname(dropIn), { recursive: true });
-  writeFileSync(dropIn, dropInText);
-  await run(["systemctl", "--user", "daemon-reload"]);
-  await run(["systemctl", "--user", "try-restart", "t3code.service"]);
+  await writePrivateFile(dropIn, dropInText);
+  const reloaded = (await run(["systemctl", "--user", "daemon-reload"])).code === 0 && (await run(["systemctl", "--user", "try-restart", "t3code.service"])).code === 0;
+  if (!reloaded) return void result.findings.push(finding("claude-token", "T3 Code did not restart with the new Claude token. Run: systemctl --user daemon-reload && systemctl --user restart t3code.service", "human"));
   result.actions.push({ target: "t3 claude token", operation: present === undefined ? "create" : "replace" });
 }
 
