@@ -3,7 +3,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import { diskWatchTargets } from "../../packs/hub/lib/disk-watch.ts";
+import { loadMachine, loadProfile } from "../profile/profile.ts";
 import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
+import { engineSource, resolveEngine, skillSources } from "../testing/packs.ts";
 import { engineRoot, fakeMachine, fleetSetup, githubRepo, pushedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
@@ -42,5 +44,10 @@ test("the setup guide's hub path: the Mac adds the hub, the hub names itself, th
   expect(await pushedAnswers(mac)).toMatchObject({ hub: "coder.fleet-hub", packs: expect.arrayContaining(["hub"]), workflows: expect.objectContaining({ boxes: false, "mcp-gateway": false }), devboxes: ["coder.fleet-hub", "coder.fleet-node-1"] });
 
   await spawnGit(hub.profile, "pull", "-q");
+  const { packs, workflows, settings, hub: hubName, devboxes, plan: ai } = await loadProfile(hub.profile);
+  const engine = await engineSource();
+  const onHub = resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs, workflows, settings, hub: hubName, devboxes, plan: ai }, (await loadMachine(hub.home))!);
+  expect(onHub.jobs.filter((job) => job.pack === "hub").map((job) => job.id)).toEqual(expect.arrayContaining(["disk-watch", "peers-restore"]));
+  expect(onHub.steps.filter((step) => step.pack === "hub").map((step) => step.id)).toEqual(expect.arrayContaining(["ssh-tunnels", "peers"]));
   expect(diskWatchTargets({ FLEET_PROFILE_DIR: hub.profile }, hub.home, "coder.fleet-hub", "fleet-hub")).toEqual({ local: "coder.fleet-hub", remote: ["coder.fleet-node-1"] });
 });
