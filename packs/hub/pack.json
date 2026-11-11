@@ -473,7 +473,8 @@
       "roles": [
         "hub"
       ],
-      "workflow": "boxes"
+      "workflow": "boxes",
+      "undo": "Delete ~/.config/fleet/box-claude-token once no box needs your Claude token."
     },
     {
       "id": "hub-https-trust",

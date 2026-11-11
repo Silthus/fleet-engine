@@ -1,11 +1,11 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { allowedSigners, listText, parseOwners, systemPaths, verify, type Verdict } from "./allowlist.ts";
 
 export type AllowlistInputs = { settings: Record<string, unknown>; profileDir?: string; root: string; print: (line: string) => void };
 
-const usage = "usage: fleet guards allowlist [text | stage <folder> | --check]";
+const usage = "usage: fleet guards allowlist [text | stage <folder> | --check | --left]";
 const installScript = join(import.meta.dir, "../system/install.sh");
 
 /** The profile keeps the signature beside fleet.json, so every machine of the profile installs the same signed list. */
@@ -81,10 +81,21 @@ function stage(list: ReturnType<typeof signedList>, folder: string) {
   copyFileSync(installScript, join(folder, "install.sh"));
 }
 
-/** Prints the signed Git allowlist and whether it verifies and is installed, stages it for the root step, or checks it for doctor. */
+/** Exits 0 while an installed list is here, 1 once it is gone, and 3 (cannot tell) when Fleet cannot look. It reads no content, since root owns the list. */
+function listLeft(path: string): number {
+  try {
+    lstatSync(path);
+    return 0;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? 1 : 3;
+  }
+}
+
+/** Prints the signed Git allowlist and whether it verifies and is installed, stages it for the root step, checks it for doctor, or, with --left, says whether any list is installed, without the guards settings. */
 export function allowlistCommand(args: string[], inputs: AllowlistInputs): number {
   const [mode, folder, ...rest] = args;
-  if (rest.length || (mode === "stage") !== Boolean(folder) || ![undefined, "text", "stage", "--check"].includes(mode)) throw new Error(usage);
+  if (rest.length || (mode === "stage") !== Boolean(folder) || ![undefined, "text", "stage", "--check", "--left"].includes(mode)) throw new Error(usage);
+  if (mode === "--left") return listLeft(systemPaths(inputs.root).list);
   const list = signedList(inputs);
   if (mode === "text") return inputs.print(list.text.trimEnd()), 0;
   const verdict = verifyWith(list);

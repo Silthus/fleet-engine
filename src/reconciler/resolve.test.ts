@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import type { AvailableSource, FetchedSource, MachineFile, MachineRole, PackManifest, Plan, Profile } from "../pack/types.ts";
@@ -647,6 +647,73 @@ describe("a step's undo", () => {
     expect(workflowOff.world.on).toBe(false);
     await expect(loadPacks(team([{ ...step, left: ["box-is-on"], undo: undefined }]).dir)).rejects.toThrow("steps auto-box: left needs an undo");
     await expect(loadPacks(team([{ ...step, left: "box-is-on" as unknown as string[] }]).dir)).rejects.toThrow("steps auto-box: left must be a command list");
+  });
+
+  test("doctor names what a human step left once its pack is off, until a person removes it, and keeps doctor green", async () => {
+    const { world, run } = box(true);
+    const home = temp.make("home-");
+    const leaving = team([]);
+    leaving.packs[0]!.manifest.human = [{ ...signIn, undo: "Sign out with box logout." }];
+    await apply(plan({ packs: ["team"], workflows: {} }, devbox, [engine, leaving]), { home, run });
+    const removed = plan({ packs: [], workflows: {} }, devbox, [engine, leaving]);
+    const note = { id: "left:sign-in", pack: "team", say: "The team pack is off. Sign out with box logout." };
+    const doctor = await check(removed, { home, run });
+    expect(doctor.findings).toContainEqual(note);
+    expect(doctor.ok).toBe(true);
+    world.signedIn = false;
+    expect((await check(removed, { home, run })).findings).not.toContainEqual(note);
+    const never = box(true);
+    never.world.signedIn = false;
+    const fresh = temp.make("home-");
+    await apply(plan({ packs: ["team"], workflows: {} }, devbox, [engine, leaving]), { home: fresh, run: never.run });
+    never.world.signedIn = true;
+    expect((await check(removed, { home: fresh, run: never.run })).findings.map((finding) => finding.id)).not.toContain("left:sign-in");
+    await expect(loadPacks(withPack({ schema: 1, name: "team", summary: "Team.", human: [{ ...signIn, undo: "" }] }).dir)).rejects.toThrow("human sign-in: undo must say what a person does");
+  });
+
+  test("doctor reads a human step's left probe once it leaves, keeps its record through a probe that fails while planned, and forgets it once nothing is left", async () => {
+    const { world, run } = box(true);
+    const home = temp.make("home-");
+    const leaving = team([]);
+    leaving.packs[0]!.manifest.human = [{ ...signIn, left: ["box-is-on"], undo: "Turn the box off by hand." }];
+    const kept = plan({ packs: ["team"], workflows: {} }, devbox, [engine, leaving]);
+    await apply(kept, { home, run });
+    await apply(kept, { home, run: async (command) => (command.join(" ") === "signed-in" ? 127 : run(command)) });
+    world.signedIn = false;
+    const removed = plan({ packs: [], workflows: {} }, devbox, [engine, leaving]);
+    const note = { id: "left:sign-in", pack: "team", say: "The team pack is off. Turn the box off by hand." };
+    expect((await check(removed, { home, run })).findings).toContainEqual(note);
+    world.on = false;
+    await apply(removed, { home, run });
+    world.on = true;
+    expect((await check(removed, { home, run })).findings).not.toContainEqual(note);
+    await expect(loadPacks(withPack({ schema: 1, name: "team", summary: "Team.", human: [{ ...signIn, left: ["box-is-on"] }] }).dir)).rejects.toThrow("human sign-in: left needs an undo");
+  });
+
+  test("records a human step from the probe the apply already ran", async () => {
+    const { run } = box(true);
+    const leaving = team([]);
+    leaving.packs[0]!.manifest.human = [{ ...signIn, repair: ["sign-in-again"], undo: "Sign out with box logout." }];
+    let probes = 0;
+    const counted = async (command: string[]) => (command.join(" ") === "signed-in" && probes++, run(command));
+    await apply(plan({ packs: ["team"], workflows: {} }, devbox, [engine, leaving]), { home: temp.make("home-"), run: counted });
+    expect(probes).toBe(1);
+  });
+
+  test("doctor names the secrets folder of a pack that is off, and keeps it", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".config/fleet/secrets/team"), { recursive: true });
+    mkdirSync(join(home, ".config/fleet/secrets/not a pack"), { recursive: true });
+    writeFileSync(join(home, ".config/fleet/secrets/team/token"), "secret");
+    const note = { id: "secrets:team", pack: "team", say: "The team pack is off. Its secrets stay in ~/.config/fleet/secrets/team. Delete that folder when you no longer need them." };
+    expect((await check(planWith([], {}), { home, run: box(true).run })).findings).not.toContainEqual(note);
+    const removed = plan({ packs: [], workflows: {} }, devbox, [engine, team([])]);
+    await apply(removed, { home, run: box(true).run });
+    expect(readFileSync(join(home, ".config/fleet/secrets/team/token"), "utf8")).toBe("secret");
+    const doctor = await check(removed, { home, run: box(true).run });
+    expect(doctor.findings).toContainEqual(note);
+    expect(doctor.findings.map((finding) => finding.id)).not.toContain("secrets:not a pack");
+    expect(doctor.ok).toBe(true);
   });
 
   const crew = (steps: PackManifest["steps"]) => withPack({ schema: 1, name: "crew", summary: "Crew.", steps });

@@ -1,8 +1,11 @@
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { install, plan as planFiles } from "../files/install.ts";
+import { packName } from "../pack/manifest.ts";
 import { cannotTell } from "../pack/types.ts";
 import type { Action, CatalogEntry, Finding, HumanStep, Owned, PackCheck, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
-import { changeLedger, ledgerKey, readLedger, undoVariable, type LedgerStep } from "./ledger.ts";
+import { changeLedger, ledgerKey, readLedger, undoVariable, type Ledger, type LedgerStep } from "./ledger.ts";
 import { hublessReason } from "./resolve.ts";
 
 export type AdapterContext = { home: string; dryRun: boolean; adopt: string[] };
@@ -80,7 +83,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
   }
   const before = await readLedger(options.home);
   const record = async (key: string, step?: LedgerStep) => {
-    if (!context.dryRun) await changeLedger(options.home, key, step);
+    if (!context.dryRun) await changeLedger(options.home, "steps", key, step);
   };
   const failed = new Set<string>();
   const undo = async (items: UndoItem[]) => {
@@ -111,7 +114,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
       if (step.pack === "base") report.ok = false;
     }
   };
-  const items = undoItems(plan, before);
+  const items = undoItems(plan, before.steps);
   await undo(items.filter((item) => item.cause === "pack"));
   const waits = waiter(plan, run);
   const held = async (step: Plan["steps"][number]) => {
@@ -132,6 +135,12 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: ran ? `Step ${step.id} of the ${step.pack} pack ran, but does not pass its check.` : `Step ${step.id} of the ${step.pack} pack failed.`, repair: "apply" });
     if (step.pack === "base") report.ok = false;
   }
+  for (const step of context.dryRun ? [] : plan.human) {
+    if (step.undo && (gated.passed.includes(step) || (await run(step.probe)) === 0)) await changeLedger(options.home, "human", ledgerKey(step), { pack: step.pack, id: step.id, probe: step.left ?? step.probe, undo: step.undo });
+  }
+  for (const step of context.dryRun ? [] : leftHuman(plan, before)) {
+    if (!heldCodes.includes(await run(step.probe, { [undoVariable]: ledgerKey(step) }))) await changeLedger(options.home, "human", ledgerKey(step));
+  }
   await undo(items.filter((item) => item.cause !== "pack"));
   return report;
 }
@@ -148,9 +157,11 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
     if (await waits(step)) continue;
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
   }
-  for (const { step, cause } of undoItems(plan, await readLedger(options.home))) {
+  const ledger = await readLedger(options.home);
+  for (const { step, cause } of undoItems(plan, ledger.steps)) {
     if (report.actions.some((action) => action.target === `step ${step.pack}/${step.id}`)) report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `${stillHolds(step, cause)} Run fleet apply to undo it.`, repair: "apply" });
   }
+  report.findings.push(...(await leftByHand(plan, ledger, run)), ...secretsLeft(plan, options.home));
   for (const step of plan.human) {
     const reported = report.findings.some((finding) => finding.id === `human:${step.id}` && finding.pack === step.pack);
     if (!reported && (await run(step.probe)) === 0) continue;
@@ -168,7 +179,7 @@ function humanFinding(step: Owned<HumanStep>, repairStillToRun: boolean): Findin
 }
 
 /** Tests each check once, running a Fleet repair first when a human step's probe fails and repairs are on, then drops the items whose check fails. A config entry may also wait for a pack check, which has no repair. It tests the checks that served services wait for first, which only the hub can, and fills their credentials, so a repair that reads a credential sees it in the same apply. */
-async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: CatalogEntry[]) => Promise<Finding[]>): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; failedChecks: Array<Owned<PackCheck>>; issued: Finding[] }> {
+async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: CatalogEntry[]) => Promise<Finding[]>): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; passed: Array<Owned<HumanStep>>; failedChecks: Array<Owned<PackCheck>>; issued: Finding[] }> {
   const tested = new Map<Owned<HumanStep>, boolean>();
   const probe = async (step: Owned<HumanStep>) => {
     if ((await run(step.probe)) === 0) return true;
@@ -206,8 +217,9 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
     else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after, value: entry.value });
   }
   const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);
+  const passed = [...tested].filter(([, passed]) => passed).map(([step]) => step);
   const failedChecks = [...checked].filter(([, passed]) => !passed).map(([item]) => item);
-  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, failedChecks, issued };
+  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, passed, failedChecks, issued };
 }
 
 type Cause = { workflow: string } | "pack" | "plan";
@@ -241,6 +253,33 @@ function stillHolds(step: LedgerStep, cause: Cause) {
   if (cause === "pack") return `The ${step.pack} pack is off, but ${what} still holds what it set.`;
   if (cause === "plan") return `This machine no longer plans ${what}, but it still holds what it set.`;
   return `The workflow ${cause.workflow} is off, but ${what} still holds what it set.`;
+}
+
+/** The human steps of the ledger that left the plan, except in a pack the profile lists but cannot load. */
+function leftHuman(plan: Plan, ledger: Ledger) {
+  const planned = new Set(plan.human.map(ledgerKey));
+  const unloaded = new Set(plan.packs.filter((pack) => !pack.available).map((pack) => pack.name));
+  return ledger.human.filter((step) => !planned.has(ledgerKey(step)) && !unloaded.has(step.pack));
+}
+
+/** The human steps of the ledger that left the plan and whose probe still passes, each with what a person does to remove it. */
+async function leftByHand(plan: Plan, ledger: Ledger, run: Runner): Promise<Finding[]> {
+  const listed = new Set(plan.packs.map((pack) => pack.name));
+  const findings: Finding[] = [];
+  for (const step of leftHuman(plan, ledger)) {
+    if ((await run(step.probe, { [undoVariable]: ledgerKey(step) })) !== 0) continue;
+    const cause = listed.has(step.pack) ? `This machine no longer plans the ${step.id} step of the ${step.pack} pack.` : `The ${step.pack} pack is off.`;
+    findings.push({ id: `left:${step.id}`, pack: step.pack, say: `${cause} ${step.undo}` });
+  }
+  return findings;
+}
+
+/** A note for each folder of pack secrets whose pack is off: Fleet keeps them, because a credential is costly to make again. */
+function secretsLeft(plan: Plan, home: string): Finding[] {
+  const on = new Set(plan.packs.map((pack) => pack.name));
+  const folder = join(home, ".config/fleet/secrets");
+  const packs = existsSync(folder) ? readdirSync(folder, { withFileTypes: true }).filter((entry) => entry.isDirectory() && packName.test(entry.name) && !on.has(entry.name)).map((entry) => entry.name) : [];
+  return packs.sort().map((pack) => ({ id: `secrets:${pack}`, pack, say: `The ${pack} pack is off. Its secrets stay in ~/.config/fleet/secrets/${pack}. Delete that folder when you no longer need them.` }));
 }
 
 async function undoHeld(step: LedgerStep, run: Runner): Promise<Held> {

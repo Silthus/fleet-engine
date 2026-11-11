@@ -116,6 +116,7 @@ describe("the signed Git allowlist workflow", () => {
     const step = plan({ "git-allowlist": true }).human.find((item) => item.id === "git-allowlist");
     expect(step?.command).toContain("sudo sh ~/.local/state/fleet/git-allowlist/install.sh");
     expect(step?.probe).toEqual(["fleet", "guards", "allowlist", "--check"]);
+    expect(step?.left).toEqual(["fleet", "guards", "allowlist", "--left"]);
     expect(step?.interactive).toBe(true);
     expect(plan({ "git-allowlist": true }, mac).human).toEqual([]);
   });
@@ -195,10 +196,23 @@ describe("fleet guards allowlist", () => {
     machine.sign(key);
     expect(machine.fleet()).toEqual({ code: 0, output: expect.stringContaining("verified.\nSystem: not installed.") });
     expect(machine.fleet("--check").code).toBe(1);
+    expect(machine.fleet("--left").code).toBe(1);
     expect(machine.fleet("stage", machine.staged).code).toBe(0);
     expect(machine.install()).toMatchObject({ code: 0, stdout: "Git allowlist: on." });
     expect(machine.fleet("--check").code).toBe(0);
-
+    const withoutSettings = (mode: string) => allowlistCommand([mode], { settings: {}, profileDir: undefined, root: machine.root, print: () => {} });
+    expect(() => withoutSettings("--check")).toThrow();
+    expect(withoutSettings("--left")).toBe(0);
+    const list = join(machine.root, "etc/fleet/git-allowlist");
+    chmodSync(list, 0o000);
+    expect(withoutSettings("--left")).toBe(0);
+    chmodSync(list, 0o644);
+    chmodSync(join(machine.root, "etc/fleet"), 0o000);
+    const blind = withoutSettings("--left");
+    chmodSync(join(machine.root, "etc/fleet"), 0o755);
+    expect(blind).toBe(process.getuid?.() === 0 ? 0 : 3);
+    expect(run(["sh", join(machine.staged, "install.sh"), "remove", machine.root]).code).toBe(0);
+    expect(withoutSettings("--left")).toBe(1);
   });
 
   test.each([
