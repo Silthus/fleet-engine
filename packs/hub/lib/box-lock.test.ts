@@ -156,5 +156,5 @@ test("the lock folder is private, and a symlinked folder or lock file is refused
 
 test("a box lock refuses a name that is not a box", async () => {
   const home = temp.make("fleet-lock-");
-  for (const name of ["../box-a", "box-a/../../x", "devbox-1", "box-"]) await expect(withBoxLock(home, name, { waitMs: 0 }, async () => 1)).rejects.toThrow("not a box");
+  for (const name of ["../box-a", "box-a/../../x", "devbox-1", "box-", "box-a.b", "box--x"]) await expect(withBoxLock(home, name, { waitMs: 0 }, async () => 1)).rejects.toThrow("not a box");
 });
