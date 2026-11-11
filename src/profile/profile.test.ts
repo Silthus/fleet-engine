@@ -115,7 +115,7 @@ describe("saving answers", () => {
     expect(await spawnGit(remote, "rev-parse", "main")).toBe(await spawnGit(dir, "rev-parse", "HEAD"));
   });
 
-  test("a push the remote rejects because it is ahead says why and how to recover", async () => {
+  async function profileBehind() {
     const remote = temp.make("remote-");
     await spawnGit(remote, "init", "-q", "--bare", "-b", "main");
     const dir = await profileRepo();
@@ -123,15 +123,32 @@ describe("saving answers", () => {
     await spawnGit(dir, "push", "-q", "-u", "origin", "main");
     const other = temp.make("other-");
     await spawnGit(other, "clone", "-q", remote, ".");
-    writeFileSync(join(other, "about-me.md"), "Hi\n");
-    await spawnGit(other, "add", ".");
-    await spawnGit(other, "commit", "-q", "-m", "Elsewhere");
-    await spawnGit(other, "push", "-q");
-    const error = await saveAnswers(dir, { plan: "claude" }, { push: true }).catch((caught: Error) => caught);
+    const elsewhere = async (change: (file: Record<string, unknown>) => Record<string, unknown>) => {
+      const file = JSON.parse(readFileSync(join(other, "fleet.json"), "utf8"));
+      writeFileSync(join(other, "fleet.json"), JSON.stringify(change(file), null, 2) + "\n");
+      await spawnGit(other, "commit", "-q", "-am", "Elsewhere");
+      await spawnGit(other, "push", "-q");
+    };
+    return { dir, remote, elsewhere };
+  }
+
+  test("takes what another machine pushed before it saves, so a change here keeps the hub named on the hub", async () => {
+    const { dir, remote, elsewhere } = await profileBehind();
+    await elsewhere((file) => ({ ...file, hub: "coder.fleet-hub" }));
+    await saveAnswers(dir, { packs: ["hub"] }, { push: true });
+    expect(JSON.parse(await spawnGit(remote, "show", "main:fleet.json"))).toMatchObject({ hub: "coder.fleet-hub", packs: ["hub"] });
+    expect(await spawnGit(remote, "rev-parse", "main")).toBe(await spawnGit(dir, "rev-parse", "HEAD"));
+  });
+
+  test("a change that clashes with one another machine pushed says why and how to recover, and leaves the profile as it was", async () => {
+    const { dir, elsewhere } = await profileBehind();
+    await saveAnswers(dir, { plan: "codex" });
+    await elsewhere((file) => ({ ...file, plan: "claude" }));
+    const error = await saveAnswers(dir, { packs: ["hub"] }, { push: true }).catch((caught: Error) => caught);
     expect(error).toBeInstanceOf(ProfileError);
-    expect((error as Error).message).toBe(
-      `${dir}: could not push answers: ! [rejected] main -> main (fetch first). ${dir} and its remote both have changes the other lacks. Run git -C ${dir} pull --rebase, then try again.`,
-    );
+    expect((error as Error).message).toBe(`${dir}: could not take the changes another machine pushed. ${dir} and its remote both have changes the other lacks. Run git -C ${dir} pull --rebase, then try again.`);
+    expect(await spawnGit(dir, "status", "--porcelain")).toBe("");
+    expect(JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8")).plan).toBe("codex");
   });
 
   test("a failed push never shows the credentials in the remote's URL", async () => {

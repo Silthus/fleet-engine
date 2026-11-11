@@ -161,3 +161,37 @@ test("a hub named by its Coder SSH name, as coder config-ssh writes it, forwards
   expect(printed.at(-1)).toBe("Hub tunnel: forwards 127.0.0.1:3317 and 127.0.0.1:60002 to coder.my-hub from login.");
   await expect(hubTunnel("install", mac({ alias: "other.my-hub" }).deps)).rejects.toThrow("hub.alias");
 });
+
+test("without the MCP gateway the Mac forwards nothing: install writes no agent and removes the one it wrote, and the doctor passes", async () => {
+  const { deps, home } = mac();
+  await hubTunnel("install", deps);
+  const off = mac({ home, loaded: true, gateway: undefined });
+  expect(await hubTunnel("install", off.deps)).toBe(0);
+  expect(existsSync(agent(home))).toBe(false);
+  expect(off.calls).toContain(`launchctl bootout gui/501/${tunnelLabel}`);
+  expect(off.printed.at(-1)).toBe("Hub tunnel: not needed. The MCP gateway is off, so this Mac forwards nothing to the hub.");
+  const fresh = mac({ gateway: undefined, coder: undefined });
+  expect(await hubTunnel("doctor", fresh.deps)).toBe(0);
+  expect(await hubTunnel("install", fresh.deps)).toBe(0);
+  expect(fresh.calls).toEqual([]);
+  expect(existsSync(join(fresh.home, "Library"))).toBe(false);
+});
+
+async function hubTunnelCommand(profile: Record<string, unknown>) {
+  const dir = temp.make("fleet-profile-");
+  writeFileSync(join(dir, "fleet.json"), JSON.stringify({ schema: 1, packs: ["hub"], workflows: {}, ...profile }));
+  const child = Bun.spawn(["bun", join(import.meta.dir, "../commands/hub-tunnel.ts"), "doctor"], {
+    env: { ...Bun.env, HOME: temp.make("fleet-mac-"), FLEET_PROFILE_DIR: dir, FLEET_SETTINGS: JSON.stringify({ "hub.alias": "coder.my-hub", "hub.relayPort": 60002 }) },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { code, output: `${stdout}${stderr}` };
+}
+
+test("fleet hub-tunnel reads from the profile whether the MCP gateway is on", async () => {
+  expect(await hubTunnelCommand({})).toEqual({ code: 0, output: "Hub tunnel: not needed. The MCP gateway is off, so this Mac forwards nothing to the hub.\n" });
+  expect(await hubTunnelCommand({ packs: ["hub", "mcp-gateway"], workflows: { "mcp-gateway": false } })).toMatchObject({ code: 0 });
+  const on = await hubTunnelCommand({ packs: ["hub", "mcp-gateway"] });
+  expect(on.code).not.toBe(0);
+  expect(on.output).toContain(process.platform === "darwin" ? "hub tunnel" : "Only a Mac opens its own hub tunnel");
+});
