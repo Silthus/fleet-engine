@@ -29,7 +29,6 @@ export function profileStep(context: ProfileContext): Step {
   return { id: "profile", title: "Make your profile", minutes: 1, kind: "auto", run: () => makeProfile(context) };
 }
 
-/** Finds this login's profile repo: the one this machine's clone uses, the team org's, or the personal one. */
 async function lookUp(machine: Machine, home: string, packs: PackManifest[], picked: string[]) {
   const gh = async (...args: string[]) => {
     const result = await machine.exec(["gh", ...args]);
@@ -56,7 +55,6 @@ async function lookUp(machine: Machine, home: string, packs: PackManifest[], pic
 
 const same = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
 
-/** Clones the profile repo another machine of this login already set up, and returns its answers; undefined when there is none. */
 export async function existingProfile(machine: Machine, home: string, packs: PackManifest[], picked: string[]): Promise<Profile | undefined> {
   const { found, dir } = await lookUp(machine, home, packs, picked);
   return found && existsSync(join(dir, "fleet.json")) ? loadProfile(dir) : undefined;
