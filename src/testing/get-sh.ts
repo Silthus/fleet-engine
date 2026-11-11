@@ -52,6 +52,7 @@ export function getShHarness() {
     stub("sleep", "exit 0");
     stub("claude", "exit 0");
     stub("codex", "exit 0");
+    stub("npx", "exit 0");
     const t3Left = join(root, "t3-failures");
     writeFileSync(t3Left, String(options.t3Failures ?? 0));
     const t3Installer = `left=$(cat "${t3Left}"); echo "t3 installer channel=$T3CODE_CHANNEL version=$T3CODE_VERSION" >> "${log}"; if [ "$left" -gt 0 ]; then echo $((left - 1)) > "${t3Left}"; echo "GET https://api.github.com/repos/pingdotgg/t3code/releases returned HTTP 403" >&2; exit 1; fi; curl -sSL "https://github.com/pingdotgg/t3code/releases/download/v$T3CODE_VERSION/SHA256SUMS" -o "$HOME/.t3-sums" || exit 1; mkdir -p "$HOME/.local/bin"; printf '#!/bin/sh\\necho "t3 $*" >> "${log}"\\n' > "$HOME/.local/bin/t3"; chmod +x "$HOME/.local/bin/t3"`;

@@ -5,6 +5,7 @@ export type PageWorkflow = {
   name: string;
   sentence: string;
   needs: Need[];
+  requires: string[];
   default: boolean;
   settings: string[];
   moment?: { time: string; title: string; body: string; words?: string[]; night?: boolean };
@@ -47,6 +48,7 @@ export type Picks = { preset: string; packs: string[]; workflows: Record<string,
 export type MomentState = { on: true } | { on: false; fix: { pack: string } | { workflow: string } };
 
 const packOf = (data: PageData, name: string) => data.packs.find((pack) => pack.name === name);
+export const workflowOf = (data: PageData, id: string) => data.packs.flatMap((pack) => pack.workflows).find((workflow) => workflow.id === id);
 const presetOf = (data: PageData, id: string) => data.presets.find((preset) => preset.id === id) ?? data.presets.find((preset) => preset.id === data.defaultPreset)!;
 const presetPacks = (data: PageData, preset: PagePreset) => [...new Set([...preset.packs, ...data.teamPacks])];
 const picked = (data: PageData, picks: Picks) => data.packs.filter((pack) => pack.always || picks.packs.includes(pack.name));
@@ -81,9 +83,17 @@ export function togglePack(data: PageData, picks: Picks, name: string): Picks {
 }
 
 export function toggleWorkflow(data: PageData, picks: Picks, id: string): Picks {
-  const workflow = data.packs.flatMap((pack) => pack.workflows).find((item) => item.id === id);
+  const workflow = workflowOf(data, id);
   if (!workflow) return picks;
-  return { ...picks, workflows: { ...picks.workflows, [id]: !chosen(picks, workflow) } };
+  const workflows = { ...picks.workflows };
+  const turn = (target: PageWorkflow, on: boolean) => {
+    if (chosen({ workflows }, target) === on) return;
+    workflows[target.id] = on;
+    if (on) target.requires.map((required) => workflowOf(data, required)).forEach((required) => required && turn(required, true));
+    else data.packs.flatMap((pack) => pack.workflows).filter((item) => item.requires.includes(target.id)).forEach((item) => turn(item, false));
+  };
+  turn(workflow, !chosen(picks, workflow));
+  return { ...picks, workflows };
 }
 
 export function setSetting(_data: PageData, picks: Picks, key: string, value: SettingValue | undefined): Picks {
@@ -98,12 +108,19 @@ export function missingPack(data: PageData, picks: Picks, workflow: PageWorkflow
   return workflow.needs.map((need) => data.needPacks[need]).find((name): name is string => !!name && !picks.packs.includes(name));
 }
 
-export function momentState(data: PageData, picks: Picks, workflow: PageWorkflow, pack = data.packs.find((item) => item.workflows.includes(workflow))?.name): MomentState {
+export function momentState(data: PageData, picks: Picks, workflow: PageWorkflow, pack = data.packs.find((item) => item.workflows.includes(workflow))?.name, seen = new Set<string>()): MomentState {
   const owner = pack ? packOf(data, pack) : undefined;
   if (owner && !owner.always && !picks.packs.includes(owner.name)) return { on: false, fix: { pack: owner.name } };
   if (!chosen(picks, workflow)) return { on: false, fix: { workflow: workflow.id } };
   const missing = missingPack(data, picks, workflow);
-  return missing ? { on: false, fix: { pack: missing } } : { on: true };
+  if (missing) return { on: false, fix: { pack: missing } };
+  seen.add(workflow.id);
+  for (const id of workflow.requires.filter((required) => !seen.has(required))) {
+    const required = workflowOf(data, id);
+    const state = required ? momentState(data, picks, required, undefined, seen) : ({ on: false, fix: { workflow: id } } as const);
+    if (!state.on) return state;
+  }
+  return { on: true };
 }
 
 const presetChoice = (preset: PagePreset, workflow: PageWorkflow) => preset.workflows[workflow.id] ?? workflow.default;

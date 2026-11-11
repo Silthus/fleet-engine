@@ -36,8 +36,10 @@ async function machine(packs = ["kit"], settings: Record<string, string> = {}, f
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs, plan: "claude", settings, workflows: {} }));
   const home = temp.make("home-");
   const bin = temp.make("bin-");
-  writeFileSync(join(bin, "claude"), '#!/bin/sh\n[ "$*" = --version ] && echo "claude 1.0.0"\n');
-  chmodSync(join(bin, "claude"), 0o755);
+  for (const [tool, version] of [["claude", "claude 1.0.0"], ["npx", "11.0.0"]]) {
+    writeFileSync(join(bin, tool!), `#!/bin/sh\n[ "$*" = --version ] && echo "${version}"\n`);
+    chmodSync(join(bin, tool!), 0o755);
+  }
   let now = start;
   let asleep = async (_now: number) => {};
   let lines: string[] = [];

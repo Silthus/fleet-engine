@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
@@ -9,7 +9,7 @@ import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { secretStore } from "../../src/runner/context.ts";
 import { listen, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
-import { launchOnBox, type Run } from "./lib/launch.ts";
+import { launchHere, launchOnBox, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
 import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
 import { startSlackStub, type Message } from "./testing.ts";
@@ -26,7 +26,8 @@ const owner = { name: "Nora Example", slackUserId: ownerId };
 const appToken = "xapp-1-test-app-token";
 const userToken = "xoxp-test-user-token";
 const models: ModelRow[] = [{ role: "implementation", work: "Build", provider: "claude", model: "claude-opus-5-5", effort: "high" }];
-const settings = (extra: Record<string, unknown> = {}) => JSON.stringify({ "slack.userId": ownerId, ...extra });
+const settings = (extra: Record<string, unknown> = {}) => JSON.stringify({ "slack.userId": ownerId, "base.startFloorGigabytes": 25, ...extra });
+const gigabytes = (count: number) => () => count * 1024 ** 3;
 
 async function homeWithTokens(tokens: Record<string, string> = { appToken, userToken }) {
   const home = temp.make("home-");
@@ -68,7 +69,7 @@ async function t3Server() {
 function commandDeps(home: string, extra: Partial<SlackCommandDeps> = {}): SlackCommandDeps & { printed: string[] } {
   const printed: string[] = [];
   return {
-    env: { FLEET_SETTINGS: settings(), FLEET_ENGINE_DIR: "/opt/fleet-engine" }, slackUserId: () => ownerId, secrets: secretStore(home, "slack"), stateDir: join(home, ".local/state/fleet/slack"), threads: t3Threads(models, { home }),
+    env: { FLEET_SETTINGS: settings(), FLEET_ENGINE_DIR: "/opt/fleet-engine" }, home, freeBytes: gigabytes(100), slackUserId: () => ownerId, secrets: secretStore(home, "slack"), stateDir: join(home, ".local/state/fleet/slack"), threads: t3Threads(models, { home }),
     print: (line) => printed.push(line), readStdin: async () => "", every: () => () => {}, sleep: async () => {}, printed, ...extra,
   };
 }
@@ -148,6 +149,28 @@ describe("fleet slack-trigger run", () => {
     expect(ran.map((call) => call.argv.slice(1).join(" "))).toEqual(["box spawn", "box run box-7 -- fleet slack-trigger launch"]);
     expect(JSON.parse(ran[1]!.input!)).toMatchObject({ title: "Slack: deploy check", prompt: expect.stringContaining("> deploy check :t3code:") });
     expect(slack.method("chat.postEphemeral")[0]!.args.text).toBe("Started <https://app.t3.codes/threads/env-box-7/thread-on-box|Slack: deploy check> on box-7.");
+  });
+
+  test("starts no thread on a disk below the start floor, logs why, and names the devbox with the most room", async () => {
+    const t3 = await t3Server();
+    const slack = slackStub([{ user: ownerId, ts: "300.1", text: "full disk :t3code:" }]);
+    const home = await homeWithTokens();
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    writeFileSync(join(home, ".local/state/fleet/disk-free.json"), JSON.stringify({ checkedAt: new Date().toISOString(), boxes: { "devbox-small": 30 * 1024 ** 3, "devbox-big": 200 * 1024 ** 3 } }));
+    const stop = new AbortController();
+    const deps = commandDeps(home, { slackBase: slack.base, stop: stop.signal, run: processes().run, threads: t3Threads(models, { home: t3.home }), freeBytes: gigabytes(3) });
+    const running = listen(deps);
+    await slack.connected();
+    slack.send({ type: "message", user: ownerId, channel: "C1", ts: "300.1", text: "full disk :t3code:" });
+    await slack.until(() => slack.method("chat.postEphemeral").length === 1);
+    stop.abort();
+    await running;
+
+    expect(t3.rpcCalls.filter((call) => call.tag === "orchestration.launchThread")).toEqual([]);
+    const failure = deps.printed.find((line) => line.includes("C1:300.1: launch failed:"));
+    expect(failure).toContain("3.0G free, below the 25G floor");
+    expect(failure).toContain("devbox-big has 200.0G free");
+    expect(slack.method("chat.postEphemeral")[0]!.args.text).toBe("Could not start a T3 thread. Fleet retries every minute for a day.");
   });
 
   test("ends when its saved Slack app is replaced, so the service starts again with the new app", async () => {
@@ -247,6 +270,62 @@ describe("a launch that fails", () => {
     expect(titles).toEqual(["Slack: why?", "Slack: why?", "Slack: why?"]);
     expect(new Set(commandIds).size).toBe(1);
     expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day.", "Started <https://app.t3.codes/threads/E1/T1|Slack: why?> on this machine."]);
+  });
+
+  async function retryBelowTheFloor(fixture: { rows?: ModelRow[]; firstLaunch: "lost" | "refused" | "fine"; repair?: (rows: ModelRow[]) => void }) {
+    let launches = 0;
+    const t3: T3Stub = await startT3Stub({
+      shell: { projects: [], threads: [] },
+      environmentId: "env-here",
+      rpc: (tag) => tag === "projects.ensureScratch" ? { projectId: "scratch" } : tag === "orchestration.launchThread" && !(fixture.firstLaunch === "refused" && launches++ === 0) ? { threadId: "thread-1" } : undefined,
+      loseAnswer: (tag) => fixture.firstLaunch === "lost" && tag === "orchestration.launchThread" && launches++ === 0,
+    });
+    stops.push(() => t3.stop());
+    const rows = fixture.rows ?? [...models];
+    let disk = { critical: false, message: "" };
+    const { deps, replies, later } = rig([]);
+    deps.launch = launchHere(t3Threads(rows, { home: t3.home }), () => disk);
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    fixture.repair?.(rows);
+    disk = { critical: true, message: "3.0G free, below the 25G floor." };
+    later(60_000);
+    await retryPending(deps);
+    return { threads: t3.threads, replies };
+  }
+
+  test("still reports a thread T3 started before its answer was lost, after the disk fell below the start floor", async () => {
+    const { threads, replies } = await retryBelowTheFloor({ firstLaunch: "lost" });
+    expect(threads.map((thread) => thread.id)).toEqual(["thread-1"]);
+    expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/env-here/thread-1|Slack: why?> on this machine.");
+  });
+
+  test("checks the start floor again on a retry whose launch failed before it reached T3", async () => {
+    const { threads, replies } = await retryBelowTheFloor({ rows: [], firstLaunch: "fine", repair: (rows) => rows.push(...models) });
+    expect(threads).toEqual([]);
+    expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day."]);
+  });
+
+  test("checks the start floor again on a retry whose launch T3 refused", async () => {
+    const { threads, replies } = await retryBelowTheFloor({ firstLaunch: "refused" });
+    expect(threads).toEqual([]);
+    expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day."]);
+  });
+
+  test("on a box, retries a launch whose T3 answer was lost as a replay", async () => {
+    let answers = 0;
+    const fleet = processes((argv) => {
+      if (argv.slice(1).join(" ") === "box spawn") return { code: 0, stdout: "box-8 env-box-8\n" };
+      if (argv[2] === "run") return answers++ === 1 ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-on-box" })}\n` } : { code: 1, stdout: `${JSON.stringify({ failed: "T3 did not answer", reachedT3: true })}\n` };
+      return undefined;
+    });
+    const { deps, replies, later } = rig([]);
+    deps.launch = launchOnBox("/opt/fleet-engine/fleet", fleet.run);
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    later(60_000);
+    await retryPending(deps);
+    const sent = fleet.calls.filter((call) => call.argv[2] === "run").map((call) => JSON.parse(call.input!));
+    expect(sent.map((request) => request.replay)).toEqual([undefined, true]);
+    expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/env-box-8/thread-on-box|Slack: why?> on box-8.");
   });
 
   test("keeps a trigger whose Slack thread could not be read, and starts it on the next retry", async () => {
@@ -393,6 +472,22 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
     expect(await slackTrigger(["launch"], deps)).toBe(0);
     expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1" });
     expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")?.payload).toMatchObject({ commandId: "command-1", title: "Slack: hi", initialMessage: { text: "Do it." } });
+  });
+
+  test("launch on a box replays a launch below the start floor, so T3 answers with the thread it already started", async () => {
+    const t3 = await t3Server();
+    const deps = commandDeps(temp.make("home-"), { threads: t3Threads(models, { home: t3.home }), freeBytes: gigabytes(3), readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1", replay: true }) });
+    expect(await slackTrigger(["launch"], deps)).toBe(0);
+    expect(t3.rpcCalls.filter((call) => call.tag === "orchestration.launchThread").map((call) => (call.payload as { commandId: string }).commandId)).toEqual(["command-1"]);
+  });
+
+  test("launch on a box below the start floor starts no thread and prints why on one line", async () => {
+    const t3 = await t3Server();
+    const deps = commandDeps(temp.make("home-"), { threads: t3Threads(models, { home: t3.home }), freeBytes: gigabytes(3), readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }) });
+    expect(await slackTrigger(["launch"], deps)).toBe(1);
+    expect(t3.rpcCalls.filter((call) => call.tag === "orchestration.launchThread")).toEqual([]);
+    expect(deps.printed.at(-1)).toContain("3.0G free, below the 25G floor");
+    expect(deps.printed.at(-1)).not.toContain("\n");
   });
 
   test("a thread that started counts as started when revoking its T3 session fails", async () => {
