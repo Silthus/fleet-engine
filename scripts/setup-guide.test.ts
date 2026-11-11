@@ -271,11 +271,10 @@ describe("the agent setup guide", () => {
     expect(savedAnswers(home).settings["orchestration.tracker"]).toBe("nora/maps");
   });
 
-  test("a host removed from devboxes in the profile's fleet.json leaves the hub's list of machines", () => {
-    expect(words(hubStep())).toContain("Remove the old host from the `devboxes` list in `~/.local/share/fleet/profile/fleet.json`");
+  test("the guide's cleanup runs fleet devbox remove, and a host it takes out of the profile leaves the hub's list of machines", () => {
+    expect(words(hubStep())).toContain("Run `fleet devbox remove coder.<old name>` on this Mac. It takes the old host out of their profile");
     const home = temp.make("home-");
     const profile = profilePath(home);
-    expect(codeIn(hubStep())).toContain(`${profilePath("~")}/fleet.json`);
     mkdirSync(profile, { recursive: true });
     const save = (devboxes: string[]) => writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, hub: "coder.hub", devboxes }));
     save(["coder.hub", "coder.old-node", "coder.node"]);
