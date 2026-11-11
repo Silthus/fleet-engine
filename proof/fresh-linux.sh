@@ -241,6 +241,7 @@ for arg do
 done
 exec "$real_curl" "\$@"
 EOF
+  chmod 755 "$work/$user-curl"
   as_user "$user" install -m 755 "$work/$user-curl" "$home/.proof/bin/curl"
   note "installed a curl at ~/.proof/bin/curl that serves Silthus/fleet-engine's raw get.sh from $work/get.sh"
 }
