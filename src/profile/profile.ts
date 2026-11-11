@@ -1,6 +1,7 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
 import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
 import { writePrivateFile } from "../files/private.ts";
@@ -16,19 +17,31 @@ export async function loadProfile(dir: string): Promise<Profile> {
   return { ...profile, dir, ...((await aboutMe.exists()) ? { aboutMe: await aboutMe.text() } : {}) };
 }
 
+/** Takes what other machines pushed before a change here, so the change lands on top of theirs. A profile without a remote has nothing to take. */
+export async function pullProfile(dir: string) {
+  if (!(await run(dir, "git", "rev-parse", "--abbrev-ref", "@{upstream}")).ok) return;
+  const pulled = await run(dir, "git", "pull", "-q", "--rebase", "--no-autostash");
+  if (pulled.ok) return;
+  const failed = `${dir}: could not take the changes another machine pushed`;
+  if (await rebasing(dir)) {
+    await run(dir, "git", "rebase", "--abort");
+    throw new ProfileError(`${failed}. ${bothChanged(dir, "its remote")} Run git -C ${dir} pull --rebase, then try again.`);
+  }
+  if ((await run(dir, "git", "status", "--porcelain")).stdout) throw new ProfileError(`${failed}, because ${dir} has changes that are not committed. Commit or discard them, then try again.`);
+  const reason = gitReason(pulled.stderr);
+  throw new ProfileError(`${failed}${reason ? `: ${reason}. Fix that, then try again.` : "."}`);
+}
+
+async function rebasing(dir: string) {
+  const paths = await run(dir, "git", "rev-parse", "--git-path", "rebase-merge", "--git-path", "rebase-apply");
+  return paths.stdout.split("\n").some((path) => existsSync(resolve(dir, path)));
+}
+
 /**
  * Saves answers to fleet.json and commits only that file. Settings merge key by
  * key; every other field, workflows included, replaces the saved one, so a
  * caller removes a workflow override by saving the full override set.
  */
-/** Takes what other machines pushed before a change here, so the change lands on top of theirs. A profile without a remote has nothing to take, and an unreachable remote leaves the push to say why. */
-export async function pullProfile(dir: string) {
-  if (!(await run(dir, "git", "rev-parse", "--abbrev-ref", "@{upstream}")).ok) return;
-  if ((await run(dir, "git", "pull", "-q", "--rebase")).ok) return;
-  if (!(await run(dir, "git", "rebase", "--abort")).ok) return;
-  throw new ProfileError(`${dir}: could not take the changes another machine pushed. ${bothChanged(dir, "its remote")} Run git -C ${dir} pull --rebase, then try again.`);
-}
-
 export async function saveAnswers(dir: string, answers: Partial<ProfileFile>, options: { push?: boolean } = {}) {
   if (options.push) await pullProfile(dir);
   const path = join(dir, "fleet.json");
@@ -54,10 +67,15 @@ export function bothChanged(dir: string, other: string) {
 async function push(dir: string) {
   const pushed = await run(dir, "git", "push", "-q");
   if (pushed.ok) return;
-  const reason = pushed.stderr.split("\n").map((line) => withoutCredentials(line).replace(/\s+/g, " ").trim()).find((line) => line && !line.startsWith("To ") && !line.startsWith("hint:"));
+  const reason = gitReason(pushed.stderr);
   const behind = /\((fetch first|non-fast-forward)\)/.test(pushed.stderr);
   const recovery = behind ? ` ${bothChanged(dir, "its remote")} Run git -C ${dir} pull --rebase, then try again.` : reason ? " Fix that, then try again." : "";
-  throw new ProfileError(`${dir}: could not push answers${reason ? `: ${reason.replace(/\.$/, "")}.` : "."}${recovery}`);
+  throw new ProfileError(`${dir}: could not push answers${reason ? `: ${reason}.` : "."}${recovery}`);
+}
+
+function gitReason(stderr: string) {
+  const line = stderr.split("\n").map((text) => withoutCredentials(text).replace(/\s+/g, " ").trim()).find((text) => text && !text.startsWith("To ") && !text.startsWith("hint:"));
+  return line?.replace(/\.$/, "");
 }
 
 function withoutCredentials(line: string) {
