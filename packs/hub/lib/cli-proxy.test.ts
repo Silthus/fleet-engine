@@ -109,6 +109,20 @@ test("install on the hub downloads the pinned release, checks it, and writes a l
   expect(again.calls.some((call) => call.startsWith("curl") || call.includes("restart"))).toBe(false);
 });
 
+test("install presents a current Claude Code version upstream, so new Claude models answer, and moves a hub on the older config to it", async () => {
+  const { machine, home } = hubMachine();
+  expect(await cliProxy("install", machine)).toBe(0);
+  const configPath = join(dataDir(home), "config.yaml");
+  const header = 'claude-header-defaults:\n  user-agent: "claude-cli/2.1.322 (external, cli)"\n';
+  expect(readFileSync(configPath, "utf8")).toContain(header);
+
+  writeFileSync(configPath, readFileSync(configPath, "utf8").replace(header, ""));
+  const older = hubMachine({ home });
+  expect(await cliProxy("install", older.machine)).toBe(0);
+  expect(readFileSync(configPath, "utf8")).toContain(header);
+  expect(older.calls).toContain("systemctl --user restart fleet-cli-proxy.service");
+});
+
 test("install stops at a release whose checksum differs, before it writes a unit", async () => {
   const { machine, home } = hubMachine({}, {}, { checksum: "tampered" });
   await expect(cliProxy("install", machine)).rejects.toThrow("Checksum mismatch");
