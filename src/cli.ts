@@ -29,7 +29,7 @@ import { spawnRunner, type CommandRunner } from "./adapters/run.ts";
 import { become, canBecome, type Become } from "./runner/become.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; fail?: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone" | "clock">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string; stdin?: () => ReadableStream<Uint8Array>; capture?: CommandRunner; become?: Become };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; fail?: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string, skip?: string[]) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone" | "clock">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string; stdin?: () => ReadableStream<Uint8Array>; capture?: CommandRunner; become?: Become };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -37,7 +37,7 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
               [--workflows <id=on|off,...>] [--set <pack.key=value>]...
               [--plan <claude|codex|both>] [--non-interactive | --chat]
                      Answer a few questions and set up this machine
-  fleet apply [--profile <dir>] [--adopt <path>]... [--dry-run]
+  fleet apply [--profile <dir>] [--adopt <path>]... [--skip <pack>/<step>]... [--dry-run]
                      Put your profile's packs onto this machine
   fleet doctor [--profile <dir>]
                      Check this machine against your profile without changing it
@@ -89,7 +89,7 @@ async function runSetup(args: string[], options: CliOptions) {
   const fail = options.fail ?? options.print;
   const recorded: CliOptions = { ...options, print: (line) => (record.print(line), options.print(line)), fail: (line) => (record.print(line), fail(line)) };
   try {
-    return await setup(args, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: record.terminal, apply: (dir) => applyProfile(dir, recorded), doctor: (dir) => reconcile("doctor", ["--profile", dir], recorded), ...options.setup });
+    return await setup(args, { home: options.home, engineRoot: options.engineRoot, platform: options.platform, ...(options.env ? { env: options.env } : {}), terminal: record.terminal, apply: (dir, skip) => applyProfile(dir, recorded, skip), doctor: (dir) => reconcile("doctor", ["--profile", dir], recorded), ...options.setup });
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     record.failed(error.message);
@@ -126,7 +126,7 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const { plan, sources } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview, inherit: preview });
   const adapters = (options.adapters ?? engineAdapters)();
   const issue: Issuer = (entries, node) => issueCredentials(entries, node, plan, sources, options);
-  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, dryRun: flags.dryRun, adapters, run: options.run, issue });
+  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, skip: flags.skip, dryRun: flags.dryRun, adapters, run: options.run, issue });
   if (doctor) {
     const drifted = await drift(plan, report.humanLeft);
     report.findings.push(...drifted);
@@ -154,8 +154,8 @@ function changesProfile(command: keyof typeof changes | "hub", args: string[]) {
   return command === "set" || (command === "packs" && args.length > 0) || (command === "hub" && args[0] === "here");
 }
 
-function applyProfile(dir: string, options: CliOptions) {
-  return options.apply ? options.apply(dir) : reconcile("apply", ["--profile", dir], options);
+function applyProfile(dir: string, options: CliOptions, skip: string[] = []) {
+  return options.apply ? options.apply(dir, skip) : reconcile("apply", ["--profile", dir, ...skip.flatMap((step) => ["--skip", step])], options);
 }
 
 async function change(command: keyof typeof changes | "hub", args: string[], options: CliOptions) {
@@ -403,7 +403,7 @@ async function loadPlan(options: CliOptions, profileFlag: string | undefined, mo
 }
 
 function parseFlags(args: string[]) {
-  const flags: { profile?: string; adopt: string[]; dryRun: boolean } = { adopt: [], dryRun: false };
+  const flags: { profile?: string; adopt: string[]; skip: string[]; dryRun: boolean } = { adopt: [], skip: [], dryRun: false };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     const value = () => {
@@ -413,6 +413,7 @@ function parseFlags(args: string[]) {
     };
     if (arg === "--profile") flags.profile = value();
     else if (arg === "--adopt") flags.adopt.push(value());
+    else if (arg === "--skip") flags.skip.push(value());
     else if (arg === "--dry-run") flags.dryRun = true;
     else throw new Error(`unknown option ${arg}`);
   }
