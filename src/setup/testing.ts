@@ -62,11 +62,12 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * devbox whose sign-ins work the same way; Claude there signs in when its
  * foreground sign-in runs.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string> } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
   const coderSsh: string[] = [];
+  const hubUpdates: string[] = [];
   const starts: string[][] = [];
   const runs: Array<{ command: string[]; input: boolean }> = [];
   const sleeps: number[] = [];
@@ -80,7 +81,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line.startsWith("t3 environment link ")) return result(true, "linked");
     return undefined;
   };
-  const box = (line: string, input?: string): ExecResult => {
+  const box = (line: string, input?: string, host?: string): ExecResult => {
+    if (line.endsWith('/.local/share/fleet/engine/fleet" update')) return hubUpdates.push(host ?? ""), result(!options.hubDown, options.hubDown ? "ssh: connect to host: Connection refused" : "✓ Up to date");
     if (line === "coder whoami") return passes("box:coder") ? result(true, coderWhoami) : result(false, "You are not logged in");
     if (line.includes("coder login https://coder.example.com") && line.startsWith("sh -c ")) {
       if (input === `${coderToken}\n`) left["box:coder"] = 0;
@@ -99,7 +101,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     async exec(command, run = {}) {
       calls.push({ command, ...run });
       const remote = onBox(command);
-      if (remote !== undefined) return box(remote, run.input);
+      if (remote !== undefined) return box(remote, run.input, command.at(-2));
       const line = command.join(" ");
       if (line.startsWith("gh auth status")) return ghStatus("github", started.has("github") ? scopes : (options.scopes ?? scopes));
       if (line === "gh auth setup-git") return result(true);
@@ -149,7 +151,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     has: () => true,
   };
-  return { machine, calls, starts, runs, sleeps, opened, coderSsh };
+  return { machine, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates };
 }
 
 export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>, doctorCode = 0, platform: NodeJS.Platform = "linux", onApply: (dir: string) => void = () => {}) {

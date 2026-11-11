@@ -3,7 +3,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { main } from "../cli.ts";
-import { isolateGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
+import { profilePath } from "./profile.ts";
 import { overSsh, pairing, profileForBox, sshHosts } from "./devbox.ts";
 import { coderToken, engineRoot, fakeMachine, fleetSetup, githubRepo, machineFile, onBox, pushedAnswers, scripted } from "./testing.ts";
 
@@ -194,5 +195,41 @@ describe("the devbox over SSH", () => {
     expect(await main(["devbox", "add", "box-2"], { ...options, setup: { machine: plain.machine } })).toBe(0);
     expect(plain.coderSsh).toEqual([]);
     expect(io.output()).not.toContain("Sign in to Coder on box-2");
+  });
+
+  test("fleet devbox add lists the node in the profile, names it there by its SSH host, and has the hub take it now", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
+    const profile = profilePath(home);
+    const answers = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
+    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...answers, hub: "coder.fleet-hub" }, null, 2) + "\n");
+    await spawnGit(profile, "commit", "-q", "-am", "Name the hub");
+    await spawnGit(profile, "push", "-q");
+    const io = scripted([]);
+    const options = { home, engineRoot, platform: "linux" as const, print: io.terminal.print, terminal: io.terminal };
+
+    const box = fakeMachine(home);
+    expect(await main(["devbox", "add", "coder.fleet-node-1"], { ...options, setup: { machine: box.machine } })).toBe(0);
+    expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1"]);
+    expect(remote(box)).toContainEqual(expect.stringContaining(`"role":"devbox","name":"coder.fleet-node-1"`));
+    expect(box.hubUpdates).toEqual(["coder.fleet-hub"]);
+    expect(io.output()).toContain("✓ The hub, coder.fleet-hub, took coder.fleet-node-1: its disk watch, tunnels and peer links include it now.");
+
+    const down = fakeMachine(home, {}, { hubDown: true });
+    expect(await main(["devbox", "add", "coder.fleet-node-2"], { ...options, setup: { machine: down.machine } })).toBe(0);
+    expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1", "coder.fleet-node-2"]);
+    expect(io.output()).toContain("· The hub, coder.fleet-hub, did not answer. It takes coder.fleet-node-2 at its next fleet update, or run fleet update there now.");
+  });
+
+  test("fleet devbox add for the hub itself lists it once and asks nothing of a hub", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
+    const io = scripted([]);
+    const options = { home, engineRoot, platform: "linux" as const, print: io.terminal.print, terminal: io.terminal };
+    const box = fakeMachine(home);
+    expect(await main(["devbox", "add", "coder.fleet-hub"], { ...options, setup: { machine: box.machine } })).toBe(0);
+    expect(await main(["devbox", "add", "coder.fleet-hub"], { ...options, setup: { machine: box.machine } })).toBe(0);
+    expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-hub"]);
+    expect(box.hubUpdates).toEqual([]);
   });
 });
