@@ -41,7 +41,7 @@ const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
 export const proxyOn = (env: Env) => typeof (JSON.parse(env.FLEET_SETTINGS ?? "{}") as Record<string, unknown>)["hub.proxyAccounts"] === "number";
 
 export function readBoxSettings(env: Env): BoxSettings {
-  if (optionalStringSetting("hub.boxTemplate", env) === undefined) throw new Error("Boxes is off. Turn it on with fleet packs --workflows boxes=on, then run fleet apply.");
+  if (optionalStringSetting("hub.boxTemplate", env) === undefined) throw new Error(boxesTurnedOn(env) ? "Boxes is on, but not ready here. Run fleet apply to see what it still needs." : "Boxes is off. To use boxes, or to release boxes that still run, turn it on with fleet packs --workflows boxes=on, then run fleet apply.");
   const warmCommand = optionalStringSetting("hub.boxWarmCommand", env);
   const httpsHost = optionalStringSetting("hub.httpsHost", env);
   return {
@@ -78,6 +78,12 @@ export function requireHub(home: string, command: string): void {
   const role = readRole(home);
   if (role === "hub") return;
   throw new Error(`fleet box ${command} runs only on the hub. This machine's role is ${role ?? "not set"}. Run fleet hub here on the hub, or run this there.`);
+}
+
+function boxesTurnedOn(env: Env): boolean {
+  const path = env.FLEET_PROFILE_DIR ? join(env.FLEET_PROFILE_DIR, "fleet.json") : undefined;
+  if (!path || !existsSync(path)) return false;
+  return (JSON.parse(readFileSync(path, "utf8")) as { workflows?: Record<string, boolean> }).workflows?.boxes === true;
 }
 
 function readProfile(env: Env): { devboxes: string[]; plan?: string; hub?: string } {
