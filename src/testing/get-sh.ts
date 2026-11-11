@@ -47,6 +47,7 @@ export function getShHarness() {
     stub("xcode-select", "exit 0");
     stub("claude", "exit 0");
     stub("codex", "exit 0");
+    stub("npx", "exit 0");
     const t3Installer = `printf '#!/bin/sh\\necho "t3 $*" >> "${log}"\\n' > "$HOME/.local/bin/t3"; chmod +x "$HOME/.local/bin/t3"; echo "t3 installer channel=$T3CODE_CHANNEL" >> "${log}"`;
     const brewInstaller = options.brewInstaller ?? `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
     const ghTar = buildGhTarball(root);
