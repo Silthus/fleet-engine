@@ -1,6 +1,7 @@
+import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
 import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
 import { writePrivateFile } from "../files/private.ts";
@@ -16,6 +17,26 @@ export async function loadProfile(dir: string): Promise<Profile> {
   return { ...profile, dir, ...((await aboutMe.exists()) ? { aboutMe: await aboutMe.text() } : {}) };
 }
 
+/** Takes what other machines pushed before a change here, so the change lands on top of theirs. A profile without a remote has nothing to take. */
+export async function pullProfile(dir: string) {
+  if (!(await run(dir, "git", "rev-parse", "--abbrev-ref", "@{upstream}")).ok) return;
+  const pulled = await run(dir, "git", "pull", "-q", "--rebase", "--no-autostash");
+  if (pulled.ok) return;
+  const failed = `${dir}: could not take the changes another machine pushed`;
+  if (await rebasing(dir)) {
+    await run(dir, "git", "rebase", "--abort");
+    throw new ProfileError(`${failed}. ${bothChanged(dir, "its remote")} Run git -C ${dir} pull --rebase, then try again.`);
+  }
+  if ((await run(dir, "git", "status", "--porcelain")).stdout) throw new ProfileError(`${failed}, because ${dir} has changes that are not committed. Commit or discard them, then try again.`);
+  const reason = gitReason(pulled.stderr);
+  throw new ProfileError(`${failed}${reason ? `: ${reason}. Fix that, then try again.` : "."}`);
+}
+
+async function rebasing(dir: string) {
+  const paths = await run(dir, "git", "rev-parse", "--git-path", "rebase-merge", "--git-path", "rebase-apply");
+  return paths.stdout.split("\n").some((path) => existsSync(resolve(dir, path)));
+}
+
 /**
  * Saves answers to fleet.json and commits only that file. Settings merge key by
  * key; every other field, workflows included, replaces the saved one, so a
@@ -23,6 +44,7 @@ export async function loadProfile(dir: string): Promise<Profile> {
  */
 export async function saveAnswers(dir: string, answers: Partial<ProfileFile>, options: { push?: boolean } = {}) {
   const path = join(dir, "fleet.json");
+  if (options.push) await pullUnder(dir, path, answers);
   const current = (await readJson(path)) ?? { schema: 1 };
   if (current.schema !== 1) throw new ProfileError(`${path}: unknown schema ${String(current.schema)}`);
   const settings = { ...(current.settings as Record<string, unknown> | undefined), ...answers.settings };
@@ -38,6 +60,14 @@ export async function saveAnswers(dir: string, answers: Partial<ProfileFile>, op
   if (options.push) await push(dir);
 }
 
+async function pullUnder(dir: string, path: string, answers: Partial<ProfileFile>) {
+  const before = await readJson(path);
+  await pullProfile(dir);
+  const after = await readJson(path);
+  const changed = Object.keys(answers).filter((key) => key !== "settings" && JSON.stringify(before?.[key]) !== JSON.stringify(after?.[key]));
+  if (changed.length) throw new ProfileError(`${dir}: another machine changed ${changed.join(" and ")} in your profile while this command ran. Run the command again to change them on top of that.`);
+}
+
 export function bothChanged(dir: string, other: string) {
   return `${dir} and ${other} both have changes the other lacks.`;
 }
@@ -45,10 +75,15 @@ export function bothChanged(dir: string, other: string) {
 async function push(dir: string) {
   const pushed = await run(dir, "git", "push", "-q");
   if (pushed.ok) return;
-  const reason = pushed.stderr.split("\n").map((line) => withoutCredentials(line).replace(/\s+/g, " ").trim()).find((line) => line && !line.startsWith("To ") && !line.startsWith("hint:"));
+  const reason = gitReason(pushed.stderr);
   const behind = /\((fetch first|non-fast-forward)\)/.test(pushed.stderr);
   const recovery = behind ? ` ${bothChanged(dir, "its remote")} Run git -C ${dir} pull --rebase, then try again.` : reason ? " Fix that, then try again." : "";
-  throw new ProfileError(`${dir}: could not push answers${reason ? `: ${reason.replace(/\.$/, "")}.` : "."}${recovery}`);
+  throw new ProfileError(`${dir}: could not push answers${reason ? `: ${reason}.` : "."}${recovery}`);
+}
+
+function gitReason(stderr: string) {
+  const line = stderr.split("\n").map((text) => withoutCredentials(text).replace(/\s+/g, " ").trim()).find((text) => text && !text.startsWith("To ") && !text.startsWith("hint:"));
+  return line?.replace(/\.$/, "");
 }
 
 function withoutCredentials(line: string) {
