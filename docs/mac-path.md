@@ -12,17 +12,18 @@ No agent can run a real Mac. Agents work on Linux devboxes. So this document, pl
 
 1. It puts `/opt/homebrew/bin` and `/usr/local/bin` first on `PATH`.
 2. When `xcode-select -p` fails, it runs `xcode-select --install`. Then it waits until `xcode-select -p` passes, checking every 5 seconds. The person finishes the window that macOS opens.
-3. When `brew` is missing, it downloads the Homebrew installer and runs it with `/bin/bash`. Under `curl | sh`, standard input is the script itself. So when standard input is not a terminal and `/dev/tty` opens, the installer reads from `/dev/tty`. This lets Homebrew ask for the Mac password.
-4. When `brew` is still not on `PATH` after the installer, it stops with "Homebrew installed, but brew is not on PATH."
+3. When the T3 Code app is there, in `/Applications` or wherever `open -Ra "T3 Code"` finds it, Homebrew is not needed, and the next two steps do not run.
+4. When `brew` is missing, it downloads the Homebrew installer and runs it with `/bin/bash`. Under `curl | sh`, standard input is the script itself. So when standard input is not a terminal and `/dev/tty` opens, the installer reads from `/dev/tty`. This lets Homebrew ask for the Mac password.
+5. When `brew` is still not on `PATH` after the installer, it stops with "Homebrew installed, but brew is not on PATH."
 
 **Code.** `get.sh`: `mac_tools`, `download`, the `case "$(uname -s)"` block.
 
 **Tests.**
 
 - `src/get.test.ts › get.sh › on macOS installs the Command Line Tools first and waits until they are there` (new)
-- `src/get.test.ts › get.sh › on macOS installs Homebrew, gh, and the T3 Code app, then applies the profile`
-- `src/get.test.ts › get.sh › under curl | sh, gives the Homebrew installer the terminal so it can ask for the password`
-- `src/get.test.ts › get.sh › on macOS with Homebrew present, skips its installer and installs Bun with brew when Bun is missing` (new)
+- `src/get-macos.test.ts › get.sh › on macOS without the T3 Code app, installs Homebrew and the app, then applies the profile`
+- `src/get-macos.test.ts › get.sh › under curl | sh, gives the Homebrew installer the terminal so it can ask for the password`
+- `src/get-macos.test.ts › get.sh › on macOS with the T3 Code app, needs no Homebrew and nothing from the person`
 - `src/get.test.ts › get.sh › on macOS stops when the Homebrew installer leaves no brew on PATH` (new)
 - `src/get.test.ts › get.sh › passes sh -n`
 
@@ -34,9 +35,10 @@ These tests stub `uname`, `xcode-select`, `curl`, `brew` and `sleep` in a sandbo
 
 **What happens.** Still in `mac_tools`:
 
-- `has gh || brew install gh`
-- `has bun || brew install bun`
-- `[ -d "/Applications/T3 Code.app" ] || brew install --cask t3-code`
+- Without the T3 Code app: `brew install --cask t3-code`.
+- `has gh || mac_gh`: it downloads `gh_<version>_macOS_<arm64|amd64>.zip` of the pinned gh release and checks it against the SHA-256 that `get.sh` pins from the release's checksums file.
+- `has bun || direct_bun`: it downloads `bun-darwin-<aarch64|x64>.zip` of the pinned Bun release and checks it against the pinned SHA-256 from Bun's `SHASUMS256.txt`, as on Linux.
+- Checksums use `sha256sum` when it is there and `shasum -a 256` otherwise. Python's `zipfile` unpacks the zips. Both binaries go to `~/.local/bin/gh` and `~/.bun/bin/bun`, which `get.sh` puts on `PATH`.
 
 Then, on both systems, `t3_cli` installs the `t3` command from `https://t3.codes/install.sh` with `T3CODE_CHANNEL=nightly`, unless `t3` is on `PATH`. `fetch_engine` fetches the engine at the pinned ref into `~/.local/share/fleet/engine`. `install_packages` runs `bun install --frozen-lockfile --production` there. `link_fleet` writes `~/.local/bin/fleet`, a short script that runs the engine's `fleet`. Its second line is `# Fleet`. When `~/.local/bin/fleet` exists without that line, `get.sh` leaves it as it is and says how to run the engine directly. `login_path` adds one line, once, to the login file of the shell in `$SHELL`. For zsh, the macOS default, and when `$SHELL` is not set, that file is `~/.zprofile`. The line puts `~/.local/bin`, `~/.bun/bin` and `/opt/homebrew/bin` on the login `PATH`, because zsh's default `PATH` has none of them. When it adds the line, `get.sh` says to open a new terminal. With no `--profile`, `get.sh` runs `fleet setup`. Under `curl | sh` it gives `fleet setup` the terminal through `/dev/tty`.
 
@@ -44,8 +46,8 @@ Then, on both systems, `t3_cli` installs the `t3` command from `https://t3.codes
 
 **Tests.**
 
-- `src/get.test.ts › get.sh › on macOS installs Homebrew, gh, and the T3 Code app, then applies the profile`: `brew install gh`, `brew install --cask t3-code`, no `brew install bun` when Bun is there, and the nightly `t3` installer.
-- `src/get.test.ts › get.sh › on macOS with Homebrew present, skips its installer and installs Bun with brew when Bun is missing` (new)
+- `src/get-macos.test.ts › get.sh › on macOS without the T3 Code app, installs Homebrew and the app, then applies the profile`: `brew install --cask t3-code`, no other `brew install`.
+- `src/get-macos.test.ts › get.sh › on macOS downloads gh for the Mac's chip from its pinned release, and refuses a file that does not match the pinned checksum`, and the same for Bun.
 - `src/get.test.ts › get.sh › under curl | sh, hands fleet setup the terminal so it can ask its questions` (new)
 - `src/get.test.ts › get.sh with an existing engine directory › refuses a directory that is not an engine, and an engine with local changes`
 - `src/get.test.ts › get.sh › a second run changes nothing`
@@ -209,10 +211,10 @@ Each step is for a person on a clean macOS user account.
 
 1. Run the public `curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh` in Terminal.
 2. Finish the Command Line Tools window when it opens.
-3. Type the Mac password once when Homebrew asks for it.
+3. Without the T3 Code app only: type the Mac password once when Homebrew asks for it.
 4. Check that `gh`, `bun`, `t3` and `/Applications/T3 Code.app` exist when `get.sh` ends.
 5. Approve the GitHub device code in the browser that setup opens.
-6. After the step "Set up this Mac", check that `claude --version` and `codex --version` work. The Base pack's `claude-cli` step installs Claude, and its `codex-cli-mac` step installs Codex from the Homebrew cask, for the chosen plans only.
+6. After the step "Set up this Mac", check that `claude --version` and `codex --version` work. The Base pack's `claude-cli` step installs Claude, and its `codex-cli` step installs Codex from its release package, for the chosen plans only.
 7. Finish `claude auth login` and `codex login` in the browser.
 8. With a team pack: finish its sign-ins. Its own repo lists what to check.
 9. Before you open T3 Code, check that `~/.t3/userdata/desktop-settings.json` holds `"updateChannel": "nightly"`. Then open T3 Code and check that it starts on the nightly channel with the seeded settings.
@@ -222,9 +224,10 @@ Each step is for a person on a clean macOS user account.
 
 ## Gaps
 
-- **Agent CLIs on the Mac, fixed here.** The Base pack's `claude-cli` and `codex-cli` steps ran only on Linux, so a clean Mac stopped at "Sign in to Claude" with "claude is not installed here". Now `claude-cli` runs on every machine. On the Mac, Codex comes from the Homebrew cask: the `codex-cli-mac` step runs `brew install --cask codex`. The Bun package of Codex starts with a Node launcher, and a clean Mac has no Node. A clean Linux box has no Node either, so the Linux `codex-cli` step runs `fleet install-codex`. It installs the checked release package from Codex's GitHub releases to `~/.local/bin/codex`. Each release unpacks to its own folder in `~/.local/share/fleet/codex/releases`, and the `current` link moves to a new release in one step. One install runs at a time, under a lock. The installer keeps the previous release and every release a running Codex still uses, and removes the others. Each step's check (`claude --version`, `codex --version`) skips a CLI that is already there. Test: `packs/base/base.test.ts` › `installs the agent CLIs on a Mac too, Codex from its Homebrew cask, so a clean Mac without Node can sign in`. A person still has to prove both installers on a clean Mac (step 6 above).
+- **Agent CLIs on the Mac, fixed here.** The Base pack's `claude-cli` and `codex-cli` steps ran only on Linux, so a clean Mac stopped at "Sign in to Claude" with "claude is not installed here". Now `claude-cli` runs on every machine. The Bun package of Codex starts with a Node launcher, and a clean Mac or Linux box has no Node. So the `codex-cli` step runs `fleet install-codex` on both. It installs the checked release package from Codex's GitHub releases to `~/.local/bin/codex`. Each release unpacks to its own folder in `~/.local/share/fleet/codex/releases`, and the `current` link moves to a new release in one step. One install runs at a time, under a lock: `flock` on Linux, and a lock folder on the Mac, which has no `flock`. A later install takes over a lock folder whose process has stopped. The installer keeps the previous release and every release a running Codex still uses, and removes the others. Each step's check (`claude --version`, `codex --version`) skips a CLI that is already there. Tests: `packs/base/base.test.ts` › `installs the agent CLIs on a Mac too, Codex from its release package, so a clean Mac without Node or Homebrew can sign in`, and the Mac tests in `packs/base/lib/install-codex.test.ts`. A person still has to prove both installers on a clean Mac (step 6 above).
 - **Spec step 13 is not built.** No T3 Code app sign-in on the Mac, and no T3 Connect on the Mac. With a team pack's devbox there is no T3 link at all.
 - **No test:** finding the T3 server on the Mac through `ps` and the `.app` bundle (`serverCli` in `src/adapters/t3/session.ts`).
 - **No test:** `open` in place of `xdg-open` on the Mac (`realMachine.openUrl` in `src/setup/commands.ts`). It reads the platform from `node:os`, so a test cannot choose it.
-- **No test:** the skip for an existing `/Applications/T3 Code.app`, and `/opt/homebrew/bin` on `PATH` in `get.sh`. Both use absolute paths that a test cannot make.
+- **No test with the real files:** the pinned gh and Bun zips. The tests serve a wrong file and check the refusal. An agent ran `get.sh` as a fake arm64 Mac on Linux with the real downloads: both checksums matched, and both binaries are Mach-O.
+- **No test:** the skip for an existing `/Applications/T3 Code.app` (the tests stub `open -Ra`), and `/opt/homebrew/bin` on `PATH` in `get.sh`. Both use absolute paths that a test cannot make.
 - **Shell.** The tests run `get.sh` with Linux's `sh`. macOS runs it with its own `/bin/sh`. `sh -n` and the POSIX-only script lower this risk, but only a Mac run proves it.
