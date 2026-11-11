@@ -24,7 +24,7 @@ function stubs(os = "Linux") {
     chmodSync(join(bin, name), 0o755);
   };
   writeFileSync(join(bin, "systemd-run.ts"), systemdRun);
-  stub("systemd-run", `exec bun "${join(bin, "systemd-run.ts")}" "$@"`);
+  stub("systemd-run", `case " $* " in *" --scope "*) while [ "$1" != -- ]; do shift; done; shift; exec "$@" ;; esac\nexec bun "${join(bin, "systemd-run.ts")}" "$@"`);
   stub("systemctl", "exit 0");
   stub("uname", `echo ${os}`);
   return { bin, calls: () => (existsSync(calls) ? readFileSync(calls, "utf8") : "") };
@@ -137,4 +137,41 @@ onLinux("refuses a slot count that is not a whole number above 0", async () => {
     expect(result).toMatchObject({ code: 2, stderr: `Fleet heavy: base.heavySlots must be a whole number above 0, not '${slots}'.\n` });
   }
   expect(calls()).toBe("uname -s\nuname -s\nuname -s\n");
+});
+
+async function startHeavy(extra: Record<string, string>, bin: string, ...args: string[]) {
+  const home = temp.make("home-");
+  const { FLEET_HEAVY_SLOTS: _, ...inherited } = Bun.env;
+  const env = { ...inherited, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(roomy), ...extra };
+  const child = Bun.spawn(["bun", join(import.meta.dir, "../commands/heavy.ts"), ...args], { env, stdout: "pipe", stderr: "pipe" });
+  const reader = child.stdout.getReader();
+  let seen = "";
+  while (!seen.includes("ready\n")) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    seen += new TextDecoder().decode(chunk.value);
+  }
+  return child;
+}
+
+const trapsTerm = 'trap "echo stopped > \\"$0\\"; exit 5" TERM; echo ready; while :; do sleep 0.05; done';
+
+onLinux("passes a stop signal on to the heavy-route handler and exits with its code", async () => {
+  const { bin } = stubs();
+  const stopped = join(bin, "stopped");
+  const handler = join(bin, "route.ts");
+  writeFileSync(handler, `import { writeFileSync } from "node:fs";\nprocess.on("SIGTERM", () => { writeFileSync(${JSON.stringify(stopped)}, "stopped\\n"); process.exit(5); });\nconsole.log("ready");\nsetTimeout(() => process.exit(9), 3000);\n`);
+  const child = await startHeavy({ FLEET_HANDLERS: JSON.stringify({ "heavy-route": handler }) }, bin, "--", "true");
+  child.kill("SIGTERM");
+  expect(await child.exited).toBe(5);
+  expect(readFileSync(stopped, "utf8")).toBe("stopped\n");
+});
+
+onLinux("passes a stop signal on to a command that runs in a slot here", async () => {
+  const { bin } = stubs();
+  const stopped = join(bin, "stopped");
+  const child = await startHeavy({}, bin, "--", "sh", "-c", trapsTerm, stopped);
+  child.kill("SIGTERM");
+  expect(await child.exited).toBe(5);
+  expect(readFileSync(stopped, "utf8")).toBe("stopped\n");
 });
