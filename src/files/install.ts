@@ -27,7 +27,7 @@ async function stat(path: string) {
 }
 
 // Do not follow directory links when writing configuration or ownership records.
-async function checkParents(home: string, target: string) {
+export async function checkParents(home: string, target: string) {
   let parent = dirname(inside(home, target));
   while (parent !== resolve(home)) {
     const info = await stat(parent);

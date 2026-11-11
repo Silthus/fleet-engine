@@ -1,6 +1,6 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { inside } from "../files/install.ts";
+import { checkParents, inside } from "../files/install.ts";
 import { writePrivateFile } from "../files/private.ts";
 
 /** A step with an undo that held on this machine, as it was when it last applied, so Fleet can undo it after it leaves the plan. */
@@ -12,22 +12,29 @@ const isStrings = (value: unknown): value is string[] => Array.isArray(value) &&
 export const ledgerKey = (step: { pack: string; id: string }) => `${step.pack}/${step.id}`;
 
 export async function readLedger(home: string): Promise<LedgerStep[]> {
-  let text: string;
-  try {
-    text = await readFile(inside(home, ledgerPath), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+  await checkParents(home, ledgerPath);
+  const path = inside(home, ledgerPath);
+  const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
     throw error;
-  }
-  const value = JSON.parse(text) as { version?: unknown; steps?: unknown };
+  });
+  if (!info) return [];
+  if (!info.isFile()) throw new Error(`${ledgerPath} must be a regular file`);
+  const value = JSON.parse(await readFile(path, "utf8")) as { version?: unknown; steps?: unknown };
   const valid = (step: Partial<LedgerStep>) =>
     typeof step.pack === "string" && typeof step.id === "string" && isStrings(step.check) && isStrings(step.undo) && (step.after === undefined || typeof step.after === "string") && (step.prerequisite === undefined || isStrings(step.prerequisite));
   if (value.version !== 1 || !Array.isArray(value.steps) || !value.steps.every((step) => step && typeof step === "object" && valid(step))) throw new Error(`${ledgerPath} is not a Fleet step ledger`);
   return value.steps as LedgerStep[];
 }
 
-export async function writeLedger(home: string, steps: LedgerStep[]) {
+/** Records or forgets one step in the ledger as it is on disk now, so another apply's entries survive and each step is kept as soon as it holds. */
+export async function changeLedger(home: string, key: string, step?: LedgerStep) {
+  const steps = await readLedger(home);
+  const kept = steps.filter((item) => ledgerKey(item) !== key);
+  const next = step ? [...kept, step] : kept;
+  const sorted = next.sort((a, b) => ledgerKey(a).localeCompare(ledgerKey(b)));
+  if (JSON.stringify(sorted) === JSON.stringify([...steps].sort((a, b) => ledgerKey(a).localeCompare(ledgerKey(b))))) return;
   const path = inside(home, ledgerPath);
   await mkdir(dirname(path), { recursive: true });
-  await writePrivateFile(path, JSON.stringify({ version: 1, steps: [...steps].sort((a, b) => ledgerKey(a).localeCompare(ledgerKey(b))) }, null, 2) + "\n");
+  await writePrivateFile(path, JSON.stringify({ version: 1, steps: sorted }, null, 2) + "\n");
 }
