@@ -10,7 +10,7 @@ import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGui
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
-import { reviewPrompt } from "./proof-review.ts";
+import { reviewedDiff, reviewPrompt } from "./proof-review.ts";
 import { quietCommitIn } from "./proof-delta.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
@@ -721,7 +721,7 @@ function changedFilesOf(from: string, to: string, run: Run) {
 function diffOf(from: string, to: string, run: Run) {
   const diff = run(["git", "diff", "--no-ext-diff", "--no-textconv", "--no-relative", from, to]);
   if (diff.code !== 0) throw new Error(`Cannot diff ${short(from)}..${short(to)} here (${firstLine(diff.stderr)})`);
-  return diff.stdout;
+  return reviewedDiff(diff.stdout);
 }
 
 function pullRequestDetails(identity: ProofIdentity, run: Run) {

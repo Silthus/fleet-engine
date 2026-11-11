@@ -1,4 +1,5 @@
-import { boxPrefix, checkSession, grant, reap, type Coder } from "./coder.ts";
+import { canBeDevbox, isBoxName } from "../../../src/hub/names.ts";
+import { checkSession, grant, reap, type Coder } from "./coder.ts";
 import { assertBox, link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
 import { quote, requireHub, type Machine } from "./machine.ts";
 import { LockBusy, userWaitMs, withBoxLock } from "./box-lock.ts";
@@ -43,14 +44,13 @@ so the hub links the box to it.`;
 const hubOnly = ["sweep", "reap", "pool", "grant", "nightly", "session"];
 const onHub = ["spawn", "start", "release"];
 const option = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
-const sshName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function caller(args: string[]): { plain: string[]; devbox?: string; valid: boolean } {
   const at = args.indexOf("--for");
   if (at < 0) return { plain: args, valid: true };
   const devbox = args[at + 1] ?? "";
   const plain = [...args.slice(0, at), ...args.slice(at + 2)];
-  return { plain, devbox, valid: onHub.includes(args[0] ?? "") && sshName.test(devbox) && !plain.includes("--for") };
+  return { plain, devbox, valid: onHub.includes(args[0] ?? "") && canBeDevbox(devbox) && !plain.includes("--for") };
 }
 
 function valid(args: string[]): boolean {
@@ -65,7 +65,7 @@ function valid(args: string[]): boolean {
     case "spawn":
       return [name, ...rest].filter((arg) => arg !== undefined).every((arg, index) => arg === "--new" || (index === 0 && !arg.startsWith("--")));
     case "run":
-      return !!name?.startsWith(boxPrefix) && rest[0] === "--" && rest.length > 1;
+      return !!name && isBoxName(name) && rest[0] === "--" && rest.length > 1;
     case "grant":
       return !!name && !name.startsWith("-") && rest.every((flag) => flag === "--if-expiring");
     case "reap":
