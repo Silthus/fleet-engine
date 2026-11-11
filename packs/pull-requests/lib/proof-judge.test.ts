@@ -6,8 +6,8 @@ import { cleanFixtures, lookup, checkout, verdict, fakeModel, reviewHead, decide
 afterEach(cleanFixtures);
 
 test("the user's accepted gap settles its kind even when the judge rejects that kind's evidence, and an unaccepted gap still yields to it", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "new\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
   await reviewHead(pr);
   await pr.fleet("require", "--kinds", "live-run");
   writeFileSync(join(pr.repository, "plan.log"), "Plan: 1 to add, 0 to change\n");
@@ -24,12 +24,12 @@ test("the user's accepted gap settles its kind even when the judge rejects that 
   await pr.fleet("gap", "--kind", "live-run", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
-  expect(accepted.output).toContain(`live-run: gap from ${pr.git("rev-parse", "--short=7", "HEAD")}, accepted ("2026-10-25 "Accept the gap""): Applying needs production access`);
+  expect(accepted.output).toContain(`live-run: gap from ${await pr.git("rev-parse", "--short=7", "HEAD")}, accepted ("2026-10-25 "Accept the gap""): Applying needs production access`);
 });
 
 test("once the mechanical gate passes, the other family's judge weighs the evidence, the review, and the code, and its verdict is cached", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet new members\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
   await reviewHead(pr);
   await pr.fleet("require", "--kinds", "live-run,ui-walk");
   const nit = { rating: "medium" as const, problem: "The name greet is vague", citation: "feature.txt:1" };
@@ -76,8 +76,8 @@ test("once the mechanical gate passes, the other family's judge weighs the evide
 });
 
 test("a judge that keeps failing goes to the arbiter, and only the user's accepted judge gap on HEAD lets the gate pass", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet new members\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
   await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "Docs only");
   fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: ["feature.txt"] } }));
@@ -103,9 +103,9 @@ test("a judge that keeps failing goes to the arbiter, and only the user's accept
 });
 
 test("under the user's standing judge rule, the agent's judge gap on HEAD lets the gate pass with its reason", async () => {
-  const pr = checkout();
+  const pr = await checkout();
   withDecideRule(pr);
-  pr.commit("feature.txt", "greet new members\n");
+  await pr.commit("feature.txt", "greet new members\n");
   await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "Docs only");
   fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: ["feature.txt"] } }));
@@ -120,8 +120,8 @@ test("under the user's standing judge rule, the agent's judge gap on HEAD lets t
 });
 
 test("without a replacement command, the judge runs the reviewer's row of the model table, and names its independence", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet new members\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
   await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "Docs only");
   pr.env.FLEET_PROOF_JUDGE = undefined;
@@ -135,8 +135,8 @@ test("without a replacement command, the judge runs the reviewer's row of the mo
   expect(codex.prompt()).toContain("You judge it from the model family that did not write it");
 
   pr.env.FLEET_MODELS = JSON.stringify([lookup, { role: "review", work: "Review code", provider: "claude", model: "solo-model", effort: "high" }]);
-  pr.commit("feature.txt", "greet every new member\n");
-  await pr.fleet("review-start", "--scope", "fixes", "--base", pr.git("rev-parse", "HEAD~1"));
+  await pr.commit("feature.txt", "greet every new member\n");
+  await pr.fleet("review-start", "--scope", "fixes", "--base", await pr.git("rev-parse", "HEAD~1"));
   await finishRound(pr, "2");
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in this commit.\n");
   await pr.fleet("respond", "--round", "2", "responses.md");
@@ -148,8 +148,8 @@ test("without a replacement command, the judge runs the reviewer's row of the mo
 
 test("after the free judge failures, only an exact CONTINUE from the arbiter keeps the agent trying; no verdict goes to the user", async () => {
   for (const arbiter of ["cat >/dev/null; exit 97", "cat >/dev/null; echo 'CONTINUE is unsafe; ESCALATE instead.'"]) {
-    const pr = checkout();
-    pr.commit("feature.txt", "greet new members\n");
+    const pr = await checkout();
+    await pr.commit("feature.txt", "greet new members\n");
     await reviewHead(pr);
     await pr.fleet("require", "--none", "--reason", "Docs only");
     fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: [] } }));
@@ -165,8 +165,8 @@ test("after the free judge failures, only an exact CONTINUE from the arbiter kee
 });
 
 test("a refusal never waives the judge, typed or chosen in the question tool", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet new members\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
   await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "Docs only");
   fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: ["feature.txt"] } }));
@@ -186,8 +186,8 @@ test("a refusal never waives the judge, typed or chosen in the question tool", a
 });
 
 test("a judge gap on a new commit needs a new answer", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet new members\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
   await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "Docs only");
   fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: ["feature.txt"] } }));
@@ -198,7 +198,7 @@ test("a judge gap on a new commit needs a new answer", async () => {
   expect((await accept()).code).toBe(0);
   expect((await pr.fleet("gate")).code).toBe(0);
 
-  pr.commit("feature.txt", "greet every new member\n");
+  await pr.commit("feature.txt", "greet every new member\n");
   await pr.fleet("gap", "--kind", "judge", "--reason", reason);
   await expect(accept()).rejects.toThrow("Ask the user again");
 });

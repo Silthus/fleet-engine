@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { dirname, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { main } from "../../src/cli.ts";
-import { git, gitEnv, isolateGit, tempDirs } from "../../src/testing/git.ts";
+import { gitEnv, isolateGit, spawnGit, tempDirs } from "../../src/testing/git.ts";
 
 isolateGit();
 
@@ -32,11 +32,11 @@ async function machineWithMemory(notes: Record<string, string>, repo = "me/notes
   return home;
 }
 
-function repoCheckout(home: string, origin: string) {
+async function repoCheckout(home: string, origin: string) {
   const dir = join(home, "code", "checkout");
   mkdirSync(dir, { recursive: true });
-  git(dir, "init", "-q");
-  git(dir, "remote", "add", "origin", origin);
+  await spawnGit(dir, "init", "-q");
+  await spawnGit(dir, "remote", "add", "origin", origin);
   return dir;
 }
 
@@ -67,7 +67,7 @@ describe("memory recall at session start", () => {
 
   test("gives Codex the main index and the index of the repo the session works in", async () => {
     const home = await machineWithMemory(notes);
-    const cwd = repoCheckout(home, "git@github.com:someone/notes-app.git");
+    const cwd = await repoCheckout(home, "git@github.com:someone/notes-app.git");
     const { code, context } = await fire(home, "codex", "SessionStart", { session_id: "s1", cwd, source: "startup" });
     expect(code).toBe(0);
     expect(context).toContain("- [Ask before deleting](ask-before-deleting.md)");
@@ -81,7 +81,7 @@ describe("memory recall at session start", () => {
 
   test("gives Claude only the repo index, since Claude loads the main index itself", async () => {
     const home = await machineWithMemory(notes);
-    const cwd = repoCheckout(home, "git@example.org:notes-app.git");
+    const cwd = await repoCheckout(home, "git@example.org:notes-app.git");
     const { context } = await fire(home, "claude", "SessionStart", { session_id: "s1", cwd: join(cwd), source: "startup" });
     expect(context).toContain("- [Flaky sync test](flaky-sync.md)");
     expect(context).not.toContain("Ask before deleting");
@@ -89,7 +89,7 @@ describe("memory recall at session start", () => {
 
   test("adds nothing again when a session resumes, since it still holds what it was shown", async () => {
     const home = await machineWithMemory(notes);
-    const cwd = repoCheckout(home, "https://github.com/someone/notes-app.git");
+    const cwd = await repoCheckout(home, "https://github.com/someone/notes-app.git");
     expect((await fire(home, "codex", "SessionStart", { session_id: "s1", cwd, source: "startup" })).context).not.toBe("");
     expect(await fire(home, "codex", "SessionStart", { session_id: "s1", cwd, source: "resume" })).toEqual({ code: 0, stderr: "", context: "" });
     expect((await fire(home, "codex", "SessionStart", { session_id: "s1", cwd, source: "compact" })).context).toContain("Flaky sync test");
@@ -103,14 +103,14 @@ describe("memory recall at session start", () => {
 
   test("gives Claude the repo index when the memory has no main index", async () => {
     const home = await machineWithMemory({ "projects/notes-app/INDEX.md": notes["projects/notes-app/INDEX.md"] });
-    const cwd = repoCheckout(home, "https://github.com/someone/notes-app.git");
+    const cwd = await repoCheckout(home, "https://github.com/someone/notes-app.git");
     expect((await fire(home, "claude", "SessionStart", { session_id: "s1", cwd, source: "startup" })).context).toContain("Flaky sync test");
   });
 
   test("keeps a readable index when the other one is broken, and logs only what it showed", async () => {
     const home = await machineWithMemory({ "projects/notes-app/INDEX.md": notes["projects/notes-app/INDEX.md"] });
     mkdirSync(join(home, ".agents/memory/MEMORY.md"));
-    const cwd = repoCheckout(home, "https://github.com/someone/notes-app.git");
+    const cwd = await repoCheckout(home, "https://github.com/someone/notes-app.git");
     const started = await fire(home, "codex", "SessionStart", { session_id: "s1", cwd, source: "startup" });
     expect([started.code, started.context]).toEqual([0, expect.stringContaining("Flaky sync test")]);
     expect(shownLog(home, "s1").map((line) => line.note)).toEqual(["projects/notes-app/INDEX.md"]);
@@ -170,31 +170,31 @@ describe("memory recall on a tool call", () => {
     const home = await machineWithMemory(notes);
     const elsewhere = join(home, "elsewhere");
     mkdirSync(elsewhere);
-    git(elsewhere, "init", "-q");
-    git(elsewhere, "remote", "add", "origin", "https://github.com/someone/other-app.git");
+    await spawnGit(elsewhere, "init", "-q");
+    await spawnGit(elsewhere, "remote", "add", "origin", "https://github.com/someone/other-app.git");
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: elsewhere, ...bash("bun run sync-retry") })).context).toBe("");
-    const cwd = repoCheckout(home, "https://github.com/someone/notes-app.git");
+    const cwd = await repoCheckout(home, "https://github.com/someone/notes-app.git");
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd, ...bash("bun run sync-retry") })).context).toContain("Retry the sync test once.");
   });
 
   test("shows a note that another machine added once the sync brings it", async () => {
     const remoteDir = temp.make("remote-");
     const remote = join(remoteDir, "notes.git");
-    git(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
+    await spawnGit(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
     const other = join(remoteDir, "other");
-    git(remoteDir, "clone", "-q", remote, other);
+    await spawnGit(remoteDir, "clone", "-q", remote, other);
     writeFileSync(join(other, "MEMORY.md"), "# Memory index\n");
-    git(other, "add", "-A");
-    git(other, "commit", "-q", "-m", "seed");
-    git(other, "push", "-q", "origin", "HEAD:main");
+    await spawnGit(other, "add", "-A");
+    await spawnGit(other, "commit", "-q", "-m", "seed");
+    await spawnGit(other, "push", "-q", "origin", "HEAD:main");
     const home = await machineWithMemory({}, `file://${remote}`);
     expect(await fleet(["memory-sync"], home)).toBe(0);
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toBe("");
 
     writeFileSync(join(other, "proof-traps.md"), proofTraps);
-    git(other, "add", "-A");
-    git(other, "commit", "-q", "-m", "a trap");
-    git(other, "push", "-q", "origin", "HEAD:main");
+    await spawnGit(other, "add", "-A");
+    await spawnGit(other, "commit", "-q", "-m", "a trap");
+    await spawnGit(other, "push", "-q", "origin", "HEAD:main");
     expect(await fleet(["memory-sync"], home)).toBe(0);
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Pass full SHAs");
   });
@@ -257,16 +257,16 @@ describe("memory recall on a tool call", () => {
   test("shows the notes of a repo whose memory lives in a subtree, through the same memory folder", async () => {
     const remoteDir = temp.make("remote-");
     const remote = join(remoteDir, "notes.git");
-    git(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
+    await spawnGit(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
     const old = join(remoteDir, "old-machine");
-    git(remoteDir, "clone", "-q", remote, old);
+    await spawnGit(remoteDir, "clone", "-q", remote, old);
     mkdirSync(join(old, "memory"));
     writeFileSync(join(old, "memory/MEMORY.md"), "# Memory index\n");
     writeFileSync(join(old, "memory/proof-traps.md"), proofTraps);
     writeFileSync(join(old, "README.md"), "Shared memory\n");
-    git(old, "add", "-A");
-    git(old, "commit", "-q", "-m", "old layout");
-    git(old, "push", "-q", "origin", "HEAD:main");
+    await spawnGit(old, "add", "-A");
+    await spawnGit(old, "commit", "-q", "-m", "old layout");
+    await spawnGit(old, "push", "-q", "origin", "HEAD:main");
     const home = await machineWithMemory({}, `file://${remote}`, { "memory.subtree": "memory" });
     expect(await fleet(["memory-sync"], home)).toBe(0);
     expect(realpathSync(join(home, ".agents/memory"))).toBe(realpathSync(join(home, ".agents/memory-repo/memory")));

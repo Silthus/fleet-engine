@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitEnv } from "../../../src/testing/git.ts";
+import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
 
@@ -21,7 +22,7 @@ export const models = [lookup, { role: "review", work: "Review Claude's code", p
 
 export const rubric = "# Coding standards\n\n- Keep things simple.";
 
-export function checkout() {
+export async function checkout() {
   const directory = fixture("fleet-proof-checkout-");
   const [home, repository, bin, github] = ["home", "repository", "bin", "github"].map((name) => join(directory, name));
   for (const path of [home, repository, bin, github]) mkdirSync(path);
@@ -58,22 +59,22 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     CLAUDE_CODE_SESSION_ID: "session-under-test", CODEX_THREAD_ID: undefined, FLEET_SETTINGS: JSON.stringify(settings), FLEET_MODELS: JSON.stringify(models),
     FLEET_PROOF_JUDGE: `cat >/dev/null; echo '${verdict()}'`, FLEET_PROOF_JUDGE_MODEL: "judge-under-test",
   };
-  const git = (...args: string[]) => {
-    const result = Bun.spawnSync(["git", ...args], { cwd: repository, env, stdout: "pipe", stderr: "pipe" });
+  const git = async (...args: string[]) => {
+    const result = await spawnAsync(["git", ...args], { cwd: repository, env });
     if (result.exitCode !== 0 && args[0] !== "merge") throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
-    return result.stdout.toString().trim();
+    return result.stdout.trim();
   };
-  const commit = (file: string, content: string) => {
+  const commit = async (file: string, content: string) => {
     writeFileSync(join(repository, file), content);
-    git("add", file);
-    git("commit", "-q", "-m", `Change ${file}`);
+    await git("add", file);
+    await git("commit", "-q", "-m", `Change ${file}`);
     return git("rev-parse", "HEAD");
   };
-  const advanceBase = (file: string, content: string) => {
-    git("checkout", "-q", "main");
-    commit(file, content);
-    git("update-ref", "refs/remotes/origin/main", "HEAD");
-    git("checkout", "-q", "feature");
+  const advanceBase = async (file: string, content: string) => {
+    await git("checkout", "-q", "main");
+    await commit(file, content);
+    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await git("checkout", "-q", "feature");
   };
   const words: ThreadWord[] = [];
   const thread = "mcp:thread-1";
@@ -91,7 +92,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     const context: ProofContext = {
       home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words,
       detach: async (worker) => {
-        if (panel.lostWorkers) return Bun.spawnSync(["true"]).pid;
+        if (panel.lostWorkers) return (await spawnAsync(["true"])).pid;
         await proofCommand([...worker], { ...context, print: () => {} });
         return process.pid;
       },
@@ -105,13 +106,15 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const fleet = (...args: string[]) => fleetIn(repository, ...args);
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
-  git("init", "-q", "-b", "main");
-  git("remote", "add", "origin", "https://github.com/example/product.git");
-  commit("shared.txt", "one\n");
-  git("update-ref", "refs/remotes/origin/main", "HEAD");
-  git("checkout", "-q", "-b", "feature");
+  await git("init", "-q", "-b", "main");
+  await git("remote", "add", "origin", "https://github.com/example/product.git");
+  await commit("shared.txt", "one\n");
+  await git("update-ref", "refs/remotes/origin/main", "HEAD");
+  await git("checkout", "-q", "-b", "feature");
   return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel };
 }
+
+export type Checkout = Awaited<ReturnType<typeof checkout>>;
 
 export const panelGuide = `# QA swarm panel
 
@@ -179,7 +182,7 @@ export function verdict(changes: { proof?: Question; owed?: Question; review?: Q
   });
 }
 
-export function fakeModel(pr: ReturnType<typeof checkout>, role: "REVIEWER" | "JUDGE", answer: string) {
+export function fakeModel(pr: Checkout, role: "REVIEWER" | "JUDGE", answer: string) {
   const prompts = join(pr.home, `${role.toLowerCase()}-prompts`);
   mkdirSync(prompts, { recursive: true });
   const reply = join(pr.home, `${role.toLowerCase()}-answer`);
@@ -191,7 +194,7 @@ export function fakeModel(pr: ReturnType<typeof checkout>, role: "REVIEWER" | "J
   };
 }
 
-export async function reviewHead(pr: ReturnType<typeof checkout>) {
+export async function reviewHead(pr: Checkout) {
   expect((await pr.fleet("review-start", "--scope", "full")).code).toBe(0);
   writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
   expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
@@ -200,17 +203,17 @@ export async function reviewHead(pr: ReturnType<typeof checkout>) {
 
 export const decideRule = "Until 2026-11-26, decide review rounds, judge gaps, and post-deploy-watch gaps yourself.";
 
-export function withDecideRule(pr: ReturnType<typeof checkout>) {
+export function withDecideRule(pr: Checkout) {
   const record = (kinds: string) => `\`fleet proof standing --kind ${kinds} --until 2026-11-26 --rule "${decideRule}"\``;
   writeFileSync(join(pr.home, ".agents/AGENTS.md"), `# Agents\n\n## Skill settings\n\n- ${decideRule} Record it with ${record("review,judge,post-deploy-watch")}, ${record("review")}, or ${record("judge")}.\n`);
 }
 
-export async function finishRound(pr: ReturnType<typeof checkout>, round: string) {
+export async function finishRound(pr: Checkout, round: string) {
   writeFileSync(join(pr.repository, "findings.md"), `Findings of ${round}.\n`);
   await pr.fleet("review-finish", "--round", round, "--reviewer", "gpt-6.1-sol", "findings.md");
 }
 
-export function recordingModel(pr: ReturnType<typeof checkout>, provider: "claude" | "codex", answer: string) {
+export function recordingModel(pr: Checkout, provider: "claude" | "codex", answer: string) {
   const calls = join(pr.home, `${provider}-calls`);
   const reply = provider === "claude" ? `echo '${answer}'` : `for arg in "$@"; do [ "$previous" = "-o" ] && echo '${answer}' > "$arg"; previous="$arg"; done`;
   writeFileSync(join(pr.env.PATH!.split(":")[0]!, provider), `#!/bin/sh\necho "$*" >> "${calls}"\ncat > "${calls}-prompt"\n${reply}\n`, { mode: 0o755 });

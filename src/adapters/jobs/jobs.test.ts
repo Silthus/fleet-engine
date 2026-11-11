@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { Owned, PackJob, Plan } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
 import { tempDirs } from "../../testing/git.ts";
+import { spawnAsync } from "../../testing/spawn.ts";
 import type { CommandRunner } from "../run.ts";
 import { jobsAdapter, type FleetTask, type T3Tasks } from "./adapter.ts";
 
@@ -60,9 +61,9 @@ function outageDropping(os: "darwin" | "linux", id: string, why: { reason: strin
   return { ...plan(os, jobs), packs: [{ name: "base", source: "engine", ref: "main", available: true }, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }], dropped: [{ pack: "base", item: `job ${id}`, ...why }] };
 }
 
-function runDueLines(text: string | undefined, home: string) {
+async function runDueLines(text: string | undefined, home: string) {
   for (const line of (text ?? "").split("\n").filter((entry) => entry && !entry.startsWith("#"))) {
-    Bun.spawnSync(["/bin/sh", "-c", line.replace(/^(\S+\s+){5}/, "")], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+    await spawnAsync(["/bin/sh", "-c", line.replace(/^(\S+\s+){5}/, "")], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
   }
   return existsSync(join(home, "ran")) ? readdirSync(join(home, "ran")).sort() : [];
 }
@@ -92,7 +93,7 @@ describe("cron jobs on Linux", () => {
     await apply(plan("linux", [odd]), { home, adapters: [cron.adapter] });
 
     expect(cron.state.text).toBe(`*/15 * * * * /bin/sh '${home}/.local/state/fleet/jobs/odd.sh' # fleet:odd\n`);
-    const ran = Bun.spawnSync(["/bin/sh", join(home, ".local/state/fleet/jobs/odd.sh")], { env: { PATH: "/nonexistent" } });
+    const ran = await spawnAsync(["/bin/sh", join(home, ".local/state/fleet/jobs/odd.sh")], { env: { PATH: "/nonexistent" } });
     expect(ran.exitCode).toBe(0);
     expect(readFileSync(join(home, ".local/state/fleet/jobs/odd.log"), "utf8")).toBe("50%|a\\%b|two\nlines|it's|");
   });
@@ -149,7 +150,7 @@ describe("cron jobs on Linux", () => {
     const cron = crontab("");
     await apply(plan("linux", [ping("gated"), ping("kept")]), { home, adapters: [cron.adapter] });
     await apply(outageDropping("linux", "gated", checkFails, [ping("kept")]), { home, adapters: [cron.adapter] });
-    expect(runDueLines(cron.state.text, home)).toEqual(["kept"]);
+    expect(await runDueLines(cron.state.text, home)).toEqual(["kept"]);
   });
 
   test("while a source is out, keeps running a job that leaves the plan only because of the outage", async () => {
@@ -157,7 +158,7 @@ describe("cron jobs on Linux", () => {
     const cron = crontab("");
     await apply(plan("linux", [ping("hidden"), ping("kept")]), { home, adapters: [cron.adapter] });
     await apply(outageDropping("linux", "hidden", outageHides, [ping("kept")]), { home, adapters: [cron.adapter] });
-    expect(runDueLines(cron.state.text, home)).toEqual(["hidden", "kept"]);
+    expect(await runDueLines(cron.state.text, home)).toEqual(["hidden", "kept"]);
   });
 
   test("starts a crontab when the user has none, with no T3 precondition", async () => {

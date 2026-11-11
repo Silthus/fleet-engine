@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
@@ -8,8 +9,8 @@ import { withSlot, type PanelIO } from "./proof-panel.ts";
 afterEach(cleanFixtures);
 
 test("fleet proof review --lens runs each PANEL.md lens on its lane's family, and the judge weighs their joined answers as findings captured by fleet", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   const reviewer = fakeModel(pr, "REVIEWER", clean);
   writeFileSync(join(pr.repository, "incidents.md"), "A greeting once leaked a member's email.\n");
@@ -38,8 +39,8 @@ test("fleet proof review --lens runs each PANEL.md lens on its lane's family, an
 });
 
 test("the sweep lens reads the other lenses' findings once they finish, and fleet flags a finding whose anchor is not in the diff", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   const reviewer = fakeModel(pr, "REVIEWER", `FINDINGS:
 - feature.txt:1 | major | Correctness | an empty name -> a blank greeting | guard it | sites: feature.txt:1 | anchor: greet the new member
@@ -59,8 +60,8 @@ COVERED: feature.txt
 });
 
 test("a lens without a FINDINGS block or a full COVERED list runs once more, then keeps the round unfinished until the same command reruns it", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   const reviewer = fakeModel(pr, "REVIEWER", "Looks fine to me.");
 
@@ -85,8 +86,8 @@ test("a lens without a FINDINGS block or a full COVERED list runs once more, the
 });
 
 test("a lens waits for a free panel slot of the machine, and --wait restarts a lens whose worker died", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   fakeModel(pr, "REVIEWER", clean);
   pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "pull-requests.panelSlots": 1 });
@@ -110,9 +111,9 @@ test("a lens waits for a free panel slot of the machine, and --wait restarts a l
 });
 
 test("a lens reads the whole diff from the round directory and REVIEW.md from the tip of the base branch, and its findings need answers, not its COVERED list", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
-  pr.advanceBase("REVIEW.md", "Flag every unchecked webhook signature.\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
+  await pr.advanceBase("REVIEW.md", "Flag every unchecked webhook signature.\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   const claude = recordingModel(pr, "claude", "FINDINGS:\n- feature.txt:1 | high | the greeting names no member\nCOVERED: feature.txt");
 
@@ -133,7 +134,7 @@ test("a lens reads the whole diff from the round directory and REVIEW.md from th
   expect((await pr.fleet("gate")).code).toBe(0);
 });
 
-const exitedPid = () => Bun.spawnSync(["true"]).pid;
+const exitedPid = async () => (await spawnAsync(["true"])).pid;
 
 function slotIO(slotCount: number): PanelIO {
   return { env: {}, pause: () => new Promise((done) => setImmediate(done)), now: () => new Date(), slots: fixture("fleet-panel-slots-"), slotCount, pid: process.pid, limit: 60_000 };
@@ -158,7 +159,7 @@ await withSlot({ env: {}, pause: tick, now: () => new Date(), slots, slotCount: 
 `);
   for (let race = 0; race < 4; race++) {
     for (const name of readdirSync(running).filter((name) => name !== "claim.ts")) rmSync(join(running, name));
-    writeFileSync(join(io.slots, "0"), String(exitedPid()));
+    writeFileSync(join(io.slots, "0"), String(await exitedPid()));
     const claimants = Array.from({ length: 4 }, () => Bun.spawn(["bun", claimant, io.slots, running], { stdout: "ignore", stderr: "inherit" }));
     expect(await Promise.all(claimants.map((child) => child.exited))).toEqual([0, 0, 0, 0]);
     const most = readdirSync(running).filter((name) => name.startsWith("most-")).map((name) => Number(readFileSync(join(running, name), "utf8")));
@@ -171,14 +172,14 @@ test("a reclaimed slot's reviewer stops with it, and a lens records its reviewer
   const io = slotIO(1);
   const reviewer = Bun.spawn(["sleep", "30"], { detached: true });
   try {
-    writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: exitedPid(), token: "dead", reviewer: reviewer.pid }));
+    writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid }));
     await withSlot(io, async () => undefined);
     await reviewer.exited;
     expect(reviewer.signalCode).toBe("SIGKILL");
   } finally { reviewer.kill("SIGKILL"); }
 
-  const pr = checkout();
-  pr.commit("feature.txt", "greet\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   const slots = join(pr.home, ".local/state/fleet/proof/.panel-slots");
   const seen = join(pr.home, "slot-seen");
@@ -188,8 +189,8 @@ test("a reclaimed slot's reviewer stops with it, and a lens records its reviewer
 });
 
 test("--wait stops the reviewer of a lens whose worker died before it restarts the lens", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   fakeModel(pr, "REVIEWER", clean);
   pr.panel.lostWorkers = true;
@@ -199,7 +200,7 @@ test("--wait stops the reviewer of a lens whose worker died before it restarts t
   mkdirSync(slots, { recursive: true });
   const reviewer = Bun.spawn(["sleep", "30"], { detached: true });
   try {
-    writeFileSync(join(slots, "2"), JSON.stringify({ pid: exitedPid(), token: "dead", reviewer: reviewer.pid }));
+    writeFileSync(join(slots, "2"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid }));
     expect((await pr.fleet("review", "--wait")).code).toBe(0);
     await reviewer.exited;
     expect(reviewer.signalCode).toBe("SIGKILL");
@@ -208,8 +209,8 @@ test("--wait stops the reviewer of a lens whose worker died before it restarts t
 });
 
 test("only entries inside a lens's FINDINGS block need answers, not its summary", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   fakeModel(pr, "REVIEWER", "Summary:\n- the change is one line of copy\n\nFINDINGS:\n(none)\nCOVERED: feature.txt\n");
   await pr.fleet("review", "--lens", "correctness");
@@ -221,8 +222,8 @@ test("only entries inside a lens's FINDINGS block need answers, not its summary"
 });
 
 test("a heading inside a lens's FINDINGS block hides none of its findings", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   fakeModel(pr, "REVIEWER", "FINDINGS:\n## High severity\n- feature.txt:1 | high | the greeting names no member\n- feature.txt:1 | high | the greeting skips the team\nCOVERED: feature.txt\n");
   await pr.fleet("review", "--lens", "correctness");

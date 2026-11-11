@@ -1,15 +1,16 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { missesPath, readMisses } from "./proof-misses.ts";
 import { checkout, cleanFixtures, fakeModel, recordingModel, reviewHead, settings } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
 test("fleet proof miss records a case only for a commit that a finished review read, with the diff range that review read", async () => {
-  const pr = checkout();
-  const base = pr.git("rev-parse", "main");
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  const base = await pr.git("rev-parse", "main");
+  await pr.commit("feature.txt", "greet the new member\n");
   const misses = join(pr.home, ".local/state/fleet/proof/misses.jsonl");
   const miss = (...args: string[]) => pr.fleet("miss", "--finding", "The greeting names no member", ...args);
 
@@ -32,8 +33,8 @@ test("fleet proof miss records a case only for a commit that a finished review r
 });
 
 test("fleet proof eval reruns the reviewer on each miss at its commit, scores it with the judge, and compares recall with the previous run", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   await reviewHead(pr);
   await pr.fleet("miss", "--source", "human", "--finding", "The greeting names no member");
@@ -52,7 +53,7 @@ test("fleet proof eval reruns the reviewer on each miss at its commit, scores it
   expect(reviewer.prompts().at(-1)).toContain("+greet the new member");
   expect(reviewer.prompts().at(-1)).toContain("from the model family that did not write it");
   expect(reviewer.prompts().at(-1)).toMatch(/The full diff is in \S+\/diff\.patch;/);
-  expect(pr.git("worktree", "list").split("\n")).toHaveLength(1);
+  expect((await pr.git("worktree", "list")).split("\n")).toHaveLength(1);
 
   pr.env.FLEET_PROOF_EVAL_JUDGE = "echo 'NAMED: the reviewer named it'";
   const second = await pr.fleet("eval", "--case", bot!.id);
@@ -64,8 +65,8 @@ test("fleet proof eval reruns the reviewer on each miss at its commit, scores it
 });
 
 test("an eval records each reviewer in its panel slot, so reclaiming the slot of a dead eval stops its reviewer", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   await reviewHead(pr);
   await pr.fleet("miss", "--source", "human", "--finding", "The greeting names no member");
@@ -74,8 +75,8 @@ test("an eval records each reviewer in its panel slot, so reclaiming the slot of
   pr.panel.onPause = () => new Promise((done) => setImmediate(done));
   const slot = join(pr.home, ".local/state/fleet/proof/.panel-slots/0");
   const [first, seen, block] = ["first", "seen", "block"].map((name) => join(pr.home, name));
-  Bun.spawnSync(["mkfifo", block]);
-  const dead = Bun.spawnSync(["true"]).pid;
+  await spawnAsync(["mkfifo", block]);
+  const dead = (await spawnAsync(["true"])).pid;
   pr.env.FLEET_PROOF_REVIEWER = `cat >/dev/null; if mkdir "${first}" 2>/dev/null; then
 until grep -qs '"reviewer":'$$ "${slot}"; do :; done; cp "${slot}" "${seen}"
 sed 's/"pid":[0-9]*/"pid":${dead}/' "${seen}" > "${slot}.dead"; mv "${slot}.dead" "${slot}"; exec cat "${block}"
@@ -90,8 +91,8 @@ else echo "No findings."; fi`;
 });
 
 test("an eval records its judge in its panel slot, so reclaiming the slot of a dead eval stops its judge", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   await reviewHead(pr);
   await pr.fleet("miss", "--source", "human", "--finding", "The greeting names no member");
@@ -100,8 +101,8 @@ test("an eval records its judge in its panel slot, so reclaiming the slot of a d
   pr.panel.onPause = () => new Promise((done) => setImmediate(done));
   const slot = join(pr.home, ".local/state/fleet/proof/.panel-slots/0");
   const [first, seen, block] = ["first", "seen", "block"].map((name) => join(pr.home, name));
-  Bun.spawnSync(["mkfifo", block]);
-  const dead = Bun.spawnSync(["true"]).pid;
+  await spawnAsync(["mkfifo", block]);
+  const dead = (await spawnAsync(["true"])).pid;
   pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo 'feature.txt:1: the greeting names no member'";
   pr.env.FLEET_PROOF_EVAL_JUDGE = `cat >/dev/null; if mkdir "${first}" 2>/dev/null; then
 until grep -qs '"reviewer":'$$'}' "${slot}"; do :; done; cp "${slot}" "${seen}"
@@ -116,8 +117,8 @@ else echo 'NOT NAMED: no finding is about email'; fi`;
 });
 
 test("without a replacement command, the eval judge runs the lookup row of the model table", async () => {
-  const pr = checkout();
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet the new member\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   await reviewHead(pr);
   await pr.fleet("miss", "--source", "ci", "--finding", "The greeting names no member");
@@ -132,15 +133,15 @@ test("without a replacement command, the eval judge runs the lookup row of the m
 });
 
 test("a miss keeps the range the review read when it was reserved, after the base moves", async () => {
-  const pr = checkout();
-  const base = pr.git("rev-parse", "origin/main");
-  const first = pr.commit("feature.txt", "greet\n");
-  pr.commit("feature.txt", "greet the new member\n");
+  const pr = await checkout();
+  const base = await pr.git("rev-parse", "origin/main");
+  const first = await pr.commit("feature.txt", "greet\n");
+  await pr.commit("feature.txt", "greet the new member\n");
   const head = await reviewHead(pr);
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"))).toMatchObject({ scope: "full", from: base });
 
-  pr.git("update-ref", "refs/remotes/origin/main", first);
-  pr.git("update-ref", "refs/heads/main", first);
+  await pr.git("update-ref", "refs/remotes/origin/main", first);
+  await pr.git("update-ref", "refs/heads/main", first);
   expect((await pr.fleet("miss", "--source", "human", "--finding", "The greeting names no member")).code).toBe(0);
   expect(JSON.parse(readFileSync(join(pr.home, ".local/state/fleet/proof/misses.jsonl"), "utf8").trim())).toMatchObject({ base, head, scope: "full" });
 });

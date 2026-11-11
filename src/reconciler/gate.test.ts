@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { jobsAdapter } from "../adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../cli.ts";
 import type { CommandRunner } from "../adapters/run.ts";
-import { git, isolateGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { fakeSystemd } from "../testing/systemd.ts";
 import { filesAdapter } from "./apply.ts";
 
@@ -103,9 +103,9 @@ test.each(["linux", "darwin"] as const)("on %s, a check that stops passing remov
   const repo = join(temp.make("team-"), "team");
   mkdirSync(join(repo, "packs/team"), { recursive: true });
   writeFileSync(join(repo, "packs/team/pack.json"), JSON.stringify({ schema: 1, name: "team", summary: "Team rules.", jobs: [{ id: "team-watch", command: ["fleet", "packs"], schedule: { every: "always" } }] }));
-  git(repo, "init", "-q", "-b", "main");
-  git(repo, "add", ".");
-  git(repo, "commit", "-q", "-m", "team");
+  await spawnGit(repo, "init", "-q", "-b", "main");
+  await spawnGit(repo, "add", ".");
+  await spawnGit(repo, "commit", "-q", "-m", "team");
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [{ name: "team", repo, ref: "main" }], packs: ["gated", "team"], plan: "claude", settings: {}, workflows: {} }));
   await fleet("apply", "--profile", profile);
   await fleet("gated", "setup");

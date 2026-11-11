@@ -2,35 +2,36 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProfileFile } from "./pack/types.ts";
-import { git, isolateGit, tempDirs } from "./testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "./testing/git.ts";
+import { spawnAsync } from "./testing/spawn.ts";
 import { noticePath, readNotice, update } from "./update.ts";
 
 isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
-function engineRemote(tags: string[]) {
+async function engineRemote(tags: string[]) {
   const dir = temp.make("engine-remote-");
-  git(dir, "init", "-q", "-b", "main");
+  await spawnGit(dir, "init", "-q", "-b", "main");
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "engine" }));
   writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
   for (const tag of tags) {
     writeFileSync(join(dir, "VERSION"), tag);
-    git(dir, "add", ".");
-    git(dir, "commit", "-q", "-m", tag);
-    git(dir, "tag", tag);
+    await spawnGit(dir, "add", ".");
+    await spawnGit(dir, "commit", "-q", "-m", tag);
+    await spawnGit(dir, "tag", tag);
   }
   writeFileSync(join(dir, "VERSION"), "main");
-  git(dir, "commit", "-q", "-am", "main");
+  await spawnGit(dir, "commit", "-q", "-am", "main");
   return dir;
 }
 
-function engineCheckout(remote: string, ref: string) {
+async function engineCheckout(remote: string, ref: string) {
   const dir = temp.make("engine-");
-  git(dir, "init", "-q");
-  git(dir, "remote", "add", "origin", remote);
-  git(dir, "fetch", "-q", "--depth", "1", "origin", ref);
-  git(dir, "checkout", "-q", "--detach", "FETCH_HEAD");
+  await spawnGit(dir, "init", "-q");
+  await spawnGit(dir, "remote", "add", "origin", remote);
+  await spawnGit(dir, "fetch", "-q", "--depth", "1", "origin", ref);
+  await spawnGit(dir, "checkout", "-q", "--detach", "FETCH_HEAD");
   return dir;
 }
 
@@ -44,8 +45,8 @@ async function run(engineDir: string, engine: ProfileFile["engine"], profileDir 
 
 describe("fleet update", () => {
   test("moves the release channel to the newest tag of its major and reports a new major", async () => {
-    const remote = engineRemote(["v0.1.0", "v0.1.1", "v0.2.0", "v1.0.0"]);
-    const result = await run(engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" });
+    const remote = await engineRemote(["v0.1.0", "v0.1.1", "v0.2.0", "v1.0.0"]);
+    const result = await run(await engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 0, applied: 1 });
     expect(result.version).toBe("v0.2.0");
     expect(result.output).toContain("Fleet v1.0.0 is out. It is a new major version, so this update stays on v0.");
@@ -53,44 +54,44 @@ describe("fleet update", () => {
   });
 
   test("clears the notice when no new major exists", async () => {
-    const remote = engineRemote(["v0.1.0", "v0.1.1"]);
-    const result = await run(engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" });
+    const remote = await engineRemote(["v0.1.0", "v0.1.1"]);
+    const result = await run(await engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" });
     expect(result.version).toBe("v0.1.1");
     expect(existsSync(noticePath(result.home))).toBe(false);
   });
 
   test("moves the track channel to main", async () => {
-    const remote = engineRemote(["v0.1.0", "v1.0.0"]);
-    const result = await run(engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "main", channel: "track" });
+    const remote = await engineRemote(["v0.1.0", "v1.0.0"]);
+    const result = await run(await engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "main", channel: "track" });
     expect(result.version).toBe("main");
     expect(result.applied).toBe(1);
   });
 
   test("fast-forwards the profile before it applies", async () => {
-    const remote = engineRemote(["v0.1.0"]);
+    const remote = await engineRemote(["v0.1.0"]);
     const profileRemote = temp.make("profile-remote-");
-    git(profileRemote, "init", "-q", "-b", "main");
+    await spawnGit(profileRemote, "init", "-q", "-b", "main");
     writeFileSync(join(profileRemote, "fleet.json"), "{}\n");
-    git(profileRemote, "add", ".");
-    git(profileRemote, "commit", "-q", "-m", "start");
+    await spawnGit(profileRemote, "add", ".");
+    await spawnGit(profileRemote, "commit", "-q", "-m", "start");
     const profileDir = temp.make("profile-");
-    git(profileDir, "clone", "-q", profileRemote, ".");
+    await spawnGit(profileDir, "clone", "-q", profileRemote, ".");
     writeFileSync(join(profileRemote, "fleet.json"), '{"plan":"claude"}\n');
-    git(profileRemote, "commit", "-q", "-am", "answers");
-    await run(engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" }, profileDir);
+    await spawnGit(profileRemote, "commit", "-q", "-am", "answers");
+    await run(await engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" }, profileDir);
     expect(await Bun.file(join(profileDir, "fleet.json")).text()).toBe('{"plan":"claude"}\n');
   });
 
   test("does not apply when the engine cannot be fetched", async () => {
-    const engineDir = engineCheckout(engineRemote(["v0.1.0"]), "v0.1.0");
-    git(engineDir, "remote", "set-url", "origin", join(temp.make(), "gone"));
+    const engineDir = await engineCheckout(await engineRemote(["v0.1.0"]), "v0.1.0");
+    await spawnGit(engineDir, "remote", "set-url", "origin", join(temp.make(), "gone"));
     const result = await run(engineDir, { repo: "gone", ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 1, applied: 0 });
     expect(result.output).toContain("could not fetch the engine");
   });
 
   test("refuses an engine checkout with local changes", async () => {
-    const engineDir = engineCheckout(engineRemote(["v0.1.0", "v0.1.1"]), "v0.1.0");
+    const engineDir = await engineCheckout(await engineRemote(["v0.1.0", "v0.1.1"]), "v0.1.0");
     writeFileSync(join(engineDir, "VERSION"), "patched");
     const result = await run(engineDir, { repo: "unused", ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 1, applied: 0, output: expect.stringContaining("has local changes") });
@@ -98,73 +99,73 @@ describe("fleet update", () => {
   });
 
   test("follows the profile's engine repository", async () => {
-    const original = engineRemote(["v0.1.0"]);
-    const engineDir = engineCheckout(original, "v0.1.0");
+    const original = await engineRemote(["v0.1.0"]);
+    const engineDir = await engineCheckout(original, "v0.1.0");
     // A moved engine is a fork or mirror, so its tags point at the same commits.
     const moved = temp.make("engine-moved-");
-    git(moved, "clone", "-q", original, ".");
+    await spawnGit(moved, "clone", "-q", original, ".");
     writeFileSync(join(moved, "VERSION"), "v0.2.0");
-    git(moved, "commit", "-q", "-am", "v0.2.0");
-    git(moved, "tag", "v0.2.0");
+    await spawnGit(moved, "commit", "-q", "-am", "v0.2.0");
+    await spawnGit(moved, "tag", "v0.2.0");
     const result = await run(engineDir, { repo: moved, ref: "v0.1.0", channel: "release" });
     expect(result.output).toContain(`The engine now comes from ${moved}.`);
     expect(result.version).toBe("v0.2.0");
   });
 
   test("never moves an engine that is not on a release back to one", async () => {
-    const remote = engineRemote(["v0.1.0"]);
-    const result = await run(engineCheckout(remote, "main"), { repo: remote, ref: "v0.1.0", channel: "release" });
+    const remote = await engineRemote(["v0.1.0"]);
+    const result = await run(await engineCheckout(remote, "main"), { repo: remote, ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 0, applied: 1, output: expect.stringContaining("is not a release, so fleet update does not move it back") });
     expect(result.version).toBe("main");
   });
 
   test("installs the packages the new engine needs before it applies", async () => {
-    const remote = engineRemote(["v0.1.0"]);
-    const engineDir = engineCheckout(remote, "v0.1.0");
+    const remote = await engineRemote(["v0.1.0"]);
+    const engineDir = await engineCheckout(remote, "v0.1.0");
     mkdirSync(join(remote, "dep"));
     writeFileSync(join(remote, "dep", "package.json"), JSON.stringify({ name: "dep", version: "1.0.0" }));
     writeFileSync(join(remote, "package.json"), JSON.stringify({ name: "engine", dependencies: { dep: "file:./dep" } }));
-    expect(Bun.spawnSync([process.execPath, "install"], { cwd: remote, stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+    expect((await spawnAsync([process.execPath, "install"], { cwd: remote })).exitCode).toBe(0);
     writeFileSync(join(remote, "VERSION"), "v0.2.0");
-    git(remote, "add", ".");
-    git(remote, "commit", "-q", "-m", "v0.2.0");
-    git(remote, "tag", "v0.2.0");
+    await spawnGit(remote, "add", ".");
+    await spawnGit(remote, "commit", "-q", "-m", "v0.2.0");
+    await spawnGit(remote, "tag", "v0.2.0");
     const result = await run(engineDir, { repo: remote, ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 0, applied: 1, version: "v0.2.0" });
     expect(existsSync(join(engineDir, "node_modules", "dep", "package.json"))).toBe(true);
-    expect(git(engineDir, "status", "--porcelain")).toBe("");
+    expect(await spawnGit(engineDir, "status", "--porcelain")).toBe("");
   });
 
   test("stops before apply when the engine's packages do not install", async () => {
-    const remote = engineRemote(["v0.1.0"]);
-    const engineDir = engineCheckout(remote, "v0.1.0");
+    const remote = await engineRemote(["v0.1.0"]);
+    const engineDir = await engineCheckout(remote, "v0.1.0");
     writeFileSync(join(remote, "package.json"), JSON.stringify({ name: "engine", dependencies: { missing: "file:./missing" } }));
     writeFileSync(join(remote, "VERSION"), "v0.2.0");
-    git(remote, "commit", "-q", "-am", "v0.2.0");
-    git(remote, "tag", "v0.2.0");
-    const before = git(engineDir, "rev-parse", "HEAD");
+    await spawnGit(remote, "commit", "-q", "-am", "v0.2.0");
+    await spawnGit(remote, "tag", "v0.2.0");
+    const before = await spawnGit(engineDir, "rev-parse", "HEAD");
     const result = await run(engineDir, { repo: remote, ref: "v0.1.0", channel: "release" });
     expect(result).toMatchObject({ code: 1, applied: 0, version: "v0.1.0" });
-    expect(git(engineDir, "rev-parse", "HEAD")).toBe(before);
+    expect(await spawnGit(engineDir, "rev-parse", "HEAD")).toBe(before);
     expect(result.output).toContain(`could not install the engine's packages in ${engineDir}, so the update was rolled back. The engine stays at ${before.slice(0, 7)}.\n`);
   });
 
   test("puts back the old engine's packages when the new engine's install fails halfway", async () => {
-    const remote = engineRemote(["v0.1.0"]);
-    const release = (version: string, dep: string, scripts?: Record<string, string>) => {
+    const remote = await engineRemote(["v0.1.0"]);
+    const release = async (version: string, dep: string, scripts?: Record<string, string>) => {
       mkdirSync(join(remote, "dep"), { recursive: true });
       writeFileSync(join(remote, "dep", "package.json"), JSON.stringify({ name: "dep", version: dep }));
       writeFileSync(join(remote, "package.json"), JSON.stringify({ name: "engine", dependencies: { dep: "file:./dep" }, ...(scripts ? { scripts } : {}) }));
-      expect(Bun.spawnSync([process.execPath, "install", "--ignore-scripts"], { cwd: remote, stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+      expect((await spawnAsync([process.execPath, "install", "--ignore-scripts"], { cwd: remote })).exitCode).toBe(0);
       writeFileSync(join(remote, "VERSION"), version);
-      git(remote, "add", ".");
-      git(remote, "commit", "-q", "-m", version);
-      git(remote, "tag", version);
+      await spawnGit(remote, "add", ".");
+      await spawnGit(remote, "commit", "-q", "-m", version);
+      await spawnGit(remote, "tag", version);
     };
-    release("v0.1.1", "1.0.0");
-    release("v0.2.0", "2.0.0", { postinstall: "exit 1" });
-    const engineDir = engineCheckout(remote, "v0.1.1");
-    expect(Bun.spawnSync([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: engineDir, stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+    await release("v0.1.1", "1.0.0");
+    await release("v0.2.0", "2.0.0", { postinstall: "exit 1" });
+    const engineDir = await engineCheckout(remote, "v0.1.1");
+    expect((await spawnAsync([process.execPath, "install", "--frozen-lockfile", "--production"], { cwd: engineDir })).exitCode).toBe(0);
     const installed = () => JSON.parse(readFileSync(join(engineDir, "node_modules", "dep", "package.json"), "utf8")).version;
     expect(installed()).toBe("1.0.0");
     const result = await run(engineDir, { repo: remote, ref: "v0.1.1", channel: "release" });
@@ -173,8 +174,8 @@ describe("fleet update", () => {
   });
 
   test("stops before apply when the track checkout fails", async () => {
-    const remote = engineRemote(["v0.1.0"]);
-    const engineDir = engineCheckout(remote, "v0.1.0");
+    const remote = await engineRemote(["v0.1.0"]);
+    const engineDir = await engineCheckout(remote, "v0.1.0");
     writeFileSync(join(engineDir, ".git", "index.lock"), "");
     const result = await run(engineDir, { repo: remote, ref: "main", channel: "track" });
     expect(result).toMatchObject({ code: 1, applied: 0, output: expect.stringContaining("could not check out main") });

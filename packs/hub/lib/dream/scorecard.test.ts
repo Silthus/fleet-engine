@@ -1,39 +1,40 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, gitEnv, tempDirs } from "../../../../src/testing/git.ts";
+import { gitEnv, spawnGit, tempDirs } from "../../../../src/testing/git.ts";
+import { spawnAsync } from "../../../../src/testing/spawn.ts";
 import { readMemories, recordRuns, scorecardText, weekOf } from "./scorecard.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 const now = Date.parse("2026-11-05T04:10:00Z");
 
-function memoryRepo() {
+async function memoryRepo() {
   const checkout = temp.make("fleet-memory-");
-  git(checkout, "init", "--quiet", "-b", "main");
-  const commit = (files: Record<string, string>, message: string, date: string) => {
+  await spawnGit(checkout, "init", "--quiet", "-b", "main");
+  const commit = async (files: Record<string, string>, message: string, date: string) => {
     for (const [path, text] of Object.entries(files)) {
       mkdirSync(join(checkout, path, ".."), { recursive: true });
       writeFileSync(join(checkout, path), text);
     }
-    Bun.spawnSync(["git", "add", "-A"], { cwd: checkout, env: gitEnv });
-    Bun.spawnSync(["git", "commit", "--quiet", "-m", message], { cwd: checkout, env: { ...gitEnv, GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date } });
+    await spawnAsync(["git", "add", "-A"], { cwd: checkout, env: gitEnv });
+    await spawnAsync(["git", "commit", "--quiet", "-m", message], { cwd: checkout, env: { ...gitEnv, GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date } });
   };
-  commit({ "MEMORY.md": "# Memory\n- [Tests](tech/run-tests.md)\n", "tech/run-tests.md": "---\nname: run-tests\n---\nRun them.\n" }, "Add: run-tests\n\nTopics: test-first", "2026-10-20T00:00:00Z");
-  commit({ "dreams/2026-10-20.md": "report\n" }, "Report", "2026-10-20T01:00:00Z");
+  await commit({ "MEMORY.md": "# Memory\n- [Tests](tech/run-tests.md)\n", "tech/run-tests.md": "---\nname: run-tests\n---\nRun them.\n" }, "Add: run-tests\n\nTopics: test-first", "2026-10-20T00:00:00Z");
+  await commit({ "dreams/2026-10-20.md": "report\n" }, "Report", "2026-10-20T01:00:00Z");
   return checkout;
 }
 
-const reader = (checkout: string) => async (args: string[]) => git(checkout, ...args) + "\n";
+const reader = (checkout: string) => async (args: string[]) => (await spawnGit(checkout, ...args)) + "\n";
 
 test("readMemories reads each memory with the topics of its commits, and skips the index and the dream reports", async () => {
-  const checkout = memoryRepo();
+  const checkout = await memoryRepo();
   const memories = await readMemories(checkout, reader(checkout));
   expect(memories.map((memory) => [memory.path, [...memory.topics].sort(), memory.addedAt.slice(0, 10)])).toEqual([["tech/run-tests.md", ["run-tests", "test-first"], "2026-10-20"]]);
 });
 
 test("recordRuns copies each analyzed session into the ledger without its text, and the scorecard counts a repeat on a remembered topic", async () => {
-  const checkout = memoryRepo();
+  const checkout = await memoryRepo();
   const state = temp.make("fleet-dream-state-");
   const run = join(state, "2026-10-28");
   mkdirSync(join(run, "digests"), { recursive: true });
