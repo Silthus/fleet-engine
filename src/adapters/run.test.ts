@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Plan } from "../pack/types.ts";
@@ -11,7 +11,13 @@ import { accountHome, directoryHome, passwdHome, spawnRunner, type CommandRunner
 import { t3Adapter } from "./t3/adapter.ts";
 
 const temp = tempDirs();
-afterEach(() => temp.cleanup());
+const leftoverGroups: number[] = [];
+afterEach(() => {
+  temp.cleanup();
+  for (const group of leftoverGroups.splice(0)) {
+    try { process.kill(-group, "SIGKILL"); } catch {}
+  }
+});
 
 describe("the command runner", () => {
   test("runs with the given HOME and without the variables it is told to clear", async () => {
@@ -78,6 +84,26 @@ describe("the command runner", () => {
     } finally {
       try { process.kill(holder); } catch {}
     }
+  });
+
+  test.if(process.platform === "linux")("an interrupt that arrives while the command starts still ends the command's process group", async () => {
+    const held = join(temp.make("fifo-"), "held");
+    expect(await Bun.spawn(["mkfifo", held]).exited).toBe(0);
+    const reader = (createReadStream(held) as unknown as AsyncIterable<Buffer>)[Symbol.asyncIterator]();
+    const runner = Bun.spawn([process.execPath, join(import.meta.dir, "fixtures/early-interrupt-run.ts"), held], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    let output = "";
+    while (!output.includes("\n")) {
+      const next = await reader.next();
+      if (next.done) break;
+      output += next.value.toString();
+    }
+    const group = Number(output.trim());
+    expect(group).toBeGreaterThan(1);
+    leftoverGroups.push(group);
+    expect(await runner.exited).toBe(143);
+    expect(await new Response(runner.stdout).text()).toBe("");
+    for (let next = await reader.next(); !next.done; next = await reader.next()) output += next.value.toString();
+    expect(output).toBe(`${group}\n`);
   });
 
   test("leaves no listener on the signal once the command is done", async () => {
