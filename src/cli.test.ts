@@ -372,6 +372,62 @@ describe("fleet routing", () => {
     expect(existsSync(join(home, ".agents"))).toBe(false);
   });
 
+  describe("a pack that leaves the profile", () => {
+    const box = `const file = Bun.env.HOME + "/box.txt";
+const [arg] = Bun.argv.slice(2);
+if (arg === "on") await Bun.write(file, "on");
+else if (arg === "off") (await import("node:fs")).rmSync(file, { force: true });
+else process.exit((await Bun.file(file).exists()) ? 0 : 1);
+`;
+    function engineWithBox() {
+      const engine = engineWithCommands();
+      cpSync(join(repoRoot, "src"), join(engine, "src"), { recursive: true });
+      cpSync(join(repoRoot, "fleet"), join(engine, "fleet"));
+      symlinkSync(join(repoRoot, "node_modules"), join(engine, "node_modules"));
+      const base = JSON.parse(readFileSync(join(engine, "packs/base/pack.json"), "utf8"));
+      writeFileSync(join(engine, "packs/base/pack.json"), JSON.stringify({ ...base, steps: [] }));
+      writeFileSync(join(engine, "packs/tools/pack.json"), JSON.stringify({ schema: 1, name: "tools", summary: "tools pack.", steps: [{ id: "box", run: ["fleet", "box", "on"], check: ["fleet", "box", "status"], undo: ["fleet", "box", "off"] }] }));
+      writeFileSync(join(engine, "packs/tools/commands/box.ts"), box);
+      return engine;
+    }
+    const drop = (profile: string) => {
+      const file = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
+      writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...file, packs: [] }));
+    };
+    const run = (args: string[], home: string, engine: string, env: Record<string, string> = {}) => main(args, { home, engineRoot: engine, platform: "linux", env, print: () => {} });
+
+    test("has its steps undone by the next apply, through the pack's own command", async () => {
+      const home = temp.make("home-");
+      const engine = engineWithBox();
+      const profile = profileDir(["tools"]);
+      expect(await run(["apply", "--profile", profile], home, engine)).toBe(0);
+      expect(existsSync(join(home, "box.txt"))).toBe(true);
+      drop(profile);
+      expect(await run(["apply"], home, engine)).toBe(0);
+      expect(existsSync(join(home, "box.txt"))).toBe(false);
+      writeFileSync(join(home, "box.txt"), "by hand");
+      expect(await run(["apply"], home, engine)).toBe(0);
+      expect(existsSync(join(home, "box.txt"))).toBe(true);
+    });
+
+    test("runs its command only for a command line of the step that the ledger names", async () => {
+      const home = temp.make("home-");
+      const engine = engineWithBox();
+      const profile = profileDir(["tools"]);
+      expect(await run(["apply", "--profile", profile], home, engine)).toBe(0);
+      drop(profile);
+      expect(await run(["box", "off"], home, engine)).toBe(2);
+      expect(await run(["box", "off"], home, engine, { FLEET_UNDO: "tools/other" })).toBe(2);
+      expect(await run(["box", "off", "--all"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(2);
+      expect(existsSync(join(home, "box.txt"))).toBe(true);
+      expect(await run(["box", "status"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(0);
+      expect(await run(["box", "off"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(0);
+      expect(existsSync(join(home, "box.txt"))).toBe(false);
+      expect(await run(["box", "on"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(2);
+      expect(existsSync(join(home, "box.txt"))).toBe(false);
+    });
+  });
+
   test("names the pack to turn on for a command of a disabled pack", async () => {
     const { home, engine } = await machineWith([]);
     expect(await fleet(["hello"], home, engine)).toMatchObject({ code: 2, output: "fleet hello comes from the Rival Tools pack, which is off. Turn it on with fleet packs." });

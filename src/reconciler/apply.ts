@@ -2,7 +2,7 @@ import { install, plan as planFiles } from "../files/install.ts";
 import { cannotTell } from "../pack/types.ts";
 import type { Action, CatalogEntry, Finding, HumanStep, Owned, PackCheck, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
-import { ledgerKey, readLedger, writeLedger, type LedgerStep } from "./ledger.ts";
+import { ledgerKey, readLedger, undoVariable, writeLedger, type LedgerStep } from "./ledger.ts";
 import { hublessReason } from "./resolve.ts";
 
 export type AdapterContext = { home: string; dryRun: boolean; adopt: string[] };
@@ -13,7 +13,7 @@ export type Adapter = {
   targets(plan: Plan): string[];
   apply(plan: Plan, context: AdapterContext): Promise<AdapterResult>;
 };
-export type Runner = (command: string[]) => Promise<number>;
+export type Runner = (command: string[], env?: Record<string, string>) => Promise<number>;
 /** Fills this machine's credential for each served service: the hub issues its own, and a node pulls its own from the hub. Reports what failed. */
 export type Issuer = (entries: CatalogEntry[], node: string) => Promise<Finding[]>;
 
@@ -102,7 +102,8 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
   }
   for (const { step, cause } of undoItems(plan, before)) {
     if (failed.has(step.pack)) continue;
-    const holds = await undoHeld(step, run);
+    const undoing = undoRunner(run, step);
+    const holds = await undoHeld(step, undoing);
     if (holds === "no") {
       ledger.delete(ledgerKey(step));
       continue;
@@ -117,7 +118,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
       report.actions.push({ target, operation: "remove", reason: `fleet apply would undo it: ${because(step, cause)}` });
       continue;
     }
-    if ((await run(step.undo)) === 0 && !heldCodes.includes(await run(step.check))) {
+    if ((await undoing(step.undo)) === 0 && !heldCodes.includes(await undoing(step.check))) {
       ledger.delete(ledgerKey(step));
       report.actions.push({ target, operation: "remove", reason: because(step, cause) });
       continue;
@@ -286,14 +287,17 @@ function hubFindings(plan: Plan): Finding[] {
 }
 
 function viaEngine(plan: Plan, run: Runner): Runner {
-  return (command) => run(engineCommand(command, plan.engineRoot));
+  return (command, env) => run(engineCommand(command, plan.engineRoot), env);
 }
+
+/** Names the step in FLEET_UNDO, so a nested fleet runs the command of a pack that is off, but only for this step's undo, check and prerequisite. */
+const undoRunner = (run: Runner, step: LedgerStep): Runner => (command) => run(command, { [undoVariable]: ledgerKey(step) });
 
 /** Runs commands with the plan's home directory as HOME, so a step installs into the home it applies to, and with the plan's profile, so a nested fleet reads the profile this run applies or checks. */
 function spawnRunner(home: string, profileDir: string | undefined): Runner {
-  return async (command) => {
+  return async (command, env = {}) => {
     try {
-      return await Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home, ...(profileDir ? { FLEET_PROFILE_DIR: profileDir } : {}) } }).exited;
+      return await Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home, ...(profileDir ? { FLEET_PROFILE_DIR: profileDir } : {}), ...env } }).exited;
     } catch {
       return 127;
     }
