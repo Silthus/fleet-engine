@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git, isolateGit } from "../../src/testing/git.ts";
-import { bash, fire, fleet, machineWithMemory, notes, proofTraps, shownLog, temp } from "./recall-testing.ts";
+import { bash, fire, fleet, notes, proofTraps, recallHarness, shownLog } from "./recall-testing.ts";
 
 isolateGit();
+const { machineWithMemory, temp } = recallHarness();
 
 describe("memory recall on a tool call", () => {
   test("shows the readable notes when another matching note breaks, and the broken one once it is fixed", async () => {

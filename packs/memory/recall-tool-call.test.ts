@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git, gitEnv, isolateGit } from "../../src/testing/git.ts";
-import { type Provider, bash, fire, fleet, installedHook, machineWithMemory, notes, proofTraps, repoCheckout, shownLog, temp } from "./recall-testing.ts";
+import { type Provider, bash, fire, fleet, installedHook, notes, proofTraps, recallHarness, repoCheckout, shownLog } from "./recall-testing.ts";
 
 isolateGit();
+const { machineWithMemory, temp } = recallHarness();
 
 describe("memory recall on a tool call", () => {
   test("shows a note when a call names its trigger, once per session and once per subagent", async () => {

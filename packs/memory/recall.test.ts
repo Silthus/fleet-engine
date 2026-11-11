@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { git, isolateGit } from "../../src/testing/git.ts";
-import { fire, machineWithMemory, repoCheckout, shownLog } from "./recall-testing.ts";
+import { fire, recallHarness, repoCheckout, shownLog } from "./recall-testing.ts";
 
 isolateGit();
+const { machineWithMemory } = recallHarness();
 
 describe("memory recall at session start", () => {
   const notes = {

@@ -5,9 +5,6 @@ import { parse as parseToml } from "smol-toml";
 import { main } from "../../src/cli.ts";
 import { git, gitEnv, tempDirs } from "../../src/testing/git.ts";
 
-export const temp = tempDirs();
-afterEach(() => temp.cleanup());
-
 const engineRoot = join(import.meta.dir, "../..");
 const launcher = join(engineRoot, "fleet");
 export type Provider = "claude" | "codex";
@@ -17,7 +14,14 @@ export async function fleet(args: string[], home: string) {
   return main(args, { home, engineRoot, platform: "linux", env: {}, print: () => {}, run: runFleetStepsOnly });
 }
 
-export async function machineWithMemory(notes: Record<string, string>, repo = "me/notes", extra: Record<string, string> = {}) {
+export function recallHarness() {
+  const temp = tempDirs();
+  afterEach(() => temp.cleanup());
+  const machineWithMemory = (notes: Record<string, string>, repo = "me/notes", extra: Record<string, string> = {}) => memoryMachine(temp, notes, repo, extra);
+  return { temp, machineWithMemory };
+}
+
+async function memoryMachine(temp: ReturnType<typeof tempDirs>, notes: Record<string, string>, repo: string, extra: Record<string, string>) {
   const home = temp.make("home-");
   const profile = temp.make("profile-");
   const settings = { "memory.repo": repo, ...extra };
