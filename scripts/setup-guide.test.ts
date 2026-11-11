@@ -136,7 +136,7 @@ describe("the agent setup guide", () => {
     const order = [
       code.indexOf("fleet devbox add %s\\n' 'coder.<hub>'"),
       code.indexOf(`ssh coder.<hub> 'export PATH="${guidePath}"; fleet hub here'`),
-      code.indexOf("fleet packs --add hub --workflows boxes=off"),
+      code.indexOf("fleet packs --add hub --workflows mcp-gateway=off"),
       code.indexOf(`ssh coder.<hub> 'export PATH="${guidePath}"; fleet update'`),
       code.indexOf("fleet devbox add %s\\n' 'coder.<node>'"),
     ];
