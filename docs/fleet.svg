@@ -2,8 +2,8 @@
   <title id="title">What Fleet sets up</title>
   <desc id="desc">Your Mac runs T3 Code. It links to your devboxes, where agent threads work in their own worktrees. An optional hub shares MCP servers with them. Every machine reads the same private profile repo on GitHub.</desc>
   <style>
-    svg { --bg: #f6f7f9; --surface: #ffffff; --sunk: #eef1f5; --fg: #1c2430; --muted: #5b6676; --accent: #1d4ed8; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
-    @media (prefers-color-scheme: dark) { svg { --bg: #0e141d; --surface: #151d29; --sunk: #1b2533; --fg: #e6ebf2; --muted: #9aa6b8; --accent: #7ea2ff; } }
+    svg { --bg: #eeefe9; --surface: #fdfdf8; --sunk: #e5e7e0; --fg: #151515; --muted: #5c5d56; --accent: #1d4aff; font-family: "IBM Plex Sans", -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    @media (prefers-color-scheme: dark) { svg { --bg: #151515; --surface: #1f1f1f; --sunk: #2c2c2c; --fg: #eeefe9; --muted: #a9aaa2; --accent: #8aa2ff; } }
     .bg { fill: var(--bg); }
     .node { fill: var(--surface); stroke: var(--fg); stroke-width: 1.5; }
     .opt { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 6 5; }

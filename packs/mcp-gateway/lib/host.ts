@@ -9,7 +9,7 @@ export const gatewayKey = credentialName("mcp-gateway");
 type ProfileFacts = { hub?: string; devboxes?: string[] };
 
 const run: Run = async (command, options = {}) => {
-  const child = Bun.spawn(command, { cwd: options.cwd, stdin: options.input === undefined ? "ignore" : new TextEncoder().encode(options.input), stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(command, { cwd: options.cwd, env: process.env, stdin: options.input === undefined ? "ignore" : new TextEncoder().encode(options.input), stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, stdout, stderr };
 };
