@@ -84,12 +84,9 @@ remove_user() {
 pause_cron() {
   for unit in cron.service crond.service; do
     if systemctl is-active --quiet "$unit"; then
-      if systemctl stop "$unit"; then
-        paused_cron=$unit
-        note "stopped $unit, so no scheduled job changes the machine while the proof compares it"
-      else
-        note "could not stop $unit, so a scheduled job may run during the proof"
-      fi
+      paused_cron=$unit
+      systemctl stop "$unit" || die "could not stop $unit. A scheduled job could change the machine between two snapshots."
+      note "stopped $unit, so no scheduled job changes the machine while the proof compares it"
       return
     fi
   done
@@ -97,7 +94,12 @@ pause_cron() {
 
 resume_cron() {
   [ -n "$paused_cron" ] || return 0
-  systemctl start "$paused_cron" && note "started $paused_cron again"
+  if systemctl start "$paused_cron"; then
+    note "started $paused_cron again"
+  else
+    note "could not start $paused_cron again. Start it with: systemctl start $paused_cron"
+    return 1
+  fi
 }
 
 cleanup() {
@@ -106,7 +108,7 @@ cleanup() {
   trap '' HUP INT TERM
   say "Cleanup"
   for entry in $created; do remove_user "${entry%%:*}" "${entry#*:}"; done
-  resume_cron
+  resume_cron || { [ "$code" -ne 0 ] || code=1; }
   if [ -n "$cleanup_failed" ]; then
     note "kept $work, because an account in it is still there"
     [ "$code" -ne 0 ] || code=1
