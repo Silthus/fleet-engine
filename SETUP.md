@@ -113,8 +113,9 @@ Ask in one call:
 
 - **Packs.** One option per preset in `~/.local/share/fleet/engine/presets.json`,
   with its `blurb`, and "One by one". For one by one, ask a multi-select
-  question with the packs below whose row says "Always". The others need a
-  hub that runs, so they come later. Base is always on. The page
+  question with the packs below whose row says "Always", plus those whose
+  row fits their answer in step 4. The others need a hub that runs, so they
+  come later. Base is always on. The page
   [A day with Fleet](https://silthus.github.io/fleet-engine/) shows each pack
   during a workday.
 - **AI plan.** Claude, ChatGPT, or both: it decides the sign-ins and the
@@ -133,7 +134,7 @@ notes of the packs they picked.
 | `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always | `packs/memory/SETUP.md` |
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Always | None |
 | `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always | `packs/guards/SETUP.md` |
-| `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always | `packs/slack/SETUP.md` |
+| `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | With Mac only | `packs/slack/SETUP.md` |
 | `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | Later, once the hub and the node run | None |
 | `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | Later, once the hub runs | None |
 
