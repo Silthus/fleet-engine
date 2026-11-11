@@ -2,6 +2,7 @@ import { install, plan as planFiles } from "../files/install.ts";
 import { cannotTell } from "../pack/types.ts";
 import type { Action, CatalogEntry, Finding, HumanStep, Owned, PackCheck, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
+import { ledgerKey, readLedger, writeLedger, type LedgerStep } from "./ledger.ts";
 import { hublessReason } from "./resolve.ts";
 
 export type AdapterContext = { home: string; dryRun: boolean; adopt: string[] };
@@ -79,36 +80,53 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
   }
   const failed = new Set<string>();
   const waits = waiter(plan, run);
+  const before = await readLedger(options.home);
+  const ledger = new Map(before.map((step) => [ledgerKey(step), step]));
+  const held = (step: Plan["steps"][number]) => {
+    if (step.undo && step.check) ledger.set(ledgerKey(step), ledgerStep(plan, step));
+  };
   for (const step of context.dryRun ? [] : plan.steps) {
     if (failed.has(step.pack) || (await waits(step))) continue;
-    if (step.check && (await run(step.check)) === 0) continue;
+    if (step.check && (await run(step.check)) === 0) {
+      held(step);
+      continue;
+    }
     const ran = (await run(step.run)) === 0;
-    if (ran && (!step.check || (await run(step.check)) === 0)) continue;
+    if (ran && (!step.check || (await run(step.check)) === 0)) {
+      held(step);
+      continue;
+    }
     failed.add(step.pack);
     report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: ran ? `Step ${step.id} of the ${step.pack} pack ran, but does not pass its check.` : `Step ${step.id} of the ${step.pack} pack failed.`, repair: "apply" });
     if (step.pack === "base") report.ok = false;
   }
-  for (const step of plan.undo ?? []) {
+  for (const { step, cause } of undoItems(plan, before)) {
     if (failed.has(step.pack)) continue;
-    const held = await undoHeld(step, run);
-    if (held === "no") continue;
-    if (held !== "yes") {
-      report.findings.push(undoFinding(step, held));
-      if (held === "unknown" && step.pack === "base") report.ok = false;
+    const holds = await undoHeld(step, run);
+    if (holds === "no") {
+      ledger.delete(ledgerKey(step));
+      continue;
+    }
+    if (holds !== "yes") {
+      report.findings.push(undoFinding(step, cause, holds));
+      if (holds === "unknown" && step.pack === "base") report.ok = false;
       continue;
     }
     const target = `step ${step.pack}/${step.id}`;
     if (context.dryRun) {
-      report.actions.push({ target, operation: "remove", reason: `fleet apply would undo it: workflow ${step.workflow} is off` });
+      report.actions.push({ target, operation: "remove", reason: `fleet apply would undo it: ${because(step, cause)}` });
       continue;
     }
-    if ((await run(step.undo!)) === 0 && !heldCodes.includes(await run(step.check!))) {
-      report.actions.push({ target, operation: "remove", reason: `workflow ${step.workflow} is off` });
+    if ((await run(step.undo)) === 0 && !heldCodes.includes(await run(step.check))) {
+      ledger.delete(ledgerKey(step));
+      report.actions.push({ target, operation: "remove", reason: because(step, cause) });
       continue;
     }
-    report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `Fleet could not undo step ${step.id} of the ${step.pack} pack, whose workflow ${step.workflow} is off. The next fleet apply tries again.`, repair: "apply" });
+    report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `Fleet could not undo step ${step.id} of the ${step.pack} pack, ${whose(cause)}. The next fleet apply tries again.`, repair: "apply" });
     if (step.pack === "base") report.ok = false;
   }
+  const after = [...ledger.values()];
+  if (!context.dryRun && JSON.stringify(after) !== JSON.stringify(before)) await writeLedger(options.home, after);
   return report;
 }
 
@@ -124,8 +142,8 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
     if (await waits(step)) continue;
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
   }
-  for (const step of plan.undo ?? []) {
-    if (report.actions.some((action) => action.target === `step ${step.pack}/${step.id}`)) report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `The workflow ${step.workflow} is off, but step ${step.id} of the ${step.pack} pack still holds what it set. Run fleet apply to undo it.`, repair: "apply" });
+  for (const { step, cause } of undoItems(plan, await readLedger(options.home))) {
+    if (report.actions.some((action) => action.target === `step ${step.pack}/${step.id}`)) report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `${stillHolds(step, cause)} Run fleet apply to undo it.`, repair: "apply" });
   }
   for (const step of plan.human) {
     const reported = report.findings.some((finding) => finding.id === `human:${step.id}` && finding.pack === step.pack);
@@ -186,22 +204,49 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
   return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, failedChecks, issued };
 }
 
-type UndoStep = NonNullable<Plan["undo"]>[number];
+type Cause = { workflow: string } | "pack" | "plan";
+type UndoItem = { step: LedgerStep; cause: Cause };
 type Held = "yes" | "no" | "waits" | "unsure" | "unknown";
 
 const heldCodes = [0, cannotTell];
 
-async function undoHeld(step: UndoStep, run: Runner): Promise<Held> {
-  const code = await run(step.check!);
+function ledgerStep(plan: Plan, step: Plan["steps"][number]): LedgerStep {
+  const prerequisite = step.after ? plan.human.find((human) => human.pack === step.pack && human.id === step.after)?.probe : undefined;
+  return { pack: step.pack, id: step.id, check: step.check!, undo: step.undo!, ...(step.after ? { after: step.after } : {}), ...(prerequisite ? { prerequisite } : {}) };
+}
+
+/** The steps to undo: those whose workflow is off while their pack is on, and those the ledger holds that left the plan, except in a pack the profile lists but cannot load. */
+function undoItems(plan: Plan, ledger: LedgerStep[]): UndoItem[] {
+  const fromPlan = (plan.undo ?? []).map((step) => ({ step: { ...ledgerStep(plan, step), ...(step.prerequisite ? { prerequisite: step.prerequisite } : {}) }, cause: { workflow: step.workflow! } }));
+  const planned = new Set([...plan.steps, ...(plan.undo ?? [])].map(ledgerKey));
+  const listed = new Set(plan.packs.map((pack) => pack.name));
+  const unloaded = new Set(plan.packs.filter((pack) => !pack.available).map((pack) => pack.name));
+  const fromLedger = ledger.filter((step) => !planned.has(ledgerKey(step)) && !unloaded.has(step.pack)).map((step) => ({ step, cause: listed.has(step.pack) ? ("plan" as const) : ("pack" as const) }));
+  return [...fromPlan, ...fromLedger];
+}
+
+const because = (step: LedgerStep, cause: Cause) => (cause === "pack" ? `the ${step.pack} pack is off` : cause === "plan" ? "this machine no longer plans it" : `workflow ${cause.workflow} is off`);
+const whose = (cause: Cause) => (cause === "pack" ? "which is off" : cause === "plan" ? "now that this machine no longer plans it" : `whose workflow ${cause.workflow} is off`);
+const though = (cause: Cause) => (cause === "pack" ? "the pack is off" : cause === "plan" ? "this machine no longer plans it" : `its workflow ${cause.workflow} is off`);
+
+function stillHolds(step: LedgerStep, cause: Cause) {
+  const what = `step ${step.id} of the ${step.pack} pack`;
+  if (cause === "pack") return `The ${step.pack} pack is off, but ${what} still holds what it set.`;
+  if (cause === "plan") return `This machine no longer plans ${what}, but it still holds what it set.`;
+  return `The workflow ${cause.workflow} is off, but ${what} still holds what it set.`;
+}
+
+async function undoHeld(step: LedgerStep, run: Runner): Promise<Held> {
+  const code = await run(step.check);
   if (!heldCodes.includes(code)) return "no";
   const waits = step.after !== undefined && !(step.prerequisite && (await run(step.prerequisite)) === 0);
   if (code === 0) return waits ? "waits" : "yes";
   return waits ? "unsure" : "unknown";
 }
 
-function undoFinding(step: UndoStep, held: Exclude<Held, "yes" | "no">): Finding {
+function undoFinding(step: LedgerStep, cause: Cause, held: Exclude<Held, "yes" | "no">): Finding {
   const id = `undo:${step.id}`;
-  if (held === "unknown") return { id, pack: step.pack, say: `Fleet cannot tell whether step ${step.id} of the ${step.pack} pack still holds what it set, though its workflow ${step.workflow} is off.`, repair: "apply" };
+  if (held === "unknown") return { id, pack: step.pack, say: `Fleet cannot tell whether step ${step.id} of the ${step.pack} pack still holds what it set, though ${though(cause)}.`, repair: "apply" };
   const say = `Step ${step.id} of the ${step.pack} pack waits for ${step.after} before Fleet can undo it.`;
   return held === "waits" ? { id, pack: step.pack, say, repair: "human" } : { id, pack: step.pack, say };
 }
