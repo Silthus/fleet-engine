@@ -24,10 +24,12 @@ export type TriggerDeps = {
   launch: Launch;
 };
 
+const withoutSkinTone = (reaction: string) => reaction.split("::")[0];
+
 export function triggerOf(event: Record<string, any>, owner: Owner): Trigger | undefined {
   if (event.user !== owner.slackUserId) return undefined;
   if (event.type === "reaction_added") {
-    return event.reaction === owner.emoji && event.item?.type === "message" ? { kind: "reaction", channel: event.item.channel, ts: event.item.ts } : undefined;
+    return withoutSkinTone(String(event.reaction ?? "")) === owner.emoji && event.item?.type === "message" ? { kind: "reaction", channel: event.item.channel, ts: event.item.ts } : undefined;
   }
   if (event.type === "app_mention") return { kind: "message", channel: event.channel, ts: event.ts };
   if (event.type === "message" && event.subtype === undefined && String(event.text ?? "").includes(`:${owner.emoji}:`)) {

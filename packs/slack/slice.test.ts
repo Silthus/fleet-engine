@@ -7,7 +7,7 @@ import { main, type CliOptions } from "../../src/cli.ts";
 import { startT3Stub } from "../../src/integrations/t3/testing.ts";
 import { filesAdapter } from "../../src/reconciler/apply.ts";
 import { secretStore } from "../../src/runner/context.ts";
-import { tempDirs } from "../../src/testing/git.ts";
+import { spawnGit, tempDirs } from "../../src/testing/git.ts";
 import { fakeSystemd } from "../../src/testing/systemd.ts";
 import { startSlackStub } from "./testing.ts";
 
@@ -105,7 +105,7 @@ async function hub() {
   };
   const minute = () => minutes.splice(0).forEach((resolve) => resolve());
   const trigger = () => systemd.service(home, "slack-trigger");
-  return { home, profile, slack, liveApps, t3, fleet, setup, minute, trigger };
+  return { home, profile, slack, liveApps, t3, fleet, setup, minute, trigger, started: () => systemd.started("slack-trigger") };
 }
 
 test("setup installs the trigger, an owner's message starts one thread, and after a lost answer the restarted trigger posts its link once", async () => {
@@ -154,6 +154,41 @@ test("setup installs the trigger, an owner's message starts one thread, and afte
   expect(launched.signalCode).toBe("SIGTERM");
   expect((await fleet("apply")).lines.join("\n")).toContain(todo);
   expect(trigger()).toBe("gone");
+});
+
+async function pushedFrom(profile: string) {
+  const remote = temp.make("remote-");
+  await spawnGit(remote, "init", "-q", "--bare", "-b", "main");
+  await spawnGit(profile, "init", "-q", "-b", "main");
+  await spawnGit(profile, "config", "user.name", "Test");
+  await spawnGit(profile, "config", "user.email", "test@example.com");
+  await spawnGit(profile, "add", "fleet.json");
+  await spawnGit(profile, "commit", "-q", "-m", "Start");
+  await spawnGit(profile, "remote", "add", "origin", remote);
+  await spawnGit(profile, "push", "-q", "-u", "origin", "main");
+}
+
+test("fleet set slack.emoji restarts the trigger, and the trigger then starts a thread from that emoji and not from :t3code:", async () => {
+  const { home, profile, slack, t3, fleet, setup, minute, started } = await hub();
+  await pushedFrom(profile);
+  await fleet("apply", "--profile", profile);
+  await setup(firstApp);
+  const before = started();
+
+  expect((await fleet("set", "slack.emoji=:eye:")).code).toBe(0);
+  expect(started()).toBe(before + 1);
+
+  const serving = fleet("run", "slack/slack-trigger");
+  await slack.connected();
+  slack.send({ type: "message", user: ownerId, channel: "C1", ts: "100.1", text: "the build is red :t3code:" });
+  slack.send({ type: "reaction_added", user: ownerId, reaction: "eye", item: { type: "message", channel: "C1", ts: "100.1" } });
+  await slack.until(() => slack.method("chat.postEphemeral").length === 1);
+  rmSync(join(home, ".config/fleet/secrets/slack/app"));
+  minute();
+  await serving;
+
+  expect(t3.threads).toHaveLength(1);
+  expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")!.payload).toMatchObject({ initialMessage: { text: expect.stringContaining("Nora Example reacted with :eye: to a Slack message.") } });
 });
 
 test("fleet slack-trigger names the Slack pack when the pack is off", async () => {

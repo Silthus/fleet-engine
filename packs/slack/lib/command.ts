@@ -34,6 +34,7 @@ export const usage = "Usage: fleet slack-trigger manifest | setup | check | laun
 
 export const appSecret = "app";
 const memberId = /^[UW][A-Z0-9]+$/;
+const emojiNamePattern = /^[^\s:]+$/;
 
 export function everyOn(sleep: Sleep): Every {
   return (work, ms) => {
@@ -53,7 +54,13 @@ export async function ownerOf(deps: Pick<SlackCommandDeps, "slackUserId" | "slac
   if (!memberId.test(slackUserId)) throw new Error(`slack.userId is ${JSON.stringify(slackUserId)}, not a Slack member ID such as U012ABCDEF. Set it with fleet set slack.userId=<your member ID>.`);
   const name = (await run(["git", "config", "--get", "user.name"])).stdout.trim();
   if (!name) throw new Error("Git has no user.name, which names your Slack app. Run fleet apply after gh auth login, so Fleet sets your Git identity.");
-  return { name, slackUserId, emoji: deps.slackEmoji() };
+  return { name, slackUserId, emoji: emojiName(deps.slackEmoji()) };
+}
+
+function emojiName(value: string): string {
+  const name = value.trim().replace(/^:(.*):$/, "$1");
+  if (!emojiNamePattern.test(name)) throw new Error(`slack.emoji is ${JSON.stringify(value)}, not a Slack emoji name such as eye or +1. Set it with fleet set slack.emoji=<name>.`);
+  return name;
 }
 
 const roomHere = (deps: SlackCommandDeps) => startRoom(deps.home, deps.env, deps.freeBytes ?? freeBytes);

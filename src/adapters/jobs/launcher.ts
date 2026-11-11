@@ -8,6 +8,7 @@ export const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 
 const session = '[ -r "$HOME/.config/fleet/session.sh" ] && . "$HOME/.config/fleet/session.sh"';
 
-export function launcherScript(command: string[], path: string, log: string) {
-  return ["#!/bin/sh", `PATH=${quote(path)}`, "export PATH", session, `exec ${command.map(quote).join(" ")} >>${quote(log)} 2>&1`, ""].join("\n");
+export function launcherScript(command: string[], path: string, log: string, settings?: string) {
+  const stamp = settings === undefined ? [] : [`# settings ${settings}`];
+  return ["#!/bin/sh", ...stamp, `PATH=${quote(path)}`, "export PATH", session, `exec ${command.map(quote).join(" ")} >>${quote(log)} 2>&1`, ""].join("\n");
 }

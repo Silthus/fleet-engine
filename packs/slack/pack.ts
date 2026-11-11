@@ -27,7 +27,7 @@ export default {
       key: "slack.emoji",
       type: "string",
       default: "t3code",
-      question: "Which Slack emoji starts a thread? Give its name without colons, such as eye.",
+      question: "Which Slack emoji starts a thread? Give its name, such as eye or +1.",
     });
     const threads = fleet.workflow({
       id: "slack-thread",
