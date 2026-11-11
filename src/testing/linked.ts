@@ -11,6 +11,7 @@ import { fakeSsh, remoteFleet, type Host } from "./ssh.ts";
 const repoRoot = join(import.meta.dir, "../..");
 export const hubMachine: MachineFile = { schema: 1, role: "linux", name: "hub-1" };
 export const nodeMachine: MachineFile = { schema: 1, role: "devbox", coder: true, name: "node-2" };
+export const macMachine: MachineFile = { schema: 1, role: "mac", name: "laptop-3" };
 
 /** A hub and a node on one profile with the issued fixture pack, each on its own temporary home, and an ssh between them that runs its remote line in a shell. port moves the issued service off its fixture port, and nodeClock is the clock the node runs on. */
 export function linkedFleets(temp: ReturnType<typeof tempDirs>, port?: number, nodeClock?: Clock) {
@@ -23,14 +24,14 @@ export function linkedFleets(temp: ReturnType<typeof tempDirs>, port?: number, n
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["issued"], plan: "claude", settings: {}, workflows: {}, hub: "hub-1", devboxes: ["node-2"] }));
   const hosts: Record<string, Host | "down"> = {};
   const ssh = fakeSsh(temp.make("ssh-"), hosts);
-  const machine = (saved: MachineFile, clock?: Clock) => {
+  const machine = (saved: MachineFile, clock?: Clock, platform: NodeJS.Platform = "linux") => {
     const home = temp.make("home-");
     mkdirSync(join(home, ".config/fleet"), { recursive: true });
     writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...saved, profileDir: profile }));
     const options: CliOptions = {
       home,
       engineRoot: engine,
-      platform: "linux",
+      platform,
       env: {},
       print: () => {},
       hostname: () => saved.name!,
@@ -48,5 +49,5 @@ export function linkedFleets(temp: ReturnType<typeof tempDirs>, port?: number, n
   };
   const hub = machine(hubMachine);
   hosts["hub-1"] = hub.fleet;
-  return { hub: hub.typed, hubFleet: hub.fleet, node: machine(nodeMachine, nodeClock).typed, other: (saved: MachineFile) => machine(saved).typed, hosts, profile };
+  return { hub: hub.typed, hubFleet: hub.fleet, node: machine(nodeMachine, nodeClock).typed, other: (saved: MachineFile) => machine(saved).typed, mac: () => machine(macMachine, undefined, "darwin").typed, hosts, profile };
 }

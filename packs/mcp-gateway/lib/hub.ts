@@ -14,7 +14,6 @@ export type Hub = {
   uid: number;
   gid: number;
   hubName: () => string;
-  devboxes: () => Promise<string[]>;
   gateway: GatewaySettings;
   run: Run;
   fetch: Fetch;
@@ -161,11 +160,8 @@ export async function syncWhenReady(hub: Hub) {
   }
 }
 
-/** Finds or makes the gateway key of one machine that the profile names, and returns its token. */
+/** Finds or makes the gateway key of one machine, and returns its token. */
 export async function issueKey(machine: string, hub: Hub) {
-  const hubName = hub.hubName();
-  const devboxes = await hub.devboxes();
-  if (machine !== hubName && !devboxes.includes(machine)) throw new Error(`Name the hub (${hubName}) or a devbox from your profile: ${devboxes.join(", ") || "none"}.`);
   const settings = await installedSettings(hub);
   const call = api(hub, settings);
   await syncGatewayGroup(call, hub.home);
