@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 
@@ -101,7 +102,7 @@ onLinux("takes the slot count from FLEET_HEAVY_SLOTS over the setting", async ()
   chmodSync(sleeper, 0o755);
   const result = await heavyWith(env, bin, roomy, "--", "true");
   busy.kill();
-  expect(result.stderr).toContain("Fleet heavy: 1 heavy jobs run already");
+  expect(result.stderr).toContain("this job is number 1 of 1 in the queue");
 });
 
 function routeHandler(bin: string) {
@@ -174,4 +175,74 @@ onLinux("passes a stop signal on to a command that runs in a slot here", async (
   child.kill("SIGTERM");
   expect(await child.exited).toBe(5);
   expect(readFileSync(stopped, "utf8")).toBe("stopped\n");
+});
+
+async function holdSlot(locks: string, slot: number) {
+  mkdirSync(locks, { recursive: true });
+  const job = Bun.spawn(["sh", "-c", 'exec 9>"$1"; flock -n 9 && echo locked && exec tail -f /dev/null', "sh", join(locks, `slot-${slot}`)], { stdout: "pipe" });
+  await job.stdout.getReader().read();
+  return job;
+}
+
+onLinux("names the job that holds each slot with its age, frees a slot whose job is gone, and lists live waiting jobs oldest first", async () => {
+  const { bin } = stubs();
+  const runtime = temp.make("runtime-");
+  const locks = join(runtime, "fleet-heavy");
+  const job = await holdSlot(locks, 1);
+  try {
+    const seconds = Math.floor(Date.now() / 1000);
+    writeFileSync(join(locks, "slot-1.holder"), `pid=${job.pid}\nstart=${seconds - 125}\nthread=thread-1\ndir=/work/one\ncommand=bun run test\n`);
+    writeFileSync(join(locks, "slot-2.holder"), `pid=999999999\nstart=${seconds - 10}\nthread=\ndir=/work/two\ncommand=bun run typecheck\n`);
+    writeFileSync(join(locks, `wait-${seconds - 60}-${process.pid}`), `pid=${process.pid}\nstart=${seconds - 60}\nthread=\ndir=/work/three\ncommand=pytest\n`);
+    writeFileSync(join(locks, `wait-${seconds - 90}-999999999`), "pid=999999999\n");
+    const result = await heavyWith({ XDG_RUNTIME_DIR: runtime }, bin, roomy, "--holders");
+    expect(result).toMatchObject({ code: 0, stderr: "" });
+    expect(result.stdout).toBe([
+      `Fleet heavy slots on ${hostname()}:`,
+      `  slot 1: pid ${job.pid}, 2m, thread thread-1, in /work/one: bun run test`,
+      "  slot 2: free",
+      "Waiting, oldest first:",
+      `  pid ${process.pid}, 1m, in /work/three: pytest`,
+      "",
+    ].join("\n"));
+    expect(existsSync(join(locks, "slot-2.holder"))).toBe(false);
+    expect(existsSync(join(locks, `wait-${seconds - 90}-999999999`))).toBe(false);
+  } finally {
+    job.kill();
+  }
+});
+
+onLinux("names a process that still holds a slot after the job that started it exited", async () => {
+  const { bin } = stubs();
+  const runtime = temp.make("runtime-");
+  const locks = join(runtime, "fleet-heavy");
+  const orphan = await holdSlot(locks, 1);
+  try {
+    writeFileSync(join(locks, "slot-1.holder"), `pid=999999999\nstart=${Math.floor(Date.now() / 1000) - 125}\nthread=\ndir=/work/one\ncommand=bun run test\n`);
+    const result = await heavyWith({ XDG_RUNTIME_DIR: runtime, FLEET_HEAVY_SLOTS: "1" }, bin, roomy, "--holders");
+    expect(result.stdout).toStartWith(`Fleet heavy slots on ${hostname()}:\n  slot 1: the job exited, but a process it started holds the slot: pid ${orphan.pid}, `);
+    expect(result.stdout).toEndWith(`tail -f /dev/null. The job was pid 999999999, 2m, in /work/one: bun run test\nNo job waits.\n`);
+  } finally {
+    orphan.kill();
+  }
+});
+
+onLinux("says so when no heavy job ran here yet", async () => {
+  const { bin } = stubs();
+  expect(await heavyWith({ XDG_RUNTIME_DIR: temp.make("runtime-") }, bin, roomy, "--holders")).toMatchObject({ code: 0, stdout: "Fleet heavy: no job has run here yet.\n" });
+});
+
+onLinux("waits behind a job that queued first, even with a free slot, and says its place in the queue", async () => {
+  const { bin } = stubs();
+  const runtime = temp.make("runtime-");
+  const locks = join(runtime, "fleet-heavy");
+  mkdirSync(locks);
+  const seconds = Math.floor(Date.now() / 1000);
+  writeFileSync(join(locks, `wait-${seconds - 60}-${process.pid}`), `pid=${process.pid}\nstart=${seconds - 60}\nthread=\ndir=/work/one\ncommand=pytest\n`);
+  writeFileSync(join(bin, "sleep"), "#!/bin/sh\nexit 9\n");
+  chmodSync(join(bin, "sleep"), 0o755);
+  const result = await heavyWith({ XDG_RUNTIME_DIR: runtime, FLEET_HEAVY_SLOTS: "1" }, bin, roomy, "--", "sh", "-c", "echo built");
+  expect(result.stdout).toBe("");
+  expect(result.stderr).toStartWith("Fleet heavy: waiting for one of 1 slots; this job is number 2 of 2 in the queue and waited 0s so far. The slots:\n  slot 1: free\n");
+  expect(readdirSync(locks).filter((name) => name.startsWith("wait-"))).toEqual([`wait-${seconds - 60}-${process.pid}`]);
 });
