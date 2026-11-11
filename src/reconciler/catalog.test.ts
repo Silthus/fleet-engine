@@ -6,6 +6,7 @@ import { main, type CliOptions } from "../cli.ts";
 import { loadPacks } from "../pack/manifest.ts";
 import type { AiPlan, MachineFile, Plan, Profile } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
+import { engineSteps } from "../testing/packs.ts";
 import { filesAdapter } from "./apply.ts";
 import { resolve } from "./resolve.ts";
 
@@ -102,7 +103,7 @@ describe("fleet.config", () => {
       env: {},
       print: () => {},
       hostname: () => saved.name!,
-      run: async (command) => (command[0] === "/bin/sh" && command[1] === join(dir, "fleet") ? main(command.slice(2), options) : 0),
+      run: engineSteps(dir, (args) => main(args, options)),
       adapters: () => [filesAdapter, providerConfigAdapter({ run: async () => ({ code: 0, stdout: "" }) })],
     };
     const codex = () => {

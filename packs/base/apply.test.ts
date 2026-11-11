@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { cargoGitCliCommand } from "./lib/cargo-git-cli.ts";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -12,6 +12,8 @@ import { spawnAsync } from "../../src/testing/spawn.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
+const shared = tempDirs();
+afterAll(() => shared.cleanup());
 
 const engineRoot = join(import.meta.dir, "../..");
 const launcher = join(engineRoot, "fleet");
@@ -27,6 +29,19 @@ async function fleet(args: string[], home: string): Promise<{ code: number; outp
   const runFleetStepsOnly = async (command: string[]) => (command[1] === launcher ? (await fleet(command.slice(2), home)).code : 0);
   const code = await main(args, { home, engineRoot, platform: "linux", env: {}, print: (line) => lines.push(line), run: runFleetStepsOnly });
   return { code, output: lines.join("\n") };
+}
+
+let firstApply: Promise<{ dir: string; code: number }> | undefined;
+
+async function appliedHome() {
+  firstApply ??= (async () => {
+    const dir = shared.make("home-");
+    return { dir, code: (await fleet(["apply", "--profile", profileWith({}, shared.make("profile-"))], dir)).code };
+  })();
+  const { dir, code } = await firstApply;
+  const home = temp.make("home-");
+  cpSync(dir, home, { recursive: true });
+  return { home, code };
 }
 
 const emptyPlan: Plan = {
@@ -78,8 +93,8 @@ describe("the Base pack's hook events", () => {
     ["codex", "SessionStart", { hook_event_name: "SessionStart", source: "startup" }],
     ["codex", "PreToolUse", { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls" } }],
   ] as const)("a %s %s input reaches a pack's hook through the dispatcher", async (provider, event, input) => {
-    const home = temp.make("home-");
-    expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
+    const { home, code } = await appliedHome();
+    expect(code).toBe(0);
     addFixtureHook(home, event);
     expect(await fire(home, installedHook(home, provider, event), input)).toEqual({ code: 0, stdout: `${provider} saw ${JSON.stringify(input)}` });
   });
@@ -112,9 +127,7 @@ describe("the Linux session", () => {
   });
 
   test("a second apply adds no second line, and a home without bash files gets .bashrc and .profile", async () => {
-    const home = temp.make("home-");
-    const profile = profileWith();
-    await fleet(["apply", "--profile", profile], home);
+    const { home } = await appliedHome();
     const first = { bashrc: read(home, ".bashrc"), profile: read(home, ".profile") };
     await fleet(["apply"], home);
     expect({ bashrc: read(home, ".bashrc"), profile: read(home, ".profile") }).toEqual(first);
@@ -142,24 +155,21 @@ describe("the Linux session", () => {
   });
 
   test("a bus address and runtime folder that are already set stay, and sourcing twice adds Fleet's folders to PATH once", async () => {
-    const home = temp.make("home-");
-    await fleet(["apply", "--profile", profileWith()], home);
+    const { home } = await appliedHome();
     const twice = '. "$HOME/.config/fleet/session.sh"; . "$HOME/.config/fleet/session.sh"; printf "%s|%s|%s" "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" "$PATH"';
     const set = { XDG_RUNTIME_DIR: "/run/custom", DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/custom/other-bus" };
     expect(await shell(home, ["/bin/sh", "-c", twice], set)).toBe(`/run/custom|unix:path=/run/custom/other-bus|${home}/.local/bin:${home}/.bun/bin:/usr/bin:/bin`);
   });
 
   test("a session turns off agent-browser's Chrome version check, which fetches a web page on each start, and keeps a value the person set", async () => {
-    const home = temp.make("home-");
-    await fleet(["apply", "--profile", profileWith()], home);
+    const { home } = await appliedHome();
     const seen = 'printf %s "$AGENT_BROWSER_NO_VERSION_CHECK"';
     expect(await shell(home, ["bash", "-lc", seen])).toBe("1");
     expect(await shell(home, ["bash", "-lc", seen], { AGENT_BROWSER_NO_VERSION_CHECK: "0" })).toBe("0");
   });
 
   test("a cron job started with only HOME and PATH sees the user bus", async () => {
-    const home = temp.make("home-");
-    await fleet(["apply", "--profile", profileWith()], home);
+    const { home } = await appliedHome();
     const crontab = { text: "" };
     const runCrontab = async (command: string[], options?: { input?: string }) => (command[1] === "-" ? ((crontab.text = options?.input ?? ""), { code: 0, stdout: "" }) : { code: 0, stdout: crontab.text });
     const job = { id: "bus-check", pack: "base", command: ["sh", "-c", 'printf %s "$DBUS_SESSION_BUS_ADDRESS"'], schedule: { every: "5m" as const } };
@@ -174,8 +184,8 @@ describe("Cargo on Linux", () => {
   const cargoConfig = (home: string) => join(home, ".cargo/config.toml");
 
   test("fetches Git dependencies with the Git CLI, so they use Fleet's SSH command instead of only the SSH agent", async () => {
-    const home = temp.make("home-");
-    expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
+    const { home, code } = await appliedHome();
+    expect(code).toBe(0);
     expect(parseToml(readFileSync(cargoConfig(home), "utf8"))).toEqual({ net: { "git-fetch-with-cli": true } });
   });
 
@@ -237,9 +247,7 @@ describe("the settings snapshot", () => {
   });
 
   test("a snapshot that someone else can read is written again", async () => {
-    const home = temp.make("home-");
-    const profile = profileWith();
-    await fleet(["apply", "--profile", profile], home);
+    const { home } = await appliedHome();
     await spawnAsync(["chmod", "644", snapshotFile(home)]);
     expect((await fleet(["doctor"], home)).output).toContain("Step settings-snapshot of the base pack does not pass its check.");
     await fleet(["apply"], home);

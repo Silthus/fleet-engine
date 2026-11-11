@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { main, type CliOptions } from "../cli.ts";
 import type { MachineFile } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
+import { engineSteps } from "../testing/packs.ts";
 import { filesAdapter } from "./apply.ts";
 import { leakedKey } from "./fixtures/issued/pack.ts";
 
@@ -31,7 +32,7 @@ function machine(saved: MachineFile) {
     env: {},
     print: (line) => lines.push(line),
     hostname: () => saved.name!,
-    run: async (command) => (command[0] === "/bin/sh" && command[1] === join(engine, "fleet") ? main(command.slice(2), { ...options, print: () => {} }) : 0),
+    run: engineSteps(engine, (args) => main(args, { ...options, print: () => {} })),
     adapters: () => [filesAdapter],
   };
   return async (...args: string[]) => {
