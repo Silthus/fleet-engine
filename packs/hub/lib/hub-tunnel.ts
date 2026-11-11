@@ -1,14 +1,14 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { changedFiles, readOwned, requireInstalled, writeFiles, type Managed } from "./managed.ts";
-import { gatewayPort, localGatewayUrl, readGatewayClient, saveGatewayClient, type Fetch, type GatewaySettings } from "../../mcp-gateway/lib/client.ts";
+import { gatewayPort, localGatewayUrl, readGatewayClient, saveGatewayClient, type Fetch } from "../../mcp-gateway/lib/client.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { relayPortOf } from "./run.ts";
 
 export type MacTunnelMode = "plan" | "install" | "doctor" | "remove";
 export type MacTunnel = {
-  /** gateway: the MCP gateway's settings while its workflow is on. Without it the Mac has nothing to forward. */
-  home: string; platform: NodeJS.Platform; uid: number; alias: string; relayPort: number; gateway?: GatewaySettings; coder?: string;
+  /** gateway: the MCP gateway's workflow is on. httpsHost: hub HTTPS is on, and the browser reaches it through the relay port. */
+  home: string; platform: NodeJS.Platform; uid: number; alias: string; relayPort: number; gateway: boolean; httpsHost?: string; coder?: string;
   run: Run; fetch: Fetch; sleep(ms: number): Promise<void>; print(line: string): void;
 };
 
@@ -25,8 +25,8 @@ export function hubWorkspace(alias: string): string {
   return workspace;
 }
 
-export function agentPlist(coder: string, alias: string, relayPort: number, log: string): string {
-  const program = [coder, "port-forward", hubWorkspace(alias), "--tcp", `127.0.0.1:${gatewayPort}:${gatewayPort}`, "--tcp", `127.0.0.1:${relayPort}:${relayPort}`, "--disable-autostart"];
+export function agentPlist(coder: string, alias: string, ports: number[], log: string): string {
+  const program = [coder, "port-forward", hubWorkspace(alias), ...ports.flatMap((port) => ["--tcp", `127.0.0.1:${port}:${port}`]), "--disable-autostart"];
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     marker,
@@ -55,7 +55,7 @@ export function agentPlist(coder: string, alias: string, relayPort: number, log:
   ].join("\n");
 }
 
-const notNeeded = "Hub tunnel: not needed. The MCP gateway is off, so this Mac forwards nothing to the hub.";
+const nothingToForward = "The MCP gateway is off and hub.httpsHost is empty, so this Mac forwards nothing to the hub.";
 
 /** The MCP gateway is on when the profile has its pack, or the Hub pack that carries it, and has not turned its workflow off. */
 export function gatewayOn(profile: { packs?: unknown; workflows?: unknown }): boolean {
@@ -64,21 +64,26 @@ export function gatewayOn(profile: { packs?: unknown; workflows?: unknown }): bo
   return (packs.includes("mcp-gateway") || packs.includes("hub")) && workflows["mcp-gateway"] !== false;
 }
 
+/** The hub ports this Mac forwards: the MCP gateway's while it is on, and the relay while hub HTTPS sends the browser through it. */
+function forwardedPorts(mac: MacTunnel): number[] {
+  return [...(mac.gateway ? [gatewayPort] : []), ...(mac.httpsHost ? [relayPortOf(mac.relayPort)] : [])];
+}
+
 export async function hubTunnel(mode: MacTunnelMode, mac: MacTunnel): Promise<number> {
-  const { gateway } = mac;
-  if (!gateway) return withoutGateway(mode, mac);
+  const ports = forwardedPorts(mac);
+  if (!ports.length) return withoutTunnel(mode, mac);
   if (mac.platform !== "darwin") throw new Error("Only a Mac opens its own hub tunnel. The hub opens the devbox tunnels with fleet ssh-tunnels.");
   if (mac.uid === 0) throw new Error("Run fleet hub-tunnel as the person who runs the agents, not root.");
   const agent = agentPath(mac);
   const domain = `gui/${mac.uid}`;
-  const loaded = async () => (await mac.run(["launchctl", "print", `${domain}/${tunnelLabel}`])).code === 0;
-  const forwards = `127.0.0.1:${gatewayPort} and 127.0.0.1:${relayPortOf(mac.relayPort)} to ${mac.alias}`;
+  const loaded = () => agentLoaded(mac);
+  const forwards = `${ports.map((port) => `127.0.0.1:${port}`).join(" and ")} to ${mac.alias}`;
   if (mode === "remove") return await removeAgent(mac), mac.print("Hub tunnel: removed. This Mac no longer forwards ports to the hub."), 0;
   if (mode === "plan") return mac.print(`Hub tunnel plan: write ${agent} and load it at login. It forwards ${forwards}.`), 0;
-  if (mode === "install") await install(mac, gateway, agent, domain, loaded);
-  else await requireInstalled(mac.home, [wantedAgent(mac, agent)], marker, "hub tunnel", "fleet hub-tunnel install");
+  if (mode === "install") await install(mac, ports, agent, domain, loaded);
+  else await requireInstalled(mac.home, [wantedAgent(mac, ports, agent)], marker, "hub tunnel", "fleet hub-tunnel install");
   if (!(await loaded())) throw new Error("The launch agent is not loaded. Run fleet hub-tunnel install.");
-  for (let attempt = 1; !(await answers(mac)); attempt++) {
+  for (let attempt = 1; mac.gateway && !(await answers(mac)); attempt++) {
     if (attempt === healthTries) throw new Error(`127.0.0.1:${gatewayPort} does not reach the MCP gateway on ${mac.alias}. Check ~/Library/Logs/fleet-hub-tunnel.log, and run coder login if the session expired.`);
     await mac.sleep(1000);
   }
@@ -86,39 +91,45 @@ export async function hubTunnel(mode: MacTunnelMode, mac: MacTunnel): Promise<nu
   return 0;
 }
 
-function wantedAgent(mac: MacTunnel, agent: string): Managed {
+function wantedAgent(mac: MacTunnel, ports: number[], agent: string): Managed {
   hubWorkspace(mac.alias);
   if (!mac.coder) throw new Error("Install the Coder CLI first, then run coder login.");
-  return { path: agent, content: agentPlist(mac.coder, mac.alias, mac.relayPort, join(mac.home, "Library/Logs/fleet-hub-tunnel.log")) };
+  return { path: agent, content: agentPlist(mac.coder, mac.alias, ports, join(mac.home, "Library/Logs/fleet-hub-tunnel.log")) };
 }
+
+const agentTarget = (mac: MacTunnel) => `gui/${mac.uid}/${tunnelLabel}`;
+const agentLoaded = async (mac: MacTunnel) => (await mac.run(["launchctl", "print", agentTarget(mac)])).code === 0;
 
 const agentPath = (mac: Pick<MacTunnel, "home">) => join(mac.home, "Library/LaunchAgents", `${tunnelLabel}.plist`);
 
 async function removeAgent(mac: MacTunnel) {
   const agent = agentPath(mac);
   await readOwned(mac.home, agent, marker, "hub tunnel");
-  const target = `gui/${mac.uid}/${tunnelLabel}`;
-  if ((await mac.run(["launchctl", "print", target])).code === 0) await mac.run(["launchctl", "bootout", target]);
+  if (await agentLoaded(mac)) await mac.run(["launchctl", "bootout", agentTarget(mac)]);
   await rm(agent, { force: true });
 }
 
-/** Without the gateway, install and remove take away an agent Fleet wrote earlier, and plan and the doctor have nothing to check. */
-async function withoutGateway(mode: MacTunnelMode, mac: MacTunnel) {
-  if ((mode === "install" || mode === "remove") && (await readOwned(mac.home, agentPath(mac), marker, "hub tunnel")) !== undefined) await removeAgent(mac);
-  return mac.print(notNeeded), 0;
+/** With nothing to forward, the doctor fails while an agent Fleet wrote is still on disk or loaded, and install and remove take it away. */
+async function withoutTunnel(mode: MacTunnelMode, mac: MacTunnel) {
+  const left = (await readOwned(mac.home, agentPath(mac), marker, "hub tunnel")) !== undefined || (mac.platform === "darwin" && (await agentLoaded(mac)));
+  if (left && mode === "doctor") throw new Error(`The hub tunnel should go. ${nothingToForward} Run fleet hub-tunnel install to remove it.`);
+  if (left && (mode === "install" || mode === "remove")) await removeAgent(mac);
+  return mac.print(`Hub tunnel: not needed. ${nothingToForward}`), 0;
 }
 
-async function install(mac: MacTunnel, gateway: GatewaySettings, agent: string, domain: string, loaded: () => Promise<boolean>) {
-  const changed = await changedFiles(mac.home, [wantedAgent(mac, agent)], marker, "hub tunnel");
+async function install(mac: MacTunnel, ports: number[], agent: string, domain: string, loaded: () => Promise<boolean>) {
+  const changed = await changedFiles(mac.home, [wantedAgent(mac, ports, agent)], marker, "hub tunnel");
   if (changed.length) {
-    if (await loaded()) await mac.run(["launchctl", "bootout", `${domain}/${tunnelLabel}`]);
+    if (await loaded()) await mac.run(["launchctl", "bootout", agentTarget(mac)]);
     await writeFiles(changed);
     mac.print("Hub tunnel: launch agent written. Stop any port-forward you started by hand, so the agent can use the ports.");
   }
   if (!(await loaded()) && (await mac.run(["launchctl", "bootstrap", domain, agent])).code !== 0) throw new Error("launchd did not load the hub tunnel.");
-  const client = await readGatewayClient(mac.home, gateway);
+  if (!mac.gateway) return;
+  const settings = { ...(mac.httpsHost ? { httpsHost: mac.httpsHost } : {}), relayPort: mac.relayPort };
+  const client = await readGatewayClient(mac.home, settings);
   if (client && client.baseUrl !== localGatewayUrl) {
-    await saveGatewayClient(mac.home, { ...client, baseUrl: localGatewayUrl }, gateway);
+    await saveGatewayClient(mac.home, { ...client, baseUrl: localGatewayUrl }, settings);
     mac.print(`Hub tunnel: MCP clients use ${localGatewayUrl}.`);
   }
 }

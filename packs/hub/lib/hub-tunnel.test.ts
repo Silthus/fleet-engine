@@ -198,7 +198,7 @@ test("without the MCP gateway or hub HTTPS the doctor fails while Fleet's agent 
   const { deps, home } = mac();
   await hubTunnel("install", deps);
   const off = { gateway: false, httpsHost: undefined };
-  await expect(hubTunnel("doctor", mac({ home, loaded: true, ...off }).deps)).rejects.toThrow("The hub tunnel should go: the MCP gateway is off and hub.httpsHost is empty, so this Mac forwards nothing to the hub. Run fleet hub-tunnel install to remove it.");
+  await expect(hubTunnel("doctor", mac({ home, loaded: true, ...off }).deps)).rejects.toThrow("The hub tunnel should go. The MCP gateway is off and hub.httpsHost is empty, so this Mac forwards nothing to the hub. Run fleet hub-tunnel install to remove it.");
   const removing = mac({ home, loaded: true, ...off });
   expect(await hubTunnel("install", removing.deps)).toBe(0);
   expect(existsSync(agent(home))).toBe(false);
