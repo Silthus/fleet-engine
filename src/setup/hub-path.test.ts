@@ -37,17 +37,18 @@ test("the setup guide's hub path: the Mac adds the hub, the hub names itself, th
   expect(await hub.fleet(["hub", "here"])).toBe(0);
   expect(hub.output()).toStartWith("✓ Saved the hub, coder.fleet-hub, in your profile and pushed it.");
 
-  expect(await onMac(["packs", "--add", "hub", "--workflows", "boxes=off,mcp-gateway=off"])).toBe(0);
+  expect(await onMac(["packs", "--add", "hub", "--workflows", "mcp-gateway=off"])).toBe(0);
   const node = fakeMachine(mac);
   expect(await onMac(["devbox", "add", "coder.fleet-node-1"], node)).toBe(0);
   expect(node.hubUpdates).toEqual(["coder.fleet-hub"]);
-  expect(await pushedAnswers(mac)).toMatchObject({ hub: "coder.fleet-hub", packs: expect.arrayContaining(["hub"]), workflows: expect.objectContaining({ boxes: false, "mcp-gateway": false }), devboxes: ["coder.fleet-hub", "coder.fleet-node-1"] });
+  expect(await pushedAnswers(mac)).toMatchObject({ hub: "coder.fleet-hub", packs: expect.arrayContaining(["hub"]), workflows: { "mcp-gateway": false }, devboxes: ["coder.fleet-hub", "coder.fleet-node-1"] });
 
   await spawnGit(hub.profile, "pull", "-q");
   const { packs, workflows, settings, hub: hubName, devboxes, plan: ai } = await loadProfile(hub.profile);
   const engine = await engineSource();
   const onHub = resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs, workflows, settings, hub: hubName, devboxes, plan: ai }, (await loadMachine(hub.home))!);
   expect(onHub.jobs.filter((job) => job.pack === "hub").map((job) => job.id)).toEqual(expect.arrayContaining(["disk-watch", "peers-restore"]));
+  expect(onHub.jobs.filter((job) => job.workflow === "boxes")).toEqual([]);
   expect(onHub.steps.filter((step) => step.pack === "hub").map((step) => step.id)).toEqual(expect.arrayContaining(["ssh-tunnels", "peers"]));
   expect(diskWatchTargets({ FLEET_PROFILE_DIR: hub.profile }, hub.home, "coder.fleet-hub", "fleet-hub")).toEqual({ local: "coder.fleet-hub", remote: ["coder.fleet-node-1"] });
 });
