@@ -7,6 +7,7 @@ import {
   commandText,
   missingPack,
   momentState,
+  workflowOf,
   presetPicks,
   profileFile,
   questions,
@@ -69,7 +70,10 @@ function packBar() {
 function fixButton(item: Moment) {
   const state = momentState(data, picks, item.workflow, item.pack.name);
   if (state.on) return "";
-  if ("workflow" in state.fix) return `<button data-act="wf" data-id="${esc(item.workflow.id)}">Turn on ${esc(item.workflow.name)}</button>`;
+  if ("workflow" in state.fix) {
+    const target = workflowOf(data, state.fix.workflow) ?? item.workflow;
+    return `<button data-act="wf" data-id="${esc(target.id)}">Turn on ${esc(target.name)}</button>`;
+  }
   const pack = packOf(state.fix.pack);
   const label = pack.name === item.pack.name ? `Add the ${esc(pack.title)} pack` : `Needs the ${esc(pack.title)} pack`;
   return `<button data-act="pack" data-id="${esc(pack.name)}">${label}</button>`;
