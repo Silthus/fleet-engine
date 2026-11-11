@@ -75,6 +75,8 @@ export type HumanStep = Scope & {
   interactive?: true;
   /** A command that Fleet runs during apply when the probe fails, before it probes again. */
   repair?: string[];
+  /** What a person does to remove what this step set, once it leaves this machine's plan. Doctor says it while the probe still passes. */
+  undo?: string;
 };
 
 /** The exit code of a step's check that means it cannot tell yet, such as before the step's human step passes. Only an undo reads it. When Fleet decides whether to run a step, 3 fails like any other code. */

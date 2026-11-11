@@ -410,6 +410,19 @@ else process.exit((await Bun.file(file).exists()) ? 0 : 1);
       expect(existsSync(join(home, "box.txt"))).toBe(true);
     });
 
+    test("doctor says what a person removes by hand, through the pack's own probe", async () => {
+      const home = temp.make("home-");
+      const engine = engineWithBox();
+      const manifest = JSON.parse(readFileSync(join(engine, "packs/tools/pack.json"), "utf8"));
+      writeFileSync(join(engine, "packs/tools/pack.json"), JSON.stringify({ ...manifest, human: [{ id: "login", say: "Log in to the box.", probe: ["fleet", "box", "status"], undo: "Log out with box logout." }] }));
+      const profile = profileDir(["tools"]);
+      expect(await run(["apply", "--profile", profile], home, engine)).toBe(0);
+      drop(profile);
+      const lines: string[] = [];
+      await main(["doctor"], { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line) });
+      expect(lines.join("\n")).toContain("The tools pack is off. Log out with box logout.");
+    });
+
     test("runs its command only for a command line of the step that the ledger names", async () => {
       const home = temp.make("home-");
       const engine = engineWithBox();

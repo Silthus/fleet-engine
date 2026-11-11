@@ -147,7 +147,8 @@
         "allowlist",
         "--check"
       ],
-      "interactive": true
+      "interactive": true,
+      "undo": "Remove the Git allowlist as root: sudo sh ~/.local/state/fleet/git-allowlist/install.sh remove"
     },
     {
       "id": "earlyoom",

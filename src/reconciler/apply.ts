@@ -1,8 +1,10 @@
+import { existsSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { install, plan as planFiles } from "../files/install.ts";
 import { cannotTell } from "../pack/types.ts";
 import type { Action, CatalogEntry, Finding, HumanStep, Owned, PackCheck, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
-import { ledgerKey, readLedger, undoVariable, writeLedger, type LedgerStep } from "./ledger.ts";
+import { ledgerKey, readLedger, undoVariable, writeLedger, type Ledger, type LedgerStep } from "./ledger.ts";
 import { hublessReason } from "./resolve.ts";
 
 export type AdapterContext = { home: string; dryRun: boolean; adopt: string[] };
@@ -81,7 +83,8 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
   const failed = new Set<string>();
   const waits = waiter(plan, run);
   const before = await readLedger(options.home);
-  const ledger = new Map(before.map((step) => [ledgerKey(step), step]));
+  const ledger = new Map(before.steps.map((step) => [ledgerKey(step), step]));
+  const humanLedger = new Map(before.human.map((step) => [ledgerKey(step), step]));
   const held = (step: Plan["steps"][number]) => {
     if (step.undo && step.check) ledger.set(ledgerKey(step), ledgerStep(plan, step));
   };
@@ -100,7 +103,12 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: ran ? `Step ${step.id} of the ${step.pack} pack ran, but does not pass its check.` : `Step ${step.id} of the ${step.pack} pack failed.`, repair: "apply" });
     if (step.pack === "base") report.ok = false;
   }
-  for (const { step, cause } of undoItems(plan, before)) {
+  for (const step of context.dryRun ? [] : plan.human) {
+    if (!step.undo) continue;
+    if ((await run(step.probe)) === 0) humanLedger.set(ledgerKey(step), { pack: step.pack, id: step.id, probe: step.probe, undo: step.undo });
+    else humanLedger.delete(ledgerKey(step));
+  }
+  for (const { step, cause } of undoItems(plan, before.steps)) {
     if (failed.has(step.pack)) continue;
     const undoing = undoRunner(run, step);
     const holds = await undoHeld(step, undoing);
@@ -126,7 +134,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `Fleet could not undo step ${step.id} of the ${step.pack} pack, ${whose(cause)}. The next fleet apply tries again.`, repair: "apply" });
     if (step.pack === "base") report.ok = false;
   }
-  const after = [...ledger.values()];
+  const after: Ledger = { steps: [...ledger.values()], human: [...humanLedger.values()] };
   if (!context.dryRun && JSON.stringify(after) !== JSON.stringify(before)) await writeLedger(options.home, after);
   return report;
 }
@@ -143,9 +151,11 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
     if (await waits(step)) continue;
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
   }
-  for (const { step, cause } of undoItems(plan, await readLedger(options.home))) {
+  const ledger = await readLedger(options.home);
+  for (const { step, cause } of undoItems(plan, ledger.steps)) {
     if (report.actions.some((action) => action.target === `step ${step.pack}/${step.id}`)) report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `${stillHolds(step, cause)} Run fleet apply to undo it.`, repair: "apply" });
   }
+  report.findings.push(...(await leftByHand(plan, ledger, run)), ...secretsLeft(plan, options.home));
   for (const step of plan.human) {
     const reported = report.findings.some((finding) => finding.id === `human:${step.id}` && finding.pack === step.pack);
     if (!reported && (await run(step.probe)) === 0) continue;
@@ -235,6 +245,28 @@ function stillHolds(step: LedgerStep, cause: Cause) {
   if (cause === "pack") return `The ${step.pack} pack is off, but ${what} still holds what it set.`;
   if (cause === "plan") return `This machine no longer plans ${what}, but it still holds what it set.`;
   return `The workflow ${cause.workflow} is off, but ${what} still holds what it set.`;
+}
+
+/** The human steps of the ledger that left the plan and whose probe still passes, each with what a person does to remove it. */
+async function leftByHand(plan: Plan, ledger: Ledger, run: Runner): Promise<Finding[]> {
+  const planned = new Set(plan.human.map(ledgerKey));
+  const listed = new Set(plan.packs.map((pack) => pack.name));
+  const unloaded = new Set(plan.packs.filter((pack) => !pack.available).map((pack) => pack.name));
+  const findings: Finding[] = [];
+  for (const step of ledger.human) {
+    if (planned.has(ledgerKey(step)) || unloaded.has(step.pack) || (await run(step.probe, { [undoVariable]: ledgerKey(step) })) !== 0) continue;
+    const cause = listed.has(step.pack) ? `This machine no longer plans the ${step.id} step of the ${step.pack} pack.` : `The ${step.pack} pack is off.`;
+    findings.push({ id: `left:${step.id}`, pack: step.pack, say: `${cause} ${step.undo}` });
+  }
+  return findings;
+}
+
+/** A note for each folder of pack secrets whose pack is off: Fleet keeps them, because a credential is costly to make again. */
+function secretsLeft(plan: Plan, home: string): Finding[] {
+  const on = new Set(plan.packs.map((pack) => pack.name));
+  const folder = join(home, ".config/fleet/secrets");
+  const packs = existsSync(folder) ? readdirSync(folder, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !on.has(entry.name)).map((entry) => entry.name) : [];
+  return packs.sort().map((pack) => ({ id: `secrets:${pack}`, pack, say: `The ${pack} pack is off. Its secrets stay in ~/.config/fleet/secrets/${pack}. Delete that folder when you no longer need them.` }));
 }
 
 async function undoHeld(step: LedgerStep, run: Runner): Promise<Held> {
