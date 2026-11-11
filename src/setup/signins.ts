@@ -64,7 +64,7 @@ export function claudeSignIn(machine: Machine): SignIn {
       const status = await machine.exec(["claude", "auth", "status"]);
       if (status.code !== 0) return false;
       try {
-        return (JSON.parse(status.output) as { loggedIn?: unknown }).loggedIn === true;
+        return (JSON.parse(status.stdout) as { loggedIn?: unknown }).loggedIn === true;
       } catch {
         return false;
       }
