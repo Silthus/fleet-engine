@@ -383,6 +383,17 @@ check_port() {
   fi
 }
 
+check_get_sh_source() {
+  user=$1
+  if [ -z "$engine_git" ]; then
+    note "public mode: install.sh fetches get.sh from public GitHub"
+  elif grep -q . "$work/local-get-sh" 2>/dev/null; then
+    pass "$user get.sh source" "install.sh ran this tree's get.sh, served from $work/get.sh for $(sort -u "$work/local-get-sh" | tr '\n' ' ')"
+  else
+    fail "$user get.sh source" "install.sh did not fetch get.sh from this tree, so it ran public GitHub's get.sh"
+  fi
+}
+
 check_doctor() {
   user=$1
   log="$work/$user-doctor"
@@ -536,6 +547,7 @@ else
 fi
 
 say "User B: checks"
+check_get_sh_source "$user_b"
 check_identity "$user_b"
 check_standalone "$user_b"
 check_jobs "$user_b"
