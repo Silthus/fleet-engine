@@ -8,7 +8,7 @@ The public Fleet engine: the `fleet` CLI, `get.sh`, and the public packs.
 - Run `bun run test` and `bun run typecheck` after every change. Keep
   `bun run test` under 5 seconds, and never wait on real time.
 - `page/index.html` is generated. After you change a `pack.json`,
-  `presets.json`, `concepts.json`, or `page/`, run `bun scripts/build-page.ts`
+  `presets.json`, `docs/fleet.svg`, or `page/`, run `bun scripts/build-page.ts`
   and commit the result. A test fails while the committed page is stale.
 - Tests that touch a home directory use a temporary `HOME`. Never run
   `fleet apply` or `get.sh` against a real home directory from an agent.

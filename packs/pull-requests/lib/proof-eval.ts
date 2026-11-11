@@ -5,7 +5,7 @@ import { ledgerRoot } from "./proof.ts";
 import { appendLine, hashOf, missSources, readLines, type Miss, type MissSource } from "./proof-misses.ts";
 import type { ModelAnswer } from "./proof-models.ts";
 import type { Slot } from "./proof-panel.ts";
-import { reviewPrompt } from "./proof-review.ts";
+import { reviewedDiff, reviewPrompt } from "./proof-review.ts";
 import { reviewRules } from "./review-rules.ts";
 
 type Outcome = "caught" | "missed" | "skipped" | "failed";
@@ -45,9 +45,10 @@ async function scoreCase(miss: Miss, io: EvalIO): Promise<CaseResult> {
       const crossFamily = await io.crossFamily(miss);
       const findings = await inWorktree(checkout, miss.head, run, async (tree) => {
         const diffFile = join(dirname(tree), "diff.patch");
-        await writeFile(diffFile, diff.stdout, { mode: 0o600 });
+        const masked = reviewedDiff(diff.stdout);
+        await writeFile(diffFile, masked, { mode: 0o600 });
         const prompt = reviewPrompt({
-          scope: miss.scope, from: miss.base, commit: miss.head, diff: diff.stdout, diffFile, crossFamily, title: miss.title, body: miss.body,
+          scope: miss.scope, from: miss.base, commit: miss.head, diff: masked, diffFile, crossFamily, title: miss.title, body: miss.body,
           rubric: io.rubric, references: io.references, reviewRules: reviewRules(changedFiles, miss.base, run),
         });
         return io.review(miss, prompt, tree, dirname(tree), slot);

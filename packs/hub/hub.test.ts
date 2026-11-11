@@ -24,7 +24,7 @@ beforeAll(async () => {
 
 const answers = { "hub.alias": "my-hub", "hub.coderUrl": "https://coder.example.com", "hub.boxTemplate": "linux" };
 const plan = (fields: Partial<Profile> = {}, machine: MachineFile = devbox) => resolveEngine(sources, { settings: answers, ...fields }, machine);
-const withBoxes = (fields: Partial<Profile> = {}, machine: MachineFile = devbox) => resolveEngine([...sources, coderTeam()], { settings: answers, ...fields, packs: [...(fields.packs ?? ["hub"]), "posthog"] }, machine);
+const withBoxes = (fields: Partial<Profile> = {}, machine: MachineFile = devbox) => resolveEngine([...sources, coderTeam()], { settings: answers, ...fields, workflows: { boxes: true, ...fields.workflows }, packs: [...(fields.packs ?? ["hub"]), "posthog"] }, machine);
 function coderTeam(): AvailableSource {
   const dir = temp.make("team-");
   return { ref: { name: "team", repo: "example/team-packs", ref: "main" }, dir, packs: [{ dir, manifest: { schema: 1, name: "posthog", summary: "A team pack that brings Coder." } }] };
@@ -70,17 +70,23 @@ describe("the Hub pack", () => {
     expect(plan({ packs: ["hub"] }).packs.find((pack) => pack.name === "hub")).toMatchObject({ available: true });
   });
 
-  test("asks setup for the hub's name, and for the Coder address and box template only when a team pack brings Coder", () => {
+  test("asks setup for the hub's name, and for the Coder address and box template only while Boxes is on and a team pack brings Coder", () => {
     expect(resolveEngine(sources, { packs: ["hub"] }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias"]);
+    expect(resolveEngine(sources, { packs: ["hub"], workflows: { boxes: true } }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias"]);
     const team = [...sources, coderTeam()];
-    expect(resolveEngine(team, { packs: ["hub", "posthog"] }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias", "hub.coderUrl", "hub.boxTemplate"]);
-    expect(resolveEngine(team, { packs: ["hub", "posthog"], settings: answers }, devbox).unanswered).toEqual([]);
+    expect(resolveEngine(team, { packs: ["hub", "posthog"] }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias"]);
+    expect(resolveEngine(team, { packs: ["hub", "posthog"], workflows: { boxes: true } }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias", "hub.coderUrl", "hub.boxTemplate"]);
+    expect(resolveEngine(team, { packs: ["hub", "posthog"], workflows: { boxes: true }, settings: answers }, devbox).unanswered).toEqual([]);
   });
 
-  test("turns Boxes on only when a team pack brings Coder", () => {
+  test("keeps Boxes off by default, even when a team pack brings Coder, says why when someone turns it on, and turns it on only with Coder", () => {
     const boxes = (result: Plan) => result.workflows.find((workflow) => workflow.pack === "hub" && workflow.id === "boxes")?.active;
-    expect(boxes(plan({ packs: ["hub"] }))).toBe(false);
-    expect(boxes(resolveEngine([...sources, coderTeam()], { packs: ["hub", "posthog"], settings: answers }, devbox))).toBe(true);
+    const team = [...sources, coderTeam()];
+    expect(boxes(resolveEngine(team, { packs: ["hub", "posthog"], settings: answers }, devbox))).toBe(false);
+    expect(boxes(plan({ packs: ["hub"], workflows: { boxes: true } }))).toBe(false);
+    expect(boxes(resolveEngine(team, { packs: ["hub", "posthog"], settings: answers, workflows: { boxes: true } }, devbox))).toBe(true);
+    const workflow = sources[0]!.packs.find((pack) => pack.manifest.name === "hub")!.manifest.workflows!.find((item) => item.id === "boxes")!;
+    expect(workflow.risk).toContain("quota");
   });
 
   test("declares every value the old hub code hardcoded as a setting with no default value", async () => {

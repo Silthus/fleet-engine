@@ -22,6 +22,8 @@ packs, and your answers live in your own private profile repo.
 - `fleet apply` puts your profile's packs onto the machine. `fleet doctor`
   checks the machine against the same plan without changing it. `fleet update`
   moves the engine and your profile forward, then applies.
+  When `fleet apply` installs T3 Code on Linux, it finds the nightly the same
+  way `get.sh` does and runs the installer up to three times.
 - `fleet packs`, `fleet settings`, and `fleet set` turn packs and workflows on
   and off and change their settings. `fleet devbox add` makes an SSH host one
   of your devboxes.
@@ -49,13 +51,15 @@ packs, and your answers live in your own private profile repo.
   thread about it.
 
 Team packs plug in as pack sources. The presets are Starter, Everyday, and
-Michael's.
+Everything.
 
 ### The page
 
-[A day with Fleet](https://silthus.github.io/fleet-engine/) shows what each
-pack does during a workday and builds the one command that sets up the packs
-you pick.
+[The Fleet page](https://silthus.github.io/fleet-engine/) says what Fleet is
+and asks where Fleet runs, Mac only or Mac plus a hub and a node, and which
+packs you want. Each pack opens in a dialog that shows what it does, its
+workflows, and its settings. The page gives the Getting started steps with a
+prompt that carries your picks to the agent that sets Fleet up.
 
 ### Known gaps
 

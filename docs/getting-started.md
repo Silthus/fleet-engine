@@ -112,5 +112,5 @@ your devbox and runs the same steps. `fleet devbox` lists your devboxes.
 - `fleet update` moves the engine and your profile forward. Each machine also
   runs it every night.
 
-[A day with Fleet](https://silthus.github.io/fleet-engine/) shows what each
-pack does during a workday.
+[The Fleet page](https://silthus.github.io/fleet-engine/) shows what each
+pack does, and builds the setup prompt with your picks.

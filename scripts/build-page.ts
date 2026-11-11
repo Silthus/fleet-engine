@@ -1,7 +1,8 @@
+import { logoMark } from "../page/logo.ts";
 import { join, resolve } from "node:path";
 import { engineSettings, loadPacks } from "../src/pack/manifest.ts";
-import type { Audience, Concept, LoadedPack, Need, PackManifest, Preset } from "../src/pack/types.ts";
-import { engineRepo, ownDevboxPacks } from "../src/setup/defaults.ts";
+import type { Audience, LoadedPack, Need, PackManifest, Preset } from "../src/pack/types.ts";
+import { engineRepo, needsHubPacks, ownDevboxPacks, prefersHubPacks } from "../src/setup/defaults.ts";
 import { choosablePacks, defaultPreset, filledBySetup, packTitle, type Catalog } from "../src/setup/questions.ts";
 import type { PageData, PagePack } from "../page/model.ts";
 
@@ -27,7 +28,6 @@ export async function pageData({ audience, team = [] }: PageOptions): Promise<Pa
   if (audience === "public" && team.length) throw new Error("the public build lists no pack from a private source");
   const engine = await loadPacks(engineRoot);
   const presets = (await Bun.file(join(engineRoot, "presets.json")).json()) as Preset[];
-  const concepts = (await Bun.file(join(engineRoot, "concepts.json")).json()) as Concept[];
   const shown = visible(audience);
   const base = engine.filter((pack) => pack.manifest.name === "base").map((pack) => pack.manifest);
   const teamManifests = team.map((pack) => pack.manifest).filter(shown);
@@ -37,8 +37,8 @@ export async function pageData({ audience, team = [] }: PageOptions): Promise<Pa
   const packs = manifests.map((manifest) => pagePack(manifest, holds));
   const workflowIds = new Set(packs.flatMap((pack) => pack.workflows.map((workflow) => workflow.id)));
   const used = new Set(packs.flatMap((pack) => pack.workflows.flatMap((workflow) => workflow.needs)));
-  const words = new Set(packs.flatMap((pack) => pack.workflows.flatMap((workflow) => workflow.moment?.words ?? [])));
   const teamPacks = teamManifests.map((manifest) => manifest.name);
+  const overview = await Bun.file(join(engineRoot, "docs/fleet.svg")).text();
   return {
     engineRepo,
     defaultPreset,
@@ -46,17 +46,21 @@ export async function pageData({ audience, team = [] }: PageOptions): Promise<Pa
     presets: presets.map((preset) => ({
       ...preset,
       packs: preset.packs.filter((name) => names.has(name)),
+      hubPacks: (preset.hubPacks ?? []).filter((name) => names.has(name)),
+      hubWorkflows: Object.fromEntries(Object.entries(preset.hubWorkflows ?? {}).filter(([id]) => workflowIds.has(id))),
       workflows: Object.fromEntries(Object.entries(preset.workflows).filter(([id]) => workflowIds.has(id))),
     })),
     packs,
     teamPacks,
     ownDevboxPacks: ownDevboxPacks.filter((name) => names.has(name)),
-    concepts: concepts.filter(shown).filter((concept) => words.has(concept.word)).map(({ word, note }) => ({ word, note })),
+    needsHubPacks: needsHubPacks.filter((name) => names.has(name)),
+    prefersHubPacks: prefersHubPacks.filter((name) => names.has(name)),
     needPacks: Object.fromEntries(Object.entries(needPacks).filter(([need]) => used.has(need as Need))),
     needLabels: Object.fromEntries(Object.entries(needLabels).filter(([need]) => used.has(need as Need))),
+    overview: { image: `data:image/svg+xml,${encodeURIComponent(overview)}`, alt: overview.match(/<desc[^>]*>([^<]+)<\/desc>/)?.[1] ?? "" },
     teamNote: teamPacks.length
       ? `The ${teamManifests.map(packTitle).join(" and ")} pack comes from your team's private pack source. Setup ticks it when GitHub shows you are in the team's org.`
-      : "A team can add its own pack from a private pack source: a GitHub repo of packs. Setup ticks it for members of the team's GitHub org.",
+      : "A team can add its own pack from a private pack source, which is a GitHub repo of packs. Setup ticks the pack for members of the team's GitHub org.",
   };
 }
 
@@ -73,7 +77,7 @@ function pagePack(manifest: PackManifest, holds: (need: Need) => boolean): PageP
     ...(manifest.risk ? { risk: manifest.risk } : {}),
     requires: (manifest.requires ?? []).filter((name) => name !== "base"),
     always: manifest.name === "base",
-    workflows: shownWorkflows.map((workflow) => ({ ...workflow, needs: workflow.needs ?? [], requires: workflow.requires ?? [], settings: workflow.settings ?? [] })),
+    workflows: shownWorkflows.map(({ id, name, sentence, needs = [], requires = [], settings = [], risk, ...workflow }) => ({ id, name, sentence, needs, requires, default: workflow.default, settings, ...(risk ? { risk } : {}) })),
     settings: (manifest.settings ?? []).filter((setting) => !engineSettings.includes(setting.key) && !listedOnlyByHidden(setting.key)),
   };
 }
@@ -87,6 +91,7 @@ export async function buildPage(options: PageOptions) {
   const shell = await Bun.file(join(engineRoot, "page/shell.html")).text();
   const json = JSON.stringify(data).replaceAll("<", "\\u003c");
   return shell
+    .replace("/*icon*/", () => `data:image/svg+xml,${encodeURIComponent(logoMark)}`)
     .replace("/*style*/", () => style.trim())
     .replace("{}/*data*/", () => json)
     .replace("/*script*/", () => script.trim().replaceAll("</script", "<\\/script"));
