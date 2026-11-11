@@ -43,8 +43,10 @@ async function makeProfile(context: ProfileContext) {
   const org = profileOrg(context.packs(), draft.packs ?? []);
   const team = org && `${org}/${profileRepoName}-${login}`;
   const dir = profilePath(home);
-  const found = team && (await exists(team)) ? team : (await exists(personal)) ? personal : undefined;
+  const inUse = await clonedProfile(machine, dir, login);
+  const found = inUse && (await exists(inUse)) ? inUse : team && (await exists(team)) ? team : (await exists(personal)) ? personal : undefined;
   let profileRepo = found ?? team ?? personal;
+  if (found && found !== personal) await requirePrivate(machine, found);
   if (found) await checkout(machine, dir, found);
   const saved = found ? savedSettings(dir) : {};
   const namedMemory = draft.settings?.["memory.repo"] ?? saved["memory.repo"];
@@ -53,19 +55,20 @@ async function makeProfile(context: ProfileContext) {
   await confirm(context, [...(found ? [] : [profileRepo]), ...(memoryMissing ? [memoryRepo] : [])], org && !found ? org : undefined);
   if (!found) {
     const made = await create(profileRepo, "My Fleet profile");
-    if (made.code !== 0 && profileRepo === team) {
+    if (made.code !== 0 && profileRepo === team && !(await exists(team))) {
       terminal.print(`  · The ${org} org did not let you create ${team} (${lastLine(made.output).replace(/^GraphQL: /, "")}), so Fleet uses your own account.`);
       profileRepo = personal;
       await gh("repo", "create", personal, "--private", "--description", "My Fleet profile");
-    } else if (made.code !== 0) throw new Error(`gh repo create failed: ${lastLine(made.output)}`);
-    terminal.print(`  ✓ Created the private repo ${profileRepo}${profileRepo === team ? `. Members of the ${org} org can read it.` : ""}`);
+    } else if (made.code !== 0 && profileRepo !== team) throw new Error(`gh repo create failed: ${lastLine(made.output)}`);
+    if (profileRepo === team) await requirePrivate(machine, team);
+    terminal.print(`  ✓ Created the private repo ${profileRepo}${profileRepo === team ? ` in the ${org} org` : ""}`);
   } else terminal.print(`  ✓ Reusing your repo ${found}`);
   if (memoryRepo && memoryMissing) {
     await gh("repo", "create", memoryRepo, "--private", "--description", "My agents' shared memory");
     terminal.print(`  ✓ Created the private repo ${memoryRepo}`);
   } else if (memoryRepo) terminal.print(`  ✓ Reusing your repo ${memoryRepo}`);
   if (team && found === personal) {
-    terminal.print(`  · Your team keeps profiles in the ${org} org, where its members can read them. To move yours there, run:`);
+    terminal.print(`  · Your team keeps profiles in the ${org} org. To move yours there, run:`);
     terminal.print(`      gh api -X POST repos/${personal}/transfer -f new_owner=${org} -f new_name=${profileRepoName}-${login}`);
     terminal.print(`      git -C ${dir} remote set-url origin https://github.com/${team}.git`);
   }
@@ -91,6 +94,20 @@ async function makeProfile(context: ProfileContext) {
   await context.saved(dir);
 }
 
+/** The profile repo this machine's clone already uses, when its name is one setup makes for this login. */
+async function clonedProfile(machine: Machine, dir: string, login: string) {
+  if (!existsSync(join(dir, ".git"))) return undefined;
+  const origin = await machine.exec(["git", "-C", dir, "config", "--get", "remote.origin.url"]);
+  const repo = githubRepoOf(origin.output.trim());
+  const names = [`${login}/${profileRepoName}`.toLowerCase(), `/${profileRepoName}-${login}`.toLowerCase()];
+  return repo && (repo.toLowerCase() === names[0] || repo.toLowerCase().endsWith(names[1]!)) ? repo : undefined;
+}
+
+async function requirePrivate(machine: Machine, repo: string) {
+  const visibility = await machine.exec(["gh", "repo", "view", repo, "--json", "visibility", "--jq", ".visibility"]);
+  if (visibility.code !== 0 || !["PRIVATE", "INTERNAL"].includes(visibility.output.trim())) throw new Error(`${repo} is not private. Make it private, then run fleet setup again.`);
+}
+
 /** The GitHub org where the first picked pack that names one keeps its members' profiles. */
 function profileOrg(packs: PackManifest[], picked: string[]) {
   return packs.find((pack) => pack.profileOrg && picked.includes(pack.name))?.profileOrg;
@@ -98,7 +115,7 @@ function profileOrg(packs: PackManifest[], picked: string[]) {
 
 async function confirm({ terminal, nonInteractive }: ProfileContext, missing: string[], org: string | undefined) {
   if (!missing.length || nonInteractive) return;
-  const where = org ? `in the ${org} GitHub org, where its members can read it,` : "in your GitHub account";
+  const where = org ? `in the ${org} GitHub org, private to the org,` : "in your GitHub account";
   terminal.print(`  Fleet creates ${missing.length === 1 ? "the private repo" : "the private repos"} ${missing.join(" and ")} ${where} and pushes your answers there.`);
   for (;;) {
     const reply = (await terminal.ask("  Go ahead? (Y/n) ")).toLowerCase();
@@ -186,7 +203,7 @@ export function profileGuide(packs: PackManifest[], sharedWith?: string) {
     "",
     "Fleet reads this repo on every machine of mine. Fleet's commands change it for me, so I rarely edit it by hand.",
     "",
-    ...(sharedWith ? [`Members of the ${sharedWith} org can read this repo, so keep secrets out of it.`, ""] : []),
+    ...(sharedWith ? [`This repo lives in the ${sharedWith} org, where teammates may read it, so keep secrets out of it.`, ""] : []),
     "- `fleet.json`: my packs, my AI plans, my settings, and the workflows I turned on or off.",
     "- `about-me.md`: how I like to work. Agents read it after my packs' rules.",
     "- `install.sh`: installs Fleet from this profile. A Coder devbox runs it as my dotfiles.",
