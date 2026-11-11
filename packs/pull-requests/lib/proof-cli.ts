@@ -119,10 +119,11 @@ finding's anchor against the diff and prints the result after the findings; it k
 review-start. When the reviewer gives no answer, the round stays reserved and the next fleet proof review on the same
 commit retries it. The setting pull-requests.reviewTimeoutMinutes limits the reviewer. FLEET_PROOF_REVIEWER replaces
 its command, and FLEET_PROOF_REVIEWER_MODEL its model.
-Spent quota stops a reviewer or judge early. When its CLI prints a quota line, such as "Reconnecting... 1/5",
-"exceeded retry limit, last status: 429", or "All credentials for model <model> are cooling down", and then prints
-nothing else for 5 minutes, fleet stops it. A run that fails right after such a line counts too. The cause starts
-with "quota exhausted", and fleet proof review exits 4. FLEET_PROOF_QUOTA_GRACE_MS changes the 5 minutes.
+Spent quota stops a reviewer or judge early. When its CLI prints two quota lines in a row, such as
+"Reconnecting... 1/5" and "Reconnecting... 2/5", "exceeded retry limit, last status: 429", or "All credentials for
+model <model> are cooling down", and then prints nothing else for 5 minutes, fleet stops it. A run that fails right
+after one such line counts too. The cause starts with "quota exhausted", and fleet proof review exits 4.
+FLEET_PROOF_QUOTA_GRACE_MS changes the 5 minutes; 0 stops the run at once.
 
 With --lens, the round is a qa-swarm panel: one reviewer per lens, each with the Brief of the qa-swarm PANEL.md in
 ~/.agents/skills/qa-swarm, filled by fleet, and the lens's hunting grounds. A lens runs on the family of its PANEL.md

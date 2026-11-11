@@ -208,7 +208,7 @@ test("the gate stops a judge stuck on spent quota and reports it unavailable", a
   await pr.commit("feature.txt", "new\n");
   await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "docs only");
-  pr.env.FLEET_PROOF_QUOTA_GRACE_MS = "50";
+  pr.env.FLEET_PROOF_QUOTA_GRACE_MS = "0";
   pr.env.FLEET_PROOF_JUDGE = stalledOnQuota("All credentials for model judge-model are cooling down");
 
   const gate = await pr.fleet("gate");

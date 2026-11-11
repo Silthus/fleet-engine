@@ -90,7 +90,7 @@ test("a lens stuck on spent quota fails at once without a second attempt, and --
   await pr.commit("feature.txt", "greet\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   const attempts = join(pr.home, "attempts");
-  pr.env.FLEET_PROOF_QUOTA_GRACE_MS = "50";
+  pr.env.FLEET_PROOF_QUOTA_GRACE_MS = "0";
   pr.env.FLEET_PROOF_REVIEWER = `echo attempt >> "${attempts}"; ${stalledOnQuota("exceeded retry limit, last status: 429 Too Many Requests")}`;
 
   await pr.fleet("review", "--lens", "correctness");

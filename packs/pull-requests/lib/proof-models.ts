@@ -50,12 +50,17 @@ export async function askModel(role: Role, row: ModelRow, request: ModelRequest,
   try {
     const output = join(scratch, "answer.txt");
     const command = replacement ? ["sh", "-c", replacement] : await modelCommand({ ...row, model }, request, scratch, output);
-    const answer = await spawnWithLimit(command, request, env, { timeout, grace: Number(env.FLEET_PROOF_QUOTA_GRACE_MS) || quotaGraceMs });
+    const answer = await spawnWithLimit(command, request, env, { timeout, grace: graceOf(env.FLEET_PROOF_QUOTA_GRACE_MS) });
     if (answer.cause !== undefined) return { ok: false, cause: answer.cause, model };
     const answersOnStdout = Boolean(replacement) || row.provider === "claude";
     const text = answersOnStdout ? answer.stdout : await readFile(output, "utf8").catch(() => "");
     return text.trim() ? { ok: true, text: text.trim(), model } : { ok: false, cause: "empty answer", model };
   } finally { await rm(scratch, { recursive: true, force: true }); }
+}
+
+function graceOf(value: string | undefined) {
+  const grace = value?.trim() ? Number(value) : Number.NaN;
+  return Number.isFinite(grace) && grace >= 0 ? grace : quotaGraceMs;
 }
 
 async function modelCommand(row: ModelRow, request: ModelRequest, scratch: string, output: string) {
@@ -84,7 +89,7 @@ async function spawnWithLimit(command: string[], request: ModelRequest, env: Rec
   try {
     const running = child = Bun.spawn(command, { cwd: request.cwd, env: env as Record<string, string>, stdin: new Blob([request.prompt]), stdout: "pipe", stderr: "pipe", detached: true });
     stop = setTimeout(() => stopGroup(running.pid), timeout);
-    const [stdout, stderr, code] = await Promise.all([watched(child.stdout, watch.observe), watched(child.stderr, watch.observe), child.exited, request.started?.(child.pid)]);
+    const [stdout, stderr, code] = await Promise.all([watched(child.stdout, watch.stream()), watched(child.stderr, watch.stream()), child.exited, request.started?.(child.pid)]);
     if (stalled) return { cause: `${quotaExhausted}: no progress after "${stalled}"` };
     if (child.signalCode) return { cause: `stopped by ${child.signalCode} at the ${Math.round(timeout / 1000)} s limit` };
     if (code !== 0 && watch.waiting()) return { cause: `${quotaExhausted}: exit ${code} after "${watch.waiting()}"` };
@@ -96,15 +101,18 @@ async function spawnWithLimit(command: string[], request: ModelRequest, env: Rec
   } finally { clearTimeout(stop); watch.stop(); }
 }
 
-async function watched(stream: ReadableStream<Uint8Array>, observe: (chunk: string) => void) {
+async function watched(stream: ReadableStream<Uint8Array>, lines: { observe: (chunk: string) => void; end: () => void }) {
   const decoder = new TextDecoder();
   let text = "";
   for await (const chunk of stream) {
     const part = decoder.decode(chunk, { stream: true });
-    observe(part);
+    lines.observe(part);
     text += part;
   }
-  return text + decoder.decode();
+  const rest = decoder.decode();
+  lines.observe(rest);
+  lines.end();
+  return text + rest;
 }
 
 function stopGroup(group: number) {
