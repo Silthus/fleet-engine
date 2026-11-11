@@ -74,7 +74,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * until then it refuses a node's credential when the node applies its
  * profile, and its fleet peers link refuses the node.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; boxCoderAt?: string } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -107,7 +107,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const onTheHub = async (line: string, host: string): Promise<ExecResult | undefined> => {
     const fleet = line.match(/\/\.local\/share\/fleet\/engine\/fleet" (.+)$/)?.[1];
     if (fleet === undefined) return undefined;
-    if (options.hubDown) return result(false, "ssh: connect to host: Connection refused");
+    if (options.hubDown) return { code: 255, output: "ssh: connect to host: Connection refused", stdout: "" };
+    if (fleet === "update" && options.hubUpdateFails) return result(false, `${options.hubUpdateFails}\n`);
     if (fleet === "update") {
       hubUpdates.push(host);
       for (const node of (await pushedProfile()).devboxes ?? []) hubTook.add(node);

@@ -247,6 +247,10 @@ describe("the devbox over SSH", () => {
     expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1", "coder.fleet-node-2"]);
     expect(io.output()).toContain("· The hub, coder.fleet-hub, did not answer. It takes coder.fleet-node-2 at its next fleet update, or run fleet update there now.");
     expect(io.output()).toEndWith("· The hub, coder.fleet-hub, has not linked coder.fleet-node-2 in T3 Code yet. Its daily fleet peers renew links it, or run fleet peers link coder.fleet-node-2 there now.");
+
+    const failing = fakeMachine(home, {}, { hubUpdateFails: "fleet update: /home/nora/.local/share/fleet/engine has local changes." });
+    expect(await add("coder.fleet-node-3", failing)).toBe(0);
+    expect(io.output()).toContain("▶ The hub, coder.fleet-hub, takes coder.fleet-node-3 with fleet update there. This can take some minutes.\n· The hub, coder.fleet-hub, could not update: fleet update: /home/nora/.local/share/fleet/engine has local changes. Fix that there and run fleet update there; it takes coder.fleet-node-3 then.");
   });
 
   test("fleet devbox add pushes the node on the next run when the push of the profile failed", async () => {
