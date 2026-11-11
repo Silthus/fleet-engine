@@ -151,7 +151,7 @@ describe("get.sh with an existing engine directory", () => {
     expect(readFileSync(join(engineDir, "notes.txt"), "utf8")).toBe("mine\n");
 
     const fresh = sandbox("Linux");
-    expect(getSh(fresh, ["--ref", "v0.1.0", "--profile", profile()]).code).toBe(0);
+    expect(getSh(fresh, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
     const installed = join(fresh.home, ".local/share/fleet/engine");
     writeFileSync(join(installed, "fleet"), "# my patch\n");
     expect(getSh(fresh, ["--ref", "v0.1.0", "--profile", profile()])).toMatchObject({ code: 1, output: expect.stringContaining("has local changes") });

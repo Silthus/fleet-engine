@@ -20,6 +20,7 @@ export function getShHarness() {
   const temp = tempDirs();
   const shared = tempDirs();
   const engine = { repo: "" };
+  let ghTar = "";
   afterEach(() => temp.cleanup());
   afterAll(() => shared.cleanup());
   beforeAll(() => {
@@ -29,6 +30,8 @@ export function getShHarness() {
     git(engine.repo, "add", ".");
     git(engine.repo, "commit", "-q", "-m", "engine");
     git(engine.repo, "tag", "v0.1.0");
+    git(engine.repo, "repack", "-a", "-d", "-q", "--window=0");
+    ghTar = buildGhTarball(shared.make("gh-"));
   });
 
   function sandbox(os: "Linux" | "Darwin", options: SandboxOptions = {}): Sandbox {
@@ -64,7 +67,6 @@ export function getShHarness() {
     const failDownloads = (pattern: string, times: number) => writeFileSync(join(failures, String(rules++)), `fail ${pattern} ${times}\n`);
     const stallDownloads = (pattern: string, times: number) => writeFileSync(join(failures, String(rules++)), `stall ${pattern} ${times}\n`);
     const brewInstaller = options.brewInstaller ?? `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
-    const ghTar = buildGhTarball(root);
     stub("curl", `
 out=; url=; effective=; connect=0; floor=0; window=0
 while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; -w) effective=1; shift ;; --connect-timeout) connect=$2; shift ;; --speed-limit) floor=$2; shift ;; --speed-time) window=$2; shift ;; -*) ;; *) url=$1 ;; esac; shift; done
