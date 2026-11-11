@@ -104,7 +104,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       terminal.print(`  ✓ You are in the ${ref.repo.split("/")[0]} org, so the ${packList(fetched.packs.map((pack) => pack.manifest.name), catalog)} pack is ticked`);
     }
     catalog.teamsKnown = true;
-    picksFrom(flags, catalog);
+    picksFrom(flags, catalog, progress.draft);
     const fromFlags = settingsFrom(flags, catalog);
     if (Object.keys(fromFlags).length) await context.answer({ settings: { ...progress.draft.settings, ...fromFlags } });
   };

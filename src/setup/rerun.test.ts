@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { main } from "../cli.ts";
+import { loadPacks } from "../pack/manifest.ts";
+import type { FetchedSource, SourceRef } from "../pack/types.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
-import { engineRoot, fakeMachine, fleetSetup, pushedAnswers, scripted } from "./testing.ts";
+import { engineRoot, fakeMachine, fleetSetup, machineFile, pushedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -37,5 +41,38 @@ describe("a second fleet setup", () => {
     const home = await grownProfile();
     await onMac(home, ["--non-interactive", "--preset", "starter"]);
     expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests"], workflows: {} });
+  });
+});
+
+describe("a rerun that changes picks", () => {
+  test("after a stop before the GitHub sign-in, --remove applies to the saved packs, not to the default preset", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home, { github: 1 }))).code).toBe(2);
+    expect(machineFile(home).setup.draft.packs).toEqual(["pull-requests"]);
+    const resumed = await fleetSetup(home, ["--non-interactive", "--remove", "pull-requests", "--plan", "claude", "--devbox", "skip"]);
+    expect(resumed.output).not.toContain("fleet setup:");
+    expect(await pushedAnswers(home)).toMatchObject({ packs: [] });
+  });
+
+  test("keeps a team workflow switch while the team's pack cannot be fetched", async () => {
+    const home = temp.make("home-");
+    const team = temp.make("team-");
+    mkdirSync(join(team, "packs/posthog"), { recursive: true });
+    writeFileSync(join(team, "packs/posthog/pack.json"), JSON.stringify({ schema: 1, name: "posthog", summary: "Team rules.", workflows: [{ id: "team-reviews", name: "Team reviews", default: true, sentence: "Agents ask the team for reviews." }] }));
+    const fetched = async (ref: SourceRef): Promise<FetchedSource> => ({ ref, dir: team, packs: await loadPacks(team) });
+    const offline = async (ref: SourceRef): Promise<FetchedSource> => ({ ref, error: "offline" });
+    const first = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--workflows", "team-reviews=off", "--plan", "claude", "--devbox", "skip"], [], fakeMachine(home, {}, { org: true }), fetched);
+    expect(first.code).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "posthog"], workflows: { "team-reviews": false } });
+    await fleetSetup(home, ["--non-interactive", "--add", "communication"], [], fakeMachine(home, {}, { org: true }), offline);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "posthog", "communication"], workflows: { "team-reviews": false } });
+  });
+
+  test("one by one keeps the profile's workflow switches", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--add", "guards", "--workflows", "package-age=on", "--plan", "claude", "--devbox", "skip"])).code).toBe(0);
+    const edited = await fleetSetup(home, ["--add", "communication"], ["e", "4", ...Array(16).fill("")]);
+    expect(edited.code).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: expect.arrayContaining(["pull-requests", "guards", "communication"]), workflows: { "package-age": true } });
   });
 });
