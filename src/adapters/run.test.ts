@@ -112,43 +112,44 @@ describe("account home lookup", () => {
     expect(directoryHome("dir: Users/octo\n")).toBeUndefined();
   });
 
-  test("asks getent for the uid's line and reads a backslash login's home from it", () => {
+  test("asks getent for the uid's line and reads a backslash login's home from it", async () => {
     const asked: string[][] = [];
-    const sources = { platform: "linux" as const, exists: (path: string) => path === "/usr/bin/getent", file: () => "", output: (command: string[]) => (asked.push(command), passwd.split("\n")[1]!) };
-    expect(accountHome(1000, sources)).toBe("/home/DOMAIN\\octo");
+    const sources = { platform: "linux" as const, exists: (path: string) => path === "/usr/bin/getent", file: () => "", output: async (command: string[]) => (asked.push(command), passwd.split("\n")[1]!) };
+    expect(await accountHome(1000, sources)).toBe("/home/DOMAIN\\octo");
     expect(asked).toEqual([["/usr/bin/getent", "passwd", "1000"]]);
   });
 
-  test("falls back to /etc/passwd when getent is missing", () => {
-    const sources = { platform: "linux" as const, exists: () => false, file: (path: string) => (path === "/etc/passwd" ? passwd : ""), output: () => "" };
-    expect(accountHome(1000, sources)).toBe("/home/DOMAIN\\octo");
-    expect(accountHome(4242, sources)).toBeUndefined();
+  test("falls back to /etc/passwd when getent is missing", async () => {
+    const sources = { platform: "linux" as const, exists: () => false, file: (path: string) => (path === "/etc/passwd" ? passwd : ""), output: async () => "" };
+    expect(await accountHome(1000, sources)).toBe("/home/DOMAIN\\octo");
+    expect(await accountHome(4242, sources)).toBeUndefined();
   });
 
-  test("asks the Mac directory service for the uid", () => {
-    const sources = { platform: "darwin" as const, exists: () => true, file: () => "", output: (command: string[]) => (command.join(" ") === "/usr/bin/dscacheutil -q user -a uid 501" ? "name: octo\ndir: /Users/octo\n" : "") };
-    expect(accountHome(501, sources)).toBe("/Users/octo");
+  test("asks the Mac directory service for the uid", async () => {
+    const sources = { platform: "darwin" as const, exists: () => true, file: () => "", output: async (command: string[]) => (command.join(" ") === "/usr/bin/dscacheutil -q user -a uid 501" ? "name: octo\ndir: /Users/octo\n" : "") };
+    expect(await accountHome(501, sources)).toBe("/Users/octo");
   });
 
-  test("on a Mac, falls back to /etc/passwd when dscacheutil is missing or knows no home, and never asks getent", () => {
+  test("on a Mac, falls back to /etc/passwd when dscacheutil is missing or knows no home, and never asks getent", async () => {
     const macPasswd = "_spotlight:*:89:89:Spotlight:/var/empty:/usr/bin/false\nocto:*:501:20:Octo Cat:/Users/octo:/bin/zsh\n";
     const asked: string[][] = [];
-    const missing = { platform: "darwin" as const, exists: () => false, file: (path: string) => (path === "/etc/passwd" ? macPasswd : ""), output: (command: string[]) => (asked.push(command), "") };
-    expect(accountHome(501, missing)).toBe("/Users/octo");
+    const missing = { platform: "darwin" as const, exists: () => false, file: (path: string) => (path === "/etc/passwd" ? macPasswd : ""), output: async (command: string[]) => (asked.push(command), "") };
+    expect(await accountHome(501, missing)).toBe("/Users/octo");
     expect(asked).toEqual([]);
     const silent = { ...missing, exists: (path: string) => path === "/usr/bin/dscacheutil" || path === "/usr/bin/getent" };
-    expect(accountHome(501, silent)).toBe("/Users/octo");
+    expect(await accountHome(501, silent)).toBe("/Users/octo");
     expect(asked).toEqual([["/usr/bin/dscacheutil", "-q", "user", "-a", "uid", "501"]]);
-    expect(accountHome(4242, silent)).toBeUndefined();
+    expect(await accountHome(4242, silent)).toBeUndefined();
   });
 
-  test.if(process.platform === "linux")("finds the exact account home even when HOME and PATH point elsewhere", () => {
+  test.if(process.platform === "linux")("finds the exact account home even when HOME and PATH point elsewhere", async () => {
     const uid = process.getuid!();
-    const expected = readFileSync("/etc/passwd", "utf8").split("\n").map((line) => line.split(":")).find((fields) => fields[2] === String(uid))?.[5] ?? Bun.spawnSync(["getent", "passwd", String(uid)]).stdout.toString().split(":")[5];
+    const fromPasswd = readFileSync("/etc/passwd", "utf8").split("\n").map((line) => line.split(":")).find((fields) => fields[2] === String(uid))?.[5];
+    const expected = fromPasswd ?? (await new Response(Bun.spawn(["getent", "passwd", String(uid)], { stdout: "pipe" }).stdout).text()).split(":")[5];
     const home = temp.make("home-");
-    const script = `import { accountHome } from ${JSON.stringify(join(import.meta.dir, "run.ts"))}; console.log(JSON.stringify(accountHome() ?? null));`;
-    const child = Bun.spawnSync([process.execPath, "--eval", script], { env: { HOME: home, PATH: "" } });
-    expect(JSON.parse(child.stdout.toString())).toBe(expected!);
+    const script = `import { accountHome } from ${JSON.stringify(join(import.meta.dir, "run.ts"))}; console.log(JSON.stringify((await accountHome()) ?? null));`;
+    const child = Bun.spawn([process.execPath, "--eval", script], { env: { HOME: home, PATH: "" }, stdout: "pipe" });
+    expect(JSON.parse(await new Response(child.stdout).text())).toBe(expected!);
   });
 });
 
@@ -179,9 +180,9 @@ function plan(): Plan {
 const quietServer = { answering: async () => false, session: async () => Promise.reject(new Error("no server")) };
 
 describe.each([
-  ["jobs", "your scheduled jobs", (run: CommandRunner, accountHome: () => string | undefined) => jobsAdapter({ run, accountHome, engineRoot: "/opt/fleet-engine" })],
-  ["identity", "your git identity", (run: CommandRunner, accountHome: () => string | undefined) => identityAdapter({ run, accountHome, engineRoot: "/opt/fleet-engine", hostname: "devbox" })],
-  ["t3", "T3 Code", (run: CommandRunner, accountHome: () => string | undefined) => t3Adapter({ run, accountHome, server: quietServer, user: "octo" })],
+  ["jobs", "your scheduled jobs", (run: CommandRunner, accountHome: () => Promise<string | undefined>) => jobsAdapter({ run, accountHome, engineRoot: "/opt/fleet-engine" })],
+  ["identity", "your git identity", (run: CommandRunner, accountHome: () => Promise<string | undefined>) => identityAdapter({ run, accountHome, engineRoot: "/opt/fleet-engine", hostname: "devbox" })],
+  ["t3", "T3 Code", (run: CommandRunner, accountHome: () => Promise<string | undefined>) => t3Adapter({ run, accountHome, server: quietServer, user: "octo" })],
 ] as const)("the %s adapter's home guard", (name, what, make) => {
   const recorder = () => {
     const calls: string[][] = [];
@@ -192,7 +193,7 @@ describe.each([
   test("reports a finding and runs nothing when the account home cannot be looked up", async () => {
     const home = temp.make("home-");
     const { calls, run } = recorder();
-    const report = await apply(plan(), { home, adapters: [make(run, () => undefined)] });
+    const report = await apply(plan(), { home, adapters: [make(run, async () => undefined)] });
     expect(calls).toEqual([]);
     expect(report.findings).toEqual([
       {
@@ -207,7 +208,7 @@ describe.each([
   test("runs nothing and reports nothing for a home that is not the account's", async () => {
     const home = temp.make("home-");
     const { calls, run } = recorder();
-    const report = await apply(plan(), { home, adapters: [make(run, () => "/home/someone-else")] });
+    const report = await apply(plan(), { home, adapters: [make(run, async () => "/home/someone-else")] });
     expect(calls).toEqual([]);
     expect(report).toMatchObject({ actions: [], findings: [] });
   });
@@ -215,7 +216,7 @@ describe.each([
   test("reconciles the account's own home", async () => {
     const home = temp.make("home-");
     const { calls, run } = recorder();
-    await apply(plan(), { home, adapters: [make(run, () => `${home}/`)] });
+    await apply(plan(), { home, adapters: [make(run, async () => `${home}/`)] });
     expect(calls.length).toBeGreaterThan(0);
   });
 });

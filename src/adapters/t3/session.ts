@@ -31,16 +31,22 @@ function alive(pid: number) {
 
 const scriptOf = (candidate: string) => scriptArg.exec(candidate)?.[1];
 
-function serverCli(pid: number): Cli | undefined {
+async function capture(command: string[], env: Record<string, string | undefined> = Bun.env) {
+  const child = Bun.spawn(command, { env, stdin: "ignore", stdout: "pipe" });
+  const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+  return { code, stdout };
+}
+
+async function serverCli(pid: number): Promise<Cli | undefined> {
   try {
     if (process.platform === "linux") {
       const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
       const script = scriptOf(argv[1] ?? "");
       return { command: readlinkSync(`/proc/${pid}/exe`), args: script ? [script] : [] };
     }
-    const ps = (column: string) => Bun.spawnSync(["ps", "-p", String(pid), "-o", `${column}=`]).stdout.toString().trim();
-    const command = ps("comm");
-    const rest = ps("args").slice(command.length).trim();
+    const ps = async (column: string) => (await capture(["ps", "-p", String(pid), "-o", `${column}=`])).stdout.trim();
+    const command = await ps("comm");
+    const rest = (await ps("args")).slice(command.length).trim();
     const bundle = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(command)?.[1];
     if (bundle) return { command, args: [`${bundle}/Contents/Resources/app.asar/apps/server/dist/bin.mjs`] };
     const script = scriptOf(rest);
@@ -51,13 +57,11 @@ function serverCli(pid: number): Cli | undefined {
 }
 
 function runCli(cli: Cli, argv: string[]) {
-  const env = cli.args.length ? { ...Bun.env, ELECTRON_RUN_AS_NODE: "1" } : Bun.env;
-  const result = Bun.spawnSync([cli.command, ...cli.args, ...argv], { env });
-  return { code: result.exitCode, stdout: result.stdout.toString() };
+  return capture([cli.command, ...cli.args, ...argv], cli.args.length ? { ...Bun.env, ELECTRON_RUN_AS_NODE: "1" } : Bun.env);
 }
 
-function issueSession(cli: Cli) {
-  const issued = runCli(cli, ["auth", "session", "issue", "--json", "--ttl", "5m", "--label", "fleet", "--subject", "fleet"]);
+async function issueSession(cli: Cli) {
+  const issued = await runCli(cli, ["auth", "session", "issue", "--json", "--ttl", "5m", "--label", "fleet", "--subject", "fleet"]);
   if (issued.code !== 0) throw new Error("T3 Code did not issue a session");
   const session = JSON.parse(issued.stdout.slice(issued.stdout.indexOf("{"))) as { sessionId?: string; token?: string };
   if (!session.sessionId || !session.token) throw new Error("T3 Code issued an invalid session");
@@ -130,9 +134,9 @@ export const localT3Server: T3Server = {
   async session(home, work) {
     const runtime = runtimeOf(home);
     if (!runtime) throw new Error("T3 Code is not running");
-    const cli = serverCli(runtime.pid);
+    const cli = await serverCli(runtime.pid);
     if (!cli) throw new Error(`Fleet cannot find the command of T3 Code's server process ${runtime.pid}`);
-    const session = issueSession(cli);
+    const session = await issueSession(cli);
     let connection: ReturnType<typeof connect> | undefined;
     const socket = () => (connection ??= connect(runtime.origin, session.token));
     const rpc: T3Rpc = {
@@ -148,7 +152,7 @@ export const localT3Server: T3Server = {
       return await work(rpc);
     } finally {
       (await connection?.catch(() => undefined))?.close();
-      runCli(cli, ["auth", "session", "revoke", session.sessionId]);
+      await runCli(cli, ["auth", "session", "revoke", session.sessionId]);
     }
   },
 };

@@ -27,7 +27,7 @@ export type FleetTask = {
 
 export type T3Tasks = { list(): Promise<FleetTask[]>; upsert(task: FleetTask): Promise<void>; setEnabled(id: string, enabled: boolean): Promise<void> };
 
-export type JobsOptions = { run?: CommandRunner; accountHome?: () => string | undefined; engineRoot?: string; uid?: number; t3?: () => Promise<T3Tasks | undefined> };
+export type JobsOptions = { run?: CommandRunner; accountHome?: () => Promise<string | undefined>; engineRoot?: string; uid?: number; t3?: () => Promise<T3Tasks | undefined> };
 
 export const taskPrefix = "fleet:";
 const notFound = 113;
@@ -45,7 +45,7 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       const result: AdapterResult = { actions: [], findings: [] };
       const osJobs = plan.jobs.filter((job) => job.runner !== "t3");
       for (const job of plan.jobs) if (!jobId.test(job.id)) throw new Error(`job id ${job.id} of the ${job.pack} pack may hold only letters, digits, dots, dashes, and underscores`);
-      const skipped = skipOtherHome("jobs", "your scheduled jobs", home, options);
+      const skipped = await skipOtherHome("jobs", "your scheduled jobs", home, options);
       if (skipped) return skipped;
       const command = (job: PackJob) => engineCommand(job.command, engineRoot);
       const context = { home, dryRun, run, result, outage: sourceOutage(plan), gated: new Set(plan.dropped.filter((entry) => entry.check && entry.item.startsWith("job ")).map((entry) => entry.item.slice("job ".length))) };

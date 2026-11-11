@@ -7,7 +7,7 @@ import { names, readTriggers, stripFrontmatter, textsOf } from "../lib/triggers.
 const notesPerCall = 2;
 const noteLimit = 3000;
 
-export function recallNotes(input: HookInput, home: string): string | undefined {
+export async function recallNotes(input: HookInput, home: string): Promise<string | undefined> {
   const session = input.session_id;
   const root = memoryRoot(home);
   if (!session || !existsSync(root)) return undefined;
@@ -20,7 +20,7 @@ export function recallNotes(input: HookInput, home: string): string | undefined 
     const term = trigger.terms.find((candidate) => texts.some((text) => names(candidate, text)));
     if (!term) continue;
     const scope = /^projects\/([^/]+)\//.exec(trigger.note)?.[1];
-    if (scope && scope !== (repo ??= repoOf(input.cwd ?? process.cwd()))) continue;
+    if (scope && scope !== (repo ??= await repoOf(input.cwd ?? process.cwd()))) continue;
     let text: string;
     try {
       text = stripFrontmatter(readFileSync(join(root, trigger.note), "utf8"));

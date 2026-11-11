@@ -10,11 +10,11 @@ function header(path: string) {
   return `Shared memory index ${path}. Its links are relative to ~/.agents/memory/${folder}. Open a memory before you act on its topic.`;
 }
 
-export function sessionIndexes(input: HookInput, provider: Provider, home: string): string | undefined {
+export async function sessionIndexes(input: HookInput, provider: Provider, home: string): Promise<string | undefined> {
   const session = input.session_id;
   const root = memoryRoot(home);
   if (!session || input.source === "resume" || !existsSync(root)) return undefined;
-  const repo = repoOf(input.cwd ?? process.cwd());
+  const repo = await repoOf(input.cwd ?? process.cwd());
   const wanted = [...(provider === "codex" ? ["MEMORY.md"] : []), ...(repo ? [repoIndexPath(repo)] : [])];
   const shown = wanted.flatMap((path) => {
     try {

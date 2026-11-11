@@ -78,12 +78,13 @@ export function directoryHome(text: string) {
   return home?.startsWith("/") ? home : undefined;
 }
 
-export type AccountSources = { platform: NodeJS.Platform; exists: (path: string) => boolean; file: (path: string) => string; output: (command: string[]) => string };
+export type AccountSources = { platform: NodeJS.Platform; exists: (path: string) => boolean; file: (path: string) => string; output: (command: string[]) => Promise<string> };
 
-function output(command: string[]) {
+async function output(command: string[]) {
   try {
-    const child = Bun.spawnSync(command, { env: {}, stdin: "ignore" });
-    return child.exitCode === 0 ? child.stdout.toString() : "";
+    const child = Bun.spawn(command, { env: {}, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const [text, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    return code === 0 ? text : "";
   } catch {
     return "";
   }
@@ -99,23 +100,23 @@ function file(path: string) {
 
 const system: AccountSources = { platform: process.platform, exists: existsSync, file, output };
 
-export function accountHome(uid = process.getuid?.(), sources = system) {
+export async function accountHome(uid = process.getuid?.(), sources = system) {
   if (uid === undefined) return undefined;
   const fromPasswd = () => passwdHome(sources.file("/etc/passwd"), uid);
   if (sources.platform === "darwin") {
     const dscacheutil = "/usr/bin/dscacheutil";
-    return (sources.exists(dscacheutil) ? directoryHome(sources.output([dscacheutil, "-q", "user", "-a", "uid", String(uid)])) : undefined) ?? fromPasswd();
+    return (sources.exists(dscacheutil) ? directoryHome(await sources.output([dscacheutil, "-q", "user", "-a", "uid", String(uid)])) : undefined) ?? fromPasswd();
   }
   const getent = ["/usr/bin/getent", "/bin/getent"].find((path) => sources.exists(path));
-  return (getent ? passwdHome(sources.output([getent, "passwd", String(uid)]), uid) : undefined) ?? fromPasswd();
+  return (getent ? passwdHome(await sources.output([getent, "passwd", String(uid)]), uid) : undefined) ?? fromPasswd();
 }
 
-export type HomeGuard = { run?: CommandRunner; accountHome?: () => string | undefined };
+export type HomeGuard = { run?: CommandRunner; accountHome?: () => Promise<string | undefined> };
 
-export function skipOtherHome(adapter: string, what: string, home: string, options: HomeGuard): AdapterResult | undefined {
-  const lookup = options.accountHome ?? (options.run ? undefined : accountHome);
+export async function skipOtherHome(adapter: string, what: string, home: string, options: HomeGuard): Promise<AdapterResult | undefined> {
+  const lookup = options.accountHome ?? (options.run ? undefined : () => accountHome());
   if (!lookup) return undefined;
-  const account = lookup();
+  const account = await lookup();
   if (account === undefined) {
     const say = `Fleet left ${what} alone: it could not look up your account's home folder, so it cannot tell whether ${home} is yours. Check that your system lists your user (getent passwd on Linux, dscacheutil on a Mac), then run fleet apply.`;
     return { actions: [], findings: [{ id: `${adapter}:home`, pack: "engine", say, repair: "human" }] };
