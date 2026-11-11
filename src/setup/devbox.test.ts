@@ -105,12 +105,49 @@ describe("the devbox over SSH", () => {
 
   test("stops before linking, and says to update T3 Code, when neither the T3 CLI nor its server gives the tunnel hostname", async () => {
     const home = homeWithHosts();
-    const box = fakeMachine(home, {}, { serverWithoutLinkState: true });
+    const box = fakeMachine(home, {}, { serverWithoutLinkState: ["box"] });
     const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
     expect(result.code).not.toBe(0);
     expect(result.output).toContain("node-1 has no T3 Connect address yet. Update T3 Code on node-1, then run fleet setup again.");
     expect(box.calls.map((call) => call.command.join(" "))).not.toContainEqual(expect.stringContaining("t3 environment link"));
     expect(box.sessions().filter((session) => !session.revoked)).toEqual([]);
+  });
+
+  test.each([
+    ["a server record that is not on this machine", { runtimeOrigin: "http://192.0.2.7:41773" }],
+    ["a server record whose process is gone", { serverGone: true }],
+  ])("never issues a T3 session for %s", async (_, server) => {
+    const home = homeWithHosts();
+    const box = fakeMachine(home, {}, server);
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.output).toContain("node-1 has no T3 Connect address yet. Update T3 Code on node-1, then run fleet setup again.");
+    expect(box.sessions()).toEqual([]);
+  });
+
+  test("waits for a tunnel that is still starting after T3 Connect links", async () => {
+    const home = homeWithHosts();
+    const box = fakeMachine(home, {}, { tunnelStartsAfter: 3 });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.code).toBe(0);
+    expect(box.calls.map((call) => call.command.join(" "))).toContain("t3 environment link https://box-1.relay.example --pairing-code BOXCODE --access full-access");
+    expect(box.sessions().filter((session) => !session.revoked)).toEqual([]);
+  });
+
+  test.each(["a..b", ".", "-box.example", "box_1.example"])("refuses the tunnel hostname %s", async (tunnel) => {
+    const home = homeWithHosts();
+    const box = fakeMachine(home, {}, { cliPrintsTunnel: true, boxTunnel: tunnel });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.output).toContain("node-1 has no T3 Connect address yet.");
+    expect(box.calls.map((call) => call.command.join(" "))).not.toContainEqual(expect.stringContaining("t3 environment link"));
+  });
+
+  test("says so when T3 Connect is on here but its tunnel address cannot be found, instead of calling it off", async () => {
+    const home = homeWithHosts();
+    const box = fakeMachine(home, {}, { connectHere: true, serverWithoutLinkState: ["here"] });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("T3 Connect is on here, but Fleet could not find this machine's tunnel address. Update T3 Code here, then run fleet setup again so node-1 links back.");
+    expect(result.output).not.toContain("because T3 Connect is off here");
   });
 
   test("a skip, or no host in ~/.ssh/config, leaves a plan for this machine only", async () => {

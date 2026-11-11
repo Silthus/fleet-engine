@@ -7,7 +7,7 @@ import { onHub, quote } from "../hub/ssh.ts";
 import { loadProfile, pullProfile, saveAnswers, validHost } from "../profile/profile.ts";
 import type { ExecResult, Machine } from "./commands.ts";
 import { engineRepo } from "./defaults.ts";
-import { type HumanContext, humanStep, type SignIn } from "./human.ts";
+import { type HumanContext, humanStep, pollMs, type SignIn } from "./human.ts";
 import type { Step, StepOutcome } from "./runner.ts";
 import { chatgptSignIn, claudeSignIn, githubSignIn } from "./signins.ts";
 import type { Terminal } from "./terminal.ts";
@@ -248,10 +248,20 @@ async function linkedStatus(machine: Machine) {
   return state?.authenticated === true && state.linked === true ? state : undefined;
 }
 
-/** For T3 CLIs that do not print the tunnel hostname yet: asks the T3 server on that machine with a short read-only session, and revokes the session after. */
+/** Waits a bounded time for a tunnel that is still starting after T3 Connect links. */
+async function connectAddressWithin(machine: Machine): Promise<string | undefined> {
+  for (let attempt = 0; ; attempt++) {
+    const address = await connectAddress(machine);
+    if (address || attempt === tunnelStartPolls) return address;
+    await machine.sleep(pollMs);
+  }
+}
+
+const tunnelStartPolls = 15;
+
+/** For T3 CLIs that do not print the tunnel hostname yet: asks the live T3 server on that machine with a short read-only session, and revokes the session after. */
 async function tunnelFromServer(machine: Machine): Promise<string | undefined> {
-  const runtime = parsed<{ origin?: unknown }>(await machine.exec(["sh", "-c", `cat "$HOME/.t3/userdata/server-runtime.json"`]));
-  const origin = httpOrigin(runtime?.origin);
+  const origin = await liveServerOrigin(machine);
   if (!origin) return undefined;
   const session = parsed<{ sessionId?: unknown; token?: unknown }>(await machine.exec(["t3", "auth", "session", "issue", "--json", "--ttl", "5m", "--label", "fleet", "--subject", "fleet", "--scope", "relay:read"]));
   if (typeof session?.sessionId !== "string" || typeof session.token !== "string") return undefined;
@@ -273,16 +283,27 @@ function parsed<T>(result: ExecResult): T | undefined {
   }
 }
 
-function httpOrigin(value: unknown) {
+/** The T3 server's own record of where it listens, trusted only on loopback and while its process runs. */
+async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
+  const runtime = parsed<{ origin?: unknown; pid?: unknown }>(await machine.exec(["sh", "-c", `cat "$HOME/.t3/userdata/server-runtime.json"`]));
+  const origin = loopbackOrigin(runtime?.origin);
+  const pid = runtime?.pid;
+  if (!origin || typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined;
+  return (await machine.exec(["sh", "-c", `kill -0 ${pid}`])).code === 0 ? origin : undefined;
+}
+
+function loopbackOrigin(value: unknown) {
   try {
     const url = new URL(String(value));
-    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : undefined;
+    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ? url.origin : undefined;
   } catch {
     return undefined;
   }
 }
 
-const hostnameOf = (value: unknown) => (typeof value === "string" && /^[a-z0-9.-]+$/i.test(value) ? value : undefined);
+const dnsName = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
+
+const hostnameOf = (value: unknown) => (typeof value === "string" && dnsName.test(value) ? value : undefined);
 
 /** Reads `t3 pair` output: where the environment answers, and the one-time code. */
 export function pairing(output: string): { url: string; code: string } | undefined {
@@ -306,11 +327,12 @@ async function linkBothWays(host: string, box: Machine, context: DevboxContext) 
     const linked = await to.exec(["t3", "environment", "link", address, "--pairing-code", found.code, "--access", "full-access"]);
     if (linked.code !== 0) throw new Error(`could not link ${fromName} from ${toName}: ${linked.output.trim().split("\n").at(-1) ?? ""}`);
   };
-  const boxAddress = await connectAddress(box);
+  const boxAddress = await connectAddressWithin(box);
   if (!boxAddress) throw new Error(`${host} has no T3 Connect address yet. Update T3 Code on ${host}, then run fleet setup again.`);
   await link(box, host, boxAddress, context.machine, here);
   const hereAddress = await connectAddress(context.machine);
   if (hereAddress) await link(context.machine, here, hereAddress, box, host);
+  else if (await linkedStatus(context.machine)) context.terminal.print(`  · T3 Connect is on here, but Fleet could not find this machine's tunnel address. Update T3 Code here, then run fleet setup again so ${host} links back.`);
   else context.terminal.print(`  · ${host} does not link back to this machine, because T3 Connect is off here. Turn it on with t3 up --connect, and T3 Code on ${host} can pair with this machine.`);
 }
 
