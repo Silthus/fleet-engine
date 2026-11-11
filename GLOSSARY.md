@@ -56,6 +56,10 @@ _Avoid_: Local config, state file
 A Linux machine, local or in the cloud, where agents and T3 threads run. A Coder workspace is a devbox from its first `fleet apply`, and signs Git commits with its Coder key.
 _Avoid_: Coding box, agent box
 
+**Node**:
+A devbox that stays on, where T3 threads do the work. The hub links the nodes and watches their disks.
+_Avoid_: Worker box
+
 **Hub**:
 The one machine that the profile's `hub` names, with `fleet hub here`. It runs the items placed on the hub and manages the other machines.
 _Avoid_: Controller, master box

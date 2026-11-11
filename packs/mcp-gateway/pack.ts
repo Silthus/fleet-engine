@@ -15,7 +15,7 @@ export default {
   title: "MCP gateway",
   summary: "The hub signs in to your MCP servers once, and agents on every machine reach them through it.",
   day: "Every machine reaches your MCP servers through the hub, signed in once.",
-  cost: "Docker on the hub. Every other machine reaches the gateway through its tunnel to the hub.",
+  cost: "The hub needs Docker. Every other machine reaches the gateway through its tunnel to the hub.",
   risk: "The hub holds the sign-ins for your MCP servers, and each machine holds a key that reaches all of them. Keep the hub as private as your laptop.",
   register(fleet) {
     const flow = fleet.workflow({

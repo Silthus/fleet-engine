@@ -7,7 +7,7 @@ export type SettingValue = string | number | boolean;
 export const needValues = ["gh", "devbox", "always-on devbox", "hub", "coder", "posthog-org"] as const;
 export type Need = (typeof needValues)[number];
 
-export type Preset = { id: string; name: string; blurb: string; packs: string[]; workflows: Record<string, boolean> };
+export type Preset = { id: string; name: string; blurb: string; packs: string[]; hubPacks?: string[]; hubWorkflows?: Record<string, boolean>; workflows: Record<string, boolean> };
 export type Concept = { word: string; note: string; audience?: Audience };
 
 export type PackSetting = {
@@ -87,6 +87,7 @@ export type PackStep = Scope & {
   check?: string[];
   /** The id of a human step of the same pack that must pass before this step runs. */
   after?: string;
+  /** Reverses what the step set. Fleet runs it while the check still holds, once the step leaves this machine's plan: its workflow or pack is off, or the machine no longer fits it. Fleet keeps the commands of each step that held in the machine's step ledger, so it can undo a step whose pack is gone from the profile. */
   undo?: string[];
 };
 
