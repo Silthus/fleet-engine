@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Threads } from "../../../src/sdk/index.ts";
-import { gatewayGroup, type Fetch } from "./client.ts";
+import type { Fetch } from "./client.ts";
+import { openRoute } from "./route.ts";
 
 export const defaultQuery = "in:inbox -from:me -category:promotions -category:social -category:forums";
 export const checkEveryMs = 2 * 60_000;
@@ -9,7 +10,6 @@ export const checkEveryMs = 2 * 60_000;
 const overlapMs = 15 * 60_000;
 const failureAlertMs = 20 * 60_000;
 const keepSeen = 3000;
-const protocolVersion = "2025-06-18";
 
 type Email = { id: string; thread_id: string; from_?: string; subject?: string; email_ts?: string; display_url?: string };
 type ThreadMessage = { id: string; label_ids?: string[]; internal_date?: string };
@@ -152,49 +152,12 @@ function repliesAfterYours(messages: ThreadMessage[], candidates: Email[], armed
   return candidates.filter((email) => (dates.get(email.id) ?? Number.POSITIVE_INFINITY) > after);
 }
 
-async function openGmail({ gateway, fetch }: MailWatch): Promise<Gmail> {
-  const endpoint = `${gateway.url}/mcphub/mcp/${gatewayGroup}`;
-  const base = { authorization: `Bearer ${gateway.credential}`, accept: "application/json, text/event-stream" };
-  let session: Record<string, string> = {};
-  const send = async (method: string, body?: Record<string, unknown>) => {
-    const init = { method, headers: { ...base, ...session, ...(body && { "content-type": "application/json" }) }, ...(body && { body: JSON.stringify({ jsonrpc: "2.0", ...body }) }), signal: AbortSignal.timeout(120_000) };
-    const response = await fetch(endpoint, init)
-      .catch((error: Error) => { throw new Error(`Cannot reach the MCP gateway at ${gateway.url}: ${error.message}. On the hub, run: fleet mcp-gateway doctor`); });
-    if (response.status === 401 || response.status === 403) throw new Error("The MCP gateway refused the hub's key. Run fleet apply on the hub.");
-    if (!response.ok) throw new Error(`The MCP gateway answered ${body?.method ?? method} with HTTP ${response.status}.`);
-    return response;
-  };
-  const opened = await send("POST", { id: 0, method: "initialize", params: { protocolVersion, capabilities: {}, clientInfo: { name: "fleet-mail-watch", version: "1" } } });
-  const id = opened.headers.get("mcp-session-id");
-  session = { ...(id && { "mcp-session-id": id }), "mcp-protocol-version": protocolVersion };
-  await opened.text();
-  const close = async () => void (id && (await send("DELETE").then((response) => response.text(), () => undefined)));
-  await send("POST", { method: "notifications/initialized" }).then((response) => response.text()).catch(async (error) => {
-    await close();
-    throw error;
-  });
-  let next = 1;
-  return {
-    async call(tool, args) {
-      const body = (await jsonOf(await send("POST", { id: next++, method: "tools/call", params: { name: `gmail-${tool}`, arguments: args } }))) as {
-        result?: { content?: { text?: string }[]; isError?: boolean; structuredContent?: unknown }; error?: { message: string };
-      };
-      if (body.error) throw new Error(`Gmail ${tool}: ${body.error.message}`);
-      const text = body.result?.content?.map((part) => part.text ?? "").join("") ?? "";
-      if (body.result?.isError) throw new Error(`Gmail ${tool}: ${text.slice(0, 300)}`);
-      return body.result?.structuredContent ?? JSON.parse(text);
-    },
-    close,
-  };
-}
-
-async function jsonOf(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!response.headers.get("content-type")?.includes("text/event-stream")) return JSON.parse(text);
-  const events = text.split("\n").filter((line) => line.startsWith("data:")).map((line) => JSON.parse(line.slice("data:".length)) as { id?: unknown });
-  const answer = events.find((event) => event.id !== undefined);
-  if (!answer) throw new Error("The MCP gateway ended its answer early.");
-  return answer;
+async function openGmail(watch: MailWatch): Promise<Gmail> {
+  const route = await openRoute(watch, "gmail", "fleet-mail-watch");
+  return { call: async (tool, args) => {
+    const { text, structured } = await route.call(tool, args);
+    return structured ?? JSON.parse(text);
+  }, close: route.close };
 }
 
 const oneLine = (text: string | undefined, fallback: string) => text?.replace(/\s+/g, " ").trim() || fallback;

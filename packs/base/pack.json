@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "name": "base",
-  "summary": "Safety rules, the model table, T3 Code defaults, and the jobs that keep every machine current.",
+  "summary": "Every machine gets safety rules, the model table, T3 Code defaults, and the jobs that keep it current.",
   "day": "Agents ask before they break things, pick the right model for each task, and every machine is up to date when you start.",
-  "cost": "Nothing to set up: every Fleet machine gets it.",
-  "risk": "Fleet owns its hooks in Claude Code and Codex. A hook you wrote yourself on the same event is kept until you adopt Fleet's.",
+  "cost": "You set up nothing. Every Fleet machine gets it.",
+  "risk": "Fleet owns its hooks in Claude Code and Codex. Fleet keeps a hook that you wrote yourself on the same event until you adopt Fleet's.",
   "instructions": "AGENTS.md",
   "guides": [
     {
@@ -244,7 +244,7 @@
       "id": "worktree-cleanup",
       "name": "Worktree cleanup",
       "default": true,
-      "sentence": "Idle worktrees whose work has merged are removed every few minutes.",
+      "sentence": "Every few minutes, Fleet removes idle worktrees whose work has merged.",
       "moment": {
         "time": "16:00",
         "title": "Merged work cleans itself up",

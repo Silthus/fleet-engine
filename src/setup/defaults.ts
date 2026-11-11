@@ -4,6 +4,10 @@ export const engineRepo = "Silthus/fleet-engine";
 
 export const ownDevboxPacks = ["posthog"];
 
+export const needsHubPacks = ["hub", "mcp-gateway", "recovery"];
+
+export const prefersHubPacks = ["slack"];
+
 export const makesOwnDevbox = (packs: string[]) => packs.some((pack) => ownDevboxPacks.includes(pack));
 
 export const defaultSources: SourceRef[] = [
