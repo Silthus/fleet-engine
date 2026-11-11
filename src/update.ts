@@ -32,12 +32,17 @@ export async function update(options: UpdateOptions): Promise<number> {
   if (!moved) return 1;
   const failed = await installPackages(options.engineDir);
   if (failed !== undefined) return await rollBack(options, before, failed), 1;
-  const profile = await git(options.profileDir, "remote");
-  if (profile.ok && profile.out) {
-    const pulled = await git(options.profileDir, "pull", "-q", "--ff-only");
-    if (!pulled.ok) options.print(`Note: your profile did not fast-forward, so this machine uses its last version: ${pulled.err}`);
-  }
-  return options.runApply();
+  const profileMoved = await pullProfile(options);
+  const applied = await options.runApply();
+  return applied === 0 && !profileMoved ? 1 : applied;
+}
+
+async function pullProfile(options: UpdateOptions) {
+  const remotes = await git(options.profileDir, "remote");
+  if (!remotes.ok || !remotes.out) return true;
+  const pulled = await git(options.profileDir, "pull", "-q", "--ff-only");
+  if (!pulled.ok) options.print(`fleet update: your profile did not fast-forward, so this machine applies its last version and the update counts as failed: ${pulled.err}`);
+  return pulled.ok;
 }
 
 /** The engine checkout must be clean, and its origin must be the profile's engine repository. */
