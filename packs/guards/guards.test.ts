@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AvailableSource, Plan } from "../../src/pack/types.ts";
-import { tempDirs } from "../../src/testing/git.ts";
+import { spawnGit, tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, resolveEngine, skillSources } from "../../src/testing/packs.ts";
 import { guard, type ToolCall } from "./hooks/guards.ts";
 
@@ -583,5 +583,122 @@ describe("the gh guard", () => {
   test("checks no owners when guards.owners is empty", () => {
     expect(refusal("gh pr view -R other/repo 1", null)).toBeUndefined();
     expect(refusal("gh pr view -R other/repo 1", " ")).toBeUndefined();
+  });
+});
+
+describe("the kill guard", () => {
+  const refusal = (command: string) => guard(bash(command), temp.make("home-"), temp.make("root-"))?.hookSpecificOutput.permissionDecisionReason;
+
+  test.each([
+    'pkill -f "bun dev"',
+    "pkill -9 -f vite",
+    "pkill -fe node",
+    "pkill --full server",
+    "pgrep -f vite | xargs kill",
+    "kill -9 $(pgrep -f vite)",
+    'pids=$(pgrep -f "bun test"); kill $pids',
+    'while pgrep -f "bun test"; do sleep 1; done',
+    "until ! pgrep -f server; do sleep 2; done",
+    "bash -c 'pkill -f server'",
+  ])("refuses a full-command-line match that would hit its own shell: %s", (command) => {
+    expect(refusal(command)).toContain("matches the agent's own shell");
+  });
+
+  test.each([
+    "pkill vite",
+    "pkill -f '[b]un dev'",
+    "pgrep -af vite",
+    "kill 1234",
+    "pkill -u fred node",
+    "echo 'pkill -f x'",
+  ])("allows a kill that cannot match its own shell: %s", (command) => {
+    expect(refusal(command)).toBeUndefined();
+  });
+});
+
+describe("the Git guard", () => {
+  const refusal = (command: string) => guard(bash(command), temp.make("home-"), temp.make("root-"))?.hookSpecificOutput.permissionDecisionReason;
+
+  test.each([
+    "git commit --no-verify -m x",
+    "git commit -nm x",
+    "git commit -am x -n",
+    "git push --no-verify origin HEAD",
+    "git -c core.hooksPath=/dev/null commit -m x",
+    "git merge --no-verify feature",
+  ])("refuses a call that skips the Git hooks: %s", (command) => {
+    expect(refusal(command)).toContain("skips the Git hooks");
+  });
+
+  test.each([
+    "git commit -m 'skip with --no-verify never'",
+    "git commit -m -n",
+    "git commit -m x",
+  ])("allows a commit that runs the hooks: %s", (command) => {
+    expect(refusal(command)).toBeUndefined();
+  });
+
+  test.each([
+    "git push --force origin feature",
+    "git push -f origin feature",
+    "git push -uf origin feature",
+    "git push origin +feature",
+    "git push --force-with-lease origin +HEAD:refs/heads/feature",
+    "git push --mirror origin",
+  ])("refuses a force push without a lease: %s", (command) => {
+    expect(refusal(command)).toContain("force-pushes without a lease");
+  });
+
+  test.each([
+    "git push --force-with-lease origin a b c d e f",
+    "git push --force-with-lease origin a b c && git push --force-with-lease origin d e f",
+  ])("refuses a leased force push of more than five branches: %s", (command) => {
+    expect(refusal(command)).toContain("force-pushes 6 branches at once");
+  });
+
+  test.each([
+    "git push --force-with-lease=feature:abc123 origin feature",
+    "git push --force-with-lease origin a b c d e",
+    "git push --dry-run --force origin feature",
+  ])("allows a leased force push of a few branches: %s", (command) => {
+    expect(refusal(command)).toBeUndefined();
+  });
+
+  async function repo(branch: string, config: Record<string, string> = {}, agents?: string) {
+    const dir = temp.make("repo-");
+    await spawnGit(dir, "init", "-q", "-b", branch);
+    await spawnGit(dir, "commit", "-q", "--allow-empty", "-m", "start");
+    await spawnGit(dir, "remote", "add", "origin", "https://github.com/acme/app.git");
+    for (const [key, value] of Object.entries(config)) await spawnGit(dir, "config", key, value);
+    if (agents) writeFileSync(join(dir, "AGENTS.md"), agents);
+    return dir;
+  }
+  const tracksMain = { "branch.feature.remote": "origin", "branch.feature.merge": "refs/heads/main" };
+
+  test.each([
+    ["a push to main", "main", {}, "git push origin main", "pushes to `main` of acme/app"],
+    ["a push of HEAD to master", "feature", {}, "git push origin HEAD:refs/heads/master", "pushes to `master` of acme/app"],
+    ["a bare push that push.default=upstream sends to main", "feature", { ...tracksMain, "push.default": "upstream" }, "git push", "push.default is upstream"],
+    ["a push to main after a cd into the repo", "main", {}, "cd REPO && git push origin main", "pushes to `main`"],
+    ["a push to main through git -C", "main", {}, "git -C REPO push origin main", "pushes to `main`"],
+  ])("refuses %s of a repository that takes pull requests", async (_, branch, config, command, why) => {
+    const dir = await repo(branch, config);
+    const home = homeWith(withGuards(), { "guards.person": "Robin" });
+    const at = command.includes("REPO") ? "/" : dir;
+    const denied = await preToolUse(home, "claude", bash(command.replace("REPO", dir), at), { GIT_CONFIG_NOSYSTEM: "1" });
+    expect(denied.refusal).toContain(why);
+    expect(denied.refusal).toContain("ask Robin");
+  });
+
+  test.each([
+    ["a push to its own branch", "feature", {}, undefined, {}, "git push -u origin HEAD:refs/heads/feature"],
+    ["a bare push under push.default=simple", "feature", tracksMain, undefined, {}, "git push"],
+    ["a dry run to main", "main", {}, undefined, {}, "git push --dry-run origin main"],
+    ["a push to main of a repository in guards.main-push-repos", "main", {}, undefined, { "guards.main-push-repos": "other/site, Acme/App" }, "git push origin main"],
+    ["a push to main of a repository whose AGENTS.md says to push there", "main", {}, "Commit and push all changes directly to `main`.\n", {}, "git push origin main"],
+  ])("allows %s", async (_, branch, config, agents, settings, command) => {
+    const dir = await repo(branch, config, agents);
+    const home = homeWith(withGuards(), settings);
+    expect(await preToolUse(home, "claude", bash(command, dir), { GIT_CONFIG_NOSYSTEM: "1" })).toEqual({ code: 0, refusal: undefined });
   });
 });
