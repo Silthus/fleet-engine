@@ -114,8 +114,10 @@ export class Coder {
     if (response.status === 401) return { rejected: true };
     if (response.status >= 300 && response.status < 400) throw new Error(`Coder answered ${response.status} with a redirect, so Fleet did not send the session to another address`);
     if (!response.ok) throw new Error(`Coder answered ${response.status}`);
-    const key = (await response.json()) as { expires_at: string; lifetime_seconds: number };
-    return { rejected: false, expiresAt: Date.parse(key.expires_at), lifetimeMs: key.lifetime_seconds * 1000 };
+    const key = (await response.json().catch(() => undefined)) as { expires_at?: unknown; lifetime_seconds?: unknown } | undefined;
+    const expiresAt = typeof key?.expires_at === "string" ? Date.parse(key.expires_at) : NaN;
+    if (!Number.isFinite(expiresAt)) throw new Error("Coder answered with something that is not an API key");
+    return { rejected: false, expiresAt, lifetimeMs: typeof key?.lifetime_seconds === "number" ? key.lifetime_seconds * 1000 : 0 };
   }
 
   async binary(): Promise<string> {

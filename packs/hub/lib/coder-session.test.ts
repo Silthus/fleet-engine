@@ -124,3 +124,16 @@ test("a key that reports no lifetime still warns within 7 days of its expiry", a
   expect(await hub.run()).toBe(1);
   expect(hub.lines.join("\n")).toContain("expires at 2026-11-04T00:00:00.000Z");
 });
+
+test("fleet box session prints no part of the session when Coder answers with something that is not an API key", async () => {
+  const secret = "x".repeat(22);
+  const coder = Bun.serve({ port: 0, fetch: () => new Response(`{"error": ${secret}}`, { headers: { "Content-Type": "application/json" } }) });
+  try {
+    const hub = hubWith({ ".config/coderv2/session": `${sessionToken}\n`, ".config/coderv2/url": `${coder.url.origin}\n` }, "network");
+    expect(await hub.run()).toBe(1);
+    expect(hub.lines.join("\n")).toContain("not an API key");
+    expect(hub.lines.join("\n")).not.toContain(secret);
+  } finally {
+    coder.stop(true);
+  }
+});
