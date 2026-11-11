@@ -12,6 +12,17 @@ const isStrings = (value: unknown): value is string[] => Array.isArray(value) &&
 
 export const ledgerKey = (step: { pack: string; id: string }) => `${step.pack}/${step.id}`;
 
+export const undoVariable = "FLEET_UNDO";
+
+/** The pack whose command line this is, when it is the undo, check or prerequisite of the ledger step that FLEET_UNDO names. */
+export async function undoingPack(home: string, env: Record<string, string | undefined>, command: string[]): Promise<string | undefined> {
+  const key = env[undoVariable];
+  if (!key) return undefined;
+  const step = (await readLedger(home)).find((item) => ledgerKey(item) === key);
+  const same = (line: string[] | undefined) => line?.length === command.length && line.every((part, index) => part === command[index]);
+  return step && [step.undo, step.check, step.prerequisite].some(same) ? step.pack : undefined;
+}
+
 export async function readLedger(home: string): Promise<LedgerStep[]> {
   await checkParents(home, ledgerPath);
   const path = inside(home, ledgerPath);

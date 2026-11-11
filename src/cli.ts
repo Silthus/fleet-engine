@@ -3,11 +3,13 @@ import { homedir, hostname } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { loadPacks } from "./pack/manifest.ts";
 import { cachedSource, fetchSource } from "./pack/sources.ts";
+import { cannotTell } from "./pack/types.ts";
 import type { AvailableSource, CatalogEntry, FetchedSource, Finding, LoadedPack, MachineFile, PackCode, Plan, Report } from "./pack/types.ts";
 import { loadMachine, loadProfile, pullProfile, saveMachine, thisMachine } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
 import { apply, check, type Adapter, type Issuer, type Runner } from "./reconciler/apply.ts";
 import { resolve } from "./reconciler/resolve.ts";
+import { undoingPack } from "./reconciler/ledger.ts";
 import { readNotice, update } from "./update.ts";
 import { setup, type SetupOptions } from "./setup/setup.ts";
 import { ttyTerminal, type Terminal } from "./setup/terminal.ts";
@@ -150,6 +152,9 @@ async function runUpdate(options: CliOptions) {
 }
 
 async function runPackCommand(name: string, args: string[], options: CliOptions) {
+  const typed = ["fleet", name, ...args];
+  const undoing = await undoingPack(options.home, options.env ?? {}, typed);
+  if (undoing) return runUndo(name, args, undoing, options);
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true });
   const command = plan.commands[name];
   if (!command) {
@@ -160,11 +165,28 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   if (command.on === "hub" && !plan.onHub) return runOnHub(name, args, plan, options);
   const loaded = loadedPack(sources, command.pack);
   const run = loaded?.code?.commands[name];
-  const typed = ["fleet", name, ...args];
   const repairs = plan.human.some((step) => step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
   if (!run && !repairs && options.become) return options.become(["bun", command.path, ...args], { ...Bun.env, ...packEnvironment(plan, options) });
   const exit = run ? await inPack(plan, loaded!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
   return exit === 0 && repairs ? applyProfile(plan.machine.profileDir!, options) : exit;
+}
+
+/** Runs the undo, check or prerequisite of a ledger step whose pack is off, with that pack's own command on this machine. When Fleet cannot run it here, it exits cannotTell, so the ledger keeps the step for a later apply. */
+async function runUndo(name: string, args: string[], pack: string, options: CliOptions) {
+  const cannot = (why: string) => (options.print(`fleet ${name}: cannot run the ${pack} pack's command to undo its step: ${why}`), cannotTell);
+  let loaded: Awaited<ReturnType<typeof loadPlan>>;
+  try {
+    loaded = await loadPlan(options, undefined, { fetch: false, remember: false, inherit: true, withPack: pack });
+  } catch (error) {
+    return cannot((error as Error).message);
+  }
+  const { plan, sources } = loaded;
+  const command = plan.commands[name];
+  const owner = command?.pack === pack ? loadedPack(sources, pack) : undefined;
+  if (!command || !owner) return cannot(`the ${pack} pack has no command ${name} here`);
+  if (command.on === "hub" && !plan.onHub) return cannot("it runs on the hub");
+  const run = owner.code?.commands[name];
+  return run ? await inPack(plan, owner, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
 }
 
 /** A node of the profile runs a hub command on the hub over the one SSH path, with this terminal. Any other machine is told where it runs. */
@@ -322,14 +344,16 @@ function handlerPaths(plan: Plan) {
   return Object.fromEntries(Object.entries(plan.handlers).map(([seam, handler]) => [seam, handler.path]));
 }
 
-async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean; inherit?: boolean; pull?: boolean }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
+/** withPack resolves the plan as if the profile also had that pack on, for the undo of one of its steps. */
+async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean; inherit?: boolean; pull?: boolean; withPack?: string }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
   const saved = await loadMachine(options.home);
   const inherited = mode.inherit && !profileFlag ? options.env?.FLEET_PROFILE_DIR : undefined;
   const profileDir = profileFlag ? resolvePath(profileFlag) : inherited ? resolvePath(inherited) : saved?.profileDir;
   if (!profileDir) throw new Error("no profile on this machine. Run get.sh, or pass --profile <dir>.");
   const machine: MachineFile = { ...thisMachine(saved, options.platform, options.env ?? {}, (options.hostname ?? hostname)()), profileDir };
   if (mode.pull) await pullProfile(profileDir);
-  const profile = await loadProfile(profileDir);
+  const loaded = await loadProfile(profileDir);
+  const profile = mode.withPack && !loaded.packs.includes(mode.withPack) ? { ...loaded, packs: [...loaded.packs, mode.withPack] } : loaded;
   const cache = join(options.home, ".local", "share", "fleet", "sources");
   const engine: AvailableSource = { ref: { name: "engine", repo: profile.engine.repo, ref: profile.engine.ref }, dir: options.engineRoot, packs: await loadPacks(options.engineRoot) };
   const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => (mode.fetch ? fetchSource(ref, cache) : cachedSource(ref, cache)))))];
