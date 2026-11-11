@@ -111,6 +111,9 @@ test("fleet proof review stops a reviewer stuck on spent quota, exits 4, and kee
   pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo 'API Error: Request rejected (429) · All credentials for model review-model are cooling down' >&2; exit 1";
   expect((await pr.fleet("review")).code).toBe(4);
 
+  pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; printf 'API Error: 429 Too Many Requests' >&2; exit 1";
+  expect((await pr.fleet("review")).code).toBe(4);
+
   pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo 'API Error: 503 no auth available' >&2; exit 1";
   await expect(pr.fleet("review")).rejects.toThrow("gave no findings (exit 1: API Error: 503 no auth available)");
 
