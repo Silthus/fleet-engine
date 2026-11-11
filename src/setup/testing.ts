@@ -66,7 +66,8 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
 /**
  * A machine signed in to GitHub as nora, whose sign-ins pass after a number
  * of 2 s polls: 0 means already signed in, and a sign-in that is never
- * started never passes. Its gh makes repos as bare repos under the home, and
+ * started never passes. Its gh makes repos as bare repos under the home,
+ * except in the org named by createFails, and
  * git runs for real with github.com rewritten to them. Its ssh reaches a fake
  * devbox whose sign-ins work the same way, and which, like real ssh, warns
  * on stderr that it added the host key the first time it reaches a host
@@ -77,7 +78,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * until then it refuses a node's credential when the node applies its
  * profile, and its fleet peers link refuses the node.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -175,6 +176,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       if (line === "gh api user --jq .login") return result(true, "nora\n");
       if (line.startsWith("gh repo view ")) return result(existsSync(githubRepo(home, command[3]!)), "");
       if (line.startsWith("gh repo create ")) {
+        const owner = command[3]!.split("/")[0]!;
+        if (owner === options.createFails) return result(false, `GraphQL: you cannot create repos in ${owner}`);
         const bare = githubRepo(home, command[3]!);
         mkdirSync(bare, { recursive: true });
         return realGit(home, ["init", "-q", "--bare", "-b", "main", bare]);

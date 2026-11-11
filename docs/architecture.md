@@ -272,9 +272,12 @@ and Fleet does not wrap it in a unit.
   hub.** A node runs a hub command as `ssh <hub> fleet <command>`, as
   `toHub` does. During its own apply a node pulls each credential the same
   way: `ssh <hub> fleet credential <pack>/<id> <node>`, at every apply, so a
-  new key on the hub reaches the node. The hub answers only for a node that
-  the profile names. Every such call goes through one engine path
-  (`src/hub/ssh.ts`): `BatchMode`, a checked host name, each word quoted,
+  new key on the hub reaches the node. A Mac on a profile with a hub pulls
+  its credentials the same way, though it keeps its own tunnel and gets no
+  forward. The hub answers for any node name: the caller already has a shell
+  on the hub, so a list of names would only stop a Mac. Every such call
+  goes through one engine path (`src/hub/ssh.ts`): `BatchMode`, a checked
+  host name, each word quoted,
   and Fleet's launcher at its install path, not the login `PATH`. The hub
   runs no command on a node, so `fleet mcphub grant` and its accept command
   are gone. A machine without plain `ssh` to the hub is outside v1's
