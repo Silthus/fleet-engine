@@ -125,6 +125,12 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, human: [{ ...coder, command: "coder login", interactive: "yes" }] } }))).rejects.toThrow("human coder: interactive must be true when set");
   });
 
+  test("accepts a profile org only as a GitHub owner name", async () => {
+    await expect(loadPacks(sourceWith({ base: { ...base, profileOrg: "acme-team" } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, profileOrg: "acme/team" } }))).rejects.toThrow("profileOrg must be a GitHub org name");
+    await expect(loadPacks(sourceWith({ base: { ...base, profileOrg: "" } }))).rejects.toThrow("profileOrg must be a GitHub org name");
+  });
+
   test("accepts a handler only for a seam the engine knows, with a path", async () => {
     const handler = { seam: "review-bot", path: "lib/review-bot.ts" };
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler] } }))).resolves.toHaveLength(1);

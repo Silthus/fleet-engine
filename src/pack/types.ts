@@ -149,6 +149,7 @@ export type PackManifest = {
   handlers?: PackHandler[];
   served?: ServedService[];
   models?: Partial<Record<AiPlan, ModelRow[]>>;
+  profileOrg?: string;
 };
 
 export type PackCheck = Scope & { id: string; run: string[]; say: string };

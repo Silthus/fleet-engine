@@ -79,7 +79,9 @@ Fetch the picture from
 and show it. Then say: Fleet installs agent rules, skills, and workflows. A
 **pack** is a set of workflows that you turn on as a whole. Your answers go
 to your **profile**, a private GitHub repo named `fleet-profile`, so every
-machine you add gets the same setup.
+machine you add gets the same setup. A team pack can keep its members'
+profiles in the team's GitHub org instead, as `fleet-profile-<login>`, so
+teammates can read each other's setup.
 
 ## 4. Ask where Fleet runs
 
