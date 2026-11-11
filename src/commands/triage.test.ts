@@ -224,6 +224,17 @@ describe("fleet triage", () => {
     expect(result.output).toContain(["- t_usable: 4m 12s", "", "| Step | Took | Waited on you | Result |", "| --- | --- | --- | --- |", "| Sign in to GitHub | 1m 5s | yes | done |", "| Set up \\| this Mac | 1m 50s | no | failed: exit 1 |", "| check | still running | no |  |"].join("\n"));
   });
 
+  test("before setup reaches t_usable, shows the steps it timed and no t_usable", async () => {
+    const home = temp.make("home-");
+    failedMachine(home);
+    const github = { id: "github", title: "Sign in to GitHub", kind: "human", start: "2026-11-11T10:00:05.000Z", end: "2026-11-11T10:00:47.000Z", seconds: 42, blocked: true, outcome: "done" };
+    writeFileSync(join(home, ".local/state/fleet/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: null, usableSeconds: null, blockedSteps: 1, steps: [github] }));
+    const result = await triage(home, ["--print"], []);
+    expect(result.output).toContain("- Failed at 2026-11-11T10:03:00.000Z, 4 of 8: Set up this Mac: fleet apply could not set up this machine on <this machine> for <email>.\n\n| Step | Took | Waited on you | Result |");
+    expect(result.output).toContain("| Sign in to GitHub | 42s | yes | done |");
+    expect(result.output).not.toContain("t_usable");
+  });
+
   test("keeps a long transcript under GitHub's issue size by cutting its oldest lines", async () => {
     const home = temp.make("home-");
     failedMachine(home);
@@ -266,6 +277,16 @@ describe("fleet setup and triage", () => {
     writeFileSync(join(home, ".local/state/fleet/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: "2026-11-11T10:03:07.000Z", steps: [] }));
     const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home));
     expect(result.output).toContain("  Ready after     3m 7s\n  Report          fleet triage");
+  });
+
+  test("the done screen has no ready time while the timings say setup has not reached t_usable", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    writeFileSync(join(home, ".local/state/fleet/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: null, usableSeconds: null, blockedSteps: 0, steps: [] }));
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home));
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("  Report          fleet triage");
+    expect(result.output).not.toContain("Ready after");
   });
 });
 
