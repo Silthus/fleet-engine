@@ -32,7 +32,7 @@ function alive(pid: number) {
 const scriptOf = (candidate: string) => scriptArg.exec(candidate)?.[1];
 
 async function capture(command: string[], env: Record<string, string | undefined> = Bun.env) {
-  const child = Bun.spawn(command, { env, stdin: "ignore", stdout: "pipe" });
+  const child = Bun.spawn(command, { env, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
   const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
   return { code, stdout };
 }
