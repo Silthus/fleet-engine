@@ -126,8 +126,10 @@ t3_cli() {
   quoted=$(command -v curl | sed "s/'/'\\\\''/g")
   printf "#!/bin/sh\nexec '%s' %s \"\$@\"\n" "$quoted" "$curl_limits" >"$limited/curl"
   chmod 755 "$limited/curl"
-  retry env PATH="$limited:$PATH" T3CODE_CHANNEL=nightly T3CODE_VERSION="$version" sh "$installer" || fail "T3 Code did not install."
+  installed=
+  retry env PATH="$limited:$PATH" T3CODE_CHANNEL=nightly T3CODE_VERSION="$version" sh "$installer" && installed=1
   rm -rf "$limited"
+  [ -n "$installed" ] || fail "T3 Code did not install."
 }
 
 fetch_engine() {

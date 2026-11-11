@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { git } from "./testing/git.ts";
 import { getShHarness, repoRoot } from "./testing/get-sh.ts";
@@ -130,8 +130,11 @@ describe("get.sh downloads", () => {
     expect(existsSync(join(recovers.home, ".local/bin/t3"))).toBe(true);
 
     const broken = sandbox("Linux", { t3Failures: 99 });
-    const failed = getSh(broken, ["--ref", "v0.1.0", "--install-only"]);
+    const tmp = join(broken.root, "tmp");
+    mkdirSync(tmp);
+    const failed = getSh(broken, ["--ref", "v0.1.0", "--install-only"], { env: { TMPDIR: tmp } });
     expect(failed.code).toBe(1);
+    expect(readdirSync(tmp).filter((name) => existsSync(join(tmp, name, "curl")))).toEqual([]);
     expect(failed.output).toContain("returned HTTP 403");
     expect(failed.output).toContain("Fleet: T3 Code did not install.");
     expect(failed.calls.split("\n").filter((call) => call.startsWith("t3 installer"))).toHaveLength(3);
