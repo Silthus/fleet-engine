@@ -12,26 +12,34 @@ isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
-function homeWithHosts(config = "Host box-1\n  HostName 10.0.0.5\nHost *.internal !bastion\nhost box-2 box-3\nMatch host x\n") {
+function homeWithHosts(config = "Host node-1\n  HostName 10.0.0.5\nHost *.internal !bastion\nhost node-2 node-3\nMatch host x\n") {
   const home = temp.make("home-");
   mkdirSync(join(home, ".ssh"), { recursive: true });
   writeFileSync(join(home, ".ssh/config"), config);
   return home;
 }
 
+async function nameHub(profile: string) {
+  const answers = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
+  if (answers.hub) return;
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...answers, hub: "coder.fleet-hub" }, null, 2) + "\n");
+  await spawnGit(profile, "commit", "-q", "-am", "Name the hub");
+  await spawnGit(profile, "push", "-q");
+}
+
 const remote = (box: ReturnType<typeof fakeMachine>) => [...box.calls.map((call) => onBox(call.command)), ...box.starts.map(onBox), ...box.runs.map((run) => onBox(run.command))].filter(Boolean) as string[];
 
 describe("the devbox over SSH", () => {
   test("lists the concrete hosts in ~/.ssh/config", () => {
-    expect(sshHosts(homeWithHosts())).toEqual(["box-1", "box-2", "box-3"]);
+    expect(sshHosts(homeWithHosts())).toEqual(["node-1", "node-2", "node-3"]);
     expect(sshHosts(temp.make("home-"))).toEqual([]);
   });
 
   test("runs box commands over SSH with the tools on PATH, in a scratch directory when asked", async () => {
     const box = fakeMachine(temp.make("home-"));
-    await overSsh(box.machine, "box-1").exec(["codex", "exec", "it's ok"], { cwd: "/tmp/x", timeoutMs: 20000 });
+    await overSsh(box.machine, "node-1").exec(["codex", "exec", "it's ok"], { cwd: "/tmp/x", timeoutMs: 20000 });
     expect(box.calls[0]).toEqual({
-      command: ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "box-1", `PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"; d=$(mktemp -d) && cd "$d" && codex exec 'it'\\''s ok'; s=$?; cd / && rm -rf "$d"; exit $s`],
+      command: ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "node-1", `PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"; d=$(mktemp -d) && cd "$d" && codex exec 'it'\\''s ok'; s=$?; cd / && rm -rf "$d"; exit $s`],
       timeoutMs: 20000,
     });
   });
@@ -47,10 +55,10 @@ describe("the devbox over SSH", () => {
     const result = await fleetSetup(home, ["--preset", "starter"], ["", "", "", "1"], box);
     expect(result.code).toBe(0);
     expect(result.output).toContain("? Which SSH host is your devbox?");
-    expect(result.output).toContain("  1) box-1");
-    expect(result.output).toContain("  Devbox          box-1: the same profile, signed in, linked with T3 Code here, and it makes signed commits.");
-    expect(result.output).toContain("  ✓ box-1 makes signed commits");
-    expect(machineFile(home).devboxes).toEqual(["box-1"]);
+    expect(result.output).toContain("  1) node-1");
+    expect(result.output).toContain("  Devbox          node-1: the same profile, signed in, linked with T3 Code here, and it makes signed commits.");
+    expect(result.output).toContain("  ✓ node-1 makes signed commits");
+    expect(machineFile(home).devboxes).toEqual(["node-1"]);
 
     const onTheBox = remote(box);
     expect(onTheBox).toContainEqual(expect.stringMatching(/curl -fsSL \S+\/get\.sh -o "\$installer" && sh "\$installer" --ref main --install-only/));
@@ -59,20 +67,20 @@ describe("the devbox over SSH", () => {
     expect(onTheBox).toContainEqual(expect.stringContaining(`gh repo clone https://github.com/nora/fleet-profile.git "$HOME/.local/share/fleet/profile" -- -q && sh "$HOME/.local/share/fleet/engine/get.sh" --ref main --profile "$HOME/.local/share/fleet/profile"`));
     expect(onTheBox).toContain("codex login --device-auth");
     expect(onTheBox).toContain("t3 up --connect --yes --headless");
-    expect(box.runs).toContainEqual({ command: ["ssh", "-t", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "box-1", expect.stringContaining("claude auth login")], input: true });
+    expect(box.runs).toContainEqual({ command: ["ssh", "-t", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "node-1", expect.stringContaining("claude auth login")], input: true });
     expect(box.opened).toEqual(["https://github.com/login/device"]);
     const here = box.calls.map((call) => call.command.join(" "));
     expect(here).toContain("t3 environment link https://box-1.relay.example --pairing-code BOXCODE --access full-access");
     expect(onTheBox).toContain(`t3 pair --ttl 5m --label ${hostname()}`);
     expect(onTheBox).not.toContainEqual(expect.stringContaining("t3 environment link"));
-    expect(here).not.toContain("t3 pair --ttl 5m --label box-1");
-    expect(result.output).toContain("  · box-1 does not link back to this machine, because T3 Connect is off here. Turn it on with t3 up --connect, and T3 Code on box-1 can pair with this machine.");
+    expect(here).not.toContain("t3 pair --ttl 5m --label node-1");
+    expect(result.output).toContain("  · node-1 does not link back to this machine, because T3 Connect is off here. Turn it on with t3 up --connect, and T3 Code on node-1 can pair with this machine.");
   });
 
   test("links back from the devbox when T3 Connect is on here, and installs the engine of a tracking profile from main", async () => {
     const home = homeWithHosts();
     const box = fakeMachine(home, {}, { connectHere: true });
-    const result = await fleetSetup(home, ["--preset", "starter", "--devbox", "box-1"], ["", "", ""], box);
+    const result = await fleetSetup(home, ["--preset", "starter", "--devbox", "node-1"], ["", "", ""], box);
     expect(result.code).toBe(0);
     expect(remote(box)).toContain("t3 environment link https://here.relay.example --pairing-code HERECODE --access full-access");
 
@@ -96,9 +104,9 @@ describe("the devbox over SSH", () => {
   test("--devbox picks the host without asking, and a run without a person lists the box sign-ins it needs", async () => {
     const home = temp.make("home-");
     const box = fakeMachine(home, { "box:github": 1 });
-    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "box-9"], [], box);
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "node-9"], [], box);
     expect(result.code).toBe(2);
-    expect(result.output).toContain("  Sign in to GitHub on box-9: do it once in a terminal, then run fleet setup again");
+    expect(result.output).toContain("  Sign in to GitHub on node-9: do it once in a terminal, then run fleet setup again");
     expect(remote(box)).toContainEqual(expect.stringContaining("--install-only"));
     expect(box.starts).toEqual([]);
   });
@@ -110,21 +118,21 @@ describe("the devbox over SSH", () => {
     expect((await fleetSetup(alone, [...args, "--devbox", "skip"], ["", ""], fakeMachine(alone))).output).not.toContain(question);
 
     const home = temp.make("home-");
-    const result = await fleetSetup(home, [...args, "--devbox", "box-1"], ["", "", "~/code/app"], fakeMachine(home));
+    const result = await fleetSetup(home, [...args, "--devbox", "node-1"], ["", "", "~/code/app"], fakeMachine(home));
     expect(result.code).toBe(0);
     const output = result.output;
-    expect(output.indexOf(question)).toBeGreaterThan(output.indexOf("  ✓ box-1"));
-    expect(output.indexOf(question)).toBeLessThan(output.indexOf("▶ Install Fleet on box-1"));
+    expect(output.indexOf(question)).toBeGreaterThan(output.indexOf("  ✓ node-1"));
+    expect(output.indexOf(question)).toBeLessThan(output.indexOf("▶ Install Fleet on node-1"));
     expect((await pushedAnswers(home)).settings["orchestration.loopProject"]).toBe("~/code/app");
 
     const later = temp.make("home-");
-    const waiting = await fleetSetup(later, ["--non-interactive", ...args, "--devbox", "box-9"], [], fakeMachine(later));
+    const waiting = await fleetSetup(later, ["--non-interactive", ...args, "--devbox", "node-9"], [], fakeMachine(later));
     expect(waiting.code).toBe(2);
     expect(waiting.output).toContain("  --set orchestration.loopProject=<value>   Which T3 project do the loops and the PR digest run in?");
   });
 
   test("a devbox setting whose push failed is pushed on the next run before the box is installed", async () => {
-    const args = ["--preset", "everyday", "--plan", "claude", "--workflows", "pr-digest=on", "--devbox", "box-1"];
+    const args = ["--preset", "everyday", "--plan", "claude", "--workflows", "pr-digest=on", "--devbox", "node-1"];
     const home = temp.make("home-");
     expect((await fleetSetup(home, args, ["", ""], fakeMachine(home))).code).toBe(130);
     const rejecting = join(githubRepo(home, "nora/fleet-profile"), "hooks/pre-receive");
@@ -133,11 +141,44 @@ describe("the devbox over SSH", () => {
 
     const blocked = await fleetSetup(home, ["--non-interactive", ...args], [], fakeMachine(home));
     expect(blocked.output).toContain("could not push answers: ! [remote rejected] main -> main (pre-receive hook declined). Fix that, then try again.");
-    expect(blocked.output).not.toContain("▶ Install Fleet on box-1");
+    expect(blocked.output).not.toContain("▶ Install Fleet on node-1");
 
     rmSync(rejecting);
     expect((await fleetSetup(home, ["--non-interactive", ...args], [], fakeMachine(home))).code).toBe(0);
     expect((await pushedAnswers(home)).settings["orchestration.loopProject"]).toBe("~/code/app");
+  });
+
+  test("fleet setup --devbox lists the node in the profile, and the hub takes it before the node asks it for a credential and links it in T3 Code once the node runs T3", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home);
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "coder.fleet-node-1"], ["", "", ""], box, undefined, 0, "linux", nameHub);
+    expect(result.code).toBe(0);
+    expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1"]);
+    expect(box.hubUpdates).toEqual(["coder.fleet-hub"]);
+    expect(box.credentials).toEqual([{ node: "coder.fleet-node-1", issued: true }]);
+    expect(result.output).toContain("✓ The hub, coder.fleet-hub, took coder.fleet-node-1: its disk watch, tunnels and credentials include it now.");
+    expect(box.hubLinked).toEqual(["coder.fleet-node-1"]);
+    expect(result.output).toContain("✓ The hub, coder.fleet-hub, linked coder.fleet-node-1 in T3 Code.");
+  });
+
+  test("fleet setup refuses a devbox name the hub cannot use, or a pool box name, and its list of SSH hosts leaves them out", async () => {
+    for (const [host, says] of [
+      ["box-7", "fleet setup: box-7 is a pool box name. Names that start with box- are kept for the boxes the hub starts; give the devbox another SSH name."],
+      ["Node-1", "fleet setup: Node-1 is not a name the hub can use."],
+    ]) {
+      const home = temp.make("home-");
+      const box = fakeMachine(home);
+      const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", host!], [], box);
+      expect(result.code).toBe(2);
+      expect(result.output).toStartWith(says!);
+      expect(remote(box)).toEqual([]);
+    }
+    const home = homeWithHosts("Host box-1 Node-2 node-3\n");
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", "", "1"], fakeMachine(home));
+    expect(result.output).toContain("  1) node-3");
+    expect(result.output).not.toContain(") box-1");
+    expect(result.output).not.toContain(") Node-2");
+    expect(machineFile(home).devboxes).toEqual(["node-3"]);
   });
 
   test("fleet devbox add makes a host a devbox later, and a failed install stops with what to do", async () => {

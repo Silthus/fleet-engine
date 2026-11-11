@@ -212,11 +212,11 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   return { machine, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked };
 }
 
-export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>, doctorCode = 0, platform: NodeJS.Platform = "linux", onApply: (dir: string) => void = () => {}) {
+export async function fleetSetup(home: string, args: string[], replies: string[] = [], box = fakeMachine(home), fetchSource?: (ref: SourceRef, cache: string) => Promise<FetchedSource>, doctorCode = 0, platform: NodeJS.Platform = "linux", onApply: (dir: string) => void | Promise<void> = () => {}) {
   const io = scripted(replies);
   const applied: string[] = [];
   const doctored: string[] = [];
-  const apply = async (dir: string) => (applied.push(dir), onApply(dir), 0);
+  const apply = async (dir: string) => (applied.push(dir), await onApply(dir), 0);
   const doctor = async (dir: string) => (doctored.push(dir), doctorCode);
   const code = await main(["setup", ...args], { home, engineRoot, platform, print: io.terminal.print, terminal: io.terminal, apply, setup: { machine: box.machine, doctor, env: {}, timeZone: "UTC", ...(fetchSource ? { fetchSource } : {}) } });
   return { code, prompts: io.prompts, output: io.output(), applied, doctored };
