@@ -247,6 +247,10 @@ describe("the devbox over SSH", () => {
     expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1", "coder.fleet-node-2"]);
     expect(io.output()).toContain("· The hub, coder.fleet-hub, did not answer. It takes coder.fleet-node-2 at its next fleet update, or run fleet update there now.");
     expect(io.output()).toEndWith("· The hub, coder.fleet-hub, has not linked coder.fleet-node-2 in T3 Code yet. Its daily fleet peers renew links it, or run fleet peers link coder.fleet-node-2 there now.");
+
+    const failing = fakeMachine(home, {}, { hubUpdateFails: "fleet update: /home/nora/.local/share/fleet/engine has local changes." });
+    expect(await add("coder.fleet-node-3", failing)).toBe(0);
+    expect(io.output()).toContain("▶ The hub, coder.fleet-hub, takes coder.fleet-node-3 with fleet update there. This can take some minutes.\n· The hub, coder.fleet-hub, could not update: fleet update: /home/nora/.local/share/fleet/engine has local changes. Fix that there and run fleet update there; it takes coder.fleet-node-3 then.");
   });
 
   test("fleet devbox add pushes the node on the next run when the push of the profile failed", async () => {
@@ -298,6 +302,17 @@ describe("the devbox over SSH", () => {
     expect(boxMachineFile(home, "node-3").name).toBe("old-node");
     expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1", "node-2"]);
     expect(box.hubUpdates).toEqual([]);
+  });
+
+  test("fleet devbox add reads the box's role file and T3 Connect state apart from the host key warning ssh prints when it first reaches the box", async () => {
+    const { home, add } = await withHub();
+    const folder = join(boxHome(home, "node-4"), ".config/fleet");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "machine.json"), JSON.stringify({ schema: 1, role: "linux" }));
+    const box = fakeMachine(home, { "box:t3": 1 });
+    expect(await add("node-4", box)).toBe(0);
+    expect(boxMachineFile(home, "node-4")).toEqual({ schema: 1, role: "linux", name: "node-4" });
+    expect(machineFile(home).setup.done).toContain("devbox:node-4:link");
   });
 
   test("fleet devbox add for the hub itself lists it once and asks nothing of a hub", async () => {
