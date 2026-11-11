@@ -62,7 +62,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * devbox whose sign-ins work the same way; Claude there signs in when its
  * foreground sign-in runs.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string> } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; boxCoderAt?: string } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -80,13 +80,15 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line.startsWith("t3 environment link ")) return result(true, "linked");
     return undefined;
   };
+  let boxCoderAt = options.boxCoderAt ?? "https://coder.example.com";
   const box = (line: string, input?: string): ExecResult => {
-    if (line === "coder whoami") return passes("box:coder") ? result(true, coderWhoami) : result(false, "You are not logged in");
-    if (line.includes("coder login https://coder.example.com") && line.startsWith("sh -c ")) {
-      if (input === `${coderToken}\n`) left["box:coder"] = 0;
+    if (line === "coder whoami") return passes("box:coder") ? result(true, coderWhoami.replace("https://coder.example.com", boxCoderAt)) : result(false, "You are not logged in");
+    if (line.includes('CODER_SESSION_TOKEN="$token" coder login ') && line.startsWith("sh -c ")) {
+      if (!line.includes("coder login --use-token-as-session https://coder.example.com")) return result(false, "CODER_SESSION_TOKEN is set. Unset it, or pass --use-token-as-session to save it as your session.");
+      if (input === `${coderToken}\n`) (left["box:coder"] = 0), (boxCoderAt = "https://coder.example.com");
       return result(passes("box:coder"), passes("box:coder") ? "Welcome to Coder, nora! You're authenticated." : "invalid token");
     }
-    if (line === "coder config-ssh --yes") return passes("box:coder") ? (coderSsh.push("box"), result(true, "Updated \"~/.ssh/config\"")) : result(false, "You are not logged in");
+    if (line === "coder config-ssh --yes") return passes("box:coder") ? (coderSsh.push(boxCoderAt), result(true, "Updated \"~/.ssh/config\"")) : result(false, "You are not logged in");
     if (line.startsWith("gh auth status")) return ghStatus("box:github", scopes);
     if (line === "gh auth setup-git") return result(true);
     if (line === "claude auth status") return result(passes("box:claude"), JSON.stringify({ loggedIn: passes("box:claude") }));
