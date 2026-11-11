@@ -6,7 +6,7 @@ import { anchorCheck } from "./finding-anchors.ts";
 import { readJson, roundId, storeCapturedFindings, writeJson, type ProofIdentity } from "./proof.ts";
 import { askModel, familyOf, isQuotaExhausted, quotaExitCode, reviewerRow, sameFamilyRow, type Family } from "./proof-models.ts";
 import type { ModelRow } from "../../base/lib/models.ts";
-import { capped, diffCap } from "./proof-review.ts";
+import { capped, diffCap, reviewedDiff } from "./proof-review.ts";
 
 export type PanelGuide = { brief: string; lenses: Map<string, { title: string; text: string }>; freshEyes: Set<string>; contextFree: Set<string> };
 export type Lens = { name: string; title: string; family: Family; row: ModelRow; text: string; knowledge: string; context: boolean };
@@ -315,7 +315,7 @@ async function finishPanel(directory: string) {
 
 function roundDiff(plan: Plan, from: string, commit: string) {
   const diff = Bun.spawnSync(["git", "diff", "--no-ext-diff", "--no-textconv", "--no-relative", from, commit], { cwd: plan.cwd, stdout: "pipe", stderr: "pipe" });
-  return diff.exitCode === 0 ? diff.stdout.toString() : undefined;
+  return diff.exitCode === 0 ? reviewedDiff(diff.stdout.toString()) : undefined;
 }
 
 async function earlierFindings(directory: string) {
