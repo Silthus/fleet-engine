@@ -242,7 +242,7 @@ describe("on a devbox", () => {
     const { fleet } = machine(nodeMachine, {}, { "hub-1": "down" });
     gatewayServer();
     const applied = await fleet(["apply"]);
-    expect(applied.output).toContain("Fix: Could not pull the credential of mcp-gateway/mcp-gateway from the hub hub-1 (ssh: connect to host hub-1 port 22: Connection refused). Fleet tries again at the next apply.");
+    expect(applied.output).toContain("Fix: Could not pull the credential of mcp-gateway/mcp-gateway from the hub hub-1 (ssh exited 255. Run ssh hub-1 true to see why). Fleet tries again at the next apply.");
     expect(applied.output).toContain("This machine cannot reach the MCP gateway.");
     expect(await fleet(["run", "mcp-gateway/mcp-gateway-client"])).toEqual({ code: 1, output: "This machine has no MCP gateway key. Run fleet apply on this machine to pull its key from the hub." });
   });

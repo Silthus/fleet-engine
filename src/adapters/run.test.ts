@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Plan } from "../pack/types.ts";
 import { apply } from "../reconciler/apply.ts";
@@ -26,6 +27,68 @@ describe("the command runner", () => {
     }
   });
 
+  test("stops the command and every process it started when its signal aborts", async () => {
+    const fifos = temp.make("fifo-");
+    const [ready, gone] = [join(fifos, "ready"), join(fifos, "gone")];
+    expect(Bun.spawnSync(["mkfifo", ready, gone]).exitCode).toBe(0);
+    const deadline = new AbortController();
+    const running = spawnRunner(["sh", "-c", '{ sleep 30 & } 3>"$1"; echo $! > "$0"; wait', ready, gone], { signal: deadline.signal });
+    const holderGone = readFile(gone, "utf8");
+    const holder = Number((await readFile(ready, "utf8")).trim());
+    try {
+      deadline.abort();
+      expect(await running).toEqual({ code: 143, stdout: "", stderr: "" });
+      expect(await holderGone).toBe("");
+    } finally {
+      try { process.kill(holder); } catch {}
+    }
+  });
+
+  test("an aborted command returns even while a process that left its group keeps the output open", async () => {
+    const ready = join(temp.make("fifo-"), "ready");
+    expect(Bun.spawnSync(["mkfifo", ready]).exitCode).toBe(0);
+    const deadline = new AbortController();
+    const leave = 'const away = Bun.spawn(["sleep", "30"], { detached: true, stdout: "inherit", stderr: "inherit" }); await Bun.write(Bun.env.READY, `${away.pid}`);';
+    const before = process.env.READY;
+    process.env.READY = ready;
+    const running = spawnRunner([process.execPath, "-e", leave], { signal: deadline.signal });
+    if (before === undefined) delete process.env.READY;
+    else process.env.READY = before;
+    const away = Number((await readFile(ready, "utf8")).trim());
+    try {
+      deadline.abort();
+      expect(await running).toMatchObject({ stdout: "", stderr: "" });
+    } finally {
+      try { process.kill(away); } catch {}
+    }
+  });
+
+  test("an interrupt of this process ends the command's process group and still ends this process", async () => {
+    const fifos = temp.make("fifo-");
+    const [ready, gone] = [join(fifos, "ready"), join(fifos, "gone")];
+    expect(Bun.spawnSync(["mkfifo", ready, gone]).exitCode).toBe(0);
+    const runner = Bun.spawn([process.execPath, join(import.meta.dir, "fixtures/stoppable-run.ts"), ready, gone], { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
+    const holderGone = readFile(gone, "utf8");
+    const holder = Number((await readFile(ready, "utf8")).trim());
+    try {
+      runner.kill("SIGINT");
+      expect(await runner.exited).toBe(130);
+      expect(await new Response(runner.stdout).text()).toBe("");
+      expect(await holderGone).toBe("");
+    } finally {
+      try { process.kill(holder); } catch {}
+    }
+  });
+
+  test("leaves no listener on the signal once the command is done", async () => {
+    const { signal } = new AbortController();
+    const listening = new Set<unknown>();
+    const [add, remove] = [signal.addEventListener.bind(signal), signal.removeEventListener.bind(signal)];
+    signal.addEventListener = (type: "abort", listener: EventListener, options?: AddEventListenerOptions) => (listening.add(listener), add(type, listener, options));
+    signal.removeEventListener = (type: "abort", listener: EventListener, options?: EventListenerOptions) => (listening.delete(listener), remove(type, listener, options));
+    expect(await spawnRunner(["sh", "-c", "printf done"], { signal })).toEqual({ code: 0, stdout: "done", stderr: "" });
+    expect(listening.size).toBe(0);
+  });
 });
 
 describe("account home lookup", () => {
