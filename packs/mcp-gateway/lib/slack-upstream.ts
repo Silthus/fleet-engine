@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { withUnicodeSkinTones } from "./skin-tones.ts";
 import { backendArguments, draftOnly, refusal, slackApp, slackToolAllowed } from "./slack-tools.ts";
 
 type Id = number | string;
@@ -94,7 +95,7 @@ async function invoke(id: Id, params: { name: string; arguments?: Record<string,
   active = id;
   try {
     thread ??= call("thread/start", { cwd: "/app/data", ephemeral: true }).then((started) => started.thread.id as string, (error) => { thread = undefined; throw error; });
-    const { structuredContent, ...result } = await call("mcpServer/tool/call", { threadId: await thread, server: "codex_apps", tool: `${slackApp.prefix}${params.name}`, arguments: params.arguments ?? {} });
+    const { structuredContent, ...result } = await call("mcpServer/tool/call", { threadId: await thread, server: "codex_apps", tool: `${slackApp.prefix}${params.name}`, arguments: withUnicodeSkinTones(params.arguments ?? {}) });
     return structuredContent == null ? result : { ...result, structuredContent };
   } finally { active = undefined; }
 }
