@@ -501,6 +501,16 @@
         "hub-https",
         "doctor"
       ],
+      "undo": [
+        "fleet",
+        "hub-https",
+        "remove"
+      ],
+      "left": [
+        "fleet",
+        "hub-https",
+        "left"
+      ],
       "roles": [
         "hub"
       ],
@@ -517,6 +527,16 @@
         "fleet",
         "ssh-tunnels",
         "doctor"
+      ],
+      "undo": [
+        "fleet",
+        "ssh-tunnels",
+        "remove"
+      ],
+      "left": [
+        "fleet",
+        "ssh-tunnels",
+        "left"
       ],
       "roles": [
         "hub",
@@ -536,6 +556,16 @@
         "peers",
         "doctor"
       ],
+      "undo": [
+        "fleet",
+        "peers",
+        "remove"
+      ],
+      "left": [
+        "fleet",
+        "peers",
+        "left"
+      ],
       "roles": [
         "hub",
         "devbox"
@@ -554,6 +584,16 @@
         "hub-tunnel",
         "doctor"
       ],
+      "undo": [
+        "fleet",
+        "hub-tunnel",
+        "remove"
+      ],
+      "left": [
+        "fleet",
+        "hub-tunnel",
+        "left"
+      ],
       "roles": [
         "mac"
       ],
@@ -570,6 +610,16 @@
         "fleet",
         "cli-proxy",
         "doctor"
+      ],
+      "undo": [
+        "fleet",
+        "cli-proxy",
+        "remove"
+      ],
+      "left": [
+        "fleet",
+        "cli-proxy",
+        "left"
       ],
       "roles": [
         "hub"

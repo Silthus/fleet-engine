@@ -7,7 +7,7 @@ import { run } from "../lib/run.ts";
 import { tunnelTargets } from "../lib/tunnels.ts";
 import { numberSetting, stringSetting } from "../../base/lib/settings.ts";
 
-const modes = ["plan", "install", "doctor", "connect", "disconnect", "check"];
+const modes = ["plan", "install", "doctor", "connect", "disconnect", "check", "remove", "left"];
 const plans = ["claude", "codex", "both"];
 const version = "8.0.46";
 const archives: Record<string, [string, string]> = {
@@ -23,7 +23,7 @@ function release(): Release {
 await runCommand(() => {
   const [mode = "plan", ...rest] = Bun.argv.slice(2);
   const agent = mode === "check" && rest.length === 1 && rest[0] === "codex" ? "codex" : rest.length ? undefined : "claude";
-  if (!agent || !modes.includes(mode)) return console.error("Usage: fleet cli-proxy [plan|install|doctor|check [codex]|disconnect], or fleet cli-proxy connect < key file"), 2;
+  if (!agent || !modes.includes(mode)) return console.error("Usage: fleet cli-proxy [plan|install|doctor|check [codex]|disconnect|remove|left], or fleet cli-proxy connect < key file"), 2;
   return cliProxy(mode as ProxyMode, {
     home: homedir(), uid: process.getuid?.() ?? 0, user: userInfo().username, ...(plans.includes(Bun.env.FLEET_PLAN ?? "") ? { plan: Bun.env.FLEET_PLAN as AiPlan } : {}), ...(proxyOn(Bun.env) ? { accounts: numberSetting("hub.proxyAccounts") } : {}),
     devboxes: mode === "doctor" ? tunnelTargets(stringSetting("hub.alias"), peerMachine().devboxes, hostname()) : [],

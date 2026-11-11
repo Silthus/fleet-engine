@@ -49,3 +49,16 @@ test("through fleet, disk-watch refuses off the hub, and disk-sweep checks its a
   const sweep = await runFleet(["disk-sweep", "--all"], { HOME: home });
   expect([sweep.code, sweep.stderr]).toEqual([1, "fleet disk-sweep: Usage: fleet disk-sweep [--dry-run] [--floor <gigabytes>] [--alert-floor <gigabytes>]\n"]);
 });
+
+test("through fleet, the hub pack's undo probe runs after the pack leaves the profile, for the step the ledger names, without its settings", async () => {
+  const home = temp.make("fleet-hub-undo-");
+  await fleetMachine(home, {});
+  mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+  const step = { pack: "hub", id: "hub-https", check: ["fleet", "hub-https", "left"], undo: ["fleet", "hub-https", "remove"] };
+  writeFileSync(join(home, ".local/state/fleet/steps.json"), JSON.stringify({ version: 1, steps: [step] }));
+  expect((await runFleet(["hub-https", "left"], { HOME: home })).code).toBe(2);
+  expect((await runFleet(["hub-https", "left"], { HOME: home, FLEET_UNDO: "hub/hub-https" })).code).toBe(1);
+  mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
+  writeFileSync(join(home, ".config/systemd/user/fleet-hub-https.service"), "# Managed by Fleet hub HTTPS.\n[Unit]\n");
+  expect((await runFleet(["hub-https", "left"], { HOME: home, FLEET_UNDO: "hub/hub-https" })).code).toBe(0);
+});

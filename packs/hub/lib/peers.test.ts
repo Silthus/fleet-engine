@@ -514,3 +514,25 @@ test("on a box, every fleet peers job and step does nothing and passes", async (
   expect(existsSync(join(home, ".ssh"))).toBe(false);
   expect(existsSync(peerRecord(home, "devbox-2"))).toBe(true);
 });
+
+test("peer remove deletes the peer file and its Include line, keeps the person's own lines, and left then reports nothing left", async () => {
+  const home = temp.make("fleet-peers-");
+  writeHome(home, { ".ssh/config": "Host github.com\n  User git\n" });
+  const { machine } = fakeMachine(home);
+  expect(await peersCommand(["install"], machine)).toBe(0);
+  expect(await peersCommand(["left"], machine)).toBe(0);
+  expect(await peersCommand(["remove"], machine)).toBe(0);
+  expect(existsSync(join(home, ".ssh/fleet-peers.conf"))).toBe(false);
+  expect(readFileSync(join(home, ".ssh/config"), "utf8")).toBe("Host github.com\n  User git\n");
+  expect(await peersCommand(["left"], machine)).toBe(1);
+  expect(await peersCommand(["remove"], machine)).toBe(0);
+  expect(readFileSync(join(home, ".ssh/config"), "utf8")).toBe("Host github.com\n  User git\n");
+});
+
+test("peer remove keeps a peer file that Fleet did not write", async () => {
+  const home = temp.make("fleet-peers-");
+  writeHome(home, { ".ssh/fleet-peers.conf": "Host box-1\n  HostName 10.0.0.1\n" });
+  const { machine } = fakeMachine(home);
+  await expect(peersCommand(["remove"], machine)).rejects.toThrow("Keep unmanaged SSH config file");
+  expect(readFileSync(join(home, ".ssh/fleet-peers.conf"), "utf8")).toBe("Host box-1\n  HostName 10.0.0.1\n");
+});

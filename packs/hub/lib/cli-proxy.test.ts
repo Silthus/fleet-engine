@@ -612,3 +612,15 @@ test("a fleet-proxy table that does not reach the proxy with this machine's key 
   codexRouted(edited.home, { model_providers: { "fleet-proxy": { ...fleetProxy, http_headers: { "X-Team": "mine" } } } });
   expect(await cliProxy("check", edited.machine, "codex")).toBe(0);
 });
+
+test("remove stops and deletes the proxy's unit, keeps its keys, config and subscriptions, and left then reports nothing left", async () => {
+  const { machine, home } = hubMachine();
+  await cliProxy("install", machine);
+  expect(await cliProxy("left", machine)).toBe(0);
+  const removing = hubMachine({ home });
+  expect(await cliProxy("remove", removing.machine)).toBe(0);
+  expect(removing.calls).toEqual(["systemctl --user disable --now fleet-cli-proxy.service", "systemctl --user daemon-reload"]);
+  expect(existsSync(unitFile(home))).toBe(false);
+  for (const path of [keyFile(home), join(dataDir(home), "management.env"), join(dataDir(home), "config.yaml"), join(dataDir(home), "auth")]) expect([path, existsSync(path)]).toEqual([path, true]);
+  expect(await cliProxy("left", removing.machine)).toBe(1);
+});

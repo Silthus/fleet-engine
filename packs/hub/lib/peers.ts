@@ -1,9 +1,10 @@
 import { existsSync, lstatSync, readdirSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { LinkedEnvironment } from "../../base/lib/t3/environments.ts";
 import { tryLockPeer, userWaitMs, withPeerLock } from "./box-lock.ts";
 import { boxMarkerPath, forget, linkTarget, pairWith, readRecord, reviveLink, stopUnit, t3Of, t3Port, type Linker } from "./links.ts";
-import { changedFiles, readIfThere, writeFiles } from "./managed.ts";
+import { changedFiles, ownedFiles, readIfThere, writeFiles } from "./managed.ts";
 import type { PeerMachine } from "./machine.ts";
 import { refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
 import { isBoxName, sshName } from "./names.ts";
@@ -13,7 +14,7 @@ export type PeerHere = Linker & Pick<PeerMachine, "peers" | "devboxes" | "onPeer
 
 const renewWithinMs = 7 * 86_400_000;
 const marker = "# Managed by Fleet peer access.";
-const usage = "Usage: fleet peers [plan|install|doctor]  Write or check the SSH config that names every peer\n       fleet peers link [<alias>...]       Link every peer, or the named ones, to T3 here\n       fleet peers renew                   Link each missing peer, and renew each link that expires within 7 days\n       fleet peers restore                 Start each recorded peer forward that does not run";
+const usage = "Usage: fleet peers [plan|install|doctor]  Write or check the SSH config that names every peer\n       fleet peers remove|left            Remove the SSH config Fleet wrote, or say whether it is still here\n       fleet peers link [<alias>...]       Link every peer, or the named ones, to T3 here\n       fleet peers renew                   Link each missing peer, and renew each link that expires within 7 days\n       fleet peers restore                 Start each recorded peer forward that does not run";
 const peerLinks = (here: Pick<PeerHere, "home">) => join(here.home, ".config/fleet/peer-links");
 const recordOf = (here: Pick<PeerHere, "home">, alias: string) => join(peerLinks(here), `${sshName(alias)}.json`);
 const guardPeerLinks = (here: Pick<PeerHere, "home">) => refuseLinks(here.home, peerLinks(here), "peer link folder");
@@ -192,6 +193,19 @@ export async function installPeerConfig(home: string, peers: string[], apply: bo
   return peers;
 }
 
+/** Whether Fleet's peer file or its Include line is still here, and with apply, takes both away and keeps the person's own lines. */
+export async function removePeerConfig(home: string, apply: boolean): Promise<boolean> {
+  const paths = peerPaths(home);
+  await refuseLinks(home, paths.config, "SSH config path");
+  const owned = await ownedFiles(home, [paths.peers], marker, "SSH config");
+  const include = includeOf(paths.peers);
+  const lines = ((await readIfThere(paths.config)) ?? "").split("\n");
+  const included = lines.includes(include);
+  if (apply && owned.length) await rm(paths.peers);
+  if (apply && included) await writePrivateFile(paths.config, lines.filter((line) => line !== include).join("\n"));
+  return owned.length > 0 || included;
+}
+
 export async function peerDoctor(home: string, peers: string[]): Promise<boolean> {
   const paths = peerPaths(home);
   for (const path of [paths.peers, paths.config]) await refuseLinks(home, path, "SSH config path");
@@ -203,7 +217,9 @@ export async function peerDoctor(home: string, peers: string[]): Promise<boolean
 
 export async function peersCommand(args: string[], here: PeerHere): Promise<number> {
   const [mode = "plan", ...rest] = args;
-  if (mode !== "link" && (rest.length || !["plan", "install", "doctor", "renew", "restore"].includes(mode))) return here.print(usage), 2;
+  if (mode !== "link" && (rest.length || !["plan", "install", "doctor", "renew", "restore", "remove", "left"].includes(mode))) return here.print(usage), 2;
+  if (mode === "left") return (await removePeerConfig(here.home, false)) ? 0 : 1;
+  if (mode === "remove") return await removePeerConfig(here.home, true), here.print("Peer access: removed the SSH config Fleet wrote."), 0;
   if (isThisABox(here)) return here.print("This machine is a box. A box has no peers, so fleet peers has nothing to do."), 0;
   for (const box of here.devboxes.filter(isBoxName)) here.say(`${box}: skipped: a box is not a peer`);
   if (mode === "link") return linkPeers(here, rest);

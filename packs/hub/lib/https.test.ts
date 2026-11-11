@@ -214,3 +214,30 @@ test("trusted fails without asking the keychain when the hub gives no certificat
     expect(sandbox.calls().some((call) => call.startsWith("security"))).toBe(false);
   }
 });
+
+test("remove stops and deletes the unit and config it wrote, keeps the certificate authority, and left then reports nothing left", async () => {
+  const { deps, home } = hub();
+  await hubHttps("install", deps);
+  const authority = join(home, ".local/share/fleet-hub-https/caddy/pki/authorities/local/root.crt");
+  mkdirSync(join(authority, ".."), { recursive: true });
+  writeFileSync(authority, "certificate\n");
+  expect(await hubHttps("left", { ...deps, httpsHost: undefined })).toBe(0);
+  const removing = hub({ home, httpsHost: undefined });
+  expect(await hubHttps("remove", removing.deps)).toBe(0);
+  expect(removing.calls).toContain("systemctl --user disable --now fleet-hub-https.service");
+  expect(removing.calls).toContain("systemctl --user daemon-reload");
+  expect([existsSync(config(home)), existsSync(unit(home)), existsSync(authority)]).toEqual([false, false, true]);
+  expect(await hubHttps("left", removing.deps)).toBe(1);
+  const again = hub({ home });
+  expect(await hubHttps("remove", again.deps)).toBe(0);
+  expect(again.calls).toEqual([]);
+});
+
+test("remove keeps a unit file that Fleet did not write", async () => {
+  const { deps, home, calls } = hub();
+  mkdirSync(join(unit(home), ".."), { recursive: true });
+  writeFileSync(unit(home), "[Unit]\nDescription=mine\n");
+  await expect(hubHttps("remove", deps)).rejects.toThrow("Keep unmanaged hub HTTPS file");
+  expect(readFileSync(unit(home), "utf8")).toBe("[Unit]\nDescription=mine\n");
+  expect(calls).toEqual([]);
+});

@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed } from "./managed.ts";
+import { changedFiles, ownedFiles, readIfThere, removeUnits, requireInstalled, writeFiles, type Managed } from "./managed.ts";
 import { gatewayPort, refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
 import { readRole } from "./machine.ts";
 import { onHub } from "../../../src/hub/ssh.ts";
@@ -9,7 +9,7 @@ import { dataDir } from "../../mcp-gateway/lib/hub.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { hostPattern, must, relayPortOf } from "./run.ts";
 
-export type HttpsMode = "plan" | "install" | "doctor" | "ca" | "trusted";
+export type HttpsMode = "plan" | "install" | "doctor" | "ca" | "trusted" | "remove" | "left";
 export type HttpsHub = {
   home: string; alias: string; httpsHost?: string; relayPort: number; user: string; uid: number;
   caddyInstalled(): boolean; run: Run; sleep(ms: number): Promise<void>; print(line: string): void;
@@ -80,6 +80,7 @@ WantedBy=default.target
 `;
 
 export async function hubHttps(mode: HttpsMode, hub: HttpsHub): Promise<number> {
+  if (mode === "remove" || mode === "left") return withoutHttps(mode, hub);
   if (!hub.httpsHost) return hub.print("Hub HTTPS is off: hub.httpsHost is empty."), 0;
   if (!hostPattern.test(hub.httpsHost)) throw new Error(`hub.httpsHost is not a host name: ${JSON.stringify(hub.httpsHost)}`);
   if (mode === "trusted") return trusted(hub);
@@ -122,6 +123,17 @@ export async function hubHttps(mode: HttpsMode, hub: HttpsHub): Promise<number> 
   const bound = await listeners();
   if (!bound.includes(address) || bound.some((local) => local !== address)) throw new Error(`Hub HTTPS must listen on loopback only, at ${address}.`);
   hub.print(`Hub HTTPS: active at ${origin}`);
+  return 0;
+}
+
+/** remove takes away the unit and config that install wrote, and keeps the certificate authority that browsers trust, Caddy, and linger. left exits 0 while either file is here. */
+async function withoutHttps(mode: "remove" | "left", hub: HttpsHub): Promise<number> {
+  const unitPath = join(hub.home, ".config/systemd/user", service);
+  const left = await ownedFiles(hub.home, [unitPath, join(httpsDir(hub.home), "Caddyfile")], marker, "hub HTTPS");
+  if (mode === "left") return hub.print(left.length ? `Hub HTTPS: ${left.join(", ")} still here.` : "Hub HTTPS: nothing left."), left.length ? 0 : 1;
+  await removeUnits(hub.home, [unitPath], marker, "hub HTTPS", hub.run);
+  for (const path of left.filter((path) => path !== unitPath)) await rm(path);
+  hub.print("Hub HTTPS: removed. Kept its certificate authority, Caddy, and linger.");
   return 0;
 }
 
