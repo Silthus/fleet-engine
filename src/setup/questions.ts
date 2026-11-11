@@ -173,10 +173,8 @@ async function oneByOne(terminal: Terminal, catalog: Catalog, current: string[])
 async function askPlan(context: QuestionContext): Promise<StepOutcome> {
   const { terminal, flags, draft } = context;
   const show = (plan: AiPlan) => terminal.print(`  ✓ ${planLabels[plan]}`);
-  if (flags.plan || flags.nonInteractive) {
-    const plan = flags.plan ?? draft.plan ?? "both";
-    return context.answer({ plan }).then(() => show(plan));
-  }
+  if (flags.plan) return context.answer({ plan: flags.plan }).then(() => show(flags.plan!));
+  if (flags.nonInteractive) return show(draft.plan ?? "both");
   terminal.print("? Which AI plans do you pay for?");
   terminal.print("  You get only the sign-ins and model defaults that match.");
   const order: AiPlan[] = ["both", "claude", "codex"];
