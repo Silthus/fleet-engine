@@ -69,17 +69,17 @@ describe("fleet setup questions", () => {
   });
 
   test("keeps picks carried from the page with one key, or changes them with e", async () => {
-    const args = ["--preset", "michael", "--remove", "memory", "--workflows", "pr-digest=off", "--set", "pull-requests.freeReviews=3", "--plan", "claude"];
+    const args = ["--preset", "everything", "--remove", "memory", "--workflows", "pr-digest=off", "--set", "pull-requests.freeReviews=3", "--plan", "claude"];
     const home = temp.make("home-");
     const kept = await fleetSetup(home, args, ["", ""]);
     expect(kept.code).toBe(0);
-    expect(kept.output).toContain("  From your command: Pull-requests, Orchestration, Communication");
+    expect(kept.output).toContain("  From your command: Pull-requests, Orchestration, Communication, Guards, Slack\n");
     expect(kept.output).toContain("  Workflows: pr-digest off");
     expect(kept.prompts).toEqual(["Press ↵ to keep them, or e to change them: ", "  Go ahead? (Y/n) "]);
     expect(savedAnswers(home)).toMatchObject({
       settings: { "pull-requests.freeReviews": 3 },
-      packs: ["pull-requests", "orchestration", "communication"],
-      workflows: { "quality-loop": true, "signal-loop": true },
+      packs: ["pull-requests", "orchestration", "communication", "guards", "slack"],
+      workflows: { "quality-loop": true, "signal-loop": true, "shell-guards": true, "package-age": true },
       plan: "claude",
     });
 
@@ -106,7 +106,7 @@ describe("fleet setup questions", () => {
     const home = temp.make("home-");
     mkdirSync(join(home, ".config/fleet"), { recursive: true });
     writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "devbox" }));
-    const missing = await fleetSetup(home, ["--non-interactive", "--preset", "michael"]);
+    const missing = await fleetSetup(home, ["--non-interactive", "--preset", "everything"]);
     expect(missing.code).toBe(2);
     expect(missing.prompts).toEqual([]);
     expect(missing.output).toContain("fleet setup --non-interactive needs these answers and sign-ins. Add the answers to the command and run it again:");
@@ -118,7 +118,7 @@ describe("fleet setup questions", () => {
     expect(machine(home).profileDir).toBeUndefined();
 
     const sets = ["--set", "orchestration.loopProject=~/code/app", "--set", "orchestration.qualityArea=src/api", "--set", "orchestration.ledgerRepo=me/ledger"];
-    const answered = await fleetSetup(home, ["--non-interactive", "--preset", "michael", ...sets]);
+    const answered = await fleetSetup(home, ["--non-interactive", "--preset", "everything", ...sets]);
     expect(answered.code).toBe(0);
     expect(answered.prompts).toEqual([]);
     expect(answered.output).toContain("Set up this machine");
@@ -183,7 +183,7 @@ describe("fleet setup questions", () => {
       [["--workflows", "toString=on"], "fleet setup: --workflows: no workflow named toString"],
       [["--set", "pull-requests.freeReviews=many"], "fleet setup: pull-requests.freeReviews takes a number"],
       [["--set", "nope.key=1"], "fleet setup: --set nope.key: no pack has this setting"],
-      [["--preset", "nope"], "fleet setup: --preset nope: choose starter, everyday, michael"],
+      [["--preset", "nope"], "fleet setup: --preset nope: choose starter, everyday, everything"],
     ] as const) {
       const result = await fleetSetup(home, [...args]);
       expect(result.code).toBe(2);

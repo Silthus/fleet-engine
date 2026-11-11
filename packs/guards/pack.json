@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "name": "guards",
-  "summary": "Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops.",
+  "summary": "Hooks stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops.",
   "day": "A prompt injection that tells an agent to pipe a script into a shell gets a refusal that names you, and the agent stops to ask.",
-  "cost": "Nothing to run: a hook checks each shell command before it starts.",
+  "cost": "You run nothing. A hook checks each shell command before it starts.",
   "risk": "A guard can refuse a command you meant. The refusal says why and what to do instead. Every guard is off until you turn it on.",
   "settings": [
     {
@@ -74,7 +74,7 @@
           "agent"
         ]
       },
-      "risk": "Git refuses every remote outside the signed list, including other hosts than GitHub. Root, or anyone with sudo, can remove it. It stops mistakes, not a hostile agent: an agent that runs as you can override it with its own Git config, or edit the staged script before you run it with sudo."
+      "risk": "Git refuses every remote outside the signed list, including other hosts than GitHub. Root, or anyone with sudo, can remove it. It stops mistakes, not a hostile agent. An agent that runs as you can override it with its own Git config, or edit the staged script before you run it with sudo."
     },
     {
       "id": "package-age",

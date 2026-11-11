@@ -1,6 +1,6 @@
-# Fleet
+# <img src="docs/fleet-logo.svg" alt="" width="30" height="30"> Fleet
 
-<img src="docs/fleet.svg" alt="Your Mac runs T3 Code and links to your devboxes, where agent threads work in their own worktrees. An optional hub shares MCP servers. Every machine reads your private profile repo." width="760">
+<img src="docs/fleet.svg" alt="Your Mac runs T3 Code. It links to your devboxes, where agent threads work in their own worktrees. An optional hub shares MCP servers with them. Every machine reads the same private profile repo on GitHub." width="760">
 
 Coding agents get much better with good rules, skills, and a machine that
 stays on. Setting that up by hand takes a day per machine, and the machines
@@ -31,9 +31,11 @@ sign-ins.
 
 ## See what it does
 
-Read [A day with Fleet](https://silthus.github.io/fleet-engine/) to see what
-each pack does for you during a workday. The page is `page/index.html`,
-generated from the pack data by `bun scripts/build-page.ts`.
+Open [the Fleet page](https://silthus.github.io/fleet-engine/) to choose
+where Fleet runs and which packs you want. Select a pack to read what it
+does, what it needs, and what it costs. The page builds the prompt above with
+your picks in it, so the agent skips those questions. The page is `page/index.html`, generated
+from the pack data by `bun scripts/build-page.ts`.
 
 ## Status
 
