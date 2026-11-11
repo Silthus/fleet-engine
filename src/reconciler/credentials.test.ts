@@ -84,9 +84,9 @@ test("the hub's finding copies nothing that a failing service printed or threw, 
   const fleet = machine(hub);
   expect((await fleet("issued", "leak")).code).toBe(0);
   const applied = await fleet("apply");
-  const findings = applied.output.split("\n").filter((line) => line.startsWith("Fix:") || line.startsWith("To do:"));
-  expect(findings).toContain("Fix: Could not issue the credential of issued/issued-api. Run fleet credential issued/issued-api hub-1 to see why. Fleet tries again at the next apply.");
-  expect(findings.join("\n")).not.toContain(leakedKey);
+  const report = applied.output.split("\n").filter((line) => line !== `fleet: ${leakedKey}`).join("\n");
+  expect(report).toContain("Fix: Could not issue the credential of issued/issued-api. Run fleet credential issued/issued-api hub-1 to see why. Fleet tries again at the next apply.");
+  expect(report).not.toContain(leakedKey);
 });
 
 test("a node issues nothing in its own apply, and ctx.use fails fast with a sentence", async () => {
