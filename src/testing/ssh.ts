@@ -17,18 +17,23 @@ export function remoteFleet(options: () => CliOptions): Host {
   };
 }
 
-/** ssh that runs its remote line in a real login shell, sh unless named, in an empty home whose fleet launcher hands its words to the named host's fleet. A host that is down, or not named, answers as ssh does. */
+/** ssh that runs its remote line in a real login shell, sh unless named, in an empty home whose fleet launcher hands its words to the named host's fleet. A host that is down, or not named, answers as ssh does, and an aborted signal ends the call as a killed ssh. */
 export function fakeSsh(home: string, hosts: Record<string, Host | "down">, shell = "sh"): CommandRunner {
   mkdirSync(join(home, ".local/share/fleet/engine"), { recursive: true });
   writeFileSync(join(home, ".local/share/fleet/engine/fleet"), `printf '%s\\0' "$@"\n`);
-  return async (command) => {
+  return async (command, options = {}) => {
     if (command[0] !== "ssh" || !command.includes("BatchMode=yes")) return { code: 127, stdout: "", stderr: `${command[0]}: not ssh in batch mode\n` };
     const host = command.at(-2)!;
     const line = command.at(-1)!;
     const target = hosts[host];
     if (!target || target === "down") return { code: 255, stdout: "", stderr: `ssh: connect to host ${host} port 22: Connection refused\n` };
-    const login = await spawnAsync([shell, "-c", line], { cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
-    if (login.exitCode !== 0) return { code: login.exitCode, stdout: "", stderr: login.stderr };
-    return target(login.stdout.split("\0").slice(0, -1));
+    const { signal } = options;
+    const killed = new Promise<Answer>((settle) => signal?.addEventListener("abort", () => settle({ code: 143, stdout: "", stderr: "" }), { once: true }));
+    const answer = async () => {
+      const login = await spawnAsync([shell, "-c", line], { cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
+      if (login.exitCode !== 0) return { code: login.exitCode, stdout: "", stderr: login.stderr };
+      return target(login.stdout.split("\0").slice(0, -1));
+    };
+    return Promise.race([answer(), killed]);
   };
 }

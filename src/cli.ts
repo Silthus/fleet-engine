@@ -240,21 +240,28 @@ async function issued(value: Promise<string>) {
   return credential;
 }
 
-/** Asks the hub for this node's credential of each service and stores the answer. A failed pull keeps what the store holds. */
+const pullLimitMs = 90_000;
+
+/** Asks the hub for this node's credential of each service and stores the answer. Each pull ends at a deadline, so a hub that connects but never answers cannot hold the apply. A failed pull keeps what the store holds, and its finding names the exit code and copies nothing the hub printed, since a service may print its key. */
 async function pullCredentials(entries: CatalogEntry[], node: string, hub: string, options: CliOptions): Promise<Finding[]> {
   const capture = options.capture ?? spawnRunner;
+  const clock = options.clock ?? { now: Date.now, sleep: Bun.sleep };
   const findings: Finding[] = [];
   for (const entry of entries) {
     const service = `${entry.pack}/${entry.id}`;
     const store = secretStore(options.home, entry.pack);
     const name = credentialName(entry.id);
-    const answer = await capture(onHub(hub, ["credential", service, node]));
+    const deadline = new AbortController();
+    void clock.sleep(pullLimitMs).then(() => deadline.abort());
+    const answer = await capture(onHub(hub, ["credential", service, node]), { signal: deadline.signal });
+    const late = deadline.signal.aborted;
+    deadline.abort();
     const value = answer.stdout.trim();
     if (answer.code === 0 && value) {
       if ((await store.read(name)) !== value) await store.write(name, value);
       continue;
     }
-    const reason = (answer.stderr ?? "").trim().split("\n").at(-1) || `exit ${answer.code}`;
+    const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : answer.code === 255 ? `ssh exited 255. Run ssh ${hub} true to see why` : `fleet credential exited ${answer.code} there. Run fleet credential ${service} ${node} on the hub to see why`;
     const kept = (await store.read(name)) ? "Kept the one this machine has." : "Fleet tries again at the next apply.";
     findings.push({ id: `credential:${service}`, pack: entry.pack, say: `Could not pull the credential of ${service} from the hub ${hub} (${reason}). ${kept}`, repair: "apply" });
   }
@@ -296,7 +303,7 @@ async function inPack(plan: Plan, loaded: LoadedPack, options: CliOptions, work:
 }
 
 function packEnvironment(plan: Plan, options: CliOptions): Record<string, string | undefined> {
-  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) };
+  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_PLAN: plan.ai, FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) };
 }
 
 function handlerPaths(plan: Plan) {
