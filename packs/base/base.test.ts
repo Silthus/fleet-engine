@@ -98,6 +98,15 @@ describe("the Base pack", () => {
     expect(plan("both", devbox).commands["install-codex"]?.path).toEndWith("packs/base/commands/install-codex.ts");
   });
 
+  test("installs a pinned Node.js on Linux after the agent CLIs, so a skill runtime can start npx without a failed Node step holding back the rest of Base", () => {
+    for (const ai of plans) {
+      const steps = plan(ai, devbox).steps;
+      expect(steps.at(-1)).toMatchObject({ id: "node-runtime", run: ["fleet", "install-node"], check: ["npx", "--version"] });
+      expect(plan(ai, devbox).commands["install-node"]?.path).toEndWith("packs/base/commands/install-node.ts");
+      expect(plan(ai).steps.map((step) => step.id)).not.toContain("node-runtime");
+    }
+  });
+
   test("gives each plan one T3 default model from its own provider", () => {
     const model = (ai: AiPlan) => plan(ai).config.filter((entry) => entry.key === "defaultModelSelection").map((entry) => (entry.value as { instanceId: string }).instanceId);
     expect(model("claude")).toEqual(["claudeAgent"]);

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "guards",
-  "summary": "Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops.",
+  "summary": "Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops.",
   "day": "A prompt injection that tells an agent to pipe a script into a shell gets a refusal that names you, and the agent stops to ask.",
   "cost": "Nothing to run: a hook checks each shell command before it starts.",
   "risk": "A guard can refuse a command you meant. The refusal says why and what to do instead. Every guard is off until you turn it on.",
@@ -21,6 +21,13 @@
       "ask": "never"
     },
     {
+      "key": "guards.main-push-repos",
+      "question": "Which GitHub repositories take pushes straight to main or master, as owner/name separated by commas?",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
       "key": "guards.signers",
       "question": "Which SSH public keys may sign the Git allowlist, one per line?",
       "type": "string",
@@ -33,7 +40,7 @@
       "id": "shell-guards",
       "name": "Shell guards",
       "default": false,
-      "sentence": "Agents cannot pipe network code into a shell, run a package the project lacks, change how Git maps URLs, use gh outside your GitHub owners, or poll in a loop of turns.",
+      "sentence": "Agents cannot pipe network code into a shell, run a package the project lacks, change how Git maps URLs, use gh outside your GitHub owners, poll in a loop of turns, kill their own shell with pkill -f, skip Git hooks, force-push without a lease, or push to main of a repository that takes pull requests.",
       "moment": {
         "time": "13:40",
         "title": "A README asks for curl | sh",
@@ -43,7 +50,8 @@
         ]
       },
       "settings": [
-        "guards.owners"
+        "guards.owners",
+        "guards.main-push-repos"
       ]
     },
     {

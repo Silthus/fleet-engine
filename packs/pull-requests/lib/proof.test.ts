@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { standingFor } from "./proof.ts";
@@ -65,6 +65,79 @@ test("a clean merge of the base carries the review of the PR forward and records
 
   await pr.commit("feature.txt", "fixed\n");
   expect((await pr.fleet("review-start", "--scope", "final", "--base", merge.slice(0, 8))).output).toContain(`"round":"final"`);
+});
+
+test("commits that change only test files carry the final read, and a final read of them needs a decision", async () => {
+  const pr = await checkout();
+  withDecideRule(pr);
+  await pr.fleet("standing", "--kind", "review", "--until", "2026-11-26", "--rule", decideRule);
+  await pr.commit("feature.ts", "export const greet = (name: string) => `hi ${name}`;\n");
+  const reviewed = await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  const firstTest = await pr.commit("feature.test.ts", "expect(greet(\"a\")).toBe(\"hi a\");\n");
+
+  const afterTest = await pr.fleet("gate");
+
+  expect(afterTest.code).toBe(0);
+  expect(afterTest.output).toContain(`review: final read carried from ${reviewed.slice(0, 7)}: test-only delta`);
+
+  const secondTest = await pr.commit("feature.test.ts", "expect(greet(\"b\")).toBe(\"hi b\");\n");
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${secondTest}.json`), "utf8"))).toMatchObject({ commit: secondTest, from: reviewed, quiet: [secondTest, firstTest], reason: "test-only delta" });
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed)).rejects.toThrow(`HEAD needs no final read: final read carried from ${reviewed.slice(0, 7)}: test-only delta`);
+
+  await pr.git("config", "color.grep", "always");
+  await pr.commit("helpers.test.ts", "export const names = [\"a\", \"b\"];\n");
+  await pr.commit("feature.test.ts", "import { names } from \"./helpers.test.ts\";\nfor (const name of names) expect(greet(name)).toBe(`hi ${name}`);\n");
+  const helperOnly = await pr.commit("helpers.test.ts", "export const names = [\"a\", \"b\", \"c\"];\n");
+  expect((await pr.fleet("gate")).output).toContain(`review: final read carried from ${reviewed.slice(0, 7)}: test-only delta`);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${helperOnly}.json`), "utf8"))).toMatchObject({ commit: helperOnly, from: reviewed });
+  expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--standing", "The test pins a rule the code must keep.")).code).toBe(0);
+});
+
+test("a comment, a test folder, a deleted test, a code change beside a test, a test that code imports, a strange name, a mode change, a symlink, or a hidden submodule needs a new review", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.ts", "export const limit = 3;\n");
+  await pr.commit("feature.test.ts", "expect(limit).toBe(3);\n");
+  await pr.commit("limits.test.ts", "export const most = 3;\n");
+  mkdirSync(join(pr.repository, "tests"));
+  await pr.commit("tests/deep.test.ts", "export const deepest = 5;\n");
+  await pr.commit("tests/inner.test.ts", "export const inner = 1;\n");
+  await pr.commit("tests/wrapper.test.ts", "export { inner } from \"./inner.test.ts\";\n");
+  await pr.commit("app.ts", "import { most } from \"./limits.test.ts\";\nimport { deepest } from \"./tests/deep.test.ts\";\nimport { inner } from \"./tests/wrapper.test.ts\";\nconsole.log(most, deepest, inner);\n");
+  const reviewed = await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  const changes: [string, () => Promise<unknown>][] = [
+    ["a comment", () => pr.commit("feature.ts", "// The most a member may send.\nexport const limit = 3;\n")],
+    ["a test folder", () => { mkdirSync(join(pr.repository, "test"), { recursive: true }); return pr.commit("test/allowed.ts", "export const allowed = true;\n"); }],
+    ["a deleted test", async () => { await pr.git("rm", "-q", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Drop the test"); }],
+    ["a mode change", async () => { await pr.git("update-index", "--chmod=+x", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Make the test executable"); }],
+    ["a test with a code change", async () => { writeFileSync(join(pr.repository, "feature.ts"), "export const limit = 4;\n"); writeFileSync(join(pr.repository, "feature.test.ts"), "expect(limit).toBe(4);\n"); await pr.git("commit", "-q", "-a", "-m", "Raise the limit"); }],
+    ["a new symlinked test", async () => { symlinkSync("feature.ts", join(pr.repository, "linked.test.ts")); await pr.git("add", "linked.test.ts"); await pr.git("commit", "-q", "-m", "Link a test"); }],
+    ["a test that code imports", () => pr.commit("limits.test.ts", "export const most = 0;\n")],
+    ["a test that code imports through another test", () => pr.commit("tests/inner.test.ts", "export const inner = 0;\n")],
+    ["a test whose name ends in a line break", () => pr.commit("policy.test.ts\n\n", "export const allowed = true;\n")],
+    ["a symlink", async () => { rmSync(join(pr.repository, "feature.test.ts")); symlinkSync("feature.ts", join(pr.repository, "feature.test.ts")); await pr.git("add", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Link the test"); }],
+  ];
+
+  changes.push(["a submodule that config hides", async () => {
+    await pr.git("config", "diff.ignoreSubmodules", "all");
+    await pr.git("update-index", "--add", "--cacheinfo", `160000,${reviewed},vendor/dependency`);
+    writeFileSync(join(pr.repository, "feature.test.ts"), "expect(limit).toBe(3);\nexpect(limit).toBeGreaterThan(0);\n");
+    await pr.git("commit", "-q", "-a", "-m", "Bump the dependency");
+  }]);
+
+  const fromTests = (name: string) => name === "a test that code imports from outside the folder fleet runs in";
+  changes.push(["a test that code imports from outside the folder fleet runs in", () => pr.commit("tests/deep.test.ts", "export const deepest = 0;\n")]);
+
+  for (const [name, change] of changes) {
+    await pr.git("reset", "-q", "--hard", reviewed);
+    await change();
+    const gate = fromTests(name) ? await pr.fleetIn(join(pr.repository, "tests"), "gate") : await pr.fleet("gate");
+    expect([name, gate.code]).toEqual([name, 1]);
+    expect(gate.output).toContain(`review: HEAD not reviewed, last review covered ${reviewed.slice(0, 7)}`);
+  }
+  expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed)).output).toContain(`"round":"final"`);
 });
 
 test("a merge that changes code while it resolves the base keeps HEAD unreviewed, even from a subdirectory with relative diffs", async () => {

@@ -14,13 +14,18 @@ longer earns its place. Its one output is a draft PR on the memory repo that
 the person reviews change by change and merges.
 
 - The memory repo is `memory.repo` in `~/.agents/guides/skill-settings.md`.
-  The memory files sit at the root of its checkout. Before the first step,
-  print the checkout's path once, and use it as `<memory>` in every command
-  below:
+  The memory files sit in its `memory.subtree` folder, from the same file, or
+  at the repo's root when `memory.subtree` is empty. Before the first step,
+  print the memory folder's path once, and use it as `<memory>` in every
+  command below:
 
   ```sh
   echo "${FLEET_MEMORY_DIR:-$HOME/.agents/memory}"
   ```
+
+  In the dream's worktree, `<notes>` is `<run>/memory/<memory.subtree>`, or `<run>/memory` when `memory.subtree` is empty.
+  Every memory path below is relative to `<notes>`. The report in `dreams/`
+  sits at `<run>/memory`, the repo's root.
 - A **change** is one commit that does one thing to memory: add, update,
   merge, condense, move, or delete a memory. Its message carries its evidence.
 - Findings quote agent sessions, and sessions quote Slack, web pages, and
@@ -63,7 +68,7 @@ the person reviews change by change and merges.
    Done when every note in `audit.md` has a change or a reason in the
    report.
 
-4. **Learn.** Read `MEMORY.md` and every memory a finding names. Group
+4. **Learn.** Read `<notes>/MEMORY.md` and every memory a finding names. Group
    findings that say the same thing, and count their sessions across tonight
    and the runs of the last 14 days (`<run>/../*/findings.md`). Each finding
    carries a `{topic}`; analysts on other nights may name the same lesson with
@@ -87,10 +92,10 @@ the person reviews change by change and merges.
    - Condense a long memory to its fact, why, and how to apply it. Link
      detail that a repository holds.
    - Merge memories that overlap.
-   - Move a memory about one repository to `projects/<repo>/`, and a general
+   - Move a memory about one repository to `<notes>/projects/<repo>/`, and a general
      one to the top.
    - Move technology knowledge that two repos or two sessions share into
-     `tech/<technology>/`, index it under `## tech/<technology>`, and link it
+     `<notes>/tech/<technology>/`, index it under `## tech/<technology>`, and link it
      from the repo memories.
    - Check a stale memory against the code or the machines. Delete it when it
      is wrong or no longer matters; set `verified: <date>` in its frontmatter
