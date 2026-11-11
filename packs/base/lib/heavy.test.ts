@@ -100,4 +100,3 @@ onLinux("refuses a slot count that is not a whole number above 0", async () => {
   }
   expect(calls()).toBe("uname -s\nuname -s\nuname -s\n");
 });
-
