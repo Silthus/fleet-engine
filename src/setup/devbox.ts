@@ -219,7 +219,7 @@ async function applyProfile(box: Machine, context: DevboxContext) {
 
 /** Claude signs in on the box in an SSH terminal: its sign-in asks for a code that the person pastes. */
 function claudeOnBox(host: string, box: Machine, context: DevboxContext): Step {
-  const signIn = claudeSignIn(box);
+  const signIn = claudeSignIn(box, host);
   const title = `${signIn.title} on ${host}`;
   return {
     id: `devbox:${host}:claude`,
