@@ -685,6 +685,78 @@ describe("a step's undo", () => {
     expect(doctor.ok).toBe(true);
   });
 
+  const crew = (steps: PackManifest["steps"]) => withPack({ schema: 1, name: "crew", summary: "Crew.", steps });
+  const gone = () => plan({ packs: [], workflows: {} }, devbox, [engine, team([step]), crew([{ ...step, id: "crew-box", run: ["crew-on"], check: ["crew-is-on"], undo: ["crew-off"] }])]);
+
+  test("undoes a step that left before it applies the steps that stay, so a step that moved to another pack holds after one apply", async () => {
+    const { world, run } = box(false);
+    const home = temp.make("home-");
+    await apply(planWith([step], {}), { home, run });
+    const moved = plan({ packs: ["crew"], workflows: {} }, devbox, [engine, team([step]), crew([{ ...step, workflow: undefined }])]);
+    const report = await apply(moved, { home, run });
+    expect(report.ok).toBe(true);
+    expect(world.on).toBe(true);
+  });
+
+  test("checks and undoes with the commands the step had when it last held, after its workflow goes off", async () => {
+    const { world, run } = box(false);
+    const home = temp.make("home-");
+    await apply(planWith([step], {}), { home, run });
+    await apply(planWith([{ ...step, check: ["broken"] }], { boxes: false }), { home, run });
+    expect(world.on).toBe(false);
+  });
+
+  test("keeps each step as soon as it holds, so a step that stops the apply leaves the earlier ones to undo", async () => {
+    const { world, run } = box(false);
+    const home = temp.make("home-");
+    const stops = async (command: string[]) => (command[0] === "stop" ? Promise.reject(new Error("stopped")) : run(command));
+    await expect(apply(planWith([step, { id: "later", run: ["stop"] }], {}), { home, run: stops })).rejects.toThrow("stopped");
+    await apply(gone(), { home, run });
+    expect(world.on).toBe(false);
+  });
+
+  test("keeps a step that failed but holds what it set", async () => {
+    const { world, run } = box(false);
+    const home = temp.make("home-");
+    const half = async (command: string[]) => (command.join(" ") === "box-on" ? ((world.on = true), 1) : run(command));
+    expect((await apply(planWith([step], {}), { home, run: half })).findings).toContainEqual({ id: "step:auto-box", pack: "team", say: "Step auto-box of the team pack failed.", repair: "apply" });
+    await apply(gone(), { home, run });
+    expect(world.on).toBe(false);
+  });
+
+  test("keeps the steps of an apply that runs while another one does", async () => {
+    const { world, run } = box(false);
+    const other = { on: false };
+    const home = temp.make("home-");
+    const crewRun = async (command: string[]) => {
+      const name = command.join(" ");
+      if (name === "crew-is-on") return other.on ? 0 : 1;
+      if (name === "crew-on") return (other.on = true), 0;
+      if (name === "crew-off") return (other.on = false), 0;
+      return run(command);
+    };
+    const crewPlan = plan({ packs: ["crew"], workflows: {} }, devbox, [engine, crew([{ ...step, id: "crew-box", workflow: undefined, run: ["crew-on"], check: ["crew-is-on"], undo: ["crew-off"] }])]);
+    const meanwhile = async (command: string[]) => (command.join(" ") === "box-on" ? (await apply(crewPlan, { home, run: crewRun }), run(command)) : run(command));
+    await apply(planWith([step], {}), { home, run: meanwhile });
+    await apply(gone(), { home, run: crewRun });
+    expect(world.on).toBe(false);
+    expect(other.on).toBe(false);
+  });
+
+  test("refuses a step ledger that is a link, rather than run commands from another file", async () => {
+    const home = temp.make("home-");
+    const elsewhere = join(temp.make("elsewhere-"), "steps.json");
+    writeFileSync(elsewhere, JSON.stringify({ version: 1, steps: [] }));
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    symlinkSync(elsewhere, join(home, ".local/state/fleet/steps.json"));
+    await expect(apply(planWith([step], {}), { home, run: box(true).run })).rejects.toThrow(".local/state/fleet/steps.json must be a regular file");
+  });
+
+  test("needs an id no other step of the pack uses, once a step has an undo", async () => {
+    await expect(loadPacks(team([step, { ...step, run: ["other"] }]).dir)).rejects.toThrow("steps auto-box: a step with an undo needs an id no other step of the pack uses");
+    await loadPacks(team([{ id: "twin", run: ["on-linux"], on: ["linux"] }, { id: "twin", run: ["on-mac"], on: ["darwin"] }]).dir);
+  });
+
   test("needs a check, so Fleet can tell what is left to undo", async () => {
     await expect(loadPacks(team([{ id: "auto-box", run: ["box-on"], undo: ["box-off"] }]).dir)).rejects.toThrow("steps auto-box: undo needs a check");
     await expect(loadPacks(team([{ ...step, check: [] }]).dir)).rejects.toThrow("steps auto-box: undo needs a check");

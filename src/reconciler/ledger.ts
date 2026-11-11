@@ -1,6 +1,6 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { inside } from "../files/install.ts";
+import { checkParents, inside } from "../files/install.ts";
 import { writePrivateFile } from "../files/private.ts";
 
 /** A step with an undo that held on this machine, as it was when it last applied, so Fleet can undo it after it leaves the plan. */
@@ -30,14 +30,15 @@ export async function undoingPack(home: string, env: Record<string, string | und
 }
 
 export async function readLedger(home: string): Promise<Ledger> {
-  let text: string;
-  try {
-    text = await readFile(inside(home, ledgerPath), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { steps: [], human: [] };
+  await checkParents(home, ledgerPath);
+  const path = inside(home, ledgerPath);
+  const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
     throw error;
-  }
-  const value = JSON.parse(text) as { version?: unknown; steps?: unknown; human?: unknown };
+  });
+  if (!info) return { steps: [], human: [] };
+  if (!info.isFile()) throw new Error(`${ledgerPath} must be a regular file`);
+  const value = JSON.parse(await readFile(path, "utf8")) as { version?: unknown; steps?: unknown; human?: unknown };
   const valid = (step: Partial<LedgerStep>) =>
     typeof step.pack === "string" && typeof step.id === "string" && isStrings(step.check) && isStrings(step.undo) && (step.after === undefined || typeof step.after === "string") && (step.prerequisite === undefined || isStrings(step.prerequisite));
   const validHuman = (step: Partial<LedgerHuman>) => typeof step.pack === "string" && typeof step.id === "string" && isStrings(step.probe) && typeof step.undo === "string";
@@ -47,9 +48,16 @@ export async function readLedger(home: string): Promise<Ledger> {
   return { steps: value.steps as LedgerStep[], human: human as LedgerHuman[] };
 }
 
-export async function writeLedger(home: string, ledger: Ledger) {
+const sorted = <T extends { pack: string; id: string }>(items: T[]) => [...items].sort((a, b) => ledgerKey(a).localeCompare(ledgerKey(b)));
+
+/** Records or forgets one entry in the ledger as it is on disk now, so another apply's entries survive and each step is kept as soon as it holds. */
+export async function changeLedger<List extends keyof Ledger>(home: string, list: List, key: string, entry?: Ledger[List][number]) {
+  const ledger = await readLedger(home);
+  const kept = (ledger[list] as Array<{ pack: string; id: string }>).filter((item) => ledgerKey(item) !== key);
+  const next = { ...ledger, [list]: entry ? [...kept, entry] : kept };
+  const text = (value: Ledger) => JSON.stringify({ version: 1, steps: sorted(value.steps), human: sorted(value.human) }, null, 2) + "\n";
+  if (text(next) === text(ledger)) return;
   const path = inside(home, ledgerPath);
-  const sorted = <T extends { pack: string; id: string }>(items: T[]) => [...items].sort((a, b) => ledgerKey(a).localeCompare(ledgerKey(b)));
   await mkdir(dirname(path), { recursive: true });
-  await writePrivateFile(path, JSON.stringify({ version: 1, steps: sorted(ledger.steps), human: sorted(ledger.human) }, null, 2) + "\n");
+  await writePrivateFile(path, text(next));
 }

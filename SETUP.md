@@ -198,6 +198,19 @@ that looks after the others. It keeps an SSH tunnel and a T3 link to every
 node, and cleans a node's disk before it fills. The node is where threads do
 the work. Each machine keeps working when the hub is down.
 
+When step 7 printed that a team pack is ticked, such as `✓ You are in the
+<org> org, so the <pack> pack is ticked`, read that pack's setup note first,
+when it has one:
+
+```sh
+~/.local/share/fleet/sources/<source>/packs/<pack>/SETUP.md
+```
+
+`<source>` is the folder in `~/.local/share/fleet/sources` that holds the
+pack. A team pack may already have made a devbox in step 7, and its note
+says which template, parameters, and devbox to use. Where it differs from
+the steps below, follow the note.
+
 1. **Coder CLI.** When `command -v coder` finds nothing, install it with
    `brew install coder`. When `coder whoami` fails, ask for their Coder
    address and sign in. `coder login` asks them to paste a token, so run it in
@@ -216,14 +229,19 @@ the work. Each machine keeps working when the hub is down.
    ```
 
    Find the disk size parameter. Ask for each parameter without a default.
+   When `coder templates pull` fails, open the template's page in the Coder
+   web app, `<coder address>/templates/<template>`, and ask the person to
+   read you the parameters and their allowed values from it.
 3. **Names.** Ask for the two workspace names. Recommend `fleet-hub` and
    `fleet-node-1`. Below, `<hub>` and `<node>` stand for them, and `<name>`
    for either.
 4. **Create.** Create the hub with a 200 GB disk and the node with a 500 GB
-   disk, with every parameter on the command line, so Coder asks nothing:
+   disk, with every parameter on the command line, so Coder asks nothing.
+   `--preset none` stops the preset question that `--yes` does not skip, and
+   `--use-parameter-defaults` takes the default of every other parameter:
 
    ```sh
-   coder create <name> --template <template> --parameter <disk parameter>=<200 or 500> --yes
+   coder create <name> --template <template> --preset none --use-parameter-defaults --parameter <disk parameter>=<200 or 500> --yes
    ```
 
    Then keep each one running, because agents work there while the Mac

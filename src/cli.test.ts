@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, relative } from "node:path";
 import { main } from "./cli.ts";
@@ -269,22 +269,35 @@ describe("fleet routing", () => {
     expect(readFileSync(join(home, "hello.txt"), "utf8")).toBe("both");
   });
 
-  test.if(process.platform === "linux")("passes on a stop signal that arrives while a pack command starts", async () => {
-    const { home, engine } = await machineWith(["tools"]);
+  test.if(process.platform === "linux")("runs a fleet heavy job as the fleet process itself, so a stop sent only to fleet reaches the job once", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithCommands();
     cpSync(join(repoRoot, "src"), join(engine, "src"), { recursive: true });
+    cpSync(join(repoRoot, "fleet"), join(engine, "fleet"));
     symlinkSync(join(repoRoot, "node_modules"), join(engine, "node_modules"));
+    const profile = profileDir(["tools"]);
+    const saved = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
+    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...saved, settings: { "base.heavySlots": 1, "base.diskFloorGigabytes": 0 } }));
+    expect((await fleet(["apply", "--profile", profile], home, engine)).code).toBe(0);
     const bin = temp.make("bin-");
-    writeFileSync(join(bin, "bun"), `#!/bin/sh\necho $$ > "$HOME/fake.pid"; trap 'kill -KILL $! 2>/dev/null; echo stopped > "$HOME/stopped"; exit 143' TERM; kill -TERM $PPID; sleep 600 & wait $!\n`, { mode: 0o755 });
-    const fleetProcess = Bun.spawn([process.execPath, join(engine, "src/cli.ts"), "hello"], { env: { ...Bun.env, HOME: home, PATH: `${bin}:${Bun.env.PATH}` }, stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    writeFileSync(join(bin, "systemd-run"), `#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done; shift; exec "$@"\n`, { mode: 0o755 });
+    const env = { ...Bun.env, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}` };
+    const stops = join(home, "stops");
+    const job = Bun.spawn(["sh", join(engine, "fleet"), "heavy", "--", "sh", "-c", `tail -f /dev/null 9>&- & tail=$!; trap 'kill $tail; echo TERM >> "$0"; exit 143' TERM; echo $$; wait $tail`, stops], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true });
     try {
-      expect(await fleetProcess.exited).toBe(143);
-      expect(readFileSync(join(home, "stopped"), "utf8")).toBe("stopped\n");
-    } finally {
-      const fake = Number(readFileSync(join(home, "fake.pid"), "utf8"));
-      if (fake > 1) {
-        await Bun.spawn(["pkill", "-KILL", "-P", String(fake)]).exited;
-        try { process.kill(fake, "SIGKILL"); } catch {}
+      const reader = job.stdout.getReader();
+      let said = "";
+      while (!said.includes("\n")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        said += new TextDecoder().decode(value);
       }
+      expect(said).toBe(`${job.pid}\n`);
+      process.kill(job.pid, "SIGTERM");
+      expect(await job.exited).toBe(143);
+      expect(readFileSync(stops, "utf8")).toBe("TERM\n");
+    } finally {
+      try { process.kill(-job.pid, "SIGKILL"); } catch {}
     }
   });
 
@@ -437,6 +450,25 @@ else process.exit((await Bun.file(file).exists()) ? 0 : 1);
       expect(await run(["box", "off"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(0);
       expect(existsSync(join(home, "box.txt"))).toBe(false);
       expect(await run(["box", "on"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(2);
+      expect(existsSync(join(home, "box.txt"))).toBe(false);
+    });
+
+    test("keeps the step to undo while Fleet cannot run its pack's command, and never runs another pack's command of that name", async () => {
+      const home = temp.make("home-");
+      const engine = engineWithBox();
+      const profile = profileDir(["tools"]);
+      expect(await run(["apply", "--profile", profile], home, engine)).toBe(0);
+      writeFileSync(join(engine, "packs/rival/commands/box.ts"), `await Bun.write(Bun.env.HOME + "/rival.txt", "ran");\n`);
+      const away = join(temp.make("away-"), "tools");
+      renameSync(join(engine, "packs/tools"), away);
+      writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8")), packs: ["rival"] }));
+      expect(await run(["box", "status"], home, engine, { FLEET_UNDO: "tools/box" })).toBe(3);
+      await run(["apply"], home, engine);
+      expect(existsSync(join(home, "rival.txt"))).toBe(false);
+      expect(existsSync(join(home, "box.txt"))).toBe(true);
+      renameSync(away, join(engine, "packs/tools"));
+      drop(profile);
+      expect(await run(["apply"], home, engine)).toBe(0);
       expect(existsSync(join(home, "box.txt"))).toBe(false);
     });
   });
