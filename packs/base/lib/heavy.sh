@@ -116,8 +116,10 @@ if [ -n "$holders" ]; then
   queued_at=$(date +%s)
   queue_place
   if [ "$queued" -eq 0 ]; then echo "No job waits."; else echo "Waiting, oldest first:"; fi
-  for file in $(ls "$locks" | sed -n 's/^wait-//p' | sort -t- -k1,1n -k2,2n); do
-    [ -f "$locks/wait-$file" ] && echo "  $(show_job "$locks/wait-$file")"
+  for file in "$locks"/wait-*; do
+    [ ! -f "$file" ] || printf '%s\n' "${file##*/wait-}"
+  done | sort -t- -k1,1n -k2,2n | while read -r name; do
+    echo "  $(show_job "$locks/wait-$name")"
   done
   exit 0
 fi
