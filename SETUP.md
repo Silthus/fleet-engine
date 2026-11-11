@@ -112,7 +112,8 @@ Ask in one call:
 
 - **Packs.** One option per preset in `~/.local/share/fleet/engine/presets.json`,
   with its `blurb`, and "One by one". For one by one, ask a multi-select
-  question with the packs below. Base is always on. The page
+  question with the packs below whose row says "Always". The others need a
+  hub that runs, so they come later. Base is always on. The page
   [A day with Fleet](https://silthus.github.io/fleet-engine/) shows each pack
   during a workday.
 - **AI plan.** Claude, ChatGPT, or both: it decides the sign-ins and the
@@ -128,8 +129,8 @@ Ask in one call:
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Always |
 | `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always |
 | `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always |
-| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | With a hub and a node |
-| `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | With a hub and a node |
+| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | Later, once the hub and the node run |
+| `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | Later, once the hub runs |
 
 ## 7. Run setup with their answers
 
