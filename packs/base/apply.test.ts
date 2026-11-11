@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { cargoGitCliCommand } from "./lib/cargo-git-cli.ts";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { jobsAdapter } from "../../src/adapters/jobs/adapter.ts";
@@ -185,6 +186,24 @@ describe("Cargo on Linux", () => {
     expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
     expect(readFileSync(join(home, file), "utf8")).toBe("[build]\njobs = 4\n");
     expect(readdirSync(join(home, ".cargo"))).toEqual([file.slice(".cargo/".length)]);
+  });
+
+  test.skipIf(process.getuid?.() === 0).each(["a read-only folder", "a file"])("leaves a Cargo home that is %s alone, and the later Base steps still run", async (kind) => {
+    const home = temp.make("home-");
+    if (kind === "a file") writeFileSync(join(home, ".cargo"), "");
+    else mkdirSync(join(home, ".cargo"), { mode: 0o500 });
+    expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
+    if (kind !== "a file") expect(readdirSync(join(home, ".cargo"))).toEqual([]);
+    chmodSync(join(home, ".cargo"), 0o700);
+  });
+
+  test("writes the config into CARGO_HOME when it is set, which is where Cargo reads it", async () => {
+    const home = temp.make("home-");
+    const cargoHome = join(temp.make("cargo-"), "home");
+    expect(await cargoGitCliCommand([], { home, cargoHome })).toBe(0);
+    expect(parseToml(readFileSync(join(cargoHome, "config.toml"), "utf8"))).toEqual({ net: { "git-fetch-with-cli": true } });
+    expect(await cargoGitCliCommand(["--check"], { home, cargoHome })).toBe(0);
+    expect(await cargoGitCliCommand(["--check"], { home })).toBe(1);
   });
 });
 
