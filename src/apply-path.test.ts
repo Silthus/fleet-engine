@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 
 const engineRoot = join(import.meta.dir, "..");
 const applyPathEntries = ["src/reconciler/apply.ts", "src/adapters/index.ts", "packs/memory/hooks/memory-index.ts", "packs/memory/hooks/memory-recall.ts", "packs/memory/sync/secret-scan.ts"];
@@ -11,10 +11,7 @@ function importGraph(entries: string[]) {
   const visit = (file: string) => {
     if (reached.has(file)) return;
     reached.add(file);
-    for (const { path } of transpiler.scanImports(readFileSync(file, "utf8"))) {
-      const next = resolve(dirname(file), path);
-      if (path.startsWith(".") && existsSync(next)) visit(next);
-    }
+    for (const { path } of transpiler.scanImports(readFileSync(file, "utf8"))) if (path.startsWith(".")) visit(Bun.resolveSync(path, dirname(file)));
   };
   for (const entry of entries) visit(join(engineRoot, entry));
   return [...reached].map((file) => relative(engineRoot, file)).sort();
