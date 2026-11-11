@@ -203,6 +203,14 @@ describe("fleet guards allowlist", () => {
     const withoutSettings = (mode: string) => allowlistCommand([mode], { settings: {}, profileDir: undefined, root: machine.root, print: () => {} });
     expect(() => withoutSettings("--check")).toThrow();
     expect(withoutSettings("--left")).toBe(0);
+    const list = join(machine.root, "etc/fleet/git-allowlist");
+    chmodSync(list, 0o000);
+    expect(withoutSettings("--left")).toBe(0);
+    chmodSync(list, 0o644);
+    chmodSync(join(machine.root, "etc/fleet"), 0o000);
+    const blind = withoutSettings("--left");
+    chmodSync(join(machine.root, "etc/fleet"), 0o755);
+    expect(blind).toBe(process.getuid?.() === 0 ? 0 : 3);
     expect(run(["sh", join(machine.staged, "install.sh"), "remove", machine.root]).code).toBe(0);
     expect(withoutSettings("--left")).toBe(1);
   });

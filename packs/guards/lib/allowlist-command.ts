@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { allowedSigners, listText, parseOwners, systemPaths, verify, type Verdict } from "./allowlist.ts";
@@ -81,11 +81,21 @@ function stage(list: ReturnType<typeof signedList>, folder: string) {
   copyFileSync(installScript, join(folder, "install.sh"));
 }
 
+/** Exits 0 while an installed list is here, 1 once it is gone, and 3 (cannot tell) when Fleet cannot look. It reads no content, since root owns the list. */
+function listLeft(path: string): number {
+  try {
+    lstatSync(path);
+    return 0;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? 1 : 3;
+  }
+}
+
 /** Prints the signed Git allowlist and whether it verifies and is installed, stages it for the root step, checks it for doctor, or, with --left, says whether any list is installed, without the guards settings. */
 export function allowlistCommand(args: string[], inputs: AllowlistInputs): number {
   const [mode, folder, ...rest] = args;
   if (rest.length || (mode === "stage") !== Boolean(folder) || ![undefined, "text", "stage", "--check", "--left"].includes(mode)) throw new Error(usage);
-  if (mode === "--left") return readOr(systemPaths(inputs.root).list) === undefined ? 1 : 0;
+  if (mode === "--left") return listLeft(systemPaths(inputs.root).list);
   const list = signedList(inputs);
   if (mode === "text") return inputs.print(list.text.trimEnd()), 0;
   const verdict = verifyWith(list);
