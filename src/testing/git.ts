@@ -22,6 +22,13 @@ export function git(dir: string, ...args: string[]) {
   return result.stdout.toString().trim();
 }
 
+export async function spawnGit(dir: string, ...args: string[]) {
+  const child = Bun.spawn(["git", ...args], { cwd: dir, env: gitEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  if (code !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
+  return stdout.trim();
+}
+
 export function tempDirs() {
   const dirs: string[] = [];
   return {
