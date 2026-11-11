@@ -51,10 +51,8 @@ export const coderWhoami = "Coder is running at https://coder.example.com, You'r
 /** The one token coder tokens create prints, alone on its line. */
 export const coderToken = ["fleet", "test", "coder", "token"].join("-");
 
-/** The home folder of the fake devbox that this machine reaches by the SSH name host. */
 export const boxHome = (home: string, host: string) => join(home, "boxes", host);
 
-/** The role file that Fleet wrote on the fake devbox. */
 export const boxMachineFile = (home: string, host: string) => JSON.parse(readFileSync(join(boxHome(home, host), ".config/fleet/machine.json"), "utf8"));
 
 /** The command an SSH call runs on the box, without the PATH prefix. */
