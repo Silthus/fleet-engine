@@ -35,6 +35,6 @@
   <text class="txt" x="606" y="68">Your profile</text>
   <rect class="sub" x="606" y="82" width="118" height="28" rx="6"/><text class="mono" x="616" y="101">fleet-profile</text>
   <text class="small" x="606" y="134">A private GitHub repo</text><text class="small" x="606" y="150">with your answers.</text>
-  <path class="optlink" d="M728 170 V316 H120 V170 M435 300 V316"/>
+  <path class="optlink" d="M728 170 V316 H120 V170 M435 300 V316 M590 105 H560"/>
   <text class="small" x="588" y="190">Every machine reads it,</text><text class="small" x="588" y="206">so all of them match.</text>
 </svg>

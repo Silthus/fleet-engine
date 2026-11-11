@@ -10,7 +10,7 @@ You need:
 - a GitHub account;
 - a Claude plan, a ChatGPT plan, or both;
 - a Coder workspace that runs Linux, for the devbox. You can add it later. It
-  needs the Linux prerequisites in the [README](../README.md#install): `curl`,
+  needs the Linux prerequisites in the [README](../README.md#set-it-up-by-hand): `curl`,
   `git`, `tar`, `sha256sum`, `python3`, cron, and systemd's user manager, with
   lingering on so T3 Code keeps running after you log out.
 
