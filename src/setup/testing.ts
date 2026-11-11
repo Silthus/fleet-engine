@@ -37,7 +37,7 @@ async function realGit(home: string, args: string[], cwd?: string): Promise<Exec
   const run = async (command: string[]) => {
     const child = Bun.spawn(command, { cwd, env: gitEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { code, output: `${stdout}${stderr}` };
+    return { code, output: `${stdout}${stderr}`, stdout };
   };
   const result = await run(["git", "-c", `url.${remotes}.insteadOf=https://github.com/`, ...args]);
   if (args[0] === "clone" && result.code === 0) await run(["git", "-C", args.at(-1)!, "config", `url.${remotes}.insteadOf`, "https://github.com/"]);
@@ -51,6 +51,8 @@ export const coderWhoami = "Coder is running at https://coder.example.com, You'r
 /** The one token coder tokens create prints, alone on its line. */
 export const coderToken = ["fleet", "test", "coder", "token"].join("-");
 
+const hostKeyAdded = (host: string) => `Warning: Permanently added '${host}' (ED25519) to the list of known hosts.\n`;
+
 export const boxHome = (home: string, host: string) => join(home, "boxes", host);
 
 export const boxMachineFile = (home: string, host: string) => JSON.parse(readFileSync(join(boxHome(home, host), ".config/fleet/machine.json"), "utf8"));
@@ -63,7 +65,9 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * of 2 s polls: 0 means already signed in, and a sign-in that is never
  * started never passes. Its gh makes repos as bare repos under the home, and
  * git runs for real with github.com rewritten to them. Its ssh reaches a fake
- * devbox whose sign-ins work the same way; Claude there signs in when its
+ * devbox whose sign-ins work the same way, and which, like real ssh, warns
+ * on stderr that it added the host key the first time it reaches a host
+ * other than a coder. one; Claude there signs in when its
  * foreground sign-in runs. A command on the box that reads or writes its
  * role file runs for real in a home folder of its own under the test home.
  * The hub takes the nodes the pushed profile lists at each fleet update;
@@ -85,7 +89,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const opened: string[] = [];
   let devbox = false;
   const passes = (name: SignInName) => left[name] === 0;
-  const result = (ok: boolean, output = ""): ExecResult => ({ code: ok ? 0 : 1, output });
+  const result = (ok: boolean, output = ""): ExecResult => ({ code: ok ? 0 : 1, output, stdout: output });
+  const reached = new Set<string>();
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
   const t3 = (line: string, token: string) => {
     if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
@@ -117,7 +122,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const forReal = async (line: string, host: string, input?: string): Promise<ExecResult> => {
     const child = Bun.spawn(["sh", "-c", line], { env: { HOME: boxHome(home, host), PATH: process.env.PATH ?? "" }, stdin: input === undefined ? "ignore" : new Blob([input]), stdout: "pipe", stderr: "pipe" });
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { code, output: `${stdout}${stderr}` };
+    return { code, output: `${stdout}${stderr}`, stdout };
   };
   let boxCoderAt = options.boxCoderAt ?? "https://coder.example.com";
   const box = async (line: string, input: string | undefined, host: string): Promise<ExecResult> => {
@@ -143,7 +148,13 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     async exec(command, run = {}) {
       calls.push({ command, ...run });
       const remote = onBox(command);
-      if (remote !== undefined) return box(remote, run.input, command.at(-2)!);
+      if (remote !== undefined) {
+        const host = command.at(-2)!;
+        const answer = await box(remote, run.input, host);
+        const firstContact = !host.startsWith("coder.") && !reached.has(host);
+        reached.add(host);
+        return firstContact ? { ...answer, output: `${answer.output}${hostKeyAdded(host)}` } : answer;
+      }
       const line = command.join(" ");
       if (line.startsWith("gh auth status")) return ghStatus("github", started.has("github") ? scopes : (options.scopes ?? scopes));
       if (line === "gh auth setup-git") return result(true);

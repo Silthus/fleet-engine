@@ -300,6 +300,17 @@ describe("the devbox over SSH", () => {
     expect(box.hubUpdates).toEqual([]);
   });
 
+  test("fleet devbox add reads the box's role file and T3 Connect state apart from the host key warning ssh prints when it first reaches the box", async () => {
+    const { home, add } = await withHub();
+    const folder = join(boxHome(home, "node-4"), ".config/fleet");
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, "machine.json"), JSON.stringify({ schema: 1, role: "linux" }));
+    const box = fakeMachine(home, { "box:t3": 1 });
+    expect(await add("node-4", box)).toBe(0);
+    expect(boxMachineFile(home, "node-4")).toEqual({ schema: 1, role: "linux", name: "node-4" });
+    expect(machineFile(home).setup.done).toContain("devbox:node-4:link");
+  });
+
   test("fleet devbox add for the hub itself lists it once and asks nothing of a hub", async () => {
     const { home, add } = await withHub();
     const box = fakeMachine(home);
