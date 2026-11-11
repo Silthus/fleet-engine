@@ -41,7 +41,7 @@ share="$HOME/.local/share/fleet"
 if [ "$os" = Darwin ] && [ "${FLEET_CODEX_LOCKED:-}" != "$$" ]; then
   command -v python3 >/dev/null 2>&1 || fail "needs python3 to install Codex safely. Install the Command Line Tools with xcode-select --install, then run fleet apply."
   mkdir -p "$share" || fail "could not create $share."
-  FLEET_CODEX_LOCKED=$$ exec python3 -c 'import fcntl, os, sys; lock = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT, 0o644); fcntl.flock(lock, fcntl.LOCK_EX); os.dup2(lock, 9); os.execv("/bin/sh", ["sh"] + sys.argv[2:])' "$share/codex.lock" "$0" "$@"
+  FLEET_CODEX_LOCKED=$$ exec python3 -c 'import fcntl, os, sys; lock = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT, 0o644); fcntl.flock(lock, fcntl.LOCK_EX); os.dup2(lock, 9); os.set_inheritable(9, True); os.execv("/bin/sh", ["sh"] + sys.argv[2:])' "$share/codex.lock" "$0" "$@"
 fi
 unset FLEET_CODEX_LOCKED
 [ "$os" = Darwin ] || command -v flock >/dev/null 2>&1 || fail "needs flock to install Codex safely. Install util-linux or BusyBox, then run fleet apply."
@@ -95,7 +95,9 @@ point "$current" "releases/$tag"
 point "$link" "$current/bin/codex"
 if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
   if [ "$os" = Darwin ]; then
-    running=$(lsof -nP -w -d txt -Fn 2>/dev/null | sed -n 's/^n/ -> /p' || true)
+    listed=$(lsof -nP -w -u "$(id -u)" -d txt -Fn 2>/dev/null) || listed=""
+    case "$listed" in *"error:"*) listed="" ;; esac
+    running=$(printf '%s\n' "$listed" | sed -n 's/^n/ -> /p')
   else
     running=$(QUOTING_STYLE=literal ls -l /proc/[0-9]*/exe 2>/dev/null || true)
   fi

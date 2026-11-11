@@ -39,6 +39,8 @@ export type SetupOptions = {
 /** Steps that run again when the command changes an answer: the profile saves it, apply puts it on this machine, and the check confirms it. */
 const answersChanged = ["profile", "apply", "apply-codex", "check"];
 
+const checked = (done: string[] = []) => done.some((id) => id === "check" || id.startsWith("check:"));
+
 export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
 
 export async function setup(args: string[], options: SetupOptions): Promise<number> {
@@ -47,7 +49,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   const terminal: Terminal = { ...options.terminal, ask: (prompt) => (waits++, options.terminal.ask(prompt)) };
   let flags: SetupFlags;
   const machine: MachineFile = thisMachine(await loadMachine(options.home), options.platform, options.env ?? process.env);
-  const unfinished = Boolean(machine.setup?.done.length) && !machine.setup?.done.includes("check");
+  const unfinished = Boolean(machine.setup?.done.length) && !checked(machine.setup?.done);
   const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
   const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
   const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, draft: progress.draft } });
@@ -82,7 +84,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     terminal.print(`fleet setup: ${error.message}`);
     return 2;
   }
-  const appliedWhole = progress.done.includes("check") && !progress.done.includes("apply-codex");
+  const appliedWhole = checked(progress.done) && !progress.done.includes("apply-codex");
   const context: QuestionContext = {
     terminal,
     flags,

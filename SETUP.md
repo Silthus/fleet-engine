@@ -10,7 +10,9 @@ passing `fleet doctor` on this Mac.
   and why. Size it to what they know (step 2).
 - **Ask with your question tool.** Every choice goes through it. Each option
   says what the person gets and what they give up, and one option is marked
-  as recommended. Put independent questions in one call.
+  as recommended. Put independent questions in one call. When your question
+  tool takes fewer questions in one call, ask the rest in a second call right
+  after the first.
 - **Secrets go through the secret prompt.** Ask for every secret, such as an
   API key or a token, with the host's secret prompt (in T3 Code, its
   `request_secret` tool), never in chat. Say in one line what the secret is
@@ -34,12 +36,12 @@ passing `fleet doctor` on this Mac.
   `export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";`.
 - **When a step fails.** Explain its last lines and fix what they name. When
   it still fails, or the cause is not clear, offer `fleet triage`. It exists
-  once the install made `~/.local/bin/fleet`. Run
+  after the install makes `~/.local/bin/fleet`. Run
   `fleet triage --print --note "<the failed step and its last line>"` and
   show the person the report. It opens a **public** issue for the Fleet
   maintainer, with private details taken out, so ask before you run the same
-  command with `--send`. Before the GitHub sign-in of step 7, `--send` saves
-  the report to a file instead, and says where.
+  command with `--send`. When `gh` is not signed in, `--send` saves the
+  report to a file, says where, and exits 1. That exit is not a new failure.
 - **The keyboard in Terminal.** A command that needs the person's keyboard
   runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
   that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,
@@ -71,7 +73,7 @@ A prompt from an earlier page can carry more lines. Use them too:
 
 ## While something runs
 
-Steps 1, 7, and 9 start commands that take minutes. While one runs in the
+Steps 1, 5, 7, and 9 start commands that take minutes. While one runs in the
 background, explain one of these, in two or three lines, and do not repeat
 one. Skip a topic that does not fit their picks:
 
@@ -158,9 +160,6 @@ setup starts from the packs in their profile.
 3. **Packs**, with the options of step 6.
 4. **AI plan**, with the options of step 6.
 
-When your question tool takes fewer questions in one call, ask the rest in a
-second call right after the first.
-
 Each pick in question 1 adds an explainer to a later step:
 
 | New to | Add |
@@ -195,16 +194,18 @@ unless the picks from the page say where Fleet runs:
 - **Mac plus a hub and one node.** Two Linux devboxes in the cloud that stay
   on while the Mac sleeps: one **hub** with a 200 GB disk, which links your
   machines and watches their disks, and one **node** with a 500 GB disk,
-  where threads do the work. Setup creates them right away, while the Mac is
-  set up. Add more nodes later, when the load grows.
+  where threads do the work. Setup creates them at once, while the Mac is set
+  up. Add more nodes later, when the load grows.
 - **Mac plus a hub and two nodes.** The same, with two nodes, so twice as
   many threads run at once. The hub and two nodes use all 3 machines of a
   free T3 Connect account, so T3 Connect on this Mac then needs a paid T3
-  Chat plan. Another answer can name more nodes.
+  Chat plan. They can name more nodes in their own answer. Three or more
+  nodes need a paid T3 Chat plan.
 
 Recommend a hub and one node when they use Coder, and Mac only otherwise.
-They use Coder when `command -v coder` finds the Coder CLI. Check it before
-step 2, so the recommendation is ready in the same call.
+They use Coder when `command -v coder` finds the Coder CLI. Check it after
+the PATH line and before step 2, so the recommendation is ready in the same
+call.
 The picks from the page line `Mac plus a hub and a node` means one node.
 Below, "the nodes" means as many as they chose.
 
@@ -226,7 +227,7 @@ Chat plan, which they link in T3 Code's account menu under **T3 Chat** →
 The Mac is ready to use first in both cases. With a hub and nodes, step 5
 creates them while the Mac is set up, and step 9 sets them up after.
 
-When a pick from the page names a hub and nodes, say it back with the disk
+When a pick from the page names a hub and nodes, repeat it with the disk
 sizes, and that you create them in step 5. They can tell you to stop.
 
 ## 5. Install the tools
@@ -237,16 +238,16 @@ error, explain its last lines, fix what they name, and run it again: it
 continues from where it stopped. Use the wait (see "While something runs").
 
 With a hub and nodes, use this wait to create them. Run items 1 to 5 of
-step 9 now:
+step 9 now. On a rerun of setup, step 1 starts no install: run items 1 to 5
+before step 7.
 
-- After item 1, run `coder list`. When it lists a workspace named
-  `fleet-hub` or `fleet-node-<n>`, an earlier setup made it: ask the
-  question about reusing a hub of step 9 now, and show the list. Reuse means
-  no `coder create` for that workspace. When it lists none, there is no hub
-  to reuse, so do not ask.
+- After item 1, run `coder list`. When it lists a workspace whose name
+  starts with `fleet-`, an earlier setup may have made it. Ask the reuse
+  question of step 9 now, and show the list. Reuse means no `coder create`
+  for that workspace. When it lists none, do not ask.
 - In item 4, start each `coder create` in the background, all at once. They
-  take minutes. Go on with step 6 while they run, and read each one's output
-  when it ends.
+  take minutes. Continue with step 6 while they run, and read the output of
+  each one when it ends.
 - In item 5, run only `coder config-ssh --yes`. Before item 6 of step 9,
   check that `ssh coder.<name> true` passes for each workspace.
 
@@ -384,7 +385,9 @@ whether to reuse a hub:
 
 **Clean up what you replace.** When a new hub or node replaces an old
 workspace, clean up only after item 10 passes on the new one, and ask before
-you remove anything:
+you remove anything. A workspace from step 5 that `fleet devbox add` never
+touched is not a devbox yet. It needs only item 2, after the person says
+yes, and it can go at once:
 
 1. Run `fleet devbox remove coder.<old name>` on this Mac. It takes the old
    host out of their profile, unlinks it in T3 Code here, and drops it from
@@ -424,7 +427,9 @@ made, replace the early workspaces: see "Clean up what you replace".
    sh ~/.cache/fleet-setup/coder-install.sh --method standalone --prefix "$HOME/.local"
    ```
 
-   When `coder whoami` fails, ask for their Coder address and sign in.
+   When `coder whoami` fails, sign in. Read their Coder address from
+   `~/Library/Application Support/coderv2/url`, and ask for it only when
+   that file is missing.
    Coder needs a session token: it lets this Mac act as them in Coder, and
    they make one at `<coder address>/cli-auth`. Ask for it with the secret
    prompt, delivered as a file, and sign in with it:
@@ -475,10 +480,13 @@ made, replace the early workspaces: see "Clean up what you replace".
    `coder schedule stop <name> manual`.
 5. **SSH.** Run `coder config-ssh --yes`. The step is done when
    `ssh coder.<name> true` passes for each workspace.
-6. **Fleet on the hub.** `fleet devbox add` installs Fleet, applies their
-   profile, and links T3 Code. It also signs the workspace in to Coder, so
-   the hub reaches the node over SSH. Its sign-ins need their keyboard, so
-   run it in a Terminal window:
+6. **Fleet on the hub.** Run `fleet hub status` first. When it names a hub
+   that step 5 did not create, ask the reuse question above now. On
+   **Reuse**, delete the early hub with `coder delete <name>` after the
+   person says yes, and skip items 6 and 7. Otherwise, `fleet devbox add`
+   installs Fleet, applies their profile, and links T3 Code. It also signs
+   the workspace in to Coder, so the hub reaches the node over SSH. Its
+   sign-ins need their keyboard, so run it in a Terminal window:
 
    ```sh
    printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nfleet devbox add %s\n' 'coder.<hub>' > ~/.cache/fleet-setup/devbox.command && chmod +x ~/.cache/fleet-setup/devbox.command && open ~/.cache/fleet-setup/devbox.command
