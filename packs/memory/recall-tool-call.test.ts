@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, gitEnv, isolateGit } from "../../src/testing/git.ts";
+import { gitEnv, isolateGit, spawnGit } from "../../src/testing/git.ts";
 import { type Provider, bash, fire, fleet, installedHook, notes, proofTraps, recallHarness, repoCheckout, shownLog } from "./recall-testing.ts";
 
 isolateGit();
@@ -48,31 +48,31 @@ describe("memory recall on a tool call", () => {
     const home = await machineWithMemory(notes);
     const elsewhere = join(home, "elsewhere");
     mkdirSync(elsewhere);
-    git(elsewhere, "init", "-q");
-    git(elsewhere, "remote", "add", "origin", "https://github.com/someone/other-app.git");
+    await spawnGit(elsewhere, "init", "-q");
+    await spawnGit(elsewhere, "remote", "add", "origin", "https://github.com/someone/other-app.git");
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: elsewhere, ...bash("bun run sync-retry") })).context).toBe("");
-    const cwd = repoCheckout(home, "https://github.com/someone/notes-app.git");
+    const cwd = await repoCheckout(home, "https://github.com/someone/notes-app.git");
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd, ...bash("bun run sync-retry") })).context).toContain("Retry the sync test once.");
   });
 
   test("shows a note that another machine added once the sync brings it", async () => {
     const remoteDir = temp.make("remote-");
     const remote = join(remoteDir, "notes.git");
-    git(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
+    await spawnGit(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
     const other = join(remoteDir, "other");
-    git(remoteDir, "clone", "-q", remote, other);
+    await spawnGit(remoteDir, "clone", "-q", remote, other);
     writeFileSync(join(other, "MEMORY.md"), "# Memory index\n");
-    git(other, "add", "-A");
-    git(other, "commit", "-q", "-m", "seed");
-    git(other, "push", "-q", "origin", "HEAD:main");
+    await spawnGit(other, "add", "-A");
+    await spawnGit(other, "commit", "-q", "-m", "seed");
+    await spawnGit(other, "push", "-q", "origin", "HEAD:main");
     const home = await machineWithMemory({}, `file://${remote}`);
     expect(await fleet(["memory-sync"], home)).toBe(0);
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toBe("");
 
     writeFileSync(join(other, "proof-traps.md"), proofTraps);
-    git(other, "add", "-A");
-    git(other, "commit", "-q", "-m", "a trap");
-    git(other, "push", "-q", "origin", "HEAD:main");
+    await spawnGit(other, "add", "-A");
+    await spawnGit(other, "commit", "-q", "-m", "a trap");
+    await spawnGit(other, "push", "-q", "origin", "HEAD:main");
     expect(await fleet(["memory-sync"], home)).toBe(0);
     expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })).context).toContain("Pass full SHAs");
   });

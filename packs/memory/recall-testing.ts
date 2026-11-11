@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { main } from "../../src/cli.ts";
-import { git, gitEnv, tempDirs } from "../../src/testing/git.ts";
+import { gitEnv, spawnGit, tempDirs } from "../../src/testing/git.ts";
 
 const engineRoot = join(import.meta.dir, "../..");
 const launcher = join(engineRoot, "fleet");
@@ -34,11 +34,11 @@ async function memoryMachine(temp: ReturnType<typeof tempDirs>, notes: Record<st
   return home;
 }
 
-export function repoCheckout(home: string, origin: string) {
+export async function repoCheckout(home: string, origin: string) {
   const dir = join(home, "code", "checkout");
   mkdirSync(dir, { recursive: true });
-  git(dir, "init", "-q");
-  git(dir, "remote", "add", "origin", origin);
+  await spawnGit(dir, "init", "-q");
+  await spawnGit(dir, "remote", "add", "origin", origin);
   return dir;
 }
 

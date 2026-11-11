@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CommandRunner } from "../adapters/run.ts";
 import { main, type CliOptions } from "../cli.ts";
+import { spawnAsync } from "./spawn.ts";
 
 export type Answer = { code: number; stdout: string; stderr: string };
 export type Host = (args: string[]) => Promise<Answer>;
@@ -26,12 +27,16 @@ export function fakeSsh(home: string, hosts: Record<string, Host | "down">, shel
     const line = command.at(-1)!;
     const target = hosts[host];
     if (!target || target === "down") return { code: 255, stdout: "", stderr: `ssh: connect to host ${host} port 22: Connection refused\n` };
-    const login = Bun.spawnSync([shell, "-c", line], { cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" } });
-    if (login.exitCode !== 0) return { code: login.exitCode, stdout: "", stderr: login.stderr.toString() };
-    const answer = target(login.stdout.toString().split("\0").slice(0, -1));
     const { signal } = options;
-    if (!signal) return answer;
-    const killed = new Promise<Answer>((settle) => signal.addEventListener("abort", () => settle({ code: 143, stdout: "", stderr: "" }), { once: true }));
-    return Promise.race([answer, killed]);
+    const killedSsh: Answer = { code: 143, stdout: "", stderr: "" };
+    if (signal?.aborted) return killedSsh;
+    const killed = new Promise<Answer>((settle) => signal?.addEventListener("abort", () => settle(killedSsh), { once: true }));
+    const answer = async () => {
+      const login = await spawnAsync([shell, "-c", line], { cwd: home, env: { HOME: home, PATH: "/usr/bin:/bin" }, signal });
+      if (signal?.aborted) return killedSsh;
+      if (login.exitCode !== 0) return { code: login.exitCode, stdout: "", stderr: login.stderr };
+      return target(login.stdout.split("\0").slice(0, -1));
+    };
+    return Promise.race([answer(), killed]);
   };
 }

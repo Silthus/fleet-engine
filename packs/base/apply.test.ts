@@ -7,6 +7,7 @@ import { main } from "../../src/cli.ts";
 import type { Plan } from "../../src/pack/types.ts";
 import { apply } from "../../src/reconciler/apply.ts";
 import { tempDirs } from "../../src/testing/git.ts";
+import { spawnAsync } from "../../src/testing/spawn.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -128,14 +129,14 @@ describe("the Linux session", () => {
     expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(0);
     expect(await shell(home, ["bash", "-c", 'printf %s "$DBUS_SESSION_BUS_ADDRESS"'], { SSH_CLIENT: "192.0.2.1 50000 22", SHLVL: "0" })).toBe(userBus);
     expect(read(home, ".bashrc")).toEndWith(bashrc);
-    expect(Bun.spawnSync(["bash", "-n", join(home, ".bashrc")]).exitCode).toBe(0);
+    expect((await spawnAsync(["bash", "-n", join(home, ".bashrc")])).exitCode).toBe(0);
   });
 
   test("a startup file that Fleet cannot read is left as it is", async () => {
     const home = temp.make("home-");
     writeFileSync(join(home, ".bashrc"), ubuntuBashrc, { mode: 0o200 });
     expect((await fleet(["apply", "--profile", profileWith()], home)).code).toBe(1);
-    Bun.spawnSync(["chmod", "600", join(home, ".bashrc")]);
+    await spawnAsync(["chmod", "600", join(home, ".bashrc")]);
     expect(read(home, ".bashrc")).toBe(ubuntuBashrc);
   });
 
@@ -182,7 +183,7 @@ describe("the settings snapshot", () => {
     const home = temp.make("home-");
     const profile = profileWith();
     await fleet(["apply", "--profile", profile], home);
-    Bun.spawnSync(["chmod", "644", snapshotFile(home)]);
+    await spawnAsync(["chmod", "644", snapshotFile(home)]);
     expect((await fleet(["doctor"], home)).output).toContain("Step settings-snapshot of the base pack does not pass its check.");
     await fleet(["apply"], home);
     expect(statSync(snapshotFile(home)).mode & 0o777).toBe(0o600);

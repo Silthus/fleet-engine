@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LoadedPack, PackManifest } from "../src/pack/types.ts";
 import { tempDirs } from "../src/testing/git.ts";
+import { spawnAsync } from "../src/testing/spawn.ts";
 import { presetPicks, commandFlags, setSetting, questions, setupAsks, settingAsks } from "../page/model.ts";
 import { buildPage, pageData } from "./build-page.ts";
 
@@ -105,8 +106,8 @@ describe("the page build", () => {
     mkdirSync(join(source, "packs", "posthog"), { recursive: true });
     writeFileSync(join(source, "packs", "posthog", "pack.json"), JSON.stringify(manifest));
     const out = join(temp.make("out-"), "index.html");
-    const run = Bun.spawnSync(["bun", join(root, "scripts/build-page.ts"), "--audience", "posthog", "--source", source, "--out", out], { cwd: root });
-    expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
+    const run = await spawnAsync(["bun", join(root, "scripts/build-page.ts"), "--audience", "posthog", "--source", source, "--out", out], { cwd: root });
+    expect([run.exitCode, run.stderr]).toEqual([0, ""]);
     expect(readFileSync(out, "utf8")).toContain('"teamPacks":["posthog"]');
   });
 
@@ -115,8 +116,8 @@ describe("the page build", () => {
     mkdirSync(join(source, "packs", "team"), { recursive: true });
     writeFileSync(join(source, "packs", "team", "pack.ts"), `setInterval(() => {}, 3_600_000);\nexport default { sdk: 1, name: "team", summary: "Team rules.", register() {} };\n`);
     const out = join(temp.make("out-"), "index.html");
-    const run = Bun.spawnSync(["bun", join(root, "scripts/build-page.ts"), "--audience", "posthog", "--source", source, "--out", out], { cwd: root, timeout: 4000 });
-    expect([run.exitCode, run.stderr.toString()]).toEqual([0, ""]);
+    const run = await spawnAsync(["bun", join(root, "scripts/build-page.ts"), "--audience", "posthog", "--source", source, "--out", out], { cwd: root, timeout: 4000 });
+    expect([run.exitCode, run.stderr]).toEqual([0, ""]);
     expect(readFileSync(out, "utf8")).toContain('"teamPacks":["team"]');
   });
 });

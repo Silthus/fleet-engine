@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git } from "../../../src/testing/git.ts";
+import { spawnGit } from "../../../src/testing/git.ts";
 import { mapTracker } from "./tracker.ts";
 
 const cleanups: string[] = [];
@@ -13,8 +13,8 @@ afterEach(async () => {
 async function profileWithOrigin(origin?: string): Promise<string> {
   const profile = await mkdtemp(join(tmpdir(), "fleet-tracker-"));
   cleanups.push(profile);
-  git(profile, "init", "-q");
-  if (origin) git(profile, "remote", "add", "origin", origin);
+  await spawnGit(profile, "init", "-q");
+  if (origin) await spawnGit(profile, "remote", "add", "origin", origin);
   return profile;
 }
 

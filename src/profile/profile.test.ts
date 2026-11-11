@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PackManifest, ProfileFile } from "../pack/types.ts";
-import { git, isolateGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { activeChoices, loadMachine, loadProfile, ProfileError, saveAnswers, saveMachine, thisMachine, workflowOverrides } from "./profile.ts";
 
 isolateGit();
@@ -31,29 +31,29 @@ const profile: ProfileFile = {
   workflows: {},
 };
 
-function profileRepo(file: unknown = profile) {
+async function profileRepo(file: unknown = profile) {
   const dir = temp.make("profile-");
-  git(dir, "init", "-q", "-b", "main");
+  await spawnGit(dir, "init", "-q", "-b", "main");
   writeFileSync(join(dir, "fleet.json"), JSON.stringify(file, null, 2) + "\n");
-  git(dir, "add", ".");
-  git(dir, "commit", "-q", "-m", "Start");
+  await spawnGit(dir, "add", ".");
+  await spawnGit(dir, "commit", "-q", "-m", "Start");
   return dir;
 }
 
 describe("profile", () => {
   test("rejects a schema it does not know", async () => {
-    const dir = profileRepo({ ...profile, schema: 3 });
+    const dir = await profileRepo({ ...profile, schema: 3 });
     expect(loadProfile(dir)).rejects.toThrow(new ProfileError(`${join(dir, "fleet.json")}: unknown schema 3`));
   });
 
   test("loads about-me.md when it exists", async () => {
-    const dir = profileRepo();
+    const dir = await profileRepo();
     writeFileSync(join(dir, "about-me.md"), "I like small PRs.\n");
     expect((await loadProfile(dir)).aboutMe).toBe("I like small PRs.\n");
   });
 
   test("round-trips workflow overrides in both directions and drops defaults", async () => {
-    const dir = profileRepo();
+    const dir = await profileRepo();
     const choices = { maps: false, "quality-loop": true };
     await saveAnswers(dir, { workflows: workflowOverrides(choices, packs) });
     const saved = await loadProfile(dir);
@@ -62,11 +62,11 @@ describe("profile", () => {
 
     await saveAnswers(dir, { workflows: workflowOverrides({ maps: true, "quality-loop": true }, packs) });
     expect((await loadProfile(dir)).workflows).toEqual({ "quality-loop": true });
-    expect(git(dir, "log", "--format=%s")).toBe("Save Fleet answers\nSave Fleet answers\nStart");
+    expect(await spawnGit(dir, "log", "--format=%s")).toBe("Save Fleet answers\nSave Fleet answers\nStart");
   });
 
   test("keeps answers it was not given", async () => {
-    const dir = profileRepo({ ...profile, settings: { "orchestration.tracker": "me/fleet-profile" } });
+    const dir = await profileRepo({ ...profile, settings: { "orchestration.tracker": "me/fleet-profile" } });
     await saveAnswers(dir, { plan: "claude" });
     const saved = JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8"));
     expect(saved).toMatchObject({ plan: "claude", settings: { "orchestration.tracker": "me/fleet-profile" } });
@@ -75,58 +75,58 @@ describe("profile", () => {
 
 describe("saving answers", () => {
   test("commits only fleet.json and leaves other staged files staged", async () => {
-    const dir = profileRepo();
+    const dir = await profileRepo();
     writeFileSync(join(dir, "notes.txt"), "private\n");
-    git(dir, "add", "notes.txt");
+    await spawnGit(dir, "add", "notes.txt");
     await saveAnswers(dir, { plan: "claude" });
-    expect(git(dir, "show", "--name-only", "--format=", "HEAD")).toBe("fleet.json");
-    expect(git(dir, "diff", "--cached", "--name-only")).toBe("notes.txt");
+    expect(await spawnGit(dir, "show", "--name-only", "--format=", "HEAD")).toBe("fleet.json");
+    expect(await spawnGit(dir, "diff", "--cached", "--name-only")).toBe("notes.txt");
   });
 
   test("merges settings key by key", async () => {
-    const dir = profileRepo({ ...profile, settings: { "team.one": 1, "team.two": 2 } });
+    const dir = await profileRepo({ ...profile, settings: { "team.one": 1, "team.two": 2 } });
     await saveAnswers(dir, { settings: { "team.one": 3 } });
     expect((await loadProfile(dir)).settings).toEqual({ "team.one": 3, "team.two": 2 });
   });
 
   test("refuses to rewrite a profile of an unknown schema", async () => {
-    const dir = profileRepo({ ...profile, schema: 9 });
+    const dir = await profileRepo({ ...profile, schema: 9 });
     expect(saveAnswers(dir, { plan: "claude" })).rejects.toThrow("unknown schema 9");
     expect(JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8")).schema).toBe(9);
   });
 
   test("fails when Git cannot stage fleet.json", async () => {
-    const dir = profileRepo();
-    git(dir, "rm", "-q", "--cached", "fleet.json");
+    const dir = await profileRepo();
+    await spawnGit(dir, "rm", "-q", "--cached", "fleet.json");
     writeFileSync(join(dir, ".gitignore"), "fleet.json\n");
-    git(dir, "add", ".gitignore");
-    git(dir, "commit", "-q", "-m", "Ignore");
+    await spawnGit(dir, "add", ".gitignore");
+    await spawnGit(dir, "commit", "-q", "-m", "Ignore");
     expect(saveAnswers(dir, { plan: "claude" })).rejects.toThrow("could not stage fleet.json");
   });
 
   test("pushes when asked, even when nothing changed", async () => {
     const remote = temp.make("remote-");
-    git(remote, "init", "-q", "--bare", "-b", "main");
-    const dir = profileRepo();
-    git(dir, "remote", "add", "origin", remote);
-    git(dir, "push", "-q", "-u", "origin", "main");
+    await spawnGit(remote, "init", "-q", "--bare", "-b", "main");
+    const dir = await profileRepo();
+    await spawnGit(dir, "remote", "add", "origin", remote);
+    await spawnGit(dir, "push", "-q", "-u", "origin", "main");
     await saveAnswers(dir, { plan: "claude" });
     await saveAnswers(dir, { plan: "claude" }, { push: true });
-    expect(git(remote, "rev-parse", "main")).toBe(git(dir, "rev-parse", "HEAD"));
+    expect(await spawnGit(remote, "rev-parse", "main")).toBe(await spawnGit(dir, "rev-parse", "HEAD"));
   });
 
   test("a push the remote rejects because it is ahead says why and how to recover", async () => {
     const remote = temp.make("remote-");
-    git(remote, "init", "-q", "--bare", "-b", "main");
-    const dir = profileRepo();
-    git(dir, "remote", "add", "origin", remote);
-    git(dir, "push", "-q", "-u", "origin", "main");
+    await spawnGit(remote, "init", "-q", "--bare", "-b", "main");
+    const dir = await profileRepo();
+    await spawnGit(dir, "remote", "add", "origin", remote);
+    await spawnGit(dir, "push", "-q", "-u", "origin", "main");
     const other = temp.make("other-");
-    git(other, "clone", "-q", remote, ".");
+    await spawnGit(other, "clone", "-q", remote, ".");
     writeFileSync(join(other, "about-me.md"), "Hi\n");
-    git(other, "add", ".");
-    git(other, "commit", "-q", "-m", "Elsewhere");
-    git(other, "push", "-q");
+    await spawnGit(other, "add", ".");
+    await spawnGit(other, "commit", "-q", "-m", "Elsewhere");
+    await spawnGit(other, "push", "-q");
     const error = await saveAnswers(dir, { plan: "claude" }, { push: true }).catch((caught: Error) => caught);
     expect(error).toBeInstanceOf(ProfileError);
     expect((error as Error).message).toBe(
@@ -135,10 +135,10 @@ describe("saving answers", () => {
   });
 
   test("a failed push never shows the credentials in the remote's URL", async () => {
-    const dir = profileRepo();
-    git(dir, "remote", "add", "origin", "http://nora:hunter2@127.0.0.1:1/nora/fleet-profile.git?access_token=EXAMPLE_TOKEN");
-    git(dir, "config", "branch.main.remote", "origin");
-    git(dir, "config", "branch.main.merge", "refs/heads/main");
+    const dir = await profileRepo();
+    await spawnGit(dir, "remote", "add", "origin", "http://nora:hunter2@127.0.0.1:1/nora/fleet-profile.git?access_token=EXAMPLE_TOKEN");
+    await spawnGit(dir, "config", "branch.main.remote", "origin");
+    await spawnGit(dir, "config", "branch.main.merge", "refs/heads/main");
     const error = await saveAnswers(dir, { plan: "claude" }, { push: true }).catch((caught: Error) => caught);
     expect(error).toBeInstanceOf(ProfileError);
     expect((error as Error).message).toContain("http://127.0.0.1:1/nora/fleet-profile.git");
@@ -146,12 +146,12 @@ describe("saving answers", () => {
   });
 
   test("rejects a profile with invalid fields", async () => {
-    expect(loadProfile(profileRepo({ ...profile, workflows: { maps: "false" } }))).rejects.toThrow("workflows must map ids to true or false");
-    expect(loadProfile(profileRepo({ schema: 1 }))).rejects.toThrow("engine needs a repo");
-    expect(loadProfile(profileRepo({ ...profile, overrides: { models: [{ role: "review", model: "x" }] } }))).rejects.toThrow("overrides.models must list rows");
-    expect(loadProfile(profileRepo({ ...profile, overrides: { config: [{ provider: "claude", key: "model", value: "x", plans: {} }] } }))).rejects.toThrow("overrides.config[0]: plans must list claude, codex, or both");
-    expect(loadProfile(profileRepo({ ...profile, overrides: { config: [{ provider: "nope", key: "model", value: "x" }] } }))).rejects.toThrow("overrides.config[0]: needs a provider and a key");
-    expect(loadProfile(profileRepo({ ...profile, overrides: { config: [{ provider: "claude", key: "model", value: "x", after: "ready" }] } }))).rejects.toThrow("overrides.config[0]: after names a pack's check, so only a pack's own config item can wait for one");
+    expect(loadProfile(await profileRepo({ ...profile, workflows: { maps: "false" } }))).rejects.toThrow("workflows must map ids to true or false");
+    expect(loadProfile(await profileRepo({ schema: 1 }))).rejects.toThrow("engine needs a repo");
+    expect(loadProfile(await profileRepo({ ...profile, overrides: { models: [{ role: "review", model: "x" }] } }))).rejects.toThrow("overrides.models must list rows");
+    expect(loadProfile(await profileRepo({ ...profile, overrides: { config: [{ provider: "claude", key: "model", value: "x", plans: {} }] } }))).rejects.toThrow("overrides.config[0]: plans must list claude, codex, or both");
+    expect(loadProfile(await profileRepo({ ...profile, overrides: { config: [{ provider: "nope", key: "model", value: "x" }] } }))).rejects.toThrow("overrides.config[0]: needs a provider and a key");
+    expect(loadProfile(await profileRepo({ ...profile, overrides: { config: [{ provider: "claude", key: "model", value: "x", after: "ready" }] } }))).rejects.toThrow("overrides.config[0]: after names a pack's check, so only a pack's own config item can wait for one");
   });
 });
 

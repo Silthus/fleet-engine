@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdir, mkdtemp, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { type AutoOptions, type CacheHost, cwdsFromLsof, decide, evictable, onlyDisposable, prune, pruneOptions, readSightings, readState, reclaimCaches, reclaimT3Versions, recordSightings, removeTreeCommand, t3StatePath, type Facts } from "./prune.ts";
 
 const onLinux = test.skipIf(process.platform !== "linux");
@@ -61,8 +62,8 @@ test("counts only lockfiles, symlinks, generated Convex code, and tool run outpu
   expect(disposable("R  pnpm-lock.yaml", "src/lock.ts")).toBe(false);
 });
 
-const sh = (cwd: string, ...command: string[]) => expect(Bun.spawnSync(command, { cwd, stderr: "pipe" }).exitCode).toBe(0);
-const commit = (cwd: string, message: string) => sh(cwd, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", message);
+const sh = async (cwd: string, ...command: string[]) => expect((await spawnAsync(command, { cwd })).exitCode).toBe(0);
+const commit = async (cwd: string, message: string) => sh(cwd, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", message);
 
 /** A repository whose main branch is also origin/main, with an empty T3 worktree root next to it. */
 async function repository(): Promise<{ base: string; repo: string; root: string }> {
@@ -70,12 +71,12 @@ async function repository(): Promise<{ base: string; repo: string; root: string 
   temporary.push(base);
   const repo = join(base, "repo");
   await mkdir(repo);
-  sh(repo, "git", "init", "-q", "-b", "main");
+  await sh(repo, "git", "init", "-q", "-b", "main");
   await writeFile(join(repo, "pnpm-lock.yaml"), "a\n");
   await writeFile(join(repo, "app.ts"), "a\n");
-  sh(repo, "git", "add", ".");
-  commit(repo, "init");
-  sh(repo, "git", "update-ref", "refs/remotes/origin/main", "HEAD");
+  await sh(repo, "git", "add", ".");
+  await commit(repo, "init");
+  await sh(repo, "git", "update-ref", "refs/remotes/origin/main", "HEAD");
   return { base, repo, root: join(base, "worktrees") };
 }
 
@@ -95,7 +96,7 @@ onLinux("a prune pass removes a settled worktree that has only tool changes and 
   const { base, repo, root } = await repository();
   const tooled = join(root, "repo/tooled");
   const edited = join(root, "repo/edited");
-  for (const [path, branch] of [[tooled, "tooled"], [edited, "edited"]]) sh(repo, "git", "worktree", "add", "-q", "-b", branch, path);
+  for (const [path, branch] of [[tooled, "tooled"], [edited, "edited"]]) await sh(repo, "git", "worktree", "add", "-q", "-b", branch, path);
   const shared = join(base, "shared-node-modules");
   await mkdir(shared);
   await writeFile(join(shared, "kept"), "");
@@ -152,9 +153,9 @@ onLinux("under disk pressure, a prune pass evicts an idle worktree and keeps one
   const used = join(root, "repo/used");
   const unused = join(root, "repo/unused");
   for (const path of [used, unused]) {
-    sh(repo, "git", "worktree", "add", "-q", "-b", basename(path), path);
+    await sh(repo, "git", "worktree", "add", "-q", "-b", basename(path), path);
     await writeFile(join(path, "app.ts"), "b\n");
-    commit(path, "work");
+    await commit(path, "work");
   }
   const later = Date.now() + 3 * 3600_000;
   const sightingsPath = join(base, "sightings.json");
@@ -174,9 +175,9 @@ onLinux("under disk pressure, a prune pass evicts an idle worktree and keeps one
 onLinux("removes a worktree whose branch has a merged pull request, asking the lookup it was given", async () => {
   const { base, repo, root } = await repository();
   const merged = join(root, "repo/merged");
-  sh(repo, "git", "worktree", "add", "-q", "-b", "merged", merged);
+  await sh(repo, "git", "worktree", "add", "-q", "-b", "merged", merged);
   await writeFile(join(merged, "app.ts"), "squashed\n");
-  commit(merged, "work");
+  await commit(merged, "work");
   const asked: string[] = [];
 
   const verdicts = prune({
@@ -192,7 +193,7 @@ onLinux("removes a worktree whose branch has a merged pull request, asking the l
 onLinux("keeps a worktree whose Git metadata is gone, with its uncommitted work", async () => {
   const { base, repo, root } = await repository();
   const broken = join(root, "repo/broken");
-  sh(repo, "git", "worktree", "add", "-q", "-b", "broken", broken);
+  await sh(repo, "git", "worktree", "add", "-q", "-b", "broken", broken);
   await writeFile(join(broken, "notes.md"), "not committed\n");
   await rm(join(repo, ".git/worktrees/broken"), { recursive: true, force: true });
 

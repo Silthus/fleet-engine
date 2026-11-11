@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, isolateGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { linkedFleets } from "../testing/linked.ts";
 
 isolateGit();
@@ -20,10 +20,10 @@ function healthServer() {
 }
 
 async function committed(profile: string) {
-  git(profile, "init", "-q");
-  git(profile, "add", "-A");
-  git(profile, "commit", "-qm", "profile");
-  return git(profile, "rev-parse", "--short", "HEAD").trim();
+  await spawnGit(profile, "init", "-q");
+  await spawnGit(profile, "add", "-A");
+  await spawnGit(profile, "commit", "-qm", "profile");
+  return spawnGit(profile, "rev-parse", "--short", "HEAD");
 }
 
 test("a command placed on the hub runs on the hub when a node types it", async () => {

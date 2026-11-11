@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { main } from "../cli.ts";
 import type { AvailableSource, ProfileFile } from "../pack/types.ts";
 import { defaultSources } from "../setup/defaults.ts";
-import { git, isolateGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { engineSource, resolveEngine } from "../testing/packs.ts";
 import { settingsCommand } from "./settings.ts";
 
@@ -14,20 +14,20 @@ afterEach(() => temp.cleanup());
 
 const engineRoot = join(import.meta.dir, "../..");
 
-function machineWithProfile(settings: Record<string, unknown> = {}) {
+async function machineWithProfile(settings: Record<string, unknown> = {}) {
   const home = temp.make("home-");
   const remote = join(home, "remote.git");
-  git(home, "init", "-q", "--bare", "-b", "main", remote);
+  await spawnGit(home, "init", "-q", "--bare", "-b", "main", remote);
   const dir = join(home, "profile");
-  git(home, "clone", "-q", remote, dir);
+  await spawnGit(home, "clone", "-q", remote, dir);
   const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: defaultSources, packs: ["pull-requests"], plan: "both", settings, workflows: {} };
   writeFileSync(join(dir, "fleet.json"), JSON.stringify(profile, null, 2) + "\n");
-  git(dir, "add", "fleet.json");
-  git(dir, "commit", "-q", "-m", "Start");
-  git(dir, "push", "-q", "-u", "origin", "main");
+  await spawnGit(dir, "add", "fleet.json");
+  await spawnGit(dir, "commit", "-q", "-m", "Start");
+  await spawnGit(dir, "push", "-q", "-u", "origin", "main");
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "linux", profileDir: dir }));
-  return { home, pushed: () => JSON.parse(git(home, "--git-dir", remote, "show", "main:fleet.json")) };
+  return { home, pushed: async () => JSON.parse(await spawnGit(home, "--git-dir", remote, "show", "main:fleet.json")) };
 }
 
 async function fleet(home: string, args: string[], applyCode = 0) {
@@ -40,7 +40,7 @@ async function fleet(home: string, args: string[], applyCode = 0) {
 
 describe("fleet packs", () => {
   test("lists every pack, marks the ones that are on, and shows their workflows", async () => {
-    const { home } = machineWithProfile();
+    const { home } = await machineWithProfile();
     const result = await fleet(home, ["packs"]);
     expect(result.code).toBe(0);
     expect(result.output).toContain("  ✓ pull-requests  ");
@@ -50,21 +50,21 @@ describe("fleet packs", () => {
   });
 
   test("turns packs and workflows on and off, pushes the profile, and applies here", async () => {
-    const { home, pushed } = machineWithProfile();
+    const { home, pushed } = await machineWithProfile();
     const result = await fleet(home, ["packs", "--add", "communication", "--workflows", "quality-loop=on,pr-care=off"]);
     expect(result.code).toBe(0);
     expect(result.output).toContain("✓ Saved your packs in your profile and pushed it.");
     expect(result.output).toEndWith("This machine has it now. Your other machines pick it up at their next fleet update.");
-    expect(pushed()).toMatchObject({ packs: ["pull-requests", "communication"], workflows: { "quality-loop": true, "pr-care": false } });
+    expect(await pushed()).toMatchObject({ packs: ["pull-requests", "communication"], workflows: { "quality-loop": true, "pr-care": false } });
     expect(result.applied).toEqual([join(home, "profile")]);
 
     const removed = await fleet(home, ["packs", "--remove", "communication", "--workflows", "pr-care=on"]);
     expect(removed.code).toBe(0);
-    expect(pushed()).toMatchObject({ packs: ["pull-requests"], workflows: { "quality-loop": true } });
+    expect(await pushed()).toMatchObject({ packs: ["pull-requests"], workflows: { "quality-loop": true } });
   });
 
   test("shows a workflow's terms note in the list and again when it is turned on", async () => {
-    const { home, pushed } = machineWithProfile();
+    const { home, pushed } = await machineWithProfile();
     const risk = JSON.parse(await Bun.file(join(engineRoot, "packs/hub/pack.json")).text()).workflows.find((workflow: { id: string }) => workflow.id === "own-account-balancing").risk;
     expect(risk).toContain("Anthropic");
     const before = await fleet(home, ["packs"]);
@@ -73,7 +73,7 @@ describe("fleet packs", () => {
     const turnedOn = await fleet(home, ["packs", "--add", "hub", "--workflows", "own-account-balancing=on"]);
     expect(turnedOn.code).toBe(0);
     expect(turnedOn.output).toContain(`Before you use Own-account balancing: ${risk}`);
-    expect(pushed()).toMatchObject({ workflows: { "own-account-balancing": true } });
+    expect(await pushed()).toMatchObject({ workflows: { "own-account-balancing": true } });
 
     const listed = await fleet(home, ["packs"]);
     expect(listed.output).toContain(`      Terms note for own-account-balancing: ${risk}`);
@@ -82,11 +82,11 @@ describe("fleet packs", () => {
   });
 
   test("shows the terms note when re-adding a pack brings back a workflow that was left on", async () => {
-    const { home, pushed } = machineWithProfile();
+    const { home, pushed } = await machineWithProfile();
     await fleet(home, ["packs", "--add", "hub", "--workflows", "own-account-balancing=on"]);
     const removed = await fleet(home, ["packs", "--remove", "hub"]);
     expect(removed.output).not.toContain("Before you use");
-    expect(pushed()).toMatchObject({ workflows: { "own-account-balancing": true } });
+    expect(await pushed()).toMatchObject({ workflows: { "own-account-balancing": true } });
 
     const readded = await fleet(home, ["packs", "--add", "hub"]);
     expect(readded.output).toContain("Before you use Own-account balancing: ");
@@ -95,34 +95,34 @@ describe("fleet packs", () => {
   });
 
   test("keeps workflow choices of packs whose source is not on this machine, and takes --set like setup", async () => {
-    const { home, pushed } = machineWithProfile();
+    const { home, pushed } = await machineWithProfile();
     const dir = join(home, "profile");
-    writeFileSync(join(dir, "fleet.json"), JSON.stringify({ ...JSON.parse(git(dir, "show", "HEAD:fleet.json")), workflows: { "team-dangerous": false } }, null, 2) + "\n");
-    git(dir, "commit", "-q", "-am", "Turn off a team workflow");
+    writeFileSync(join(dir, "fleet.json"), JSON.stringify({ ...JSON.parse(await spawnGit(dir, "show", "HEAD:fleet.json")), workflows: { "team-dangerous": false } }, null, 2) + "\n");
+    await spawnGit(dir, "commit", "-q", "-am", "Turn off a team workflow");
     const result = await fleet(home, ["packs", "--add", "communication", "--set", "pull-requests.freeReviews=3"]);
     expect(result.code).toBe(0);
-    expect(pushed()).toMatchObject({ packs: ["pull-requests", "communication"], workflows: { "team-dangerous": false }, settings: { "pull-requests.freeReviews": 3 } });
+    expect(await pushed()).toMatchObject({ packs: ["pull-requests", "communication"], workflows: { "team-dangerous": false }, settings: { "pull-requests.freeReviews": 3 } });
   });
 
   test("refuses to leave a pack without a pack it needs", async () => {
-    const { home, pushed } = machineWithProfile();
+    const { home, pushed } = await machineWithProfile();
     expect((await fleet(home, ["packs", "--add", "orchestration"])).code).toBe(0);
     const result = await fleet(home, ["packs", "--remove", "pull-requests"]);
     expect(result.code).toBe(2);
     expect(result.output).toStartWith("fleet packs: Orchestration needs Pull-requests. Add pull-requests, or remove orchestration.");
-    expect(pushed().packs).toEqual(["pull-requests", "orchestration"]);
+    expect((await pushed()).packs).toEqual(["pull-requests", "orchestration"]);
   });
 
   test("a change that does not apply here stays saved, and says how to finish", async () => {
-    const { home, pushed } = machineWithProfile();
+    const { home, pushed } = await machineWithProfile();
     const result = await fleet(home, ["packs", "--add", "memory"], 1);
     expect(result.code).toBe(1);
-    expect(pushed().packs).toEqual(["pull-requests", "memory"]);
+    expect((await pushed()).packs).toEqual(["pull-requests", "memory"]);
     expect(result.output).toEndWith("The change is saved. Fix what it says above, then run fleet apply.");
   });
 
   test("refuses unknown packs and workflows without touching the profile", async () => {
-    const { home, pushed } = machineWithProfile();
+    const { home, pushed } = await machineWithProfile();
     for (const [args, message] of [
       [["--add", "nope"], "fleet packs: no pack named nope."],
       [["--remove", "base"], "fleet packs: the base pack is always on"],
@@ -133,13 +133,13 @@ describe("fleet packs", () => {
       expect(result.code).toBe(2);
       expect(result.output).toStartWith(message);
     }
-    expect(pushed().packs).toEqual(["pull-requests"]);
+    expect((await pushed()).packs).toEqual(["pull-requests"]);
   });
 });
 
 describe("fleet settings and fleet set", () => {
   test("lists the settings of the packs that are on, with defaults marked", async () => {
-    const { home } = machineWithProfile({ "pull-requests.panelSlots": 4 });
+    const { home } = await machineWithProfile({ "pull-requests.panelSlots": 4 });
     const result = await fleet(home, ["settings"]);
     expect(result.code).toBe(0);
     expect(result.output).toContain("  pull-requests.freeReviews = 2 (default)");
@@ -175,10 +175,10 @@ describe("fleet settings and fleet set", () => {
   });
 
   test("checks each value against its type, then pushes and applies it", async () => {
-    const { home, pushed } = machineWithProfile();
+    const { home, pushed } = await machineWithProfile();
     const result = await fleet(home, ["set", "pull-requests.freeReviews=4", "--set", "memory.repo=me/notes"]);
     expect(result.code).toBe(0);
-    expect(pushed().settings).toEqual({ "pull-requests.freeReviews": 4, "memory.repo": "me/notes" });
+    expect((await pushed()).settings).toEqual({ "pull-requests.freeReviews": 4, "memory.repo": "me/notes" });
     expect(result.output).toContain("✓ Saved pull-requests.freeReviews, memory.repo in your profile and pushed it.");
     expect(result.output).toContain("The memory pack is off, so its setting waits until you turn it on with fleet packs --add memory.");
 
@@ -191,6 +191,6 @@ describe("fleet settings and fleet set", () => {
       expect(refused.code).toBe(2);
       expect(refused.output).toStartWith(message!);
     }
-    expect(pushed().settings).toEqual({ "pull-requests.freeReviews": 4, "memory.repo": "me/notes" });
+    expect((await pushed()).settings).toEqual({ "pull-requests.freeReviews": 4, "memory.repo": "me/notes" });
   });
 });

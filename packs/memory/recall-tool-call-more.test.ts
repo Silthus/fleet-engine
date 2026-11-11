@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { git, isolateGit } from "../../src/testing/git.ts";
+import { isolateGit, spawnGit } from "../../src/testing/git.ts";
 import { bash, fire, fleet, notes, proofTraps, recallHarness, shownLog } from "./recall-testing.ts";
 
 isolateGit();
@@ -54,16 +54,16 @@ describe("memory recall on a tool call", () => {
   test("shows the notes of a repo whose memory lives in a subtree, through the same memory folder", async () => {
     const remoteDir = temp.make("remote-");
     const remote = join(remoteDir, "notes.git");
-    git(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
+    await spawnGit(remoteDir, "init", "-q", "--bare", "-b", "main", remote);
     const old = join(remoteDir, "old-machine");
-    git(remoteDir, "clone", "-q", remote, old);
+    await spawnGit(remoteDir, "clone", "-q", remote, old);
     mkdirSync(join(old, "memory"));
     writeFileSync(join(old, "memory/MEMORY.md"), "# Memory index\n");
     writeFileSync(join(old, "memory/proof-traps.md"), proofTraps);
     writeFileSync(join(old, "README.md"), "Shared memory\n");
-    git(old, "add", "-A");
-    git(old, "commit", "-q", "-m", "old layout");
-    git(old, "push", "-q", "origin", "HEAD:main");
+    await spawnGit(old, "add", "-A");
+    await spawnGit(old, "commit", "-q", "-m", "old layout");
+    await spawnGit(old, "push", "-q", "origin", "HEAD:main");
     const home = await machineWithMemory({}, `file://${remote}`, { "memory.subtree": "memory" });
     expect(await fleet(["memory-sync"], home)).toBe(0);
     expect(realpathSync(join(home, ".agents/memory"))).toBe(realpathSync(join(home, ".agents/memory-repo/memory")));

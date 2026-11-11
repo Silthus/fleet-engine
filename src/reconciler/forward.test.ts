@@ -5,6 +5,7 @@ import { jobsAdapter } from "../adapters/jobs/adapter.ts";
 import { main, type CliOptions } from "../cli.ts";
 import type { MachineFile } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
+import { spawnAsync } from "../testing/spawn.ts";
 import { fakeSystemd } from "../testing/systemd.ts";
 import { filesAdapter } from "./apply.ts";
 
@@ -39,7 +40,7 @@ function machine(saved: MachineFile, extra: Record<string, string> = {}) {
     if (command.join(" ") !== "systemctl --user restart fleet-hub-forward.service") return answer;
     const execStart = readFileSync(unit, "utf8").match(/^ExecStart=(.+)$/m)![1]!;
     writeFileSync(log, "");
-    Bun.spawnSync(["/bin/sh", "-c", execStart], { env: { HOME: home } });
+    await spawnAsync(["/bin/sh", "-c", execStart], { env: { HOME: home } });
     started = readFileSync(log, "utf8").trimEnd().split("\n");
     return answer;
   };

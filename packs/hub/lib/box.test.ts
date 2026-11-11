@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
+import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { claimScript, isIdle, nightly, nightlySteps, recycleScript, refreshPool, release, saveToken, setUpScript, spawn, startBox, sweep, unfinishedThreads } from "./box.ts";
 import { boxCommand, type BoxDeps } from "./box-command.ts";
 import { LockBusy, lockBox } from "./box-lock.ts";
@@ -1203,9 +1204,9 @@ test("round 6, finding 4: a spawn never hands out a pooled box whose cleaning le
     lockedFolders(onBox, ["dev/a-locked"], 0o500);
     return onBox;
   };
-  const recycling = (onBox: string, keepDirs: string[]) => {
-    const ran = Bun.spawnSync(["sh", "-c", recycleScript(keepDirs)], { env: { HOME: onBox, PATH: `${bin}:/usr/bin:/bin` }, stderr: "pipe" });
-    return { code: ran.exitCode, stdout: "", stderr: ran.stderr.toString() };
+  const recycling = async (onBox: string, keepDirs: string[]) => {
+    const ran = await spawnAsync(["sh", "-c", recycleScript(keepDirs)], { env: { HOME: onBox, PATH: `${bin}:/usr/bin:/bin` } });
+    return { code: ran.exitCode, stdout: "", stderr: ran.stderr };
   };
 
   const home = hubHome();
