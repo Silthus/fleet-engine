@@ -11,6 +11,7 @@ import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCas
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { reviewPrompt } from "./proof-review.ts";
+import { quietCommitIn } from "./proof-delta.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
 import { listenIn, withoutThread, type ThreadWords } from "./proof-answers.ts";
@@ -232,7 +233,11 @@ required. A stacked PR whose base requires nothing is held to the default branch
 requires any, every check counts. On a draft, a required check named "<workflow> / <job>" that never reported counts
 as withheld from drafts when its workflow reported other checks on the commit and all of them passed. CI is unknown
 when GitHub does not answer for the rulesets or branch protection. A clean merge of the PR's base carries the review and the evidence of
-its other parent forward.
+its other parent forward. The review also carries across quiet commits: single-parent commits that only change or add
+test files, named *.test.*, *.spec.*, *_test.go, *_test.py or test_*.py, or snapshots in __snapshots__, as regular
+files with an unchanged mode. A deleted test, a mode change, a symlink, a comment, a file in a test folder, or a test
+file whose name other code holds, such as an import of limits.test.ts, needs a review. The gate then prints "final read carried from <sha>: test-only delta", and the receipt in
+carried/<HEAD>.json names the quiet commits and the reason. Evidence does not carry across quiet commits.
 When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
 picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's
 findings and responses, and the coding standards in ~/.agents/guides/coding-standards.md. It answers four questions:
@@ -247,7 +252,7 @@ FLEET_PROOF_JUDGE_MODEL its model.`,
     run: async ({ flags }, identity, context) => {
       const { print, home, run, now } = context;
       const head = identity();
-      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), now: now?.() });
+      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), now: now?.() });
       for (const line of gate.lines) print(line);
       const judged = gate.code === 0 ? await judgeHead(head, gate, context) : { code: gate.code, lines: [], covered: "" };
       for (const line of judged.lines) print(line);
@@ -314,7 +319,8 @@ change the judge. Exit 1 when no case was scored.`,
     usage: "review-start [--scope full|fixes|final] [--base <reviewed-sha>] [--phase review|babysit] [--override <dated quote> --thread <id> | --standing <reason>]",
     summary: `Reserve a review round before you dispatch its reviewers. Round 1 is --scope full and takes no --base. A later
 round is --scope fixes, and a final read is --scope final; both take --base with the commit of the latest finished
-review. The printed id names the round for review-finish and respond.
+review. The printed id names the round for review-finish and respond. A final read of a HEAD that the gate carries
+across quiet commits is refused, unless the user's --override, or --standing under their standing rule, asks for it.
 A later round with the user's --override, or --standing under their standing rule, may be --scope full: it reviews
 the whole PR diff at HEAD again, such as after a restack.
 ${overrideHelp}`,
@@ -324,7 +330,7 @@ ${overrideHelp}`,
       const head = identity();
       const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
       const scope = options.get("--scope") ?? "full";
-      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
+      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) })));
       return 0;
     },
   },
@@ -381,7 +387,7 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
   const from = rangeStart(scope, base, head, context.run);
-  const reserved = await startReview(context.home, head, { scope, base, from, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
+  const reserved = await startReview(context.home, head, { scope, base, from, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
   return { ...reserved, scope, from };
 }
 
