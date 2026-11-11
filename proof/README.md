@@ -4,7 +4,9 @@
 Fleet from the public one-liner, and that a devbox gets the same setup from
 the profile repo. Run it as root on a throwaway Linux box with systemd, cron,
 `ss`, and python3. It never touches the box owner's files, accounts, crontab,
-or T3 Code.
+or T3 Code. It stops cron while it runs and starts it again at the end, so a
+scheduled job cannot change a home between two snapshots or move the engine
+off the copy under proof.
 
 ```sh
 sudo sh proof/fresh-linux.sh
