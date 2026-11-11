@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { homedir, hostname, userInfo } from "node:os";
-import { runCommand } from "../../base/lib/command.ts";
+import { failedExit, runCommand } from "../../base/lib/command.ts";
 import { cliProxy, type Agent, type AiPlan, type ProxyMode, type Release } from "../lib/cli-proxy.ts";
 import { peerMachine, proxyOn } from "../lib/machine.ts";
 import { run } from "../lib/run.ts";
@@ -29,4 +29,4 @@ await runCommand(() => {
     devboxes: mode === "doctor" ? tunnelTargets(stringSetting("hub.alias"), peerMachine().devboxes, hostname()) : [],
     release: release(), run, fetch, sleep: (ms) => Bun.sleep(ms), readStdin: () => Bun.stdin.text(), randomKey: () => randomBytes(32).toString("hex"), print: (line) => console.log(line),
   }, agent as Agent);
-}, "fleet cli-proxy");
+}, "fleet cli-proxy", failedExit(Bun.argv[2]));

@@ -215,11 +215,19 @@ export async function peerDoctor(home: string, peers: string[]): Promise<boolean
   return true;
 }
 
+/** Runs remove and left, which need no peer settings, so they work after the hub pack is off. Any other command is undefined. */
+export function peerConfigCommand(args: string[], home: string, print: (line: string) => void): Promise<number> | undefined {
+  if (args.length !== 1) return undefined;
+  if (args[0] === "left") return removePeerConfig(home, false).then((left) => (left ? 0 : 1));
+  if (args[0] === "remove") return removePeerConfig(home, true).then(() => (print("Peer access: removed the SSH config Fleet wrote."), 0));
+  return undefined;
+}
+
 export async function peersCommand(args: string[], here: PeerHere): Promise<number> {
   const [mode = "plan", ...rest] = args;
   if (mode !== "link" && (rest.length || !["plan", "install", "doctor", "renew", "restore", "remove", "left"].includes(mode))) return here.print(usage), 2;
-  if (mode === "left") return (await removePeerConfig(here.home, false)) ? 0 : 1;
-  if (mode === "remove") return await removePeerConfig(here.home, true), here.print("Peer access: removed the SSH config Fleet wrote."), 0;
+  const config = peerConfigCommand(args, here.home, here.print);
+  if (config) return config;
   if (isThisABox(here)) return here.print("This machine is a box. A box has no peers, so fleet peers has nothing to do."), 0;
   for (const box of here.devboxes.filter(isBoxName)) here.say(`${box}: skipped: a box is not a peer`);
   if (mode === "link") return linkPeers(here, rest);
