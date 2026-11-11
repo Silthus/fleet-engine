@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
-import { ciOf, pushedHeadOf, readPullRequest } from "./pr-ci.ts";
+import { ciOf, pullRequestOfCheckout, pushedHeadOf, readPullRequest } from "./pr-ci.ts";
 import { askModel, family, familyOf, modelLabel, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge } from "./proof-judge.ts";
 import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO } from "./proof-panel.ts";
@@ -224,11 +224,12 @@ ${answerHelp}`,
 the judge weigh them. Exit 0 only on a pass: 1 means the owed proofs are not recorded, a proof is missing, the commit
 is not reviewed, a finding has no answer, the commit is not the PR's head on GitHub, its checks are red or pending,
 or the judge failed or was unavailable; 3 means only unaccepted gaps remain. No gap waives the head check. The last
-line is the verdict and names what it covered. fleet reads the PR and its CI over GitHub's REST API only. The
+line is the verdict and names what it covered. fleet finds the PR of the checkout, and reads it and its CI, over GitHub's REST API. The
 required checks of the base branch, from its rulesets and branch protection, decide CI; other checks print as not
 required. A stacked PR whose base requires nothing is held to the default branch's required checks. When no branch
 requires any, every check counts. On a draft, a required check named "<workflow> / <job>" that never reported counts
-as withheld from drafts when its workflow reported other checks on the commit and all of them finished. A clean merge of the PR's base carries the review and the evidence of
+as withheld from drafts when its workflow reported other checks on the commit and all of them passed. CI is unknown
+when GitHub does not answer for the rulesets or branch protection. A clean merge of the PR's base carries the review and the evidence of
 its other parent forward.
 When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
 picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's
@@ -661,6 +662,8 @@ function resolveCommit(revision: string, run: Run) {
 
 function resolvePullRequest(repository: string | undefined, pr: string | undefined, run: Run) {
   if (repository !== undefined && pr !== undefined) return { repository, pr: Number(pr) };
+  const checkout = pullRequestOfCheckout(run, repository, pr);
+  if (checkout) return checkout;
   const branch = pr ?? (repository ? firstLine(run(["git", "branch", "--show-current"]).stdout) : "");
   const view = run(["gh", "pr", "view", ...(branch ? [branch] : []), ...(repository ? ["--repo", repository] : []), "--json", "number,url"]);
   const found = view.code === 0 ? JSON.parse(view.stdout) as { number?: number; url?: string } : {};

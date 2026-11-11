@@ -5,11 +5,11 @@ import type { CiResult, ProofIdentity, PushedHead } from "./proof.ts";
 export type Run = (command: string[]) => { code: number; stdout: string; stderr: string };
 export type PullRequest = { title: string; body: string; draft: boolean; head: string; base: string; defaultBranch?: string };
 
-type CheckRun = { id: number; name: string; status: string; conclusion: string | null; app?: number | null };
+type CheckRun = { name: string; status: string; conclusion: string | null; app?: number | null };
 type CommitStatus = { context: string; state: string };
 type RequiredCheck = { context: string; appId?: number };
 type Outcome = "pass" | "fail" | "pending";
-type Entry = { name: string; outcome: Outcome; appId?: number; id: number; status?: true };
+type Entry = { name: string; outcome: Outcome; appId?: number; status?: true };
 
 const passing = new Set(["success", "neutral", "skipped"]);
 const rank: Record<Outcome, number> = { pass: 0, pending: 1, fail: 2 };
@@ -29,26 +29,52 @@ export function readPullRequest(identity: ProofIdentity, run: Run): PullRequest 
   return { title: raw.title ?? "", body: raw.body ?? "", draft: raw.draft === true, head: raw.head?.sha ?? "", base: raw.base?.ref ?? "", defaultBranch: raw.base?.repo?.default_branch };
 }
 
+export function pullRequestOfCheckout(run: Run, repository?: string, pr?: string): { repository: string; pr: number } | undefined {
+  const git = (args: string[]) => { const result = run(["git", ...args]); return result.code === 0 ? result.stdout.trim() : ""; };
+  const remotes = git(["remote"]).split("\n").filter(Boolean);
+  const repositories = new Map(remotes.map((remote) => [remote, /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(git(["remote", "get-url", remote]))?.[1]]));
+  const candidates = repository ? [repository] : [...new Set(["upstream", "origin", ...remotes].map((remote) => repositories.get(remote)).filter((name): name is string => !!name))];
+  if (pr !== undefined) return /^\d+$/.test(pr) && candidates[0] ? { repository: candidates[0], pr: Number(pr) } : undefined;
+  const [pushRemote = "", ...pushBranch] = git(["rev-parse", "--abbrev-ref", "@{upstream}"]).split("/");
+  const owner = (repositories.get(pushRemote) ?? repositories.get("origin") ?? candidates[0])?.split("/")[0];
+  const branches = [...new Set([pushBranch.join("/"), git(["branch", "--show-current"])].filter(Boolean))];
+  for (const name of candidates) for (const branch of branches) {
+    const found = run(["gh", "api", `repos/${name}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open&per_page=1`]);
+    const [open] = found.code === 0 ? JSON.parse(found.stdout) as { number?: number }[] : [];
+    if (open?.number) return { repository: name, pr: open.number };
+  }
+  return undefined;
+}
+
 export function pushedHeadOf(identity: ProofIdentity, run: Run): PushedHead {
   try { return { commit: readPullRequest(identity, run).head }; }
   catch (error) { return { error: (error as Error).message }; }
 }
 
-function readRequired(repository: string, branch: string, run: Run): { checks: RequiredCheck[]; complete: boolean } {
+function readRequired(repository: string, branch: string, run: Run): RequiredCheck[] {
   const checks = new Map<string, RequiredCheck>();
   const add = (context: string, appId?: number | null) => checks.set(`${context}\n${appId ?? ""}`, appId ? { context, appId } : { context });
   type Rule = { type: string; parameters?: { required_status_checks?: { context: string; integration_id?: number }[] } };
   const encoded = encodeURIComponent(branch);
-  const rules = run(["gh", "api", `repos/${repository}/rules/branches/${encoded}?per_page=100`]);
-  if (rules.code === 0) for (const rule of JSON.parse(rules.stdout) as Rule[]) if (rule.type === "required_status_checks") for (const check of rule.parameters?.required_status_checks ?? []) add(check.context, check.integration_id);
+  for (let page = 1; ; page++) {
+    const rules = run(["gh", "api", `repos/${repository}/rules/branches/${encoded}?per_page=100&page=${page}`]);
+    if (rules.code !== 0) {
+      if (page === 1 && /HTTP 404|Upgrade to GitHub/.test(rules.stderr)) break;
+      throw new Error(`cannot read the rulesets of ${branch} over REST (${firstLine(rules.stderr)})`);
+    }
+    const list = JSON.parse(rules.stdout) as Rule[];
+    for (const rule of list) if (rule.type === "required_status_checks") for (const check of rule.parameters?.required_status_checks ?? []) add(check.context, check.integration_id);
+    if (list.length < 100) break;
+  }
   type Branch = { protection?: { required_status_checks?: { enforcement_level?: string; contexts?: string[]; checks?: { context: string; app_id?: number | null }[] } } };
   const branchView = run(["gh", "api", `repos/${repository}/branches/${encoded}`]);
-  const classic = branchView.code === 0 ? (JSON.parse(branchView.stdout) as Branch).protection?.required_status_checks : undefined;
+  if (branchView.code !== 0) throw new Error(`cannot read the protection of ${branch} over REST (${firstLine(branchView.stderr)})`);
+  const classic = (JSON.parse(branchView.stdout) as Branch).protection?.required_status_checks;
   if (classic && classic.enforcement_level !== "off") {
     for (const check of classic.checks ?? []) add(check.context, check.app_id);
     for (const context of classic.contexts ?? []) if (![...checks.values()].some((check) => check.context === context)) add(context);
   }
-  return { checks: [...checks.values()], complete: branchView.code === 0 };
+  return [...checks.values()];
 }
 
 function requiredChecks(home: string, repository: string, branch: string, run: Run, now: Date): RequiredCheck[] {
@@ -58,11 +84,9 @@ function requiredChecks(home: string, repository: string, branch: string, run: R
     const age = now.getTime() - new Date(cached.fetchedAt).getTime();
     if (age >= 0 && age < cacheMs) return cached.checks;
   } catch {}
-  const { checks, complete } = readRequired(repository, branch, run);
-  if (complete) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify({ fetchedAt: now.toISOString(), checks }));
-  }
+  const checks = readRequired(repository, branch, run);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ fetchedAt: now.toISOString(), checks }));
   return checks;
 }
 
@@ -74,16 +98,13 @@ function commitRecords<T>(identity: ProofIdentity, run: Run, path: string, jq: s
 }
 
 function entriesOf(identity: ProofIdentity, run: Run): Entry[] {
-  const runs = commitRecords<CheckRun>(identity, run, "check-runs", ".check_runs[] | {id, name, status, conclusion, app: .app.id}");
+  const runs = commitRecords<CheckRun>(identity, run, "check-runs", ".check_runs[] | {name, status, conclusion, app: .app.id}");
   const statuses = commitRecords<CommitStatus>(identity, run, "statuses", ".[] | {context, state}");
-  const latest = new Map<string, Entry>();
-  for (const check of runs) {
-    const outcome: Outcome = check.status !== "completed" ? "pending" : passing.has(check.conclusion ?? "") ? "pass" : "fail";
-    const key = `${check.name}\n${check.app ?? ""}`;
-    if ((latest.get(key)?.id ?? -1) < check.id) latest.set(key, { name: check.name, outcome, appId: check.app ?? undefined, id: check.id });
-  }
   const newest = statuses.filter((status, index) => statuses.findIndex((other) => other.context === status.context) === index);
-  return [...latest.values(), ...newest.map((status): Entry => ({ name: status.context, id: 0, status: true, outcome: status.state === "success" ? "pass" : status.state === "pending" ? "pending" : "fail" }))];
+  return [
+    ...runs.map((check): Entry => ({ name: check.name, appId: check.app ?? undefined, outcome: check.status !== "completed" ? "pending" : passing.has(check.conclusion ?? "") ? "pass" : "fail" })),
+    ...newest.map((status): Entry => ({ name: status.context, status: true, outcome: status.state === "success" ? "pass" : status.state === "pending" ? "pending" : "fail" })),
+  ];
 }
 
 function listOf(names: string[], limit = 8) {
@@ -91,11 +112,13 @@ function listOf(names: string[], limit = 8) {
   return unique.length > limit ? `${unique.slice(0, limit).join(", ")} and ${unique.length - limit} more` : unique.join(", ");
 }
 
-function withheldFromDraft(context: string, entries: Entry[]) {
-  const split = context.indexOf(" / ");
-  if (split <= 0) return false;
-  const siblings = entries.filter((entry) => entry.name.startsWith(context.slice(0, split + 3)));
-  return siblings.length > 0 && siblings.every((entry) => entry.outcome !== "pending");
+const reportedBy = (check: RequiredCheck, entry: Entry) => check.appId === undefined || (!entry.status && entry.appId === check.appId);
+
+function withheldFromDraft(check: RequiredCheck, entries: Entry[]) {
+  const split = check.context.indexOf(" / ");
+  if (split <= 0 || entries.some((entry) => entry.name === check.context)) return false;
+  const siblings = entries.filter((entry) => entry.name.startsWith(check.context.slice(0, split + 3)) && reportedBy(check, entry));
+  return siblings.length > 0 && siblings.every((entry) => entry.outcome === "pass");
 }
 
 function everyCheck(entries: Entry[], commit: string): CiResult {
@@ -118,9 +141,9 @@ function requiredVerdict(entries: Entry[], required: RequiredCheck[], draft: boo
   const counted = new Set<Entry>();
   const [failing, pending, missing, withheld]: string[][] = [[], [], [], []];
   for (const check of required) {
-    const matches = entries.filter((entry) => entry.name === check.context && (check.appId === undefined || (!entry.status && entry.appId === check.appId)));
+    const matches = entries.filter((entry) => entry.name === check.context && reportedBy(check, entry));
     matches.forEach((entry) => counted.add(entry));
-    if (!matches.length) { (draft && withheldFromDraft(check.context, entries) ? withheld : missing).push(check.context); continue; }
+    if (!matches.length) { (draft && withheldFromDraft(check, entries) ? withheld : missing).push(check.context); continue; }
     const worst = matches.reduce((a, b) => rank[b.outcome] > rank[a.outcome] ? b : a).outcome;
     if (worst === "fail") failing.push(check.context);
     else if (worst === "pending") pending.push(check.context);
