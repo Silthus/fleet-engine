@@ -121,7 +121,7 @@
     {
       "id": "boxes",
       "name": "Boxes",
-      "default": true,
+      "default": false,
       "needs": [
         "hub",
         "coder"
@@ -150,7 +150,8 @@
           "Coder",
           "thread"
         ]
-      }
+      },
+      "risk": "Each box is a full devbox, and takes its CPUs from your cloud quota while it runs. A warm pool can use up the quota, so your own devboxes fail to start. It starts off. Turn it on when your quota has room for the pool, and your agents need clean machines that your devboxes and worktrees do not give them."
     },
     {
       "id": "disk-watch",

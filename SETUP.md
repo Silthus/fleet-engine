@@ -310,7 +310,7 @@ the steps below, follow the note.
    when the line does not name `hub`:
 
    ```sh
-   fleet packs --add hub --workflows boxes=off,mcp-gateway=off
+   fleet packs --add hub --workflows mcp-gateway=off
    ```
 
    Then have the hub take the change now, not at its nightly update:
