@@ -147,10 +147,10 @@ function skipsCommitHooks(args: string[]): boolean {
   return false;
 }
 
-type Push = { remote?: string; refspecs: string[]; force: boolean; lease: boolean; all: boolean; deletes: boolean; noVerify: boolean; dryRun: boolean };
+type Push = { remote?: string; refspecs: string[]; force: boolean; lease: boolean; all: boolean; tags: boolean; deletes: boolean; noVerify: boolean; dryRun: boolean };
 
 function parsePush(args: string[]): Push {
-  const push: Push = { refspecs: [], force: false, lease: false, all: false, deletes: false, noVerify: false, dryRun: false };
+  const push: Push = { refspecs: [], force: false, lease: false, all: false, tags: false, deletes: false, noVerify: false, dryRun: false };
   const operands: string[] = [];
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -168,6 +168,7 @@ function parsePush(args: string[]): Push {
     else if (arg === "--force" || shortCluster(arg, "f", "o")) push.force = true;
     else if (arg === "--mirror") push.force = push.all = true;
     else if (arg === "--all" || arg === "--branches") push.all = true;
+    else if (arg === "--tags") push.tags = true;
     else if (arg === "--delete" || shortCluster(arg, "d", "o")) push.deletes = true;
     else if (!arg.startsWith("-")) operands.push(arg);
   }
@@ -210,6 +211,7 @@ function targets(push: Push, repo: Repo, remote: string | undefined): Target[] {
   const upstreamOf = (branch: string) => repo.config(`branch.${branch}.remote`) === remote ? repo.config(`branch.${branch}.merge`) : undefined;
   const every = () => repo.branches.map((name) => ({ name, upstream: false }));
   if (push.all || mirrors(repo, remote)) return every();
+  if (push.tags && push.refspecs.length === 0) return [];
   const resolveSpec = (spec: string): Target[] => {
     const bare = spec.replace(/^\+/, "");
     if (bare === ":") return every();

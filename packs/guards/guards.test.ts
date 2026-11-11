@@ -737,6 +737,7 @@ describe("the Git guard", () => {
     ["a push to its own branch", "feature", {}, undefined, {}, "git push -u origin HEAD:refs/heads/feature"],
     ["a bare push under push.default=simple", "feature", tracksMain, undefined, {}, "git push"],
     ["a dry run to main", "main", {}, undefined, {}, "git push --dry-run origin main"],
+    ["a push of only the tags from main", "main", {}, undefined, {}, "git push --tags"],
     ["a push to main of a repository in guards.main-push-repos", "main", {}, undefined, { "guards.main-push-repos": "other/site, Acme/App" }, "git push origin main"],
     ["a push to main of a repository whose AGENTS.md says to push there", "main", {}, "Commit and push all changes directly to `main`.\n", {}, "git push origin main"],
   ])("allows %s", async (_, branch, config, agents, settings, command) => {
