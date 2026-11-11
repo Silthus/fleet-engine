@@ -82,6 +82,24 @@ describe("fleet update", () => {
     expect(await Bun.file(join(profileDir, "fleet.json")).text()).toBe('{"plan":"claude"}\n');
   });
 
+  test("applies the last profile but fails when the profile does not fast-forward", async () => {
+    const remote = await engineRemote(["v0.1.0"]);
+    const profileRemote = temp.make("profile-remote-");
+    await spawnGit(profileRemote, "init", "-q", "-b", "main");
+    writeFileSync(join(profileRemote, "fleet.json"), "{}\n");
+    await spawnGit(profileRemote, "add", ".");
+    await spawnGit(profileRemote, "commit", "-q", "-m", "start");
+    const profileDir = temp.make("profile-");
+    await spawnGit(profileDir, "clone", "-q", profileRemote, ".");
+    writeFileSync(join(profileRemote, "fleet.json"), '{"plan":"claude"}\n');
+    await spawnGit(profileRemote, "commit", "-q", "-am", "answers");
+    writeFileSync(join(profileDir, "fleet.json"), '{"plan":"local"}\n');
+    await spawnGit(profileDir, "commit", "-q", "-am", "local answers");
+    const result = await run(await engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" }, profileDir);
+    expect(result).toMatchObject({ code: 1, applied: 1, output: expect.stringContaining("your profile did not fast-forward") });
+    expect(await Bun.file(join(profileDir, "fleet.json")).text()).toBe('{"plan":"local"}\n');
+  });
+
   test("does not apply when the engine cannot be fetched", async () => {
     const engineDir = await engineCheckout(await engineRemote(["v0.1.0"]), "v0.1.0");
     await spawnGit(engineDir, "remote", "set-url", "origin", join(temp.make(), "gone"));
