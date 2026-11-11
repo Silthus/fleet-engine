@@ -192,6 +192,9 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(item.check === undefined || isStrings(item.check), `${label}: check must be a command list`);
     need(item.undo === undefined || (isStrings(item.undo) && item.undo.length > 0), `${label}: undo must be a command list`);
     need(item.undo === undefined || (isStrings(item.check) && item.check.length > 0), `${label}: undo needs a check`);
+    const steps = ((raw.steps as unknown[]) ?? []).filter(isRecord);
+    const twins = steps.filter((other) => other.id === item.id);
+    need(twins.length === 1 || twins.every((other) => other.undo === undefined), `${label}: a step with an undo needs an id no other step of the pack uses`);
     waitsWithin(item, label);
     filters(item, label);
   });
