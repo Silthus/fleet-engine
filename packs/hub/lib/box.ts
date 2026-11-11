@@ -651,10 +651,11 @@ export async function idle(here: Machine): Promise<number> {
 }
 
 export type NightlyStep = { name: string; run(): number | Promise<number> };
-export type NightlyParts = { reap(): Promise<number>; grant(devbox: string): Promise<number>; refresh(): Promise<number> };
+export type NightlyParts = { session(): Promise<number>; reap(): Promise<number>; grant(devbox: string): Promise<number>; refresh(): Promise<number> };
 
 export function nightlySteps(here: Machine, parts: NightlyParts): NightlyStep[] {
   return [
+    { name: "check the Coder session", run: parts.session },
     { name: "reap", run: parts.reap },
     ...here.devboxes.map((devbox) => ({ name: `grant ${devbox}`, run: () => parts.grant(devbox) })),
     { name: "refresh the pool", run: parts.refresh },
