@@ -269,6 +269,17 @@ describe("fleet routing", () => {
     expect(readFileSync(join(home, "hello.txt"), "utf8")).toBe("both");
   });
 
+  test.if(process.platform === "linux")("passes on a stop signal that arrives while a pack command starts", async () => {
+    const { home, engine } = await machineWith(["tools"]);
+    cpSync(join(repoRoot, "src"), join(engine, "src"), { recursive: true });
+    symlinkSync(join(repoRoot, "node_modules"), join(engine, "node_modules"));
+    const bin = temp.make("bin-");
+    writeFileSync(join(bin, "bun"), `#!/bin/sh\ntrap 'kill -KILL $! 2>/dev/null; echo stopped > "$HOME/stopped"; exit 143' TERM; kill -TERM $PPID; sleep 600 & wait $!\n`, { mode: 0o755 });
+    const fleetProcess = Bun.spawn([process.execPath, join(engine, "src/cli.ts"), "hello"], { env: { ...Bun.env, HOME: home, PATH: `${bin}:${Bun.env.PATH}` }, stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    expect(await fleetProcess.exited).toBe(143);
+    expect(readFileSync(join(home, "stopped"), "utf8")).toBe("stopped\n");
+  });
+
   test("runs a leading fleet in a pack step with this engine's launcher, not one on PATH", async () => {
     const home = temp.make("home-");
     const engine = engineWithCommands();

@@ -173,11 +173,16 @@ async function runOnHub(name: string, args: string[], plan: Plan, options: CliOp
 const lines = (text: string) => (text ? text.replace(/\n$/, "").split("\n") : []);
 
 async function spawnPackCommand(path: string, args: string[], plan: Plan, options: CliOptions) {
-  const child = Bun.spawn(["bun", path, ...args], { stdio: ["inherit", "inherit", "inherit"], env: { ...Bun.env, ...packEnvironment(plan, options) } });
-  const forward = (signal: NodeJS.Signals) => child.kill(signal);
+  let child: { kill(signal: NodeJS.Signals): void } | undefined;
+  const forward = (signal: NodeJS.Signals) => child?.kill(signal);
   process.on("SIGINT", forward).on("SIGTERM", forward);
-  try { return await child.exited; }
-  finally { process.off("SIGINT", forward).off("SIGTERM", forward); }
+  try {
+    const started = Bun.spawn(["bun", path, ...args], { stdio: ["inherit", "inherit", "inherit"], env: { ...Bun.env, ...packEnvironment(plan, options) } });
+    child = started;
+    return await started.exited;
+  } finally {
+    process.off("SIGINT", forward).off("SIGTERM", forward);
+  }
 }
 
 async function runItem(args: string[], options: CliOptions) {

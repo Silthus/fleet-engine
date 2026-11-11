@@ -9,9 +9,19 @@ export type RunOptions = { input?: string; home?: string; clearEnv?: string[]; i
 export type CommandRunner = (command: string[], options?: RunOptions) => Promise<{ code: number; stdout: string; stderr?: string }>;
 
 export const spawnRunner: CommandRunner = async (command, options = {}) => {
-  let started: { kill(signal: NodeJS.Signals): void } | undefined;
+  let started: { pid: number; kill(signal: NodeJS.Signals): void } | undefined;
+  const endGroup = () => {
+    if (started) try { process.kill(-started.pid, "SIGTERM"); } catch {}
+  };
   const forward = (signal: NodeJS.Signals) => started?.kill(signal);
-  if (options.inherit) process.on("SIGINT", forward).on("SIGTERM", forward);
+  const interrupted = (signal: NodeJS.Signals) => {
+    endGroup();
+    release();
+    if (!process.listenerCount(signal)) process.kill(process.pid, signal);
+  };
+  const listener = options.inherit ? forward : options.signal ? interrupted : undefined;
+  const release = () => void (listener && process.off("SIGINT", listener).off("SIGTERM", listener));
+  if (listener) process.on("SIGINT", listener).on("SIGTERM", listener);
   try {
     const child = Bun.spawn(command, {
       stdout: options.inherit ? "inherit" : "pipe",
@@ -23,45 +33,32 @@ export const spawnRunner: CommandRunner = async (command, options = {}) => {
     started = child;
     if (options.inherit) return { code: await child.exited, stdout: "" };
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    if (options.signal) return await stoppable(child.pid, child.exited, output, options.signal);
+    if (options.signal) return await stoppable(endGroup, child.exited, output, options.signal);
     const [[stdout, stderr], code] = await Promise.all([output, child.exited]);
     return { code, stdout, stderr };
   } catch (error) {
     return { code: 127, stdout: "", stderr: `${command[0]} could not start: ${error instanceof Error ? error.message : String(error)}\n` };
   } finally {
-    process.off("SIGINT", forward).off("SIGTERM", forward);
+    release();
   }
 };
 
 /**
  * Runs a command that has its own process group until it exits or the signal aborts. An abort, or an interrupt
- * of this process, ends the whole group, so a process it started, such as an ssh ProxyCommand, ends too. An
+ * of this process that spawnRunner hears from before the command starts, ends the whole group, so a process it started, such as an ssh ProxyCommand, ends too. An
  * aborted command returns no output, since a process that left the group may keep the pipes open.
  */
-async function stoppable(group: number, exited: Promise<number>, output: Promise<[string, string]>, signal: AbortSignal) {
-  const end = () => {
-    try { process.kill(-group, "SIGTERM"); } catch {}
-  };
+async function stoppable(end: () => void, exited: Promise<number>, output: Promise<[string, string]>, signal: AbortSignal) {
   let settle: (value: [string, string]) => void = () => {};
   const stopped = new Promise<[string, string]>((done) => (settle = done));
   const stop = () => (end(), void exited.then(() => settle(["", ""])));
-  const interrupted = (name: NodeJS.Signals) => {
-    end();
-    release();
-    if (!process.listenerCount(name)) process.kill(process.pid, name);
-  };
-  const release = () => {
-    signal.removeEventListener("abort", stop);
-    process.off("SIGINT", interrupted).off("SIGTERM", interrupted);
-  };
   signal.addEventListener("abort", stop, { once: true });
-  process.on("SIGINT", interrupted).on("SIGTERM", interrupted);
   if (signal.aborted) stop();
   try {
     const [[stdout, stderr], code] = await Promise.all([Promise.race([output, stopped]), exited]);
     return { code, stdout, stderr };
   } finally {
-    release();
+    signal.removeEventListener("abort", stop);
   }
 }
 
