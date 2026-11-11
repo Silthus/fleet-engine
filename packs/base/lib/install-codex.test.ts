@@ -51,12 +51,12 @@ async function release(root: string, targets: string[], options: { tag?: string;
   writeFileSync(join(root, "latest"), name);
 }
 
-async function machine(arch: string, targets: string[], options: { corrupt?: boolean } = {}) {
+async function machine(arch: string, targets: string[], options: { corrupt?: boolean; os?: string } = {}) {
   const bin = temp.make("bin-");
   const home = temp.make("home-");
   const root = temp.make("releases-");
   await release(root, targets, options);
-  stub(bin, "uname", `echo ${arch}`);
+  stub(bin, "uname", `case "$1" in -s) echo ${options.os ?? "Linux"} ;; *) echo ${arch} ;; esac`);
   stub(
     bin,
     "curl",
@@ -270,6 +270,41 @@ describe("install-codex.sh", () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("Fleet did not install it");
     expect(readFileSync(join(box.home, ".local/bin/codex"), "utf8")).toBe("mine\n");
+  });
+
+  function onMac(box: { bin: string }) {
+    stub(box.bin, "flock", "exit 1");
+    stub(box.bin, "sha256sum", "exit 127");
+    stub(box.bin, "mv", `case "$1" in -T) echo "mv: illegal option -- T" >&2; exit 64 ;; -h) shift; exec ${realMv} -T "$@" ;; esac\nexec ${realMv} "$@"`);
+  }
+
+  onLinux.each([
+    ["arm64", "aarch64-apple-darwin"],
+    ["x86_64", "x86_64-apple-darwin"],
+  ])("on a %s Mac, installs and updates the checked macOS package with the Mac's own mv, shasum, and a lock folder", async (arch, target) => {
+    const box = await machine(arch, [target], { os: "Darwin" });
+    onMac(box);
+    expect(await install(box)).toMatchObject({ code: 0 });
+    expect(await version(box.home)).toBe(`codex-cli 9.9.9 ${target}`);
+    await box.publish("rust-v10.0.0");
+    expect((await install(box)).code).toBe(0);
+    expect(readlinkSync(join(codexHome(box.home), "current"))).toBe("releases/rust-v10.0.0");
+    expect(readlinkSync(join(box.home, ".local/bin/codex"))).toBe(join(codexHome(box.home), "current/bin/codex"));
+    expect(box.calls()).not.toContain("flock");
+    expect(box.calls()).not.toContain("sha256sum");
+    expect(readdirSync(join(box.home, ".local/share/fleet")).sort()).toEqual(["codex"]);
+  });
+
+  onLinux("on a Mac, takes over the install lock that a stopped install left behind", async () => {
+    const box = await machine("arm64", ["aarch64-apple-darwin"], { os: "Darwin" });
+    onMac(box);
+    const lock = join(box.home, ".local/share/fleet/codex.lock.d");
+    mkdirSync(lock, { recursive: true });
+    const gone = Bun.spawn(["true"]);
+    await gone.exited;
+    writeFileSync(join(lock, "pid"), String(gone.pid));
+    expect((await install(box)).code).toBe(0);
+    expect(existsSync(lock)).toBe(false);
   });
 
   onLinux("removes Fleet's earlier Bun install of Codex only when it shadows the new one", async () => {

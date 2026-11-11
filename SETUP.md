@@ -119,16 +119,18 @@ and the `t3` command, the engine in `~/.local/share/fleet/engine`, `fleet` in
 setup, so start it at once, in the background, and say they can tell you to
 stop it.
 
-When `command -v brew` finds Homebrew, start it in the background yourself:
+You run in T3 Code, so the app is there, and the script needs no Homebrew
+and no password. When `xcode-select -p` succeeds, start it in the background
+yourself:
 
 ```sh
 sh ~/.cache/fleet-setup/get.sh --install-only
 ```
 
-When Homebrew is missing, its installer needs the person's Mac password, so
-run the script in a Terminal window and ask them to tell you when it ends.
-When the Command Line Tools are missing, a Mac window asks to install them;
-the person clicks **Install**:
+When `xcode-select -p` fails, the Command Line Tools are missing. A Mac
+window asks to install them, the person clicks **Install**, and the script
+waits for them. Run it in a Terminal window then, and ask them to tell you
+when it ends:
 
 ```sh
 printf '#!/bin/sh\nsh ~/.cache/fleet-setup/get.sh --install-only\n' > ~/.cache/fleet-setup/install.command && chmod +x ~/.cache/fleet-setup/install.command && open ~/.cache/fleet-setup/install.command
@@ -374,7 +376,10 @@ says which template, parameters, and devbox to use. Where it differs from
 the steps below, follow the note.
 
 1. **Coder CLI.** When `command -v coder` finds nothing, install it with
-   `brew install coder`. When `coder whoami` fails, ask for their Coder
+   `brew install coder` when `command -v brew` finds Homebrew. Without
+   Homebrew, download `https://coder.com/install.sh` to
+   `~/.cache/fleet-setup/coder-install.sh`, read it, and run
+   `sh ~/.cache/fleet-setup/coder-install.sh --method standalone --prefix "$HOME/.local"`. When `coder whoami` fails, ask for their Coder
    address and sign in. Coder needs a session token: it lets this Mac act as
    them in Coder, and they make one at `<coder address>/cli-auth`. Ask for it
    with the secret prompt, delivered as a file, and sign in with it:

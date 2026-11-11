@@ -7,14 +7,14 @@ import { getShHarness, onLinuxHost, repoRoot } from "./testing/get-sh.ts";
 const { temp, engine, sandbox, profile, getSh } = getShHarness();
 
 describe("get.sh", () => {
-  onLinuxHost("on macOS installs Homebrew, gh, and the T3 Code app, then applies the profile", () => {
+  onLinuxHost("on macOS without the T3 Code app, installs Homebrew and the app, then applies the profile", () => {
     const box = sandbox("Darwin");
     const result = getSh(box, ["--ref", "v0.1.0", "--profile", profile()]);
     expect(result.code).toBe(0);
     const calls = result.calls.split("\n");
-    expect(calls.indexOf("brew install gh")).toBeGreaterThan(-1);
+    expect(result.calls).toContain("Homebrew/install");
     expect(calls).toContain("brew install --cask t3-code");
-    expect(calls).not.toContain("brew install bun");
+    expect(calls.filter((call) => call.startsWith("brew install ") && !call.includes("--cask"))).toEqual([]);
     expect(result.calls).toContain("t3 installer channel=nightly");
     expect(result.output).toContain("Applied 14 changes.");
   });
@@ -44,18 +44,27 @@ describe("get.sh", () => {
     expect(passed).toBeLessThan(calls.findIndex((call) => call.startsWith("curl ")));
   });
 
-  onLinuxHost("on macOS with Homebrew present, skips its installer and installs Bun with brew when Bun is missing", () => {
-    const box = sandbox("Darwin", { without: ["bun"] });
-    box.stub("brew", `[ "$2" = bun ] && cp "${join(box.root, "fake-bun")}" "${join(box.bin, "bun")}"; exit 0`);
+  onLinuxHost("on macOS with the T3 Code app, needs no Homebrew and nothing from the person", () => {
+    const box = sandbox("Darwin", { t3App: true });
     const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
     expect(result.code).toBe(0);
     expect(result.output).not.toContain("Installing Homebrew");
     expect(result.calls).not.toContain("Homebrew/install");
-    const calls = result.calls.split("\n");
-    expect(calls).toContain("brew install gh");
-    expect(calls).toContain("brew install bun");
-    expect(calls).toContain("brew install --cask t3-code");
+    expect(result.calls).not.toContain("brew ");
     expect(readFileSync(join(box.home, ".local/state/fleet/logs/install-timings"), "utf8")).toMatch(/^tools \d+$/m);
+  });
+
+  onLinuxHost.each([
+    ["gh", { without: ["gh"] }, "https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_macOS_amd64.zip", "gh checksum mismatch."],
+    ["Bun", { without: ["bun"] }, "https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-darwin-x64.zip", "Bun checksum mismatch."],
+  ] as const)("on macOS downloads %s for the Mac's chip from its pinned release, and refuses a file that does not match the pinned checksum", (_tool, options, url, refusal) => {
+    const box = sandbox("Darwin", { ...options, without: [...options.without], t3App: true });
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(1);
+    expect(result.calls).toContain(` ${url} -o `);
+    expect(result.output).toContain(`Fleet: ${refusal}`);
+    expect(result.calls).not.toContain("brew ");
+    expect(existsSync(join(box.home, ".local/share/fleet/engine"))).toBe(false);
   });
 
   onLinuxHost("on macOS stops when the Homebrew installer leaves no brew on PATH", () => {

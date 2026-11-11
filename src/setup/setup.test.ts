@@ -42,7 +42,7 @@ describe("fleet setup questions", () => {
     expect(result.output).not.toContain("Set up this machine");
     expect(result.output).toContain("  This Mac ");
     expect(machine(home)).toMatchObject({ schema: 1, role: "mac", devboxes: [], setup: { done: ["bootstrap", "github", "packs", "plans", "profile", "apply", "devbox", "claude", "apply-codex", "chatgpt", "check"] } });
-    expect(result.skipped).toEqual([["base/codex-cli-mac"], []]);
+    expect(result.skipped).toEqual([["base/codex-cli"], []]);
   });
 
   test("keeps the name and role that apply saves, though setup writes its progress after apply", async () => {
