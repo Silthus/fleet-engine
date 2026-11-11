@@ -57,10 +57,11 @@ export function agentPlist(coder: string, alias: string, relayPort: number, log:
 
 const notNeeded = "Hub tunnel: not needed. The MCP gateway is off, so this Mac forwards nothing to the hub.";
 
-/** The MCP gateway is on when the profile has its pack and has not turned its workflow off. */
+/** The MCP gateway is on when the profile has its pack, or the Hub pack that carries it, and has not turned its workflow off. */
 export function gatewayOn(profile: { packs?: unknown; workflows?: unknown }): boolean {
   const workflows = (profile.workflows ?? {}) as Record<string, unknown>;
-  return Array.isArray(profile.packs) && profile.packs.includes("mcp-gateway") && workflows["mcp-gateway"] !== false;
+  const packs = Array.isArray(profile.packs) ? profile.packs : [];
+  return (packs.includes("mcp-gateway") || packs.includes("hub")) && workflows["mcp-gateway"] !== false;
 }
 
 export async function hubTunnel(mode: MacTunnelMode, mac: MacTunnel): Promise<number> {

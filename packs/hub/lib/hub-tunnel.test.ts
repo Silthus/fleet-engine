@@ -188,10 +188,13 @@ async function hubTunnelCommand(profile: Record<string, unknown>) {
   return { code, output: `${stdout}${stderr}` };
 }
 
-test("fleet hub-tunnel reads from the profile whether the MCP gateway is on", async () => {
-  expect(await hubTunnelCommand({})).toEqual({ code: 0, output: "Hub tunnel: not needed. The MCP gateway is off, so this Mac forwards nothing to the hub.\n" });
-  expect(await hubTunnelCommand({ packs: ["hub", "mcp-gateway"], workflows: { "mcp-gateway": false } })).toMatchObject({ code: 0 });
-  const on = await hubTunnelCommand({ packs: ["hub", "mcp-gateway"] });
-  expect(on.code).not.toBe(0);
-  expect(on.output).toContain(process.platform === "darwin" ? "hub tunnel" : "Only a Mac opens its own hub tunnel");
+test("fleet hub-tunnel reads from the profile whether the MCP gateway is on, which a profile with the Hub pack carries until its workflow is off", async () => {
+  const notNeeded = { code: 0, output: "Hub tunnel: not needed. The MCP gateway is off, so this Mac forwards nothing to the hub.\n" };
+  expect(await hubTunnelCommand({ workflows: { "mcp-gateway": false } })).toEqual(notNeeded);
+  expect(await hubTunnelCommand({ packs: ["hub", "mcp-gateway"], workflows: { "mcp-gateway": false } })).toEqual(notNeeded);
+  for (const packs of [["hub"], ["hub", "mcp-gateway"]]) {
+    const on = await hubTunnelCommand({ packs });
+    expect(on.code).not.toBe(0);
+    expect(on.output).toContain(process.platform === "darwin" ? "hub tunnel" : "Only a Mac opens its own hub tunnel");
+  }
 });
