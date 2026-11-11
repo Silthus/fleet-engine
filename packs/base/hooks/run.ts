@@ -1,9 +1,10 @@
 import { readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { HookResult } from "../lib/hook.ts";
 import { redactSecrets } from "./secret-guard.ts";
 
-export type HookResult = { code: number; stdout: string; stderr: string };
+export type { HookResult };
 export type RunHook = (path: string, provider: string, input: string) => Promise<HookResult>;
 
 type Specific = { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string; [key: string]: unknown };

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { type Hook, printing, runHook } from "../../base/lib/hook.ts";
 import { installedOwners } from "../lib/allowlist.ts";
 import { downloadRisk } from "../lib/download.ts";
 import { ghRisk, ownerList } from "../lib/gh.ts";
@@ -66,7 +66,7 @@ export function guard(call: ToolCall, home: string, root = "/"): Denial | undefi
   }
 }
 
-export function answer(input: string, home: string): Denial | undefined {
+function answer(input: string, home: string): Denial | undefined {
   let call: ToolCall;
   try {
     call = JSON.parse(input);
@@ -76,7 +76,6 @@ export function answer(input: string, home: string): Denial | undefined {
   return guard(call, home);
 }
 
-if (import.meta.main) {
-  const denial = answer(await Bun.stdin.text(), process.env.HOME ?? homedir());
-  if (denial) process.stdout.write(`${JSON.stringify(denial)}\n`);
-}
+export const hook: Hook = (_provider, input, home) => printing(answer(input, home));
+
+if (import.meta.main) await runHook(hook);

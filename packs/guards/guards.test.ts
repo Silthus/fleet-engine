@@ -4,9 +4,10 @@ import { basename, dirname, join } from "node:path";
 import type { AvailableSource, Plan } from "../../src/pack/types.ts";
 import { isolateGit, spawnGit, tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, resolveEngine, skillSources } from "../../src/testing/packs.ts";
-import { check as nameAModel } from "../base/hooks/name-a-model.ts";
-import { dispatch, type HookResult, type RunHook } from "../base/hooks/run.ts";
-import { answer, guard, type ToolCall } from "./hooks/guards.ts";
+import { hook as nameAModelHook } from "../base/hooks/name-a-model.ts";
+import { dispatch, type RunHook } from "../base/hooks/run.ts";
+import type { Hook, HookResult } from "../base/lib/hook.ts";
+import { guard, hook as guardsHook, type ToolCall } from "./hooks/guards.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -62,18 +63,7 @@ async function preToolUseInstalled(home: string, provider: "claude" | "codex", c
   return refusalOf({ code, stdout, stderr: "" });
 }
 
-const hookAnswer = (code: number, stdout = "", stderr = ""): HookResult => ({ code, stdout, stderr });
-
-const hooksInProcess: Record<string, (provider: string, input: string, home: string) => HookResult> = {
-  "guards.ts": (_, input, home) => {
-    const denial = answer(input, home);
-    return hookAnswer(0, denial ? `${JSON.stringify(denial)}\n` : "");
-  },
-  "name-a-model.ts": (provider, input) => {
-    const problem = nameAModel(provider, JSON.parse(input));
-    return problem ? hookAnswer(2, "", `${problem}\n`) : hookAnswer(0);
-  },
-};
+const hooksInProcess: Record<string, Hook> = { "guards.ts": guardsHook, "name-a-model.ts": nameAModelHook };
 
 async function hookProcess(path: string, provider: string, input: string, home: string): Promise<HookResult> {
   const child = Bun.spawn([process.execPath, path, provider], { cwd: dirname(dirname(path)), env: { ...process.env, HOME: home }, stdin: new Blob([input]), stdout: "pipe", stderr: "pipe" });
@@ -86,9 +76,9 @@ async function preToolUse(home: string, provider: "claude" | "codex", call: Tool
     const inProcess = hooksInProcess[basename(path)];
     if (!inProcess || (guardAsProcess && basename(path) === "guards.ts")) return hookProcess(path, hookProvider, input, home);
     try {
-      return inProcess(hookProvider, input, home);
+      return await inProcess(hookProvider, input, home);
     } catch (error) {
-      return hookAnswer(1, "", String(error));
+      return { code: 1, stdout: "", stderr: String(error) };
     }
   };
   return refusalOf(await dispatch(join(home, ".config/fleet/hooks/PreToolUse"), provider, stdinOf(call), run));

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { answerHook, clip, type HookInput, logShown, memoryRoot, type Provider, repoIndexPath, repoOf } from "../lib/notes.ts";
+import { runHook } from "../../base/lib/hook.ts";
+import { clip, contextHook, type HookInput, logShown, memoryRoot, type Provider, repoIndexPath, repoOf } from "../lib/notes.ts";
 
 const indexLimit = 16_000;
 
@@ -31,4 +31,6 @@ export async function sessionIndexes(input: HookInput, provider: Provider, home:
   return shown.length ? shown.map(({ path, text }) => `${header(path)}\n\n${clip(text, indexLimit)}`).join("\n\n") : undefined;
 }
 
-if (import.meta.main) await answerHook("SessionStart", (input, provider) => sessionIndexes(input, provider, process.env.HOME ?? homedir()));
+export const hook = contextHook("SessionStart", sessionIndexes);
+
+if (import.meta.main) await runHook(hook);

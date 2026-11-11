@@ -4,13 +4,13 @@ import { basename, dirname, join } from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { main } from "../../src/cli.ts";
 import { gitEnv, spawnGit, tempDirs } from "../../src/testing/git.ts";
-import { check as nameAModelCheck } from "../base/hooks/name-a-model.ts";
-import { dispatch, type HookResult, type RunHook } from "../base/hooks/run.ts";
-import { guard as secretGuard } from "../base/hooks/secret-guard.ts";
-import { check as memoryCapCheck } from "./hooks/memory-cap.ts";
-import { sessionIndexes } from "./hooks/memory-index.ts";
-import { recallNotes } from "./hooks/memory-recall.ts";
-import type { HookInput } from "./lib/notes.ts";
+import { hook as nameAModelHook } from "../base/hooks/name-a-model.ts";
+import { dispatch, type RunHook } from "../base/hooks/run.ts";
+import { hook as secretGuardHook } from "../base/hooks/secret-guard.ts";
+import type { Hook, HookResult } from "../base/lib/hook.ts";
+import { hook as capHook } from "./hooks/memory-cap.ts";
+import { hook as indexHook } from "./hooks/memory-index.ts";
+import { hook as recallHook } from "./hooks/memory-recall.ts";
 
 const engineRoot = join(import.meta.dir, "../..");
 const launcher = join(engineRoot, "fleet");
@@ -42,7 +42,8 @@ type AppliedHome = { home: string; code: number };
 
 async function applyMemoryPack(prepared: ReturnType<typeof tempDirs>, settings: Record<string, string>): Promise<AppliedHome> {
   const home = prepared.make("home-");
-  const profile = prepared.make("profile-");
+  const profile = join(home, "profile");
+  mkdirSync(profile);
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [], packs: ["memory"], plan: "both", settings, workflows: {} }));
   mkdirSync(join(home, ".bun/bin"), { recursive: true });
   symlinkSync(process.execPath, join(home, ".bun/bin/bun"));
@@ -105,35 +106,20 @@ const answerOf = ({ code, stdout, stderr }: HookResult) => ({
   context: stdout.trim() ? (JSON.parse(stdout).hookSpecificOutput?.additionalContext as string | undefined) ?? "" : "",
 });
 
-type HookBody = (provider: Provider, input: string, home: string) => HookResult | Promise<HookResult>;
-
-const quiet: HookResult = { code: 0, stdout: "", stderr: "" };
-const refusing = (reason: string | undefined): HookResult => (reason ? { code: 2, stdout: "", stderr: `${reason}\n` } : quiet);
-const printing = (answer: object | undefined): HookResult => (answer ? { code: 0, stdout: `${JSON.stringify(answer)}\n`, stderr: "" } : quiet);
-
-const answeringContext = (event: string, answer: (input: HookInput, provider: Provider, home: string) => Promise<string | undefined>): HookBody => async (provider, input, home) => {
-  try {
-    const context = await answer(JSON.parse(input) as HookInput, provider, home);
-    return printing(context ? { hookSpecificOutput: { hookEventName: event, additionalContext: context } } : undefined);
-  } catch {
-    return quiet;
-  }
-};
-
-const hookBodies: Record<string, HookBody> = {
-  "memory-recall.ts": answeringContext("PreToolUse", (input, _, home) => recallNotes(input, home)),
-  "memory-index.ts": answeringContext("SessionStart", sessionIndexes),
-  "memory-cap.ts": (provider, input) => refusing(provider === "claude" ? memoryCapCheck(JSON.parse(input)) : undefined),
-  "name-a-model.ts": (provider, input) => refusing(nameAModelCheck(provider, JSON.parse(input))),
-  "secret-guard.ts": (provider, input) => printing(secretGuard(provider, JSON.parse(input))),
+const hooksInProcess: Record<string, Hook> = {
+  "memory-recall.ts": recallHook,
+  "memory-index.ts": indexHook,
+  "memory-cap.ts": capHook,
+  "name-a-model.ts": nameAModelHook,
+  "secret-guard.ts": secretGuardHook,
 };
 
 function inProcess(home: string): RunHook {
   return async (path, provider, input) => {
-    const body = hookBodies[basename(path)];
-    if (!body) return runInstalledFile(path, provider, input, home);
+    const hook = hooksInProcess[basename(path)];
+    if (!hook) return runInstalledFile(path, provider, input, home);
     try {
-      return await body(provider as Provider, input, home);
+      return await hook(provider, input, home);
     } catch (error) {
       return { code: 1, stdout: "", stderr: String(error) };
     }
