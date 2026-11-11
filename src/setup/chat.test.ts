@@ -63,6 +63,14 @@ describe("usable before the rest", () => {
     expect(timings(home).steps.at(-1)).toMatchObject({ id: "check", outcome: "done", end: "2026-11-11T10:00:14.000Z" });
   });
 
+  test("without a person to wait for, installs Codex in the first apply, since the run stops at an open sign-in", async () => {
+    const home = temp.make("home-");
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "both", "--devbox", "skip"], [], fakeMachine(home, { claude: 5 }, { startedAt: start }));
+    expect(result.code).toBe(2);
+    expect(result.skipped).toEqual([[]]);
+    expect(result.output).not.toContain("Install Codex");
+  });
+
   test("with one plan, installs everything in one apply", async () => {
     const home = temp.make("home-");
     const result = await fleetSetup(home, ["--chat", "--preset", "starter", "--plan", "codex", "--devbox", "skip"], [], fakeMachine(home, {}, { startedAt: start }));

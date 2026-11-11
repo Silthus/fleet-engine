@@ -258,7 +258,8 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
   const { profile, plan } = planFor(context, machine);
   const box = human.machine;
   const sshDevbox = !makesOwnDevbox(profile.packs) && (machine.role === "mac" || machine.role === "linux");
-  const codexOnly = plan.ai === "both" ? plan.steps.filter((step) => step.plans && !step.plans.includes("claude")).map((step) => `${step.pack}/${step.id}`) : [];
+  const waitsForSignIns = !human.nonInteractive || human.chat === true;
+  const codexOnly = plan.ai === "both" && waitsForSignIns ? plan.steps.filter((step) => step.plans && !step.plans.includes("claude")).map((step) => `${step.pack}/${step.id}`) : [];
   const devboxAsk = sshDevbox && machine.devboxes?.length ? planFor(context, { ...machine, role: "devbox" }).plan.ask.filter((setting) => !plan.ask.some((asked) => asked.key === setting.key)) : [];
   return [
     bootstrapStep(context.terminal, box.has),
