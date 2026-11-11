@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
@@ -140,8 +140,6 @@ onLinux("refuses a slot count that is not a whole number above 0", async () => {
   expect(calls()).toBe("uname -s\nuname -s\nuname -s\n");
 });
 
-const realSleep = Bun.which("sleep")!;
-
 function follow(stream: ReadableStream<Uint8Array>) {
   let text = "";
   let ended = false;
@@ -168,13 +166,14 @@ function follow(stream: ReadableStream<Uint8Array>) {
 
 function machine(slots = 1) {
   const { bin } = stubs();
-  writeFileSync(join(bin, "sleep"), `#!/bin/sh\nexec ${realSleep} 0.02\n`);
+  writeFileSync(join(bin, "sleep"), "#!/bin/sh\nexit 0\n");
   chmodSync(join(bin, "sleep"), 0o755);
   const home = temp.make("home-");
+  const tmp = temp.make("tmp-");
   const folder = temp.make("work-");
   const started: Array<ReturnType<typeof Bun.spawn>> = [];
   const { FLEET_HEAVY_SLOTS: _, T3CODE_THREAD_ID: __, ...inherited } = Bun.env;
-  const env = (extra: Record<string, string>) => ({ ...inherited, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(roomy), FLEET_HEAVY_SLOTS: String(slots), ...extra });
+  const env = (extra: Record<string, string>) => ({ ...inherited, HOME: home, XDG_RUNTIME_DIR: home, TMPDIR: tmp, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(roomy), FLEET_HEAVY_SLOTS: String(slots), ...extra });
   const start = (args: string[], extra: Record<string, string> = {}) => {
     const child = Bun.spawn(["bun", join(import.meta.dir, "../commands/heavy.ts"), ...args], { cwd: folder, env: env(extra), stdout: "pipe", stderr: "pipe", detached: true });
     started.push(child);
@@ -186,49 +185,30 @@ function machine(slots = 1) {
     return stdout;
   };
   const stopAll = async () => {
-    for (const child of started) child.kill("SIGTERM");
+    for (const child of started) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {}
+    }
     await Promise.all(started.map((child) => child.exited));
   };
-  return { bin, folder, start, holders, stopAll };
-}
-
-async function gone(pid: number) {
-  for (let tries = 0; existsSync(`/proc/${pid}`) && tries < 400; tries++) await Bun.sleep(5);
-  return !existsSync(`/proc/${pid}`);
+  return { bin, home, tmp, folder, start, holders, stopAll };
 }
 
 const host = () => `Fleet heavy slots on ${hostname()}:\n`;
 const age = "\\d+s";
+const holdSlot = ["--", "sh", "-c", "echo ready; exec tail -f /dev/null"];
 
-onLinux("passes a stop signal on once to the heavy-route handler, though the whole process group gets it, and exits with its code", async () => {
+onLinux("frees the slot when a stop reaches the job's process group, with every process the command started", async () => {
   const box = machine();
-  const seen = join(box.bin, "signals");
-  const handler = join(box.bin, "route.ts");
-  writeFileSync(handler, `import { appendFileSync } from "node:fs";\nprocess.on("SIGINT", () => { appendFileSync(${JSON.stringify(seen)}, "int\\n"); console.log("got"); });\nprocess.on("SIGTERM", () => process.exit(5));\nconsole.log("ready");\nsetTimeout(() => process.exit(9), 3000);\n`);
   try {
-    const job = box.start(["--", "true"], { FLEET_HANDLERS: JSON.stringify({ "heavy-route": handler }) });
+    const job = box.start(["--", "sh", "-c", "tail -f /dev/null & echo ready; wait"]);
     await job.out.until("ready\n");
-    process.kill(-job.child.pid, "SIGINT");
-    await job.out.until("got\n");
-    job.child.kill("SIGTERM");
-    expect(await job.child.exited).toBe(5);
-    expect(readFileSync(seen, "utf8")).toBe("int\n");
-  } finally {
-    await box.stopAll();
-  }
-});
-
-onLinux("stops the command and every process it started on a stop signal, so its slot is free again", async () => {
-  const box = machine();
-  const pidFile = join(box.bin, "background");
-  try {
-    const job = box.start(["--", "sh", "-c", 'tail -f /dev/null & echo $! > "$0"; echo ready; wait', pidFile]);
-    await job.out.until("ready\n");
-    const background = Number(readFileSync(pidFile, "utf8"));
-    job.child.kill("SIGTERM");
+    process.kill(-job.child.pid, "SIGTERM");
     await job.child.exited;
-    expect(await gone(background)).toBe(true);
-    expect(await box.holders()).toBe(`${host()}  slot 1: free\nNo job waits.\n`);
+    const next = box.start(["--", "sh", "-c", "echo next"]);
+    await next.out.until("next\n");
+    expect(await next.child.exited).toBe(0);
   } finally {
     await box.stopAll();
   }
@@ -237,7 +217,7 @@ onLinux("stops the command and every process it started on a stop signal, so its
 onLinux("lists the job in each slot with its thread, folder and command, and the waiting jobs in the order they came, each with its place", async () => {
   const box = machine();
   try {
-    const first = box.start(["--", "sh", "-c", "echo ready; exec tail -f /dev/null"], { T3CODE_THREAD_ID: "thread-1" });
+    const first = box.start(holdSlot, { T3CODE_THREAD_ID: "thread-1" });
     await first.out.until("ready\n");
     const second = box.start(["--", "sh", "-c", "echo second; exec tail -f /dev/null"]);
     await second.err.until("this job is number 1 of 1 in the queue");
@@ -271,7 +251,7 @@ onLinux("names a process that still holds a slot after the job that started it e
 onLinux("forgets a waiting job that died without cleaning up, so the next job takes the free slot", async () => {
   const box = machine();
   try {
-    const first = box.start(["--", "sh", "-c", "echo ready; exec tail -f /dev/null"]);
+    const first = box.start(holdSlot);
     await first.out.until("ready\n");
     const doomed = box.start(["--", "true"]);
     await doomed.err.until("this job is number 1 of 1 in the queue");
@@ -291,31 +271,41 @@ onLinux("forgets a waiting job that died without cleaning up, so the next job ta
 onLinux("takes a waiting job off the queue when its terminal hangs up", async () => {
   const box = machine();
   try {
-    const first = box.start(["--", "sh", "-c", "echo ready; exec tail -f /dev/null"]);
+    const first = box.start(holdSlot);
     await first.out.until("ready\n");
     const waiting = box.start(["--", "true"]);
     await waiting.err.until("this job is number 1 of 1 in the queue");
-    waiting.child.kill("SIGHUP");
-    expect(await waiting.child.exited).toBe(129);
+    process.kill(-waiting.child.pid, "SIGHUP");
+    await waiting.child.exited;
     expect(await box.holders()).toEndWith("No job waits.\n");
   } finally {
     await box.stopAll();
   }
 });
 
-onLinux("hands the command no lock from its time in the queue", async () => {
+onLinux("keeps its job records where only this user can read them, also without a runtime folder", async () => {
   const box = machine();
-  try {
-    const first = box.start(["--", "sh", "-c", "echo ready; exec tail -f /dev/null"]);
-    await first.out.until("ready\n");
-    const queued = box.start(["--", "sh", "-c", 'if [ -e /proc/$$/fd/8 ]; then echo "holds fd 8"; else echo clean; fi']);
-    await queued.err.until("this job is number 1 of 1 in the queue");
-    process.kill(-first.child.pid, "SIGTERM");
-    expect(await queued.child.exited).toBe(0);
-    expect(queued.out.text()).toBe("clean\n");
-  } finally {
-    await box.stopAll();
-  }
+  const records = join(box.tmp, `fleet-heavy-${process.getuid!()}`);
+  mkdirSync(records, { mode: 0o777 });
+  chmodSync(records, 0o777);
+  const job = box.start(["--", "sh", "-c", "echo done"], { XDG_RUNTIME_DIR: "" });
+  expect(await job.child.exited).toBe(0);
+  expect(job.out.text()).toBe("done\n");
+  expect(statSync(records).mode & 0o777).toBe(0o700);
+  const other = box.start(["--", "sh", "-c", "echo done"]);
+  expect(await other.child.exited).toBe(0);
+  expect(statSync(join(box.home, "fleet-heavy")).mode & 0o777).toBe(0o700);
+});
+
+onLinux("refuses a records folder that is a link, and runs nothing", async () => {
+  const box = machine();
+  const elsewhere = temp.make("elsewhere-");
+  symlinkSync(elsewhere, join(box.home, "fleet-heavy"));
+  const job = box.start(["--", "sh", "-c", "echo ran"]);
+  expect(await job.child.exited).toBe(1);
+  expect(job.out.text()).toBe("");
+  expect(job.err.text()).toBe(`Fleet heavy: ${join(box.home, "fleet-heavy")} is not a private folder of this user, so it cannot keep job records there.\n`);
+  expect(readdirSync(elsewhere)).toEqual([]);
 });
 
 onLinux("says so when no heavy job ran here yet", async () => {

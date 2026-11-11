@@ -3,7 +3,7 @@ set -eu
 usage='Usage: fleet heavy [--unit <name> | --service <name> | --stop <name> | --holders] -- <command> [argument...]'
 commands=$(CDPATH='' cd -- "$(dirname -- "$0")/../commands" && pwd -P)
 self=$0
-locks="${XDG_RUNTIME_DIR:-/tmp}/fleet-heavy"
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then locks="$XDG_RUNTIME_DIR/fleet-heavy"; else locks="${TMPDIR:-/tmp}/fleet-heavy-$(id -u)"; fi
 report_every=${FLEET_HEAVY_REPORT_SECONDS:-120}
 
 age() {
@@ -119,7 +119,7 @@ if [ -n "$holders" ]; then
   for file in "$locks"/wait-*; do
     [ ! -f "$file" ] || printf '%s\n' "${file##*/wait-}"
   done | sort -t- -k1,1n -k2,2n | while read -r name; do
-    echo "  $(show_job "$locks/wait-$name")"
+    if job=$(show_job "$locks/wait-$name" 2>/dev/null); then echo "  $job"; fi
   done
   exit 0
 fi
@@ -150,7 +150,11 @@ fi
 
 slots=${FLEET_HEAVY_SLOTS:?}
 check_slots
-mkdir -p "$locks"
+mkdir -m 700 "$locks" 2>/dev/null || true
+if [ -L "$locks" ] || [ ! -d "$locks" ] || [ ! -O "$locks" ] || ! chmod 700 "$locks"; then
+  echo "Fleet heavy: $locks is not a private folder of this user, so it cannot keep job records there." >&2
+  exit 1
+fi
 
 run_in_slot() {
   exec 9>"$locks/slot-$1"
