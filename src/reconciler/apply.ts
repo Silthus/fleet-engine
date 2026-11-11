@@ -94,6 +94,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     if (held === "no") continue;
     if (held !== "yes") {
       report.findings.push(undoFinding(step, held));
+      if (held === "unknown" && step.pack === "base") report.ok = false;
       continue;
     }
     const target = `step ${step.pack}/${step.id}`;

@@ -541,6 +541,17 @@ describe("a step's undo", () => {
     expect((await apply(off, { home: temp.make("home-"), run: box(true, 1).run })).ok).toBe(true);
   });
 
+  test("a Base step whose check cannot tell fails the apply, but not while it waits for its prerequisite", async () => {
+    const asBase = (steps: PackManifest["steps"]) => {
+      const off = planWith(steps, { boxes: false });
+      return { ...off, undo: off.undo!.map((item) => ({ ...item, pack: "base" })) };
+    };
+    expect((await apply(asBase([{ ...step, check: ["box-unsure"] }]), { home: temp.make("home-"), run: box(true).run })).ok).toBe(false);
+    const waiting = box(true);
+    waiting.world.signedIn = false;
+    expect((await apply(asBase([{ ...step, check: ["box-state"], after: "sign-in" }]), { home: temp.make("home-"), run: waiting.run })).ok).toBe(true);
+  });
+
   test("needs a check, so Fleet can tell what is left to undo", async () => {
     await expect(loadPacks(team([{ id: "auto-box", run: ["box-on"], undo: ["box-off"] }]).dir)).rejects.toThrow("steps auto-box: undo needs a check");
     await expect(loadPacks(team([{ ...step, check: [] }]).dir)).rejects.toThrow("steps auto-box: undo needs a check");
