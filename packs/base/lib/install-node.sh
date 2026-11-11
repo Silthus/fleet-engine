@@ -21,7 +21,7 @@ case "$(uname -m)" in
 esac
 version=$(pin version)
 sum=$(pin "$target")
-[ -n "$version" ] && [ -n "$sum" ] || fail "could not read the pinned Node.js release from $release."
+{ [ -n "$version" ] && [ -n "$sum" ]; } || fail "could not read the pinned Node.js release from $release."
 for tool in curl sha256sum tar; do
   command -v "$tool" >/dev/null 2>&1 || fail "needs $tool to install Node.js."
 done
@@ -39,7 +39,7 @@ if [ ! -d "$share/$name" ]; then
   curl -fsSL "https://nodejs.org/dist/v$version/$name.tar.gz" -o "$work/$name.tar.gz" || fail "could not download Node.js $version."
   echo "$sum  $work/$name.tar.gz" | sha256sum -c --status - || fail "the Node.js $version download does not match its pinned checksum."
   tar -xzf "$work/$name.tar.gz" -C "$work" || fail "could not unpack Node.js $version."
-  mkdir -p "$share" && mv "$work/$name" "$share/$name" || fail "could not move Node.js into $share."
+  { mkdir -p "$share" && mv "$work/$name" "$share/$name"; } || fail "could not move Node.js into $share."
 fi
 
 for tool in node npm npx; do
