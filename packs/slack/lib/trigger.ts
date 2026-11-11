@@ -4,13 +4,12 @@ import { dirname } from "node:path";
 import type { Claim, Launch } from "./launch.ts";
 import type { SlackApi } from "./slack.ts";
 
-export const triggerEmoji = "t3code";
 const ackEmoji = "eyes";
 const day = 86_400_000;
 const retryFor = day;
 const keepFor = 31 * day;
 
-export type Owner = { name: string; slackUserId: string };
+export type Owner = { name: string; slackUserId: string; emoji: string };
 export type Trigger = { kind: "message" | "reaction"; channel: string; ts: string };
 type Message = { user?: string; text?: string; ts: string; thread_ts?: string };
 type Pending = { trigger: Trigger; since: number; commandId: string; told?: true; claim?: Claim; reachedT3?: true };
@@ -25,13 +24,15 @@ export type TriggerDeps = {
   launch: Launch;
 };
 
+const withoutSkinTone = (reaction: string) => reaction.split("::")[0];
+
 export function triggerOf(event: Record<string, any>, owner: Owner): Trigger | undefined {
   if (event.user !== owner.slackUserId) return undefined;
   if (event.type === "reaction_added") {
-    return event.reaction === triggerEmoji && event.item?.type === "message" ? { kind: "reaction", channel: event.item.channel, ts: event.item.ts } : undefined;
+    return withoutSkinTone(String(event.reaction ?? "")) === owner.emoji && event.item?.type === "message" ? { kind: "reaction", channel: event.item.channel, ts: event.item.ts } : undefined;
   }
   if (event.type === "app_mention") return { kind: "message", channel: event.channel, ts: event.ts };
-  if (event.type === "message" && event.subtype === undefined && String(event.text ?? "").includes(`:${triggerEmoji}:`)) {
+  if (event.type === "message" && event.subtype === undefined && String(event.text ?? "").includes(`:${owner.emoji}:`)) {
     return { kind: "message", channel: event.channel, ts: event.ts };
   }
   return undefined;
@@ -114,7 +115,7 @@ async function start(trigger: Trigger, key: string, { commandId, claim, reachedT
     formatThread(deps.slack, messages.some((candidate) => candidate.ts === message.ts) ? messages : [...messages, message]),
     deps.slack("chat.getPermalink", { channel: trigger.channel, message_ts: trigger.ts }).then((result) => String(result.permalink)),
   ]);
-  const name = title(message.text ?? "");
+  const name = title(message.text ?? "", deps.owner.emoji);
   const launched = await deps.launch({ title: name, prompt: prompt(deps.owner, trigger, message.text ?? "", permalink, context), commandId, claim, replay: reachedT3 });
   return "failed" in launched ? { failed: launched.failed, thread, claim: launched.claim, reachedT3: launched.reachedT3 } : { started: launched, name, thread };
 }
@@ -150,15 +151,15 @@ async function formatThread(slack: SlackApi, messages: Message[]): Promise<strin
 
 const slackText = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("|", "¦");
 
-function title(text: string): string {
-  const words = text.replaceAll(`:${triggerEmoji}:`, "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
+function title(text: string, emoji: string): string {
+  const words = text.replaceAll(`:${emoji}:`, "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
   return `Slack: ${words.slice(0, 60) || "look at this"}`;
 }
 
 export function prompt(owner: Owner, trigger: Trigger, text: string, permalink: string, thread: string): string {
   const ask = trigger.kind === "message"
     ? `${owner.name} wrote this Slack message to you. It is your task:\n\n> ${text.replaceAll("\n", "\n> ")}`
-    : `${owner.name} reacted with :${triggerEmoji}: to a Slack message. Look into the problem that message raises: find the cause, and propose the fix.`;
+    : `${owner.name} reacted with :${owner.emoji}: to a Slack message. Look into the problem that message raises: find the cause, and propose the fix.`;
   return `${ask}
 
 Slack message: ${permalink}

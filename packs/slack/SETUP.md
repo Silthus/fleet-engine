@@ -3,8 +3,9 @@
 Read this when the person picks the Slack pack, in step 6 with Mac only or
 in step 9 with a hub.
 
-Their own Slack message with `:t3code:`, their `:t3code:` reaction, or a
-mention of their Slack app starts a T3 thread. It needs their own Slack app.
+Their own Slack message or reaction with their trigger emoji (default
+`:t3code:`, set by `slack.emoji`), or a mention of their Slack app, starts a
+T3 thread. It needs their own Slack app.
 With Mac only, the trigger runs on the Mac and stops while the Mac sleeps.
 With a hub, the trigger runs on the hub, so it runs while the Mac sleeps,
 and the Slack app step below runs on the hub.
