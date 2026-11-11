@@ -633,6 +633,22 @@ describe("a step's undo", () => {
     await expect(apply(planWith([step], {}), { home, run: box(true).run })).rejects.toThrow(".local/state/fleet/steps.json is not a Fleet step ledger");
   });
 
+  test("reads the step's left probe instead of its check, when the check also passes with nothing to hold", async () => {
+    const { world, run } = box(true);
+    const home = temp.make("home-");
+    const doctored = { ...step, check: ["always-fine"], left: ["box-is-on"] };
+    await apply(planWith([doctored], {}), { home, run });
+    const removed = plan({ packs: [], workflows: {} }, devbox, [engine, team([doctored])]);
+    expect((await apply(removed, { home, run })).actions).toContainEqual({ target: "step team/auto-box", operation: "remove", reason: "the team pack is off" });
+    expect(world.on).toBe(false);
+    expect((await apply(removed, { home, run })).findings.map((finding) => finding.id)).not.toContain("undo:auto-box");
+    const workflowOff = box(true);
+    expect((await apply(planWith([doctored], { boxes: false }), { home: temp.make("home-"), run: workflowOff.run })).actions).toContainEqual({ target: "step team/auto-box", operation: "remove", reason: "workflow boxes is off" });
+    expect(workflowOff.world.on).toBe(false);
+    await expect(loadPacks(team([{ ...step, left: ["box-is-on"], undo: undefined }]).dir)).rejects.toThrow("steps auto-box: left needs an undo");
+    await expect(loadPacks(team([{ ...step, left: "box-is-on" as unknown as string[] }]).dir)).rejects.toThrow("steps auto-box: left must be a command list");
+  });
+
   const crew = (steps: PackManifest["steps"]) => withPack({ schema: 1, name: "crew", summary: "Crew.", steps });
   const gone = () => plan({ packs: [], workflows: {} }, devbox, [engine, team([step]), crew([{ ...step, id: "crew-box", run: ["crew-on"], check: ["crew-is-on"], undo: ["crew-off"] }])]);
 

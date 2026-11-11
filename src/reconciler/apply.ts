@@ -218,7 +218,7 @@ const heldCodes = [0, cannotTell];
 
 function ledgerStep(plan: Plan, step: Plan["steps"][number]): LedgerStep {
   const prerequisite = step.after ? plan.human.find((human) => human.pack === step.pack && human.id === step.after)?.probe : undefined;
-  return { pack: step.pack, id: step.id, check: step.check!, undo: step.undo!, ...(step.after ? { after: step.after } : {}), ...(prerequisite ? { prerequisite } : {}) };
+  return { pack: step.pack, id: step.id, check: step.left ?? step.check!, undo: step.undo!, ...(step.after ? { after: step.after } : {}), ...(prerequisite ? { prerequisite } : {}) };
 }
 
 /** The steps to undo: those whose workflow is off while their pack is on, and those the ledger holds that left the plan, except in a pack the profile lists but cannot load. A step the ledger holds is undone with the commands it had when it last held. */

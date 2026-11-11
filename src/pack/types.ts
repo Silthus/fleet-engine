@@ -89,6 +89,8 @@ export type PackStep = Scope & {
   after?: string;
   /** Reverses what the step set. Fleet runs it while the check still holds, once the step leaves this machine's plan: its workflow or pack is off, or the machine no longer fits it. Fleet keeps the commands of each step that held in the machine's step ledger, so it can undo a step whose pack is gone from the profile. */
   undo?: string[];
+  /** Exits 0 while anything the step set is still on this machine, and any other code once nothing is. An undo reads it instead of the check, for a check that also passes when the step has nothing to hold. */
+  left?: string[];
 };
 
 /**
