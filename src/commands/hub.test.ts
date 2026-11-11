@@ -11,7 +11,7 @@ afterEach(() => temp.cleanup());
 
 const repoRoot = join(import.meta.dir, "../..");
 
-async function fleetMachine(profileFields: Record<string, unknown> = {}, machineFields: Record<string, unknown> = {}, enginePacks: string[] = []) {
+async function fleetMachine(profileFields: Record<string, unknown> = {}, machineFields: Record<string, unknown> = {}, enginePacks: string[] = [], env: Record<string, string> = {}) {
   const engine = temp.make("engine-");
   for (const pack of ["base", ...enginePacks]) cpSync(join(repoRoot, "packs", pack), join(engine, "packs", pack), { recursive: true });
   cpSync(join(import.meta.dir, "fixtures/placed"), join(engine, "packs/placed"), { recursive: true });
@@ -28,7 +28,7 @@ async function fleetMachine(profileFields: Record<string, unknown> = {}, machine
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "linux", profileDir: profile, ...machineFields }));
   const fleet = async (args: string[], host = "hub-1") => {
     const lines: string[] = [];
-    const code = await main(args, { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line), run: async () => 0, adapters: () => [filesAdapter], hostname: () => host });
+    const code = await main(args, { home, engineRoot: engine, platform: "linux", env, print: (line) => lines.push(line), run: async () => 0, adapters: () => [filesAdapter], hostname: () => host });
     return { code, output: lines.join("\n") };
   };
   return {
@@ -41,7 +41,23 @@ async function fleetMachine(profileFields: Record<string, unknown> = {}, machine
 
 const hubless = "Note: Your profile lists devboxes but names no hub, so this machine leaves out 1 item that runs on the hub. Run fleet hub here on the machine that should be the hub.";
 
+const coderWorkspace = (name: string) => ({ CODER: "true", CODER_AGENT_URL: "https://coder.example.com", CODER_WORKSPACE_NAME: name });
+
 describe("fleet hub here", () => {
+  test("in a Coder workspace, names the hub by the SSH name coder config-ssh gives it, so every machine reaches it by that name", async () => {
+    const { fleet, machineFile, pushed } = await fleetMachine({ devboxes: ["coder.fleet-node-1"] }, {}, [], coderWorkspace("fleet-hub"));
+    const named = await fleet(["hub", "here"], "fleet-hub");
+    expect(named.code).toBe(0);
+    expect(named.output).toStartWith("✓ Saved the hub, coder.fleet-hub, in your profile and pushed it.");
+    expect(await pushed()).toMatchObject({ hub: "coder.fleet-hub" });
+    expect(machineFile()).toMatchObject({ name: "coder.fleet-hub", role: "hub" });
+  });
+
+  test("in a Coder workspace from the box pool, keeps the box's own name", async () => {
+    const { fleet } = await fleetMachine({}, {}, [], coderWorkspace("box-a1b2"));
+    expect((await fleet(["hub", "status"], "box-a1b2")).output).toStartWith("This machine: box-a1b2,");
+  });
+
   test("names this machine the hub in the profile, pushes it, and the hub's items run here", async () => {
     const { fleet, machineFile, pushed } = await fleetMachine({ devboxes: ["node-2"] });
     expect(await fleet(["run", "placed/placed-worker"])).toEqual({ code: 2, output: "fleet run: placed/placed-worker does not run here: your profile names no hub. Run fleet hub here on the machine that should be the hub." });
