@@ -1,11 +1,13 @@
-import { lstatSync, mkdirSync, readFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { checkParents } from "../../files/install.ts";
 import { writePrivateFile } from "../../files/private.ts";
 import type { Finding } from "../../pack/types.ts";
 import type { AdapterResult } from "../../reconciler/apply.ts";
 import type { CommandRunner } from "../run.ts";
 
 export type Wait = (ms: number) => Promise<void>;
+export type Environment = Record<string, string | undefined>;
 
 const bounded = ["--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "60"];
 const releasesFeed = "https://github.com/pingdotgg/t3code/releases.atom";
@@ -30,9 +32,16 @@ async function newestNightly(run: CommandRunner, wait: Wait) {
 
 const finding = (id: string, say: string, repair: Finding["repair"]): Finding => ({ id: `t3:${id}`, pack: "engine", say, repair });
 
-const tokenFile = ".config/claude-env/oauth.env";
+const tokenFolder = ".config/claude-env";
+const tokenFile = `${tokenFolder}/oauth.env`;
+const pendingFile = `${tokenFolder}/restart-pending`;
 const tokenDropIn = ".config/systemd/user/t3code.service.d/claude-token.conf";
 const dropInText = `[Service]\nEnvironmentFile=%h/${tokenFile}\n`;
+const tokenShape = /^[A-Za-z0-9._~+/=-]+$/;
+const needsReload = "reload";
+const restartCommand = "systemctl --user restart t3code.service";
+
+const tokenFinding = (say: string, repair: Finding["repair"] = "human") => finding("claude-token", say, repair);
 
 const readOr = (path: string) => {
   try {
@@ -42,23 +51,64 @@ const readOr = (path: string) => {
   }
 };
 
+const privateMode = (path: string, mode: number) => (lstatSync(path, { throwIfNoEntry: false })?.mode ?? 0) % 0o1000 === mode;
+
+async function realFolders(home: string) {
+  try {
+    for (const target of [tokenFile, tokenDropIn]) await checkParents(home, target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const insideT3 = (env: Environment) => Boolean(env.T3CODE_THREAD_ID || env.T3CODE_PORT);
+
+async function invocation(run: CommandRunner) {
+  const shown = await run(["systemctl", "--user", "show", "t3code.service", "--property=InvocationID", "--value"]);
+  return shown.code === 0 ? shown.stdout.trim() : undefined;
+}
+
+async function loadToken(run: CommandRunner, env: Environment, pending: string, result: AdapterResult) {
+  let loadedAt = readOr(pending);
+  if (loadedAt === needsReload) {
+    if ((await run(["systemctl", "--user", "daemon-reload"])).code !== 0) return void result.findings.push(tokenFinding(`systemd did not reload T3 Code's service, so T3 Code runs without the Claude token. Run fleet apply again, or run: systemctl --user daemon-reload && ${restartCommand}`));
+    loadedAt = await invocation(run);
+    if (loadedAt !== undefined) await writePrivateFile(pending, loadedAt);
+  } else if (loadedAt !== undefined) {
+    const now = await invocation(run);
+    if (now !== undefined && now !== loadedAt) return void rmSync(pending, { force: true });
+  }
+  if (insideT3(env)) return void result.findings.push(tokenFinding(`T3 Code picks up the Claude token at its next restart. Fleet did not restart it, because this apply runs inside T3 Code and the restart would end it. From a shell outside T3 Code, run: ${restartCommand}`));
+  if ((await run(["systemctl", "--user", "try-restart", "t3code.service"])).code !== 0) return void result.findings.push(tokenFinding(`T3 Code did not restart with the new Claude token. Run fleet apply again, or run: ${restartCommand}`));
+  rmSync(pending, { force: true });
+}
+
 /** T3 Code's user service does not inherit the session, so a Claude token that the session gets from its environment reaches T3 through a file. A drop-in that Fleet did not write stays. */
-export async function reconcileClaudeToken(run: CommandRunner, home: string, token: string | undefined, dryRun: boolean, result: AdapterResult) {
+export async function reconcileClaudeToken(run: CommandRunner, home: string, env: Environment, dryRun: boolean, result: AdapterResult) {
+  const token = env.CLAUDE_CODE_OAUTH_TOKEN;
   if (!token) return;
+  if (!tokenShape.test(token)) return void result.findings.push(tokenFinding("CLAUDE_CODE_OAUTH_TOKEN in this session has characters that a Claude token does not use, so Fleet did not give it to T3 Code. Set it again from claude setup-token, then run fleet apply."));
+  if (!(await realFolders(home))) return void result.findings.push(tokenFinding(`Fleet did not give the Claude token to T3 Code, because a folder on the way to ~/${tokenFile} or ~/${tokenDropIn} is a link or not a folder. Make them plain folders in your home, then run fleet apply.`));
   const file = join(home, tokenFile);
   const dropIn = join(home, tokenDropIn);
+  const pending = join(home, pendingFile);
   const present = readOr(dropIn);
   if (present !== undefined && present !== dropInText) return;
   const wanted = `CLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
-  if (present === dropInText && readOr(file) === wanted && (lstatSync(file).mode & 0o777) === 0o600) return;
-  if (dryRun) return void result.findings.push(finding("claude-token", "T3 Code's service needs the Claude token that this session has.", "apply"));
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  await writePrivateFile(file, wanted);
-  mkdirSync(dirname(dropIn), { recursive: true });
-  await writePrivateFile(dropIn, dropInText);
-  const reloaded = (await run(["systemctl", "--user", "daemon-reload"])).code === 0 && (await run(["systemctl", "--user", "try-restart", "t3code.service"])).code === 0;
-  if (!reloaded) return void result.findings.push(finding("claude-token", "T3 Code did not restart with the new Claude token. Run: systemctl --user daemon-reload && systemctl --user restart t3code.service", "human"));
-  result.actions.push({ target: "t3 claude token", operation: present === undefined ? "create" : "replace" });
+  const written = present === dropInText && readOr(file) === wanted && privateMode(file, 0o600) && privateMode(join(home, tokenFolder), 0o700);
+  if (written && readOr(pending) === undefined) return;
+  if (dryRun) return void result.findings.push(tokenFinding("T3 Code's service needs the Claude token that this session has.", "apply"));
+  if (!written) {
+    mkdirSync(join(home, tokenFolder), { recursive: true, mode: 0o700 });
+    chmodSync(join(home, tokenFolder), 0o700);
+    await writePrivateFile(pending, needsReload);
+    await writePrivateFile(file, wanted);
+    mkdirSync(dirname(dropIn), { recursive: true });
+    await writePrivateFile(dropIn, dropInText);
+    result.actions.push({ target: "t3 claude token", operation: present === undefined ? "create" : "replace" });
+  }
+  await loadToken(run, env, pending, result);
 }
 
 export async function reconcileService(run: CommandRunner, wait: Wait, user: string, dryRun: boolean, result: AdapterResult) {
