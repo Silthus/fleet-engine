@@ -151,6 +151,31 @@ describe("saving answers", () => {
     expect(JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8")).plan).toBe("codex");
   });
 
+  test("a profile with changes it has not committed takes nothing and saves nothing, and says to commit or discard them", async () => {
+    const { dir, remote, elsewhere } = await profileBehind();
+    await elsewhere((file) => ({ ...file, hub: "coder.fleet-hub" }));
+    writeFileSync(join(dir, "about-me.md"), "Hi\n");
+    await spawnGit(dir, "add", "about-me.md");
+    const before = await spawnGit(dir, "rev-parse", "HEAD");
+    const error = await saveAnswers(dir, { packs: ["hub"] }, { push: true }).catch((caught: Error) => caught);
+    expect(error).toBeInstanceOf(ProfileError);
+    expect((error as Error).message).toBe(`${dir}: could not take the changes another machine pushed, because ${dir} has changes that are not committed. Commit or discard them, then try again.`);
+    expect(await spawnGit(dir, "rev-parse", "HEAD")).toBe(before);
+    expect(JSON.parse(await spawnGit(remote, "show", "main:fleet.json")).packs).toEqual(["orchestration"]);
+  });
+
+  test("a profile whose Git stashes changes on its own before a pull still refuses them, and keeps fleet.json readable", async () => {
+    const { dir, elsewhere } = await profileBehind();
+    await spawnGit(dir, "config", "rebase.autoStash", "true");
+    await elsewhere((file) => ({ ...file, plan: "claude" }));
+    const edited = JSON.stringify({ ...profile, plan: "codex" }, null, 2) + "\n";
+    writeFileSync(join(dir, "fleet.json"), edited);
+    const error = await saveAnswers(dir, { packs: ["hub"] }, { push: true }).catch((caught: Error) => caught);
+    expect(error).toBeInstanceOf(ProfileError);
+    expect((error as Error).message).toContain(`because ${dir} has changes that are not committed.`);
+    expect(readFileSync(join(dir, "fleet.json"), "utf8")).toBe(edited);
+  });
+
   test("a failed push never shows the credentials in the remote's URL", async () => {
     const dir = await profileRepo();
     await spawnGit(dir, "remote", "add", "origin", "http://nora:hunter2@127.0.0.1:1/nora/fleet-profile.git?access_token=EXAMPLE_TOKEN");
