@@ -615,6 +615,20 @@ WantedBy=default.target
     expect(changes(linux.calls.slice(before))).toEqual([["systemctl", "--user", "restart", "fleet-slack-trigger.service"]]);
   });
 
+  test("restarts the service when a setting of its pack changes, and not when another pack's setting changes", async () => {
+    const home = temp.make("home-");
+    const linux = systemd();
+    const withSettings = (settings: Plan["settings"]) => ({ ...plan("linux", [trigger]), settings });
+    await apply(withSettings({ "base.emoji": "t3code", "other.size": 1 }), { home, adapters: [linux.adapter] });
+    const before = linux.calls.length;
+
+    await apply(withSettings({ "base.emoji": "t3code", "other.size": 2 }), { home, adapters: [linux.adapter] });
+    expect(changes(linux.calls.slice(before))).toEqual([]);
+    await apply(withSettings({ "base.emoji": "eye", "other.size": 2 }), { home, adapters: [linux.adapter] });
+
+    expect(changes(linux.calls.slice(before))).toEqual([["systemctl", "--user", "restart", "fleet-slack-trigger.service"]]);
+  });
+
   test("starts a service that stopped, and enables one that was disabled", async () => {
     const home = temp.make("home-");
     const linux = systemd();

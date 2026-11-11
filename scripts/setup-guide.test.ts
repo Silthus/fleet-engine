@@ -247,19 +247,18 @@ describe("the agent setup guide", () => {
     expect(readFileSync(join(home, ".claude/rules/fleet.md"), "utf8")).toContain("I like small diffs.");
   });
 
-  test("a second setup reuses the profile, keeps earlier settings, and turns workflows the run does not name off, as the guide says", async () => {
+  test("a second setup without --preset, as the guide says, reuses the profile and keeps its packs, workflows, and settings", async () => {
     const step1 = words(guide().slice(guide().indexOf("## 1. Check the Mac"), guide().indexOf("## 2. Ask what they know")));
-    expect(step1).toContain("The packs and workflow switches of this run replace the earlier ones");
-    expect(step1).toContain("Earlier settings stay unless this run sets them again.");
+    expect(step1).toContain("In the step 7 command, leave out `--preset`, and name only what changes with `--add`, `--remove`, and `--workflows`.");
     const command = guide().match(/^fleet setup (.+)$/m)![1]!.replace("<claude|codex|both>", "both");
     const home = temp.make("home-");
     const box = fakeMachine(home);
     const first = await fleetSetup(home, [...command.replace("<id>", "everyday").split(" "), "--add", "guards", "--workflows", "package-age=on", "--set", "orchestration.tracker=nora/maps"], [], box, undefined, 0, "darwin");
-    const again = await fleetSetup(home, command.replace("<id>", "starter").split(" "), [], box, undefined, 0, "darwin");
+    const again = await fleetSetup(home, [...command.replace("--preset <id> ", "").split(" "), "--add", "memory"], [], box, undefined, 0, "darwin");
     expect({ first: first.code, again: again.code }).toEqual({ first: 0, again: 0 });
     expect(again.output).toContain("Reusing your repo nora/fleet-profile");
-    expect(savedAnswers(home).packs).toEqual(presets().find((preset) => preset.id === "starter")!.packs);
-    expect(savedAnswers(home).workflows["package-age"]).not.toBe(true);
+    expect(savedAnswers(home).packs).toEqual([...presets().find((preset) => preset.id === "everyday")!.packs, "guards", "memory"]);
+    expect(savedAnswers(home).workflows["package-age"]).toBe(true);
     expect(savedAnswers(home).settings["orchestration.tracker"]).toBe("nora/maps");
   });
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Finding, Owned, PackJob, Plan } from "../../pack/types.ts";
@@ -51,7 +52,7 @@ export function jobsAdapter(options: JobsOptions = {}): Adapter {
       const context = { home, dryRun, run, result, outage: sourceOutage(plan), gated: new Set(plan.dropped.filter((entry) => entry.check && entry.item.startsWith("job ")).map((entry) => entry.item.slice("job ".length))) };
       const reconcile = async () => {
         const path = [`${home}/.local/bin`, `${home}/.bun/bin`, ...(plan.os === "darwin" ? ["/opt/homebrew/bin"] : []), "/usr/local/bin", "/usr/bin", "/bin"].join(":");
-        const scripts = await launchers(home, osJobs, (job) => launcherScript(command(job), path, inside(home, logTarget(job.id))));
+        const scripts = await launchers(home, osJobs, (job) => launcherScript(command(job), path, inside(home, logTarget(job.id)), isService(job) ? packSettingsStamp(plan, job.pack) : undefined));
         if (plan.os === "linux") {
           const services = osJobs.filter(isService);
           const timed = osJobs.filter(isTimed);
@@ -76,10 +77,15 @@ function needs(job: { id: string; pack: string } | string, what: string, kind = 
   return { id: `${kind}:${id}`, pack: typeof job === "string" ? "engine" : job.pack, say: `The ${id} ${kind} needs to be ${what}.`, repair: "apply" };
 }
 
-async function launchers(home: string, jobs: Array<Owned<PackJob>>, script: (job: PackJob) => string): Promise<Scripts> {
+async function launchers(home: string, jobs: Array<Owned<PackJob>>, script: (job: Owned<PackJob>) => string): Promise<Scripts> {
   const scripts: Scripts = new Map();
   for (const job of jobs) scripts.set(job.id, { target: launcherTarget(job.id), before: await readState(home, launcherTarget(job.id)), after: script(job) });
   return scripts;
+}
+
+function packSettingsStamp(plan: Plan, pack: string): string | undefined {
+  const own = Object.entries(plan.settings).filter(([key]) => key.startsWith(`${pack}.`)).sort(([a], [b]) => a.localeCompare(b));
+  return own.length ? createHash("sha256").update(JSON.stringify(own)).digest("hex").slice(0, 16) : undefined;
 }
 
 const only = (scripts: Scripts, jobs: Array<Owned<PackJob>>): Scripts => new Map(jobs.map((job) => [job.id, scripts.get(job.id)!]));

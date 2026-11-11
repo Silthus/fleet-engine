@@ -486,7 +486,7 @@ export default {
     const userId = fleet.setting({ key: "slack.userId", type: "string", question: "What is your Slack member ID?" });
     const threads = fleet.workflow({
       id: "slack-thread", name: "Start a thread from Slack", default: false, settings: [userId],
-      sentence: "Your own Slack message with :t3code: starts a T3 thread, and Slack shows you its link.",
+      sentence: "Your own Slack message with your trigger emoji (default :t3code:) starts a T3 thread, and Slack shows you its link.",
     });
     const hub = { on: "hub", when: threads } as const;
     const app = fleet.check({
@@ -530,6 +530,10 @@ stores for each Slack message before it starts a thread
 - **The service restarts when the tokens change.** It watches the secret
   store entry and stops when the entry changes, so the OS starts it again,
   as `waitForTokens` and `watchTokens` do today with the token file.
+- **The service restarts when a setting of its pack changes,** such as
+  `slack.emoji`. The Jobs adapter writes a hash of the pack's settings into
+  the service's launcher, so the apply after `fleet set` rewrites the
+  launcher and restarts the service.
 
 ### 5.4 Who owns what
 

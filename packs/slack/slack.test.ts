@@ -8,7 +8,7 @@ import { t3CliRunner, t3Threads } from "../../src/integrations/t3/index.ts";
 import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { secretStore } from "../../src/runner/context.ts";
-import { listen, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
+import { listen, ownerOf, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
 import { launchHere, launchOnBox, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
 import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 const ownerId = "U0OWNER";
-const owner = { name: "Nora Example", slackUserId: ownerId };
+const owner = { name: "Nora Example", slackUserId: ownerId, emoji: "t3code" };
 const appToken = "xapp-1-test-app-token";
 const userToken = "xoxp-test-user-token";
 const models: ModelRow[] = [{ role: "implementation", work: "Build", provider: "claude", model: "claude-opus-5-5", effort: "high" }];
@@ -69,7 +69,7 @@ async function t3Server() {
 function commandDeps(home: string, extra: Partial<SlackCommandDeps> = {}): SlackCommandDeps & { printed: string[] } {
   const printed: string[] = [];
   return {
-    env: { FLEET_SETTINGS: settings(), FLEET_ENGINE_DIR: "/opt/fleet-engine" }, home, freeBytes: gigabytes(100), slackUserId: () => ownerId, secrets: secretStore(home, "slack"), stateDir: join(home, ".local/state/fleet/slack"), threads: t3Threads(models, { home }),
+    env: { FLEET_SETTINGS: settings(), FLEET_ENGINE_DIR: "/opt/fleet-engine" }, home, freeBytes: gigabytes(100), slackUserId: () => ownerId, slackEmoji: () => "t3code", secrets: secretStore(home, "slack"), stateDir: join(home, ".local/state/fleet/slack"), threads: t3Threads(models, { home }),
     print: (line) => printed.push(line), readStdin: async () => "", every: () => () => {}, sleep: async () => {}, printed, ...extra,
   };
 }
@@ -85,6 +85,20 @@ describe("which Slack events start a thread", () => {
     expect(triggerOf({ type: "message", subtype: "message_changed", user: ownerId, channel: "C1", ts: "1.4", text: ":t3code:" }, owner)).toBeUndefined();
     expect(triggerOf({ type: "app_mention", user: ownerId, channel: "C1", ts: "1.5", text: "<@B1> look" }, owner)).toEqual({ kind: "message", channel: "C1", ts: "1.5" });
     expect(triggerOf({ type: "app_mention", user: "U0OTHER", channel: "C1", ts: "1.6", text: "<@B1> look" }, owner)).toBeUndefined();
+  });
+
+  test("a slack.emoji other than the default starts threads, and :t3code: then does not", () => {
+    const eye = { ...owner, emoji: "eye" };
+    expect(triggerOf({ type: "reaction_added", user: ownerId, reaction: "eye", item: { type: "message", channel: "C1", ts: "1.1" } }, eye)).toEqual({ kind: "reaction", channel: "C1", ts: "1.1" });
+    expect(triggerOf({ type: "message", user: ownerId, channel: "C1", ts: "1.2", text: "fix it :eye:" }, eye)).toEqual({ kind: "message", channel: "C1", ts: "1.2" });
+    expect(triggerOf({ type: "message", user: ownerId, channel: "C1", ts: "1.3", text: "fix it :t3code:" }, eye)).toBeUndefined();
+  });
+
+  test("a reaction or message with a skin tone of the trigger emoji counts", () => {
+    const thumbsUp = { ...owner, emoji: "+1" };
+    expect(triggerOf({ type: "reaction_added", user: ownerId, reaction: "+1::skin-tone-2", item: { type: "message", channel: "C1", ts: "1.1" } }, thumbsUp)).toEqual({ kind: "reaction", channel: "C1", ts: "1.1" });
+    expect(triggerOf({ type: "message", user: ownerId, channel: "C1", ts: "1.2", text: "fix it :+1::skin-tone-2:" }, thumbsUp)).toEqual({ kind: "message", channel: "C1", ts: "1.2" });
+    expect(triggerOf({ type: "reaction_added", user: ownerId, reaction: "+1_tone", item: { type: "message", channel: "C1", ts: "1.3" } }, thumbsUp)).toBeUndefined();
   });
 });
 
@@ -442,6 +456,20 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
     expect(deps.printed[0]).toStartWith("Create the app: https://api.slack.com/apps?new_app=1&manifest_json=");
     expect(manifest("Nora Example").display_information.name).toBe("T3Code - Nora Example");
     expect(manifest("Nora Example").settings.socket_mode_enabled).toBe(true);
+  });
+
+  test("takes slack.emoji with or without colons, and keeps names such as +1", async () => {
+    const emojiOf = async (value: string) => (await ownerOf({ slackUserId: () => ownerId, slackEmoji: () => value }, processes().run)).emoji;
+    expect(await emojiOf(":eye:")).toBe("eye");
+    expect(await emojiOf(" +1 ")).toBe("+1");
+    expect(await emojiOf("thumbsup")).toBe("thumbsup");
+  });
+
+  test("refuses a slack.emoji that is not an emoji name", async () => {
+    for (const value of ["::", "two words", "thumbsup::skin-tone-2"]) {
+      const deps = commandDeps(temp.make("home-"), { run: processes().run, slackEmoji: () => value });
+      await expect(slackTrigger(["check"], deps)).rejects.toThrow(`slack.emoji is ${JSON.stringify(value)}, not a Slack emoji name such as eye or +1. Set it with fleet set slack.emoji=<name>.`);
+    }
   });
 
   test("refuses a member ID that is not one", async () => {
