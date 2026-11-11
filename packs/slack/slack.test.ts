@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
-import { t3CliRunner, t3Threads, UnansweredLaunch } from "../../src/integrations/t3/index.ts";
+import { t3CliRunner, t3Threads } from "../../src/integrations/t3/index.ts";
 import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { secretStore } from "../../src/runner/context.ts";
@@ -272,45 +272,43 @@ describe("a launch that fails", () => {
     expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day.", "Started <https://app.t3.codes/threads/E1/T1|Slack: why?> on this machine."]);
   });
 
-  test("still reports a thread T3 started before its answer was lost, after the disk fell below the start floor", async () => {
-    const { deps, replies, later } = rig([]);
-    const started = new Map<string, string>();
-    let answers = false;
+  async function retryBelowTheFloor(fixture: { rows?: ModelRow[]; firstLaunch: "lost" | "refused" | "fine"; repair?: (rows: ModelRow[]) => void }) {
+    let launches = 0;
+    const t3: T3Stub = await startT3Stub({
+      shell: { projects: [], threads: [] },
+      environmentId: "env-here",
+      rpc: (tag) => tag === "projects.ensureScratch" ? { projectId: "scratch" } : tag === "orchestration.launchThread" && !(fixture.firstLaunch === "refused" && launches++ === 0) ? { threadId: "thread-1" } : undefined,
+      loseAnswer: (tag) => fixture.firstLaunch === "lost" && tag === "orchestration.launchThread" && launches++ === 0,
+    });
+    stops.push(() => t3.stop());
+    const rows = fixture.rows ?? [...models];
     let disk = { critical: false, message: "" };
-    deps.launch = launchHere({
-      async start({ key }) {
-        if (!started.has(key)) started.set(key, `T${started.size + 1}`);
-        if (!answers) throw new UnansweredLaunch("T3 did not answer");
-        return { id: started.get(key)!, url: `https://app.t3.codes/threads/E1/${started.get(key)}` };
-      },
-    }, () => disk);
+    const { deps, replies, later } = rig([]);
+    deps.launch = launchHere(t3Threads(rows, { home: t3.home }), () => disk);
     await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
-    answers = true;
+    fixture.repair?.(rows);
     disk = { critical: true, message: "3.0G free, below the 25G floor." };
     later(60_000);
     await retryPending(deps);
-    expect([...started.values()]).toEqual(["T1"]);
-    expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/E1/T1|Slack: why?> on this machine.");
+    return { threads: t3.threads, replies };
+  }
+
+  test("still reports a thread T3 started before its answer was lost, after the disk fell below the start floor", async () => {
+    const { threads, replies } = await retryBelowTheFloor({ firstLaunch: "lost" });
+    expect(threads.map((thread) => thread.id)).toEqual(["thread-1"]);
+    expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/env-here/thread-1|Slack: why?> on this machine.");
   });
 
   test("checks the start floor again on a retry whose launch failed before it reached T3", async () => {
-    const { deps, later } = rig([]);
-    const started: string[] = [];
-    let ready = false;
-    let disk = { critical: false, message: "" };
-    deps.launch = launchHere({
-      async start({ key }) {
-        if (!ready) throw new Error("The model table of your AI plan has no implementation row.");
-        started.push(key);
-        return { id: "T1" };
-      },
-    }, () => disk);
-    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
-    ready = true;
-    disk = { critical: true, message: "3.0G free, below the 25G floor." };
-    later(60_000);
-    await retryPending(deps);
-    expect(started).toEqual([]);
+    const { threads, replies } = await retryBelowTheFloor({ rows: [], firstLaunch: "fine", repair: (rows) => rows.push(...models) });
+    expect(threads).toEqual([]);
+    expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day."]);
+  });
+
+  test("checks the start floor again on a retry whose launch T3 refused", async () => {
+    const { threads, replies } = await retryBelowTheFloor({ firstLaunch: "refused" });
+    expect(threads).toEqual([]);
+    expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day."]);
   });
 
   test("on a box, retries a launch whose T3 answer was lost as a replay", async () => {

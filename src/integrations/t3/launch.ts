@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ModelRow } from "../../pack/types.ts";
-import type { T3Client } from "./session.ts";
+import { T3Refusal, type T3Client } from "./session.ts";
 
 export type ThreadLaunch = { title: string; prompt: string; row: ModelRow; commandId?: string };
 
@@ -23,7 +23,7 @@ export async function launchScratchThread(client: Pick<T3Client, "call">, launch
     workspaceStrategy: { type: "root" },
     initialMessage: { text: launch.prompt, attachments: [] },
   }, launchTimeoutMs).catch((error: Error) => {
-    throw new UnansweredLaunch(error.message);
+    throw error instanceof T3Refusal ? error : new UnansweredLaunch(error.message);
   });
   return threadId;
 }
