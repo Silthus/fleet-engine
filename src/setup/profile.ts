@@ -37,7 +37,13 @@ async function makeProfile(context: ProfileContext) {
     return result.output.trim();
   };
   const login = await gh("api", "user", "--jq", ".login");
-  const exists = async (repo: string) => (await machine.exec(["gh", "repo", "view", repo, "--json", "name"])).code === 0;
+  const exists = async (repo: string) => {
+    const view = await machine.exec(["gh", "repo", "view", repo, "--json", "name"]);
+    if (view.code === 0) return true;
+    if (view.output.includes("Could not resolve to a Repository")) return false;
+    throw new Error(`could not look up ${repo}: ${lastLine(view.output)}`);
+  };
+  const same = (a: string | undefined, b: string | undefined) => a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
   const create = (repo: string, description: string) => machine.exec(["gh", "repo", "create", repo, "--private", "--description", description]);
   const personal = `${login}/${profileRepoName}`;
   const org = profileOrg(context.packs(), draft.packs ?? []);
@@ -46,7 +52,7 @@ async function makeProfile(context: ProfileContext) {
   const inUse = await clonedProfile(machine, dir, login);
   const found = inUse && (await exists(inUse)) ? inUse : team && (await exists(team)) ? team : (await exists(personal)) ? personal : undefined;
   let profileRepo = found ?? team ?? personal;
-  if (found && found !== personal) await requirePrivate(machine, found);
+  if (found && !same(found, personal)) await requirePrivate(machine, found);
   if (found) await checkout(machine, dir, found);
   const saved = found ? savedSettings(dir) : {};
   const namedMemory = draft.settings?.["memory.repo"] ?? saved["memory.repo"];
@@ -55,19 +61,19 @@ async function makeProfile(context: ProfileContext) {
   await confirm(context, [...(found ? [] : [profileRepo]), ...(memoryMissing ? [memoryRepo] : [])], org && !found ? org : undefined);
   if (!found) {
     const made = await create(profileRepo, "My Fleet profile");
-    if (made.code !== 0 && profileRepo === team && !(await exists(team))) {
+    if (made.code !== 0 && same(profileRepo, team) && !(await exists(profileRepo))) {
       terminal.print(`  · The ${org} org did not let you create ${team} (${lastLine(made.output).replace(/^GraphQL: /, "")}), so Fleet uses your own account.`);
       profileRepo = personal;
       await gh("repo", "create", personal, "--private", "--description", "My Fleet profile");
-    } else if (made.code !== 0 && profileRepo !== team) throw new Error(`gh repo create failed: ${lastLine(made.output)}`);
-    if (profileRepo === team) await requirePrivate(machine, team);
-    terminal.print(`  ✓ Created the private repo ${profileRepo}${profileRepo === team ? ` in the ${org} org` : ""}`);
+    } else if (made.code !== 0 && !same(profileRepo, team)) throw new Error(`gh repo create failed: ${lastLine(made.output)}`);
+    if (same(profileRepo, team)) await requirePrivate(machine, profileRepo);
+    terminal.print(`  ✓ Created the private repo ${profileRepo}${same(profileRepo, team) ? ` in the ${org} org` : ""}`);
   } else terminal.print(`  ✓ Reusing your repo ${found}`);
   if (memoryRepo && memoryMissing) {
     await gh("repo", "create", memoryRepo, "--private", "--description", "My agents' shared memory");
     terminal.print(`  ✓ Created the private repo ${memoryRepo}`);
   } else if (memoryRepo) terminal.print(`  ✓ Reusing your repo ${memoryRepo}`);
-  if (team && found === personal) {
+  if (team && same(found, personal)) {
     terminal.print(`  · Your team keeps profiles in the ${org} org. To move yours there, run:`);
     terminal.print(`      gh api -X POST repos/${personal}/transfer -f new_owner=${org} -f new_name=${profileRepoName}-${login}`);
     terminal.print(`      git -C ${dir} remote set-url origin https://github.com/${team}.git`);
@@ -76,7 +82,7 @@ async function makeProfile(context: ProfileContext) {
   if (!found) await checkout(machine, dir, profileRepo);
   await git(machine, dir, "config", "user.name", login);
   await git(machine, dir, "config", "user.email", `${login}@users.noreply.github.com`);
-  await startFiles(dir, context, profileRepo === team ? org : undefined);
+  await startFiles(dir, context, same(profileRepo, team) ? org : undefined);
   const started = await untracked(machine, dir, startFileNames);
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, settings: {}, workflows: {} }),
