@@ -162,6 +162,55 @@ export default {
         return (await import("./lib/mail-watch.ts")).checkMail({ ...(await watchOf(ctx)), log: ctx.print }, true).then((ok) => (ok ? 0 : 1));
       },
     });
+    const reviewSearch = fleet.setting({
+      key: "mcp-gateway.reviewWaitSearch",
+      type: "string",
+      default: "",
+      question: "Which GitHub search qualifiers narrow the ready pull requests that review wait watches, such as org:your-org? Leave it empty for all of yours.",
+    });
+    const reviewAsks = fleet.setting({
+      key: "mcp-gateway.reviewWaitAsks",
+      type: "string",
+      question: "Which Slack search filter finds your own review asks, such as from:<@U012ABCDEF> in:#your-team? Review wait holds a pull request you linked there in the last 12 hours.",
+    });
+    const reviews = fleet.workflow({
+      id: "review-wait",
+      name: "Review wait wakes threads",
+      default: false,
+      requires: ["slack-bridge"],
+      settings: [reviewSearch, reviewAsks],
+      sentence: "When a ready pull request of yours waits 4 hours on a review nobody gave, the T3 thread that links it wakes up, and again at 24 hours.",
+      moment: {
+        time: "14:00",
+        title: "A silent review request speaks up",
+        body: "Your pull request has waited on the team since the morning. The thread that owns it wakes and asks whether to ping a named reviewer, nudge the team in Slack, or keep waiting.",
+        words: ["hub", "thread"],
+      },
+      risk: "Reads your pull requests on GitHub and your own Slack messages from the last 12 hours. It messages your threads and changes nothing on GitHub or Slack.",
+    });
+    const reviewWaitOf = async (ctx: Context) => {
+      const [{ runGh }, { hostname }] = await Promise.all([import("../pull-requests/lib/gh.ts"), import("node:os")]);
+      return {
+        gh: runGh, qualifiers: ctx.get(reviewSearch), threads: ctx.threads, session: {}, host: hostname(),
+        slack: { gateway: await ctx.use(service), filter: ctx.get(reviewAsks), fetch: (input: string | URL | Request, init?: RequestInit) => fetch(input, init) },
+        statePath: join(ctx.stateDir, "review-wait.json"), now: ctx.now, log: ctx.log,
+      };
+    };
+    fleet.service({
+      on: "hub",
+      os: "linux",
+      when: reviews,
+      id: "review-wait",
+      run: async (ctx) => (await import("./lib/review-wait.ts")).watchReviews(await reviewWaitOf(ctx), ctx.sleep),
+    });
+    fleet.command("review-wait", {
+      on: "hub",
+      summary: "Say which threads the next review wait check would wake for pull requests that wait on a review, and change nothing",
+      run: async (args, ctx) => {
+        if (args.length) return ctx.print("usage: fleet review-wait"), 2;
+        return (await import("./lib/review-wait.ts")).checkReviews({ ...(await reviewWaitOf(ctx)), log: ctx.print }, true).then((ok) => (ok ? 0 : 1));
+      },
+    });
     fleet.check({
       when: flow,
       id: "mcp-gateway-client",
