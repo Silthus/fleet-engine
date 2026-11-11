@@ -99,6 +99,8 @@ describe("the plan", () => {
   });
 });
 
+const startEnvironment = { ...process.env };
+
 function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}) {
   const state = fakeMcpHub({ groups: [{ id: "g", name: "fleet", servers: ["tickets", "calendar"] }], ...fields });
   const api = mcphubFetch(state);
@@ -114,13 +116,15 @@ function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}) {
     return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "mcphub", version: "1.1.0" } } }, { headers: { "mcp-session-id": "session-1" } });
   }) as typeof fetch);
   const spawned: string[][] = [];
+  const dockerHomes: (string | undefined)[] = [];
   const spawn = Bun.spawn;
-  spyOn(Bun, "spawn").mockImplementation(((command: string[], options: never) => {
-    if (command[0] !== "docker") return spawn(command, options);
+  spyOn(Bun, "spawn").mockImplementation(((command: string[], options: { env?: Record<string, string | undefined> }) => {
+    if (command[0] !== "docker") return spawn(command, options as never);
     spawned.push(command);
+    dockerHomes.push((options.env ?? startEnvironment).HOME);
     return { exited: Promise.resolve(127), stdout: new Response("").body, stderr: new Response(`${command[0]}: command not found`).body };
   }) as never);
-  return { state, bridged, spawned };
+  return { state, bridged, spawned, dockerHomes };
 }
 
 function machine(saved: MachineFile, fields: Partial<Profile> = {}, hosts: Record<string, Host | "down"> = {}) {
@@ -195,6 +199,15 @@ describe("on the hub", () => {
     spyOn(console, "error").mockImplementation((line: string) => { errors.push(line); });
     expect(await fleet(["mcp-connect"], initialize)).toEqual({ code: 1, output: "" });
     expect(errors).toEqual(["mcp-gateway/mcp-gateway has no credential on this machine yet. Run fleet apply on the hub."]);
+  });
+
+  test("the docker commands of the install repair run with the home Fleet runs the pack in", async () => {
+    const { home, fleet } = machine(hubMachine);
+    writeMcpHubSettings(home);
+    const { dockerHomes } = gatewayServer({ home, healthy: false });
+    await fleet(["apply"]);
+    expect(dockerHomes.length).toBeGreaterThan(0);
+    expect(new Set(dockerHomes)).toEqual(new Set([home]));
   });
 
   test("a gateway installed at an HTTPS address fails the install check, and apply reinstalls it at loopback", async () => {
