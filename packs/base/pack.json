@@ -731,6 +731,21 @@
       ]
     },
     {
+      "id": "cargo-git-cli",
+      "run": [
+        "fleet",
+        "cargo-git-cli"
+      ],
+      "check": [
+        "fleet",
+        "cargo-git-cli",
+        "--check"
+      ],
+      "on": [
+        "linux"
+      ]
+    },
+    {
       "id": "node-runtime",
       "run": [
         "fleet",
