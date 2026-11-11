@@ -15,9 +15,9 @@ function gettingStarted() {
 }
 
 function prompt() {
-  const block = gettingStarted().match(/^ *```text\n *(.+)\n *```$/m);
-  expect(block).not.toBeNull();
-  return block![1]!;
+  const blocks = [...gettingStarted().matchAll(/^ *```\w*\n *(.+)\n *```$/gm)];
+  expect(blocks.length).toBe(1);
+  return blocks[0]![1]!;
 }
 
 describe("the README", () => {

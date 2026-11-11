@@ -25,9 +25,8 @@ same setup.
    Set up Fleet on this Mac with me. Read https://raw.githubusercontent.com/Silthus/fleet-engine/main/SETUP.md and follow it step by step.
    ```
 
-From here the agent leads. It asks what you know and what you want, explains
-each part, and runs the steps itself. You answer its questions and do your own
-sign-ins.
+From here the agent guides you. It explains each part and runs the install.
+You answer setup's questions and do your own sign-ins.
 
 ## See what it does
 
