@@ -71,6 +71,8 @@ export function fakeCoder(fields: Partial<CommandCoder> = {}, listed: Box[] = [b
     binary: async () => "coder",
     env: {},
     token: async () => "[]",
+    sessionFrom: "none",
+    sessionKey: async () => undefined,
     boxes: async () => listed.map((entry) => ({ ...entry })),
     ssh: async (box, command, stdin) => {
       calls.push({ box, command, ...(stdin === undefined ? {} : { stdin }) });
