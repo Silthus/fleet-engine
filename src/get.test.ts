@@ -70,6 +70,71 @@ describe("get.sh", () => {
   });
 });
 
+describe("get.sh downloads", () => {
+  const curlCalls = (calls: string) => calls.split("\n").filter((call) => call.startsWith("curl "));
+
+  test("tries a failed download again, and goes on when a later try works", () => {
+    const box = sandbox("Linux");
+    box.failDownloads("*gh_9.9.9_linux_amd64.tar.gz", 2);
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    expect(existsSync(join(box.home, ".local/bin/gh"))).toBe(true);
+    expect(curlCalls(result.calls).filter((call) => call.includes("gh_9.9.9_linux_amd64.tar.gz"))).toHaveLength(3);
+    expect(result.calls.split("\n")).toEqual(expect.arrayContaining(["sleep 1", "sleep 2"]));
+  });
+
+  test("stops after three failed tries and names what it could not download", () => {
+    const box = sandbox("Linux");
+    box.failDownloads("*gh_9.9.9_linux_amd64.tar.gz", 99);
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("Fleet: could not download gh.");
+    expect(curlCalls(result.calls).filter((call) => call.includes("gh_9.9.9_linux_amd64.tar.gz"))).toHaveLength(3);
+  });
+
+  test("gives up on a download that cannot connect or stalls, instead of waiting forever", () => {
+    const box = sandbox("Linux");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    const calls = curlCalls(result.calls);
+    expect(calls.length).toBeGreaterThan(3);
+    for (const call of calls) expect(call).toMatch(/--connect-timeout \d+ --speed-limit \d+ --speed-time \d+ /);
+  });
+
+  test("installs the newest T3 Code nightly from the releases feed, so the installer never asks the GitHub API", () => {
+    const box = sandbox("Linux");
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(0);
+    expect(result.calls).toContain("t3 installer channel=nightly version=0.1.9-nightly.20990102.7\n");
+  });
+
+  test("lets the T3 Code installer find the nightly itself when the releases feed is down or names none", () => {
+    const down = sandbox("Linux");
+    down.failDownloads("*releases.atom", 99);
+    const empty = sandbox("Linux", { releasesFeed: "<feed></feed>" });
+    for (const box of [down, empty]) {
+      const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+      expect(result.code).toBe(0);
+      expect(result.calls).toContain("t3 installer channel=nightly version=\n");
+    }
+  });
+
+  test("runs the T3 Code installer again when it fails, up to three times", () => {
+    const recovers = sandbox("Linux", { t3Failures: 2 });
+    const recovered = getSh(recovers, ["--ref", "v0.1.0", "--install-only"]);
+    expect(recovered.code).toBe(0);
+    expect(recovered.calls.split("\n").filter((call) => call.startsWith("t3 installer"))).toHaveLength(3);
+    expect(existsSync(join(recovers.home, ".local/bin/t3"))).toBe(true);
+
+    const broken = sandbox("Linux", { t3Failures: 99 });
+    const failed = getSh(broken, ["--ref", "v0.1.0", "--install-only"]);
+    expect(failed.code).toBe(1);
+    expect(failed.output).toContain("returned HTTP 403");
+    expect(failed.output).toContain("Fleet: T3 Code did not install.");
+    expect(failed.calls.split("\n").filter((call) => call.startsWith("t3 installer"))).toHaveLength(3);
+  });
+});
+
 describe("get.sh with an existing engine directory", () => {
   test("refuses a directory that is not an engine, and an engine with local changes", () => {
     const box = sandbox("Linux");

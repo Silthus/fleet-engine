@@ -33,9 +33,24 @@ done
 [ "$(id -u)" -ne 0 ] || fail "run this as your login user, without sudo."
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
 
+retry() {
+  tries=1
+  until "$@"; do
+    [ "$tries" -lt 3 ] || return 1
+    sleep "$tries"
+    tries=$((tries + 1))
+  done
+}
+
+fetch_once() {
+  out=$(curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 60 "$@") && printf '%s' "$out"
+}
+
+fetch() { retry fetch_once "$@"; }
+
 download() {
   file=$(mktemp)
-  curl -fsSL "$1" -o "$file" || fail "could not download $1."
+  fetch "$1" -o "$file" || fail "could not download $1."
   printf '%s\n' "$file"
 }
 
@@ -68,12 +83,12 @@ linux_gh() {
     x86_64|amd64) arch=amd64 ;;
     *) fail "no gh build for $(uname -m). Install gh from https://cli.github.com." ;;
   esac
-  latest=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/cli/cli/releases/latest) || fail "could not find the latest gh release."
+  latest=$(fetch -I -o /dev/null -w '%{url_effective}' https://github.com/cli/cli/releases/latest) || fail "could not find the latest gh release."
   version=${latest##*/v}
   name="gh_${version}_linux_${arch}"
   work=$(mktemp -d)
-  curl -fsSL "https://github.com/cli/cli/releases/download/v$version/$name.tar.gz" -o "$work/gh.tar.gz" || fail "could not download gh."
-  curl -fsSL "https://github.com/cli/cli/releases/download/v$version/gh_${version}_checksums.txt" -o "$work/sums" || fail "could not download gh checksums."
+  fetch "https://github.com/cli/cli/releases/download/v$version/$name.tar.gz" -o "$work/gh.tar.gz" || fail "could not download gh."
+  fetch "https://github.com/cli/cli/releases/download/v$version/gh_${version}_checksums.txt" -o "$work/sums" || fail "could not download gh checksums."
   (cd "$work" && grep " $name.tar.gz\$" sums | sed "s/$name.tar.gz/gh.tar.gz/" | sha256sum -c --status -) || fail "gh checksum mismatch."
   tar -xzf "$work/gh.tar.gz" -C "$work"
   mkdir -p "$HOME/.local/bin"
@@ -88,7 +103,7 @@ linux_bun() {
     *) fail "no Bun build for $(uname -m). Install Bun from https://bun.sh." ;;
   esac
   work=$(mktemp -d)
-  curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-$target.zip" -o "$work/bun.zip" || fail "could not download Bun."
+  fetch "https://github.com/oven-sh/bun/releases/download/bun-v$bun_version/bun-$target.zip" -o "$work/bun.zip" || fail "could not download Bun."
   echo "$sum  $work/bun.zip" | sha256sum -c --status - || fail "Bun checksum mismatch."
   python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$work/bun.zip" "$work"
   mkdir -p "$HOME/.bun/bin"
@@ -96,10 +111,16 @@ linux_bun() {
   rm -rf "$work"
 }
 
+t3_nightly() {
+  feed=$(fetch https://github.com/pingdotgg/t3code/releases.atom) || return 0
+  printf '%s\n' "$feed" | sed -n 's|.*/releases/tag/v\([0-9][0-9.]*-nightly\.[0-9]*\.[0-9]*\)".*|\1|p' | head -n 1
+}
+
 t3_cli() {
   has t3 && return 0
   installer=$(download https://t3.codes/install.sh)
-  T3CODE_CHANNEL=nightly sh "$installer" || fail "T3 Code did not install."
+  version=$(t3_nightly)
+  retry env T3CODE_CHANNEL=nightly T3CODE_VERSION="$version" sh "$installer" || fail "T3 Code did not install."
 }
 
 fetch_engine() {
