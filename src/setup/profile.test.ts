@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
@@ -22,7 +22,7 @@ function teamSource(): (ref: SourceRef) => Promise<FetchedSource> {
   return async (ref) => ({ ref, dir, packs: await loadPacks(dir) });
 }
 
-const teamSetup = (home: string, args: string[], replies: string[], options: { createFails?: string; createFailsAfterMaking?: string; publicRepos?: string[] } = {}) => fleetSetup(home, args, replies, fakeMachine(home, {}, { org: true, ...options }), teamSource());
+const teamSetup = (home: string, args: string[], replies: string[], options: { createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[] } = {}) => fleetSetup(home, args, replies, fakeMachine(home, {}, { org: true, ...options }), teamSource());
 
 describe("fleet setup profile", () => {
   test("asks once, creates the private profile repo, and pushes the answers, the shim, about me, and the guide", async () => {
@@ -118,6 +118,24 @@ describe("fleet setup profile", () => {
     expect(result.output).toContain("  ✓ Created the private repo acme/fleet-profile-nora in the acme org");
     expect(existsSync(githubRepo(home, "nora/fleet-profile"))).toBe(false);
     expect((await pushedAnswers(home, "acme/fleet-profile-nora")).packs).toContain("posthog");
+  });
+
+  test("stops when it cannot tell whether a failed org create made the repo, and creates no personal profile", async () => {
+    const home = temp.make("home-");
+    const result = await teamSetup(home, starter, ["", ""], { createFailsAfterMaking: "acme", lookupFails: "acme" });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: could not look up acme/fleet-profile-nora: HTTP 502: Bad Gateway");
+    expect(existsSync(githubRepo(home, "nora/fleet-profile"))).toBe(false);
+  });
+
+  test("treats a clone of the personal profile as personal whatever the case of its owner, and keeps a public one", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, starter, ["", ""])).code).toBe(0);
+    symlinkSync(githubRepo(home, "nora/fleet-profile").replace(/nora\/fleet-profile\.git$/, "nora"), join(home, "github-remotes", "NORA"));
+    await spawnGit(profilePath(home), "remote", "set-url", "origin", "https://github.com/NORA/fleet-profile.git");
+    const rerun = await teamSetup(home, ["--set", "pull-requests.freeReviews=2"], [""], { publicRepos: ["NORA/fleet-profile", "nora/fleet-profile"] });
+    expect(rerun.code).toBe(0);
+    expect(rerun.output).toContain("  ✓ Reusing your repo NORA/fleet-profile");
   });
 
   test("heads a pack's section in the profile guide with its title", () => {

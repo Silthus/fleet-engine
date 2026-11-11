@@ -74,7 +74,8 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * of 2 s polls: 0 means already signed in, and a sign-in that is never
  * started never passes. Its gh makes repos as bare repos under the home,
  * except in the org named by createFails (createFailsAfterMaking makes the
- * repo, then reports a 502), and
+ * repo, then reports a 502; lookupFails answers a lookup of a repo that
+ * exists there with a 502), and
  * git runs for real with github.com rewritten to them. Its ssh reaches a fake
  * devbox whose sign-ins work the same way, and which, like real ssh, warns
  * on stderr that it added the host key the first time it reaches a host
@@ -85,7 +86,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * until then it refuses a node's credential when the node applies its
  * profile, and its fleet peers link refuses the node.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -190,6 +191,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
       if (line === "hogli devbox:status") return result(devbox);
       if (line === "hogli devbox:start") return (devbox = true), result(true, "up");
       if (line === "gh api user --jq .login") return result(true, "nora\n");
+      if (line.startsWith("gh repo view ") && existsSync(githubRepo(home, command[3]!)) && command[3]!.split("/")[0] === options.lookupFails) return result(false, "HTTP 502: Bad Gateway");
       if (line.startsWith("gh repo view ")) return existsSync(githubRepo(home, command[3]!)) ? result(true, line.endsWith("--json visibility --jq .visibility") ? `${options.publicRepos?.includes(command[3]!) ? "PUBLIC" : "PRIVATE"}\n` : "") : result(false, "Could not resolve to a Repository");
       if (line.startsWith("gh repo create ")) {
         const owner = command[3]!.split("/")[0]!;
