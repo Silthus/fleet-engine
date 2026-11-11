@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { standingFor } from "./proof.ts";
@@ -67,49 +67,48 @@ test("a clean merge of the base carries the review of the PR forward and records
   expect((await pr.fleet("review-start", "--scope", "final", "--base", merge.slice(0, 8))).output).toContain(`"round":"final"`);
 });
 
-test("commits that change only tests or only comments carry the final read, and a final read of them needs a decision", async () => {
+test("commits that change only test files carry the final read, and a final read of them needs a decision", async () => {
   const pr = await checkout();
   withDecideRule(pr);
   await pr.fleet("standing", "--kind", "review", "--until", "2026-11-26", "--rule", decideRule);
   await pr.commit("feature.ts", "export const greet = (name: string) => `hi ${name}`;\n");
   const reviewed = await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "fixture");
-  const testOnly = await pr.commit("feature.test.ts", "expect(greet(\"a\")).toBe(\"hi a\");\n");
+  const firstTest = await pr.commit("feature.test.ts", "expect(greet(\"a\")).toBe(\"hi a\");\n");
 
   const afterTest = await pr.fleet("gate");
 
   expect(afterTest.code).toBe(0);
   expect(afterTest.output).toContain(`review: final read carried from ${reviewed.slice(0, 7)}: test-only delta`);
 
-  const commentOnly = await pr.commit("feature.ts", "// Greets one member by name.\nexport const greet = (name: string) => `hi ${name}`;\n\n");
-  const afterComment = await pr.fleet("gate");
-
-  expect(afterComment.code).toBe(0);
-  expect(afterComment.output).toContain(`final read carried from ${reviewed.slice(0, 7)}: test-only and comment-only delta`);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${commentOnly}.json`), "utf8"))).toMatchObject({ commit: commentOnly, from: reviewed, quiet: [commentOnly, testOnly], reason: "test-only and comment-only delta" });
-  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed)).rejects.toThrow(`HEAD needs no final read: final read carried from ${reviewed.slice(0, 7)}: test-only and comment-only delta`);
-  expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--standing", "The comment names a rule the code must keep.")).code).toBe(0);
+  const secondTest = await pr.commit("feature.test.ts", "expect(greet(\"b\")).toBe(\"hi b\");\n");
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${secondTest}.json`), "utf8"))).toMatchObject({ commit: secondTest, from: reviewed, quiet: [secondTest, firstTest], reason: "test-only delta" });
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed)).rejects.toThrow(`HEAD needs no final read: final read carried from ${reviewed.slice(0, 7)}: test-only delta`);
+  expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--standing", "The test pins a rule the code must keep.")).code).toBe(0);
 });
 
-test("a comment marker inside a string, a trailing comment, code moved into a comment, or another language needs a new review", async () => {
+test("a comment, a file in a test folder, a deleted test, a code change beside a test, a mode change, or a symlink needs a new review", async () => {
   const pr = await checkout();
-  const source = "export const help = `\n// run it\n`;\nexport const limit = 3;\n";
-  await pr.commit("feature.ts", source);
-  await pr.commit("notes.md", "# Notes\n");
+  await pr.commit("feature.ts", "export const limit = 3;\n");
+  await pr.commit("feature.test.ts", "expect(limit).toBe(3);\n");
   const reviewed = await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "fixture");
-  const changes: [string, string][] = [
-    ["feature.ts", source.replace("// run it", "// run it twice")],
-    ["feature.ts", source.replace("= 3;", "= 3; // most")],
-    ["feature.ts", source.replace("export const limit = 3;\n", "/*\nexport const limit = 3;\n*/\n")],
-    ["notes.md", "# Notes\n<!-- later -->\n"],
+  const changes: [string, () => Promise<unknown>][] = [
+    ["a comment", () => pr.commit("feature.ts", "// The most a member may send.\nexport const limit = 3;\n")],
+    ["a test folder", () => { mkdirSync(join(pr.repository, "test"), { recursive: true }); return pr.commit("test/allowed.ts", "export const allowed = true;\n"); }],
+    ["a deleted test", async () => { await pr.git("rm", "-q", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Drop the test"); }],
+    ["a mode change", async () => { await pr.git("update-index", "--chmod=+x", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Make the test executable"); }],
+    ["a test with a code change", async () => { writeFileSync(join(pr.repository, "feature.ts"), "export const limit = 4;\n"); writeFileSync(join(pr.repository, "feature.test.ts"), "expect(limit).toBe(4);\n"); await pr.git("commit", "-q", "-a", "-m", "Raise the limit"); }],
+    ["a new symlinked test", async () => { symlinkSync("feature.ts", join(pr.repository, "linked.test.ts")); await pr.git("add", "linked.test.ts"); await pr.git("commit", "-q", "-m", "Link a test"); }],
+    ["a symlink", async () => { rmSync(join(pr.repository, "feature.test.ts")); symlinkSync("feature.ts", join(pr.repository, "feature.test.ts")); await pr.git("add", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Link the test"); }],
   ];
 
-  for (const [file, content] of changes) {
+  for (const [name, change] of changes) {
     await pr.git("reset", "-q", "--hard", reviewed);
-    await pr.commit(file, content);
+    await change();
     const gate = await pr.fleet("gate");
-    expect(gate.code).toBe(1);
+    expect([name, gate.code]).toEqual([name, 1]);
     expect(gate.output).toContain(`review: HEAD not reviewed, last review covered ${reviewed.slice(0, 7)}`);
   }
   expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed)).output).toContain(`"round":"final"`);
