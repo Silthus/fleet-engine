@@ -149,6 +149,17 @@ const releasesFeed = ["mobile-android-build%2F2.3.0%2Fabc", "v0.1.9-nightly.2099
   .map((tag) => `<entry><link rel="alternate" type="text/html" href="https://github.com/pingdotgg/t3code/releases/tag/${tag}"/></entry>`)
   .join("\n");
 
+function envOf(command: string[]) {
+  const env: Record<string, string> = {};
+  if (command[0] !== "env") return env;
+  for (const word of command.slice(1)) {
+    const assignment = word.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+    if (!assignment) break;
+    env[assignment[1]!] = assignment[2]!;
+  }
+  return env;
+}
+
 function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
   const calls: string[] = [];
   const state = { t3: machine.t3 ?? true, service: machine.service ?? "installed", installFailures: machine.installFailures ?? 0, installerVersions: [] as string[] };
@@ -159,7 +170,7 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
     if (line === "t3 --version") return { code: 0, stdout: "0.9.0-nightly\n" };
     if (command[0] === "curl" && command.at(-1) === "https://github.com/pingdotgg/t3code/releases.atom") return machine.feed === undefined ? { code: 0, stdout: releasesFeed } : machine.feed ? { code: 0, stdout: machine.feed } : { code: 22, stdout: "", stderr: "curl: (22) The requested URL returned error: 503" };
     if (line.includes("t3.codes/install.sh")) {
-      state.installerVersions.push(command.find((word) => word.startsWith("T3CODE_VERSION="))?.slice("T3CODE_VERSION=".length) ?? "unset");
+      state.installerVersions.push(envOf(command).T3CODE_VERSION ?? "unset");
       if (state.installFailures > 0) return state.installFailures--, { code: 1, stdout: "", stderr: "GET https://api.github.com/repos/pingdotgg/t3code/releases returned HTTP 403" };
       return (state.t3 = true), { code: 0, stdout: "" };
     }

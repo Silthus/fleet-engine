@@ -10,7 +10,6 @@ const nightlyTag = /\/releases\/tag\/v([0-9][0-9.]*-nightly\.[0-9]+\.[0-9]+)"/;
 const installScript = `installer=$(mktemp) && curl -fsSL ${bounded.join(" ")} https://t3.codes/install.sh -o "$installer" && T3CODE_CHANNEL=nightly sh "$installer"; code=$?; rm -f "$installer"; exit $code`;
 const tries = 3;
 
-/** Names the version, so the installer skips the unauthenticated GitHub releases API that shared networks run out of. Empty lets the installer find it. */
 const installT3 = (version: string) => ["env", `T3CODE_VERSION=${version}`, "/bin/sh", "-c", installScript];
 
 async function retried(attempt: () => ReturnType<CommandRunner>, wait: Wait) {
