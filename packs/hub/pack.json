@@ -584,6 +584,19 @@
   ],
   "checks": [
     {
+      "id": "coder-session",
+      "run": [
+        "fleet",
+        "box",
+        "session"
+      ],
+      "say": "The hub's Coder session expires soon, has expired, or Coder did not answer, so boxes and devbox tokens stop working when it runs out. Run fleet box session on the hub to see which. Most often the fix is coder login <your Coder address> on the hub.",
+      "roles": [
+        "hub"
+      ],
+      "workflow": "boxes"
+    },
+    {
       "id": "cli-proxy-client",
       "run": [
         "fleet",
