@@ -5,10 +5,11 @@ import { shortCluster } from "./kill.ts";
 import { commandsIn } from "./shell-words.ts";
 
 export type Repo = { config: (key: string) => string | undefined; values: (key: string) => string[]; branch?: string; branches: string[]; agents?: string };
-export type ReadRepo = (dir: string) => Repo | undefined;
+export type ReadRepo = (dir: string, selectors: string[]) => Repo | undefined;
 
 export const largestForcePush = 5;
 const mainBranches = new Set(["main", "master"]);
+const commitValuedLetters = "mFCctSu";
 const commitValued = new Set(["-m", "-F", "-C", "-c", "-t", "--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message", "--fixup", "--squash", "--trailer", "--cleanup"]);
 const pushValued = new Set(["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
 
@@ -46,34 +47,39 @@ function insideWorkTree(dir: string): boolean {
   }
 }
 
-export const readRepo: ReadRepo = (dir) => {
-  if (!existsSync(dir) || !insideWorkTree(dir)) return undefined;
-  const git = (args: string[]) => {
-    const result = Bun.spawnSync(["git", "-C", dir, ...args], { stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 5_000 });
-    return result.exitCode === 0 ? result.stdout.toString() : undefined;
+const selectsRepository = (selectors: string[]) => selectors.some((selector) => /^--(?:git-dir|work-tree)/.test(selector));
+
+export const readRepo: ReadRepo = (dir, selectors) => {
+  if (!existsSync(dir) || (!selectsRepository(selectors) && !insideWorkTree(dir))) return undefined;
+  const git = (args: string[], required = true) => {
+    const result = Bun.spawnSync(["git", ...selectors, ...args], { cwd: dir, stdin: "ignore", stdout: "pipe", stderr: "ignore", timeout: 5_000 });
+    if (result.exitCode === 0) return result.stdout.toString();
+    if (required || result.exitCode === null) throw new Error(`\`git ${args.join(" ")}\` failed in ${dir}`);
+    return undefined;
   };
-  const top = git(["rev-parse", "--show-toplevel"])?.trim();
-  if (!top) return undefined;
+  if (git(["rev-parse", "--git-dir"], false) === undefined) return undefined;
+  const top = git(["rev-parse", "--show-toplevel"], false)?.trim();
   const values = new Map<string, string[]>();
-  for (const entry of (git(["config", "--list", "-z"]) ?? "").split("\0").filter(Boolean)) {
+  for (const entry of git(["config", "--list", "-z"])!.split("\0").filter(Boolean)) {
     const split = entry.indexOf("\n");
     const key = configKey(split < 0 ? entry : entry.slice(0, split));
     values.set(key, [...values.get(key) ?? [], split < 0 ? "true" : entry.slice(split + 1)]);
   }
-  const agents = join(top, "AGENTS.md");
+  const agents = top && join(top, "AGENTS.md");
   return {
     values: (key) => values.get(configKey(key)) ?? [],
     config: (key) => values.get(configKey(key))?.at(-1),
-    branch: git(["symbolic-ref", "-q", "--short", "HEAD"])?.trim() || undefined,
-    branches: (git(["for-each-ref", "--format=%(refname:short)", "refs/heads/"]) ?? "").split("\n").filter(Boolean),
-    agents: existsSync(agents) ? readFileSync(agents, "utf8") : undefined,
+    branch: git(["symbolic-ref", "-q", "--short", "HEAD"], false)?.trim() || undefined,
+    branches: git(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])!.split("\n").filter(Boolean),
+    agents: agents && existsSync(agents) ? readFileSync(agents, "utf8") : undefined,
   };
 };
 
-type GitCall = { dir: string | undefined; settings: string[]; sub?: string; args: string[] };
+type GitCall = { dir: string | undefined; selectors: string[]; settings: string[]; sub?: string; args: string[] };
 
 function gitCall(args: string[], cwd: string | undefined): GitCall {
   let dir = cwd;
+  const selectors: string[] = [];
   const settings: string[] = [];
   let index = 0;
   for (; index < args.length; index++) {
@@ -81,10 +87,22 @@ function gitCall(args: string[], cwd: string | undefined): GitCall {
     if (arg === "-C") dir = dir === undefined ? undefined : resolve(dir, args[++index] ?? ".");
     else if (arg === "-c" || arg === "--config-env") settings.push(args[++index] ?? "");
     else if (/^-c./.test(arg)) settings.push(arg.slice(2));
-    else if (["--git-dir", "--work-tree", "--namespace"].includes(arg)) index++;
+    else if (arg.startsWith("--config-env=")) settings.push(arg.slice("--config-env=".length));
+    else if (arg === "--git-dir" || arg === "--work-tree") selectors.push(`${arg}=${args[++index] ?? ""}`);
+    else if (/^--(?:git-dir|work-tree)=/.test(arg)) selectors.push(arg);
+    else if (arg === "--namespace") index++;
     else if (!arg.startsWith("-")) break;
   }
-  return { dir, settings, sub: args[index], args: args.slice(index + 1) };
+  return { dir, selectors, settings, sub: args[index], args: args.slice(index + 1) };
+}
+
+function withSettings(repo: Repo, settings: string[]): Repo {
+  const given = new Map<string, string>();
+  for (const setting of settings) {
+    const split = setting.indexOf("=");
+    given.set(configKey(split < 0 ? setting : setting.slice(0, split)), split < 0 ? "true" : setting.slice(split + 1));
+  }
+  return { ...repo, config: (key) => given.get(configKey(key)) ?? repo.config(key), values: (key) => given.has(configKey(key)) ? [given.get(configKey(key))!] : repo.values(key) };
 }
 
 function skipsCommitHooks(args: string[]): boolean {
@@ -92,7 +110,8 @@ function skipsCommitHooks(args: string[]): boolean {
     const arg = args[index];
     if (arg === "--") return false;
     if (commitValued.has(arg)) index++;
-    else if (arg === "--no-verify" || shortCluster(arg, "n", "mFCctSu")) return true;
+    else if (arg === "--no-verify" || shortCluster(arg, "n", commitValuedLetters)) return true;
+    else if (/^-[A-Za-z]+$/.test(arg) && commitValuedLetters.includes(arg.at(-1)!) && !shortCluster(arg, "n", "")) index++;
   }
   return false;
 }
@@ -130,29 +149,47 @@ const branchName = (ref: string) => ref.replace(/^refs\/heads\//, "");
 
 type Target = { name: string; upstream: boolean };
 
-function remoteOf(push: Push, repo: Repo): { name?: string; url?: string } {
+function remoteOf(push: Push, repo: Repo): { name?: string; urls: string[] } {
   const branch = repo.branch;
   const name = push.remote ?? (branch && repo.config(`branch.${branch}.pushRemote`)) ?? repo.config("remote.pushDefault") ?? (branch && repo.config(`branch.${branch}.remote`)) ?? "origin";
-  if (/[:/]/.test(name)) return { url: name };
-  return { name, url: repo.config(`remote.${name}.pushurl`) ?? repo.config(`remote.${name}.url`) };
+  if (/[:/]/.test(name)) return { urls: [name] };
+  const pushUrls = repo.values(`remote.${name}.pushurl`);
+  return { name, urls: pushUrls.length > 0 ? pushUrls : repo.values(`remote.${name}.url`) };
 }
+
+const globPattern = (glob: string) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace("*", "(.*)")}$`);
+
+function expandWildcard(spec: string, branches: string[]): Target[] {
+  const [source, destination = source] = spec.split(":");
+  const pattern = globPattern(source.startsWith("refs/") ? source : `refs/heads/${source}`);
+  return branches.flatMap((branch) => {
+    const match = `refs/heads/${branch}`.match(pattern);
+    return match ? [{ name: branchName(destination.replace("*", match[1])), upstream: false }] : [];
+  });
+}
+
+const configuredSpecs = (push: Push, repo: Repo, remote: string | undefined) =>
+  push.refspecs.length > 0 ? push.refspecs : remote ? repo.values(`remote.${remote}.push`) : [];
+
+const mirrors = (repo: Repo, remote: string | undefined) => remote !== undefined && repo.config(`remote.${remote}.mirror`) === "true";
 
 /** Where each ref of a push lands, as Git resolves it, including a bare `git push` under push.default. */
 function targets(push: Push, repo: Repo, remote: string | undefined): Target[] {
   const pushDefault = repo.config("push.default") ?? "simple";
   const upstreamOf = (branch: string) => repo.config(`branch.${branch}.remote`) === remote ? repo.config(`branch.${branch}.merge`) : undefined;
   const every = () => repo.branches.map((name) => ({ name, upstream: false }));
-  if (push.all) return every();
+  if (push.all || mirrors(repo, remote)) return every();
   const resolveSpec = (spec: string): Target[] => {
     const bare = spec.replace(/^\+/, "");
     if (bare === ":") return every();
+    if (bare.includes("*")) return expandWildcard(bare, repo.branches);
     if (bare.includes(":")) return [{ name: branchName(bare.slice(bare.indexOf(":") + 1)), upstream: false }];
     if (bare === "HEAD" || bare === "@") return repo.branch ? [{ name: repo.branch, upstream: false }] : [];
     const local = branchName(bare);
     const upstream = !push.deletes && repo.branches.includes(local) && pushDefault === "upstream" ? upstreamOf(local) : undefined;
     return [{ name: branchName(upstream ?? local), upstream: upstream !== undefined }];
   };
-  const specs = push.refspecs.length > 0 ? push.refspecs : remote ? repo.values(`remote.${remote}.push`) : [];
+  const specs = configuredSpecs(push, repo, remote);
   if (specs.length > 0) return specs.flatMap(resolveSpec);
   const branch = repo.branch;
   if (!branch || pushDefault === "nothing") return [];
@@ -163,25 +200,23 @@ function targets(push: Push, repo: Repo, remote: string | undefined): Target[] {
   return [{ name: branch, upstream: false }];
 }
 
-function leasedRefs(push: Push, repo: Repo | undefined): number {
-  if (!push.lease) return 0;
-  if (push.refspecs.length > 0) return push.refspecs.length;
-  return push.all ? repo?.branches.length ?? largestForcePush + 1 : 1;
-}
+const forcesWithoutLease = (push: Push, repo: Repo, remote: string | undefined) =>
+  mirrors(repo, remote) || configuredSpecs(push, repo, remote).some((spec) => spec.startsWith("+"));
 
 /** Refuses Git calls that skip hooks, pushes to main or master of a GitHub repository that takes pull requests, force pushes
  * without a lease, and leased force pushes of more than five branches at once. A dry run passes. */
 export function gitRisk(command: string, cwd: string, person: string, mainPushRepos: ReadonlySet<string>, read: ReadRepo = readRepo): string | undefined {
   const repos = new Map<string, Repo | undefined>();
-  const repoAt = (dir: string | undefined) => {
+  const repoAt = (dir: string | undefined, selectors: string[]) => {
     if (dir === undefined) return undefined;
-    if (!repos.has(dir)) repos.set(dir, read(dir));
-    return repos.get(dir);
+    const key = [dir, ...selectors].join("\0");
+    if (!repos.has(key)) repos.set(key, read(dir, selectors));
+    return repos.get(key);
   };
   let forced = 0;
   for (const [call, directory] of withDirectories(commandsIn(command), cwd)) {
     if (call.name !== "git") continue;
-    const { dir, settings, sub, args } = gitCall(call.args, directory);
+    const { dir, selectors, settings, sub, args } = gitCall(call.args, directory);
     if (sub !== "commit" && sub !== "push" && sub !== "merge") continue;
     if (settings.some((setting) => /^core\.hookspath=/i.test(setting))) return hooksReason(person);
     if (sub === "commit" && skipsCommitHooks(args)) return hooksReason(person);
@@ -191,14 +226,21 @@ export function gitRisk(command: string, cwd: string, person: string, mainPushRe
     if (push.dryRun) continue;
     if (push.noVerify) return hooksReason(person);
     if (push.force || push.refspecs.some((spec) => spec.startsWith("+"))) return forceReason(person);
-    const repo = repoAt(dir);
-    forced += leasedRefs(push, repo);
-    if (!repo) continue;
+    const found = repoAt(dir, selectors);
+    if (!found) {
+      if (push.lease) forced += push.all ? largestForcePush + 1 : Math.max(1, push.refspecs.length);
+      continue;
+    }
+    const repo = withSettings(found, settings);
     const remote = remoteOf(push, repo);
-    const slug = remote.url && githubSlug(remote.url);
-    if (!slug || mainPushRepos.has(slug.toLowerCase()) || agentsPushToMain(repo.agents)) continue;
-    const main = targets(push, repo, remote.name).find((target) => mainBranches.has(target.name));
-    if (main) return mainReason(main.name, slug, main.upstream, person);
+    if (forcesWithoutLease(push, repo, remote.name)) return forceReason(person);
+    const landing = targets(push, repo, remote.name);
+    if (push.lease) forced += landing.length;
+    const slugs = remote.urls.map(githubSlug).filter((slug): slug is string => slug !== undefined);
+    const guarded = slugs.find((slug) => !mainPushRepos.has(slug.toLowerCase()));
+    if (!guarded || agentsPushToMain(repo.agents)) continue;
+    const main = landing.find((target) => mainBranches.has(target.name));
+    if (main) return mainReason(main.name, guarded, main.upstream, person);
   }
   return forced > largestForcePush ? burstReason(forced, person) : undefined;
 }

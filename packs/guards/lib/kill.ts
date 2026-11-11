@@ -17,14 +17,25 @@ export function shortCluster(arg: string, letter: string, valued: string): boole
 }
 
 const matchesFullLine = (args: string[]) => args.some((arg) => arg === "--full" || shortCluster(arg, "f", pgrepValued));
-const selfSafe = (args: string[]) => args.some((arg) => !arg.startsWith("-") && /\[[^\]]+\]/.test(arg));
-const fullLineMatch = ({ name, args }: Command) => (name === "pkill" || name === "pgrep") && matchesFullLine(args) && !selfSafe(args);
-const kills = ({ name, args }: Command) => name === "kill" || name === "pkill" || (name === "xargs" && args.includes("kill"));
 
-/** Refuses `pkill -f`, and `pgrep -f` that feeds a kill or runs in a loop: both match the tool's own `bash -c` shell. */
+function matchesItself(pattern: string | undefined, text: string): boolean {
+  if (pattern === undefined) return true;
+  try {
+    return new RegExp(pattern).test(text);
+  } catch {
+    return true;
+  }
+}
+
+const patternOf = (args: string[]) => args.filter((arg) => !arg.startsWith("-")).at(-1);
+const fullLineMatch = ({ name, args }: Command, text: string) => (name === "pkill" || name === "pgrep") && matchesFullLine(args) && matchesItself(patternOf(args), text);
+const killsComputedPids = ({ name, args }: Command) => (name === "kill" && args.some((arg) => /[$`]/.test(arg))) || (name === "xargs" && args.includes("kill"));
+
+/** Refuses `pkill -f`, and `pgrep -f` that feeds a kill or runs in a loop, when the pattern matches the command's own text:
+ * the tool runs it as `bash -c '<command>'`, so that shell matches too. */
 export function killRisk(command: string, person: string): string | undefined {
   const commands = commandsIn(command);
-  const matches = commands.filter(fullLineMatch);
-  const risky = matches.some((match) => match.name === "pkill" || match.inLoop) || (matches.length > 0 && commands.some(kills));
+  const matches = commands.filter((each) => fullLineMatch(each, command));
+  const risky = matches.some((match) => match.name === "pkill" || match.inLoop) || (matches.length > 0 && commands.some(killsComputedPids));
   return risky ? killReason(person) : undefined;
 }

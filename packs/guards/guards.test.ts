@@ -600,6 +600,7 @@ describe("the kill guard", () => {
     'while pgrep -f "bun test"; do sleep 1; done',
     "until ! pgrep -f server; do sleep 2; done",
     "bash -c 'pkill -f server'",
+    "pkill -f 'server[0-9]*'",
   ])("refuses a full-command-line match that would hit its own shell: %s", (command) => {
     expect(refusal(command)).toContain("matches the agent's own shell");
   });
@@ -611,6 +612,8 @@ describe("the kill guard", () => {
     "kill 1234",
     "pkill -u fred node",
     "echo 'pkill -f x'",
+    "pgrep -af vite; kill %1",
+    "pkill -f '^/usr/bin/node server'",
   ])("allows a kill that cannot match its own shell: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
   });
@@ -626,6 +629,7 @@ describe("the Git guard", () => {
     "git push --no-verify origin HEAD",
     "git -c core.hooksPath=/dev/null commit -m x",
     "git merge --no-verify feature",
+    "NOHOOKS=/dev/null git --config-env=core.hooksPath=NOHOOKS commit -m x",
   ])("refuses a call that skips the Git hooks: %s", (command) => {
     expect(refusal(command)).toContain("skips the Git hooks");
   });
@@ -634,6 +638,7 @@ describe("the Git guard", () => {
     "git commit -m 'skip with --no-verify never'",
     "git commit -m -n",
     "git commit -m x",
+    "git commit -am '-n'",
   ])("allows a commit that runs the hooks: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
   });
@@ -664,12 +669,12 @@ describe("the Git guard", () => {
     expect(refusal(command)).toBeUndefined();
   });
 
-  async function repo(branch: string, config: Record<string, string> = {}, agents?: string) {
+  async function repo(branch: string, config: Record<string, string | string[]> = {}, agents?: string) {
     const dir = temp.make("repo-");
     await spawnGit(dir, "init", "-q", "-b", branch);
     await spawnGit(dir, "commit", "-q", "--allow-empty", "-m", "start");
     await spawnGit(dir, "remote", "add", "origin", "https://github.com/acme/app.git");
-    for (const [key, value] of Object.entries(config)) await spawnGit(dir, "config", key, value);
+    for (const [key, value] of Object.entries(config)) for (const each of [value].flat()) await spawnGit(dir, "config", "--add", key, each);
     if (agents) writeFileSync(join(dir, "AGENTS.md"), agents);
     return dir;
   }
@@ -681,6 +686,11 @@ describe("the Git guard", () => {
     ["a bare push that push.default=upstream sends to main", "feature", { ...tracksMain, "push.default": "upstream" }, "git push", "push.default is upstream"],
     ["a push to main after a cd into the repo", "main", {}, "cd REPO && git push origin main", "pushes to `main`"],
     ["a push to main through git -C", "main", {}, "git -C REPO push origin main", "pushes to `main`"],
+    ["a push to main through --git-dir", "feature", {}, "git --git-dir=REPO/.git push origin HEAD:main", "pushes to `main`"],
+    ["a bare push that a -c push.default=upstream sends to main", "feature", tracksMain, "git -c push.default=upstream push", "push.default is upstream"],
+    ["a push to main whose GitHub push URL comes before another one", "feature", { "remote.origin.pushurl": ["https://github.com/acme/app.git", "/srv/mirror.git"] }, "git push origin HEAD:main", "pushes to `main` of acme/app"],
+    ["a wildcard push that lands on main", "main", {}, "git push --force-with-lease origin 'refs/heads/*:refs/heads/*'", "pushes to `main` of acme/app"],
+    ["a push to a mirror remote, which forces every ref", "feature", { "remote.origin.mirror": "true" }, "git push origin", "force-pushes without a lease"],
   ])("refuses %s of a repository that takes pull requests", async (_, branch, config, command, why) => {
     const dir = await repo(branch, config);
     const home = homeWith(withGuards(), { "guards.person": "Robin" });
@@ -688,6 +698,24 @@ describe("the Git guard", () => {
     const denied = await preToolUse(home, "claude", bash(command.replace("REPO", dir), at), { GIT_CONFIG_NOSYSTEM: "1" });
     expect(denied.refusal).toContain(why);
     expect(denied.refusal).toContain("ask Robin");
+  });
+
+  test("refuses a leased wildcard push of more than five branches", async () => {
+    const dir = await repo("feature");
+    for (const branch of ["b1", "b2", "b3", "b4", "b5"]) await spawnGit(dir, "branch", branch);
+    const home = homeWith(withGuards(), { "guards.person": "Robin" });
+    const denied = await preToolUse(home, "claude", bash("git push --force-with-lease origin 'refs/heads/*:refs/heads/*'", dir), { GIT_CONFIG_NOSYSTEM: "1" });
+    expect(denied.refusal).toContain("force-pushes 6 branches at once");
+  });
+
+  test("refuses a push when it cannot read the repository's Git config", async () => {
+    const dir = await repo("main");
+    const bin = temp.make("bin-");
+    const real = Bun.which("git")!;
+    writeFileSync(join(bin, "git"), `#!/bin/sh\ncase "$*" in *"config --list"*) exit 1;; esac\nexec ${real} "$@"\n`, { mode: 0o755 });
+    const home = homeWith(withGuards(), { "guards.person": "Robin" });
+    const denied = await preToolUse(home, "claude", bash("git push origin main", dir), { GIT_CONFIG_NOSYSTEM: "1", PATH: `${bin}:${process.env.PATH}` });
+    expect(denied.refusal).toContain("could not check");
   });
 
   test.each([
