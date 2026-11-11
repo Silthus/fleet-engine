@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { main } from "../cli.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
+import { profilePath } from "./profile.ts";
 import { engineRoot, fakeMachine, fleetSetup, pushedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
@@ -37,5 +40,29 @@ describe("a second fleet setup", () => {
     const home = await grownProfile();
     await onMac(home, ["--non-interactive", "--preset", "starter"]);
     expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests"], workflows: {} });
+  });
+});
+
+/** A profile repo on GitHub that another machine set up and grew, and a home that has never run Fleet. The fake GitHub lives under the home, so the new machine shares it. */
+async function newMachineWithProfile() {
+  const home = temp.make("home-");
+  expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--add", "guards", "--workflows", "package-age=on", "--plan", "claude", "--devbox", "skip"])).code).toBe(0);
+  rmSync(join(home, ".config/fleet"), { recursive: true });
+  rmSync(profilePath(home), { recursive: true });
+  return home;
+}
+
+describe("fleet setup on a new machine whose profile repo exists", () => {
+  test("with no flags keeps the profile's packs and workflows", async () => {
+    const home = await newMachineWithProfile();
+    const result = await fleetSetup(home, [], Array(8).fill(""));
+    expect(result.code).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "guards"], workflows: { "package-age": true }, plan: "claude" });
+  });
+
+  test("with --add changes only the pack it names", async () => {
+    const home = await newMachineWithProfile();
+    expect((await fleetSetup(home, ["--non-interactive", "--add", "communication", "--devbox", "skip"])).code).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "guards", "communication"], workflows: { "package-age": true }, plan: "claude" });
   });
 });
