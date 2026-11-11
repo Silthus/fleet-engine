@@ -54,7 +54,7 @@ const hubButton = (focus: string, fallback: string) => `<button class="btn-line"
 
 function hero() {
   return `<header class="hero"><div class="wrap hero-in">
-    <p class="brand">${logoMark}<span>Fleet</span></p>
+    <p class="wordmark"><span aria-hidden="true">${logoMark}</span><span>Fleet</span></p>
     <h1>Set up your coding agents once. Every machine gets the same setup.</h1>
     <div class="pitch">
       <div><p class="eyebrow">The problem</p><p>Coding agents get much better with good rules, skills, and a machine that stays on. Setting that up by hand takes a day for each machine, and the machines drift apart.</p></div>
@@ -87,7 +87,7 @@ function whereCard(where: Where) {
   const hubTitles = data.needsHubPacks.map((name) => packOf(name).title);
   const facts =
     where === "mac"
-      ? ["Your Mac gets every pack's skills and rules, and each workflow that a Mac can run.", "Agents stop when the Mac sleeps.", "Workflows that need a machine that stays on, such as the nightly loops, wait until you add a node."]
+      ? ["Your Mac gets the skills and rules of every pack you pick, and each workflow that a Mac can run.", "Agents stop when the Mac sleeps.", "Workflows that need a machine that stays on, such as the nightly loops, wait until you add a node."]
       : [
           "Two Linux devboxes in the cloud stay on while the Mac sleeps.",
           "The node is where threads do the work. The hub links your machines and watches their disks.",
@@ -121,7 +121,7 @@ function presetCards() {
     })
     .join("");
   return `<div class="presets" role="group" aria-label="Presets">${cards}</div>
-    <p class="preset-state muted" data-live="preset">${active ? `You are on the ${esc(active.name)} preset. Turn any pack on or off below.` : "These are your own picks. Choose a preset to start again from it."}</p>`;
+    <p class="preset-state muted">${active ? `You are on the ${esc(active.name)} preset. Turn any pack on or off below.` : "These are your own picks. Choose a preset to start again from it."}</p>`;
 }
 
 function needChips(pack: PagePack, workflow: PageWorkflow) {
@@ -256,7 +256,7 @@ function packSheet(pack: PagePack) {
       ${control}
       <button class="sheet-x" data-act="close" data-focus="sheet:close" aria-label="Close">${uiIcons.close}</button>
     </header>
-    <div class="sheet-tabs" role="tablist" aria-label="${esc(pack.title)} pack">${tabs.map(([id, label]) => `<button role="tab" id="tab-${id}" aria-selected="${id === tab}" aria-controls="sheet-panel" tabindex="${id === tab ? 0 : -1}" data-act="sheet-tab" data-id="${id}" data-focus="sheet:tab:${id}">${label}</button>`).join("")}</div>
+    <div class="sheet-tabs" role="tablist" aria-label="${esc(pack.title)} pack sections">${tabs.map(([id, label]) => `<button role="tab" id="tab-${id}" aria-selected="${id === tab}" aria-controls="sheet-panel" tabindex="${id === tab ? 0 : -1}" data-act="sheet-tab" data-id="${id}" data-focus="sheet:tab:${id}">${label}</button>`).join("")}</div>
     <div class="sheet-body" id="sheet-panel" role="tabpanel" aria-labelledby="tab-${tab}">${panel}</div>`;
 }
 
@@ -293,7 +293,7 @@ function agentSteps() {
   const asks = questions(data, picks);
   const steps = [
     "It asks what you already know, and explains only the rest.",
-    "It installs what is missing on your Mac: the GitHub CLI, Bun, the `t3` command, and Fleet.",
+    "It installs what is missing on your Mac: the Command Line Tools, Homebrew, the GitHub CLI, Bun, the `t3` command, and Fleet.",
     "You sign in to GitHub, and to Claude, ChatGPT, or both. Each sign-in opens in your browser.",
     `It asks which AI plan you use${asks.settings.length ? `, and ${plural(asks.settings.length, "more question")} that your packs need` : ""}.`,
     "It saves your picks to `fleet-profile`, a private repo in your GitHub account, so every machine you add gets the same setup.",
@@ -305,7 +305,7 @@ function agentSteps() {
 
 function byHand() {
   const text = tab === "command" ? commandText(data, picks) : JSON.stringify(profileFile(data, picks), null, 2);
-  const later = picks.where === "hub" ? ` It sets up this Mac. Then add the hub and the node with <code>fleet devbox add</code>, as <a href="https://github.com/${esc(data.engineRepo)}/blob/main/docs/getting-started.md" target="_blank" rel="noopener">Getting started</a> shows.` : "";
+  const later = picks.where === "hub" ? ` It sets up this Mac only. The hub, the node, and the packs that wait for the hub come after it. Step 9 of <a href="https://github.com/${esc(data.engineRepo)}/blob/main/SETUP.md#9-add-the-hub-and-the-node" target="_blank" rel="noopener">the setup guide</a> has the commands.` : "";
   const note =
     tab === "command"
       ? `Run it in a terminal on your Mac. Setup keeps these picks with one key press, signs you in, and ${esc(setupAsks(data, picks))}.${later}`
@@ -323,7 +323,7 @@ function byHand() {
 function startOut() {
   const prompt = promptText(data, picks);
   return `<div class="out prompt">
-      <div class="out-head"><span class="out-title">Your prompt</span><span class="out-picks" data-live="picks">${esc(promptPicks())}</span></div>
+      <div class="out-head"><span class="out-title">Your prompt</span><span class="out-picks">${esc(promptPicks())}</span></div>
       <pre id="prompt-text">${esc(prompt)}</pre>
       <div class="out-foot"><button class="btn-solid" data-act="copy" data-id="prompt-text" data-focus="copy:prompt">Copy prompt</button><a class="btn-ghost" data-focus="open:t3" href="https://app.t3.codes/new?prompt=${encodeURIComponent(prompt)}" target="_blank" rel="noopener">Open in T3 Code${uiIcons.arrow}</a></div>
     </div>
@@ -434,6 +434,7 @@ function showTab(tab: SheetTab) {
 sheet.addEventListener("keydown", (event) => {
   const tab = (event.target as HTMLElement).closest<HTMLElement>('[role="tab"]');
   if (!tab || (event.key !== "ArrowRight" && event.key !== "ArrowLeft")) return;
+  event.preventDefault();
   const tabs = [...sheet.querySelectorAll<HTMLElement>('[role="tab"]')];
   const next = tabs[(tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length]!;
   showTab(next.dataset.id as SheetTab);

@@ -87,8 +87,8 @@ machine you add gets the same setup.
 Ask "Mac only, or Mac plus a hub and a node?", with these options, unless
 the picks from the page say where Fleet runs:
 
-- **Mac only.** A full setup: every pack's skills and rules, and the
-  workflows that run on a Mac, run on this Mac. Agents stop when the Mac
+- **Mac only.** A full setup: the skills and rules of every pack they pick,
+  and the workflows that run on a Mac, run on this Mac. Agents stop when the Mac
   sleeps. Workflows that need an always-on machine, such as the loops and
   the PR digest, wait until a node runs. A hub and a node can come later.
 - **Mac plus a hub and a node.** Two Linux devboxes in the cloud that stay
@@ -158,7 +158,7 @@ notes of the packs they picked.
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Step 9 | `packs/recovery/SETUP.md` |
 | `guards` | Hooks stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops. | Always | `packs/guards/SETUP.md` |
 | `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | With Mac only, or in step 9 | `packs/slack/SETUP.md` |
-| `hub` | One always-on devbox manages the others. It signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | Step 9 | `packs/hub/SETUP.md` |
+| `hub` | One always-on devbox manages the others. It keeps your devboxes linked and watches their disks. | Step 9 | `packs/hub/SETUP.md` |
 | `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | Step 9 | `packs/mcp-gateway/SETUP.md` |
 
 ## 7. Run setup with their answers

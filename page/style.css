@@ -42,11 +42,10 @@ html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; scroll-padding-t
 html:has(dialog[open]) { overflow: hidden; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 var(--f-body); overflow-wrap: anywhere; }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--bg); }
-h1, h2, h3, h4 { font-family: var(--f-body); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1, h2, h3 { font-family: var(--f-body); line-height: 1.15; text-wrap: balance; margin: 0; }
 h1 { font-size: clamp(2rem, 4.6vw, 3.2rem); font-weight: 700; letter-spacing: -0.025em; }
 h2 { font-size: clamp(1.45rem, 3vw, 1.95rem); font-weight: 700; letter-spacing: -0.01em; }
 h3 { font-size: 1.12rem; font-weight: 700; }
-h4 { font-size: 1.08rem; font-weight: 700; }
 p, ul, ol { margin: 0; }
 a { color: var(--link); font-weight: 600; text-underline-offset: 2px; }
 code { font-family: var(--f-mono); font-size: 0.88em; background: var(--sunk); padding: 0.05em 0.35em; border-radius: 4px; }
@@ -64,15 +63,15 @@ svg { display: block; }
 
 .hero { padding-block: 36px 28px; }
 .hero-in { display: grid; gap: 20px; }
-.brand { display: flex; align-items: center; gap: 10px; font: 700 1.35rem/1 var(--f-body); letter-spacing: -0.01em; }
-.brand svg { width: 38px; height: 38px; }
+.wordmark { display: flex; align-items: center; gap: 10px; font: 700 1.35rem/1 var(--f-body); letter-spacing: -0.01em; }
+.wordmark svg { width: 38px; height: 38px; }
 .hero h1 { max-width: 21ch; }
 .pitch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .pitch > div { display: grid; gap: 8px; align-content: start; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; font-size: 1.02rem; }
 .pitch > div + div { border-color: var(--edge); box-shadow: 0 4px 0 var(--shadow); }
 .overview { margin: 0; border: 1px solid var(--line); border-radius: 12px; padding: 4px; overflow-x: auto; }
 .overview img { display: block; width: 100%; max-width: 760px; height: auto; margin-inline: auto; }
-.btn, .route a, .btn-line, .btn-solid { border: 1.5px solid var(--edge); border-radius: 8px; box-shadow: 0 3px 0 var(--shadow); font-weight: 700; transition: transform 0.1s, box-shadow 0.1s; }
+.route a, .btn-line, .btn-solid { border: 1.5px solid var(--edge); border-radius: 8px; box-shadow: 0 3px 0 var(--shadow); font-weight: 700; transition: transform 0.1s, box-shadow 0.1s; }
 .route a:hover, .btn-line:hover, .btn-solid:hover { transform: translateY(-1px); box-shadow: 0 4px 0 var(--shadow); }
 .route a:active, .btn-line:active, .btn-solid:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--shadow); }
 .route { display: flex; flex-wrap: wrap; gap: 10px; padding-bottom: 4px; }
@@ -104,7 +103,7 @@ main > .step:first-child { border-top: 0; }
 .d-ghost { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 4 4; opacity: 0.6; }
 .d-txt { fill: var(--fg); font: 600 13px var(--f-body); }
 .d-small { fill: var(--muted); font: 10.5px var(--f-body); }
-.d-faint { opacity: 0.55; }
+.d-faint { opacity: 0.8; }
 .d-link { stroke: var(--accent); stroke-width: 2; fill: none; }
 .d-nolink { stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 4; fill: none; opacity: 0.6; }
 
@@ -181,9 +180,9 @@ details > summary::-webkit-details-marker { display: none; }
 .sub > summary::after { content: ""; width: 7px; height: 7px; border-right: 1.7px solid currentColor; border-bottom: 1.7px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform 0.15s; flex: none; }
 .sub[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
 .sub > summary:hover { color: var(--fg); }
-.switch { position: relative; width: 46px; height: 26px; flex: none; border-radius: 999px; background: var(--line); border: 0; transition: background 0.15s; }
+.switch { position: relative; width: 46px; height: 26px; flex: none; border-radius: 999px; background: var(--line); border: 0; box-shadow: inset 0 0 0 1.5px var(--muted); transition: background 0.15s; }
 .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); transition: transform 0.15s; }
-.switch[aria-checked="true"] { background: var(--accent); }
+.switch[aria-checked="true"] { background: var(--accent); box-shadow: none; }
 .switch[aria-checked="true"]::after { transform: translateX(20px); }
 .switch.small { width: 36px; height: 21px; margin-top: 2px; }
 .switch.small::after { width: 15px; height: 15px; }

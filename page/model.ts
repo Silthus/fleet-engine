@@ -48,9 +48,9 @@ export type PageData = {
 
 export type Picks = { preset: string; where: Where; packs: string[]; workflows: Record<string, boolean>; settings: Record<string, SettingValue>; hubPathWorkflows?: string[] };
 
-export type WorkflowState = { on: true } | { on: false; fix: { pack: string } | { workflow: string } };
+type WorkflowState = { on: true } | { on: false; fix: { pack: string } | { workflow: string } };
 
-export type RunState = WorkflowState | { on: false; fix: { where: "hub" } };
+type RunState = WorkflowState | { on: false; fix: { where: "hub" } };
 
 const packOf = (data: PageData, name: string) => data.packs.find((pack) => pack.name === name);
 export const workflowOf = (data: PageData, id: string) => data.packs.flatMap((pack) => pack.workflows).find((workflow) => workflow.id === id);
@@ -268,7 +268,7 @@ export function profileFile(data: PageData, all: Picks) {
 
 export const whereLabels: Record<Where, string> = { mac: "Mac only", hub: "Mac plus a hub and a node" };
 
-export const setupPrompt = (data: PageData) => `Set up Fleet on this Mac with me. Read https://raw.githubusercontent.com/${data.engineRepo}/main/SETUP.md and follow it step by step.`;
+const setupPrompt = (data: PageData) => `Set up Fleet on this Mac with me. Read https://raw.githubusercontent.com/${data.engineRepo}/main/SETUP.md and follow it step by step.`;
 
 export const promptLabels = {
   intro: "My picks from the Fleet page:",
