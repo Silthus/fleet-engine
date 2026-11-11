@@ -1,0 +1,6 @@
+[maintenance]
+	auto = false
+[gc]
+	auto = 0
+[receive]
+	autogc = false

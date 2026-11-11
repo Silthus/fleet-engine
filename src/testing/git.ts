@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export const gitEnv = {
   ...process.env,
-  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_GLOBAL: join(import.meta.dir, "gitconfig"),
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_AUTHOR_NAME: "Test",
   GIT_AUTHOR_EMAIL: "test@example.com",
@@ -40,5 +40,41 @@ export function tempDirs() {
     cleanup() {
       for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
     },
+  };
+}
+
+const pathFiles = new Set(["config", "gitdir", ".git"]);
+
+function relocate(from: string, to: string, dir = to) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      const target = readlinkSync(path);
+      if (target.startsWith(from)) {
+        rmSync(path);
+        symlinkSync(to + target.slice(from.length), path);
+      }
+    } else if (entry.isDirectory()) relocate(from, to, path);
+    else if (pathFiles.has(entry.name)) {
+      const text = readFileSync(path, "utf8");
+      if (text.includes(from)) writeFileSync(path, text.replaceAll(from, to));
+    }
+  }
+}
+
+export function template(build: (dir: string) => unknown) {
+  let ready: Promise<string> | undefined;
+  const prepare = async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fleet-template-"));
+    process.once("exit", () => rmSync(dir, { recursive: true, force: true }));
+    await build(dir);
+    return dir;
+  };
+  return async (target: string) => {
+    ready ??= prepare();
+    const source = await ready;
+    cpSync(source, target, { recursive: true, verbatimSymlinks: true });
+    relocate(source, target);
+    return target;
   };
 }

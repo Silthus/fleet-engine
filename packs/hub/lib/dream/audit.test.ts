@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { git, gitEnv, tempDirs } from "../../../../src/testing/git.ts";
+import { git, gitEnv, template, tempDirs } from "../../../../src/testing/git.ts";
 import { writeHome } from "../testing.ts";
 import { AnalystFailure } from "./analyze.ts";
 import type { Verdict } from "./audit.ts";
@@ -33,29 +33,38 @@ function digest(fields: Partial<Digest>): Digest {
   };
 }
 
-function hubWithSyncedNotes(firstAt = "2026-11-03T10:00:00Z") {
-  const home = temp.make("fleet-dream-audit-");
-  const origin = join(home, "origin.git");
-  const writer = join(home, "writer");
-  git(home, "init", "-q", "--bare", "-b", "main", origin);
-  git(home, "clone", "-q", origin, writer);
-  commitAt(writer, firstAt, "memory: devbox-1", {
-    "README.md": "# Notes\n",
-    "memory/MEMORY.md": "# Memory index\n",
-    "memory/tech/old-read.md": note("old-read", { modified: "2026-09-01" }),
+const syncedNotes = new Map<string, (target: string) => Promise<string>>();
+
+function syncedNotesTemplate(firstAt: string) {
+  const built = syncedNotes.get(firstAt) ?? template((home) => {
+    const origin = join(home, "origin.git");
+    const writer = join(home, "writer");
+    git(home, "init", "-q", "--bare", "-b", "main", origin);
+    git(home, "clone", "-q", origin, writer);
+    commitAt(writer, firstAt, "memory: devbox-1", {
+      "README.md": "# Notes\n",
+      "memory/MEMORY.md": "# Memory index\n",
+      "memory/tech/old-read.md": note("old-read", { modified: "2026-09-01" }),
+    });
+    git(home, "clone", "-q", origin, join(home, ".agents/memory-repo"));
+    symlinkSync(join(home, ".agents/memory-repo/memory"), join(home, ".agents/memory"));
+    writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub" }) });
+    commitAt(writer, "2026-11-04T12:00:00Z", "memory: devbox-1", {
+      "memory/tech/trap.md": note("trap", {}, "Always run the slow suite twice."),
+      "memory/projects/app/rule.md": note("rule", { originSessionId: "s-2" }, "Deploy on Tuesdays."),
+      "memory/projects/app/lone.md": note("lone", {}, "A note from a Mac session."),
+      "memory/tech/gone.md": note("gone"),
+      "README.md": "# Notes, renamed\n",
+    });
+    commitAt(writer, "2026-11-04T13:00:00Z", "memory: devbox-2", { "memory/tech/gone.md": null });
+    commitAt(writer, "2026-11-04T14:00:00Z", "Condense: dreamed", { "memory/tech/dreamed.md": note("dreamed") });
   });
-  git(home, "clone", "-q", origin, join(home, ".agents/memory-repo"));
-  symlinkSync(join(home, ".agents/memory-repo/memory"), join(home, ".agents/memory"));
-  writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub" }) });
-  commitAt(writer, "2026-11-04T12:00:00Z", "memory: devbox-1", {
-    "memory/tech/trap.md": note("trap", {}, "Always run the slow suite twice."),
-    "memory/projects/app/rule.md": note("rule", { originSessionId: "s-2" }, "Deploy on Tuesdays."),
-    "memory/projects/app/lone.md": note("lone", {}, "A note from a Mac session."),
-    "memory/tech/gone.md": note("gone"),
-    "README.md": "# Notes, renamed\n",
-  });
-  commitAt(writer, "2026-11-04T13:00:00Z", "memory: devbox-2", { "memory/tech/gone.md": null });
-  commitAt(writer, "2026-11-04T14:00:00Z", "Condense: dreamed", { "memory/tech/dreamed.md": note("dreamed") });
+  syncedNotes.set(firstAt, built);
+  return built;
+}
+
+async function hubWithSyncedNotes(firstAt = "2026-11-03T10:00:00Z") {
+  const home = await syncedNotesTemplate(firstAt)(temp.make("fleet-dream-audit-"));
   const state = ".local/state/fleet/dream";
   writeHome(home, {
     [`${state}/2026-11-05/digests/s-1.json`]: JSON.stringify(digest({ memoryWrites: ["tech/trap.md"], memoryShown: ["tech/old-read.md"] })),
@@ -78,7 +87,7 @@ function checker() {
 }
 
 test("audit checks each note that the sync changed since the last audit against the session that wrote it, and writes audit.md", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   const { asked, check } = checker();
   const { io, printed } = quietIo(home, { git: realGit, checker: () => check });
 
@@ -120,7 +129,7 @@ test("audit checks each note that the sync changed since the last audit against 
 });
 
 test("a second audit checks only what the sync changed after the first", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   const first = checker();
   expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => first.check }).io)).toBe(0);
   commitAt(join(home, "writer"), "2026-11-05T02:00:00Z", "memory: devbox-1", { "memory/tech/trap.md": note("trap", {}, "Run the slow suite once.") });
@@ -135,7 +144,7 @@ test("a second audit checks only what the sync changed after the first", async (
 });
 
 test("audit lists a check that failed, and checks it again next time", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   const failing = async (input: string) => {
     if (input.includes("Memory: tech/trap.md")) throw new AnalystFailure("exit 2");
     return { verdict: "confirmed" as const, reason: "Fine.", evidence: "", correction: "" };
@@ -150,7 +159,7 @@ test("audit lists a check that failed, and checks it again next time", async () 
 });
 
 test("audit exits 1 and writes no audit when the memory checkout cannot fetch", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   rmSync(join(home, "origin.git"), { recursive: true });
   const { io, said } = quietIo(home, { git: realGit, checker: () => checker().check });
 
@@ -161,7 +170,7 @@ test("audit exits 1 and writes no audit when the memory checkout cannot fetch", 
 });
 
 test("prepare collects, analyzes, then audits, and prints the run", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   const { check } = checker();
   const analyst = async () => ({ taskType: "fix", findings: [] });
   const { io, printed } = quietIo(home, { git: realGit, checker: () => check, analyst: () => analyst });
@@ -173,7 +182,7 @@ test("prepare collects, analyzes, then audits, and prints the run", async () => 
 });
 
 test("prepare still prints the run when the audit fails, and says why", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   rmSync(join(home, "origin.git"), { recursive: true });
   const analyst = async () => ({ taskType: "fix", findings: [] });
   const { io, printed, said } = quietIo(home, { git: realGit, checker: () => checker().check, analyst: () => analyst });
@@ -185,7 +194,7 @@ test("prepare still prints the run when the audit fails, and says why", async ()
 });
 
 test("a limited audit moves through the backlog: the next audit checks only the notes the limit left", async () => {
-  const { home } = hubWithSyncedNotes();
+  const { home } = await hubWithSyncedNotes();
   const first = checker();
   expect(await dreamCommand(["audit", "--limit", "2"], quietIo(home, { git: realGit, checker: () => first.check }).io)).toBe(0);
   const second = checker();
@@ -197,7 +206,7 @@ test("a limited audit moves through the backlog: the next audit checks only the 
 });
 
 test("the first audit of a memory repo younger than a day checks every note since its first commit", async () => {
-  const { home, run } = hubWithSyncedNotes("2026-11-04T11:00:00Z");
+  const { home, run } = await hubWithSyncedNotes("2026-11-04T11:00:00Z");
   const { asked, check } = checker();
 
   expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => check }).io)).toBe(0);
@@ -207,7 +216,7 @@ test("the first audit of a memory repo younger than a day checks every note sinc
 });
 
 test("audit asks about the last session that wrote the note before its sync commit, from any run, and falls back to its originSessionId", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   const state = join(home, ".local/state/fleet/dream");
   writeHome(state, {
     "2026-11-05/digests/s-9.json": JSON.stringify(digest({ session: "s-9", startedAt: "2026-11-04T20:00:00Z", memoryWrites: ["tech/trap.md"], entries: [{ at: "2026-11-04T20:00:00Z", role: "user", text: "Too late to write it." }] })),
@@ -225,7 +234,7 @@ test("audit asks about the last session that wrote the note before its sync comm
 });
 
 test("audit finds a note whose name Git would quote", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   commitAt(join(home, "writer"), "2026-11-04T15:00:00Z", "memory: devbox-2", { "memory/tech/café.md": note("café", { originSessionId: "s-2" }) });
   const { asked, check } = checker();
 
@@ -236,7 +245,7 @@ test("audit finds a note whose name Git would quote", async () => {
 });
 
 test("audit keeps secrets out of what it asks and writes, and flattens the checker's text so it cannot add sections to audit.md", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   const token = `ghp_${"a1".repeat(18)}`;
   commitAt(join(home, "writer"), "2026-11-04T15:00:00Z", "memory: devbox-2", { "memory/tech/token.md": note("token", { originSessionId: "s-2" }, `Use ${token} for the API.`) });
   const asked: string[] = [];
@@ -253,7 +262,7 @@ test("audit keeps secrets out of what it asks and writes, and flattens the check
 });
 
 test("audit starts over from the first commit when main was rewound past its last point", async () => {
-  const { home, run } = hubWithSyncedNotes();
+  const { home, run } = await hubWithSyncedNotes();
   const writer = join(home, "writer");
   expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => checker().check }).io)).toBe(0);
   const before = git(writer, "rev-parse", "HEAD");
@@ -269,7 +278,7 @@ test("audit starts over from the first commit when main was rewound past its las
 });
 
 test("audit redacts a note and its change before it clips them, so a secret across the cut does not leak", async () => {
-  const { home } = hubWithSyncedNotes();
+  const { home } = await hubWithSyncedNotes();
   const password = ["pretend", "pass", "9z8y7x"].join("-");
   const head = note("hook", { originSessionId: "s-2" }, "").length - 1;
   const long = `${"x".repeat(5990 - head - "https://deploy:".length)}https://deploy:${password}@example.com/hook`;

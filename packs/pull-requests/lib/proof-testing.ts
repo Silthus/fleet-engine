@@ -2,7 +2,7 @@ import { expect } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gitEnv } from "../../../src/testing/git.ts";
+import { gitEnv, template } from "../../../src/testing/git.ts";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
@@ -22,14 +22,27 @@ export const models = [lookup, { role: "review", work: "Review Claude's code", p
 
 export const rubric = "# Coding standards\n\n- Keep things simple.";
 
+const seedRepository = template(async (repository) => {
+  const git = (...args: string[]) => spawnAsync(["git", ...args], { cwd: repository, env: gitEnv });
+  writeFileSync(join(repository, "shared.txt"), "one\n");
+  for (const args of [["init", "-q", "-b", "main"], ["remote", "add", "origin", "https://github.com/example/product.git"], ["add", "shared.txt"], ["commit", "-q", "-m", "Change shared.txt"], ["update-ref", "refs/remotes/origin/main", "HEAD"], ["checkout", "-q", "-b", "feature"]]) {
+    const result = await git(...args);
+    if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+  }
+});
+
 export async function checkout() {
   const directory = fixture("fleet-proof-checkout-");
   const [home, repository, bin, github] = ["home", "repository", "bin", "github"].map((name) => join(directory, name));
-  for (const path of [home, repository, bin, github]) mkdirSync(path);
+  for (const path of [home, bin, github]) mkdirSync(path);
   writeFileSync(join(bin, "gh"), `#!/bin/sh
 echo "$*" >> "${github}/calls"
-head=$(cat "${github}/head" 2>/dev/null || git -C "${repository}" rev-parse HEAD)
-base=$(cat "${github}/base" 2>/dev/null || echo main)
+if [ -f "${github}/head" ]; then read -r head < "${github}/head"
+else
+  read -r head < "${repository}/.git/HEAD"
+  case "$head" in "ref: "*) ref="${repository}/.git/\${head#ref: }"; if [ -f "$ref" ]; then read -r head < "$ref"; else head=$(git -C "${repository}" rev-parse HEAD); fi;; esac
+fi
+base=main; [ -f "${github}/base" ] && read -r base < "${github}/base"
 case "$*" in
   "api "*"/pulls/"[0-9]*)
     [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head"
@@ -43,7 +56,7 @@ case "$*" in
     all="$*"; branch=\${all##*/branches/}; branch=\${branch%% *}
     cat "${github}/branch-$branch" 2>/dev/null || echo '{"protected":false}'; exit 0;;
   "api "*)
-    sha=$(printf '%s' "$*" | sed -n 's#.*/commits/\\([0-9a-f]*\\)/.*#\\1#p')
+    all="$*"; sha=; case "$all" in */commits/*/*) sha=\${all#*/commits/}; sha=\${sha%%/*};; esac
     case "$*" in *"/check-runs"*) kind=check-runs;; *) kind=statuses;; esac
     file="${github}/$kind-$sha"; [ -f "$file" ] || file="${github}/$kind-any"
     cat "$file" 2>/dev/null; exit 0;;
@@ -128,11 +141,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const fleet = (...args: string[]) => fleetIn(repository, ...args);
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
-  await git("init", "-q", "-b", "main");
-  await git("remote", "add", "origin", "https://github.com/example/product.git");
-  await commit("shared.txt", "one\n");
-  await git("update-ref", "refs/remotes/origin/main", "HEAD");
-  await git("checkout", "-q", "-b", "feature");
+  await seedRepository(repository);
   return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel };
 }
 

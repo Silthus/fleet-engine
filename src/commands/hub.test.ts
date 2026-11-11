@@ -3,7 +3,7 @@ import { cpSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync 
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import { filesAdapter } from "../reconciler/apply.ts";
-import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, template, tempDirs } from "../testing/git.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -11,19 +11,35 @@ afterEach(() => temp.cleanup());
 
 const repoRoot = join(import.meta.dir, "../..");
 
+const machineTemplates = new Map<string, (target: string) => Promise<string>>();
+
+function machineTemplate(profileFields: Record<string, unknown>, enginePacks: string[]) {
+  const key = JSON.stringify([profileFields, enginePacks]);
+  const built = machineTemplates.get(key) ?? template(async (root) => {
+    const engine = join(root, "engine");
+    for (const pack of ["base", ...enginePacks]) cpSync(join(repoRoot, "packs", pack), join(engine, "packs", pack), { recursive: true });
+    cpSync(join(import.meta.dir, "fixtures/placed"), join(engine, "packs/placed"), { recursive: true });
+    const home = join(root, "home");
+    mkdirSync(home);
+    const remote = join(home, "remote.git");
+    await spawnGit(home, "init", "-q", "--bare", "-b", "main", remote);
+    const profile = join(home, "profile");
+    await spawnGit(home, "clone", "-q", remote, profile);
+    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["placed"], plan: "claude", settings: {}, workflows: {}, ...profileFields }, null, 2) + "\n");
+    await spawnGit(profile, "add", "fleet.json");
+    await spawnGit(profile, "commit", "-q", "-m", "Start");
+    await spawnGit(profile, "push", "-q", "-u", "origin", "main");
+  });
+  machineTemplates.set(key, built);
+  return built;
+}
+
 async function fleetMachine(profileFields: Record<string, unknown> = {}, machineFields: Record<string, unknown> = {}, enginePacks: string[] = [], env: Record<string, string> = {}) {
-  const engine = temp.make("engine-");
-  for (const pack of ["base", ...enginePacks]) cpSync(join(repoRoot, "packs", pack), join(engine, "packs", pack), { recursive: true });
-  cpSync(join(import.meta.dir, "fixtures/placed"), join(engine, "packs/placed"), { recursive: true });
-  const home = temp.make("home-");
+  const root = await machineTemplate(profileFields, enginePacks)(temp.make("hub-machine-"));
+  const engine = join(root, "engine");
+  const home = join(root, "home");
   const remote = join(home, "remote.git");
-  await spawnGit(home, "init", "-q", "--bare", "-b", "main", remote);
   const profile = join(home, "profile");
-  await spawnGit(home, "clone", "-q", remote, profile);
-  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["placed"], plan: "claude", settings: {}, workflows: {}, ...profileFields }, null, 2) + "\n");
-  await spawnGit(profile, "add", "fleet.json");
-  await spawnGit(profile, "commit", "-q", "-m", "Start");
-  await spawnGit(profile, "push", "-q", "-u", "origin", "main");
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "linux", profileDir: profile, ...machineFields }));
   const fleet = async (args: string[], host = "hub-1") => {

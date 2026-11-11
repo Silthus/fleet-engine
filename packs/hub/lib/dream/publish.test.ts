@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
-import { git, gitEnv, tempDirs } from "../../../../src/testing/git.ts";
+import { git, gitEnv, template, tempDirs } from "../../../../src/testing/git.ts";
 import { writeHome } from "../testing.ts";
 import { dreamCommand } from "./command.ts";
 import { dreamSettings, note, quietIo, realGit } from "./testing.ts";
@@ -16,21 +16,32 @@ function commit(dir: string, message: string, files: Record<string, string>) {
   git(dir, "-c", "commit.gpgsign=false", "commit", "-q", "-m", message);
 }
 
-function dreamWorktree(subtree = "memory") {
-  const home = temp.make("fleet-dream-publish-");
-  const origin = join(home, "origin.git");
+const dreamTemplates = new Map<string, (target: string) => Promise<string>>();
+
+function dreamTemplate(subtree: string) {
+  const built = dreamTemplates.get(subtree) ?? template((home) => {
+    const origin = join(home, "origin.git");
+    const laptop = join(home, "laptop");
+    const prefix = subtree ? `${subtree}/` : "";
+    git(home, "init", "-q", "--bare", "-b", "main", origin);
+    git(home, "clone", "-q", origin, laptop);
+    commit(laptop, "memory: laptop", { "README.md": "# Notes\n", [`${prefix}MEMORY.md`]: "# Memory index\n", [`${prefix}tech/rule.md`]: note("rule") });
+    git(laptop, "push", "-q", "origin", "HEAD:main");
+    const checkout = join(home, subtree ? ".agents/memory-repo" : ".agents/memory");
+    git(home, "clone", "-q", origin, checkout);
+    if (subtree) symlinkSync(join(checkout, subtree), join(home, ".agents/memory"));
+    writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub" }) });
+    git(checkout, "worktree", "add", "-q", join(home, ".local/state/fleet/dream/2026-11-05/memory"), "-b", "dream/2026-11-05", "origin/main");
+  });
+  dreamTemplates.set(subtree, built);
+  return built;
+}
+
+async function dreamWorktree(subtree = "memory") {
+  const home = await dreamTemplate(subtree)(temp.make("fleet-dream-publish-"));
   const laptop = join(home, "laptop");
   const prefix = subtree ? `${subtree}/` : "";
-  git(home, "init", "-q", "--bare", "-b", "main", origin);
-  git(home, "clone", "-q", origin, laptop);
-  commit(laptop, "memory: laptop", { "README.md": "# Notes\n", [`${prefix}MEMORY.md`]: "# Memory index\n", [`${prefix}tech/rule.md`]: note("rule") });
-  git(laptop, "push", "-q", "origin", "HEAD:main");
-  const checkout = join(home, subtree ? ".agents/memory-repo" : ".agents/memory");
-  git(home, "clone", "-q", origin, checkout);
-  if (subtree) symlinkSync(join(checkout, subtree), join(home, ".agents/memory"));
-  writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub" }) });
   const worktree = join(home, ".local/state/fleet/dream/2026-11-05/memory");
-  git(checkout, "worktree", "add", "-q", worktree, "-b", "dream/2026-11-05", "origin/main");
   const settings = { ...dreamSettings, "memory.subtree": subtree };
   return { home, laptop, worktree, prefix, io: () => quietIo(home, { git: realGit, env: { FLEET_SETTINGS: JSON.stringify(settings) } }) };
 }
@@ -38,7 +49,7 @@ function dreamWorktree(subtree = "memory") {
 const mainOf = (home: string, ...args: string[]) => git(home, "--git-dir", join(home, "origin.git"), ...args);
 
 test("publish rebases the Dream's commits onto the memory repo's newer main and pushes them", async () => {
-  const { home, laptop, worktree, prefix, io } = dreamWorktree();
+  const { home, laptop, worktree, prefix, io } = await dreamWorktree();
   commit(worktree, "Condense: rule", { "memory/tech/rule.md": note("rule", {}, "Shorter.") });
   commit(worktree, "Report: 2026-11-05", { "dreams/2026-11-05.md": "1 session from hub.\n" });
   commit(laptop, "memory: laptop", { [`${prefix}tech/new.md`]: note("new") });
@@ -62,7 +73,7 @@ test("publish refuses commits outside the memory folder and dreams/, a conflict 
     ["message", { "memory/tech/fine.md": note("fine") }, "Fleet dream: the commits hold a secret (GitHub token), in this or an earlier commit. Remove it and rewrite the commits."],
   ];
   for (const [name, files, refusal] of cases) {
-    const { home, worktree, io } = dreamWorktree();
+    const { home, worktree, io } = await dreamWorktree();
     const before = mainOf(home, "rev-parse", "main");
     commit(worktree, name === "message" ? `Change: ${fakeToken()}` : `Change: ${name}`, files);
     if (name === "secret") commit(worktree, "Remove the token", { "memory/tech/token.md": "no token\n" });
@@ -76,7 +87,7 @@ test("publish refuses commits outside the memory folder and dreams/, a conflict 
 });
 
 test("publish in the flat layout lets the Dream change any file", async () => {
-  const { home, worktree, io } = dreamWorktree("");
+  const { home, worktree, io } = await dreamWorktree("");
   commit(worktree, "Update: readme", { "README.md": "# Changed\n" });
   const { io: dream } = io();
 
@@ -86,7 +97,7 @@ test("publish in the flat layout lets the Dream change any file", async () => {
 });
 
 test("publish stops on a rebase conflict, names the file, and leaves the worktree on its branch", async () => {
-  const { home, laptop, worktree, io } = dreamWorktree();
+  const { home, laptop, worktree, io } = await dreamWorktree();
   commit(worktree, "Update: rule", { "memory/tech/rule.md": note("rule", {}, "Dream's version.") });
   commit(laptop, "memory: laptop", { "memory/tech/rule.md": note("rule", {}, "Laptop's version.") });
   git(laptop, "push", "-q", "origin", "HEAD:main");
@@ -101,7 +112,7 @@ test("publish stops on a rebase conflict, names the file, and leaves the worktre
 });
 
 test("publish refuses uncommitted changes, and says when there is nothing to publish", async () => {
-  const { worktree, io } = dreamWorktree();
+  const { worktree, io } = await dreamWorktree();
   const first = io();
   expect(await dreamCommand(["publish", worktree], first.io)).toBe(0);
   expect(first.printed).toEqual(["Fleet dream: nothing to publish."]);
@@ -115,7 +126,7 @@ test("publish refuses uncommitted changes, and says when there is nothing to pub
 });
 
 test("publish with no worktree prints its usage and exits 2", async () => {
-  const { io } = dreamWorktree();
+  const { io } = await dreamWorktree();
   const { io: dream, said } = io();
 
   expect(await dreamCommand(["publish"], dream)).toBe(2);
@@ -146,7 +157,7 @@ test("publish refuses what the final tree hides from a commit-by-commit check: a
     }, "Fleet dream: the commits add a symlink or a submodule: memory/vendor. Memory holds plain files only."],
   ];
   for (const [name, change, refusal] of cases) {
-    const { home, laptop, worktree, io } = dreamWorktree();
+    const { home, laptop, worktree, io } = await dreamWorktree();
     change(worktree, laptop);
     const before = mainOf(home, "rev-parse", "main");
     const { io: dream, said } = io();
@@ -159,7 +170,7 @@ test("publish refuses what the final tree hides from a commit-by-commit check: a
 });
 
 test("publish refuses when a guard's Git command fails, and pushes nothing", async () => {
-  const { home, worktree, io } = dreamWorktree();
+  const { home, worktree, io } = await dreamWorktree();
   commit(worktree, "Change: outside", { "README.md": "# Changed\n" });
   const before = mainOf(home, "rev-parse", "main");
   const { io: dream, said } = io();
@@ -172,7 +183,7 @@ test("publish refuses when a guard's Git command fails, and pushes nothing", asy
 });
 
 test("publish refuses a worktree paused in a rebase, and leaves it paused", async () => {
-  const { home, worktree, io } = dreamWorktree();
+  const { home, worktree, io } = await dreamWorktree();
   commit(worktree, "Change: one", { "memory/tech/one.md": note("one") });
   commit(worktree, "Change: two", { "memory/tech/two.md": note("two") });
   const paused = Bun.spawnSync(["git", "-c", "commit.gpgsign=false", "rebase", "-q", "-i", "HEAD~2"], { cwd: worktree, env: { ...gitEnv, GIT_SEQUENCE_EDITOR: "sed -i -e 1s/^pick/edit/" } });
@@ -187,7 +198,7 @@ test("publish refuses a worktree paused in a rebase, and leaves it paused", asyn
 });
 
 test("publish refuses a checkout that is not the memory repo's, and pushes nothing", async () => {
-  const { home, io } = dreamWorktree("");
+  const { home, io } = await dreamWorktree("");
   const other = join(home, "other.git");
   const project = join(home, "dev/project");
   git(home, "init", "-q", "--bare", "-b", "main", other);
@@ -229,7 +240,7 @@ test("publish refuses an outside file or a symlink that only an earlier outgoing
     }, "Fleet dream: the commits add a symlink or a submodule: memory/tech/link.md. Memory holds plain files only."],
   ];
   for (const [name, change, refusal] of cases) {
-    const { home, laptop, worktree, io } = dreamWorktree();
+    const { home, laptop, worktree, io } = await dreamWorktree();
     change(worktree, laptop);
     const before = mainOf(home, "rev-parse", "main");
     const { io: dream, said } = io();
@@ -242,7 +253,7 @@ test("publish refuses an outside file or a symlink that only an earlier outgoing
 });
 
 test("publish pushes the commit it checked, not one made in the worktree after the check", async () => {
-  const { home, worktree, io } = dreamWorktree();
+  const { home, worktree, io } = await dreamWorktree();
   commit(worktree, "Change: rule", { "memory/tech/rule.md": note("rule", {}, "Checked.") });
   const checked = git(worktree, "rev-parse", "HEAD");
   const { io: dream, printed } = io();
@@ -258,7 +269,7 @@ test("publish pushes the commit it checked, not one made in the worktree after t
 });
 
 test("publish accepts memory.subtree with a trailing slash, as the memory sync does", async () => {
-  const { home, worktree } = dreamWorktree();
+  const { home, worktree } = await dreamWorktree();
   commit(worktree, "Change: new", { "memory/tech/new.md": note("new") });
   const { io: dream } = quietIo(home, { git: realGit, env: { FLEET_SETTINGS: JSON.stringify({ ...dreamSettings, "memory.subtree": "memory/" }) } });
 
