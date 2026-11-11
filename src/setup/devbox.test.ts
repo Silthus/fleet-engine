@@ -161,16 +161,20 @@ describe("the devbox over SSH", () => {
     expect(result.output).toContain("✓ The hub, coder.fleet-hub, linked coder.fleet-node-1 in T3 Code.");
   });
 
-  test("fleet setup run again has the hub take the node before the node applies its profile, when the hub could not take it on the run that stopped", async () => {
-    const home = temp.make("home-");
-    const args = ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "coder.fleet-node-1"];
-    const failing = fakeMachine(home, { "box:github": 1 }, { hubUpdateFails: "fleet update: the engine has local changes." });
-    expect((await fleetSetup(home, args, [], failing, undefined, 0, "linux", nameHub)).code).toBe(2);
-    const box = fakeMachine(home);
-    expect((await fleetSetup(home, args, [], box, undefined, 0, "linux", nameHub)).code).toBe(0);
-    expect(box.hubUpdates).toEqual(["coder.fleet-hub"]);
-    expect(box.credentials).toEqual([{ node: "coder.fleet-node-1", issued: true }]);
-    expect(box.hubLinked).toEqual(["coder.fleet-node-1"]);
+  test("fleet setup run again has the hub take the node, then applies the node's profile and links it from the hub, when the hub could not take it on an earlier run that stopped or finished", async () => {
+    for (const [polls, firstCode] of [[{ "box:github": 1 }, 2], [{}, 0]] as const) {
+      const home = temp.make("home-");
+      const args = ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "coder.fleet-node-1"];
+      for (const hubUpdateFails of ["fleet update: the engine has local changes.", undefined]) {
+        const failing = fakeMachine(home, polls, hubUpdateFails ? { hubUpdateFails } : { hubDown: true });
+        expect((await fleetSetup(home, args, [], failing, undefined, 0, "linux", nameHub)).code).toBe(firstCode);
+      }
+      const box = fakeMachine(home);
+      expect((await fleetSetup(home, args, [], box, undefined, 0, "linux", nameHub)).code).toBe(0);
+      expect(box.hubUpdates).toEqual(["coder.fleet-hub"]);
+      expect(box.credentials).toEqual([{ node: "coder.fleet-node-1", issued: true }]);
+      expect(box.hubLinked).toEqual(["coder.fleet-node-1"]);
+    }
   });
 
   test("fleet setup refuses a devbox name the hub cannot use, or a pool box name, and its list of SSH hosts leaves them out", async () => {

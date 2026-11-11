@@ -280,8 +280,10 @@ async function linkBothWays(host: string, box: Machine, context: DevboxContext) 
 export type HubContext = { terminal: Terminal; machine: Machine };
 
 const registerId = (host: string) => `devbox:${host}:register`;
+const hubLinkId = (host: string) => `devbox:${host}:hub-link`;
+const waitsOnHub = (host: string) => [registerId(host), `devbox:${host}:profile`, hubLinkId(host)];
 
-export const notTakenByHub = (id: string, took: Map<string, boolean>) => [...took].some(([host, taken]) => !taken && id === registerId(host));
+export const notTakenByHub = (id: string, took: Map<string, boolean>) => [...took].some(([host, taken]) => !taken && waitsOnHub(host).includes(id));
 
 export function hubSteps(host: string, context: HubContext & { profileDir: string | undefined; took: Map<string, boolean> }): { register: Step; link: Step } {
   const hubOf = async () => {
@@ -300,7 +302,7 @@ export function hubSteps(host: string, context: HubContext & { profileDir: strin
     },
   };
   const link: Step = {
-    id: `devbox:${host}:hub-link`,
+    id: hubLinkId(host),
     title: `Link ${host} from the hub`,
     minutes: 1,
     kind: "auto",
