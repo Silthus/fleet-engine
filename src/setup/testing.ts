@@ -39,9 +39,8 @@ async function realGit(home: string, args: string[], cwd?: string): Promise<Exec
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
     return { code, output: `${stdout}${stderr}`, stdout };
   };
-  const result = await run(["git", "-c", `url.${remotes}.insteadOf=https://github.com/`, ...args]);
-  if (args[0] === "clone" && result.code === 0) await run(["git", "-C", args.at(-1)!, "config", `url.${remotes}.insteadOf`, "https://github.com/"]);
-  return result;
+  const rewrite = `url.${remotes}.insteadOf=https://github.com/`;
+  return run(["git", "-c", rewrite, ...(args[0] === "clone" ? ["clone", "--config", rewrite, ...args.slice(1)] : args)]);
 }
 
 type SignInName = "github" | "claude" | "chatgpt" | "coder" | "box:github" | "box:claude" | "box:chatgpt" | "box:t3" | "box:coder";

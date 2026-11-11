@@ -39,7 +39,7 @@ async function heavyWith(extra: Record<string, string>, bin: string, settings: R
   const home = temp.make("home-");
   const { FLEET_HEAVY_SLOTS: _, ...inherited } = Bun.env;
   const env = { ...inherited, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(settings), ...extra };
-  const child = Bun.spawn(["bun", join(import.meta.dir, "../commands/heavy.ts"), ...args], { env, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "../commands/heavy.ts"), ...args], { env, stdout: "pipe", stderr: "pipe" });
   return { code: await child.exited, stdout: await new Response(child.stdout).text(), stderr: await new Response(child.stderr).text() };
 }
 
@@ -175,12 +175,12 @@ function machine(slots = 1) {
   const { FLEET_HEAVY_SLOTS: _, T3CODE_THREAD_ID: __, ...inherited } = Bun.env;
   const env = (extra: Record<string, string>) => ({ ...inherited, HOME: home, XDG_RUNTIME_DIR: home, TMPDIR: tmp, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(roomy), FLEET_HEAVY_SLOTS: String(slots), ...extra });
   const start = (args: string[], extra: Record<string, string> = {}) => {
-    const child = Bun.spawn(["bun", join(import.meta.dir, "../commands/heavy.ts"), ...args], { cwd: folder, env: env(extra), stdout: "pipe", stderr: "pipe", detached: true });
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../commands/heavy.ts"), ...args], { cwd: folder, env: env(extra), stdout: "pipe", stderr: "pipe", detached: true });
     started.push(child);
     return { child, out: follow(child.stdout), err: follow(child.stderr) };
   };
   const holders = async () => {
-    const child = Bun.spawn(["bun", join(import.meta.dir, "../commands/heavy.ts"), "--holders"], { cwd: folder, env: env({}), stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../commands/heavy.ts"), "--holders"], { cwd: folder, env: env({}), stdout: "pipe", stderr: "pipe" });
     const [stdout] = await Promise.all([new Response(child.stdout).text(), child.exited]);
     return stdout;
   };
@@ -249,7 +249,7 @@ onLinux("runs the job on a Bun that cannot replace its own process, as before", 
   const home = temp.make("home-");
   const { FLEET_HEAVY_SLOTS: _, ...inherited } = Bun.env;
   const env = { ...inherited, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(roomy) };
-  const child = Bun.spawn(["bun", "--preload", older, join(import.meta.dir, "../commands/heavy.ts"), "--", "sh", "-c", "echo built"], { env, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([process.execPath, "--preload", older, join(import.meta.dir, "../commands/heavy.ts"), "--", "sh", "-c", "echo built"], { env, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect({ code: await child.exited, stdout }).toEqual({ code: 0, stdout: "built\n" });
   expect(stderr).not.toContain("cannot run");

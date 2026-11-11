@@ -18,18 +18,32 @@ function stub(bin: string, name: string, body: string, keep?: string) {
   chmodSync(join(bin, name), 0o755);
 }
 
+const packages = new Map<string, Promise<{ code: number; bytes: Uint8Array }>>();
+
+function packaged(name: string, target: string) {
+  const key = `${name} ${target}`;
+  if (!packages.has(key)) packages.set(key, (async () => {
+    const tree = temp.make("package-");
+    mkdirSync(join(tree, "bin"));
+    writeFileSync(join(tree, "bin", "codex"), `#!/bin/sh\n[ ! -e /proc/$$/fd/9 ] || : > "$HOME/codex-saw-lock"\necho "codex-cli ${name.replace("rust-v", "")} ${target}"\n`);
+    chmodSync(join(tree, "bin", "codex"), 0o755);
+    const archive = join(tree, "package.tar.gz");
+    const code = await Bun.spawn(["tar", "-czf", archive, "-C", tree, "bin"]).exited;
+    return { code, bytes: code === 0 ? readFileSync(archive) : new Uint8Array() };
+  })());
+  return packages.get(key)!;
+}
+
 async function release(root: string, targets: string[], options: { tag?: string; corrupt?: boolean } = {}) {
   const name = options.tag ?? tag;
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
   const sums: string[] = [];
   for (const target of targets) {
-    const tree = temp.make("package-");
-    mkdirSync(join(tree, "bin"));
-    writeFileSync(join(tree, "bin", "codex"), `#!/bin/sh\n[ ! -e /proc/$$/fd/9 ] || : > "$HOME/codex-saw-lock"\necho "codex-cli ${name.replace("rust-v", "")} ${target}"\n`);
-    chmodSync(join(tree, "bin", "codex"), 0o755);
     const asset = `codex-package-${target}.tar.gz`;
-    expect(await Bun.spawn(["tar", "-czf", join(dir, asset), "-C", tree, "bin"]).exited).toBe(0);
+    const archive = await packaged(name, target);
+    expect(archive.code).toBe(0);
+    writeFileSync(join(dir, asset), archive.bytes);
     const digest = new Bun.CryptoHasher("sha256").update(readFileSync(join(dir, asset))).digest("hex");
     sums.push(`${options.corrupt ? "0".repeat(64) : digest}  ${asset}`);
   }

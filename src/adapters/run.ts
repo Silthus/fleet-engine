@@ -110,8 +110,10 @@ export async function accountHome(uid = process.getuid?.(), sources = system) {
 
 export type HomeGuard = { run?: CommandRunner; accountHome?: () => Promise<string | undefined> };
 
+let ownAccountHome: Promise<string | undefined> | undefined;
+
 export async function skipOtherHome(adapter: string, what: string, home: string, options: HomeGuard): Promise<AdapterResult | undefined> {
-  const lookup = options.accountHome ?? (options.run ? undefined : () => accountHome());
+  const lookup = options.accountHome ?? (options.run ? undefined : () => (ownAccountHome ??= accountHome()));
   if (!lookup) return undefined;
   const account = await lookup();
   if (account === undefined) {

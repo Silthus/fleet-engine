@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { main } from "../cli.ts";
 import { tempDirs } from "../testing/git.ts";
@@ -67,6 +67,8 @@ describe("a pack.ts", () => {
   });
 });
 
+const baseSteps = new Set((JSON.parse(readFileSync(join(repoRoot, "packs/base/pack.json"), "utf8")).steps as Array<{ run: string[] }>).flatMap(({ run }) => (run[0] === "fleet" ? [run[1]!] : [])));
+
 const cpTwin = (dir: string) => cpSync(join(fixtures, "twin-ts/packs/twin"), dir, { recursive: true });
 
 function machineWith(packs: Record<string, (dir: string) => void>, enabled = Object.keys(packs)) {
@@ -87,7 +89,7 @@ function machineWith(packs: Record<string, (dir: string) => void>, enabled = Obj
   const lines: string[] = [];
   const launcher = join(engine, "fleet");
   const options = { home, engineRoot: engine, platform: "linux" as const, env: {}, print: (line: string) => lines.push(line) };
-  const runFleetStepsOnly = async (command: string[]): Promise<number> => (command[1] === launcher ? await main(command.slice(2), { ...options, print: () => {}, run: runFleetStepsOnly }) : 0);
+  const runFleetStepsOnly = async (command: string[]): Promise<number> => (command[1] === launcher && !baseSteps.has(command[2]!) ? await main(command.slice(2), { ...options, print: () => {}, run: runFleetStepsOnly }) : 0);
   const fleet = async (...args: string[]) => {
     const path = process.env.PATH;
     process.env.PATH = `${bin}:${path}`;
