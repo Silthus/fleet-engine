@@ -109,7 +109,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     }
     catalog.teamsKnown = true;
     if (!machine.profileDir) await startFromExisting();
-    picksFrom(flags, catalog);
+    picksFrom(flags, catalog, progress.draft);
     const fromFlags = settingsFrom(flags, catalog);
     if (Object.keys(fromFlags).length) await context.answer({ settings: { ...progress.draft.settings, ...fromFlags } });
   };

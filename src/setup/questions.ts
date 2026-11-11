@@ -106,7 +106,8 @@ export function picksFrom(flags: SetupFlags, catalog: Catalog, saved: Draft = {}
   const manifests = catalog.packs.map((pack) => pack.manifest);
   const known = workflowDefaults(manifests);
   for (const id of Object.keys(flags.workflows)) if (!Object.hasOwn(known, id) && !laterWorkflow(catalog)) throw new FlagError(`--workflows: no workflow named ${id}`);
-  return { packs, workflows: workflowOverrides({ ...start.workflows, ...flags.workflows }, manifests) };
+  const unloaded = Object.fromEntries(Object.entries(start.workflows).filter(([id]) => !Object.hasOwn(known, id)));
+  return { packs, workflows: { ...unloaded, ...workflowOverrides({ ...start.workflows, ...flags.workflows }, manifests) } };
 }
 
 /** Picked packs whose required packs are not picked. */
@@ -150,7 +151,7 @@ async function askPacks(context: QuestionContext): Promise<StepOutcome> {
   const lines = [...presets.map((preset) => `${preset.name}  ${packList(presetPacks(preset, catalog), catalog)}`), "One by one"];
   const fallback = presets.findIndex((preset) => preset.id === defaultPreset);
   const index = await chooseFrom(terminal, lines, fallback, presets[fallback]!.name);
-  const chosen = index < presets.length ? { packs: presetPacks(presets[index]!, catalog), workflows: workflowOverrides(presets[index]!.workflows, catalog.packs.map((pack) => pack.manifest)) } : await oneByOne(terminal, catalog, picked.packs);
+  const chosen = index < presets.length ? { packs: presetPacks(presets[index]!, catalog), workflows: workflowOverrides(presets[index]!.workflows, catalog.packs.map((pack) => pack.manifest)) } : { packs: await oneByOne(terminal, catalog, picked.packs), workflows: picked.workflows };
   await context.answer(chosen);
   show(chosen);
 }
@@ -166,7 +167,7 @@ async function oneByOne(terminal: Terminal, catalog: Catalog, current: string[])
     terminal.print(`  ${title(unmet.pack, catalog.packs)} needs ${unmet.needs.map((name) => title(name, catalog.packs)).join(", ")}, so ${unmet.needs.length === 1 ? "it is" : "they are"} on too.`);
     packs.push(...unmet.needs.filter((name) => !packs.includes(name)));
   }
-  return { packs, workflows: {} };
+  return packs;
 }
 
 async function askPlan(context: QuestionContext): Promise<StepOutcome> {
