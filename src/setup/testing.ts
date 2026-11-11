@@ -95,8 +95,9 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * names a loopback server, process 4242, that runs unless runtimeOrigin,
  * runtimePid or serverGone say otherwise. Its environment sets a proxy that
  * takes every curl request which does not turn proxies off, and its tunnel answers only after tunnelStartsAfter lookups.
+ * Each box's T3 environment id is env-<host>, except on the hosts withoutT3, where T3 never ran.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: boolean; linked: boolean }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; boxTunnel?: string } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: boolean; linked: boolean }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; boxTunnel?: string; withoutT3?: string[] } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -214,6 +215,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
     if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
     if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
+    if (line.startsWith("sh -c ") && line.includes("/userdata/environment-id")) return options.withoutT3?.includes(host) ? result(false, "cat: environment-id: No such file or directory") : result(true, `env-${host}\n`);
     return t3(line, "BOXCODE", input, { name: "box", home: boxHome(home, host), linked: passes("box:t3"), tunnel: options.boxTunnel ?? "box-1.relay.example", sessions: boxSessions }) ?? result(false, `unexpected on the box: ${line}`);
   };
   const machine: Machine = {

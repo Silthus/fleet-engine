@@ -310,7 +310,9 @@ async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
   return (await machine.exec(["sh", "-c", `kill -0 ${pid}`])).code === 0 ? url.origin : undefined;
 }
 
-const runtimeRecord = `case "$T3CODE_HOME" in *[![:graph:]]* | [!/]* | */../* | */..) exit 1 ;; esac; [ -z "$VITE_DEV_SERVER_URL" ] && cat "\${T3CODE_HOME:-$HOME/.t3}/userdata/server-runtime.json"`;
+export const t3HomeGuard = `case "$T3CODE_HOME" in *[![:graph:]]* | [!/]* | */../* | */..) exit 1 ;; esac;`;
+
+const runtimeRecord = `${t3HomeGuard} [ -z "$VITE_DEV_SERVER_URL" ] && cat "\${T3CODE_HOME:-$HOME/.t3}/userdata/server-runtime.json"`;
 
 function loopbackUrl(value: unknown) {
   try {

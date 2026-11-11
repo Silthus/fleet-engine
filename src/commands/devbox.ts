@@ -1,6 +1,7 @@
 import type { MachineFile, Plan } from "../pack/types.ts";
 import { saveMachine, validHost } from "../profile/profile.ts";
 import type { Machine } from "../setup/commands.ts";
+import { balanceThreads } from "../setup/devbox-balance.ts";
 import { devboxSteps, linkFromHub, listInProfile, nameBox, overSsh, profileForBox, tellHub } from "../setup/devbox.ts";
 import { FlagError, refuseUnusableDevbox } from "../setup/flags.ts";
 import { runSteps } from "../setup/runner.ts";
@@ -50,5 +51,6 @@ export async function devboxCommand(args: string[], context: DevboxCommandContex
   terminal.print("");
   terminal.print(`${host} is your devbox now. It runs your profile, and T3 Code here and there can reach each other.`);
   if (hub) await linkFromHub(context, hub, host, hubTook);
+  await balanceThreads(context);
   return 0;
 }
