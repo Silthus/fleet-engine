@@ -61,6 +61,7 @@ function refuseUnusableName(host: string) {
 
 const hubUpdateLimitMs = 15 * 60_000;
 const hubLinkLimitMs = 5 * 60_000;
+const sshFailed = 255;
 
 /** Lists the devbox in the profile, so the hub and every node know it, and returns the hub the profile names. It pushes on every run, so a push that failed before reaches the remote now. */
 async function listInProfile(profileDir: string | undefined, host: string): Promise<string | undefined> {
@@ -73,8 +74,12 @@ async function listInProfile(profileDir: string | undefined, host: string): Prom
 
 /** Has the hub take the new node before the node applies its profile, so the hub serves the node's credentials, and its disk watch and tunnels include it. */
 async function tellHub({ machine, terminal }: DevboxCommandContext, hub: string, host: string): Promise<boolean> {
+  terminal.print(`▶ The hub, ${hub}, takes ${host} with fleet update there. This can take some minutes.`);
   const updated = await machine.exec(onHub(hub, ["update"]), { timeoutMs: hubUpdateLimitMs });
-  terminal.print(updated.code === 0 ? `✓ The hub, ${hub}, took ${host}: its disk watch, tunnels and credentials include it now.` : `· The hub, ${hub}, did not answer. It takes ${host} at its next fleet update, or run fleet update there now.`);
+  const reason = updated.output.trim().split("\n").at(-1);
+  if (updated.code === 0) terminal.print(`✓ The hub, ${hub}, took ${host}: its disk watch, tunnels and credentials include it now.`);
+  else if (updated.code === sshFailed || !reason) terminal.print(`· The hub, ${hub}, did not answer. It takes ${host} at its next fleet update, or run fleet update there now.`);
+  else terminal.print(`· The hub, ${hub}, could not update: ${reason} Fix that there and run fleet update there; it takes ${host} then.`);
   return updated.code === 0;
 }
 
