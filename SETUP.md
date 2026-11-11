@@ -32,6 +32,11 @@ passing `fleet doctor` on this Mac.
 - **One PATH.** Your shell started before the install. Begin every command
   that runs `fleet`, `gh`, `bun`, `claude`, or `codex` with
   `export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";`.
+- **When a step fails.** Explain its last lines and fix what they name. When
+  it still fails, or the cause is not clear, offer `fleet triage`: run
+  `fleet triage --print`, show the person the report, and run
+  `fleet triage --send` only after they say yes. It opens an issue for the
+  Fleet maintainer, with private details taken out.
 - **The keyboard in Terminal.** A command that needs the person's keyboard
   runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
   that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,

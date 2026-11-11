@@ -62,6 +62,16 @@ describe("get.sh", () => {
     expect(result.code).toBe(1);
     expect(result.output).toContain("lockfile is out of date");
     expect(result.output).toContain("Fleet: could not install the engine's packages in " + join(box.home, ".local/share/fleet/engine") + ".");
+    expect(result.output).not.toContain("fleet triage");
+  });
+
+  test("a failure after fleet is installed says to run fleet triage", () => {
+    const box = sandbox("Linux");
+    expect(getSh(box, ["--ref", "v0.1.0", "--install-only"]).code).toBe(0);
+    box.stub("bun", `[ "$1" = install ] || exec "${process.execPath}" "$@"\necho "lockfile is out of date" >&2\nexit 1`);
+    const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
+    expect(result.code).toBe(1);
+    expect(result.output).toEndWith("Fleet: Stuck? Run fleet triage. It shows a report of this setup that you can send to the Fleet maintainer.\n");
   });
 
   test("a second run changes nothing", () => {
