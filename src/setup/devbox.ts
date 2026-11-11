@@ -301,19 +301,22 @@ function parsed<T>(result: ExecResult): T | undefined {
   }
 }
 
-/** The T3 server's own record of where it listens, trusted only on loopback and while its process runs. */
+/** The T3 server's own record of where it listens, trusted only on loopback and only while the recorded process is the one listening at that port. */
 async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
   const runtime = parsed<{ origin?: unknown; pid?: unknown }>(await machine.exec(["sh", "-c", `cat "$HOME/.t3/userdata/server-runtime.json"`]));
-  const origin = loopbackOrigin(runtime?.origin);
+  const url = loopbackUrl(runtime?.origin);
   const pid = runtime?.pid;
-  if (!origin || typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined;
-  return (await machine.exec(["sh", "-c", `kill -0 ${pid}`])).code === 0 ? origin : undefined;
+  if (!url || typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined;
+  const listening = await machine.exec(["sh", "-c", listensAt, "sh", String(pid), url.port || "80"]);
+  return listening.code === 0 ? url.origin : undefined;
 }
 
-function loopbackOrigin(value: unknown) {
+const listensAt = `lsof -a -nP -p "$1" -iTCP:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1" || ss -Hltnp "sport = :$2" 2>/dev/null | grep -q "pid=$1,"`;
+
+function loopbackUrl(value: unknown) {
   try {
     const url = new URL(String(value));
-    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ? url.origin : undefined;
+    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ? url : undefined;
   } catch {
     return undefined;
   }

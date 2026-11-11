@@ -91,10 +91,10 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * and a tunnelHostname only when cliPrintsTunnel is set. Its server answers
  * link-state with the tunnel hostname to a session it issued and has not
  * revoked, unless serverWithoutLinkState names that side. Its runtime record
- * names a live loopback server unless runtimeOrigin or serverGone says
- * otherwise, and its tunnel answers only after tunnelStartsAfter lookups.
+ * names a loopback server, process 4242, listening at its port unless
+ * runtimeOrigin, runtimePid, listenerPid or serverGone say otherwise, and its tunnel answers only after tunnelStartsAfter lookups.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; serverGone?: boolean; tunnelStartsAfter?: number; boxTunnel?: string } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; listenerPid?: number; serverGone?: boolean; tunnelStartsAfter?: number; boxTunnel?: string } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -119,15 +119,19 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
   const boxSessions: T3Session[] = [];
   const hereSessions: T3Session[] = [];
-  const origin = options.runtimeOrigin ?? "http://127.0.0.1:41773";
+  const recorded = options.runtimeOrigin ?? "http://127.0.0.1:41773";
+  const origin = URL.canParse(recorded) ? new URL(recorded).origin : recorded;
+  const port = URL.canParse(recorded) ? new URL(recorded).port || "80" : "";
+  const listener = options.serverGone ? undefined : String(options.listenerPid ?? 4242);
   let lookups = 0;
   const t3 = (line: string, token: string, input: string | undefined, side: { name: "box" | "here"; linked: boolean; tunnel: string; sessions: T3Session[] }) => {
     const { sessions } = side;
     if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
     if (line.startsWith("t3 environment link ")) return result(true, "linked");
     if (line === "t3 connect status --json") return result(true, JSON.stringify({ desired: side.linked, authenticated: side.linked, linked: side.linked, revoked: false, relayUrl: "https://relay.example", ...(options.cliPrintsTunnel && side.linked ? { tunnelHostname: side.tunnel } : {}) }));
-    if (line === `sh -c 'cat "$HOME/.t3/userdata/server-runtime.json"'`) return result(true, JSON.stringify({ version: 1, pid: 4242, port: Number(new URL(origin).port), origin }));
-    if (line === "sh -c 'kill -0 4242'") return result(!options.serverGone);
+    if (line === `sh -c 'cat "$HOME/.t3/userdata/server-runtime.json"'`) return result(true, JSON.stringify({ version: 1, pid: "runtimePid" in options ? options.runtimePid : 4242, port: Number(port), origin: recorded }));
+    const listens = line.match(/^sh -c '.*LISTEN.*' sh (\S+) (\S+)$/);
+    if (listens) return result(listens[1] === listener && listens[2] === port);
     if (line === "t3 auth session issue --json --ttl 5m --label fleet --subject fleet --scope relay:read") {
       const session = { sessionId: `session-${sessions.length + 1}`, token: `t3-bearer-${side.tunnel}-${sessions.length + 1}`, revoked: false };
       sessions.push(session);
