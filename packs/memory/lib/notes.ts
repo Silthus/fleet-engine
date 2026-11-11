@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { type Hook, printing, quiet } from "../../base/lib/hook.ts";
 
 export type Provider = "claude" | "codex";
 export type HookInput = { session_id?: string; agent_id?: string; cwd?: string; source?: string; tool_name?: string; tool_input?: unknown };
@@ -84,13 +85,14 @@ export function clip(text: string, limit: number) {
   return text.length <= limit ? text : `${text.slice(0, limit)}\n[… open the file for the rest]`;
 }
 
-export async function answerHook(event: string, answer: (input: HookInput, provider: Provider) => Promise<string | undefined>) {
-  try {
-    const provider = process.argv[2];
-    if (provider !== "claude" && provider !== "codex") return;
-    const context = await answer(JSON.parse(await Bun.stdin.text()) as HookInput, provider);
-    if (context) process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } })}\n`);
-  } catch {
-    return;
-  }
+export function contextHook(event: string, answer: (input: HookInput, provider: Provider, home: string) => Promise<string | undefined>): Hook {
+  return async (provider, readInput, home) => {
+    if (provider !== "claude" && provider !== "codex") return quiet;
+    try {
+      const context = await answer(JSON.parse(await readInput()) as HookInput, provider, home);
+      return printing(context ? { hookSpecificOutput: { hookEventName: event, additionalContext: context } } : undefined);
+    } catch {
+      return quiet;
+    }
+  };
 }

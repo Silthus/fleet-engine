@@ -1,3 +1,5 @@
+import { type Hook, printing, runHook } from "../lib/hook.ts";
+
 export type Provider = "claude" | "codex";
 export type HookEvent =
   | { hook_event_name: "UserPromptSubmit"; prompt: string }
@@ -100,12 +102,7 @@ export function guard(provider: Provider, event: HookEvent): HookDecision | unde
   return kinds.length ? toolOutputDecision(provider, kinds, event.tool_response) : undefined;
 }
 
-if (import.meta.main) {
-  const provider = process.argv[2];
-  if (provider !== "claude" && provider !== "codex") {
-    process.stderr.write("Usage: secret-guard.ts claude|codex\n");
-    process.exit(1);
-  }
-  const decision = guard(provider, JSON.parse(await Bun.stdin.text()) as HookEvent);
-  if (decision) process.stdout.write(`${JSON.stringify(decision)}\n`);
-}
+export const hook: Hook = async (provider, readInput) =>
+  provider === "claude" || provider === "codex" ? printing(guard(provider, JSON.parse(await readInput()) as HookEvent)) : { code: 1, stdout: "", stderr: "Usage: secret-guard.ts claude|codex\n" };
+
+if (import.meta.main) await runHook(hook);

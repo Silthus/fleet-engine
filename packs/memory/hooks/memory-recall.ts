@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { answerHook, claimNote, clip, type HookInput, logShown, memoryRoot, repoOf } from "../lib/notes.ts";
+import { runHook } from "../../base/lib/hook.ts";
+import { claimNote, clip, contextHook, type HookInput, logShown, memoryRoot, repoOf } from "../lib/notes.ts";
 import { testsRuleFor } from "../lib/tests-rule.ts";
 import { names, readTriggers, stripFrontmatter, textsOf } from "../lib/triggers.ts";
 
@@ -45,4 +45,6 @@ async function triggeredNotes(input: HookInput, home: string, session: string): 
   return hits.length ? hits.map((hit) => `Shared memory ${hit.note}, shown because this call names "${hit.term}":\n${clip(hit.text, noteLimit)}`).join("\n\n") : undefined;
 }
 
-if (import.meta.main) await answerHook("PreToolUse", (input) => recallNotes(input, process.env.HOME ?? homedir()));
+export const hook = contextHook("PreToolUse", (input, _provider, home) => recallNotes(input, home));
+
+if (import.meta.main) await runHook(hook);

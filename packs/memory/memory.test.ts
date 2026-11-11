@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { closeSync, openSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
@@ -68,5 +68,30 @@ describe("the memory cap hook", () => {
     const child = Bun.spawn([process.execPath, join(import.meta.dir, "hooks/memory-cap.ts"), "claude"], { stdin: new Blob([input]), stderr: "pipe" });
     expect(await child.exited).toBe(2);
     expect(await new Response(child.stderr).text()).toContain("Fold related notes into topic files");
+  });
+
+  test("lets a Codex call through without waiting for its input", async () => {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "hooks/memory-cap.ts"), "codex"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    expect(await child.exited).toBe(0);
+    expect(await new Response(child.stdout).text()).toBe("");
+  });
+});
+
+describe("the memory hooks", () => {
+  test.each(["memory-index.ts", "memory-recall.ts"])("%s answers nothing and lets the agent go on when it cannot read its input", async (name) => {
+    const unreadable = openSync(temp.make("stdin-"), "r");
+    try {
+      const child = Bun.spawn([process.execPath, join(import.meta.dir, "hooks", name), "claude"], { stdin: unreadable, stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: temp.make("home-") } });
+      expect(await child.exited).toBe(0);
+      expect(await new Response(child.stdout).text()).toBe("");
+    } finally {
+      closeSync(unreadable);
+    }
+  });
+
+  test.each(["memory-index.ts", "memory-recall.ts"])("%s answers nothing for an unknown agent without waiting for its input", async (name) => {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "hooks", name), "gemini"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    expect(await child.exited).toBe(0);
+    expect(await new Response(child.stdout).text()).toBe("");
   });
 });

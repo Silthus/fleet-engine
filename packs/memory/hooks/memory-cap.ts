@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { blocking, type Hook, quiet, runHook } from "../../base/lib/hook.ts";
 
 export const indexLimit = 180;
 
@@ -25,11 +26,6 @@ function lineCount(text: string) {
   return text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
 }
 
-if (import.meta.main) {
-  if (process.argv[2] !== "claude") process.exit(0);
-  const reason = check(JSON.parse(await Bun.stdin.text()) as ToolCall);
-  if (reason) {
-    process.stderr.write(`${reason}\n`);
-    process.exit(2);
-  }
-}
+export const hook: Hook = async (provider, readInput) => (provider === "claude" ? blocking(check(JSON.parse(await readInput()) as ToolCall)) : quiet);
+
+if (import.meta.main) await runHook(hook);

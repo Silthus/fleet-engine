@@ -101,6 +101,12 @@ describe("secret guard", () => {
     expect(await new Response(child.stderr).text()).toContain("Fleet hooks need Bun");
   });
 
+  test("the secret guard names its usage for an unknown agent without waiting for its input", async () => {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "secret-guard.ts"), "gemini"], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    expect(await child.exited).toBe(1);
+    expect(await new Response(child.stderr).text()).toBe("Usage: secret-guard.ts claude|codex\n");
+  });
+
   test("points at file delivery for a secret a shell command needs", () => {
     const decision = guard("claude", toolEvent(`token ${githubToken}`))!;
     expect(JSON.stringify(decision)).toContain('delivery: \\"file\\"');
