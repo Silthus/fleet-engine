@@ -23,7 +23,7 @@ describe("setup timings", () => {
     expect(saved.started).toBe("2026-11-11T10:00:00.000Z");
     expect(saved.usable).toBe("2026-11-11T10:00:06.000Z");
     expect(saved.usableSeconds).toBe(6);
-    expect(saved.steps.map((step) => [step.id, step.neededYou])).toEqual([
+    expect(saved.steps.map((step) => [step.id, step.blocked])).toEqual([
       ["bootstrap", false],
       ["github", true],
       ["packs", true],
@@ -34,8 +34,8 @@ describe("setup timings", () => {
       ["claude", false],
       ["check", false],
     ]);
-    expect(saved.steps[1]).toMatchObject({ title: "Sign in to GitHub", kind: "human", start: "2026-11-11T10:00:00.000Z", end: "2026-11-11T10:00:06.000Z", seconds: 6 });
-    expect(saved.neededYou).toBe(3);
+    expect(saved.steps[1]).toMatchObject({ title: "Sign in to GitHub", kind: "human", outcome: "done", start: "2026-11-11T10:00:00.000Z", end: "2026-11-11T10:00:06.000Z", seconds: 6 });
+    expect(saved.blockedSteps).toBe(3);
     expect(result.output).toContain("  Usable 6 s after the start. 3 steps needed you.");
   });
 
@@ -49,7 +49,7 @@ describe("setup timings", () => {
     expect(result.code).toBe(0);
     const saved = timings(home);
     expect(saved.started).toBe("2026-11-11T09:56:40.000Z");
-    expect(saved.steps.slice(0, 4).map((step) => [step.id, step.seconds, step.neededYou])).toEqual([
+    expect(saved.steps.slice(0, 4).map((step) => [step.id, step.seconds, step.blocked])).toEqual([
       ["install:tools", 120, true],
       ["install:t3", 50, false],
       ["install:engine", 20, false],
@@ -75,15 +75,24 @@ describe("setup timings", () => {
     const first = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], box);
     expect(first.code).toBe(2);
     expect(timings(home).usable).toBeNull();
-    expect(timings(home).steps.find((step) => step.id === "claude")).toMatchObject({ neededYou: true, outcome: "unanswered" });
+    expect(timings(home).steps.find((step) => step.id === "claude")).toMatchObject({ blocked: true, outcome: "unanswered" });
 
     const second = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home, {}, { startedAt: start + 90_000 }));
     expect(second.code).toBe(0);
     const saved = timings(home);
     expect(saved.started).toBe("2026-11-11T10:00:00.000Z");
     expect(saved.usableSeconds).toBe(90);
-    expect(saved.neededYou).toBe(1);
+    expect(saved.blockedSteps).toBe(1);
     expect(second.output).toContain("  Usable 1 min 30 s after the start. 1 step needed you.");
+  });
+
+  test("records a step that failed, with its error, and leaves the machine not usable", async () => {
+    const home = temp.make("home-");
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home, {}, { startedAt: start }), undefined, 1);
+    expect(result.code).toBe(1);
+    const saved = timings(home);
+    expect(saved.usable).toBeNull();
+    expect(saved.steps.at(-1)).toMatchObject({ id: "check", outcome: "failed", error: expect.stringContaining("fleet doctor found something to fix") });
   });
 
   test("a finished setup run again starts a new record and prints nothing when no step ran", async () => {

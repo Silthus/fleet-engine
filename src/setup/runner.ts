@@ -1,4 +1,4 @@
-import type { Terminal } from "./terminal.ts";
+import { Stopped, type Terminal } from "./terminal.ts";
 import { duration, type StepRecord } from "./timings.ts";
 
 export type StepKind = "auto" | "question" | "human";
@@ -75,14 +75,18 @@ async function timed(step: Step, options: RunOptions): Promise<StepOutcome> {
     step.kind === "auto"
       ? (options.every ?? intervals)(heartbeatMs, () => options.terminal.print(`  … ${step.title}: still running, ${duration(Math.round((clock.now() - start) / 1000))} so far`))
       : () => {};
+  const blocked = () => (options.waits?.() ?? 0) > waitsBefore;
   let outcome: StepOutcome;
   try {
     outcome = await step.run();
-  } finally {
+  } catch (error) {
     stop();
+    if (!(error instanceof Stopped)) await options.record?.({ id: step.id, title: step.title, kind: step.kind, start, end: clock.now(), blocked: blocked(), outcome: "failed", error: error instanceof Error ? error.message : String(error) });
+    throw error;
   }
+  stop();
   const unanswered = outcome === "unanswered";
-  await options.record?.({ id: step.id, title: step.title, kind: step.kind, start, end: clock.now(), neededYou: unanswered || (options.waits?.() ?? 0) > waitsBefore, ...(unanswered ? { outcome: "unanswered" as const } : {}) });
+  await options.record?.({ id: step.id, title: step.title, kind: step.kind, start, end: clock.now(), blocked: unanswered || blocked(), outcome: unanswered ? "unanswered" : "done" });
   return outcome;
 }
 

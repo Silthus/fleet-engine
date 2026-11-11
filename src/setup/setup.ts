@@ -199,8 +199,8 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
         (machine.devboxes ?? []).map((host) => ({ host, plan: planFor(context, { ...machine, role: "devbox" }).plan })),
       ),
     };
-    for (const line of doneScreen(summary)) terminal.print(line);
     const usable = await timings.usable(clock.now());
+    for (const line of doneScreen(summary)) terminal.print(line);
     if (usable) terminal.print(usable);
     return 0;
   } catch (error) {

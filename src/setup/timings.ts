@@ -18,8 +18,9 @@ export type StepTiming = {
   end: string;
   seconds: number;
   /** The step waited for the person: a question, a confirmation, or a sign-in. */
-  neededYou: boolean;
-  outcome?: "unanswered";
+  blocked: boolean;
+  outcome: "done" | "unanswered" | "failed";
+  error?: string;
 };
 
 /** The time from the start of the install to a machine the person can use, step by step. fleet setup writes it after each step. */
@@ -29,8 +30,8 @@ export type Timings = {
   steps: StepTiming[];
   usable: string | null;
   usableSeconds: number | null;
-  /** How many steps needed the person at least once. */
-  neededYou: number;
+  /** How many steps waited for the person at least once. */
+  blockedSteps: number;
 };
 
 const installTitles: Record<string, string> = {
@@ -40,7 +41,7 @@ const installTitles: Record<string, string> = {
   packages: "Install the engine's packages",
 };
 
-export type StepRecord = Pick<StepTiming, "id" | "title" | "kind" | "neededYou" | "outcome"> & { start: number; end: number };
+export type StepRecord = Pick<StepTiming, "id" | "title" | "kind" | "blocked" | "outcome" | "error"> & { start: number; end: number };
 
 export type TimingsLog = {
   record(step: StepRecord): Promise<void>;
@@ -61,8 +62,8 @@ export function openTimings(home: string, now: number): TimingsLog {
   };
   return {
     async record(step) {
-      const entry: StepTiming = { id: step.id, title: step.title, kind: step.kind, start: iso(step.start), end: iso(step.end), seconds: seconds(step.end - step.start), neededYou: step.neededYou, ...(step.outcome ? { outcome: step.outcome } : {}) };
-      timings = { ...timings, steps: [...timings.steps, entry], neededYou: new Set([...timings.steps, entry].filter((item) => item.neededYou).map((item) => item.id)).size };
+      const entry: StepTiming = { id: step.id, title: step.title, kind: step.kind, start: iso(step.start), end: iso(step.end), seconds: seconds(step.end - step.start), blocked: step.blocked, outcome: step.outcome, ...(step.error ? { error: step.error } : {}) };
+      timings = { ...timings, steps: [...timings.steps, entry], blockedSteps: new Set([...timings.steps, entry].filter((item) => item.blocked).map((item) => item.id)).size };
       await save();
     },
     async usable(at) {
@@ -70,7 +71,7 @@ export function openTimings(home: string, now: number): TimingsLog {
       const total = seconds(at - Date.parse(timings.started));
       timings = { ...timings, usable: iso(at), usableSeconds: total };
       await save();
-      return `  Usable ${duration(total)} after the start. ${timings.neededYou} ${timings.neededYou === 1 ? "step" : "steps"} needed you.`;
+      return `  Usable ${duration(total)} after the start. ${timings.blockedSteps} ${timings.blockedSteps === 1 ? "step" : "steps"} needed you.`;
     },
   };
 }
@@ -79,7 +80,7 @@ function fresh(home: string, now: number): Timings {
   const install = installPhases(home, now);
   const started = install?.started ?? now;
   const steps = install?.steps ?? [];
-  return { schema: 1, started: iso(started), steps, usable: null, usableSeconds: null, neededYou: steps.filter((step) => step.neededYou).length };
+  return { schema: 1, started: iso(started), steps, usable: null, usableSeconds: null, blockedSteps: steps.filter((step) => step.blocked).length };
 }
 
 function installPhases(home: string, now: number): { started: number; steps: StepTiming[] } | undefined {
@@ -97,7 +98,7 @@ function installPhases(home: string, now: number): { started: number; steps: Ste
   let previous = started;
   for (const [phase, ended, flag] of lines.slice(1)) {
     const end = Number(ended) * 1000;
-    steps.push({ id: `install:${phase}`, title: installTitles[phase!] ?? phase!, kind: flag === "needed-you" ? "human" : "auto", start: iso(previous), end: iso(end), seconds: seconds(end - previous), neededYou: flag === "needed-you" });
+    steps.push({ id: `install:${phase}`, title: installTitles[phase!] ?? phase!, kind: flag === "needed-you" ? "human" : "auto", start: iso(previous), end: iso(end), seconds: seconds(end - previous), blocked: flag === "needed-you", outcome: "done" });
     previous = end;
   }
   return { started, steps };
