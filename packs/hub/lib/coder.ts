@@ -109,9 +109,11 @@ export class Coder {
   async sessionKey(timeoutMs = sessionLimitMs): Promise<SessionKey | undefined> {
     const token = this.env.CODER_SESSION_TOKEN;
     if (!token) return undefined;
-    const response = await this.fetch(`${this.env.CODER_URL}/api/v2/users/me/keys/${encodeURIComponent(token.split("-")[0]!)}`, { signal: limit(timeoutMs), headers: { "Coder-Session-Token": token } });
+    if (!/^[\x21-\x7e]+$/.test(token)) throw new Error("the session token has a character that cannot go in a request, such as a line break");
+    const response = await this.fetch(`${this.env.CODER_URL}/api/v2/users/me/keys/${encodeURIComponent(token.split("-")[0]!)}`, { signal: limit(timeoutMs), redirect: "manual", headers: { "Coder-Session-Token": token } });
     if (response.status === 401) return { rejected: true };
-    if (!response.ok) throw new Error(`Coder answered ${response.status}: ${(await response.text()).trim()}`);
+    if (response.status >= 300 && response.status < 400) throw new Error(`Coder answered ${response.status} with a redirect, so Fleet did not send the session to another address`);
+    if (!response.ok) throw new Error(`Coder answered ${response.status}`);
     const key = (await response.json()) as { expires_at: string; lifetime_seconds: number };
     return { rejected: false, expiresAt: Date.parse(key.expires_at), lifetimeMs: key.lifetime_seconds * 1000 };
   }
@@ -321,13 +323,16 @@ export async function checkSession(coder: Pick<Coder, "env" | "sessionFrom" | "s
   try {
     key = await coder.sessionKey();
   } catch (error) {
-    const reason = error instanceof DOMException && error.name === "TimeoutError" ? "it timed out" : (error as Error).message;
+    const token = coder.env.CODER_SESSION_TOKEN ?? "";
+    const message = error instanceof DOMException && error.name === "TimeoutError" ? "it timed out" : (error as Error).message;
+    const reason = token ? message.split(token).join("<session token>") : message;
     return options.print(`Cannot reach Coder at ${url} to check the hub's Coder session: ${reason}. Check the address and the network, then run fleet box session again.`), 1;
   }
   if (!key || key.rejected) return options.print(`Coder rejects the hub's Coder session: it expired or was removed. ${fix}`), 1;
   const at = new Date(key.expiresAt).toISOString();
   if (key.expiresAt <= options.now) return options.print(`The hub's Coder session expired at ${at}. ${fix}`), 1;
-  if (key.expiresAt - options.now <= Math.min(tokenRenewWithinMs, key.lifetimeMs / 2)) return options.print(`The hub's Coder session expires at ${at}. ${fix}`), 1;
+  const warnWithin = key.lifetimeMs > 0 ? Math.min(tokenRenewWithinMs, key.lifetimeMs / 2) : tokenRenewWithinMs;
+  if (key.expiresAt - options.now <= warnWithin) return options.print(`The hub's Coder session expires at ${at}. ${fix}`), 1;
   options.print(`The hub's Coder session lasts until ${at}.`);
   return 0;
 }

@@ -18,17 +18,18 @@ function apiKey(expiresAt: number, lifetimeSeconds: number, loginType = "passwor
   return { id: keyId, user_id: "8f1c2c1e-0f7a-4b8e-9c55-0d6c2f3a1b11", last_used: "2026-10-31T23:50:00Z", expires_at: new Date(expiresAt).toISOString(), created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-31T23:50:00Z", login_type: loginType, scope: "all", scopes: ["all"], token_name: "", lifetime_seconds: lifetimeSeconds, allow_list: [{ type: "*", id: "*" }] };
 }
 
-function hubWith(files: Record<string, string>, answer: Answer, env: Record<string, string> = {}) {
+function hubWith(files: Record<string, string>, answer: Answer | "network", env: Record<string, string> = {}) {
   const home = temp.make("fleet-coder-session-");
   writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub" }), ...files });
   const requests: Request[] = [];
   const fetcher = (async (url: string, init?: RequestInit) => {
     requests.push({ url, token: new Headers(init?.headers).get("Coder-Session-Token"), signal: init?.signal instanceof AbortSignal });
+    if (answer === "network") throw new Error("the real network is in use");
     if (answer instanceof Error) throw answer;
     return Response.json(answer.body, { status: answer.status });
   }) as unknown as typeof fetch;
   const { machine, lines } = fakeMachine(home, { self: "my-hub", isHub: true });
-  const coder = new Coder({ home, env, coderUrl: machine.settings.coderUrl, template: machine.settings.template, fetch: fetcher });
+  const coder = new Coder({ home, env, coderUrl: machine.settings.coderUrl, template: machine.settings.template, ...(answer === "network" ? {} : { fetch: fetcher }) });
   const run = () => boxCommand(["session"], { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} });
   return { run, lines, requests };
 }
@@ -90,4 +91,36 @@ test("on a machine that is not the hub, fleet box session refuses and says to ru
   const { machine } = fakeMachine(home);
   const coder = new Coder({ home, env: {}, coderUrl: machine.settings.coderUrl, template: machine.settings.template });
   await expect(boxCommand(["session"], { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} })).rejects.toThrow("Run fleet hub here on the hub");
+});
+
+test("fleet box session sends the session to no other address that Coder's address redirects to", async () => {
+  const seen: Array<string | null> = [];
+  const other = Bun.serve({ port: 0, fetch: (request) => (seen.push(request.headers.get("Coder-Session-Token")), Response.json(apiKey(start + 30 * day, 90 * 86_400, "token"))) });
+  const coder = Bun.serve({ port: 0, fetch: (request) => Response.redirect(`${other.url.origin}${new URL(request.url).pathname}`, 302) });
+  try {
+    const hub = hubWith({ ".config/coderv2/session": `${sessionToken}\n`, ".config/coderv2/url": `${coder.url.origin}\n` }, "network");
+    expect(await hub.run()).toBe(1);
+    expect(seen).toEqual([]);
+    expect(hub.lines.join("\n")).toContain("redirect");
+  } finally {
+    coder.stop(true);
+    other.stop(true);
+  }
+});
+
+test("fleet box session never prints the session token, not even one that cannot go in a header or that Coder echoes", async () => {
+  const pasted = `${keyId}-pastedSecretPart\nsecondLineSecret`;
+  const broken = hubWith({ ".config/coderv2/session": `${pasted}\n`, ".config/coderv2/url": "http://127.0.0.1:9\n" }, "network");
+  expect(await broken.run()).toBe(1);
+  expect(broken.lines.join("\n")).not.toMatch(/pastedSecretPart|secondLineSecret/);
+  const echoed = hubWith(cliSession, { status: 500, body: { message: `bad key ${sessionToken}` } });
+  expect(await echoed.run()).toBe(1);
+  expect(echoed.lines.join("\n")).toContain("Coder answered 500");
+  expect(echoed.lines.join("\n")).not.toContain("x".repeat(22));
+});
+
+test("a key that reports no lifetime still warns within 7 days of its expiry", async () => {
+  const hub = hubWith(cliSession, { status: 200, body: apiKey(start + 3 * day, 0, "token") });
+  expect(await hub.run()).toBe(1);
+  expect(hub.lines.join("\n")).toContain("expires at 2026-11-04T00:00:00.000Z");
 });
