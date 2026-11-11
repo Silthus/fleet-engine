@@ -96,7 +96,16 @@ describe("the agent setup guide", () => {
 
   test("with a hub and a node, creates a 200 GB hub and a 500 GB node with every parameter given, so Coder asks nothing", () => {
     expect(words(hubStep())).toContain("The default is one **hub** with a 200 GB disk and one **node** with a 500 GB disk");
-    expect(codeIn(hubStep()).find((code) => code.startsWith("coder create "))).toBe("coder create <name> --template <template> --parameter <disk parameter>=<200 or 500> --yes\n");
+    expect(codeIn(hubStep()).find((code) => code.startsWith("coder create "))).toBe("coder create <name> --template <template> --preset none --use-parameter-defaults --parameter <disk parameter>=<200 or 500> --yes\n");
+  });
+
+  test("with a hub and a node, reads the template's parameters when coder templates pull fails", () => {
+    expect(words(hubStep())).toContain("When `coder templates pull` fails, open the template's page in the Coder web app");
+  });
+
+  test("with a hub and a node, follows a team pack's own setup note first, because that pack may already have made a devbox", () => {
+    expect(words(hubStep())).toContain("When step 7 printed that a team pack is ticked");
+    expect(codeIn(hubStep())).toContain("~/.local/share/fleet/sources/<source>/packs/<pack>/SETUP.md\n");
   });
 
   test("with a hub and a node, keeps both running while the Mac sleeps", () => {
