@@ -30,7 +30,7 @@ export async function devboxCommand(args: string[], context: DevboxCommandContex
   try {
     await runSteps(steps, {
       terminal,
-      done: machineFile.setup?.done ?? [],
+      done: (machineFile.setup?.done ?? []).filter((id) => id !== `devbox:${host}:coder`),
       async save(done) {
         machineFile.setup = { ...machineFile.setup, done };
         await remember();

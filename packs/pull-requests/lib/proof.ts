@@ -3,6 +3,7 @@ import { access, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } f
 import { dirname, extname, join } from "node:path";
 import { normalized, withoutThread, type Hear, type HeardAnswer } from "./proof-answers.ts";
 import type { Family } from "./proof-models.ts";
+import { quietReason, type DeltaKind, type QuietStep } from "./proof-delta.ts";
 
 export type ProofIdentity = { repository: string; pr: number; commit: string };
 const sha = /^[0-9a-f]{40}$/;
@@ -148,15 +149,17 @@ async function askUser(home: string, identity: ProofIdentity, now: Date, stop: s
 }
 
 export type CapturedBy = "fleet" | "author";
-export type ReviewRequest = { scope: string; base?: string; from?: string; override?: string; standing?: string; hear?: Hear; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; capturedBy?: CapturedBy; now?: Date };
+export type ReviewRequest = { scope: string; base?: string; from?: string; override?: string; standing?: string; hear?: Hear; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; capturedBy?: CapturedBy; now?: Date };
 type Reserved = { round: number | "final"; id: string; directory: string };
 type Decision = { override: string; answer: HeardAnswer } | { standing: StandingDecision } | undefined;
 type StandingDecision = { reason: string; rule: string; until: string };
 type Permit = { arbiter: Arbiter; limits: ReviewLimits; now: Date };
 
-async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: Decision, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {
+async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: Decision, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {
   if (base === undefined) throw new Error("A final read needs --base with the latest reviewed commit");
   if (base === identity.commit) throw new Error("HEAD is already reviewed. Skip the final read.");
+  const quiet = decision ? undefined : reviewedThrough(identity.commit, new Set([base]), cleanBaseMerge, quietCommit);
+  if (quiet?.quiet.length) throw new Error(`HEAD needs no final read: final read carried from ${short(base)}: ${quietReason(quiet.kinds)}. fleet proof gate counts the carry. To read it anyway, pass the user's --override, or --standing under their standing rule`);
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   for (let attempt = 1; attempt <= 100; attempt++) {
     const started = await reviewNames(reviews);
@@ -182,7 +185,7 @@ const coversReview = (base: string, reviewed: string, cleanBaseMerge: CleanBaseM
 const isDatedQuote = (text: string) => /\b\d{4}-\d{2}-\d{2}\b/.test(text) && /["“][^"”]*\S[^"”]*["”]/.test(text);
 
 export async function startReview(home: string, identity: ProofIdentity, request: ReviewRequest): Promise<Reserved> {
-  const { scope, base, phase, hear = withoutThread, cleanBaseMerge = () => undefined, capturedBy = "author", now = new Date() } = request;
+  const { scope, base, phase, hear = withoutThread, cleanBaseMerge = () => undefined, quietCommit = () => undefined, capturedBy = "author", now = new Date() } = request;
   const from = request.from ?? base;
   const permit = { arbiter: request.arbiter, limits: request.limits, now };
   if (!["full", "fixes", "final"].includes(scope)) throw new Error("Review scope must be full, fixes, or final");
@@ -195,7 +198,7 @@ export async function startReview(home: string, identity: ProofIdentity, request
   let release: (() => Promise<void>) | undefined;
   try {
     if (decision && "override" in decision) release = await claimAnswer(home, identity, decision.answer);
-    if (scope === "final") return await startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, capturedBy, from);
+    if (scope === "final") return await startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, quietCommit, capturedBy, from);
     return await startRound(home, identity, reviews, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy });
   } catch (error) {
     await release?.();
@@ -685,37 +688,58 @@ async function finishedReviews(home: string, identity: ProofIdentity) {
 const reviewLabel = (name: string) => name.startsWith(finalReadPrefix) ? `final read ${name.slice(finalReadPrefix.length)}` : `round ${name}`;
 
 export type CleanBaseMerge = (commit: string) => string | undefined;
-type Carried = { commit: string; from: string; merges: string[]; recordedAt: string };
+export type QuietCommit = (commit: string) => QuietStep | undefined;
+type Carried = { commit: string; from: string; merges: string[]; quiet?: string[]; reason?: string; recordedAt: string };
 const carriedPath = (home: string, identity: ProofIdentity, commit: string) => join(pullRequestDirectory(home, identity), "carried", `${commit}.json`);
 const maxCarriedMerges = 20;
+const maxQuietCommits = 30;
 
 function reviewedThroughMerges(start: string, reviewed: Set<string>, cleanBaseMerge: CleanBaseMerge) {
+  const found = reviewedThrough(start, reviewed, cleanBaseMerge, () => undefined);
+  return found && { from: found.from, merges: found.merges };
+}
+
+function reviewedThrough(start: string, reviewed: Set<string>, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit) {
   const merges: string[] = [];
+  const quiet: string[] = [];
+  const kinds = new Set<DeltaKind>();
   let commit: string | undefined = start;
-  while (commit && merges.length <= maxCarriedMerges) {
-    if (reviewed.has(commit)) return { from: commit, merges };
-    merges.push(commit);
-    commit = cleanBaseMerge(commit);
+  while (commit && merges.length <= maxCarriedMerges && quiet.length <= maxQuietCommits) {
+    if (reviewed.has(commit)) return { from: commit, merges, quiet, kinds: [...kinds] };
+    const merged = cleanBaseMerge(commit);
+    if (merged) { merges.push(commit); commit = merged; continue; }
+    const step = quietCommit(commit);
+    if (!step) return undefined;
+    quiet.push(commit);
+    step.kinds.forEach((kind) => kinds.add(kind));
+    commit = step.parent;
   }
   return undefined;
 }
 
-async function carryForward(home: string, identity: ProofIdentity, reviewed: Set<string>, cleanBaseMerge: CleanBaseMerge) {
-  const found = reviewedThroughMerges(identity.commit, reviewed, cleanBaseMerge);
-  if (!found?.merges.length) return undefined;
-  const carried: Carried = { commit: identity.commit, ...found, recordedAt: new Date().toISOString() };
+async function carryForward(home: string, identity: ProofIdentity, reviewed: Set<string>, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit) {
+  const found = reviewedThrough(identity.commit, reviewed, cleanBaseMerge, quietCommit);
+  if (!found || (!found.merges.length && !found.quiet.length)) return undefined;
+  const quiet = found.quiet.length ? { quiet: found.quiet, reason: quietReason(found.kinds) } : {};
+  const carried: Carried = { commit: identity.commit, from: found.from, merges: found.merges, ...quiet, recordedAt: new Date().toISOString() };
   await writeJson(carriedPath(home, identity, identity.commit), carried);
   return carried;
 }
 
-async function reviewStatus(home: string, identity: ProofIdentity, cleanBaseMerge: CleanBaseMerge): Promise<Status> {
+async function reviewStatus(home: string, identity: ProofIdentity, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit): Promise<Status> {
   const finished = await finishedReviews(home, identity);
   const head = finished.filter((review) => review.commit === identity.commit).at(-1);
   if (head) {
     const covered = `${reviewLabel(head.name)}${head.reviewer ? ` by ${head.reviewer}` : ""}`;
     return { problem: undefined, line: `review: HEAD reviewed in ${covered}`, covered };
   }
-  const carried = await carryForward(home, identity, new Set(finished.map((review) => review.commit)), cleanBaseMerge);
+  const carried = await carryForward(home, identity, new Set(finished.map((review) => review.commit)), cleanBaseMerge, quietCommit);
+  if (carried?.reason) {
+    const review = finished.filter((done) => done.commit === carried.from).at(-1)!;
+    const merges = carried.merges.length ? ` and ${carried.merges.length} clean merge(s) of the base` : "";
+    const covered = `final read carried from ${short(carried.from)}: ${carried.reason}`;
+    return { problem: undefined, line: `review: ${covered} (${reviewLabel(review.name)}${review.reviewer ? ` by ${review.reviewer}` : ""}; ${carried.quiet!.length} quiet commit(s)${merges})`, covered };
+  }
   if (carried) return { problem: undefined, line: `review: HEAD carried forward from the review of ${short(carried.from)} across ${carried.merges.length} clean merge(s) of the base`, covered: `carried from ${short(carried.from)}` };
   const latest = finished.at(-1);
   return { problem: "missing", line: latest ? `review: HEAD not reviewed, last review covered ${short(latest.commit)}` : "review: HEAD not reviewed" };
@@ -752,15 +776,15 @@ function headStatus(identity: ProofIdentity, before: PushedHead, after: PushedHe
   return { problem: undefined, line: `head: ${short(identity.commit)} is the PR's head on GitHub` };
 }
 
-export type GateOptions = { ci: () => CiResult; pushedHead: () => PushedHead; landed?: boolean; cleanBaseMerge?: CleanBaseMerge; now?: Date };
+export type GateOptions = { ci: () => CiResult; pushedHead: () => PushedHead; landed?: boolean; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; now?: Date };
 
-export async function proofGate(home: string, identity: ProofIdentity, { ci, pushedHead, landed = false, cleanBaseMerge = () => undefined, now = new Date() }: GateOptions) {
+export async function proofGate(home: string, identity: ProofIdentity, { ci, pushedHead, landed = false, cleanBaseMerge = () => undefined, quietCommit = () => undefined, now = new Date() }: GateOptions) {
   const owed = await readOwed(home, identity);
   const statuses: Status[] = [];
   if (!owed) statuses.push({ problem: "missing", line: "owed proofs: not recorded; run fleet proof require --kinds <kind,kind> or fleet proof require --none --reason <why>" });
   else if (!owed.kinds.length) statuses.push({ problem: undefined, line: `owed proofs: none (${owed.none?.reason ?? "no reason recorded"})` });
   const kinds = await Promise.all((owed?.kinds ?? []).map(async (kind) => ({ kind, ...await kindStatus(home, identity, kind, landed, cleanBaseMerge, now) })));
-  const review = await reviewStatus(home, identity, cleanBaseMerge);
+  const review = await reviewStatus(home, identity, cleanBaseMerge, quietCommit);
   const responses = await responseStatuses(home, identity);
   const before = pushedHead();
   const ciResult = ci();
