@@ -19,6 +19,7 @@ function codeIn(text: string) {
   const spans = [...text.replace(/^ *```[\s\S]*?^ *```$/gm, "").matchAll(/`([^`\n]+)`/g)].map((match) => match[1]!);
   return [...blocks, ...spans];
 }
+const guidePath = "$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";
 const manifests = async () => (await loadPacks(root)).map((pack) => pack.manifest);
 const hubStep = () => guide().slice(guide().indexOf("## 9. Add the hub and the node"));
 const words = (text: string) => text.replace(/\s+/g, " ");
@@ -100,6 +101,10 @@ describe("the agent setup guide", () => {
     expect(codeIn(hubStep())).toContain("coder schedule stop <name> manual");
   });
 
+  test("with a hub and a node, checks each workspace with a fleet doctor that sets the guide's PATH over SSH", () => {
+    expect(codeIn(hubStep())).toContain(`ssh coder.<name> 'export PATH="${guidePath}"; fleet doctor'\n`);
+  });
+
   test("with a hub and a node, says how to add a node later", () => {
     expect(words(hubStep())).toContain("To add a node later, when the load grows, run steps 3 to 6 again with a new name and a 500 GB disk");
   });
@@ -108,7 +113,7 @@ describe("the agent setup guide", () => {
     const notes = readdirSync(join(root, "packs")).map((pack) => join(root, "packs", pack, "SETUP.md")).filter(existsSync);
     const paths = [guide(), ...notes.map((path) => readFileSync(path, "utf8"))].flatMap((text) => [...text.matchAll(/export PATH="([^"]+)"/g)].map((match) => match[1]));
     expect(paths.length).toBeGreaterThan(1);
-    expect(new Set(paths)).toEqual(new Set(["$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"]));
+    expect(new Set(paths)).toEqual(new Set([guidePath]));
   });
 
   test("fetches only files that are in the repo", () => {
