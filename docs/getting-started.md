@@ -105,6 +105,8 @@ stopped.
 
 If you write the SSH hosts before step 1, `fleet setup` asks which host is
 your devbox and runs the same steps. `fleet devbox` lists your devboxes.
+When a new devbox replaces an old one, `fleet devbox remove <ssh host>`
+takes the old one out of your profile and unlinks it in T3 Code.
 
 ## Change things later
 

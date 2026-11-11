@@ -2,6 +2,7 @@ import type { MachineFile, Plan } from "../pack/types.ts";
 import { saveMachine, validHost } from "../profile/profile.ts";
 import type { Machine } from "../setup/commands.ts";
 import { balanceThreads } from "../setup/devbox-balance.ts";
+import { removeDevbox } from "../setup/devbox-remove.ts";
 import { devboxSteps, linkFromHub, listInProfile, nameBox, overSsh, profileForBox, tellHub } from "../setup/devbox.ts";
 import { FlagError, refuseUnusableDevbox } from "../setup/flags.ts";
 import { runSteps } from "../setup/runner.ts";
@@ -9,7 +10,7 @@ import { Stopped, type Terminal } from "../setup/terminal.ts";
 
 export type DevboxCommandContext = { home: string; terminal: Terminal; machine: Machine; machineFile: MachineFile; plan: Plan };
 
-const usage = "usage: fleet devbox, or fleet devbox add <ssh host>";
+const usage = "usage: fleet devbox, fleet devbox add <ssh host>, or fleet devbox remove <ssh host>";
 
 /** Lists the devboxes, or makes an SSH host a devbox with the same steps setup runs. */
 export async function devboxCommand(args: string[], context: DevboxCommandContext): Promise<number> {
@@ -21,7 +22,8 @@ export async function devboxCommand(args: string[], context: DevboxCommandContex
     return 0;
   }
   const [action, host, ...rest] = args;
-  if (action !== "add" || !host || rest.length || !validHost(host)) throw new FlagError(usage);
+  if ((action !== "add" && action !== "remove") || !host || rest.length || !validHost(host)) throw new FlagError(usage);
+  if (action === "remove") return await removeDevbox(host, context), 0;
   refuseUnusableDevbox(host);
   await nameBox(overSsh(context.machine, host), host);
   const remember = () => saveMachine(context.home, machineFile);

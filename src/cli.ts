@@ -47,8 +47,8 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet settings     List the settings of your packs
   fleet set [--set] <pack.key=value>...
                      Change settings
-  fleet devbox [add <ssh host>]
-                     List your devboxes, or make an SSH host one
+  fleet devbox [add|remove <ssh host>]
+                     List your devboxes, make an SSH host one, or remove one you replaced
   fleet hub here [<ssh name>]
                      Make this machine the hub of your profile
   fleet hub status   Show this machine's name and the hub
