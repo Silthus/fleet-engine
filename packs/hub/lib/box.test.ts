@@ -306,13 +306,13 @@ test("the nightly pool refresh warms each free box with hub.boxWarmCommand in a 
 
 test("the nightly job reaps, grants a Coder token to each profile devbox, refreshes the pool, and fails if any part failed", async () => {
   const { machine, lines } = fakeMachine(temp.make("fleet-box-"), { self: "my-hub", isHub: true, devboxes: ["devbox-1", "devbox-2"] });
-  const steps = nightlySteps(machine, { reap: async () => 0, grant: async (devbox) => (devbox === "devbox-2" ? 1 : 0), refresh: async () => 0 });
-  expect(steps.map((step) => step.name)).toEqual(["reap", "grant devbox-1", "grant devbox-2", "refresh the pool"]);
+  const steps = nightlySteps(machine, { session: async () => 1, reap: async () => 0, grant: async (devbox) => (devbox === "devbox-2" ? 1 : 0), refresh: async () => 0 });
+  expect(steps.map((step) => step.name)).toEqual(["check the Coder session", "reap", "grant devbox-1", "grant devbox-2", "refresh the pool"]);
   expect(await nightly(steps, machine)).toBe(1);
-  expect(lines.filter((line) => line.includes("failed"))).toEqual(["grant devbox-2 failed (exit 1)"]);
-  const passing = nightlySteps(machine, { reap: async () => 0, grant: async () => 0, refresh: async () => { throw new Error("boom"); } });
+  expect(lines.filter((line) => line.includes("failed"))).toEqual(["check the Coder session failed (exit 1)", "grant devbox-2 failed (exit 1)"]);
+  const passing = nightlySteps(machine, { session: async () => 0, reap: async () => 0, grant: async () => 0, refresh: async () => { throw new Error("boom"); } });
   expect(await nightly(passing, machine)).toBe(1);
-  expect(await nightly(nightlySteps(machine, { reap: async () => 0, grant: async () => 0, refresh: async () => 0 }), machine)).toBe(0);
+  expect(await nightly(nightlySteps(machine, { session: async () => 0, reap: async () => 0, grant: async () => 0, refresh: async () => 0 }), machine)).toBe(0);
 });
 
 test("fleet box token saves the pasted token with mode 0600, and refuses an empty paste", async () => {

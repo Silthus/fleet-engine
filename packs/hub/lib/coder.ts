@@ -16,6 +16,11 @@ export type Box = { name: string; id: string; template: string; status: string; 
 export type Capture = (argv: string[], options: { env?: Env; stdin?: string; timeoutMs: number; inherit?: boolean }) => Promise<Result>;
 export type Timer = (ms: number, fire: () => void) => () => void;
 export type CoderOptions = { home: string; env: Env; coderUrl: string; template: string; capture?: Capture; fetch?: typeof fetch };
+export type SessionSource = "environment" | "fleet" | "cli" | "none";
+export type SessionKey = { rejected: true } | { rejected: false; expiresAt: number; lifetimeMs: number };
+
+const sessionFiles = [["fleet", ".config/fleet/coder-session", ".config/fleet/coder-url"], ["cli", ".config/coderv2/session", ".config/coderv2/url"]] as const;
+const sessionLimitMs = 10_000;
 
 export function slugFor(name: string): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -80,6 +85,7 @@ export class Coder {
   private readonly home: string;
   private readonly template: string;
   private readonly capture: Capture;
+  readonly sessionFrom: SessionSource;
   private readonly fetch: typeof fetch;
   private found?: string;
 
@@ -89,14 +95,25 @@ export class Coder {
     this.capture = options.capture ?? capture;
     this.fetch = options.fetch ?? fetch;
     this.env = { ...options.env };
-    const fleet = join(options.home, ".config/fleet");
-    const cli = join(options.home, ".config/coderv2");
-    for (const [token, url] of [[join(fleet, "coder-session"), join(fleet, "coder-url")], [join(cli, "session"), join(cli, "url")]] as const) {
-      if (this.env.CODER_SESSION_TOKEN || !existsSync(token)) continue;
-      this.env.CODER_SESSION_TOKEN = readFileSync(token, "utf8").trim();
-      if (existsSync(url)) this.env.CODER_URL = readFileSync(url, "utf8").trim();
+    let from: SessionSource = this.env.CODER_SESSION_TOKEN ? "environment" : "none";
+    for (const [source, token, url] of sessionFiles) {
+      if (this.env.CODER_SESSION_TOKEN || !existsSync(join(options.home, token))) continue;
+      this.env.CODER_SESSION_TOKEN = readFileSync(join(options.home, token), "utf8").trim();
+      from = source;
+      if (existsSync(join(options.home, url))) this.env.CODER_URL = readFileSync(join(options.home, url), "utf8").trim();
     }
+    this.sessionFrom = this.env.CODER_SESSION_TOKEN ? from : "none";
     this.env.CODER_URL ||= options.coderUrl;
+  }
+
+  async sessionKey(timeoutMs = sessionLimitMs): Promise<SessionKey | undefined> {
+    const token = this.env.CODER_SESSION_TOKEN;
+    if (!token) return undefined;
+    const response = await this.fetch(`${this.env.CODER_URL}/api/v2/users/me/keys/${encodeURIComponent(token.split("-")[0]!)}`, { signal: limit(timeoutMs), headers: { "Coder-Session-Token": token } });
+    if (response.status === 401) return { rejected: true };
+    if (!response.ok) throw new Error(`Coder answered ${response.status}: ${(await response.text()).trim()}`);
+    const key = (await response.json()) as { expires_at: string; lifetime_seconds: number };
+    return { rejected: false, expiresAt: Date.parse(key.expires_at), lifetimeMs: key.lifetime_seconds * 1000 };
   }
 
   async binary(): Promise<string> {
@@ -286,5 +303,31 @@ export async function grant(coder: { env: Env; token(args: string[]): Promise<st
   }
   for (const old of tokens) await coder.token(["remove", old.token_name]);
   options.print(`${name}: granted for ${tokenLifetime}.`);
+  return 0;
+}
+
+export type SessionOptions = { now: number; print(line: string): void };
+
+export async function checkSession(coder: Pick<Coder, "env" | "sessionFrom" | "sessionKey">, options: SessionOptions): Promise<number> {
+  if (coder.sessionFrom === "none") return options.print("This machine has no Coder session, so there is no Coder session to check."), 0;
+  const url = coder.env.CODER_URL ?? "";
+  const login = `coder login ${url}`;
+  const fix = {
+    environment: `Set CODER_SESSION_TOKEN to a fresh token, or unset it and run ${login} on the hub.`,
+    fleet: `Write a fresh Coder token to ~/.config/fleet/coder-session, or remove that file and run ${login} on the hub.`,
+    cli: `Run ${login} on the hub to sign in again.`,
+  }[coder.sessionFrom];
+  let key: SessionKey | undefined;
+  try {
+    key = await coder.sessionKey();
+  } catch (error) {
+    const reason = error instanceof DOMException && error.name === "TimeoutError" ? "it timed out" : (error as Error).message;
+    return options.print(`Cannot reach Coder at ${url} to check the hub's Coder session: ${reason}. Check the address and the network, then run fleet box session again.`), 1;
+  }
+  if (!key || key.rejected) return options.print(`Coder rejects the hub's Coder session: it expired or was removed. ${fix}`), 1;
+  const at = new Date(key.expiresAt).toISOString();
+  if (key.expiresAt <= options.now) return options.print(`The hub's Coder session expired at ${at}. ${fix}`), 1;
+  if (key.expiresAt - options.now <= Math.min(tokenRenewWithinMs, key.lifetimeMs / 2)) return options.print(`The hub's Coder session expires at ${at}. ${fix}`), 1;
+  options.print(`The hub's Coder session lasts until ${at}.`);
   return 0;
 }
