@@ -77,9 +77,13 @@ export type HumanStep = Scope & {
   repair?: string[];
 };
 
+/** The exit code of a step's check that means it cannot tell yet, such as before the step's human step passes. Only an undo reads it. When Fleet decides whether to run a step, 3 fails like any other code. */
+export const cannotTell = 3;
+
 export type PackStep = Scope & {
   id: string;
   run: string[];
+  /** Exits 0 when what the step sets holds, cannotTell (3) when it cannot tell yet, and any other code when it does not hold. */
   check?: string[];
   /** The id of a human step of the same pack that must pass before this step runs. */
   after?: string;
