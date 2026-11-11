@@ -270,17 +270,23 @@ and Fleet does not wrap it in a unit.
   no second direction.
 - **Commands and credentials travel over plain `ssh`, from the node to the
   hub.** A node runs a hub command as `ssh <hub> fleet <command>`, as
-  `toHub` does today (`packs/hub/lib/machine.ts:144`). During its own apply
-  a node pulls each credential the same way:
-  `ssh <hub> fleet credential <pack>/<id> <node>`. The hub answers only for
-  a node that the profile names. The hub runs no command on a node. A machine
-  without plain `ssh` to the hub is outside v1's topology.
+  `toHub` does. During its own apply a node pulls each credential the same
+  way: `ssh <hub> fleet credential <pack>/<id> <node>`, at every apply, so a
+  new key on the hub reaches the node. The hub answers only for a node that
+  the profile names. Every such call goes through one engine path
+  (`src/hub/ssh.ts`): `BatchMode`, a checked host name, each word quoted,
+  and Fleet's launcher at its install path, not the login `PATH`. The hub
+  runs no command on a node, so `fleet mcphub grant` and its accept command
+  are gone. A machine without plain `ssh` to the hub is outside v1's
+  topology.
 - **Each service issues its own credentials (D14).** The engine mints no
   key. A service that needs one declares `serve.credential(ctx, node)`,
   which returns the value for that node. The hub calls it when a node
   asks, and directly for itself. The node stores the answer in the pack's
   secret store, and `ctx.use` returns it. When the hub does not answer,
-  the node keeps its stored credential, and apply reports a finding.
+  the node keeps its stored credential, and apply reports a finding. The
+  finding names the exit code and the command that shows why, and copies
+  nothing that the hub printed, in case the service prints its key.
   *Reason:* the MCP gateway already mints a scoped key for each machine
   (`grant`, `packs/mcp-gateway/lib/hub.ts`), and the CLI proxy has
   one shared key in its config. Engine keys would be a second auth system.
@@ -291,7 +297,10 @@ and Fleet does not wrap it in a unit.
     pack owns only the probe, a check. The config items say `after: route`.
   - *Apply while the proxy does not answer:* the gate fails, the two items
     leave the plan, and the adapter removes its own values. Claude Code
-    uses its own sign-in.
+    uses its own sign-in. A key that holds exactly the pack's value also
+    goes when no apply recorded it, as after `fleet cli-proxy connect`,
+    and while a pack source cannot be fetched. The items that wait for
+    one check go together, so they all stay when one holds another value.
   - *Until recovery:* each `fleet apply` and `fleet doctor` reports the
     failed check. The first apply whose probe passes writes both keys
     again. Between applies nothing changes the route.
@@ -312,8 +321,9 @@ and Fleet does not wrap it in a unit.
 fleet.command("box", { on: "hub", summary: "Borrow, run on, and return boxes", run });
 ```
 
-On the hub the engine runs it. On another node the engine runs
-`ssh <hub> fleet box ...`, from step 3 on. Resolve collects every command
+On the hub the engine runs it. On a node that the profile names the engine
+runs `ssh <hub> fleet box ...` with this terminal and returns the hub's exit
+code. Any other machine is told to run it on the hub. Resolve collects every command
 before it filters items for the local machine, as `packCommands` does today
 (`resolve.ts:360`), so every node knows the name. `on` only selects where
 the command runs. Pack code no longer calls `requireHub` or builds
@@ -345,9 +355,9 @@ directly, not a page that only Caddy serves, and tells the person to run
 the gateway at loopback without private HTTPS. Apply tests the checks that
 served services wait for first and issues their credentials, so the client
 check's repair writes today's client file from the new key in the same
-apply. Until step 3 pulls keys, `fleet mcp-gateway grant <devbox>` and its
-`accept` stay, and the client check's repair moves a key from today's
-client file into the store. A profile that lists the Hub pack gets this
+apply. A node pulls its key from the hub at every apply, and the client
+check's repair moves a key from today's client file into the store once.
+`fleet mcp-gateway` runs on the hub, also when you type it on a node. A profile that lists the Hub pack gets this
 pack too, until it turns the `mcp-gateway` workflow off.
 
 **The Slack trigger** (pack `slack`, section 5.3) serves nothing: it opens
@@ -701,8 +711,12 @@ Ranked, most important first.
 
 1. **Profile drift between nodes.** Nothing sends the catalog (D11). Two
    nodes at different profile commits compute different catalogs, and a
-   stale profile can name an old hub. *Plan:* `fleet doctor` tests each
-   catalog entry's health path at loopback and names the profile commit.
+   stale profile can name an old hub. *Plan, in step 3:* `fleet doctor`
+   tests each catalog entry's health path at loopback and names the profile
+   commit, so two nodes that show different commits have drifted. The hub
+   and its named nodes test the health; a solo machine has no node to
+   drift from. The hub skips an entry whose install check is still left,
+   because doctor names that check already.
 2. **The plugin's skill names.** A skill in a plugin is `source:skill`,
    and instructions, guides, and other skills name skills without a prefix
    today. *Plan:* step 6 moves one skill first. If agents no longer find

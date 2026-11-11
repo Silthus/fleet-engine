@@ -111,7 +111,7 @@
     },
     {
       "key": "hub.proxyAccounts",
-      "question": "How many of your own Claude subscriptions must the hub's proxy hold before fleet cli-proxy doctor passes?",
+      "question": "How many of your own subscriptions must the hub's proxy hold before fleet cli-proxy doctor passes? They are Claude subscriptions, or Codex ones on the Codex plan.",
       "type": "number",
       "default": 2,
       "ask": "never"
@@ -240,7 +240,7 @@
         "hub.relayPort",
         "hub.proxyAccounts"
       ],
-      "sentence": "The hub holds your own Claude subscriptions in a local proxy, and Claude Code on the hub, your devboxes, and boxes spends the one whose weekly quota resets first.",
+      "sentence": "The hub holds your own Claude or Codex subscriptions in a local proxy, and Claude Code and Codex on the hub, your devboxes, and boxes go through it, spending the Claude subscription whose weekly quota resets first.",
       "moment": {
         "time": "11:30",
         "title": "No weekly quota left unused",
@@ -251,7 +251,7 @@
           "thread"
         ]
       },
-      "risk": "The hub keeps your Claude sign-ins in CLIProxyAPI, and every machine in the workflow sends Claude Code through it. Read Anthropic's terms first. As read on 2026-11-05: the Anthropic Usage Policy, effective Nov 12, 2026, section \"Do Not Abuse Our Platform\" (https://www.anthropic.com/legal/aup), lists: \"Resell, proxy, or otherwise provide access to Claude through unauthorized means, including services that route requests through consumer subscriptions or misrepresent the product or client being used\". The Anthropic Consumer Terms, effective Oct 8, 2025, section 2 (https://www.anthropic.com/legal/consumer-terms), say: \"You may not share your Account login information, Anthropic API key, or Account credentials with anyone else. You also may not make your Account available to anyone else.\" Section 3, item 7 of the same terms lists: \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" Balancing is only for your own subscriptions, never for someone else's."
+      "risk": "On the Claude and both plans, the hub keeps your Claude sign-ins in CLIProxyAPI, and every machine in the workflow sends Claude Code through it. On the Codex and both plans, it keeps your ChatGPT sign-ins there, and every machine sends Codex through it. The balancer ranks only Claude subscriptions by reset date. Read Anthropic's terms first, and OpenAI's terms for your plan too. As read on 2026-11-05: the Anthropic Usage Policy, effective Nov 12, 2026, section \"Do Not Abuse Our Platform\" (https://www.anthropic.com/legal/aup), lists: \"Resell, proxy, or otherwise provide access to Claude through unauthorized means, including services that route requests through consumer subscriptions or misrepresent the product or client being used\". The Anthropic Consumer Terms, effective Oct 8, 2025, section 2 (https://www.anthropic.com/legal/consumer-terms), say: \"You may not share your Account login information, Anthropic API key, or Account credentials with anyone else. You also may not make your Account available to anyone else.\" Section 3, item 7 of the same terms lists: \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" Balancing is only for your own subscriptions, never for someone else's."
     }
   ],
   "config": [
@@ -267,7 +267,8 @@
         "claude",
         "both"
       ],
-      "workflow": "own-account-balancing"
+      "workflow": "own-account-balancing",
+      "after": "cli-proxy-client"
     },
     {
       "provider": "claude",
@@ -281,7 +282,8 @@
         "claude",
         "both"
       ],
-      "workflow": "own-account-balancing"
+      "workflow": "own-account-balancing",
+      "after": "cli-proxy-client"
     },
     {
       "provider": "codex",
@@ -292,9 +294,11 @@
         "devbox"
       ],
       "plans": [
+        "codex",
         "both"
       ],
-      "workflow": "own-account-balancing"
+      "workflow": "own-account-balancing",
+      "after": "cli-proxy-codex"
     },
     {
       "provider": "codex",
@@ -316,9 +320,11 @@
         "devbox"
       ],
       "plans": [
+        "codex",
         "both"
       ],
-      "workflow": "own-account-balancing"
+      "workflow": "own-account-balancing",
+      "after": "cli-proxy-codex"
     }
   ],
   "jobs": [
@@ -447,6 +453,7 @@
       "workflow": "own-account-balancing",
       "plans": [
         "claude",
+        "codex",
         "both"
       ]
     }
@@ -482,23 +489,6 @@
     }
   ],
   "steps": [
-    {
-      "id": "cli-proxy-route",
-      "run": [
-        "fleet",
-        "cli-proxy",
-        "route"
-      ],
-      "roles": [
-        "hub",
-        "devbox"
-      ],
-      "plans": [
-        "claude",
-        "both"
-      ],
-      "workflow": "own-account-balancing"
-    },
     {
       "id": "hub-https",
       "run": [
@@ -587,6 +577,7 @@
       "workflow": "own-account-balancing",
       "plans": [
         "claude",
+        "codex",
         "both"
       ]
     }
@@ -599,13 +590,32 @@
         "cli-proxy",
         "check"
       ],
-      "say": "Claude Code or Codex cannot reach your own-account proxy, so Fleet sent it back to its own sign-in. Run fleet cli-proxy check here to see why.",
+      "say": "Claude Code cannot reach your own-account proxy, so fleet apply keeps it on its own sign-in until the proxy answers. Run fleet cli-proxy check here to see why.",
       "roles": [
         "hub",
         "devbox"
       ],
       "plans": [
         "claude",
+        "both"
+      ],
+      "workflow": "own-account-balancing"
+    },
+    {
+      "id": "cli-proxy-codex",
+      "run": [
+        "fleet",
+        "cli-proxy",
+        "check",
+        "codex"
+      ],
+      "say": "Codex cannot reach your own-account proxy, so fleet apply keeps it on its own sign-in until the proxy answers. Run fleet cli-proxy check codex here to see why.",
+      "roles": [
+        "hub",
+        "devbox"
+      ],
+      "plans": [
+        "codex",
         "both"
       ],
       "workflow": "own-account-balancing"

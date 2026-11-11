@@ -14,10 +14,11 @@ import { isBoxName } from "./names.ts";
 import { must, proxyPort } from "./run.ts";
 
 export { proxyPort, proxyUrl };
-export type ProxyMode = "plan" | "install" | "doctor" | "connect" | "disconnect" | "check" | "route";
+export type ProxyMode = "plan" | "install" | "doctor" | "connect" | "disconnect" | "check";
 export type Release = { version: string; url: string; sha256: string };
+export type AiPlan = "claude" | "codex" | "both";
 export type ProxyMachine = {
-  home: string; uid: number; user: string; accounts?: number; devboxes: string[]; release: Release; run: Run; fetch: Fetch;
+  home: string; uid: number; user: string; plan?: AiPlan; accounts?: number; devboxes: string[]; release: Release; run: Run; fetch: Fetch;
   sleep(ms: number): Promise<void>; readStdin(): Promise<string>; randomKey(): string; print(line: string): void;
 };
 
@@ -35,7 +36,10 @@ function layout(home: string) {
   return { dir, binary: join(dir, "cli-proxy-api"), config: join(dir, "config.yaml"), auth: join(dir, "auth"), management: managementFile(home), unit: join(home, ".config/systemd/user", service), key: keyPath(home), restart: join(dir, "restart-pending") };
 }
 type Layout = ReturnType<typeof layout>;
-const loginCommand = (paths: Layout) => `${paths.binary} -config ${paths.config} -claude-login -no-browser`;
+const loginCommand = (paths: Layout, agent: Agent) => `${paths.binary} -config ${paths.config} -${agent}-login -no-browser`;
+const pooled = (plan: AiPlan | undefined): Agent => (plan === "codex" ? "codex" : "claude");
+const subscription = { claude: "Claude", codex: "Codex" };
+const subscriptions = (count: number, agent: Agent) => `${count} ${subscription[agent]} subscription${count === 1 ? "" : "s"}`;
 
 function wanted(paths: Layout, key: string): Managed[] {
   if (/["%\s\\]/.test(paths.dir)) throw new Error(`Move your home to a path without spaces, quotes, % or backslashes: ${paths.dir}`);
@@ -129,12 +133,16 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
   const strategy = ((await management(machine.fetch, managementKey, "routing/strategy")) as { strategy?: string }).strategy;
   if (strategy !== "fill-first") throw new Error(`The proxy routes with ${strategy ?? "no strategy"}, not fill-first. Run fleet cli-proxy-balance to restore it.`);
   const { files } = (await management(machine.fetch, managementKey, "auth-files")) as { files: Array<{ provider?: string; disabled?: boolean }> };
-  const count = files.filter((file) => file.provider === "claude" && !file.disabled).length;
+  const enabled = (agent: Agent) => files.filter((file) => file.provider === agent && !file.disabled).length;
+  const agent = pooled(machine.plan);
+  const count = enabled(agent);
   const floor = machine.accounts ?? 2;
-  if (count < floor) throw new Error(`Add at least ${floor} of your own Claude subscriptions; found ${count}. Run: ${loginCommand(paths)}`);
-  const reason = await probe(machine.fetch, key);
+  if (count < floor) throw new Error(`Add at least ${floor} of your own ${subscription[agent]} subscriptions; found ${count}. Run: ${loginCommand(paths, agent)}`);
+  const reason = await probe(machine.fetch, key, agent);
   if (reason) throw new Error(reason);
-  machine.print(`CLI proxy: CLIProxyAPI ${machine.release.version} runs at ${proxyUrl}, loopback only, with ${count} of your own Claude subscriptions. Every 5 minutes the balancer puts the one whose weekly quota resets first on top.`);
+  const beside = machine.plan === "both" ? ` and ${subscriptions(enabled("codex"), "codex")}` : "";
+  const balancer = agent === "claude" ? "puts the one whose weekly quota resets first on top" : "frees each one whose quota cooldown its live usage disproves";
+  machine.print(`CLI proxy: CLIProxyAPI ${machine.release.version} runs at ${proxyUrl}, loopback only, with ${count} of your own ${subscription[agent]} subscriptions${beside}. Every 5 minutes the balancer ${balancer}.`);
   for (const devbox of machine.devboxes.filter((name) => !isBoxName(name))) machine.print(`Connect ${devbox}: ssh ${devbox} ${quote(remoteFleet("cli-proxy connect"))} < ~/.config/fleet/cli-proxy.key`);
 }
 
@@ -158,13 +166,13 @@ function unserved(models: string[] | string, provider: "claude" | "codex"): stri
   return models.some(servedModel[provider]) ? undefined : missingModel[provider];
 }
 
-const probe = async (fetch: Fetch, key: string) => unserved(await listModels(fetch, key), "claude");
+const probe = async (fetch: Fetch, key: string, agent: Agent) => unserved(await listModels(fetch, key), agent);
 
-async function answered(machine: ProxyMachine, key: string): Promise<string | undefined> {
-  let reason = await probe(machine.fetch, key);
+async function answered(machine: ProxyMachine, key: string, agent: Agent): Promise<string | undefined> {
+  let reason = await probe(machine.fetch, key, agent);
   for (let attempt = 1; attempt < answerTries && reason === silent; attempt++) {
     await machine.sleep(1000);
-    reason = await probe(machine.fetch, key);
+    reason = await probe(machine.fetch, key, agent);
   }
   return reason;
 }
@@ -226,7 +234,7 @@ async function readCodex(home: string) {
   const table = providers?.[codexProvider];
   const url = isObject(table) ? table.base_url : undefined;
   const routed = config.model_provider === codexProvider && (url === undefined || url === codexUrl);
-  return { path, text, config, providers, routed, usable: routed && url === codexUrl, untouched: Bun.deepEquals(table, codexProviderTable) };
+  return { path, text, config, providers, routed, untouched: Bun.deepEquals(table, codexProviderTable) };
 }
 
 const readableCodex = (home: string) => readCodex(home).catch(() => undefined);
@@ -242,32 +250,72 @@ async function sendCodexHome(home: string): Promise<boolean> {
   return routed;
 }
 
-async function route(machine: ProxyMachine): Promise<boolean> {
+export type Agent = "claude" | "codex";
+
+async function check(machine: ProxyMachine, agent: Agent): Promise<boolean> {
   const key = await savedKey(machine.home);
   const models = key ? await listModels(machine.fetch, key) : `This machine has no proxy key at ${keyPath(machine.home)}. On the hub, fleet cli-proxy doctor prints the connect command.`;
-  const reached = (agent: string, reason: string | undefined) => (machine.print(reason ? `${reason} ${agent} uses its own sign-in now.` : `${agent} reaches your own-account proxy at ${proxyUrl}.`), !reason);
-  const claude = unserved(models, "claude");
-  if (claude) await sendClaude(machine.home, false);
-  const claudeReached = reached("Claude Code", claude);
-  const codexConfig = await readableCodex(machine.home);
-  if (!codexConfig?.routed) return claudeReached;
-  const codex = codexConfig.usable ? unserved(models, "codex") : `${codexConfig.path} selects the ${codexProvider} provider, but its table has no base_url.`;
-  if (codex) await sendCodexHome(machine.home);
-  return reached("Codex", codex) && claudeReached;
+  const reason = agent === "claude" ? unserved(models, "claude") : await codexUnserved(machine.home, models);
+  const name = agent === "claude" ? "Claude Code" : "Codex";
+  machine.print(reason ? `${reason} fleet apply keeps ${name} on its own sign-in until the proxy serves it.` : `${name} reaches your own-account proxy at ${proxyUrl}.`);
+  return !reason;
+}
+
+async function codexUnserved(home: string, models: string[] | string): Promise<string | undefined> {
+  const config = await readableCodex(home);
+  const table = config?.providers?.[codexProvider];
+  if (table !== undefined && !reachesProxy(table)) return ownTable(config!.path);
+  return unserved(models, "codex");
+}
+
+const reachesProxy = (table: unknown) => isObject(table) && (["base_url", "wire_api", "auth"] as const).every((field) => Bun.deepEquals(table[field], codexProviderTable[field]));
+const ownTable = (path: string) => `${path} has its own ${codexProvider} provider table, which does not reach the proxy with this machine's key.`;
+
+async function codexRoute(home: string): Promise<string | (() => Promise<void>)> {
+  const read = await readableCodex(home);
+  if (!read) return "Fleet cannot read ~/.codex/config.toml, or it is a link, so Fleet leaves it alone.";
+  const { path, text, config, providers } = read;
+  const table = providers?.[codexProvider];
+  if (config.model_provider !== undefined && config.model_provider !== codexProvider) return `Keep your Codex setting model_provider in ${path}: Fleet did not set it. Remove it to use the proxy.`;
+  if (table !== undefined && !reachesProxy(table)) return ownTable(path);
+  config.model_provider = codexProvider;
+  config.model_providers = { ...providers, [codexProvider]: table ?? codexProviderTable };
+  return () => replaceUnchanged(path, text, `${stringify(config)}\n`);
+}
+
+async function sendCodex(home: string, besideClaude: boolean): Promise<string | undefined> {
+  const route = await codexRoute(home);
+  if (typeof route === "string") return route;
+  try {
+    await route();
+  } catch (error) {
+    if (!besideClaude) throw error;
+    return (error as Error).message;
+  }
 }
 
 async function connect(machine: ProxyMachine): Promise<void> {
   if (readRole(machine.home) === "hub") throw new Error("The hub has its own key. Run fleet cli-proxy install there.");
   const key = (await machine.readStdin()).trim();
   if (!keyPattern.test(key)) throw new Error("Pass the proxy key from the hub on standard input: 64 hexadecimal characters.");
-  await claudeRoute(machine.home, true);
-  const reason = await answered(machine, key);
+  const agent = pooled(machine.plan);
+  if (agent === "claude") await claudeRoute(machine.home, true);
+  const codex = machine.plan === "codex" || machine.plan === "both" ? await codexRoute(machine.home) : undefined;
+  if (agent === "codex" && typeof codex === "string") throw new Error(`${codex} Nothing changed.`);
+  const reason = await answered(machine, key, agent);
   if (reason) throw new Error(`${reason} Nothing changed.`);
   await refuseLinks(machine.home, keyPath(machine.home), `${what} path`);
   await mkdir(dirname(keyPath(machine.home)), { recursive: true, mode: 0o700 });
   await writePrivateFile(keyPath(machine.home), `${key}\n`);
-  await sendClaude(machine.home, true);
-  machine.print(`Claude Code uses your own-account proxy at ${proxyUrl} now. Restart open Claude Code sessions.`);
+  if (agent === "claude") {
+    await sendClaude(machine.home, true);
+    machine.print(`Claude Code uses your own-account proxy at ${proxyUrl} now. Restart open Claude Code sessions.`);
+  }
+  if (codex === undefined) return;
+  const unroutable = typeof codex === "string" ? codex : agent === "codex" ? undefined : await probe(machine.fetch, key, "codex");
+  const failed = unroutable ?? (await sendCodex(machine.home, agent === "claude"));
+  if (failed) return machine.print(`${failed} Codex keeps its own sign-in.`);
+  machine.print(`Codex uses your own-account proxy at ${proxyUrl} now. Restart open Codex sessions.`);
 }
 
 async function disconnect(machine: ProxyMachine): Promise<void> {
@@ -284,17 +332,19 @@ async function disconnect(machine: ProxyMachine): Promise<void> {
 async function plan(machine: ProxyMachine, paths: Layout): Promise<void> {
   if (readRole(machine.home) !== "hub") {
     const key = await savedKey(machine.home);
-    return machine.print(key ? `CLI proxy plan (no changes): Claude Code uses the proxy at ${proxyUrl} through the hub's tunnel.` : "CLI proxy plan (no changes): this machine has no proxy key. On the hub, fleet cli-proxy doctor prints the connect command.");
+    const agents = machine.plan === "codex" ? "Codex uses" : machine.plan === "both" ? "Claude Code and Codex use" : "Claude Code uses";
+    return machine.print(key ? `CLI proxy plan (no changes): this machine has a proxy key, and ${agents} the proxy at ${proxyUrl} through the hub's tunnel while the proxy serves them.` : "CLI proxy plan (no changes): this machine has no proxy key. On the hub, fleet cli-proxy doctor prints the connect command.");
   }
   machine.print("CLI proxy plan (no changes):");
   if (!(await binaryReady(machine, paths))) machine.print(`  Install CLIProxyAPI ${machine.release.version} at ${paths.binary}.`);
   machine.print(`  Run it at ${proxyUrl}, loopback only, with fill-first routing and session affinity, as ${service}.`);
   machine.print(`  Keep the client key in ${paths.key} and the management key in ${paths.management}, both mode 600.`);
-  machine.print("  Every 5 minutes, fleet cli-proxy-balance puts the subscription whose weekly quota resets first on top.");
-  machine.print(`  Add at least ${machine.accounts ?? 2} of your own Claude subscriptions with: ${loginCommand(paths)}`);
+  const agent = pooled(machine.plan);
+  machine.print(agent === "claude" ? "  Every 5 minutes, fleet cli-proxy-balance puts the subscription whose weekly quota resets first on top." : "  Every 5 minutes, fleet cli-proxy-balance frees each subscription whose quota cooldown its live usage disproves.");
+  machine.print(`  Add at least ${machine.accounts ?? 2} of your own ${subscription[agent]} subscriptions with: ${loginCommand(paths, agent)}`);
 }
 
-export async function cliProxy(mode: ProxyMode, machine: ProxyMachine): Promise<number> {
+export async function cliProxy(mode: ProxyMode, machine: ProxyMachine, agent: Agent = "claude"): Promise<number> {
   if (machine.uid === 0) throw new Error("Run fleet cli-proxy as the person who runs Claude Code, not root.");
   const paths = layout(machine.home);
   if (mode === "install" || mode === "doctor") requireHubRole(machine.home, `cli-proxy ${mode}`);
@@ -303,7 +353,6 @@ export async function cliProxy(mode: ProxyMode, machine: ProxyMachine): Promise<
   if (mode === "doctor") await doctor(machine, paths);
   if (mode === "connect") await connect(machine);
   if (mode === "disconnect") await disconnect(machine);
-  if (mode === "check") return (await route(machine)) ? 0 : 1;
-  if (mode === "route") await route(machine);
+  if (mode === "check") return (await check(machine, agent)) ? 0 : 1;
   return 0;
 }

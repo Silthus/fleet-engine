@@ -1,5 +1,5 @@
 import { install, plan as planFiles } from "../files/install.ts";
-import type { Action, CatalogEntry, Finding, HumanStep, Owned, Plan, Report } from "../pack/types.ts";
+import type { Action, CatalogEntry, Finding, HumanStep, Owned, PackCheck, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
 import { hublessReason } from "./resolve.ts";
 
@@ -12,7 +12,7 @@ export type Adapter = {
   apply(plan: Plan, context: AdapterContext): Promise<AdapterResult>;
 };
 export type Runner = (command: string[]) => Promise<number>;
-/** Issues this machine's credential for each served service that lacks one, and reports what failed. */
+/** Fills this machine's credential for each served service: the hub issues its own, and a node pulls its own from the hub. Reports what failed. */
 export type Issuer = (entries: CatalogEntry[], node: string) => Promise<Finding[]>;
 
 export const filesGroup = "fleet";
@@ -67,10 +67,10 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     return report;
   }
   const run = viaEngine(plan, options.run ?? spawnRunner(options.home, plan.machine.profileDir));
-  const node = plan.onHub ? plan.machine.name : undefined;
+  const node = plan.onHub || plan.reachesHub ? plan.machine.name : undefined;
   const issue = !context.dryRun && node && options.issue ? (ready: CatalogEntry[]) => options.issue!(ready, node) : undefined;
   const gated = await gate(plan, run, !context.dryRun, issue);
-  report.findings.push(...gated.issued, ...gated.failed.map((step) => humanFinding(step, context.dryRun)));
+  report.findings.push(...gated.issued, ...gated.failed.map((step) => humanFinding(step, context.dryRun)), ...gated.failedChecks.map(checkFinding));
   for (const adapter of adapters) {
     const result = await adapter.apply(gated.plan, context);
     report.actions.push(...result.actions);
@@ -88,6 +88,19 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: ran ? `Step ${step.id} of the ${step.pack} pack ran, but does not pass its check.` : `Step ${step.id} of the ${step.pack} pack failed.`, repair: "apply" });
     if (step.pack === "base") report.ok = false;
   }
+  for (const step of plan.undo ?? []) {
+    if (failed.has(step.pack) || (await run(step.check!)) !== 0) continue;
+    if (await undoWaits(step, run)) {
+      report.findings.push(undoWaitFinding(step));
+      continue;
+    }
+    if ((await run(step.undo!)) === 0 && (await run(step.check!)) !== 0) {
+      report.actions.push({ target: `step ${step.pack}/${step.id}`, operation: "remove", reason: `workflow ${step.workflow} is off` });
+      continue;
+    }
+    report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `Fleet could not undo step ${step.id} of the ${step.pack} pack, whose workflow ${step.workflow} is off. The next fleet apply tries again.`, repair: "apply" });
+    if (step.pack === "base") report.ok = false;
+  }
   return report;
 }
 
@@ -95,12 +108,18 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
   const run = viaEngine(plan, options.run ?? spawnRunner(options.home, plan.machine.profileDir));
   const report = await apply(plan, { ...options, dryRun: true });
   for (const item of plan.checks) {
-    if ((await run(item.run)) !== 0) report.findings.push({ id: `check:${item.id}`, pack: item.pack, say: item.say, repair: "apply" });
+    if (report.findings.some((finding) => finding.id === `check:${item.id}` && finding.pack === item.pack)) continue;
+    if ((await run(item.run)) !== 0) report.findings.push(checkFinding(item));
   }
   const waits = waiter(plan, run);
   for (const step of plan.steps) {
     if (await waits(step)) continue;
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
+  }
+  for (const step of plan.undo ?? []) {
+    if ((await run(step.check!)) !== 0) continue;
+    if (await undoWaits(step, run)) report.findings.push(undoWaitFinding(step));
+    else report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `The workflow ${step.workflow} is off, but step ${step.id} of the ${step.pack} pack still holds what it set. Run fleet apply to undo it.`, repair: "apply" });
   }
   for (const step of plan.human) {
     const reported = report.findings.some((finding) => finding.id === `human:${step.id}` && finding.pack === step.pack);
@@ -112,12 +131,14 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
   return report;
 }
 
+const checkFinding = (item: Owned<PackCheck>): Finding => ({ id: `check:${item.id}`, pack: item.pack, say: item.say, repair: "apply" });
+
 function humanFinding(step: Owned<HumanStep>, repairStillToRun: boolean): Finding {
   return { id: `human:${step.id}`, pack: step.pack, say: step.command ? `${step.say} Run: ${step.command}` : step.say, repair: repairStillToRun && step.repair && !step.command ? "apply" : "human" };
 }
 
-/** Tests each check once, running a Fleet repair first when one fails and repairs are on, then drops the items whose check fails. It tests the checks that served services wait for first and issues their credentials, so a repair that reads a credential sees it in the same apply. */
-async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: CatalogEntry[]) => Promise<Finding[]>): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; issued: Finding[] }> {
+/** Tests each check once, running a Fleet repair first when a human step's probe fails and repairs are on, then drops the items whose check fails. A config entry may also wait for a pack check, which has no repair. It tests the checks that served services wait for first, which only the hub can, and fills their credentials, so a repair that reads a credential sees it in the same apply. */
+async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: CatalogEntry[]) => Promise<Finding[]>): Promise<{ plan: Plan; failed: Array<Owned<HumanStep>>; failedChecks: Array<Owned<PackCheck>>; issued: Finding[] }> {
   const tested = new Map<Owned<HumanStep>, boolean>();
   const probe = async (step: Owned<HumanStep>) => {
     if ((await run(step.probe)) === 0) return true;
@@ -130,7 +151,7 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
   };
   const checkOf = (pack: string, id: string) => plan.human.find((step) => step.pack === pack && step.id === id);
   const ready: CatalogEntry[] = [];
-  for (const entry of plan.catalog ?? []) if (!entry.after || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
+  for (const entry of plan.catalog ?? []) if (!entry.after || plan.reachesHub || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
   const issued = issue ? await issue(ready) : [];
   if (repair) for (const step of plan.human) if (step.repair) await passes(step);
   const jobs: Plan["jobs"] = [];
@@ -139,16 +160,37 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
     if (!job.after || (await passes(plan.human.find((step) => step.pack === job.pack && step.id === job.after)))) jobs.push(job);
     else dropped.push({ pack: job.pack, item: `job ${job.id}`, reason: `check ${job.after} does not pass`, check: job.after });
   }
+  const checked = new Map<Owned<PackCheck>, boolean>();
+  const checkPasses = async (item: Owned<PackCheck>) => {
+    if (!checked.has(item)) checked.set(item, (await run(item.run)) === 0);
+    return checked.get(item)!;
+  };
+  const waitsFor = (pack: string, id: string) => {
+    const human = checkOf(pack, id);
+    const check = human ? undefined : plan.checks.find((item) => item.pack === pack && item.id === id);
+    return check ? checkPasses(check) : passes(human);
+  };
   const config: Plan["config"] = [];
   for (const entry of plan.config) {
-    if (!entry.after || (await passes(plan.human.find((step) => step.pack === entry.pack && step.id === entry.after)))) config.push(entry);
-    else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after });
+    if (!entry.after || (await waitsFor(entry.pack, entry.after))) config.push(entry);
+    else dropped.push({ pack: entry.pack, item: `config ${entry.provider}:${entry.key}`, reason: `check ${entry.after} does not pass`, check: entry.after, value: entry.value });
   }
   const failed = [...tested].filter(([, passed]) => !passed).map(([step]) => step);
-  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, issued };
+  const failedChecks = [...checked].filter(([, passed]) => !passed).map(([item]) => item);
+  return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, failedChecks, issued };
 }
 
 /** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */
+type UndoStep = NonNullable<Plan["undo"]>[number];
+
+async function undoWaits(step: UndoStep, run: Runner) {
+  return step.after !== undefined && !(step.prerequisite && (await run(step.prerequisite)) === 0);
+}
+
+function undoWaitFinding(step: UndoStep): Finding {
+  return { id: `undo:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack waits for ${step.after} before Fleet can undo it.`, repair: "human" };
+}
+
 function waiter(plan: Plan, run: Runner) {
   const passed = new Map<string, boolean>();
   return async (step: Plan["steps"][number]) => {

@@ -1,13 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { homedir, hostname, userInfo } from "node:os";
 import { runCommand } from "../../base/lib/command.ts";
-import { cliProxy, type ProxyMode, type Release } from "../lib/cli-proxy.ts";
+import { cliProxy, type Agent, type AiPlan, type ProxyMode, type Release } from "../lib/cli-proxy.ts";
 import { peerMachine, proxyOn } from "../lib/machine.ts";
 import { run } from "../lib/run.ts";
 import { tunnelTargets } from "../lib/tunnels.ts";
 import { numberSetting, stringSetting } from "../../base/lib/settings.ts";
 
-const modes = ["plan", "install", "doctor", "connect", "disconnect", "check", "route"];
+const modes = ["plan", "install", "doctor", "connect", "disconnect", "check"];
+const plans = ["claude", "codex", "both"];
 const version = "8.0.46";
 const archives: Record<string, [string, string]> = {
   x64: ["linux_amd64", "471f5235c501c19d3dec85c06e7612f0fe5ce3f823ef75331c2097aad8ed3c62"],
@@ -21,10 +22,11 @@ function release(): Release {
 
 await runCommand(() => {
   const [mode = "plan", ...rest] = Bun.argv.slice(2);
-  if (rest.length || !modes.includes(mode)) return console.error("Usage: fleet cli-proxy [plan|install|doctor|check|disconnect], or fleet cli-proxy connect < key file"), 2;
+  const agent = mode === "check" && rest.length === 1 && rest[0] === "codex" ? "codex" : rest.length ? undefined : "claude";
+  if (!agent || !modes.includes(mode)) return console.error("Usage: fleet cli-proxy [plan|install|doctor|check [codex]|disconnect], or fleet cli-proxy connect < key file"), 2;
   return cliProxy(mode as ProxyMode, {
-    home: homedir(), uid: process.getuid?.() ?? 0, user: userInfo().username, ...(proxyOn(Bun.env) ? { accounts: numberSetting("hub.proxyAccounts") } : {}),
+    home: homedir(), uid: process.getuid?.() ?? 0, user: userInfo().username, ...(plans.includes(Bun.env.FLEET_PLAN ?? "") ? { plan: Bun.env.FLEET_PLAN as AiPlan } : {}), ...(proxyOn(Bun.env) ? { accounts: numberSetting("hub.proxyAccounts") } : {}),
     devboxes: mode === "doctor" ? tunnelTargets(stringSetting("hub.alias"), peerMachine().devboxes, hostname()) : [],
     release: release(), run, fetch, sleep: (ms) => Bun.sleep(ms), readStdin: () => Bun.stdin.text(), randomKey: () => randomBytes(32).toString("hex"), print: (line) => console.log(line),
-  });
+  }, agent as Agent);
 }, "fleet cli-proxy");

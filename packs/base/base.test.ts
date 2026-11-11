@@ -44,7 +44,7 @@ describe("the Base pack", () => {
     for (const ai of plans) {
       const result = plan(ai, devbox);
       expect(result.unanswered).toEqual([]);
-      expect(result.settings).toEqual({ "base.heavySlots": 2, "base.diskFloorGigabytes": 10, "identity.signer": "ssh" });
+      expect(result.settings).toEqual({ "base.heavySlots": 2, "base.diskFloorGigabytes": 10, "base.startFloorGigabytes": 25, "identity.signer": "ssh" });
     }
   });
 

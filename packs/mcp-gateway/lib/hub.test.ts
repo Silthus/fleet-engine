@@ -3,7 +3,7 @@ import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, statSync, sym
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { clientPath, localGatewayUrl } from "./client.ts";
-import { doctor, grant, prepareMcpHub, reconnect, restart, signIn } from "./hub.ts";
+import { doctor, issueKey, prepareMcpHub, reconnect, restart, signIn } from "./hub.ts";
 import { fakeHub, fakeMcpHub, fakeRun, managementToken, mcphubFetch, writeMachineFile, writeMcpHubSettings } from "./testing.ts";
 
 const temp = tempDirs();
@@ -59,51 +59,28 @@ test("preparation accepts only the hub's HTTPS address or the loopback address a
   await prepareMcpHub(home, localGatewayUrl, { relayPort: 60001 });
 });
 
-test("grant names the machines it accepts, and refuses without an installed gateway", async () => {
-  await expect(grant("box-1", fakeHub(temp.make("fleet-mcphub-")))).rejects.toThrow("MCPHub is not installed. Run: fleet apply");
-  await expect(grant("stranger", fakeHub(hubHome()))).rejects.toThrow("Name the hub (my-hub) or a devbox from your profile: box-1, box-2.");
+test("a key goes only to the hub or a devbox of the profile, and only from an installed gateway", async () => {
+  await expect(issueKey("box-1", fakeHub(temp.make("fleet-mcphub-")))).rejects.toThrow("MCPHub is not installed. Run: fleet apply");
+  await expect(issueKey("stranger", fakeHub(hubHome()))).rejects.toThrow("Name the hub (my-hub) or a devbox from your profile: box-1, box-2.");
 });
 
-test("grant on the hub itself scopes its key to the fleet group of every server and sends nothing over SSH", async () => {
-  const home = hubHome();
+test("a new key is scoped to the fleet group, which holds every server", async () => {
   const api = fakeMcpHub();
-  const { calls, run } = fakeRun();
-  const hub = fakeHub(home, { fetch: mcphubFetch(api), run });
-  await grant("my-hub", hub);
-  expect(calls).toEqual([]);
+  expect(await issueKey("my-hub", fakeHub(hubHome(), { fetch: mcphubFetch(api) }))).toBe("mcphub_new-machine-token");
   expect(api.groups).toEqual([{ id: "group-1", name: "fleet", servers: ["tickets", "calendar"] }]);
   expect(api.calls.find((call) => call.path === "auth/keys")?.body).toEqual({ name: "Fleet my-hub", kind: "system", accessType: "groups", allowedGroups: ["fleet"] });
-  expect(hub.printed).toEqual(["my-hub: saved its MCP gateway key."]);
 });
 
-test("grant sends a devbox its key over SSH on stdin, never in argv, always with the tunnel address, even when the hub has an HTTPS host", async () => {
-  for (const [gateway, baseUrl] of [[secure, localGatewayUrl], [{ relayPort: 60001 }, localGatewayUrl]] as const) {
-    const home = hubHome();
-    const { calls, run } = fakeRun();
-    await grant("box-1", fakeHub(home, { run, gateway }));
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.command).toEqual(["ssh", "box-1", "sh \"${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet\" mcp-gateway accept"]);
-    expect(JSON.parse(calls[0]!.input!)).toEqual({ baseUrl, token: "mcphub_new-machine-token" });
-  }
-});
-
-test("grant reuses a machine's key, moves an old server-scoped key to the fleet group, and syncs the group", async () => {
+test("a machine keeps its key, an old server-scoped key moves to the fleet group, and the group syncs", async () => {
   const oldKey = { id: "key-old", name: "Fleet box-2", token: "mcphub_old-token", enabled: true, kind: "system", accessType: "servers", allowedServers: ["tickets"] };
   const home = hubHome({ bearerKeys: [{ id: "fleet-management", token: managementToken, enabled: true, kind: "system", accessType: "all" }, oldKey] });
   const api = fakeMcpHub({ servers: ["tickets", "calendar", "notes"], groups: [{ id: "group-9", name: "fleet", servers: ["tickets"] }] });
-  const { calls, run } = fakeRun();
-  await grant("box-2", fakeHub(home, { fetch: mcphubFetch(api), run }));
+  expect(await issueKey("box-2", fakeHub(home, { fetch: mcphubFetch(api) }))).toBe("mcphub_old-token");
   expect(api.groups).toEqual([{ id: "group-9", name: "fleet", servers: ["tickets", "calendar", "notes"] }]);
   expect(api.calls.filter((call) => call.method !== "GET")).toEqual([
     { method: "PUT", path: "groups/group-9", body: { servers: ["tickets", "calendar", "notes"] } },
     { method: "PUT", path: "auth/keys/key-old", body: { accessType: "groups", allowedGroups: ["fleet"], allowedServers: [] } },
   ]);
-  expect(JSON.parse(calls[0]!.input!).token).toBe("mcphub_old-token");
-});
-
-test("grant says when a devbox could not save its key", async () => {
-  const { run } = fakeRun(() => ({ code: 127, stderr: "sh: fleet: not found" }));
-  await expect(grant("box-1", fakeHub(hubHome(), { run }))).rejects.toThrow("box-1 could not save its MCP gateway key: sh: fleet: not found. Run fleet apply on box-1 first.");
 });
 
 test("doctor passes a healthy gateway that refuses calls without a key and serves every server to the fleet group", async () => {

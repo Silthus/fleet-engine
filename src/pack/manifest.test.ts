@@ -128,7 +128,7 @@ describe("loadPacks", () => {
   test("accepts a handler only for a seam the engine knows, with a path", async () => {
     const handler = { seam: "review-bot", path: "lib/review-bot.ts" };
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler] } }))).resolves.toHaveLength(1);
-    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, seam: "deploy-bot" }] } }))).rejects.toThrow("handlers deploy-bot: seam must be one of review-bot");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, seam: "deploy-bot" }] } }))).rejects.toThrow("handlers deploy-bot: seam must be one of review-bot, heavy-route");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, path: "" }] } }))).rejects.toThrow("handlers review-bot: needs a path");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, workflow: "nope" }] } }))).rejects.toThrow("handlers review-bot names unknown workflow nope");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler, handler] } }))).rejects.toThrow("handlers review-bot is declared twice");
@@ -155,6 +155,15 @@ describe("loadPacks", () => {
     await expect(loadPacks(sourceWith({ base: { ...base, human, jobs: [job] } }))).resolves.toHaveLength(1);
     await expect(loadPacks(sourceWith({ base: { ...base, human, jobs: [{ ...job, after: "github" }] } }))).rejects.toThrow("jobs listen: after must name a human step of this pack");
     await expect(loadPacks(sourceWith({ base: { ...base, human, jobs: [{ ...job, roles: ["hub", "solo", "devbox"] }] } }))).rejects.toThrow("jobs listen: runs where its human step token does not; give it the same roles");
+  });
+
+  test("lets a config entry wait for a check of its pack, but only where that check runs", async () => {
+    const checks = [{ id: "proxy-up", run: ["proxy-check"], say: "The proxy is down.", roles: ["devbox"] }];
+    const entry = { provider: "claude", key: "env.ANTHROPIC_BASE_URL", value: "http://127.0.0.1:8317", after: "proxy-up", roles: ["devbox"] };
+    await expect(loadPacks(sourceWith({ base: { ...base, checks, config: [entry] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, checks, config: [{ ...entry, after: "proxy-gone" }] } }))).rejects.toThrow("config env.ANTHROPIC_BASE_URL: after must name a human step or a check of this pack");
+    await expect(loadPacks(sourceWith({ base: { ...base, checks, config: [{ ...entry, roles: ["devbox", "hub"] }] } }))).rejects.toThrow("config env.ANTHROPIC_BASE_URL: runs where its check proxy-up does not; give it the same roles");
+    await expect(loadPacks(sourceWith({ base: { ...base, checks, steps: [{ id: "start", run: ["start"], after: "proxy-up", roles: ["devbox"] }] } }))).rejects.toThrow("steps start: after must name a human step of this pack");
   });
 
   test("rejects malformed nested items with a clear error", async () => {

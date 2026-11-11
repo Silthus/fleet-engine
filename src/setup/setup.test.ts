@@ -147,7 +147,7 @@ describe("fleet setup questions", () => {
     expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter"])).code).toBe(0);
     const changed = await fleetSetup(home, ["--non-interactive", "--preset", "everyday", "--plan", "claude"]);
     expect(changed.code).toBe(0);
-    expect(pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "orchestration", "communication"], plan: "claude" });
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "orchestration", "communication"], plan: "claude" });
     expect(changed.output).toContain("Set up this machine");
 
     const same = await fleetSetup(home, ["--non-interactive", "--preset", "everyday", "--plan", "claude"]);
@@ -184,6 +184,6 @@ describe("fleet setup questions", () => {
     expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
     const again = await fleetSetup(home, ["--set", "pull-requests.freeReviews=5"]);
     expect(again.code).toBe(0);
-    expect(pushedAnswers(home).settings).toEqual({ "pull-requests.freeReviews": 5 });
+    expect((await pushedAnswers(home)).settings).toEqual({ "pull-requests.freeReviews": 5 });
   });
 });

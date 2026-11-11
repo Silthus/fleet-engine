@@ -7,6 +7,7 @@ import type { AvailableSource, MachineFile, Profile } from "../../src/pack/types
 import { filesAdapter } from "../../src/reconciler/apply.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, mac, resolveEngine, skillSources } from "../../src/testing/packs.ts";
+import { fakeSsh, remoteFleet, type Host } from "../../src/testing/ssh.ts";
 import { fakeMcpHub, mcphubFetch, writeMcpHubSettings } from "./lib/testing.ts";
 
 const temp = tempDirs();
@@ -84,7 +85,7 @@ function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}) {
   return { state, bridged, spawned };
 }
 
-function machine(saved: MachineFile, fields: Partial<Profile> = {}) {
+function machine(saved: MachineFile, fields: Partial<Profile> = {}, hosts: Record<string, Host | "down"> = {}) {
   const home = temp.make("home-");
   const profile = temp.make("profile-");
   writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["mcp-gateway"], plan: "codex", settings: {}, workflows: {}, hub: "hub-1", devboxes: ["node-2"], ...fields }));
@@ -102,6 +103,7 @@ function machine(saved: MachineFile, fields: Partial<Profile> = {}) {
     fail: (line) => errors.push(line),
     hostname: () => saved.name!,
     stdin: () => new Response(input).body!,
+    capture: fakeSsh(temp.make("ssh-"), hosts),
     run: async (command) => (command[0] === "/bin/sh" && command[1] === join(repoRoot, "fleet") ? main(command.slice(2), { ...options, print: () => {} }) : 0),
     adapters: () => [filesAdapter, providerConfigAdapter({ run: async () => ({ code: 0, stdout: "" }) })],
   };
@@ -111,7 +113,7 @@ function machine(saved: MachineFile, fields: Partial<Profile> = {}) {
     const code = await main(args, options);
     return { code, output: lines.join("\n") };
   };
-  return { home, fleet, errors };
+  return { home, fleet, errors, host: remoteFleet(() => options) };
 }
 
 const initialize = `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } })}\n`;
@@ -167,17 +169,6 @@ describe("on the hub", () => {
     expect(spawned[0]).toEqual(["docker", "image", "inspect", expect.stringMatching(/^fleet-mcphub:1\.1\.0-/)]);
   });
 
-  test("grant on the hub's own name saves the key to the store and the client file, and the bridge uses it", async () => {
-    const { home, fleet } = machine(hubMachine);
-    writeMcpHubSettings(home);
-    const { bridged } = gatewayServer({ home });
-    expect(await fleet(["mcp-gateway", "grant", "hub-1"])).toEqual({ code: 0, output: "hub-1: saved its MCP gateway key." });
-    expect(readFileSync(storeFile(home), "utf8")).toBe(issued);
-    expect(JSON.parse(readFileSync(clientFile(home), "utf8"))).toEqual({ baseUrl: "http://127.0.0.1:3317/mcphub", token: issued });
-    expect((await fleet(["mcp-connect"], initialize)).code).toBe(0);
-    expect(bridged[0]).toBe(`POST Bearer ${issued}`);
-  });
-
   test("a failure before the bridge starts goes to standard error, never onto the MCP stream", async () => {
     const { home, fleet, errors } = machine(hubMachine);
     mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
@@ -221,15 +212,50 @@ describe("on a devbox", () => {
     }
   });
 
-  test("without a key, apply names the check, and accept saves the key the hub sends on stdin to the store and the client file", async () => {
-    const { home, fleet } = machine(nodeMachine);
-    gatewayServer();
-    expect((await fleet(["apply"])).output).toContain("This machine cannot reach the MCP gateway.");
-    expect(await fleet(["run", "mcp-gateway/mcp-gateway-client"])).toEqual({ code: 1, output: "This machine has no MCP gateway key. On the hub, run: fleet mcp-gateway grant <this machine's SSH name>" });
-    expect(await fleet(["mcp-gateway", "accept"], JSON.stringify({ baseUrl: "http://127.0.0.1:3317/mcphub", token: issued }))).toEqual({ code: 0, output: "Saved the MCP gateway key." });
+  test("apply pulls this machine's key from the hub over ssh, the client file follows the store, and the bridge uses the key", async () => {
+    const hub = machine(hubMachine);
+    writeMcpHubSettings(hub.home);
+    const { state, bridged } = gatewayServer({ home: hub.home });
+    expect((await hub.fleet(["apply"])).code).toBe(0);
+    const { home, fleet } = machine(nodeMachine, {}, { "hub-1": hub.host });
+    const applied = await fleet(["apply"]);
+    expect(applied.output).not.toContain("Could not pull");
+    expect(state.calls.filter((call) => call.path === "auth/keys").map((call) => call.body)).toEqual([expect.objectContaining({ name: "Fleet hub-1" }), expect.objectContaining({ name: "Fleet node-2" })]);
     expect(readFileSync(storeFile(home), "utf8")).toBe(issued);
-    expect(await fleet(["run", "mcp-gateway/mcp-gateway-client"])).toEqual({ code: 0, output: "The MCP gateway at http://127.0.0.1:3317/mcphub answers." });
+    expect(JSON.parse(readFileSync(clientFile(home), "utf8"))).toEqual({ baseUrl: "http://127.0.0.1:3317/mcphub", token: issued });
+    expect(statSync(clientFile(home)).mode & 0o777).toBe(0o600);
+    expect((await fleet(["mcp-connect"], initialize)).code).toBe(0);
+    expect(bridged.at(-1)).toBe(`POST Bearer ${issued}`);
   });
+
+  test("without a key and with the hub down, apply names the failed pull and the client check", async () => {
+    const { fleet } = machine(nodeMachine, {}, { "hub-1": "down" });
+    gatewayServer();
+    const applied = await fleet(["apply"]);
+    expect(applied.output).toContain("Fix: Could not pull the credential of mcp-gateway/mcp-gateway from the hub hub-1 (ssh exited 255. Run ssh hub-1 true to see why). Fleet tries again at the next apply.");
+    expect(applied.output).toContain("This machine cannot reach the MCP gateway.");
+    expect(await fleet(["run", "mcp-gateway/mcp-gateway-client"])).toEqual({ code: 1, output: "This machine has no MCP gateway key. Run fleet apply on this machine to pull its key from the hub." });
+  });
+
+  const trickyServer = "team docs; $(touch pwned) 'x'";
+  const nodeOfHub = () => {
+    const hub = machine(hubMachine);
+    writeMcpHubSettings(hub.home, { mcpServers: { [trickyServer]: { oauth: { pendingAuthorization: { authorizationUrl: "https://auth.example.com/authorize?state=1" } } } } });
+    const { state } = gatewayServer({ home: hub.home });
+    return { state, fleet: machine(nodeMachine, {}, { "hub-1": hub.host }).fleet };
+  };
+
+  test("fleet mcp-gateway reconnect typed on a devbox reconnects that server on the hub, with a name that holds a space and shell characters", async () => {
+    const { state, fleet } = nodeOfHub();
+    expect(await fleet(["mcp-gateway", "reconnect", trickyServer])).toEqual({ code: 0, output: `MCPHub reconnected ${trickyServer}. If it needs a sign-in, run: fleet mcp-gateway sign-in` });
+    expect(state.calls.map((call) => call.path)).toContain(`servers/${encodeURIComponent(trickyServer)}/reload`);
+  });
+
+  test("fleet mcp-gateway sign-in typed on a devbox prints the hub's pending sign-ins", async () => {
+    const { fleet } = nodeOfHub();
+    expect(await fleet(["mcp-gateway", "sign-in"])).toEqual({ code: 0, output: `On your computer, keep this running while you sign in: coder port-forward hub-1 --tcp 3317\n${trickyServer}: https://auth.example.com/authorize?state=1` });
+  });
+
 
   test("the hub's install check and the key issue stay off a devbox", async () => {
     const { home, fleet } = machine(nodeMachine);

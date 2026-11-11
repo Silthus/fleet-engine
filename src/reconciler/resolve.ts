@@ -28,7 +28,7 @@ export class ResolveError extends Error {}
 
 const hubAlias = "hub.alias";
 
-export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "hub", "run"];
+export const engineCommands = ["setup", "apply", "doctor", "update", "packs", "settings", "set", "devbox", "hub", "run", "credential"];
 
 /** Why a machine leaves out an item of the hub while a profile with devboxes names no hub. */
 export const hublessReason = "your profile names no hub. Run fleet hub here on the machine that should be the hub.";
@@ -90,7 +90,10 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
     for (const entry of manifest.files ?? []) if (fits(pack, entry, `file ${entry.target}`)) packFiles.push({ target: entry.target, source: within(dir, entry.path, pack) });
     for (const job of manifest.jobs ?? []) if (fits(pack, job, `job ${job.id}`)) plan.jobs.push({ ...job, pack });
     for (const step of manifest.human ?? []) if (fits(pack, step, `human ${step.id}`)) plan.human.push({ ...step, pack });
-    for (const step of manifest.steps ?? []) if (fits(pack, step, `step ${step.id}`)) plan.steps.push({ ...step, pack });
+    for (const step of manifest.steps ?? []) {
+      if (fits(pack, step, `step ${step.id}`)) plan.steps.push({ ...step, pack });
+      else if (step.undo && plan.dropped.at(-1)?.reason === `workflow ${step.workflow} is off`) (plan.undo ??= []).push({ ...step, pack, prerequisite: manifest.human?.find((human) => human.id === step.after)?.probe });
+    }
     for (const check of manifest.checks ?? []) if (fits(pack, check, `check ${check.id}`)) plan.checks.push({ ...check, pack });
     for (const handler of manifest.handlers ?? []) {
       if (!fits(pack, handler, `handler ${handler.seam}`)) continue;
@@ -114,7 +117,8 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
       plan.config.push({ ...entry, pack });
     }
   }
-  if (forwardsToHub(profile, machine, os) && plan.catalog.length) plan.jobs.push(hubForward(profile.hub!, plan.catalog));
+  if (forwardsToHub(profile, machine, os)) plan.reachesHub = true;
+  if (plan.reachesHub && plan.catalog.length) plan.jobs.push(hubForward(profile.hub!, plan.catalog));
   for (const entry of profile.overrides?.config ?? []) {
     if (!fits("profile", entry, `config ${entry.provider}:${entry.key}`)) continue;
     const owner = `${entry.provider}:${entry.key}`;
@@ -405,14 +409,14 @@ function skillDir(pack: string, packDir: string, path: string, sources: FetchedS
 
 function packCommands(order: Candidate[]) {
   const commands: Plan["commands"] = Object.create(null);
-  const add = (name: string, pack: string, path: string) => {
+  const add = (name: string, pack: string, path: string, onHub = false) => {
     if (engineCommands.includes(name)) throw new ResolveError(`${pack}: command ${name} is reserved by the engine`);
     const other = commands[name];
     if (other) throw new ResolveError(`command ${name} is shipped by both ${other.pack} and ${pack}`);
-    commands[name] = { pack, path };
+    commands[name] = { pack, path, ...(onHub ? { on: "hub" as const } : {}) };
   };
   for (const { manifest, dir, code } of order) {
-    for (const name of Object.keys(code?.commands ?? {}).sort()) add(name, manifest.name, join(dir, "pack.ts"));
+    for (const name of Object.keys(code?.commands ?? {}).sort()) add(name, manifest.name, join(dir, "pack.ts"), code!.hubCommands.includes(name));
     const root = join(dir, "commands");
     if (!existsSync(root)) continue;
     for (const file of readdirSync(root).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts")).sort()) {
