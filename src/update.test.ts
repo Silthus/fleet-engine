@@ -39,8 +39,15 @@ async function run(engineDir: string, engine: ProfileFile["engine"], profileDir 
   const home = temp.make("home-");
   const lines: string[] = [];
   let applied = 0;
-  const code = await update({ home, engineDir, profileDir, engine, print: (line) => lines.push(line), runApply: async () => (applied++, 0) });
-  return { code, home, applied, output: lines.join("\n"), version: await Bun.file(join(engineDir, "VERSION")).text() };
+  let appliedProfile: string | undefined;
+  const runApply = async () => {
+    applied++;
+    const answers = join(profileDir, "fleet.json");
+    appliedProfile = existsSync(answers) ? readFileSync(answers, "utf8") : undefined;
+    return 0;
+  };
+  const code = await update({ home, engineDir, profileDir, engine, print: (line) => lines.push(line), runApply });
+  return { code, home, applied, appliedProfile, output: lines.join("\n"), version: await Bun.file(join(engineDir, "VERSION")).text() };
 }
 
 describe("fleet update", () => {
@@ -96,8 +103,7 @@ describe("fleet update", () => {
     writeFileSync(join(profileDir, "fleet.json"), '{"plan":"local"}\n');
     await spawnGit(profileDir, "commit", "-q", "-am", "local answers");
     const result = await run(await engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" }, profileDir);
-    expect(result).toMatchObject({ code: 1, applied: 1, output: expect.stringContaining("your profile did not fast-forward") });
-    expect(await Bun.file(join(profileDir, "fleet.json")).text()).toBe('{"plan":"local"}\n');
+    expect(result).toMatchObject({ code: 1, appliedProfile: '{"plan":"local"}\n', output: expect.stringContaining("your profile did not fast-forward") });
   });
 
   test("does not apply when the engine cannot be fetched", async () => {
