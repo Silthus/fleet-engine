@@ -33,7 +33,7 @@ export type SignIn = {
   after?(): Promise<void>;
 };
 
-export type HumanContext = { terminal: Terminal; machine: Machine; nonInteractive: boolean };
+export type HumanContext = { terminal: Terminal; machine: Machine; nonInteractive: boolean; waited?(): void };
 
 /**
  * A step that needs the person: it checks first, then starts the sign-in,
@@ -44,7 +44,7 @@ export function humanStep(signIn: SignIn, context: HumanContext): Step {
   return { id: signIn.id, title: signIn.title, minutes: signIn.minutes, kind: "human", run: () => waitForPerson(signIn, context) };
 }
 
-async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive }: HumanContext): Promise<StepOutcome> {
+async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive, waited }: HumanContext): Promise<StepOutcome> {
   if (await signIn.probe()) {
     terminal.print(`  ✓ ${signIn.title}: already done`);
     return signIn.after?.();
@@ -54,6 +54,7 @@ async function waitForPerson(signIn: SignIn, { terminal, machine, nonInteractive
     terminal.print(`  ${howToStart(signIn)}`);
     return "unanswered";
   }
+  waited?.();
   terminal.print(`▶ ${signIn.title}  (step needs you, about ${signIn.minutes} min)`);
   terminal.print(`  ${signIn.why}`);
   if (signIn.interactive && signIn.command) return withKeyboard(signIn, { terminal, machine, nonInteractive });

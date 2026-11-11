@@ -38,6 +38,7 @@ describe("get.sh", () => {
     expect(result.output).toContain("Installing the Command Line Tools. Finish the window that opens; this script waits.");
     const calls = result.calls.split("\n");
     expect(calls.slice(0, 5)).toEqual(["uname -s", "xcode-select -p", "xcode-select --install", "xcode-select -p", "sleep 5"]);
+    expect(readFileSync(join(box.home, ".local/state/fleet/logs/install-timings"), "utf8")).toMatch(/^tools \d+ needed-you$/m);
     const passed = calls.indexOf("xcode-select -p", 4);
     expect(passed).toBeGreaterThanOrEqual(0);
     expect(passed).toBeLessThan(calls.findIndex((call) => call.startsWith("curl ")));
@@ -54,6 +55,7 @@ describe("get.sh", () => {
     expect(calls).toContain("brew install gh");
     expect(calls).toContain("brew install bun");
     expect(calls).toContain("brew install --cask t3-code");
+    expect(readFileSync(join(box.home, ".local/state/fleet/logs/install-timings"), "utf8")).toMatch(/^tools \d+$/m);
   });
 
   onLinuxHost("on macOS stops when the Homebrew installer leaves no brew on PATH", () => {

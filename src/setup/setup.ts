@@ -16,6 +16,7 @@ import { profileStep } from "./profile.ts";
 import { runSteps, type Step } from "./runner.ts";
 import { chatgptSignIn, claudeSignIn, githubSignIn, memberSources } from "./signins.ts";
 import { Stopped, type Terminal } from "./terminal.ts";
+import { openTimings } from "./timings.ts";
 
 export type SetupOptions = {
   home: string;
@@ -32,6 +33,7 @@ export type SetupOptions = {
   timeZone?: string;
   /** The environment the standalone check reads, and that tells a Coder workspace apart. */
   env?: Record<string, string | undefined>;
+  clock?: { now(): number };
 };
 
 /** Steps that run again when the command changes an answer: the profile saves it, apply puts it on this machine, and the check confirms it. */
@@ -40,7 +42,9 @@ const answersChanged = ["profile", "apply", "check"];
 export const sourceCache = (home: string) => join(home, ".local", "share", "fleet", "sources");
 
 export async function setup(args: string[], options: SetupOptions): Promise<number> {
-  const { terminal } = options;
+  const clock = options.clock ?? Date;
+  let waits = 0;
+  const terminal: Terminal = { ...options.terminal, ask: (prompt) => (waits++, options.terminal.ask(prompt)) };
   let flags: SetupFlags;
   const machine: MachineFile = thisMachine(await loadMachine(options.home), options.platform, options.env ?? process.env);
   const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
@@ -88,7 +92,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       await remember();
     },
   };
-  const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive };
+  const human: HumanContext = { terminal, machine: box, nonInteractive: flags.nonInteractive, waited: () => void waits++ };
   const addTeamSources = async () => {
     for (const ref of await memberSources(box)) {
       if (catalog.sources.some((source) => source.ref.name === ref.name)) continue;
@@ -170,9 +174,13 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       doctor: () => (machine.profileDir && options.doctor ? options.doctor(machine.profileDir) : Promise.resolve(1)),
     });
   const steps = () => [...setupSteps(context, machine, options, human, addTeamSources, [profile, applyStep], devbox), check()];
+  const timings = openTimings(options.home, clock.now());
   try {
     const result = await runSteps(steps, {
       terminal,
+      clock,
+      waits: () => waits,
+      record: (step) => timings.record(step),
       done: progress.done,
       async save(done) {
         progress.done = done.filter((id) => !notTakenByHub(id, hubTook));
@@ -180,6 +188,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
       },
     });
     if (result.unanswered.length) return printNeeds(terminal, steps(), result.unanswered), 2;
+    await timings.usable(clock.now());
     const { plan } = planFor(context, machine);
     const summary = {
       role: machine.role,
