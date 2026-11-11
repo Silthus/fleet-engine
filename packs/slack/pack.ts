@@ -1,10 +1,10 @@
 import { homedir } from "node:os";
 import type { Context, Pack, Setting } from "../../src/sdk/index.ts";
 
-async function commandDeps(ctx: Context, userId: Setting<string>) {
+async function commandDeps(ctx: Context, userId: Setting<string>, emoji: Setting<string>) {
   const { everyOn } = await import("./lib/command.ts");
   return {
-    env: process.env, home: homedir(), slackUserId: () => ctx.get(userId), secrets: ctx.secrets, stateDir: ctx.stateDir, threads: ctx.threads,
+    env: process.env, home: homedir(), slackUserId: () => ctx.get(userId), slackEmoji: () => ctx.get(emoji), secrets: ctx.secrets, stateDir: ctx.stateDir, threads: ctx.threads,
     print: ctx.print, now: ctx.now, sleep: ctx.sleep, every: everyOn(ctx.sleep), readStdin: () => Bun.stdin.text(),
   };
 }
@@ -14,7 +14,7 @@ export default {
   name: "slack",
   title: "Slack",
   summary: "Your own message, reaction, or mention in Slack starts a T3 thread about it.",
-  day: "A teammate reports a bug in a Slack thread. You react with :t3code:, and a thread starts to find the cause, with the whole Slack thread as its context.",
+  day: "A teammate reports a bug in a Slack thread. You react with your trigger emoji (default :t3code:), and a thread starts to find the cause, with the whole Slack thread as its context.",
   cost: "You need your own Slack app, which you make from a manifest in a few minutes. One small process stays connected to Slack.",
   risk: "Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread, and the prompt treats the rest of the Slack thread as data.",
   register(fleet) {
@@ -23,12 +23,18 @@ export default {
       type: "string",
       question: "What is your Slack member ID, so only your own messages start threads? In Slack, open your profile, then More, then Copy member ID.",
     });
+    const emoji = fleet.setting({
+      key: "slack.emoji",
+      type: "string",
+      default: "t3code",
+      question: "Which Slack emoji starts a thread? Give its name without colons, such as eye.",
+    });
     const threads = fleet.workflow({
       id: "slack-thread",
       name: "Start a thread from Slack",
       default: false,
-      settings: [userId],
-      sentence: "Your own Slack message with :t3code:, your :t3code: reaction, or a mention of your Slack app starts a T3 thread, and Slack shows you its link.",
+      settings: [userId, emoji],
+      sentence: "Your own Slack message or reaction with your trigger emoji (default :t3code:), or a mention of your Slack app starts a T3 thread, and Slack shows you its link.",
       risk: "Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread.",
     });
     const hub = { on: "hub", when: threads } as const;
@@ -49,13 +55,13 @@ export default {
     });
     fleet.command("slack-trigger", {
       summary: "Set up or check your Slack app",
-      run: async (args, ctx) => (await import("./lib/command.ts")).slackTrigger(args, await commandDeps(ctx, userId)),
+      run: async (args, ctx) => (await import("./lib/command.ts")).slackTrigger(args, await commandDeps(ctx, userId, emoji)),
     });
     fleet.service({
       ...hub,
       after: app,
       id: "slack-trigger",
-      run: async (ctx) => (await import("./lib/command.ts")).listen(await commandDeps(ctx, userId)),
+      run: async (ctx) => (await import("./lib/command.ts")).listen(await commandDeps(ctx, userId, emoji)),
     });
   },
 } satisfies Pack;
