@@ -88,10 +88,16 @@ test("on a draft, a check from another app than the pinned one neither passes no
   expect(ciLine((await pr.fleet("gate")).output)).toBe("ci: pending, required not reported yet: CI / test");
 });
 
-test("a required check that two workflows report fails when either run fails", async () => {
+test("the newest run of a check from each app decides: a rerun clears an older failure, and another app's pass hides no failure", async () => {
   const { pr } = await reviewed();
   pr.required("main", [{ context: "test" }]);
   pr.ci([{ name: "test", bucket: "fail" }, { name: "test", bucket: "pass" }]);
+  expect(ciLine((await pr.fleet("gate")).output)).toBe("ci: green, 1 required check(s) pass");
+
+  pr.ci([{ name: "test", bucket: "pass" }, { name: "test", bucket: "fail" }]);
+  expect(ciLine((await pr.fleet("gate")).output)).toStartWith("ci: red, required failing: test");
+
+  pr.ci([{ name: "test", bucket: "fail", app: 7 }, { name: "test", bucket: "pass", app: 9 }]);
   expect(ciLine((await pr.fleet("gate")).output)).toStartWith("ci: red, required failing: test");
 });
 
@@ -131,11 +137,11 @@ test("a stacked PR whose base requires nothing is held to the default branch's r
   expect(ciLine((await pr.fleet("gate")).output)).toBe("ci: pending, required waiting on: test (required by main; the base feature-base requires none)");
 });
 
-test("the gate finds the PR of the checkout and reads its head and required checks over REST, never through gh pr view", async () => {
+test("with --repo and --pr, the gate reads the PR head and the required checks over REST, never through gh pr view", async () => {
   const { pr } = await reviewed();
   pr.required("main", [{ context: "test" }]);
   const before = pr.githubCalls().length;
-  expect((await pr.fleet("gate")).code).toBe(0);
+  expect((await pr.fleet("gate", "--repo", "example/product", "--pr", "42")).code).toBe(0);
   const calls = pr.githubCalls().slice(before);
   expect(calls).toContainEqual("api repos/example/product/pulls/42");
   expect(calls).toContainEqual(expect.stringMatching(/^api repos\/example\/product\/rules\/branches\/main/));

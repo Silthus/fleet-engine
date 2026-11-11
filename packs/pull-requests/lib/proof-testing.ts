@@ -31,10 +31,6 @@ echo "$*" >> "${github}/calls"
 head=$(cat "${github}/head" 2>/dev/null || git -C "${repository}" rev-parse HEAD)
 base=$(cat "${github}/base" 2>/dev/null || echo main)
 case "$*" in
-  "api "*"/pulls?head=example%3Afeature&"*)
-    echo '[{"number":42}]'; exit 0;;
-  "api "*"/pulls?"*)
-    echo '[]'; exit 0;;
   "api "*"/pulls/"[0-9]*)
     [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head"
     draft=false; [ -f "${github}/draft" ] && draft=true
@@ -57,7 +53,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   for (const model of ["claude", "codex"]) writeFileSync(join(bin, model), `#!/bin/sh\necho "the test ran the real ${model}" >&2\nexit 97\n`, { mode: 0o755 });
   const runs: Record<string, { status: string; conclusion: string | null }> = { pass: { status: "completed", conclusion: "success" }, fail: { status: "completed", conclusion: "failure" }, cancel: { status: "completed", conclusion: "cancelled" }, pending: { status: "in_progress", conclusion: null } };
   const lines = (items: object[]) => items.map((item) => JSON.stringify(item) + "\n").join("");
-  const ci = (checks: { name: string; bucket: string; app?: number }[] | "none", commit = "any") => writeFileSync(join(github, `check-runs-${commit}`), checks === "none" ? "" : lines(checks.map(({ name, bucket, app = 1 }) => ({ name, ...runs[bucket], app }))));
+  const ci = (checks: { name: string; bucket: string; app?: number }[] | "none", commit = "any") => writeFileSync(join(github, `check-runs-${commit}`), checks === "none" ? "" : lines(checks.map(({ name, bucket, app = 1 }, index) => ({ id: index + 1, name, ...runs[bucket], app }))));
   const required = (branch: string, rules: { context: string; integration_id?: number }[] | { error: string }, { classic, page = 1, others = 0 }: { classic?: string[]; page?: number; others?: number } = {}) => {
     rmSync(join(github, `rules-error-${branch}`), { force: true });
     if ("error" in rules) writeFileSync(join(github, `rules-error-${branch}`), rules.error);

@@ -5,7 +5,7 @@ import type { CiResult, ProofIdentity, PushedHead } from "./proof.ts";
 export type Run = (command: string[]) => { code: number; stdout: string; stderr: string };
 export type PullRequest = { title: string; body: string; draft: boolean; head: string; base: string; defaultBranch?: string };
 
-type CheckRun = { name: string; status: string; conclusion: string | null; app?: number | null };
+type CheckRun = { id: number; name: string; status: string; conclusion: string | null; app?: number | null };
 type CommitStatus = { context: string; state: string };
 type RequiredCheck = { context: string; appId?: number };
 type Outcome = "pass" | "fail" | "pending";
@@ -27,23 +27,6 @@ export function readPullRequest(identity: ProofIdentity, run: Run): PullRequest 
   type Raw = { title?: string; body?: string | null; draft?: boolean; head?: { sha?: string }; base?: { ref?: string; repo?: { default_branch?: string } } };
   const raw = restJson<Raw>(`repos/${identity.repository}/pulls/${identity.pr}`, run);
   return { title: raw.title ?? "", body: raw.body ?? "", draft: raw.draft === true, head: raw.head?.sha ?? "", base: raw.base?.ref ?? "", defaultBranch: raw.base?.repo?.default_branch };
-}
-
-export function pullRequestOfCheckout(run: Run, repository?: string, pr?: string): { repository: string; pr: number } | undefined {
-  const git = (args: string[]) => { const result = run(["git", ...args]); return result.code === 0 ? result.stdout.trim() : ""; };
-  const remotes = git(["remote"]).split("\n").filter(Boolean);
-  const repositories = new Map(remotes.map((remote) => [remote, /github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/i.exec(git(["remote", "get-url", remote]))?.[1]]));
-  const candidates = repository ? [repository] : [...new Set(["upstream", "origin", ...remotes].map((remote) => repositories.get(remote)).filter((name): name is string => !!name))];
-  if (pr !== undefined) return /^\d+$/.test(pr) && candidates[0] ? { repository: candidates[0], pr: Number(pr) } : undefined;
-  const [pushRemote = "", ...pushBranch] = git(["rev-parse", "--abbrev-ref", "@{upstream}"]).split("/");
-  const owner = (repositories.get(pushRemote) ?? repositories.get("origin") ?? candidates[0])?.split("/")[0];
-  const branches = [...new Set([pushBranch.join("/"), git(["branch", "--show-current"])].filter(Boolean))];
-  for (const name of candidates) for (const branch of branches) {
-    const found = run(["gh", "api", `repos/${name}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open&per_page=1`]);
-    const [open] = found.code === 0 ? JSON.parse(found.stdout) as { number?: number }[] : [];
-    if (open?.number) return { repository: name, pr: open.number };
-  }
-  return undefined;
 }
 
 export function pushedHeadOf(identity: ProofIdentity, run: Run): PushedHead {
@@ -98,11 +81,16 @@ function commitRecords<T>(identity: ProofIdentity, run: Run, path: string, jq: s
 }
 
 function entriesOf(identity: ProofIdentity, run: Run): Entry[] {
-  const runs = commitRecords<CheckRun>(identity, run, "check-runs", ".check_runs[] | {name, status, conclusion, app: .app.id}");
+  const runs = commitRecords<CheckRun>(identity, run, "check-runs", ".check_runs[] | {id, name, status, conclusion, app: .app.id}");
+  const newestRuns = [...runs.reduce((newest, check) => {
+    const key = `${check.name}\n${check.app ?? ""}`;
+    if ((newest.get(key)?.id ?? -1) < check.id) newest.set(key, check);
+    return newest;
+  }, new Map<string, CheckRun>()).values()];
   const statuses = commitRecords<CommitStatus>(identity, run, "statuses", ".[] | {context, state}");
   const newest = statuses.filter((status, index) => statuses.findIndex((other) => other.context === status.context) === index);
   return [
-    ...runs.map((check): Entry => ({ name: check.name, appId: check.app ?? undefined, outcome: check.status !== "completed" ? "pending" : passing.has(check.conclusion ?? "") ? "pass" : "fail" })),
+    ...newestRuns.map((check): Entry => ({ name: check.name, appId: check.app ?? undefined, outcome: check.status !== "completed" ? "pending" : passing.has(check.conclusion ?? "") ? "pass" : "fail" })),
     ...newest.map((status): Entry => ({ name: status.context, status: true, outcome: status.state === "success" ? "pass" : status.state === "pending" ? "pending" : "fail" })),
   ];
 }
