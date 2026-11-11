@@ -6,7 +6,7 @@ export const stateDir = (home: string) => join(home, ".local", "state", "fleet")
 const logsDir = (home: string) => join(stateDir(home), "logs");
 export const transcriptPath = (home: string) => join(logsDir(home), "setup.log");
 export const failurePath = (home: string) => join(logsDir(home), "setup-failed.json");
-export const timingsPath = (home: string) => join(stateDir(home), "setup-timings.json");
+export const timingsPath = (home: string) => join(logsDir(home), "setup-timings.json");
 
 const keptBytes = 512 * 1024;
 
