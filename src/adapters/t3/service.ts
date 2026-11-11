@@ -51,6 +51,29 @@ const readOr = (path: string) => {
   }
 };
 
+/** Only a missing file reads as absent. Any other error throws, so a file Fleet cannot read is never taken for one it may write. */
+const readIfThere = (path: string) => {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+};
+
+const invocationId = /^[0-9a-f]{32}$/;
+
+/** What the restart marker owes: nothing, a reload, or a restart of the T3 Code started under that invocation. A marker Fleet did not write owes a reload again, so a spoiled marker never drops the token. */
+async function owedRestart(pending: string): Promise<string | undefined> {
+  const marker = lstatSync(pending, { throwIfNoEntry: false });
+  if (!marker) return undefined;
+  const text = marker.isFile() ? readOr(pending) : undefined;
+  if (text === needsReload || (text !== undefined && invocationId.test(text))) return text;
+  rmSync(pending, { recursive: true, force: true });
+  await writePrivateFile(pending, needsReload);
+  return needsReload;
+}
+
 const privateMode = (path: string, mode: number) => (lstatSync(path, { throwIfNoEntry: false })?.mode ?? 0) % 0o1000 === mode;
 
 async function realFolders(home: string) {
@@ -70,11 +93,11 @@ async function invocation(run: CommandRunner) {
 }
 
 async function loadToken(run: CommandRunner, env: Environment, pending: string, result: AdapterResult) {
-  let loadedAt = readOr(pending);
+  let loadedAt = await owedRestart(pending);
   if (loadedAt === needsReload) {
     if ((await run(["systemctl", "--user", "daemon-reload"])).code !== 0) return void result.findings.push(tokenFinding(`systemd did not reload T3 Code's service, so T3 Code runs without the Claude token. Run fleet apply again, or run: systemctl --user daemon-reload && ${restartCommand}`));
     loadedAt = await invocation(run);
-    if (loadedAt !== undefined) await writePrivateFile(pending, loadedAt);
+    if (loadedAt !== undefined && invocationId.test(loadedAt)) await writePrivateFile(pending, loadedAt);
   } else if (loadedAt !== undefined) {
     const now = await invocation(run);
     if (now !== undefined && now !== loadedAt) return void rmSync(pending, { force: true });
@@ -93,11 +116,16 @@ export async function reconcileClaudeToken(run: CommandRunner, home: string, env
   const file = join(home, tokenFile);
   const dropIn = join(home, tokenDropIn);
   const pending = join(home, pendingFile);
-  const present = readOr(dropIn);
+  let present: string | undefined;
+  try {
+    present = readIfThere(dropIn);
+  } catch {
+    return void result.findings.push(tokenFinding(`Fleet cannot read ~/${tokenDropIn}, so it leaves that file alone and does not give the Claude token to T3 Code. Make the file readable, or remove it if Fleet wrote it, then run fleet apply.`));
+  }
   if (present !== undefined && present !== dropInText) return;
   const wanted = `CLAUDE_CODE_OAUTH_TOKEN=${token}\n`;
   const written = present === dropInText && readOr(file) === wanted && privateMode(file, 0o600) && privateMode(join(home, tokenFolder), 0o700);
-  if (written && readOr(pending) === undefined) return;
+  if (written && lstatSync(pending, { throwIfNoEntry: false }) === undefined) return;
   if (dryRun) return void result.findings.push(tokenFinding("T3 Code's service needs the Claude token that this session has.", "apply"));
   if (!written) {
     mkdirSync(join(home, tokenFolder), { recursive: true, mode: 0o700 });
