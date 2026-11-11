@@ -1,11 +1,19 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "./git.ts";
 import { memoryTemp } from "./memory-temp.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
+
+const rootOf = (memory: string) => join(memory, `fleet-test-${process.getuid!()}`);
+
+const mountsWith = (memory: string, options: string) => {
+  const mounts = join(temp.make("mounts-"), "mounts");
+  writeFileSync(mounts, `/dev/root / ext4 rw,relatime 0 0\ntmpfs ${memory} tmpfs ${options} 0 0\n`);
+  return mounts;
+};
 
 const deadPid = () => {
   const child = Bun.spawnSync(["true"]);
@@ -38,6 +46,42 @@ test("leaves TMPDIR alone where the memory root has too little room", () => {
   const memory = temp.make("memory-");
   const env: Record<string, string | undefined> = {};
   expect(memoryTemp(env, { memory, pid: process.pid, room: Number.MAX_SAFE_INTEGER })).toBeUndefined();
+  expect(env).toEqual({});
+});
+
+test("still removes what ended workers left behind where the memory root has too little room", () => {
+  const memory = temp.make("memory-");
+  const ended = memoryTemp({}, { memory, pid: deadPid() })!;
+  memoryTemp({}, { memory, pid: process.pid, room: Number.MAX_SAFE_INTEGER });
+  expect(existsSync(ended)).toBe(false);
+});
+
+test("leaves TMPDIR alone where the memory root is mounted noexec, since tests run the tools they write there", () => {
+  const memory = temp.make("memory-");
+  const env: Record<string, string | undefined> = {};
+  expect(memoryTemp(env, { memory, pid: process.pid, mounts: mountsWith(memory, "rw,nosuid,nodev,noexec") })).toBeUndefined();
+  expect(env).toEqual({});
+  expect(memoryTemp(env, { memory, pid: process.pid, mounts: mountsWith(memory, "rw,nosuid,nodev") })).toBe(env.TMPDIR!);
+});
+
+test("leaves TMPDIR alone, and follows nothing, where the folder for this user is a link someone planted", () => {
+  const memory = temp.make("memory-");
+  const elsewhere = temp.make("elsewhere-");
+  const ended = String(deadPid());
+  writeFileSync(join(elsewhere, ended), "kept");
+  symlinkSync(elsewhere, rootOf(memory));
+  const env: Record<string, string | undefined> = {};
+  expect(memoryTemp(env, { memory, pid: process.pid })).toBeUndefined();
+  expect(env).toEqual({});
+  expect(readdirSync(elsewhere)).toEqual([ended]);
+});
+
+test("leaves TMPDIR alone where others can write to the folder for this user", () => {
+  const memory = temp.make("memory-");
+  mkdirSync(rootOf(memory));
+  chmodSync(rootOf(memory), 0o777);
+  const env: Record<string, string | undefined> = {};
+  expect(memoryTemp(env, { memory, pid: process.pid })).toBeUndefined();
   expect(env).toEqual({});
 });
 
