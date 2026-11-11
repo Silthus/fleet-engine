@@ -1,13 +1,15 @@
 import { skinToneEmoji } from "./skin-tone-emoji.ts";
 
-const codeSpans = /(```[\s\S]*?```|`[^`\n]*`)/;
-const tonedShortcode = /:([a-z0-9_+-]+)::skin-tone-([2-6]):/g;
+const codeOrTonedShortcode = /(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)|:([a-z0-9_+-]+)::skin-tone-([2-6]):/g;
 const lightestTone = "\u{1F3FB}";
 
-const toned = (match: string, name: string, tone: string) => skinToneEmoji[name]?.replace(lightestTone, String.fromCodePoint(0x1f3f9 + Number(tone))) ?? match;
+function toned(match: string, code: string | undefined, name: string, tone: string) {
+  if (code !== undefined || !Object.hasOwn(skinToneEmoji, name)) return match;
+  return skinToneEmoji[name]!.replaceAll(lightestTone, String.fromCodePoint(0x1f3f9 + Number(tone)));
+}
 
 export function unicodeSkinTones(text: string) {
-  return text.split(codeSpans).map((part, index) => (index % 2 ? part : part.replace(tonedShortcode, toned))).join("");
+  return text.replace(codeOrTonedShortcode, toned);
 }
 
 export function withUnicodeSkinTones(args: Record<string, unknown>) {

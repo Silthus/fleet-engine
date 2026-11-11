@@ -91,11 +91,11 @@ for (const [runtime, command] of Object.entries(runtimes)) describe.skipIf(!node
   test("a draft's skin-tone shortcodes reach Slack as Unicode emoji, so Slack's markdown cannot double the tone, and code keeps them as written", async () => {
     const bridge = upstream();
     await bridge.initialize();
-    const message = "Thanks :+1::skin-tone-2: and :wave::skin-tone-6: :unknown::skin-tone-3: `:+1::skin-tone-4:`\n```\n:clap::skin-tone-5:\n```";
+    const message = "Thanks :+1::skin-tone-2: and :wave::skin-tone-6: :man-heart-man::skin-tone-6: :unknown::skin-tone-3: :constructor::skin-tone-6: :__proto__::skin-tone-2: `:+1::skin-tone-4:` ``a`:+1::skin-tone-6:`` \n```\n:clap::skin-tone-5:\n```";
     await bridge.request("tools/call", { name: "slack_send_message_draft", arguments: { channel_id: "C1", message, text: ":ok_hand::skin-tone-3:", title: ":+1::skin-tone-2:" } });
     expect(bridge.backend().find((entry) => entry.method === "mcpServer/tool/call")!.params.arguments).toEqual({
       channel_id: "C1",
-      message: "Thanks \u{1F44D}\u{1F3FB} and \u{1F44B}\u{1F3FF} :unknown::skin-tone-3: `:+1::skin-tone-4:`\n```\n:clap::skin-tone-5:\n```",
+      message: "Thanks \u{1F44D}\u{1F3FB} and \u{1F44B}\u{1F3FF} \u{1F468}\u{1F3FF}\u200D\u2764\uFE0F\u200D\u{1F468}\u{1F3FF} :unknown::skin-tone-3: :constructor::skin-tone-6: :__proto__::skin-tone-2: `:+1::skin-tone-4:` ``a`:+1::skin-tone-6:`` \n```\n:clap::skin-tone-5:\n```",
       text: "\u{1F44C}\u{1F3FC}",
       title: ":+1::skin-tone-2:",
     });
