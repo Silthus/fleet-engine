@@ -48,6 +48,7 @@ describe("the agent setup guide", () => {
   test("gives each pack its own setup note that is in the repo, or says it needs none, and names every note the packs hold", () => {
     const rows = packRows();
     const notes = rows.filter((row) => row.note.startsWith("`")).map((row) => ({ name: row.name, path: row.note.slice(1, -1) }));
+    expect(notes.length).toBeGreaterThan(0);
     expect(rows.filter((row) => !row.note.startsWith("`") && !["None", "Step 9"].includes(row.note))).toEqual([]);
     expect(notes.filter(({ name, path }) => path !== `packs/${name}/SETUP.md` || !existsSync(join(root, path)))).toEqual([]);
     const held = readdirSync(join(root, "packs")).filter((pack) => existsSync(join(root, "packs", pack, "SETUP.md")));
