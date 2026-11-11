@@ -1,6 +1,6 @@
-import { cpSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join, relative } from "node:path";
 
 export const gitEnv = {
   ...process.env,
@@ -43,38 +43,48 @@ export function tempDirs() {
   };
 }
 
+type Entry = { path: string } & ({ kind: "dir" } | { kind: "link"; target: string } | { kind: "file"; mode: number; data: Buffer });
+
 const pathFiles = new Set(["config", "gitdir", ".git"]);
 
-function relocate(from: string, to: string, dir = to) {
+function snapshot(root: string, dir = root, entries: Entry[] = []) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    if (entry.isSymbolicLink()) {
-      const target = readlinkSync(path);
-      if (target.startsWith(from)) {
-        rmSync(path);
-        symlinkSync(to + target.slice(from.length), path);
-      }
-    } else if (entry.isDirectory()) relocate(from, to, path);
-    else if (pathFiles.has(entry.name)) {
-      const text = readFileSync(path, "utf8");
-      if (text.includes(from)) writeFileSync(path, text.replaceAll(from, to));
-    }
+    const at = relative(root, path);
+    if (entry.isSymbolicLink()) entries.push({ path: at, kind: "link", target: readlinkSync(path) });
+    else if (entry.isDirectory()) {
+      entries.push({ path: at, kind: "dir" });
+      snapshot(root, path, entries);
+    } else entries.push({ path: at, kind: "file", mode: statSync(path).mode, data: readFileSync(path) });
+  }
+  return entries;
+}
+
+function restore(entries: Entry[], from: string, to: string) {
+  mkdirSync(to, { recursive: true });
+  for (const entry of entries) {
+    const path = join(to, entry.path);
+    if (entry.kind === "dir") mkdirSync(path, { recursive: true });
+    else if (entry.kind === "link") symlinkSync(entry.target.startsWith(from) ? to + entry.target.slice(from.length) : entry.target, path);
+    else writeFileSync(path, pathFiles.has(basename(path)) ? entry.data.toString().replaceAll(from, to) : entry.data, { mode: entry.mode });
   }
 }
 
 export function template(build: (dir: string) => unknown) {
-  let ready: Promise<string> | undefined;
+  let ready: Promise<{ from: string; entries: Entry[] }> | undefined;
   const prepare = async () => {
-    const dir = mkdtempSync(join(tmpdir(), "fleet-template-"));
-    process.once("exit", () => rmSync(dir, { recursive: true, force: true }));
-    await build(dir);
-    return dir;
+    const from = mkdtempSync(join(tmpdir(), "fleet-template-"));
+    try {
+      await build(from);
+      return { from, entries: snapshot(from) };
+    } finally {
+      rmSync(from, { recursive: true, force: true });
+    }
   };
   return async (target: string) => {
     ready ??= prepare();
-    const source = await ready;
-    cpSync(source, target, { recursive: true, verbatimSymlinks: true });
-    relocate(source, target);
+    const { from, entries } = await ready;
+    restore(entries, from, target);
     return target;
   };
 }
