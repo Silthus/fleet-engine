@@ -67,13 +67,16 @@ sudo sh proof/fresh-linux.sh
 
 It exits 1 when a check fails.
 
-## Before the engine repo is public
+## Proving a local copy
 
-Set `FLEET_PROOF_ENGINE` to a Git repo or bundle of the engine. The proof then
-serves `get.sh` from that copy with `curl file://...`, and sets
-`FLEET_ENGINE_REPO` so get.sh fetches the engine from it. On user B,
-`install.sh` cannot download get.sh and falls back to `gh api`, which the
-sandbox answers from the same copy.
+CI proves a pull request's tree this way. Set `FLEET_PROOF_ENGINE` to a Git
+repo or bundle of the engine. The proof then serves `get.sh` from that copy
+with `curl file://...`, and sets `FLEET_ENGINE_REPO` so get.sh fetches the
+engine from it. User B's `install.sh` downloads get.sh from
+`raw.githubusercontent.com`, so the proof puts a `curl` first on each user's
+PATH that serves that one URL from the copy and passes every other call to the
+real `curl`. The check `get.sh source` fails when B's `install.sh` did not
+fetch get.sh through it.
 
 ```sh
 sudo FLEET_PROOF_ENGINE=/path/to/fleet-engine sh proof/fresh-linux.sh
