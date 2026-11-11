@@ -143,7 +143,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
   return { state, calls, tags, server };
 }
 
-type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean; feed?: string; installFailures?: number };
+type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; sudo?: boolean; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean; feed?: string; installFailures?: number };
 
 const releasesFeed = ["mobile-android-build%2F2.3.0%2Fabc", "v0.1.9-nightly.20990102.7", "v0.1.9-nightly.20990101.3"]
   .map((tag) => `<entry><link rel="alternate" type="text/html" href="https://github.com/pingdotgg/t3code/releases/tag/${tag}"/></entry>`)
@@ -181,6 +181,7 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
     }
     if (line === "t3 service install") return (state.service = "installed"), { code: 0, stdout: "" };
     if (line === "systemctl --user show-environment") return machine.manager === false ? { code: 1, stdout: "", stderr: "Failed to connect to bus" } : { code: 0, stdout: "HOME=/home/octo\n" };
+    if (line === "sudo -n loginctl enable-linger octo") return machine.sudo ? { code: 0, stdout: "" } : { code: 1, stdout: "", stderr: "sudo: a password is required" };
     if (line === "loginctl show-user octo --property=Linger --value") return { code: 0, stdout: `${machine.linger ?? "yes"}\n` };
     if (command[0] === "t3" && command[1] === "project" && command[2] === "add") {
       server.state.projects.push({ id: `project-${server.state.projects.length}`, title: command[3]!, workspaceRoot: command[3]!, deletedAt: null, scripts: [] });
@@ -828,6 +829,14 @@ describe("T3 on Linux", () => {
     expect(commands.calls).toContain("t3 service install");
     expect(report.ok).toBe(true);
     expect(report.findings).toContainEqual({ id: "t3:linger", pack: "engine", say: "T3 Code stops when you log out, because lingering is off for octo. Run: sudo loginctl enable-linger octo", repair: "human" });
+  });
+
+  test("turns lingering on with sudo when it can, so T3 Code keeps running after you log out", async () => {
+    const home = temp.make("home-");
+    const { adapter } = setup({}, { linger: "no", sudo: true });
+    const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+    expect(report.findings.map((item) => item.id)).not.toContain("t3:linger");
+    expect(report.actions.map((action) => action.target)).toContain("t3 linger");
   });
 
   test("reports a missing user manager and leaves the service alone", async () => {

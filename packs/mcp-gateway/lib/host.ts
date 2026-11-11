@@ -6,7 +6,7 @@ import type { Hub, Run } from "./hub.ts";
 
 export const gatewayKey = credentialName("mcp-gateway");
 
-type ProfileFacts = { hub?: string; devboxes?: string[] };
+type ProfileFacts = { hub?: string };
 
 const run: Run = async (command, options = {}) => {
   const child = Bun.spawn(command, { cwd: options.cwd, env: process.env, stdin: options.input === undefined ? "ignore" : new TextEncoder().encode(options.input), stdout: "pipe", stderr: "pipe" });
@@ -19,7 +19,7 @@ async function savedName(home: string) {
   catch { return undefined; }
 }
 
-/** The gateway's view of this machine: its home, the profile's hub and devboxes, and the tools it runs. The hub is the machine the profile names, or this machine when the profile names none. */
+/** The gateway's view of this machine: its home, the profile's hub, and the tools it runs. The hub is the machine the profile names, or this machine when the profile names none. */
 export async function gateway(ctx: Context): Promise<Hub> {
   const home = process.env.HOME!;
   const profileDir = process.env.FLEET_PROFILE_DIR;
@@ -36,7 +36,6 @@ export async function gateway(ctx: Context): Promise<Hub> {
       if (!hubName) throw new Error("your profile names no hub. Run fleet hub here on the machine that should be the hub.");
       return hubName;
     },
-    devboxes: async () => profile.devboxes ?? [],
     gateway: {},
     run,
     fetch: (input, init) => fetch(input, init),

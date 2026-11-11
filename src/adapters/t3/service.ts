@@ -43,7 +43,8 @@ export async function reconcileService(run: CommandRunner, wait: Wait, user: str
     return void result.findings.push(finding("service", "T3 Code cannot run as a service: systemd's user manager does not answer (systemctl --user). Log in to this machine in a normal session, or install your system's systemd user-session support, then run fleet apply.", "human"));
   }
   const linger = (await run(["loginctl", "show-user", user, "--property=Linger", "--value"])).stdout.trim();
-  if (linger === "no") result.findings.push(finding("linger", `T3 Code stops when you log out, because lingering is off for ${user}. Run: sudo loginctl enable-linger ${user}`, "human"));
+  if (linger === "no" && !dryRun && (await run(["sudo", "-n", "loginctl", "enable-linger", user])).code === 0) result.actions.push({ target: "t3 linger", operation: "create" });
+  else if (linger === "no") result.findings.push(finding("linger", `T3 Code stops when you log out, because lingering is off for ${user}. Run: sudo loginctl enable-linger ${user}`, "human"));
   else if (linger !== "yes") result.findings.push(finding("linger", `Fleet cannot tell whether T3 Code keeps running after you log out. Check with: loginctl show-user ${user} --property=Linger`, "human"));
   if (!cli) return void result.findings.push(finding("service", "T3 Code's service needs to be installed.", "apply"));
   const status = await run(["t3", "service", "status"]);

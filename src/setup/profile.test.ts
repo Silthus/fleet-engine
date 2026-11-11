@@ -1,17 +1,28 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadPacks } from "../pack/manifest.ts";
+import type { FetchedSource, SourceRef } from "../pack/types.ts";
 import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { defaultSources } from "./defaults.ts";
 import { profileGuide, profilePath } from "./profile.ts";
-import { fleetSetup, githubRepo, machineFile, pushedAnswers } from "./testing.ts";
+import { fakeMachine, fleetSetup, githubRepo, machineFile, pushedAnswers } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
 const starter = ["--preset", "starter", "--plan", "claude"];
-const pushedFiles = async (home: string) => (await spawnGit(githubRepo(home, "nora/fleet-profile"), "ls-tree", "--name-only", "main")).split("\n");
+const pushedFiles = async (home: string, repo = "nora/fleet-profile") => (await spawnGit(githubRepo(home, repo), "ls-tree", "--name-only", "main")).split("\n");
+
+function teamSource(): (ref: SourceRef) => Promise<FetchedSource> {
+  const dir = temp.make("team-");
+  mkdirSync(join(dir, "packs/posthog"), { recursive: true });
+  writeFileSync(join(dir, "packs/posthog/pack.json"), JSON.stringify({ schema: 1, name: "posthog", summary: "Team rules.", profileOrg: "acme" }));
+  return async (ref) => ({ ref, dir, packs: await loadPacks(dir) });
+}
+
+const teamSetup = (home: string, args: string[], replies: string[], options: { createFails?: string } = {}) => fleetSetup(home, args, replies, fakeMachine(home, {}, { org: true, ...options }), teamSource());
 
 describe("fleet setup profile", () => {
   test("asks once, creates the private profile repo, and pushes the answers, the shim, about me, and the guide", async () => {
@@ -33,6 +44,51 @@ describe("fleet setup profile", () => {
     const guide = await spawnGit(githubRepo(home, "nora/fleet-profile"), "show", "main:README.md");
     expect(guide).toContain("### Pull requests");
     expect(guide).toContain("| `pull-requests.freeReviews` |");
+  });
+
+  test("with a team pack that names a profile org, creates the profile there and says where", async () => {
+    const home = temp.make("home-");
+    const result = await teamSetup(home, starter, ["", ""]);
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("  Fleet creates the private repo acme/fleet-profile-nora in the acme GitHub org, where its members can read it, and pushes your answers there.");
+    expect(result.output).toContain("  ✓ Created the private repo acme/fleet-profile-nora. Members of the acme org can read it.");
+    expect(result.output).toContain("  Profile         acme/fleet-profile-nora, private.");
+    expect(existsSync(githubRepo(home, "nora/fleet-profile"))).toBe(false);
+    expect(await pushedFiles(home, "acme/fleet-profile-nora")).toEqual(["README.md", "about-me.md", "fleet.json", "install.sh"]);
+    expect((await pushedAnswers(home, "acme/fleet-profile-nora")).packs).toContain("posthog");
+    expect(await spawnGit(githubRepo(home, "acme/fleet-profile-nora"), "show", "main:README.md")).toContain("Members of the acme org can read this repo, so keep secrets out of it.");
+
+    rmSync(join(home, ".config/fleet"), { recursive: true });
+    rmSync(profilePath(home), { recursive: true });
+    const second = await teamSetup(home, starter, [""]);
+    expect(second.code).toBe(0);
+    expect(second.output).toContain("  ✓ Reusing your repo acme/fleet-profile-nora");
+  });
+
+  test("with a team pack, keeps an existing personal profile and says how to move it to the org", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, starter, ["", ""])).code).toBe(0);
+    rmSync(join(home, ".config/fleet"), { recursive: true });
+    rmSync(profilePath(home), { recursive: true });
+
+    const rerun = await teamSetup(home, starter, [""]);
+    expect(rerun.code).toBe(0);
+    expect(rerun.output).toContain("  ✓ Reusing your repo nora/fleet-profile");
+    expect(rerun.output).toContain("  · Your team keeps profiles in the acme org, where its members can read them. To move yours there, run:");
+    expect(rerun.output).toContain("      gh api -X POST repos/nora/fleet-profile/transfer -f new_owner=acme -f new_name=fleet-profile-nora");
+    expect(rerun.output).toContain(`      git -C ${profilePath(home)} remote set-url origin https://github.com/acme/fleet-profile-nora.git`);
+    expect(existsSync(githubRepo(home, "acme/fleet-profile-nora"))).toBe(false);
+    expect((await pushedAnswers(home)).packs).toContain("posthog");
+  });
+
+  test("with a team pack whose org refuses the repo, creates the profile in the user's account and says why", async () => {
+    const home = temp.make("home-");
+    const result = await teamSetup(home, starter, ["", ""], { createFails: "acme" });
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("  · The acme org did not let you create acme/fleet-profile-nora (you cannot create repos in acme), so Fleet uses your own account.");
+    expect(result.output).toContain("  ✓ Created the private repo nora/fleet-profile");
+    expect(existsSync(githubRepo(home, "acme/fleet-profile-nora"))).toBe(false);
+    expect((await pushedAnswers(home)).packs).toContain("posthog");
   });
 
   test("heads a pack's section in the profile guide with its title", () => {
