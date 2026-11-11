@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statfsSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { numberSetting, optionalStringSetting } from "./settings.ts";
 
@@ -70,6 +71,10 @@ export function startDecision(free: number, floor: number, place: StartPlace): D
       `${startFloorVariable} or --min-free <GB> changes the floor.`,
     ].join("\n"),
   };
+}
+
+export function startRoom(home: string, env: Env, free: (path: string) => number = freeBytes): () => DiskStatus {
+  return () => startDecision(free(home), startFloor([], env), { ...thisMachine(home, hostname(), env), freeMap: () => readFreeMap(home, env), now: Date.now() });
 }
 
 export function diskCommand(args: string[], free: number, floorGigabytes: number, place?: StartPlace, env: Env = Bun.env): number {

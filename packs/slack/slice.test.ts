@@ -76,7 +76,7 @@ async function hub() {
   cpSync(join(t3.home, ".t3/userdata/server-runtime.json"), join(home, ".t3/userdata/server-runtime.json"));
   writeFileSync(join(home, ".gitconfig"), "[user]\n\tname = Nora Example\n");
   const profile = temp.make("profile-");
-  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["slack"], plan: "claude", settings: { "slack.userId": ownerId }, workflows: { "slack-thread": true } }));
+  writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "example/engine", ref: "main", channel: "track" }, sources: [], packs: ["slack"], plan: "claude", settings: { "slack.userId": ownerId, "base.startFloorGigabytes": 0 }, workflows: { "slack-thread": true } }));
   const minutes: Array<() => void> = [];
   const engineFleet = join(repoRoot, "fleet");
   let lines: string[] = [];
