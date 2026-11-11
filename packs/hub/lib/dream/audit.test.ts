@@ -77,7 +77,7 @@ function checker() {
   return { asked, check: async (input: string) => (asked.push(input), verdicts[/^Memory: (.+)$/m.exec(input)![1]!] ?? fine) };
 }
 
-test.concurrent("audit checks each note that the sync changed since the last audit against the session that wrote it, and writes audit.md", async () => {
+test("audit checks each note that the sync changed since the last audit against the session that wrote it, and writes audit.md", async () => {
   const { home, run } = hubWithSyncedNotes();
   const { asked, check } = checker();
   const { io, printed } = quietIo(home, { git: realGit, checker: () => check });
@@ -119,7 +119,7 @@ test.concurrent("audit checks each note that the sync changed since the last aud
   expect(asked.find((input) => input.includes("Memory: projects/app/rule.md"))).toContain("[user] We deploy on Tuesdays.");
 });
 
-test.concurrent("a second audit checks only what the sync changed after the first", async () => {
+test("a second audit checks only what the sync changed after the first", async () => {
   const { home, run } = hubWithSyncedNotes();
   const first = checker();
   expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => first.check }).io)).toBe(0);
@@ -134,7 +134,7 @@ test.concurrent("a second audit checks only what the sync changed after the firs
   expect(readFileSync(join(run, "audit.md"), "utf8")).toContain("; 1 checked.");
 });
 
-test.concurrent("audit lists a check that failed, and checks it again next time", async () => {
+test("audit lists a check that failed, and checks it again next time", async () => {
   const { home, run } = hubWithSyncedNotes();
   const failing = async (input: string) => {
     if (input.includes("Memory: tech/trap.md")) throw new AnalystFailure("exit 2");
@@ -149,7 +149,7 @@ test.concurrent("audit lists a check that failed, and checks it again next time"
   expect(again.asked.some((input) => input.includes("Memory: tech/trap.md"))).toBe(true);
 });
 
-test.concurrent("audit exits 1 and writes no audit when the memory checkout cannot fetch", async () => {
+test("audit exits 1 and writes no audit when the memory checkout cannot fetch", async () => {
   const { home, run } = hubWithSyncedNotes();
   rmSync(join(home, "origin.git"), { recursive: true });
   const { io, said } = quietIo(home, { git: realGit, checker: () => checker().check });
@@ -160,7 +160,7 @@ test.concurrent("audit exits 1 and writes no audit when the memory checkout cann
   expect(existsSync(join(run, "audit.md"))).toBe(false);
 });
 
-test.concurrent("prepare collects, analyzes, then audits, and prints the run", async () => {
+test("prepare collects, analyzes, then audits, and prints the run", async () => {
   const { home, run } = hubWithSyncedNotes();
   const { check } = checker();
   const analyst = async () => ({ taskType: "fix", findings: [] });
@@ -172,7 +172,7 @@ test.concurrent("prepare collects, analyzes, then audits, and prints the run", a
   expect(readFileSync(join(run, "audit.md"), "utf8")).toContain("3 notes changed by sessions since");
 });
 
-test.concurrent("prepare still prints the run when the audit fails, and says why", async () => {
+test("prepare still prints the run when the audit fails, and says why", async () => {
   const { home, run } = hubWithSyncedNotes();
   rmSync(join(home, "origin.git"), { recursive: true });
   const analyst = async () => ({ taskType: "fix", findings: [] });
@@ -184,7 +184,7 @@ test.concurrent("prepare still prints the run when the audit fails, and says why
   expect(said).toContain(`Fleet dream: audit failed: cannot fetch the memory repo in ${join(home, ".agents/memory")}`);
 });
 
-test.concurrent("a limited audit moves through the backlog: the next audit checks only the notes the limit left", async () => {
+test("a limited audit moves through the backlog: the next audit checks only the notes the limit left", async () => {
   const { home } = hubWithSyncedNotes();
   const first = checker();
   expect(await dreamCommand(["audit", "--limit", "2"], quietIo(home, { git: realGit, checker: () => first.check }).io)).toBe(0);
@@ -196,7 +196,7 @@ test.concurrent("a limited audit moves through the backlog: the next audit check
   expect(second.asked.map((input) => /^Memory: (.+)$/m.exec(input)![1])).toEqual(["tech/trap.md"]);
 });
 
-test.concurrent("the first audit of a memory repo younger than a day checks every note since its first commit", async () => {
+test("the first audit of a memory repo younger than a day checks every note since its first commit", async () => {
   const { home, run } = hubWithSyncedNotes("2026-11-04T11:00:00Z");
   const { asked, check } = checker();
 
@@ -206,7 +206,7 @@ test.concurrent("the first audit of a memory repo younger than a day checks ever
   expect(asked).toHaveLength(2);
 });
 
-test.concurrent("audit asks about the last session that wrote the note before its sync commit, from any run, and falls back to its originSessionId", async () => {
+test("audit asks about the last session that wrote the note before its sync commit, from any run, and falls back to its originSessionId", async () => {
   const { home, run } = hubWithSyncedNotes();
   const state = join(home, ".local/state/fleet/dream");
   writeHome(state, {
@@ -224,7 +224,7 @@ test.concurrent("audit asks about the last session that wrote the note before it
   expect(asked.join("\n")).not.toContain("Too late to write it.");
 });
 
-test.concurrent("audit finds a note whose name Git would quote", async () => {
+test("audit finds a note whose name Git would quote", async () => {
   const { home, run } = hubWithSyncedNotes();
   commitAt(join(home, "writer"), "2026-11-04T15:00:00Z", "memory: devbox-2", { "memory/tech/café.md": note("café", { originSessionId: "s-2" }) });
   const { asked, check } = checker();
@@ -235,7 +235,7 @@ test.concurrent("audit finds a note whose name Git would quote", async () => {
   expect(readFileSync(join(run, "audit.md"), "utf8")).toContain("- `tech/café.md`: Fine.");
 });
 
-test.concurrent("audit keeps secrets out of what it asks and writes, and flattens the checker's text so it cannot add sections to audit.md", async () => {
+test("audit keeps secrets out of what it asks and writes, and flattens the checker's text so it cannot add sections to audit.md", async () => {
   const { home, run } = hubWithSyncedNotes();
   const token = `ghp_${"a1".repeat(18)}`;
   commitAt(join(home, "writer"), "2026-11-04T15:00:00Z", "memory: devbox-2", { "memory/tech/token.md": note("token", { originSessionId: "s-2" }, `Use ${token} for the API.`) });
@@ -252,7 +252,7 @@ test.concurrent("audit keeps secrets out of what it asks and writes, and flatten
   expect(written.split("\n").filter((line) => line.startsWith("## "))).toEqual(["## no session (1)", "## confirmed (3)", "## Recheck"]);
 });
 
-test.concurrent("audit starts over from the first commit when main was rewound past its last point", async () => {
+test("audit starts over from the first commit when main was rewound past its last point", async () => {
   const { home, run } = hubWithSyncedNotes();
   const writer = join(home, "writer");
   expect(await dreamCommand(["audit"], quietIo(home, { git: realGit, checker: () => checker().check }).io)).toBe(0);
@@ -268,7 +268,7 @@ test.concurrent("audit starts over from the first commit when main was rewound p
   expect(after.asked.some((input) => input.includes("Memory: tech/trap.md") && input.includes("Always run the slow suite twice."))).toBe(true);
 });
 
-test.concurrent("audit redacts a note and its change before it clips them, so a secret across the cut does not leak", async () => {
+test("audit redacts a note and its change before it clips them, so a secret across the cut does not leak", async () => {
   const { home } = hubWithSyncedNotes();
   const password = ["pretend", "pass", "9z8y7x"].join("-");
   const head = note("hook", { originSessionId: "s-2" }, "").length - 1;
