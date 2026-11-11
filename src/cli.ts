@@ -351,7 +351,7 @@ function parseFlags(args: string[]) {
 
 function printReport(report: Report, command: string, print: (line: string) => void, dryRun = false) {
   const changes = report.actions.filter((action) => action.operation !== "keep" && action.operation !== "conflict");
-  if (command === "apply") for (const action of changes) print(`${action.operation} ${action.target}`);
+  if (command === "apply") for (const action of changes) print(`${action.operation} ${action.target}${action.reason ? ` (${action.reason})` : ""}`);
   for (const finding of report.findings) print(`${finding.repair === "human" ? "To do" : finding.repair ? "Fix" : "Note"}: ${finding.say}`);
   if (command === "doctor") print(report.ok ? "Everything matches your profile." : "Run fleet apply to fix what Fleet can fix.");
   else if (dryRun) print(report.ok ? `Preview: ${changes.length} change${changes.length === 1 ? "" : "s"} to apply. Nothing was written.` : "Preview: Fleet could not apply your profile. Nothing was written.");

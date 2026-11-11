@@ -527,10 +527,35 @@ describe("T3 project scripts", () => {
     const { server, commands, adapter } = setup({ settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
     const report = await apply(withScripts([named]), { home, adapters: [adapter] });
     expect(commands.calls.filter((line) => line.startsWith("t3 project add"))).toEqual([`t3 project add ${home}/app`]);
-    expect(report.actions).toContainEqual({ target: "t3 project ~/app", operation: "create" });
+    expect(report.actions).toContainEqual({ target: "t3 project ~/app", operation: "create", reason: "the team pack's Prepare worktree script runs in it; turn off the team pack to keep it removed" });
     expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [ours] } });
     await apply(withScripts([named]), { home, adapters: [adapter] });
     expect(commands.calls.filter((line) => line.startsWith("t3 project add")).length).toBe(1);
+  });
+
+  test("adds back a script's project that a person removed in T3 Code, says which script keeps it, and then settles", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, "app"), { recursive: true });
+    const named = { ...prepare, projects: ["~/app"] };
+    const { server, adapter } = setup({ settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
+    await apply(withScripts([named]), { home, adapters: [adapter] });
+    server.state.projects[0]!.deletedAt = "2026-11-10T00:00:00.000Z";
+
+    const back = await apply(withScripts([named]), { home, adapters: [adapter] });
+    expect(back.actions).toContainEqual({ target: "t3 project ~/app", operation: "create", reason: "the team pack's Prepare worktree script runs in it; turn off the team pack to keep it removed" });
+    expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [ours] }, "project-1": { defaultProjectScripts: [ours] } });
+
+    const settled = await apply(withScripts([named]), { home, adapters: [adapter] });
+    expect(settled.actions).toEqual([]);
+    expect(server.state.projects.filter((item) => !item.deletedAt).map((item) => item.workspaceRoot)).toEqual([`${home}/app`]);
+  });
+
+  test("names the workflow that owns a script as the way to keep its project removed", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, "app"), { recursive: true });
+    const { adapter } = setup({ settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
+    const report = await apply(withScripts([{ ...prepare, projects: ["~/app"], workflow: "worktrees" }]), { home, adapters: [adapter] });
+    expect(report.actions).toContainEqual({ target: "t3 project ~/app", operation: "create", reason: "the team pack's Prepare worktree script runs in it; turn off the worktrees workflow to keep it removed" });
   });
 
   test("knows a script folder reached through a symlink as the project T3 lists under the other path", async () => {

@@ -127,6 +127,14 @@ describe("fleet apply", () => {
     expect(settings.model).toBe("opus");
   });
 
+  test("says why it changes a target", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude/settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8317" }, model: "opus" }));
+    const result = await fleet(["apply", "--profile", profileDir()], home);
+    expect(result.output).toMatch(/^replace \.claude\/settings\.json \(set .*; remove env\.ANTHROPIC_BASE_URL\)$/m);
+  });
+
   test("keeps an unmanaged file and a local edit, and says so", async () => {
     const home = temp.make("home-");
     mkdirSync(join(home, ".codex"), { recursive: true });

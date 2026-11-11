@@ -76,22 +76,28 @@ function taskProjects(plan: Plan) {
   return [...new Set(plan.jobs.flatMap((job) => (job.runner === "t3" && job.task?.project ? [job.task.project] : [])))];
 }
 
-function scriptProjects(plan: Plan, home: string) {
+function scriptProjects(plan: Plan, home: string): Wanted[] {
   const folder = (path: string) => !path.includes("*") && existsSync(expandHome(home, path)) && statSync(expandHome(home, path)).isDirectory();
-  return (plan.t3ProjectScripts ?? []).flatMap((script) => script.projects).filter(folder);
+  return (plan.t3ProjectScripts ?? []).flatMap((script) => {
+    const owner = script.workflow ? `the ${script.workflow} workflow` : `the ${script.pack} pack`;
+    const reason = `the ${script.pack} pack's ${script.name} script runs in it; turn off ${owner} to keep it removed`;
+    return script.projects.filter(folder).map((path) => ({ path, reason }));
+  });
 }
 
+type Wanted = { path: string; reason?: string };
+
 async function reconcileProjects(rpc: T3Rpc, plan: Plan, home: string, run: CommandRunner, dryRun: boolean, result: AdapterResult) {
-  const wanted = [...new Map([...taskProjects(plan), ...scriptProjects(plan, home)].map((path) => [realPath(expandHome(home, path)), path])).values()];
+  const wanted: Wanted[] = [...new Map([...taskProjects(plan).map((path) => ({ path })), ...scriptProjects(plan, home)].map((item) => [realPath(expandHome(home, item.path)), item])).values()];
   if (!wanted.length) return;
   const listed = new Set((await activeProjects(rpc)).map((project) => realPath(project.workspaceRoot)));
-  for (const path of wanted.filter((item) => !listed.has(realPath(expandHome(home, item))))) {
+  for (const { path, reason } of wanted.filter((item) => !listed.has(realPath(expandHome(home, item.path))))) {
     if (dryRun) {
       result.findings.push(finding(`project:${path}`, `T3 Code needs the project ${path}.`, "apply"));
       continue;
     }
     const added = await run(["t3", "project", "add", expandHome(home, path)]);
-    if (added.code === 0) result.actions.push({ target: `t3 project ${path}`, operation: "create" });
+    if (added.code === 0) result.actions.push({ target: `t3 project ${path}`, operation: "create", ...(reason ? { reason } : {}) });
     else if (added.code === 127) result.findings.push(finding(`project:${path}`, `Fleet cannot run t3 to add the project ${path}. Add the folder as a project in T3 Code, then run fleet apply.`, "human"));
     else result.findings.push(finding(`project:${path}`, `T3 Code did not add the project ${path} (exit ${added.code}). Check that the folder exists, then run fleet apply.`, "apply"));
   }
