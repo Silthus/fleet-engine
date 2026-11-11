@@ -37,8 +37,8 @@ setup goes on by itself when you are done:
 
 Setup creates the private repo `fleet-profile` in your GitHub account and saves
 your answers there. When a team pack you picked names a profile org, setup
-creates `fleet-profile-<login>` in that org instead, where its members can
-read it. If you already have a personal profile, setup keeps it and prints the
+creates `fleet-profile-<login>` in that org instead, private to the org, where
+teammates may read it. If you already have a personal profile, setup keeps it and prints the
 two commands that move it to the org. Then it applies your packs to the Mac and checks the result
 with `fleet doctor`. It ends with a screen that lists your packs and what runs
 by itself.
