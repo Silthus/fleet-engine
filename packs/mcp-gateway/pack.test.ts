@@ -99,7 +99,9 @@ describe("the plan", () => {
   });
 });
 
-function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}, docker: "fake" | "on-path" = "fake") {
+const startEnvironment = { ...process.env };
+
+function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}) {
   const state = fakeMcpHub({ groups: [{ id: "g", name: "fleet", servers: ["tickets", "calendar"] }], ...fields });
   const api = mcphubFetch(state);
   const bridged: string[] = [];
@@ -114,14 +116,15 @@ function gatewayServer(fields: Parameters<typeof fakeMcpHub>[0] = {}, docker: "f
     return Response.json({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "mcphub", version: "1.1.0" } } }, { headers: { "mcp-session-id": "session-1" } });
   }) as typeof fetch);
   const spawned: string[][] = [];
-  if (docker === "on-path") return { state, bridged, spawned };
+  const dockerHomes: (string | undefined)[] = [];
   const spawn = Bun.spawn;
-  spyOn(Bun, "spawn").mockImplementation(((command: string[], options: never) => {
-    if (command[0] !== "docker") return spawn(command, options);
+  spyOn(Bun, "spawn").mockImplementation(((command: string[], options: { env?: Record<string, string | undefined> }) => {
+    if (command[0] !== "docker") return spawn(command, options as never);
     spawned.push(command);
+    dockerHomes.push((options.env ?? startEnvironment).HOME);
     return { exited: Promise.resolve(127), stdout: new Response("").body, stderr: new Response(`${command[0]}: command not found`).body };
   }) as never);
-  return { state, bridged, spawned };
+  return { state, bridged, spawned, dockerHomes };
 }
 
 function machine(saved: MachineFile, fields: Partial<Profile> = {}, hosts: Record<string, Host | "down"> = {}) {
@@ -201,15 +204,10 @@ describe("on the hub", () => {
   test("the docker commands of the install repair run with the home Fleet runs the pack in", async () => {
     const { home, fleet } = machine(hubMachine);
     writeMcpHubSettings(home);
-    gatewayServer({ home, healthy: false }, "on-path");
-    const bin = temp.make("bin-");
-    const seen = join(bin, "home-seen");
-    writeFileSync(join(bin, "docker"), `#!/bin/sh\nprintf %s "$HOME" > '${seen}'\nexit 1\n`, { mode: 0o755 });
-    const path = process.env.PATH;
-    process.env.PATH = `${bin}:${path}`;
-    try { await fleet(["apply"]); }
-    finally { process.env.PATH = path; }
-    expect(readFileSync(seen, "utf8")).toBe(home);
+    const { dockerHomes } = gatewayServer({ home, healthy: false });
+    await fleet(["apply"]);
+    expect(dockerHomes.length).toBeGreaterThan(0);
+    expect(new Set(dockerHomes)).toEqual(new Set([home]));
   });
 
   test("a gateway installed at an HTTPS address fails the install check, and apply reinstalls it at loopback", async () => {
