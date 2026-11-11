@@ -8,7 +8,7 @@ export const onLinuxHost = test.if(process.platform === "linux");
 
 const systemTools = ["sh", "env", "id", "cat", "mkdir", "mktemp", "rm", "chmod", "dirname", "sed", "grep", "head", "install", "tar", "gzip", "git", "bun", "sha256sum", "tr", "tail", "ls", "cp", "mv", "basename", "sleep", "python3", "date"];
 
-type SandboxOptions = { without?: string[]; brewInstaller?: string; t3Failures?: number; releasesFeed?: string };
+type SandboxOptions = { without?: string[]; brewInstaller?: string; t3Failures?: number; releasesFeed?: string; t3App?: boolean };
 export type Sandbox = { root: string; bin: string; home: string; log: string; stub: (name: string, body: string) => void; failDownloads: (pattern: string, times: number) => void; stallDownloads: (pattern: string, times: number) => void };
 
 const t3Feed = ["mobile-android-build%2F2.3.0%2Fabc", "v0.1.9-nightly.20990102.7", "v0.1.9-nightly.20990101.3"]
@@ -52,6 +52,8 @@ export function getShHarness() {
     chmodSync(join(root, "fake-bun"), 0o755);
     if (!options.without?.includes("bun")) cpSync(join(root, "fake-bun"), join(bin, "bun"));
     stub("xcode-select", "exit 0");
+    if (os === "Darwin" && !options.without?.includes("gh")) stub("gh", "exit 0");
+    if (options.t3App) stub("open", "exit 0");
     stub("sleep", "exit 0");
     stub("claude", "exit 0");
     stub("codex", "exit 0");
@@ -89,6 +91,7 @@ case "$url" in
   https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh) echo '${brewInstaller.replaceAll("'", "'\\''")}' > "$out" ;;
   https://github.com/cli/cli/releases/latest) printf 'https://github.com/cli/cli/releases/tag/v9.9.9' ;;
   *gh_9.9.9_linux_amd64.tar.gz) cp "${ghTar}" "$out" ;;
+  *_macOS_*.zip|*/bun-darwin-*.zip) echo "not the pinned file" > "$out" ;;
   *gh_9.9.9_checksums.txt) echo "$(sha256sum "${ghTar}" | cut -c1-64)  gh_9.9.9_linux_amd64.tar.gz" > "$out" ;;
   *) echo "unexpected url $url" >&2; exit 22 ;;
 esac`);

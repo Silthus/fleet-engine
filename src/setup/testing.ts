@@ -100,7 +100,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * Each box's T3 environment id is env-<host>, except on the hosts withoutT3, where T3 never ran.
  * T3 here lists hereLinks as its linked environments, and unlink forgets one. ssh never reaches the hosts named unreachable.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: boolean; linked: boolean }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; boxTunnel?: string; withoutT3?: string[]; hereLinks?: HereLink[]; unreachable?: string[] } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: unknown; linked: unknown }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; boxTunnel?: string; withoutT3?: string[]; hereLinks?: HereLink[]; unreachable?: string[] } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -157,7 +157,8 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     const status = side.name === "box" && options.boxConnect ? options.boxConnect : { authenticated: side.linked, linked: side.linked };
     if (line === "t3 connect status --json") return result(true, JSON.stringify({ desired: side.linked, ...status, revoked: false, relayUrl: "https://relay.example", ...(options.cliPrintsTunnel && side.linked ? { tunnelHostname: side.tunnel } : {}) }));
     if (line.startsWith("sh -c ") && line.includes("server-runtime.json")) return runtimeRecord(line, side.home);
-    if (/^sh -c 'kill -0 \S+'$/.test(line)) return result(!options.serverGone);
+    const killed = line.match(/^sh -c 'kill -0 (\S+)'$/)?.[1];
+    if (killed !== undefined) return result(!options.serverGone && killed === String("runtimePid" in options ? options.runtimePid : 4242));
     if (line.startsWith("curl ") && !line.startsWith("curl -q --noproxy '*' ")) return { code: 22, output: "curl: (22) The requested URL returned error: 502 from the proxy", stdout: "" };
     if (line === "t3 auth session issue --json --ttl 5m --label fleet --subject fleet --scope relay:read") {
       const session = { sessionId: `session-${sessions.length + 1}`, token: `t3-bearer-${side.tunnel}-${sessions.length + 1}`, revoked: false };
@@ -166,8 +167,10 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     }
     const revoked = sessions.find((session) => line === `t3 auth session revoke ${session.sessionId}`);
     if (revoked) return (revoked.revoked = true), result(true, "Revoked.");
-    if (line === `curl -q --noproxy '*' -fsS --max-time 15 -H @- ${origin}/api/connect/link-state`) {
-      const live = sessions.some((session) => !session.revoked && input?.split("\n").includes(`authorization: Bearer ${session.token}`));
+    if (line === `curl -q --noproxy '*' -fsS --max-time 15 -H @- ${quote(`${origin}/api/connect/link-state`)}`) {
+      const lines = input?.split("\n") ?? [];
+      const live = sessions.some((session) => !session.revoked && lines.includes(`authorization: Bearer ${session.token}`));
+      if (!lines.includes("x-t3-orchestration-protocol: 2")) return { code: 22, output: "curl: (22) The requested URL returned error: 400", stdout: "" };
       if (!live) return { code: 22, output: "curl: (22) The requested URL returned error: 401", stdout: "" };
       if (options.serverWithoutLinkState?.includes(side.name)) return { code: 22, output: "curl: (22) The requested URL returned error: 404", stdout: "" };
       return result(true, JSON.stringify({ linked: side.linked, relayUrl: "https://relay.example", managedTunnelActive: side.linked, linkRevoked: false, tunnelHostname: side.linked && ++lookups > (options.tunnelStartsAfter ?? 0) ? side.tunnel : null, linkableHere: false }));
