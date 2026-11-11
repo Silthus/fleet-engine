@@ -8,5 +8,6 @@ test("the dream skill finds the memory through memory.subtree, so a memory folde
   expect(skill).toContain("`memory.subtree`");
   expect(skill).toContain("`<notes>` is `<run>/memory/<memory.subtree>`, or `<run>/memory` when `memory.subtree` is empty.");
   expect([...skill.matchAll(/([^\s`]*)MEMORY\.md/g)].map((match) => match[1])).toEqual(["<notes>/"]);
+  expect([...skill.matchAll(/([^\s`(]*)\/(projects|tech)\//g)].map((match) => match[1])).toEqual(["<notes>", "<notes>"]);
   expect([...skill.matchAll(/`(projects|tech)\//g)]).toEqual([]);
 });
