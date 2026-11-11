@@ -23,15 +23,10 @@ export type Machine = {
 export const realMachine: Machine = {
   async exec(command, options = {}) {
     const limited = options.timeoutMs !== undefined;
-    let child: ReturnType<typeof Bun.spawn<"ignore" | Blob, "pipe", "pipe">>;
-    try {
-      child = Bun.spawn(command, { cwd: options.cwd, stdin: options.input === undefined ? "ignore" : new Blob([options.input]), stdout: "pipe", stderr: "pipe", detached: limited });
-    } catch {
-      return { code: 127, output: "", stdout: "" };
-    }
+    let child: ReturnType<typeof Bun.spawn<"ignore" | Blob, "pipe", "pipe">> | undefined;
     const endGroup = () => {
       try {
-        process.kill(-child.pid, "SIGKILL");
+        if (child) process.kill(-child.pid, "SIGKILL");
       } catch {}
     };
     const release = () => {
@@ -43,8 +38,14 @@ export const realMachine: Machine = {
       release();
       if (!process.listenerCount(signal)) process.kill(process.pid, signal);
     };
-    const deadline = limited ? setTimeout(endGroup, options.timeoutMs) : undefined;
     if (limited) process.once("exit", endGroup).on("SIGINT", interrupted).on("SIGTERM", interrupted);
+    try {
+      child = Bun.spawn(command, { cwd: options.cwd, stdin: options.input === undefined ? "ignore" : new Blob([options.input]), stdout: "pipe", stderr: "pipe", detached: limited });
+    } catch {
+      release();
+      return { code: 127, output: "", stdout: "" };
+    }
+    const deadline = limited ? setTimeout(endGroup, options.timeoutMs) : undefined;
     try {
       const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       return { code, output: `${stdout}${stderr}`, stdout };
