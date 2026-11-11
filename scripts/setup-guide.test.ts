@@ -189,7 +189,7 @@ describe("the agent setup guide", () => {
   });
 
   test("names only files that are in the repo", () => {
-    const files = [...guide().matchAll(/`([\w./-]+\.(?:json|md|svg|ts|sh|html))`/g)].map((match) => match[1]!);
+    const files = [...guide().matchAll(/`([\w./-]+\.(?:json|md|svg|ts|sh|html))`|\]\((?!https?:|#)([^)#\s]+)/g)].map((match) => (match[1] ?? match[2])!);
     expect(files.length).toBeGreaterThan(0);
     expect(files.filter((file) => !existsSync(join(root, file)))).toEqual([]);
   });
