@@ -103,7 +103,7 @@ export function devboxSteps(host: string, context: DevboxContext): Step[] {
   const on = (signIn: SignIn): SignIn => Object.assign(Object.create(signIn) as SignIn, { id: `devbox:${host}:${signIn.id}`, title: `${signIn.title} on ${host}` });
   const chatgpt = chatgptSignIn(box, context.models);
   return [
-    auto(host, "install", `Install Fleet on ${host}`, 4, context.terminal, () => install(box, context)),
+    auto(host, "install", `Install Fleet on ${host}`, 4, context.terminal, () => install(box, host, context)),
     ...(host.startsWith(coderPrefix) && context.machine.has("coder") ? [auto(host, "coder", `Sign in to Coder on ${host}`, 1, context.terminal, () => coderOnBox(host, box, context.machine))] : []),
     humanStep(on(githubSignIn(box, async () => {})), human),
     auto(host, "profile", `Apply your profile on ${host}`, 3, context.terminal, () => applyProfile(box, context)),
@@ -132,10 +132,11 @@ async function shown(box: Machine, script: string, failure: string) {
   if ((await box.run(["sh", "-c", script])) !== 0) throw new Error(failure);
 }
 
-async function install(box: Machine, context: DevboxContext) {
+/** Installs Fleet on the devbox and names it by the SSH host this machine reaches it by, the name the profile lists it by. */
+async function install(box: Machine, host: string, context: DevboxContext) {
   const { engineRef } = await context.profile();
   const getSh = `https://raw.githubusercontent.com/${engineRepo}/${engineRef}/get.sh`;
-  const role = `mkdir -p "$HOME/.config/fleet" && { [ -f "$HOME/.config/fleet/machine.json" ] || printf '{"schema":1,"role":"devbox"}\\n' > "$HOME/.config/fleet/machine.json"; }`;
+  const role = `mkdir -p "$HOME/.config/fleet" && { [ -f "$HOME/.config/fleet/machine.json" ] || printf '{"schema":1,"role":"devbox","name":"${host}"}\\n' > "$HOME/.config/fleet/machine.json"; }`;
   const download = `installer=$(mktemp) && { curl -fsSL ${quote(getSh)} -o "$installer" && sh "$installer" --ref ${quote(engineRef)} --install-only; s=$?; rm -f "$installer"; exit $s; }`;
   await shown(box, `${role} && ${download}`, "Fleet did not install on the devbox. Fix what it says above, then run fleet setup again.");
 }

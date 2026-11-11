@@ -1,5 +1,6 @@
 import type { MachineFile, Plan } from "../pack/types.ts";
-import { saveMachine, validHost } from "../profile/profile.ts";
+import { onHub } from "../hub/ssh.ts";
+import { loadProfile, saveAnswers, saveMachine, validHost } from "../profile/profile.ts";
 import type { Machine } from "../setup/commands.ts";
 import { devboxSteps, profileForBox } from "../setup/devbox.ts";
 import { FlagError } from "../setup/flags.ts";
@@ -26,6 +27,7 @@ export async function devboxCommand(args: string[], context: DevboxCommandContex
     machineFile.devboxes = [...(machineFile.devboxes ?? []), host];
     await remember();
   }
+  const hub = await listInProfile(machineFile.profileDir, host);
   const steps = () => devboxSteps(host, { terminal, machine: context.machine, nonInteractive: false, plan: context.plan.ai, models: context.plan.models, profile: () => profileForBox(context.machine, machineFile.profileDir) });
   try {
     await runSteps(steps, {
@@ -44,5 +46,22 @@ export async function devboxCommand(args: string[], context: DevboxCommandContex
   }
   terminal.print("");
   terminal.print(`${host} is your devbox now. It runs your profile, and T3 Code here and there can reach each other.`);
+  if (hub && hub !== host) await tellHub(context, hub, host);
   return 0;
+}
+
+const hubUpdateLimitMs = 15 * 60_000;
+
+/** Lists the devbox in the profile, so the hub and every node know it, and returns the hub the profile names. */
+async function listInProfile(profileDir: string | undefined, host: string): Promise<string | undefined> {
+  if (!profileDir) return undefined;
+  const profile = await loadProfile(profileDir);
+  if (!profile.devboxes?.includes(host)) await saveAnswers(profileDir, { devboxes: [...(profile.devboxes ?? []), host] }, { push: true });
+  return profile.hub;
+}
+
+/** Has the hub take the new node now, so its disk watch, tunnels and peer links include it before the next nightly update. */
+async function tellHub({ machine, terminal }: DevboxCommandContext, hub: string, host: string) {
+  const updated = await machine.exec(onHub(hub, ["update"]), { timeoutMs: hubUpdateLimitMs });
+  terminal.print(updated.code === 0 ? `✓ The hub, ${hub}, took ${host}: its disk watch, tunnels and peer links include it now.` : `· The hub, ${hub}, did not answer. It takes ${host} at its next fleet update, or run fleet update there now.`);
 }
