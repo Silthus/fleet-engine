@@ -227,8 +227,8 @@ or the judge failed or was unavailable; 3 means only unaccepted gaps remain. No 
 line is the verdict and names what it covered. A clean merge of the PR's base carries the review and the evidence of
 its other parent forward. The review also carries across quiet commits: single-parent commits that only change or add
 test files, named *.test.*, *.spec.*, *_test.go, *_test.py or test_*.py, or snapshots in __snapshots__, as regular
-files with an unchanged mode. A deleted test, a mode change, a symlink, a comment, or a file in a test folder needs a
-review. The gate then prints "final read carried from <sha>: test-only delta", and the receipt in
+files with an unchanged mode. A deleted test, a mode change, a symlink, a comment, a file in a test folder, or a test
+file whose name other code holds, such as an import of limits.test.ts, needs a review. The gate then prints "final read carried from <sha>: test-only delta", and the receipt in
 carried/<HEAD>.json names the quiet commits and the reason. Evidence does not carry across quiet commits.
 When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
 picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's

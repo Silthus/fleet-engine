@@ -88,10 +88,12 @@ test("commits that change only test files carry the final read, and a final read
   expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--standing", "The test pins a rule the code must keep.")).code).toBe(0);
 });
 
-test("a comment, a file in a test folder, a deleted test, a code change beside a test, a mode change, or a symlink needs a new review", async () => {
+test("a comment, a test folder, a deleted test, a code change beside a test, a test that code imports, a strange name, a mode change, a symlink, or a hidden submodule needs a new review", async () => {
   const pr = await checkout();
   await pr.commit("feature.ts", "export const limit = 3;\n");
   await pr.commit("feature.test.ts", "expect(limit).toBe(3);\n");
+  await pr.commit("limits.test.ts", "export const most = 3;\n");
+  await pr.commit("app.ts", "import { most } from \"./limits.test.ts\";\nconsole.log(most);\n");
   const reviewed = await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "fixture");
   const changes: [string, () => Promise<unknown>][] = [
@@ -101,8 +103,17 @@ test("a comment, a file in a test folder, a deleted test, a code change beside a
     ["a mode change", async () => { await pr.git("update-index", "--chmod=+x", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Make the test executable"); }],
     ["a test with a code change", async () => { writeFileSync(join(pr.repository, "feature.ts"), "export const limit = 4;\n"); writeFileSync(join(pr.repository, "feature.test.ts"), "expect(limit).toBe(4);\n"); await pr.git("commit", "-q", "-a", "-m", "Raise the limit"); }],
     ["a new symlinked test", async () => { symlinkSync("feature.ts", join(pr.repository, "linked.test.ts")); await pr.git("add", "linked.test.ts"); await pr.git("commit", "-q", "-m", "Link a test"); }],
+    ["a test that code imports", () => pr.commit("limits.test.ts", "export const most = 0;\n")],
+    ["a test whose name ends in a line break", () => pr.commit("policy.test.ts\n\n", "export const allowed = true;\n")],
     ["a symlink", async () => { rmSync(join(pr.repository, "feature.test.ts")); symlinkSync("feature.ts", join(pr.repository, "feature.test.ts")); await pr.git("add", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Link the test"); }],
   ];
+
+  changes.push(["a submodule that config hides", async () => {
+    await pr.git("config", "diff.ignoreSubmodules", "all");
+    await pr.git("update-index", "--add", "--cacheinfo", `160000,${reviewed},vendor/dependency`);
+    writeFileSync(join(pr.repository, "feature.test.ts"), "expect(limit).toBe(3);\nexpect(limit).toBeGreaterThan(0);\n");
+    await pr.git("commit", "-q", "-a", "-m", "Bump the dependency");
+  }]);
 
   for (const [name, change] of changes) {
     await pr.git("reset", "-q", "--hard", reviewed);
