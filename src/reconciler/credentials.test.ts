@@ -5,6 +5,7 @@ import { main, type CliOptions } from "../cli.ts";
 import type { MachineFile } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
 import { filesAdapter } from "./apply.ts";
+import { leakedKey } from "./fixtures/issued/pack.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -74,9 +75,18 @@ test("a service that refuses to issue a key gives a finding, and apply stores no
   const fleet = machine(hub);
   expect((await fleet("issued", "refuse")).code).toBe(0);
   const applied = await fleet("apply");
-  expect(applied.output).toContain("Fix: Could not issue the credential of issued/issued-api: the service said no");
+  expect(applied.output).toContain("Fix: Could not issue the credential of issued/issued-api. Run fleet credential issued/issued-api hub-1 to see why. Fleet tries again at the next apply.");
   expect(applied.code).toBe(0);
   expect((await fleet("issued", "use")).output).toBe("fleet: issued/issued-api has no credential on this machine yet. Run fleet apply on the hub.");
+});
+
+test("the hub's finding copies nothing that a failing service printed or threw, so its key stays out of the report", async () => {
+  const fleet = machine(hub);
+  expect((await fleet("issued", "leak")).code).toBe(0);
+  const applied = await fleet("apply");
+  const findings = applied.output.split("\n").filter((line) => line.startsWith("Fix:") || line.startsWith("To do:"));
+  expect(findings).toContain("Fix: Could not issue the credential of issued/issued-api. Run fleet credential issued/issued-api hub-1 to see why. Fleet tries again at the next apply.");
+  expect(findings.join("\n")).not.toContain(leakedKey);
 });
 
 test("a node issues nothing in its own apply, and ctx.use fails fast with a sentence", async () => {
