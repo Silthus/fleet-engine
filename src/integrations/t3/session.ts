@@ -39,6 +39,8 @@ export async function readT3Settings<T>(client: Pick<T3Client, "call">): Promise
   return (await client.call<{ settings: T }>("server.getConfig", {})).settings;
 }
 
+export class T3Refusal extends Error {}
+
 class T3Rpc {
   private nextId = 1;
   private pending = new Map<string, PendingCall>();
@@ -85,7 +87,7 @@ class T3Rpc {
       catch {
         this.pending.delete(id);
         clearTimer();
-        reject(new Error(`T3 RPC ${tag} could not send`));
+        reject(new T3Refusal(`T3 RPC ${tag} could not send`));
       }
     });
   }
@@ -107,7 +109,7 @@ class T3Rpc {
         const pending = this.pending.get(String(message.requestId));
         this.pending.delete(String(message.requestId));
         if (message.exit?._tag === "Success") pending?.resolve(message.exit.value);
-        else pending?.reject(new Error("T3 RPC request failed"));
+        else pending?.reject(new T3Refusal("T3 RPC request failed"));
       }
       if (message._tag === "Defect" || message._tag === "ClientProtocolError") this.rejectPending("T3 RPC protocol failed");
     }

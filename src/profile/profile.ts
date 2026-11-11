@@ -93,12 +93,18 @@ export function inCoderWorkspace(env: Record<string, string | undefined>) {
   return Boolean(env.CODER_AGENT_URL) || env.CODER === "true";
 }
 
-/** This machine as saved, or its defaults: a Mac, a devbox in a Coder workspace, or a Linux machine. A Coder workspace saved as linux becomes a devbox. Its name is the saved one, or the host name when that is an SSH name. */
+/** The SSH name coder config-ssh gives a workspace, which every machine reaches it by. A box from the pool keeps its bare name. */
+export function coderSshName(env: Record<string, string | undefined>): string | undefined {
+  const workspace = env.CODER_WORKSPACE_NAME;
+  return workspace && validHost(workspace) && !workspace.startsWith("box-") ? `coder.${workspace}` : undefined;
+}
+
+/** This machine as saved, or its defaults: a Mac, a devbox in a Coder workspace, or a Linux machine. A Coder workspace saved as linux becomes a devbox. Its name is the saved one, then its Coder SSH name, then the host name when that is an SSH name. */
 export function thisMachine(saved: MachineFile | undefined, platform: NodeJS.Platform, env: Record<string, string | undefined>, host = hostname()): MachineFile {
   const coder = saved?.coder ?? (platform !== "darwin" && inCoderWorkspace(env) ? true : undefined);
   const fallback = platform === "darwin" ? "mac" : coder ? "devbox" : "linux";
   const role = !saved || (saved.role === "linux" && coder) ? fallback : saved.role;
-  const name = saved?.name ?? (validHost(host) ? host : undefined);
+  const name = saved?.name ?? (coder ? coderSshName(env) : undefined) ?? (validHost(host) ? host : undefined);
   return { ...saved, schema: 1, role, ...(coder ? { coder } : {}), ...(name ? { name } : {}) };
 }
 

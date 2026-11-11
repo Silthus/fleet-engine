@@ -13,7 +13,7 @@ const keepFor = 31 * day;
 export type Owner = { name: string; slackUserId: string };
 export type Trigger = { kind: "message" | "reaction"; channel: string; ts: string };
 type Message = { user?: string; text?: string; ts: string; thread_ts?: string };
-type Pending = { trigger: Trigger; since: number; commandId: string; told?: true; claim?: Claim };
+type Pending = { trigger: Trigger; since: number; commandId: string; told?: true; claim?: Claim; reachedT3?: true };
 type State = { handled: Record<string, number>; pending: Record<string, Pending> };
 export type Started = { threadId: string; url?: string; where: string };
 export type TriggerDeps = {
@@ -56,6 +56,7 @@ export async function handleTrigger(trigger: Trigger, deps: TriggerDeps): Promis
         const entry = state.pending[key];
         if (!entry) return false;
         if (outcome.claim) entry.claim = outcome.claim;
+        if (outcome.reachedT3) entry.reachedT3 = true;
         if (entry.told) return false;
         entry.told = true;
         return true;
@@ -98,9 +99,9 @@ async function forget(key: string, deps: TriggerDeps) {
   if (claim) await deps.launch.release?.(claim).catch((error) => deps.log(`${key}: could not release ${claim.box}: ${error}`));
 }
 
-type Outcome = { started: Started; name: string; thread?: string } | { failed: string; thread?: string; claim?: Claim } | { gone: string };
+type Outcome = { started: Started; name: string; thread?: string } | { failed: string; thread?: string; claim?: Claim; reachedT3?: true } | { gone: string };
 
-async function start(trigger: Trigger, key: string, { commandId, claim }: Pending, deps: TriggerDeps): Promise<Outcome> {
+async function start(trigger: Trigger, key: string, { commandId, claim, reachedT3 }: Pending, deps: TriggerDeps): Promise<Outcome> {
   const first = (await deps.slack("conversations.replies", { channel: trigger.channel, ts: trigger.ts, limit: "1" })).messages?.[0] as Message | undefined;
   if (!first) return { gone: "message not found" };
   const threadTs = first.thread_ts ?? first.ts;
@@ -114,8 +115,8 @@ async function start(trigger: Trigger, key: string, { commandId, claim }: Pendin
     deps.slack("chat.getPermalink", { channel: trigger.channel, message_ts: trigger.ts }).then((result) => String(result.permalink)),
   ]);
   const name = title(message.text ?? "");
-  const launched = await deps.launch({ title: name, prompt: prompt(deps.owner, trigger, message.text ?? "", permalink, context), commandId, claim });
-  return "failed" in launched ? { failed: launched.failed, thread, claim: launched.claim } : { started: launched, name, thread };
+  const launched = await deps.launch({ title: name, prompt: prompt(deps.owner, trigger, message.text ?? "", permalink, context), commandId, claim, replay: reachedT3 });
+  return "failed" in launched ? { failed: launched.failed, thread, claim: launched.claim, reachedT3: launched.reachedT3 } : { started: launched, name, thread };
 }
 
 async function exactMessage(slack: SlackApi, trigger: Trigger, threadTs: string): Promise<Message | undefined> {

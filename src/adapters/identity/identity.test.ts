@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFil
 import { join, resolve } from "node:path";
 import type { Plan, SettingValue } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
-import { tempDirs } from "../../testing/git.ts";
+import { gitEnv, spawnGit, tempDirs } from "../../testing/git.ts";
 import type { CommandRunner } from "../run.ts";
 import { identityAdapter } from "./adapter.ts";
 
@@ -108,6 +108,8 @@ describe("the ssh signer", () => {
 \tgpgsign = true
 [tag]
 \tgpgsign = true
+[push]
+\tdefault = simple
 `);
     expect(read(home, ".ssh/fleet-allowed-signers")).toBe(`octo@example.com ${sshKey}\n`);
     expect(read(home, ".gitconfig")).toBe("[include]\n\tpath = ~/.config/fleet/gitconfig\n");
@@ -152,6 +154,27 @@ describe("the ssh signer", () => {
     expect(read(home, ".gitconfig")).toBe("[alias]\n\tst = status\n[include]\n\tpath = ~/.config/fleet/gitconfig\n");
     const backups = join(home, ".local/state/fleet/backups");
     expect(readdirSync(backups).map((run) => read(home, `.local/state/fleet/backups/${run}/.gitconfig`))).toEqual(["[alias]\n\tst = status"]);
+  });
+
+  test("a bare git push from a branch made off origin/main leaves main alone, even when the user set push.default to upstream", async () => {
+    const home = temp.make("home-");
+    writeFileSync(join(home, ".gitconfig"), "[push]\n\tdefault = upstream\n");
+    const remote = temp.make("remote-");
+    const work = temp.make("work-");
+    await spawnGit(remote, "init", "--bare", "-b", "main");
+    await spawnGit(work, "clone", remote, ".");
+    await spawnGit(work, "commit", "--allow-empty", "-m", "first");
+    await spawnGit(work, "push", "origin", "main");
+    await spawnGit(work, "checkout", "-b", "feature", "origin/main");
+    await spawnGit(work, "commit", "--allow-empty", "-m", "feature");
+    const main = await spawnGit(remote, "rev-parse", "main");
+
+    await apply(plan("linux"), { home, adapters: [github(home, octo).adapter] });
+
+    const { GIT_CONFIG_GLOBAL: _global, ...env } = gitEnv;
+    const push = Bun.spawn(["git", "push"], { cwd: work, env: { ...env, HOME: home }, stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    expect(await push.exited).not.toBe(0);
+    expect(await spawnGit(remote, "rev-parse", "main")).toBe(main);
   });
 
   test("turns on no signing when the private key is missing or does not match", async () => {

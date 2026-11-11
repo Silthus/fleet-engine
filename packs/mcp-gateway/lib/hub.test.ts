@@ -128,6 +128,13 @@ test("sign-in prints the forward for your computer and each pending authorizatio
   expect(quiet.printed).toEqual(["No upstream server waits for a sign-in."]);
 });
 
+test("sign-in forwards from the hub's Coder workspace when the profile names the hub by its coder.<workspace> SSH name", async () => {
+  const pending = { oauth: { pendingAuthorization: { authorizationUrl: "https://auth.example.com/authorize?state=<x>" } } };
+  const hub = fakeHub(hubHome({ mcpServers: { tickets: pending } }), { hubName: () => "coder.my-hub" });
+  await signIn(hub);
+  expect(hub.printed[0]).toBe("On your computer, keep this running while you sign in: coder port-forward my-hub --tcp 3317");
+});
+
 const ownContainer = (call: { command: string[] }) => call.command[1] === "container" ? { stdout: JSON.stringify([{ Config: { Labels: { "org.fleet.service": "mcphub" } } }]) } : {};
 
 test("restart restarts the container and keeps the grants on disk", async () => {

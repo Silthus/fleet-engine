@@ -39,8 +39,15 @@ async function run(engineDir: string, engine: ProfileFile["engine"], profileDir 
   const home = temp.make("home-");
   const lines: string[] = [];
   let applied = 0;
-  const code = await update({ home, engineDir, profileDir, engine, print: (line) => lines.push(line), runApply: async () => (applied++, 0) });
-  return { code, home, applied, output: lines.join("\n"), version: await Bun.file(join(engineDir, "VERSION")).text() };
+  let appliedProfile: string | undefined;
+  const runApply = async () => {
+    applied++;
+    const answers = join(profileDir, "fleet.json");
+    appliedProfile = existsSync(answers) ? readFileSync(answers, "utf8") : undefined;
+    return 0;
+  };
+  const code = await update({ home, engineDir, profileDir, engine, print: (line) => lines.push(line), runApply });
+  return { code, home, applied, appliedProfile, output: lines.join("\n"), version: await Bun.file(join(engineDir, "VERSION")).text() };
 }
 
 describe("fleet update", () => {
@@ -80,6 +87,23 @@ describe("fleet update", () => {
     await spawnGit(profileRemote, "commit", "-q", "-am", "answers");
     await run(await engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" }, profileDir);
     expect(await Bun.file(join(profileDir, "fleet.json")).text()).toBe('{"plan":"claude"}\n');
+  });
+
+  test("applies the last profile but fails when the profile does not fast-forward", async () => {
+    const remote = await engineRemote(["v0.1.0"]);
+    const profileRemote = temp.make("profile-remote-");
+    await spawnGit(profileRemote, "init", "-q", "-b", "main");
+    writeFileSync(join(profileRemote, "fleet.json"), "{}\n");
+    await spawnGit(profileRemote, "add", ".");
+    await spawnGit(profileRemote, "commit", "-q", "-m", "start");
+    const profileDir = temp.make("profile-");
+    await spawnGit(profileDir, "clone", "-q", profileRemote, ".");
+    writeFileSync(join(profileRemote, "fleet.json"), '{"plan":"claude"}\n');
+    await spawnGit(profileRemote, "commit", "-q", "-am", "answers");
+    writeFileSync(join(profileDir, "fleet.json"), '{"plan":"local"}\n');
+    await spawnGit(profileDir, "commit", "-q", "-am", "local answers");
+    const result = await run(await engineCheckout(remote, "v0.1.0"), { repo: remote, ref: "v0.1.0", channel: "release" }, profileDir);
+    expect(result).toMatchObject({ code: 1, appliedProfile: '{"plan":"local"}\n', output: expect.stringContaining("your profile did not fast-forward") });
   });
 
   test("does not apply when the engine cannot be fetched", async () => {
