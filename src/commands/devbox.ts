@@ -1,6 +1,6 @@
 import type { MachineFile, Plan } from "../pack/types.ts";
 import { hubNodeName, onHub, poolBoxName } from "../hub/ssh.ts";
-import { loadProfile, saveAnswers, saveMachine, validHost } from "../profile/profile.ts";
+import { loadProfile, pullProfile, saveAnswers, saveMachine, validHost } from "../profile/profile.ts";
 import type { Machine } from "../setup/commands.ts";
 import { devboxSteps, nameBox, overSsh, profileForBox } from "../setup/devbox.ts";
 import { FlagError } from "../setup/flags.ts";
@@ -66,6 +66,7 @@ const sshFailed = 255;
 /** Lists the devbox in the profile, so the hub and every node know it, and returns the hub the profile names. It pushes on every run, so a push that failed before reaches the remote now. */
 async function listInProfile(profileDir: string | undefined, host: string): Promise<string | undefined> {
   if (!profileDir) return undefined;
+  await pullProfile(profileDir);
   const profile = await loadProfile(profileDir);
   const devboxes = profile.devboxes?.includes(host) ? profile.devboxes : [...(profile.devboxes ?? []), host];
   await saveAnswers(profileDir, { devboxes }, { push: true });
