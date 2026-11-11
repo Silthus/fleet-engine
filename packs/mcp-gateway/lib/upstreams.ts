@@ -1,11 +1,11 @@
-import { chmod, mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { chmod, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { builtInApps, parseUpstream, type CodexApp, type Upstream } from "./apps.ts";
+import { builtInApps, type CodexApp, type Upstream } from "./apps.ts";
+import { declaredUpstreams } from "./declared.ts";
 import { browserGatewayUrl } from "./client.ts";
 import { dataDir, managementApi, syncGatewayGroup, type Api, type Hub } from "./hub.ts";
 import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile } from "./install.ts";
 
-export const upstreamsDir = (home: string) => join(home, ".config/fleet/mcp-gateway/upstreams");
 const account = (app: CodexApp) => `${app.account ?? app.name}-codex`;
 export const appHome = (home: string, app: CodexApp) => join(dataDir(home), "data", account(app));
 export const hubCodex = (home: string) => join(codexPackage(home), "current/bin/codex");
@@ -32,27 +32,6 @@ function wanted(upstream: Upstream, hub: Hub): Config {
 
 const marker = "Added by Fleet";
 const ours = (config: Config) => config.description === marker || (config.command === "node" && Array.isArray(config.args) && [bridgeFile, legacyBridgeFile].includes(config.args[0]));
-const allowed = (upstream: Upstream) => (upstream.kind === "oauth" && upstream.tools ? { [upstream.name]: upstream.tools } : {});
-
-/** Every upstream that a pack links into the hub's upstream folder, one JSON file each. */
-export async function declaredUpstreams(home: string): Promise<Upstream[]> {
-  const dir = upstreamsDir(home);
-  const files = await readdir(dir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
-  const found: Upstream[] = [];
-  for (const file of files.filter((name) => name.endsWith(".json")).sort()) {
-    const path = join(dir, file);
-    let value: unknown;
-    try { value = JSON.parse(await readFile(path, "utf8")); }
-    catch { throw new Error(`${path}: is not JSON`); }
-    try {
-      const upstream = parseUpstream(value);
-      if (builtInApps.some((app) => app.name === upstream.name)) throw new Error(`name ${upstream.name} belongs to a built-in upstream`);
-      if (found.some((other) => other.name === upstream.name)) throw new Error(`name ${upstream.name} is declared twice`);
-      found.push(upstream);
-    } catch (error) { throw new Error(`${path}: ${(error as Error).message}`); }
-  }
-  return found;
-}
 
 async function current(call: Api, name: string): Promise<Config | undefined> {
   const names = (await call<Array<{ name: string }>>("servers")).map((server) => server.name);
@@ -61,7 +40,7 @@ async function current(call: Api, name: string): Promise<Config | undefined> {
 }
 
 async function groupServes(call: Api, upstream: Upstream) {
-  const tools = allowed(upstream)[upstream.name];
+  const tools = upstream.kind === "oauth" ? upstream.tools : undefined;
   const entry = (await call<Array<{ name: string; servers: Array<string | { name: string; tools?: unknown }> }>>("groups"))
     .find((group) => group.name === "fleet")?.servers.find((server) => (typeof server === "string" ? server : server.name) === upstream.name);
   if (!entry) return false;
@@ -98,7 +77,7 @@ export async function registerUpstream(hub: Hub, upstream: Upstream) {
   if (!config) await call("servers", "POST", { name: upstream.name, config: want });
   else if (!holds(config, want)) await call(path, "PUT", { config: { ...config, ...want, ...(plain(config.oauth) && { oauth: { ...config.oauth, ...(want.oauth as Config) } }) } });
   if (config?.enabled === false) await call(`${path}/toggle`, "POST", { enabled: true });
-  await syncGatewayGroup(call, allowed(upstream));
+  await syncGatewayGroup(call, hub.home);
   const kept = (await current(call, upstream.name)) ?? {};
   if (!holds(kept, want) || !(await groupServes(call, upstream))) throw new Error(`The MCP gateway did not keep the settings of ${upstream.title}. Run: fleet mcp-gateway doctor`);
   if (upstream.kind === "oauth") return hub.print(`${upstream.title} is in the MCP gateway.${config ? "" : " To sign in to it, on the hub, run: fleet mcp-gateway sign-in"}`);
