@@ -12,7 +12,3 @@ test("the Calendar and Drive routes are read-only", () => {
   for (const name of ["search", "get_document_text", "get_spreadsheet_range", "get_slide"]) expect(toolAllowed(googleDrive, name)).toBe(true);
   for (const name of ["create_file", "update_document", "delete_file", "share_file", "move_file"]) expect(toolAllowed(googleDrive, name)).toBe(false);
 });
-
-test("the three Google apps share one Codex home, so one ChatGPT sign-in serves them all", () => {
-  expect(new Set([gmail, googleCalendar, googleDrive].map((app) => app.account))).toEqual(new Set(["google"]));
-});

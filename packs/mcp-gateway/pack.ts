@@ -96,6 +96,7 @@ export default {
         id: app.name,
         name: app.title,
         default: false,
+        requires: ["mcp-gateway"],
         sentence: words.sentence,
         moment: { time: "10:10", title: `${app.title}, read through the hub`, body: words.body, words: ["agent"] },
         risk: `The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns ${app.title} off on every machine.`,

@@ -263,14 +263,18 @@ function workflowStates(profile: Profile, machine: MachineFile, order: Candidate
     coder: names.has("posthog"),
     "posthog-org": names.has("posthog"),
   };
-  return order.flatMap(({ manifest }) =>
-    (manifest.workflows ?? []).map((workflow) => {
-      const chosen = profile.workflows[workflow.id] ?? workflow.default;
-      const unmet = (workflow.needs ?? []).filter((need) => !holds[need]);
-      const reason = !chosen ? "turned off" : unmet.length ? `needs ${unmet.join(", ")}` : undefined;
-      return { id: workflow.id, pack: manifest.name, active: !reason, ...(reason ? { reason } : {}) };
-    }),
-  );
+  const workflows = order.flatMap(({ manifest }) => (manifest.workflows ?? []).map((workflow) => ({ workflow, pack: manifest.name })));
+  const own = workflows.map(({ workflow, pack }) => {
+    const chosen = profile.workflows[workflow.id] ?? workflow.default;
+    const unmet = (workflow.needs ?? []).filter((need) => !holds[need]);
+    const reason = !chosen ? "turned off" : unmet.length ? `needs ${unmet.join(", ")}` : undefined;
+    return { id: workflow.id, pack, active: !reason, ...(reason ? { reason } : {}) };
+  });
+  const on = activeIds(own);
+  return own.map((state, index) => {
+    const missing = state.active ? (workflows[index]!.workflow.requires ?? []).filter((id) => !on.has(id)) : [];
+    return missing.length ? { id: state.id, pack: state.pack, active: false, reason: `needs workflow ${missing.join(", ")}` } : state;
+  });
 }
 
 function activeSettings(order: Candidate[], active: Set<string>): Array<PackSetting & { pack: string }> {

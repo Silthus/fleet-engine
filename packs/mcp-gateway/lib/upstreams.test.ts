@@ -1,11 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
-import { slack } from "./apps.ts";
+import { gmail, googleApps, googleCalendar, slack } from "./apps.ts";
 import { issueKey } from "./hub.ts";
 import { declaredUpstreams } from "./declared.ts";
-import { registerUpstreams, upstreamsRegistered } from "./upstreams.ts";
+import { appSignedIn, registerUpstream, registerUpstreams, signInApp, upstreamsRegistered } from "./upstreams.ts";
 import { dockerHost, fakeHub, fakeMcpHub, fakeRun, mcphubFetch, writeMcpHubSettings, type FakeContainer, type FakeMcpHub } from "./testing.ts";
 
 const temp = tempDirs();
@@ -130,4 +130,21 @@ test("narrowing an upstream's tools keeps the rest of its group entry, and keeps
   api.groups[0]!.servers = ["tickets", { name: "notes", alias: "n", tools: "all", prompts: [], resources: [], pinnedTools: ["read_note", "delete_note"] }];
   await registerUpstreams(hub);
   expect(api.groups[0]!.servers).toEqual(["tickets", { name: "notes", alias: "n", tools: ["search_notes", "read_note"], prompts: [], resources: [], pinnedTools: ["read_note"] }, "calendar"]);
+});
+
+test("one ChatGPT sign-in serves every Google route: the gateway reloads all three, and signing in a second route runs no second device sign-in", async () => {
+  const { api, home, hub } = hubWith({});
+  for (const app of googleApps) await registerUpstream(hub, app);
+  const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
+  writeFileSync(codex, `#!/bin/sh\necho "$*" >> "$CODEX_HOME/logins"\necho '{}' > "$CODEX_HOME/auth.json"\n`);
+  chmodSync(codex, 0o755);
+  api.calls.length = 0;
+  expect(await signInApp(hub, gmail)).toBe(0);
+  for (const app of googleApps) expect(await appSignedIn(hub, app)).toBe(true);
+  expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
+  expect(await appSignedIn(hub, slack)).toBe(false);
+  api.calls.length = 0;
+  expect(await signInApp(hub, googleCalendar)).toBe(0);
+  expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/logins"), "utf8")).toBe("login --device-auth\n");
+  expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
 });

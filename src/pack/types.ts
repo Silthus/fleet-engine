@@ -28,6 +28,8 @@ export type Workflow = {
   name: string;
   sentence: string;
   needs?: Need[];
+  /** Workflows that must be on for this one to be on. */
+  requires?: string[];
   default: boolean;
   settings?: string[];
   moment?: { time: string; title: string; body: string; words?: string[]; night?: boolean };

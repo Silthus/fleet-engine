@@ -101,10 +101,14 @@ export async function codexApps(home: string) {
 export async function signInApp(hub: Hub, app: CodexApp) {
   if (!(await exists(hubCodex(hub.home)))) throw new Error(`${app.title} runs through Codex, and this hub has no Codex from Fleet. Run: fleet install-codex`);
   await mkdir(appHome(hub.home, app), { recursive: true, mode: 0o700 });
-  hub.print(`Sign in with the ChatGPT account whose ${app.title} app the gateway should use. This sign-in stays in its own Codex home.`);
-  const code = await Bun.spawn([hubCodex(hub.home), "login", "--device-auth"], { env: { ...process.env, CODEX_HOME: appHome(hub.home, app) }, stdio: ["inherit", "inherit", "inherit"] }).exited;
-  if (code || !(await upstreamRegistered(hub, app))) return code;
-  await (await managementApi(hub))(`servers/${encodeURIComponent(app.name)}/reload`, "POST");
-  hub.print(`${app.title} is signed in. Agents reach it through the gateway now.`);
+  if (!(await appSignedIn(hub, app))) {
+    hub.print(`Sign in with the ChatGPT account whose ${app.title} app the gateway should use. This sign-in stays in its own Codex home.`);
+    const code = await Bun.spawn([hubCodex(hub.home), "login", "--device-auth"], { env: { ...process.env, CODEX_HOME: appHome(hub.home, app) }, stdio: ["inherit", "inherit", "inherit"] }).exited;
+    if (code) return code;
+  }
+  const sharing = (await codexApps(hub.home)).filter((other) => account(other) === account(app));
+  const call = await managementApi(hub);
+  for (const other of sharing) if (await upstreamRegistered(hub, other)) await call(`servers/${encodeURIComponent(other.name)}/reload`, "POST");
+  hub.print(`${sharing.map((other) => other.title).join(", ")} signed in. Agents reach them through the gateway now.`);
   return 0;
 }

@@ -74,6 +74,9 @@ describe("the plan", () => {
     expect(steps(hub, { gmail: true, "google-drive": true })).toEqual(["gmail", "gmail-sign-in", "google-drive", "google-drive-sign-in"]);
     for (const machine of [hub, devbox, mac]) expect(off(machine, { gmail: true, "google-drive": true })).toEqual([[`apps.${native.gmail}.enabled`, false], [`apps.${native["google-drive"]}.enabled`, false]]);
     expect(steps(devbox, { gmail: true })).toEqual([]);
+    expect(steps(hub, { gmail: true, "mcp-gateway": false })).toEqual([]);
+    expect(off(devbox, { gmail: true, "mcp-gateway": false })).toEqual([]);
+    expect(plan(devbox, { gmail: true, "mcp-gateway": false }).workflows.find((state) => state.id === "gmail")).toMatchObject({ active: false, reason: "needs workflow mcp-gateway" });
     expect(plan(hub, { gmail: true }).human.find((step) => step.id === "gmail-sign-in")).toMatchObject({ command: "fleet mcp-gateway sign-in gmail" });
   });
 
