@@ -1,4 +1,5 @@
 import { install, plan as planFiles } from "../files/install.ts";
+import { cannotTell } from "../pack/types.ts";
 import type { Action, CatalogEntry, Finding, HumanStep, Owned, PackCheck, Plan, Report } from "../pack/types.ts";
 import { engineCommand } from "./engine-command.ts";
 import { hublessReason } from "./resolve.ts";
@@ -76,10 +77,9 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     report.actions.push(...result.actions);
     report.findings.push(...result.findings);
   }
-  if (context.dryRun) return report;
   const failed = new Set<string>();
   const waits = waiter(plan, run);
-  for (const step of plan.steps) {
+  for (const step of context.dryRun ? [] : plan.steps) {
     if (failed.has(step.pack) || (await waits(step))) continue;
     if (step.check && (await run(step.check)) === 0) continue;
     const ran = (await run(step.run)) === 0;
@@ -89,13 +89,20 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     if (step.pack === "base") report.ok = false;
   }
   for (const step of plan.undo ?? []) {
-    if (failed.has(step.pack) || (await run(step.check!)) !== 0) continue;
-    if (await undoWaits(step, run)) {
-      report.findings.push(undoWaitFinding(step));
+    if (failed.has(step.pack)) continue;
+    const held = await undoHeld(step, run);
+    if (held === "no") continue;
+    if (held !== "yes") {
+      report.findings.push(undoFinding(step, held));
       continue;
     }
-    if ((await run(step.undo!)) === 0 && (await run(step.check!)) !== 0) {
-      report.actions.push({ target: `step ${step.pack}/${step.id}`, operation: "remove", reason: `workflow ${step.workflow} is off` });
+    const target = `step ${step.pack}/${step.id}`;
+    if (context.dryRun) {
+      report.actions.push({ target, operation: "remove", reason: `fleet apply would undo it: workflow ${step.workflow} is off` });
+      continue;
+    }
+    if ((await run(step.undo!)) === 0 && !heldCodes.includes(await run(step.check!))) {
+      report.actions.push({ target, operation: "remove", reason: `workflow ${step.workflow} is off` });
       continue;
     }
     report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `Fleet could not undo step ${step.id} of the ${step.pack} pack, whose workflow ${step.workflow} is off. The next fleet apply tries again.`, repair: "apply" });
@@ -117,9 +124,7 @@ export async function check(plan: Plan, options: { home: string; adapters?: Adap
     if (step.check && (await run(step.check)) !== 0) report.findings.push({ id: `step:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack does not pass its check.`, repair: "apply" });
   }
   for (const step of plan.undo ?? []) {
-    if ((await run(step.check!)) !== 0) continue;
-    if (await undoWaits(step, run)) report.findings.push(undoWaitFinding(step));
-    else report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `The workflow ${step.workflow} is off, but step ${step.id} of the ${step.pack} pack still holds what it set. Run fleet apply to undo it.`, repair: "apply" });
+    if (report.actions.some((action) => action.target === `step ${step.pack}/${step.id}`)) report.findings.push({ id: `undo:${step.id}`, pack: step.pack, say: `The workflow ${step.workflow} is off, but step ${step.id} of the ${step.pack} pack still holds what it set. Run fleet apply to undo it.`, repair: "apply" });
   }
   for (const step of plan.human) {
     const reported = report.findings.some((finding) => finding.id === `human:${step.id}` && finding.pack === step.pack);
@@ -180,17 +185,27 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
   return { plan: { ...plan, jobs, config, dropped: [...plan.dropped, ...dropped] }, failed, failedChecks, issued };
 }
 
-/** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */
 type UndoStep = NonNullable<Plan["undo"]>[number];
+type Held = "yes" | "no" | "waits" | "unsure" | "unknown";
 
-async function undoWaits(step: UndoStep, run: Runner) {
-  return step.after !== undefined && !(step.prerequisite && (await run(step.prerequisite)) === 0);
+const heldCodes = [0, cannotTell];
+
+async function undoHeld(step: UndoStep, run: Runner): Promise<Held> {
+  const code = await run(step.check!);
+  if (!heldCodes.includes(code)) return "no";
+  const waits = step.after !== undefined && !(step.prerequisite && (await run(step.prerequisite)) === 0);
+  if (code === 0) return waits ? "waits" : "yes";
+  return waits ? "unsure" : "unknown";
 }
 
-function undoWaitFinding(step: UndoStep): Finding {
-  return { id: `undo:${step.id}`, pack: step.pack, say: `Step ${step.id} of the ${step.pack} pack waits for ${step.after} before Fleet can undo it.`, repair: "human" };
+function undoFinding(step: UndoStep, held: Exclude<Held, "yes" | "no">): Finding {
+  const id = `undo:${step.id}`;
+  if (held === "unknown") return { id, pack: step.pack, say: `Fleet cannot tell whether step ${step.id} of the ${step.pack} pack still holds what it set, though its workflow ${step.workflow} is off.`, repair: "apply" };
+  const say = `Step ${step.id} of the ${step.pack} pack waits for ${step.after} before Fleet can undo it.`;
+  return held === "waits" ? { id, pack: step.pack, say, repair: "human" } : { id, pack: step.pack, say };
 }
 
+/** Whether a pack step still waits for its human step. Each human step is probed once, when its first waiting step comes up, so earlier steps can install what the probe runs. */
 function waiter(plan: Plan, run: Runner) {
   const passed = new Map<string, boolean>();
   return async (step: Plan["steps"][number]) => {
