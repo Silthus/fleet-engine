@@ -1,81 +1,193 @@
 # Set up Fleet with the person
 
 You are an agent in T3 Code on the person's Mac. They pasted the prompt from
-the Fleet README. Set up Fleet on this Mac with them, from nothing to a
-passing `fleet doctor`.
+the Fleet README. Set up Fleet with them, from nothing to a passing
+`fleet doctor` on this Mac.
 
-Work as a guide: before each step, say in one or two plain sentences what it
-does and why. Run every command yourself. The person answers questions and
-does their own sign-ins in their browser.
+## How you work
 
-## 1. Check the machine
+- **Guide.** Before each step, say in one or two plain sentences what it does
+  and why. Size it to what they know (step 2).
+- **Ask with your question tool.** Every choice goes through it, with options
+  that say what each one means. Put independent questions in one call.
+- **Run every command yourself.** The person answers, approves, and does their
+  own sign-ins in their browser. Just before a sign-in opens, say what it is
+  for.
+- **Show, then tell.** Where a step names a visual, show it as a page in the
+  chat when you can (T3 Code shows HTML pages that agents publish). Otherwise
+  describe it in three lines of text.
+- **One PATH.** Your shell started before the install. Begin every command
+  that runs `fleet`, `gh`, `bun`, `claude`, or `codex` with
+  `export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";`.
+- **The keyboard in Terminal.** A command that needs the person's keyboard
+  runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
+  that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,
+  make it executable, and `open` it. Ask them to tell you when it ends.
+
+## 1. Check the Mac
 
 Run `uname -s` and `id -u`. Go on when the output is `Darwin` and a user ID
 other than `0`. On another system, tell the person that this guide is for a
 Mac, and point them at "Set it up by hand" in the README.
 
-## 2. Download the install script
+## 2. Ask what they know
 
-Download it to a file. Keep the script in view, because a pipe into `sh`
-hides what runs:
+Ask three questions in one call, each with the options "New to me" and "I
+know it":
+
+1. T3 Code, the app you are talking in.
+2. Fleet, what it sets up.
+3. Devboxes: Linux machines in the cloud, such as Coder workspaces, where
+   agents keep working while the Mac sleeps.
+
+Each "New to me" adds an explainer to a later step:
+
+| New to | Add |
+| --- | --- |
+| T3 Code | In step 3: threads, worktrees, and that T3 Code shows every machine's threads on the Mac and the phone. |
+| Fleet | In step 3: the picture, then what a pack, a workflow, and the profile are. |
+| Devboxes | In step 4: what a hub and a node are, and why agents run better on them. |
+
+Take the plain words for each term from `concepts.json` in the engine. Skip
+what they know.
+
+## 3. Show what Fleet is
+
+Fetch the picture from
+`https://raw.githubusercontent.com/Silthus/fleet-engine/main/docs/fleet.svg`
+and show it. Then say: Fleet installs agent rules, skills, and workflows. A
+**pack** is a set of workflows that you turn on as a whole. Your answers go
+to your **profile**, a private GitHub repo named `fleet-profile`, so every
+machine you add gets the same setup.
+
+## 4. Ask where Fleet runs
+
+Ask "Mac only, or Mac plus a hub and a node?", with these options:
+
+- **Mac only.** A full setup: every pack's skills and rules, and the
+  workflows that run on a Mac, run on this Mac. Agents stop when the Mac
+  sleeps. Workflows that need an always-on machine, such as the loops and
+  the PR digest, wait until a node runs. A hub and a node can come later.
+- **Mac plus a hub and a node.** Two Linux devboxes in the cloud: one **hub**
+  with a 200 GB disk, which keeps your machines linked and shares MCP
+  servers, and one **node** with a 500 GB disk, where threads do the work.
+  Add more nodes later, when the load grows.
+
+Use their answer. Set up the Mac first in both cases.
+
+## 5. Install the tools
+
+Download the install script to a file. Keep the script in view, because a
+pipe into `sh` hides what runs:
 
 ```sh
 mkdir -p ~/.cache/fleet-setup && curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh -o ~/.cache/fleet-setup/get.sh
 ```
 
-Read the file, then tell the person what it does, from the file, in a short
-list. Expect about this: it installs the Command Line Tools, Homebrew, the
-GitHub CLI, Bun, T3 Code, and the `t3` command when they are missing; it puts
-the engine in `~/.local/share/fleet/engine` and `fleet` in `~/.local/bin`; it
-adds one `PATH` line to their login file; and it starts `fleet setup`. Ask
-with your question tool whether to go on. When they say no, stop, and tell
-them they can paste the prompt again later.
+Read it, then tell the person what it installs when missing: the Command Line
+Tools, Homebrew, the GitHub CLI, Bun, and the `t3` command. It puts the
+engine in `~/.local/share/fleet/engine` and `fleet` in `~/.local/bin`, and
+adds one `PATH` line to their login file. Ask whether to go on.
 
-## 3. Run it in a Terminal window
-
-Setup asks its own questions and needs the person's keyboard for the Mac
-password, so it runs in Terminal, not in your shell:
+When `command -v brew` finds Homebrew, run it yourself:
 
 ```sh
-printf '#!/bin/sh\nsh ~/.cache/fleet-setup/get.sh\n' > ~/.cache/fleet-setup/fleet-setup.command && chmod +x ~/.cache/fleet-setup/fleet-setup.command && open ~/.cache/fleet-setup/fleet-setup.command
+sh ~/.cache/fleet-setup/get.sh --install-only
 ```
 
-Tell the person what to expect there:
-
-- When a Mac window asks to install the Command Line Tools, click
-  **Install** and wait for it to finish.
-- When Homebrew asks for a password, type the Mac password.
-- Setup asks plain-language questions. Where a question shows a default, ↵
-  takes it.
-- It opens their browser for each sign-in: GitHub (for their profile repo and
-  keys), then Claude, ChatGPT, or both. For GitHub, copy the code from
-  Terminal into the browser page.
-
-Then use your question tool: ask them to tell you when Terminal shows
-`✓ Fleet is set up.`, or when it stops with an error.
-
-On an error, read the last lines they paste, explain them, and run
-`open ~/.cache/fleet-setup/fleet-setup.command` again. Every step skips what
-is done.
-
-## 4. Check the result
-
-Your shell started before the install, so give it the new `PATH` first:
+When Homebrew is missing, its installer needs the person's Mac password, so
+run the script in a Terminal window and ask them to tell you when it ends:
 
 ```sh
-export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet doctor
+printf '#!/bin/sh\nsh ~/.cache/fleet-setup/get.sh --install-only\n' > ~/.cache/fleet-setup/install.command && chmod +x ~/.cache/fleet-setup/install.command && open ~/.cache/fleet-setup/install.command
 ```
 
-When it finds something, it ends with `Run fleet apply to fix what Fleet can
-fix.` and exit code `1`. That is expected. The step is done when every line
-is explained to the person:
+When the Command Line Tools are missing, a Mac window asks to install them;
+the person clicks **Install**. The step is done when
+`~/.local/bin/fleet help` prints the list of commands.
 
-- `Fix:` Fleet can repair it. Run `fleet apply` with the same `PATH`, then
-  `fleet doctor` again.
+## 6. Ask what they want
+
+Ask in one call:
+
+- **Packs.** One option per preset in `~/.local/share/fleet/engine/presets.json`,
+  with its `blurb`, and "One by one". For one by one, ask a multi-select
+  question with the packs below whose row says "Always". The others need a
+  hub that runs, so they come later. Base is always on. The page
+  [A day with Fleet](https://silthus.github.io/fleet-engine/) shows each pack
+  during a workday.
+- **AI plan.** Claude, ChatGPT, or both: it decides the sign-ins and the
+  model defaults. Recommend the agent they set up in T3 Code
+  (`claude auth status` or `codex login status` passes).
+
+| Pack | What it does | Offer it |
+| --- | --- | --- |
+| `pull-requests` | Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged. | Always |
+| `orchestration` | Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread. | Always |
+| `communication` | Agents write in your voice, give short updates, and share plans and previews as links. | Always |
+| `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always |
+| `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Later, once the hub runs |
+| `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always |
+| `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always |
+| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | Later, once the hub and the node run |
+| `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | Later, once the hub runs |
+
+## 7. Run setup with their answers
+
+Build the command from the answers, so setup asks nothing twice:
+
+```sh
+fleet setup --non-interactive --preset <id> --plan <claude|codex|both> --devbox skip
+```
+
+For one by one, use `--preset starter`, add `--remove pull-requests` when
+they did not pick it, and add `--add <pack>` once per other pack they picked.
+Run it, and repeat this loop until it ends with code `0`:
+
+- **A line `--set <pack.key>=<value>   <question>`.** Ask the question with
+  your question tool, then add `--set <pack.key>=<answer>` to the command.
+- **A line `Needs you: <sign-in>`, then `Run: <command>`.** Say what the sign-in is
+  for, from the table below. Start the command in the background, read its
+  output, and give the person any one-time code it prints. Open the URL it
+  names with `open <url>`. Wait until the command ends. When it asks to
+  paste a code, stop it and run it in Terminal (see "The keyboard in
+  Terminal").
+- **A line `Needs you: <sign-in>`, then `In a terminal, run: <command>`.**
+  It needs the person's keyboard, for example to paste a token. Say what it
+  is for, then run it in Terminal (see "The keyboard in Terminal").
+- **Any other stop.** Read the last lines, explain them, and fix what they
+  name.
+
+Then run the same command again. Every step skips what is done.
+
+| Sign-in | What it is for |
+| --- | --- |
+| GitHub | Once, with every permission Fleet needs: it creates their private `fleet-profile` repo, adds their SSH keys, and reads their org's packs. |
+| Claude | Claude Code on this Mac uses their Claude plan. |
+| ChatGPT | Codex on this Mac uses their ChatGPT plan. Setup checks it with a real request. |
+
+## 8. Check the result
+
+```sh
+fleet doctor
+```
+
+The step is done when every line is explained to the person:
+
+- `Fix:` Fleet can repair it. Run `fleet apply`, then `fleet doctor` again.
 - `To do:` the person does it. Say exactly what and where.
 - `Note:` information only.
-- `Everything matches your profile.` Setup is done. Tell them that a new
-  Terminal window has `fleet` on its `PATH`, that the setup screen in
-  Terminal ends with a first prompt to paste into a new thread, and that
-  [A day with Fleet](https://silthus.github.io/fleet-engine/) shows what each
-  pack does.
+- `Everything matches your profile.` The Mac is set up.
+
+Tell them that a new Terminal window has `fleet` on its `PATH`. With Mac
+only, setup is done. With a hub and a node, go on to step 9.
+
+## 9. Add the hub and the node
+
+Ask for the SSH names of the two workspaces. Walk them through steps 3 and
+4 of
+[Getting started](https://github.com/Silthus/fleet-engine/blob/main/docs/getting-started.md),
+running each command yourself. `fleet devbox add` needs their keyboard, so
+run it in Terminal. Add the hub first, then make it the hub with
+`ssh <hub> 'bash -lc "fleet hub here <hub>"'`, then add the node. To add a
+node later, they run the same steps with a new workspace.
