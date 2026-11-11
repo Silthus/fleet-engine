@@ -1,5 +1,4 @@
 import { afterEach, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../testing/git.ts";
 import { realMachine } from "./commands.ts";
@@ -7,13 +6,7 @@ import { realMachine } from "./commands.ts";
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
-function running(pid: number) {
-  try {
-    return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
-  } catch {
-    return false;
-  }
-}
+const ended = (pid: number) => Bun.spawn(["tail", `--pid=${pid}`, "-s", "0.01", "-f", "/dev/null"]).exited;
 const holdOutputOpen = (fifo: string) => ["sh", "-c", `tail -f /dev/null & echo $! > ${fifo}; wait`];
 
 async function holderPid(fifo: string) {
@@ -32,7 +25,7 @@ test.if(process.platform === "linux")("a command that runs past its time limit r
   const [result, holder] = await Promise.all([realMachine.exec(holdOutputOpen(fifo), { timeoutMs: 1000 }), holderPid(fifo)]);
   try {
     expect(result.code).not.toBe(0);
-    expect(running(holder)).toBe(false);
+    expect(await ended(holder)).toBe(0);
   } finally {
     try {
       process.kill(holder, "SIGKILL");
@@ -49,7 +42,7 @@ test.if(process.platform === "linux")("a command with a time limit ends with eve
     try {
       fleet.kill(signal);
       await fleet.exited;
-      expect({ signal, running: running(holder) }).toEqual({ signal, running: false });
+      expect({ signal, ended: await ended(holder) }).toEqual({ signal, ended: 0 });
     } finally {
       try {
         process.kill(holder, "SIGKILL");
