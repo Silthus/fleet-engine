@@ -33,6 +33,8 @@ done
 [ "$(id -u)" -ne 0 ] || fail "run this as your login user, without sudo."
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
 
+curl_limits="--connect-timeout 20 --speed-limit 1024 --speed-time 60"
+
 retry() {
   tries=1
   until "$@"; do
@@ -43,7 +45,7 @@ retry() {
 }
 
 fetch_once() {
-  out=$(curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 60 "$@") && printf '%s' "$out"
+  out=$(curl -fsSL $curl_limits "$@") && printf '%s' "$out"
 }
 
 fetch() { retry fetch_once "$@"; }
@@ -120,7 +122,12 @@ t3_cli() {
   has t3 && return 0
   installer=$(download https://t3.codes/install.sh)
   version=$(t3_nightly)
-  retry env T3CODE_CHANNEL=nightly T3CODE_VERSION="$version" sh "$installer" || fail "T3 Code did not install."
+  limited=$(mktemp -d)
+  quoted=$(command -v curl | sed "s/'/'\\\\''/g")
+  printf "#!/bin/sh\nexec '%s' %s \"\$@\"\n" "$quoted" "$curl_limits" >"$limited/curl"
+  chmod 755 "$limited/curl"
+  retry env PATH="$limited:$PATH" T3CODE_CHANNEL=nightly T3CODE_VERSION="$version" sh "$installer" || fail "T3 Code did not install."
+  rm -rf "$limited"
 }
 
 fetch_engine() {

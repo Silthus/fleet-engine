@@ -92,13 +92,16 @@ describe("get.sh downloads", () => {
     expect(curlCalls(result.calls).filter((call) => call.includes("gh_9.9.9_linux_amd64.tar.gz"))).toHaveLength(3);
   });
 
-  test("gives up on a download that cannot connect or stalls, instead of waiting forever", () => {
+  test("gives up on a download that cannot connect or stalls, the T3 Code installer's too, and tries it again", () => {
     const box = sandbox("Linux");
+    box.stallDownloads("*gh_9.9.9_linux_amd64.tar.gz", 1);
+    box.stallDownloads("*/SHA256SUMS", 1);
     const result = getSh(box, ["--ref", "v0.1.0", "--install-only"]);
     expect(result.code).toBe(0);
-    const calls = curlCalls(result.calls);
-    expect(calls.length).toBeGreaterThan(3);
-    for (const call of calls) expect(call).toMatch(/--connect-timeout \d+ --speed-limit \d+ --speed-time \d+ /);
+    expect(result.calls).not.toContain("curl hangs on");
+    expect(curlCalls(result.calls).filter((call) => call.includes("gh_9.9.9_linux_amd64.tar.gz"))).toHaveLength(2);
+    expect(curlCalls(result.calls).filter((call) => call.includes("/SHA256SUMS"))).toHaveLength(2);
+    expect(existsSync(join(box.home, ".local/bin/t3"))).toBe(true);
   });
 
   test("installs the newest T3 Code nightly from the releases feed, so the installer never asks the GitHub API", () => {
