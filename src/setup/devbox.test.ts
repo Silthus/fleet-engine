@@ -6,7 +6,7 @@ import { main } from "../cli.ts";
 import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { profilePath } from "./profile.ts";
 import { overSsh, pairing, profileForBox, sshHosts } from "./devbox.ts";
-import { coderToken, engineRoot, fakeMachine, fleetSetup, githubRepo, machineFile, onBox, pushedAnswers, scripted } from "./testing.ts";
+import { boxHome, boxMachineFile, coderToken, engineRoot, fakeMachine, fleetSetup, githubRepo, machineFile, onBox, pushedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -146,18 +146,18 @@ describe("the devbox over SSH", () => {
     const failing = fakeMachine(home, {}, { failRun: true });
     const io = scripted([]);
     const options = { home, engineRoot, platform: "linux" as const, print: io.terminal.print, terminal: io.terminal };
-    expect(await main(["devbox", "add", "box-2"], { ...options, setup: { machine: failing.machine } })).toBe(1);
+    expect(await main(["devbox", "add", "node-2"], { ...options, setup: { machine: failing.machine } })).toBe(1);
     expect(io.output()).toContain("fleet: Fleet did not install on the devbox. Fix what it says above, then run fleet setup again.");
 
     const box = fakeMachine(home);
-    expect(await main(["devbox", "add", "box-2"], { ...options, setup: { machine: box.machine } })).toBe(0);
-    expect(io.output()).toEndWith("box-2 is your devbox now. It runs your profile, and T3 Code here and there can reach each other.");
-    expect(machineFile(home).devboxes).toEqual(["box-2"]);
-    expect(machineFile(home).setup.done).toContain("devbox:box-2:link");
+    expect(await main(["devbox", "add", "node-2"], { ...options, setup: { machine: box.machine } })).toBe(0);
+    expect(io.output()).toEndWith("node-2 is your devbox now. It runs your profile, and T3 Code here and there can reach each other.");
+    expect(machineFile(home).devboxes).toEqual(["node-2"]);
+    expect(machineFile(home).setup.done).toContain("devbox:node-2:link");
 
     expect(await main(["devbox"], { ...options, setup: { machine: box.machine } })).toBe(0);
-    expect(io.output()).toContain("Your devboxes: box-2");
-    expect(await main(["devbox", "remove", "box-2"], options)).toBe(2);
+    expect(io.output()).toContain("Your devboxes: node-2");
+    expect(await main(["devbox", "remove", "node-2"], options)).toBe(2);
     expect(await main(["devbox", "add", "-oProxyCommand=x"], options)).toBe(2);
     expect((await fleetSetup(temp.make("home-"), ["--devbox", "-oProxyCommand=x"])).output).toStartWith("fleet setup: --devbox takes an SSH host");
   });
@@ -192,44 +192,100 @@ describe("the devbox over SSH", () => {
     expect(io.output()).toContain("Coder is not signed in on this machine. Run coder login <your Coder address> here, then fleet devbox add coder.fleet-node-1 again.");
 
     const plain = fakeMachine(home, { "box:coder": 1 });
-    expect(await main(["devbox", "add", "box-2"], { ...options, setup: { machine: plain.machine } })).toBe(0);
+    expect(await main(["devbox", "add", "node-2"], { ...options, setup: { machine: plain.machine } })).toBe(0);
     expect(plain.coderSsh).toEqual([]);
-    expect(io.output()).not.toContain("Sign in to Coder on box-2");
+    expect(io.output()).not.toContain("Sign in to Coder on node-2");
   });
 
-  test("fleet devbox add lists the node in the profile, names it there by its SSH host, and has the hub take it now", async () => {
+  async function withHub(hub = "coder.fleet-hub") {
     const home = temp.make("home-");
     expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
     const profile = profilePath(home);
     const answers = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
-    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...answers, hub: "coder.fleet-hub" }, null, 2) + "\n");
+    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...answers, hub }, null, 2) + "\n");
     await spawnGit(profile, "commit", "-q", "-am", "Name the hub");
     await spawnGit(profile, "push", "-q");
     const io = scripted([]);
     const options = { home, engineRoot, platform: "linux" as const, print: io.terminal.print, terminal: io.terminal };
+    return { home, io, add: (host: string, box: ReturnType<typeof fakeMachine>) => main(["devbox", "add", host], { ...options, setup: { machine: box.machine } }) };
+  }
 
+  test("fleet devbox add lists the node in the profile, and the hub takes it before the node asks it for a credential and links it in T3 Code once the node runs T3", async () => {
+    const { home, io, add } = await withHub();
     const box = fakeMachine(home);
-    expect(await main(["devbox", "add", "coder.fleet-node-1"], { ...options, setup: { machine: box.machine } })).toBe(0);
+    expect(await add("coder.fleet-node-1", box)).toBe(0);
     expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1"]);
-    expect(remote(box)).toContainEqual(expect.stringContaining(`"role":"devbox","name":"coder.fleet-node-1"`));
     expect(box.hubUpdates).toEqual(["coder.fleet-hub"]);
-    expect(io.output()).toContain("✓ The hub, coder.fleet-hub, took coder.fleet-node-1: its disk watch, tunnels and peer links include it now.");
+    expect(box.credentials).toEqual([{ node: "coder.fleet-node-1", issued: true }]);
+    expect(io.output()).toContain("✓ The hub, coder.fleet-hub, took coder.fleet-node-1: its disk watch, tunnels and credentials include it now.");
+    expect(box.hubLinked).toEqual(["coder.fleet-node-1"]);
+    expect(io.output()).toEndWith("✓ The hub, coder.fleet-hub, linked coder.fleet-node-1 in T3 Code.");
 
     const down = fakeMachine(home, {}, { hubDown: true });
-    expect(await main(["devbox", "add", "coder.fleet-node-2"], { ...options, setup: { machine: down.machine } })).toBe(0);
+    expect(await add("coder.fleet-node-2", down)).toBe(0);
     expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1", "coder.fleet-node-2"]);
     expect(io.output()).toContain("· The hub, coder.fleet-hub, did not answer. It takes coder.fleet-node-2 at its next fleet update, or run fleet update there now.");
+    expect(io.output()).toEndWith("· The hub, coder.fleet-hub, has not linked coder.fleet-node-2 in T3 Code yet. Its daily fleet peers renew links it, or run fleet peers link coder.fleet-node-2 there now.");
+  });
+
+  test("fleet devbox add pushes the node on the next run when the push of the profile failed", async () => {
+    const { home, io, add } = await withHub();
+    const rejecting = join(githubRepo(home, "nora/fleet-profile"), "hooks/pre-receive");
+    writeFileSync(rejecting, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    expect(await add("coder.fleet-node-1", fakeMachine(home))).toBe(1);
+    expect(io.output()).toContain("could not push answers");
+    rmSync(rejecting);
+    const box = fakeMachine(home);
+    expect(await add("coder.fleet-node-1", box)).toBe(0);
+    expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1"]);
+    expect(box.credentials).toEqual([{ node: "coder.fleet-node-1", issued: true }]);
+    expect(io.output()).toContain("✓ The hub, coder.fleet-hub, took coder.fleet-node-1");
+  });
+
+  test("fleet devbox add refuses a name the hub cannot use, or a pool box name, before it saves or publishes anything", async () => {
+    const { home, io, add } = await withHub();
+    const before = await pushedAnswers(home);
+    for (const host of ["worker_1", "Node-1", "box-7"]) {
+      const box = fakeMachine(home);
+      expect(await add(host, box)).toBe(2);
+      expect(remote(box)).toEqual([]);
+    }
+    expect(io.output()).toContain("fleet devbox: worker_1 is not a name the hub can use. Give the devbox an SSH name in ~/.ssh/config of lowercase letters, digits, dots and dashes, starting with a letter or a digit.");
+    expect(io.output()).toContain("fleet devbox: Node-1 is not a name the hub can use.");
+    expect(io.output()).toContain("fleet devbox: box-7 is a pool box name. Names that start with box- are kept for the boxes the hub starts; give the devbox another SSH name.");
+    expect(await pushedAnswers(home)).toEqual(before);
+    expect(machineFile(home).devboxes).toEqual([]);
+  });
+
+  test("fleet devbox add names the box by the SSH name the profile lists, keeps the rest of a role file there, and stops when the box already has another name", async () => {
+    const { home, io, add } = await withHub();
+    expect(await add("coder.fleet-node-1", fakeMachine(home))).toBe(0);
+    expect(boxMachineFile(home, "coder.fleet-node-1")).toEqual({ schema: 1, role: "devbox", name: "coder.fleet-node-1" });
+
+    const unnamed = join(boxHome(home, "node-2"), ".config/fleet");
+    mkdirSync(unnamed, { recursive: true });
+    writeFileSync(join(unnamed, "machine.json"), JSON.stringify({ schema: 1, role: "linux", coder: true }));
+    expect(await add("node-2", fakeMachine(home))).toBe(0);
+    expect(boxMachineFile(home, "node-2")).toEqual({ schema: 1, role: "linux", coder: true, name: "node-2" });
+
+    const named = join(boxHome(home, "node-3"), ".config/fleet");
+    mkdirSync(named, { recursive: true });
+    writeFileSync(join(named, "machine.json"), JSON.stringify({ schema: 1, role: "devbox", name: "old-node" }));
+    const box = fakeMachine(home);
+    expect(await add("node-3", box)).toBe(1);
+    expect(io.output()).toContain("fleet: node-3 already calls itself old-node in ~/.config/fleet/machine.json. Run fleet devbox add old-node to keep that name, or set its name there to node-3 and run fleet devbox add node-3 again.");
+    expect(boxMachineFile(home, "node-3").name).toBe("old-node");
+    expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-node-1", "node-2"]);
+    expect(box.hubUpdates).toEqual([]);
   });
 
   test("fleet devbox add for the hub itself lists it once and asks nothing of a hub", async () => {
-    const home = temp.make("home-");
-    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""])).code).toBe(0);
-    const io = scripted([]);
-    const options = { home, engineRoot, platform: "linux" as const, print: io.terminal.print, terminal: io.terminal };
+    const { home, add } = await withHub();
     const box = fakeMachine(home);
-    expect(await main(["devbox", "add", "coder.fleet-hub"], { ...options, setup: { machine: box.machine } })).toBe(0);
-    expect(await main(["devbox", "add", "coder.fleet-hub"], { ...options, setup: { machine: box.machine } })).toBe(0);
+    expect(await add("coder.fleet-hub", box)).toBe(0);
+    expect(await add("coder.fleet-hub", box)).toBe(0);
     expect((await pushedAnswers(home)).devboxes).toEqual(["coder.fleet-hub"]);
     expect(box.hubUpdates).toEqual([]);
+    expect(box.hubLinked).toEqual([]);
   });
 });
