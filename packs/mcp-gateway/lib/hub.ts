@@ -191,7 +191,7 @@ export async function signIn(hub: Hub) {
   const settings = await installedSettings(hub);
   const waiting = Object.entries(settings.mcpServers).flatMap(([name, config]) => (config.oauth?.pendingAuthorization?.authorizationUrl ? [[name, config.oauth.pendingAuthorization.authorizationUrl] as const] : []));
   if (!waiting.length) return hub.print("No upstream server waits for a sign-in.");
-  hub.print(`On your computer, keep this running while you sign in: coder port-forward ${hub.hubName()} --tcp ${gatewayPort}`);
+  hub.print(`On your computer, keep this running while you sign in: coder port-forward ${hub.hubName().replace(/^coder\./, "")} --tcp ${gatewayPort}`);
   for (const [name, url] of waiting) hub.print(`${name}: ${url}`);
 }
 

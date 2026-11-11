@@ -33,6 +33,20 @@ test("readMemories reads each memory with the topics of its commits, and skips t
   expect(memories.map((memory) => [memory.path, [...memory.topics].sort(), memory.addedAt.slice(0, 10)])).toEqual([["tech/run-tests.md", ["run-tests", "test-first"], "2026-10-20"]]);
 });
 
+test("readMemories reads the memories of a memory.subtree folder by their paths in that folder", async () => {
+  const repo = temp.make("fleet-memory-repo-");
+  await spawnGit(repo, "init", "--quiet", "-b", "main");
+  for (const [path, text] of Object.entries({ "memory/MEMORY.md": "# Memory\n- [Tests](tech/run-tests.md)\n", "memory/tech/run-tests.md": "---\nname: run-tests\n---\nRun them.\n", "app/notes.md": "not memory\n" })) {
+    mkdirSync(join(repo, path, ".."), { recursive: true });
+    writeFileSync(join(repo, path), text);
+  }
+  await spawnAsync(["git", "add", "-A"], { cwd: repo, env: gitEnv });
+  await spawnAsync(["git", "commit", "--quiet", "-m", "Add: run-tests\n\nTopics: test-first"], { cwd: repo, env: { ...gitEnv, GIT_COMMITTER_DATE: "2026-10-20T00:00:00Z", GIT_AUTHOR_DATE: "2026-10-20T00:00:00Z" } });
+  const checkout = join(repo, "memory");
+  const memories = await readMemories(checkout, reader(checkout));
+  expect(memories.map((memory) => [memory.path, [...memory.topics].sort()])).toEqual([["tech/run-tests.md", ["run-tests", "test-first"]]]);
+});
+
 test("recordRuns copies each analyzed session into the ledger without its text, and the scorecard counts a repeat on a remembered topic", async () => {
   const checkout = await memoryRepo();
   const state = temp.make("fleet-dream-state-");

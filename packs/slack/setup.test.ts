@@ -50,7 +50,7 @@ const tokensPath = (home: string) => join(home, ".config/fleet/secrets/slack/app
 
 function setupDeps(home: string, extra: Partial<SlackCommandDeps>): SlackCommandDeps {
   const threads = { start: async () => { throw new Error("setup starts no thread"); } };
-  return { env: {}, slackUserId: () => ownerId, secrets: secretStore(home, "slack"), stateDir: join(home, "state"), threads, print: () => {}, readStdin: async () => "", every: () => () => {}, run: async () => ({ code: 0, stdout: "Nora Example\n", stderr: "" }), ...extra };
+  return { env: {}, home, slackUserId: () => ownerId, secrets: secretStore(home, "slack"), stateDir: join(home, "state"), threads, print: () => {}, readStdin: async () => "", every: () => () => {}, run: async () => ({ code: 0, stdout: "Nora Example\n", stderr: "" }), ...extra };
 }
 
 function harness(home: string) {
@@ -59,7 +59,7 @@ function harness(home: string) {
 import { secretStore } from ${JSON.stringify(resolve(import.meta.dir, "../../src/runner/context.ts"))};
 const run = async (argv: string[]) => argv[0] === "git" ? { code: 0, stdout: "Nora Example\\n", stderr: "" } : { code: 127, stdout: "", stderr: "" };
 const threads = { start: async () => { throw new Error("setup starts no thread"); } };
-process.exit(await slackTrigger(["setup"], { env: Bun.env, slackUserId: () => JSON.parse(Bun.env.FLEET_SETTINGS!)["slack.userId"], secrets: secretStore(Bun.env.HOME!, "slack"), stateDir: Bun.env.HOME!, threads, every: () => () => {}, print: (line) => console.log(line), readStdin: () => Bun.stdin.text(), run, slackBase: Bun.argv[2] }));
+process.exit(await slackTrigger(["setup"], { env: Bun.env, home: Bun.env.HOME!, slackUserId: () => JSON.parse(Bun.env.FLEET_SETTINGS!)["slack.userId"], secrets: secretStore(Bun.env.HOME!, "slack"), stateDir: Bun.env.HOME!, threads, every: () => () => {}, print: (line) => console.log(line), readStdin: () => Bun.stdin.text(), run, slackBase: Bun.argv[2] }));
 `);
   return script;
 }
