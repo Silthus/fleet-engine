@@ -95,6 +95,9 @@ test("a declared file that is not an upstream names its path and what is wrong",
     [{ ...mail, app: slack.app }, "app, plugin and account must differ from those of the built-in Slack"],
     [{ ...mail, plugin: slack.plugin }, "app, plugin and account must differ from those of the built-in Slack"],
     [{ ...mail, account: "slack" }, "app, plugin and account must differ from those of the built-in Slack"],
+    [{ ...mail, app: `${slack.app}.enabled=true #` }, "app must be a ChatGPT app id: letters, digits and underscores"],
+    [{ ...mail, plugin: 'mail@x".enabled=true #' }, "plugin must be a Codex plugin name such as name@marketplace"],
+    [{ ...mail, prefix: "mail" }, "prefix must be the app's tool prefix: lowercase letters, digits and underscores, then a dot"],
     [{ ...mail, account: undefined, name: "mail" }, ""],
   ];
   for (const [value, problem] of cases) {
@@ -147,4 +150,11 @@ test("one ChatGPT sign-in serves every Google route: the gateway reloads all thr
   expect(await signInApp(hub, googleCalendar)).toBe(0);
   expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/logins"), "utf8")).toBe("login --device-auth\n");
   expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
+});
+
+test("a group entry whose server is named like an object property keeps its own tool selection", async () => {
+  const { api, hub } = hubWith({}, { servers: ["tickets", "constructor"] });
+  api.groups[0]!.servers = ["tickets", { name: "constructor", tools: ["read"] }];
+  await issueKey("box-1", hub);
+  expect(api.groups[0]!.servers).toEqual(["tickets", { name: "constructor", tools: ["read"] }]);
 });

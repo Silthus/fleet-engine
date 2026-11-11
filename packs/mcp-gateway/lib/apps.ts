@@ -110,7 +110,9 @@ function problem(value: Field): string | undefined {
     if (value.tools !== undefined && (!strings(value.tools) || !(value.tools as string[]).every((tool) => toolName.test(tool)))) return "tools of an oauth upstream must be exact tool names";
     return;
   }
-  for (const key of ["app", "plugin", "prefix"]) if (!text(value[key])) return `${key} must name the ChatGPT app`;
+  if (typeof value.app !== "string" || !/^[A-Za-z0-9_]+$/.test(value.app)) return "app must be a ChatGPT app id: letters, digits and underscores";
+  if (typeof value.plugin !== "string" || !/^[a-z0-9][a-z0-9-]*@[a-z0-9][a-z0-9-]*$/.test(value.plugin)) return "plugin must be a Codex plugin name such as name@marketplace";
+  if (typeof value.prefix !== "string" || !/^[a-z0-9_]+\.$/.test(value.prefix)) return "prefix must be the app's tool prefix: lowercase letters, digits and underscores, then a dot";
   if (!strings(value.tools) || !(value.tools as string[]).every((tool) => toolName.test(tool.replace(/\*$/, "")))) return "tools must list tool names, each may end in *";
   if (!text(value.refusal)) return "refusal must be a sentence";
   if (value.renames !== undefined && !(typeof value.renames === "object" && value.renames !== null && Object.values(value.renames).every(text))) return "renames must map tool names to tool names";
