@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../src/cli.ts";
 import { loadPacks } from "../src/pack/manifest.ts";
+import { cachedSource } from "../src/pack/sources.ts";
+import { sourceCache } from "../src/setup/setup.ts";
 import { fakeMachine, fleetSetup, savedAnswers } from "../src/setup/testing.ts";
 import { isolateGit, tempDirs } from "../src/testing/git.ts";
 import { needsHubPacks, prefersHubPacks } from "../src/setup/defaults.ts";
@@ -99,7 +101,25 @@ describe("the agent setup guide", () => {
 
   test("with a hub and a node, creates a 200 GB hub and a 500 GB node with every parameter given, so Coder asks nothing", () => {
     expect(words(hubStep())).toContain("The default is one **hub** with a 200 GB disk and one **node** with a 500 GB disk");
-    expect(codeIn(hubStep()).find((code) => code.startsWith("coder create "))).toBe("coder create <name> --template <template> --parameter <disk parameter>=<200 or 500> --yes\n");
+    expect(codeIn(hubStep()).find((code) => code.startsWith("coder create "))).toBe("coder create <name> --template <template> --preset none --use-parameter-defaults --parameter <disk parameter>=<200 or 500> --yes\n");
+  });
+
+  test("with a hub and a node, reads the template's parameters when coder templates pull fails", () => {
+    expect(words(hubStep())).toContain("When `coder templates pull` fails, open the template's page in the Coder web app");
+  });
+
+  test("with a hub and a node, follows a team pack's own setup note first, at the path where setup keeps that team's pack", async () => {
+    expect(words(hubStep())).toContain("When step 7 printed that a team pack is ticked");
+    const notePath = codeIn(hubStep()).find((code) => code.includes("/packs/<pack>/SETUP.md"))?.trim();
+    const home = temp.make("home-");
+    const cached = join(sourceCache(home), "team", "packs", "hub");
+    cpSync(join(root, "packs", "hub"), cached, { recursive: true });
+    mkdirSync(join(sourceCache(home), "team", ".git"));
+    const source = await cachedSource({ name: "team", repo: "example/team-pack", ref: "main" }, sourceCache(home));
+    const pack = "packs" in source ? source.packs.find((loaded) => loaded.manifest.name === "hub") : undefined;
+    const guidePathOfNote = notePath?.replace("~", home).replace("<source>", "team").replace("<pack>", "hub");
+    expect(guidePathOfNote).toBe(join(pack!.dir, "SETUP.md"));
+    expect(existsSync(guidePathOfNote!)).toBe(true);
   });
 
   test("with a hub and a node, keeps both running while the Mac sleeps", () => {
