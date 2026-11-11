@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { main } from "../cli.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
 import type { ExecResult, Machine } from "./commands.ts";
+import { quote } from "../hub/ssh.ts";
 import { gitEnv } from "../testing/git.ts";
 import { profilePath } from "./profile.ts";
 import { Stopped, type Terminal } from "./terminal.ts";
@@ -49,6 +50,8 @@ async function realGit(home: string, args: string[], cwd?: string): Promise<Exec
   return run(["git", "-c", rewrite, ...(args[0] === "clone" ? ["clone", "--config", rewrite, ...args.slice(1)] : args)]);
 }
 
+type T3Session = { sessionId: string; token: string; revoked: boolean };
+
 type SignInName = "github" | "claude" | "chatgpt" | "coder" | "box:github" | "box:claude" | "box:chatgpt" | "box:t3" | "box:coder";
 
 /** What coder whoami prints when signed in, as the Coder CLI writes it. */
@@ -85,8 +88,15 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * The hub takes the nodes the pushed profile lists at each fleet update;
  * until then it refuses a node's credential when the node applies its
  * profile, and its fleet peers link refuses the node.
+ * T3 on each machine reports what the real CLI prints: the shared relayUrl,
+ * and a tunnelHostname only when cliPrintsTunnel is set. Its server answers
+ * link-state with the tunnel hostname to a session it issued and has not
+ * revoked, unless serverWithoutLinkState names that side. Its runtime record
+ * names a loopback server, process 4242, that runs unless runtimeOrigin,
+ * runtimePid or serverGone say otherwise. Its environment sets a proxy that
+ * takes every curl request which does not turn proxies off, and its tunnel answers only after tunnelStartsAfter lookups.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: boolean; linked: boolean }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; boxTunnel?: string } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -111,9 +121,49 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
   };
   const claudeReply = (name: "claude" | "box:claude") => options.claude?.[name]?.reply ?? (passes(name) ? result(true, "ok") : claudeUnauthorized);
   const ghStatus = (name: SignInName, granted: string) => (passes(name) ? result(true, `github.com\n${granted}\n`) : result(false, "You are not logged in"));
-  const t3 = (line: string, token: string) => {
+  const boxSessions: T3Session[] = [];
+  const hereSessions: T3Session[] = [];
+  const recorded = options.runtimeOrigin ?? "http://127.0.0.1:41773";
+  const origin = URL.canParse(recorded) ? new URL(recorded).origin : recorded;
+  let lookups = 0;
+  const runtimeRecord = async (line: string, sideHome: string): Promise<ExecResult> => {
+    const record = (at: string, origin: string) => {
+      const file = `${at}/userdata/server-runtime.json`;
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, JSON.stringify({ version: 1, pid: "runtimePid" in options ? options.runtimePid : 4242, port: Number(new URL(origin).port || 80), origin }));
+    };
+    const raw = options.t3Home ?? "";
+    const trimmed = raw.trim();
+    const t3Reads = trimmed === "" ? join(sideHome, ".t3") : trimmed.startsWith("~") ? join(sideHome, trimmed.slice(1)) : resolve(sideHome, trimmed);
+    if (raw !== "") record(isAbsolute(raw) ? raw : join(sideHome, raw), "http://127.0.0.1:6666");
+    record(t3Reads, recorded);
+    const env: Record<string, string> = { HOME: sideHome, PATH: process.env.PATH ?? "", ...(options.t3Home === undefined ? {} : { T3CODE_HOME: options.t3Home }), ...(options.devServerUrl ? { VITE_DEV_SERVER_URL: options.devServerUrl } : {}) };
+    const child = Bun.spawn(["sh", "-c", line], { cwd: sideHome, env, stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { code, output: `${stdout}${stderr}`, stdout };
+  };
+  const t3 = (line: string, token: string, input: string | undefined, side: { name: "box" | "here"; home: string; linked: boolean; tunnel: string; sessions: T3Session[] }) => {
+    const { sessions } = side;
     if (line.startsWith("t3 pair ")) return result(true, `Pairing with test.\n\nPairing URL: http://127.0.0.1:3773/pair#token=x\nToken: ${token}\n`);
     if (line.startsWith("t3 environment link ")) return result(true, "linked");
+    const status = side.name === "box" && options.boxConnect ? options.boxConnect : { authenticated: side.linked, linked: side.linked };
+    if (line === "t3 connect status --json") return result(true, JSON.stringify({ desired: side.linked, ...status, revoked: false, relayUrl: "https://relay.example", ...(options.cliPrintsTunnel && side.linked ? { tunnelHostname: side.tunnel } : {}) }));
+    if (line.startsWith("sh -c ") && line.includes("server-runtime.json")) return runtimeRecord(line, side.home);
+    if (/^sh -c 'kill -0 \S+'$/.test(line)) return result(!options.serverGone);
+    if (line.startsWith("curl ") && !line.startsWith("curl -q --noproxy '*' ")) return { code: 22, output: "curl: (22) The requested URL returned error: 502 from the proxy", stdout: "" };
+    if (line === "t3 auth session issue --json --ttl 5m --label fleet --subject fleet --scope relay:read") {
+      const session = { sessionId: `session-${sessions.length + 1}`, token: `t3-bearer-${side.tunnel}-${sessions.length + 1}`, revoked: false };
+      sessions.push(session);
+      return result(true, `${JSON.stringify({ sessionId: session.sessionId, token: session.token, scopes: ["relay:read"] })}\n`);
+    }
+    const revoked = sessions.find((session) => line === `t3 auth session revoke ${session.sessionId}`);
+    if (revoked) return (revoked.revoked = true), result(true, "Revoked.");
+    if (line === `curl -q --noproxy '*' -fsS --max-time 15 -H @- ${origin}/api/connect/link-state`) {
+      const live = sessions.some((session) => !session.revoked && input?.split("\n").includes(`authorization: Bearer ${session.token}`));
+      if (!live) return { code: 22, output: "curl: (22) The requested URL returned error: 401", stdout: "" };
+      if (options.serverWithoutLinkState?.includes(side.name)) return { code: 22, output: "curl: (22) The requested URL returned error: 404", stdout: "" };
+      return result(true, JSON.stringify({ linked: side.linked, relayUrl: "https://relay.example", managedTunnelActive: side.linked, linkRevoked: false, tunnelHostname: side.linked && ++lookups > (options.tunnelStartsAfter ?? 0) ? side.tunnel : null, linkableHere: false }));
+    }
     return undefined;
   };
   const pushedProfile = async (): Promise<{ hub?: string; devboxes?: string[] }> => {
@@ -164,8 +214,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
     if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
     if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
-    if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: passes("box:t3"), linked: passes("box:t3"), relayUrl: passes("box:t3") ? "https://box-1.relay.example/" : null }));
-    return t3(line, "BOXCODE") ?? result(false, `unexpected on the box: ${line}`);
+    return t3(line, "BOXCODE", input, { name: "box", home: boxHome(home, host), linked: passes("box:t3"), tunnel: options.boxTunnel ?? "box-1.relay.example", sessions: boxSessions }) ?? result(false, `unexpected on the box: ${line}`);
   };
   const machine: Machine = {
     async exec(command, run = {}) {
@@ -202,8 +251,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
         return owner === options.createFailsAfterMaking ? result(false, "HTTP 502: Bad Gateway") : made;
       }
       if (command[0] === "git") return realGit(home, command.slice(1), run.cwd);
-      if (line === "t3 connect status --json") return result(true, JSON.stringify({ authenticated: Boolean(options.connectHere), linked: Boolean(options.connectHere), relayUrl: options.connectHere ? "https://here.relay.example/" : null }));
-      return t3(line, "HERECODE") ?? result(false, `unexpected ${line}`);
+      return t3(command.map(quote).join(" "), "HERECODE", run.input, { name: "here", home, linked: Boolean(options.connectHere), tunnel: "here.relay.example", sessions: hereSessions }) ?? result(false, `unexpected ${line}`);
     },
     start(command) {
       starts.push(command);
@@ -238,7 +286,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     },
     has: () => true,
   };
-  return { machine, clock, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked };
+  return { machine, clock, calls, starts, runs, sleeps, opened, coderSsh, hubUpdates, credentials, hubLinked, sessions: () => [...hereSessions, ...boxSessions] };
 }
 
 export const remote = (box: ReturnType<typeof fakeMachine>) => [...box.calls.map((call) => onBox(call.command)), ...box.starts.map(onBox), ...box.runs.map((run) => onBox(run.command))].filter(Boolean) as string[];
