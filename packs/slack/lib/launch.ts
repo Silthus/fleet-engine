@@ -1,5 +1,6 @@
 import { threadUrl } from "../../../src/integrations/t3/index.ts";
 import type { Threads } from "../../../src/sdk/index.ts";
+import type { DiskStatus } from "../../base/lib/disk.ts";
 import type { Started } from "./trigger.ts";
 
 export type Run = (argv: string[], input?: string) => Promise<{ code: number; stdout: string; stderr: string }>;
@@ -21,9 +22,11 @@ export const spawnRun: Run = async (argv, input) => {
 const lastLine = (text: string) => text.trim().split("\n").at(-1)?.trim() ?? "";
 const why = (result: { code: number; stderr: string; stdout: string }) => lastLine(result.stderr) || lastLine(result.stdout) || `exit ${result.code}`;
 
-export function launchHere(threads: Threads): Launch {
+export function launchHere(threads: Threads, room: () => DiskStatus): Launch {
   return async ({ title, prompt, commandId }) => {
     try {
+      const disk = room();
+      if (disk.critical) return { failed: disk.message.replaceAll("\n", " ") };
       const { id, url } = await threads.start({ key: commandId, title, prompt, modelRole: "implementation" });
       return { threadId: id, url, where: "this machine" };
     } catch (error) {
