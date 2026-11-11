@@ -28,13 +28,12 @@ export function t3Threads(models: ModelRow[], session: T3SessionOptions = {}): T
         throw error;
       }
     },
-    async send({ id, text }) {
-      await withT3Session(async (client) => {
-        const thread = await findThread(client, id);
-        if (!thread) throw new Error(`T3 has no thread ${id} on this machine.`);
-        await sendMessage(client, thread, text);
-      }, { ...session, scopes: startScopes });
-    },
+    send: ({ id, text }) => withT3Session(async (client) => {
+      const thread = await findThread(client, id);
+      if (!thread || thread.archivedAt) return false;
+      await sendMessage(client, thread, text);
+      return true;
+    }, { ...session, scopes: startScopes }),
   };
 }
 

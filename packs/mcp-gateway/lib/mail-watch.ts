@@ -9,12 +9,11 @@ export const checkEveryMs = 2 * 60_000;
 const overlapMs = 15 * 60_000;
 const failureAlertMs = 20 * 60_000;
 const keepSeen = 3000;
-const maxPages = 10;
 const protocolVersion = "2025-06-18";
 
 type Email = { id: string; thread_id: string; from_?: string; subject?: string; email_ts?: string; display_url?: string };
 type ThreadMessage = { id: string; label_ids?: string[]; internal_date?: string };
-type State = { since?: number; seen?: string[]; threads?: Record<string, string>; failingSince?: number };
+type State = { armedAt?: number; since?: number; seen?: string[]; threads?: Record<string, string>; pending?: Record<string, Email[]>; failingSince?: number };
 
 export type MailWatch = {
   gateway: { url: string; credential: string };
@@ -26,7 +25,7 @@ export type MailWatch = {
   fetch: Fetch;
 };
 
-type Gmail = (tool: string, args: Record<string, unknown>) => Promise<any>;
+type Gmail = { call(tool: string, args: Record<string, unknown>): Promise<any>; close(): Promise<void> };
 
 export async function watchMail(watch: MailWatch, sleep: (ms: number) => Promise<void>): Promise<never> {
   for (;;) {
@@ -38,112 +37,135 @@ export async function watchMail(watch: MailWatch, sleep: (ms: number) => Promise
 export async function checkMail(watch: MailWatch, dryRun = false): Promise<boolean> {
   const state = readState(watch.statePath);
   const now = watch.now();
-  if (!state.since) {
-    if (!dryRun) writeState(watch.statePath, { since: now, seen: [], threads: {} });
+  const save = () => dryRun || writeState(watch.statePath, state);
+  if (!state.armedAt) {
+    Object.assign(state, { armedAt: now, since: now, seen: [], threads: {}, pending: {} });
+    save();
     watch.log("Armed. Replies that arrive from now on start a thread.");
     return true;
   }
-  const seen = new Set(state.seen ?? []);
-  const threads = { ...state.threads };
+  const pending = (state.pending ??= {});
+  const threads = (state.threads ??= {});
+  let failure: string | undefined;
   try {
-    const gmail = await openGmail(watch);
-    const fresh = await searchNew(gmail, watch.query, state.since - overlapMs, seen);
-    let notified = 0;
-    let missed = false;
+    const fresh = await findReplies(watch, state);
+    for (const [conversation, replies] of fresh) pending[conversation] = [...(pending[conversation] ?? []), ...replies.filter((reply) => !pending[conversation]?.some((held) => held.id === reply.id))];
+    state.since = now;
+  } catch (error) {
+    failure = (error as Error).message;
+    watch.log(`Check failed: ${failure}`);
+  }
+  let notified = 0;
+  for (const [conversation, replies] of Object.entries(pending)) {
+    if (dryRun) {
+      watch.log(`Would notify: ${replies.length} new in ${conversation}.`);
+      continue;
+    }
+    const missed = await deliver(watch, threads, conversation, replies);
+    if (missed) {
+      failure ??= `Could not reach a thread for ${conversation}: ${missed}`;
+      watch.log(`Could not reach a thread for ${conversation}; the next check tries again.`);
+      continue;
+    }
+    delete pending[conversation];
+    notified++;
+    save();
+  }
+  if (!failure) watch.log(`Notified ${notified} threads.`);
+  if (failure && !dryRun) await alertWhenLong(watch, state, now, failure);
+  if (!failure) delete state.failingSince;
+  save();
+  return !failure;
+}
+
+async function findReplies(watch: MailWatch, state: State): Promise<Map<string, Email[]>> {
+  const seen = new Set(state.seen ?? []);
+  const gmail = await openGmail(watch);
+  try {
+    const fresh = await searchNew(gmail, watch.query, state.since! - overlapMs, seen);
+    const found = new Map<string, Email[]>();
     for (const [conversation, candidates] of Map.groupBy(fresh, (email) => email.thread_id)) {
-      const thread = await gmail("read_email_thread", { thread_id: conversation, max_messages: 100 });
-      const replies = repliesAfterYours((thread.messages ?? []) as ThreadMessage[], candidates);
-      if (replies.length && dryRun) watch.log(`Would notify: ${replies.length} new in ${conversation}.`);
-      if (replies.length && !dryRun) {
-        const delivered = await deliver(watch, threads, conversation, replies);
-        if (!delivered) {
-          missed = true;
-          watch.log(`Could not reach a thread for ${conversation}; the next check tries again.`);
-          continue;
-        }
-        notified++;
-      }
+      const thread = await gmail.call("read_email_thread", { thread_id: conversation, max_messages: 100 });
+      const replies = repliesAfterYours((thread.messages ?? []) as ThreadMessage[], candidates, state.armedAt!);
+      if (replies.length) found.set(conversation, replies);
       for (const email of candidates) seen.add(email.id);
     }
-    watch.log(`Checked ${fresh.length} new inbox emails; notified ${notified} threads.`);
-    if (!dryRun) writeState(watch.statePath, { since: missed ? state.since : now, seen: [...seen].slice(-keepSeen), threads });
-    return true;
-  } catch (error) {
-    const message = (error as Error).message;
-    watch.log(`Check failed: ${message}`);
-    if (!dryRun) writeState(watch.statePath, { ...state, ...(await failing(watch, state, now, message)) });
-    return false;
+    state.seen = [...seen].slice(-keepSeen);
+    return found;
+  } finally {
+    await gmail.close();
   }
 }
 
-async function deliver(watch: MailWatch, threads: Record<string, string>, conversation: string, replies: Email[]): Promise<boolean> {
+async function deliver(watch: MailWatch, threads: Record<string, string>, conversation: string, replies: Email[]): Promise<string | undefined> {
   const existing = threads[conversation];
-  if (existing) {
-    const sent = await watch.threads.send({ id: existing, text: followUpPrompt(conversation, replies) }).then(() => true, (error: Error) => (watch.log(`${existing}: ${error.message}`), false));
-    if (sent) return true;
-  }
   try {
-    const started = await watch.threads.start({ key: `mail-${conversation}-${replies[0]!.id}`, title: title(replies[0]!), prompt: firstPrompt(conversation, replies), modelRole: "survey" });
-    threads[conversation] = started.id;
-    return true;
+    if (existing && (await watch.threads.send({ id: existing, text: followUpPrompt(conversation, replies) }))) return;
+    const key = existing ? `mail-${conversation}-after-${existing}` : `mail-${conversation}`;
+    threads[conversation] = (await watch.threads.start({ key, title: title(replies[0]!), prompt: firstPrompt(conversation, replies), modelRole: "survey" })).id;
   } catch (error) {
-    watch.log(`${conversation}: ${(error as Error).message}`);
-    return false;
+    return (error as Error).message;
   }
 }
 
-async function failing(watch: MailWatch, state: State, now: number, message: string): Promise<State> {
-  const failingSince = state.failingSince ?? now;
-  if (now - failingSince >= failureAlertMs) {
-    await watch.threads.start({ key: `mail-watch-failing-${failingSince}`, title: "Mail watch is failing", prompt: alertPrompt(failingSince, message), modelRole: "lookup" })
-      .catch((error: Error) => watch.log(`Could not start the alert thread: ${error.message}`));
-  }
-  return { failingSince };
+async function alertWhenLong(watch: MailWatch, state: State, now: number, failure: string) {
+  const failingSince = (state.failingSince ??= now);
+  if (now - failingSince < failureAlertMs) return;
+  await watch.threads.start({ key: `mail-watch-failing-${failingSince}`, title: "Mail watch is failing", prompt: alertPrompt(failingSince, failure), modelRole: "lookup" })
+    .catch((error: Error) => watch.log(`Could not start the alert thread: ${error.message}`));
 }
 
 async function searchNew(gmail: Gmail, query: string, afterMs: number, seen: Set<string>): Promise<Email[]> {
   const found: Email[] = [];
+  const pages = new Set<string>();
   let page: string | undefined;
-  for (let pages = 0; pages < maxPages; pages++) {
-    const result = await gmail("search_emails", { query: `${query} after:${Math.floor(afterMs / 1000)}`, max_results: 50, ...(page && { next_page_token: page }) });
+  do {
+    const result = await gmail.call("search_emails", { query: `${query} after:${Math.floor(afterMs / 1000)}`, max_results: 50, ...(page && { next_page_token: page }) });
     for (const email of (result.emails ?? []) as Email[]) if (!seen.has(email.id)) found.push(email);
     page = result.next_page_token || undefined;
-    if (!page) break;
-  }
+    if (page && pages.has(page)) throw new Error("Gmail repeated a page of the search.");
+    if (page) pages.add(page);
+  } while (page);
   return found;
 }
 
-function repliesAfterYours(messages: ThreadMessage[], candidates: Email[]): Email[] {
+function repliesAfterYours(messages: ThreadMessage[], candidates: Email[], armedAt: number): Email[] {
   const sentAt = messages.filter((message) => message.label_ids?.includes("SENT")).map((message) => Number(message.internal_date ?? 0));
   if (!sentAt.length) return [];
-  const firstSent = Math.min(...sentAt);
+  const after = Math.max(Math.min(...sentAt), armedAt);
   const dates = new Map(messages.map((message) => [message.id, Number(message.internal_date ?? 0)]));
-  return candidates.filter((email) => (dates.get(email.id) ?? Number.POSITIVE_INFINITY) > firstSent);
+  return candidates.filter((email) => (dates.get(email.id) ?? Number.POSITIVE_INFINITY) > after);
 }
 
 async function openGmail({ gateway, fetch }: MailWatch): Promise<Gmail> {
   const endpoint = `${gateway.url}/mcphub/mcp/${gatewayGroup}`;
-  const base = { authorization: `Bearer ${gateway.credential}`, accept: "application/json, text/event-stream", "content-type": "application/json" };
+  const base = { authorization: `Bearer ${gateway.credential}`, accept: "application/json, text/event-stream" };
   let session: Record<string, string> = {};
-  const post = async (body: Record<string, unknown>) => {
-    const response = await fetch(endpoint, { method: "POST", headers: { ...base, ...session }, body: JSON.stringify({ jsonrpc: "2.0", ...body }), signal: AbortSignal.timeout(120_000) })
+  const send = async (method: string, body?: Record<string, unknown>) => {
+    const init = { method, headers: { ...base, ...session, ...(body && { "content-type": "application/json" }) }, ...(body && { body: JSON.stringify({ jsonrpc: "2.0", ...body }) }), signal: AbortSignal.timeout(120_000) };
+    const response = await fetch(endpoint, init)
       .catch((error: Error) => { throw new Error(`Cannot reach the MCP gateway at ${gateway.url}: ${error.message}. On the hub, run: fleet mcp-gateway doctor`); });
     if (response.status === 401 || response.status === 403) throw new Error("The MCP gateway refused the hub's key. Run fleet apply on the hub.");
-    if (!response.ok) throw new Error(`The MCP gateway answered ${body.method} with HTTP ${response.status}.`);
+    if (!response.ok) throw new Error(`The MCP gateway answered ${body?.method ?? method} with HTTP ${response.status}.`);
     return response;
   };
-  const opened = await post({ id: 0, method: "initialize", params: { protocolVersion, capabilities: {}, clientInfo: { name: "fleet-mail-watch", version: "1" } } });
+  const opened = await send("POST", { id: 0, method: "initialize", params: { protocolVersion, capabilities: {}, clientInfo: { name: "fleet-mail-watch", version: "1" } } });
   const id = opened.headers.get("mcp-session-id");
   session = { ...(id && { "mcp-session-id": id }), "mcp-protocol-version": protocolVersion };
   await opened.text();
-  await (await post({ method: "notifications/initialized" })).text();
+  await (await send("POST", { method: "notifications/initialized" })).text();
   let next = 1;
-  return async (tool, args) => {
-    const body = (await jsonOf(await post({ id: next++, method: "tools/call", params: { name: `gmail-${tool}`, arguments: args } }))) as { result?: { content?: { text?: string }[]; isError?: boolean; structuredContent?: unknown }; error?: { message: string } };
-    if (body.error) throw new Error(`Gmail ${tool}: ${body.error.message}`);
-    const text = body.result?.content?.map((part) => part.text ?? "").join("") ?? "";
-    if (body.result?.isError) throw new Error(`Gmail ${tool}: ${text.slice(0, 300)}`);
-    return body.result?.structuredContent ?? JSON.parse(text);
+  return {
+    async call(tool, args) {
+      const body = (await jsonOf(await send("POST", { id: next++, method: "tools/call", params: { name: `gmail-${tool}`, arguments: args } }))) as {
+        result?: { content?: { text?: string }[]; isError?: boolean; structuredContent?: unknown }; error?: { message: string };
+      };
+      if (body.error) throw new Error(`Gmail ${tool}: ${body.error.message}`);
+      const text = body.result?.content?.map((part) => part.text ?? "").join("") ?? "";
+      if (body.result?.isError) throw new Error(`Gmail ${tool}: ${text.slice(0, 300)}`);
+      return body.result?.structuredContent ?? JSON.parse(text);
+    },
+    close: async () => void (id && (await send("DELETE").then((response) => response.text(), () => undefined))),
   };
 }
 
@@ -185,9 +207,9 @@ Read it with read_email_thread, then update your summary and proposed reply in a
 }
 
 function alertPrompt(failingSince: number, message: string): string {
-  return `Fleet's mail watch on the hub has failed every check since ${new Date(failingSince).toISOString()}, so no thread starts when someone replies by mail. Last error: ${message.slice(0, 500)}
+  return `Fleet's mail watch on the hub has failed every check since ${new Date(failingSince).toISOString()}, so replies by mail may wait without a thread. Last error: ${message.slice(0, 500)}
 
-On the hub, run fleet mail-watch --dry-run and fleet mcp-gateway doctor, then reply in at most 4 lines with the cause and the fix. When the cause is the Gmail sign-in, ask the person to run fleet mcp-gateway sign-in gmail on the hub.`;
+On the hub, run fleet mail-watch and fleet mcp-gateway doctor, then reply in at most 4 lines with the cause and the fix. When the cause is the Gmail sign-in, ask the person to run fleet mcp-gateway sign-in gmail on the hub.`;
 }
 
 function readState(path: string): State {

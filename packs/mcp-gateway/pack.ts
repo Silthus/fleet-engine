@@ -156,10 +156,10 @@ export default {
     });
     fleet.command("mail-watch", {
       on: "hub",
-      summary: "Check Gmail once for replies to you, or with --dry-run, only say what a check would start",
+      summary: "Say which Gmail replies the next mail watch check would start or follow up, and change nothing",
       run: async (args, ctx) => {
-        if (args.some((arg) => arg !== "--dry-run")) return ctx.print("usage: fleet mail-watch [--dry-run]"), 2;
-        return (await import("./lib/mail-watch.ts")).checkMail({ ...(await watchOf(ctx)), log: ctx.print }, args.includes("--dry-run")).then((ok) => (ok ? 0 : 1));
+        if (args.length) return ctx.print("usage: fleet mail-watch"), 2;
+        return (await import("./lib/mail-watch.ts")).checkMail({ ...(await watchOf(ctx)), log: ctx.print }, true).then((ok) => (ok ? 0 : 1));
       },
     });
     fleet.check({
