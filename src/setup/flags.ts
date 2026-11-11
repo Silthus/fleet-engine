@@ -1,3 +1,4 @@
+import { isKeptForBoxes, isNodeName } from "../hub/names.ts";
 import type { AiPlan, PackSetting, SettingValue } from "../pack/types.ts";
 
 export type SetupFlags = {
@@ -40,6 +41,7 @@ export function parseSetupFlags(args: string[]): SetupFlags {
     } else if (arg === "--devbox") {
       flags.devbox = value();
       if (!/^[\w][\w.@-]*$/.test(flags.devbox)) throw new FlagError(`--devbox takes an SSH host from ~/.ssh/config, or skip`);
+      if (flags.devbox !== "skip") refuseUnusableDevbox(flags.devbox);
     }
     else if (arg === "--non-interactive") flags.nonInteractive = true;
     else throw new FlagError(`unknown option ${arg}`);
@@ -90,4 +92,9 @@ export function parseSettingValue(setting: PackSetting, raw: string): SettingVal
   }
   if (text === "") throw new FlagError(`${setting.key} needs a value`);
   return text;
+}
+
+export function refuseUnusableDevbox(host: string) {
+  if (!isNodeName(host)) throw new FlagError(`${host} is not a name the hub can use. Give the devbox an SSH name in ~/.ssh/config of lowercase letters, digits, dots and dashes, starting with a letter or a digit.`);
+  if (isKeptForBoxes(host)) throw new FlagError(`${host} is a pool box name. Names that start with box- are kept for the boxes the hub starts; give the devbox another SSH name.`);
 }

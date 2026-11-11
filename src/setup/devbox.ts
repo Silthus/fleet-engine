@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import type { AiPlan, ModelRow } from "../pack/types.ts";
-import { loadProfile, validHost } from "../profile/profile.ts";
-import { quote } from "../hub/ssh.ts";
+import { canBeDevbox } from "../hub/names.ts";
+import { onHub, quote } from "../hub/ssh.ts";
+import { loadProfile, pullProfile, saveAnswers, validHost } from "../profile/profile.ts";
 import type { Machine } from "./commands.ts";
 import { engineRepo } from "./defaults.ts";
 import { type HumanContext, humanStep, type SignIn } from "./human.ts";
@@ -81,7 +82,7 @@ export function devboxQuestion(context: { terminal: Terminal; home: string; flag
         terminal.print(host ? `  ✓ ${host}` : "  ✓ No devbox for now. Add one later with fleet devbox add <host>.");
       };
       if (context.flag) return chosen(context.flag === skipDevbox ? undefined : context.flag);
-      const hosts = sshHosts(context.home);
+      const hosts = sshHosts(context.home).filter(canBeDevbox);
       if (context.nonInteractive || !hosts.length) return chosen(undefined);
       terminal.print("? Which SSH host is your devbox?");
       terminal.print("  Fleet installs itself there over SSH, signs it in, and links it with T3 Code here.");
@@ -274,4 +275,71 @@ async function linkBothWays(host: string, box: Machine, context: DevboxContext) 
   const hereAddress = await connectAddress(context.machine);
   if (hereAddress) await link(context.machine, here, hereAddress, box, host);
   else context.terminal.print(`  · ${host} does not link back to this machine, because T3 Connect is off here. Turn it on with t3 up --connect, and T3 Code on ${host} can pair with this machine.`);
+}
+
+export type HubContext = { terminal: Terminal; machine: Machine };
+
+const registerId = (host: string) => `devbox:${host}:register`;
+const hubLinkId = (host: string) => `devbox:${host}:hub-link`;
+const waitsOnHub = (host: string) => [registerId(host), `devbox:${host}:profile`, hubLinkId(host)];
+
+export const notTakenByHub = (id: string, took: Map<string, boolean>) => [...took].some(([host, taken]) => !taken && waitsOnHub(host).includes(id));
+
+export function hubSteps(host: string, context: HubContext & { profileDir: string | undefined; took: Map<string, boolean> }): { register: Step; link: Step } {
+  const hubOf = async () => {
+    const hub = context.profileDir ? (await loadProfile(context.profileDir)).hub : undefined;
+    return hub && hub !== host ? hub : undefined;
+  };
+  const register: Step = {
+    id: registerId(host),
+    title: `List ${host} in your profile`,
+    minutes: 1,
+    kind: "auto",
+    async run() {
+      await nameBox(overSsh(context.machine, host), host);
+      const listedHub = await listInProfile(context.profileDir, host);
+      if (listedHub && listedHub !== host) context.took.set(host, await tellHub(context, listedHub, host));
+    },
+  };
+  const link: Step = {
+    id: hubLinkId(host),
+    title: `Link ${host} from the hub`,
+    minutes: 1,
+    kind: "auto",
+    async run() {
+      const hub = await hubOf();
+      if (hub) await linkFromHub(context, hub, host, context.took.get(host) ?? true);
+    },
+  };
+  return { register, link };
+}
+
+const hubUpdateLimitMs = 15 * 60_000;
+const hubLinkLimitMs = 5 * 60_000;
+const sshFailed = 255;
+
+/** Lists the devbox in the profile, so the hub and every node know it, and returns the hub the profile names. It pushes on every run, so a push that failed before reaches the remote now. */
+export async function listInProfile(profileDir: string | undefined, host: string): Promise<string | undefined> {
+  if (!profileDir) return undefined;
+  await pullProfile(profileDir);
+  const profile = await loadProfile(profileDir);
+  const devboxes = profile.devboxes?.includes(host) ? profile.devboxes : [...(profile.devboxes ?? []), host];
+  await saveAnswers(profileDir, { devboxes }, { push: true });
+  return profile.hub;
+}
+
+/** Has the hub take the new node before the node applies its profile, so the hub serves the node's credentials, and its disk watch and tunnels include it. */
+export async function tellHub({ machine, terminal }: HubContext, hub: string, host: string): Promise<boolean> {
+  terminal.print(`▶ The hub, ${hub}, takes ${host} with fleet update there. This can take some minutes.`);
+  const updated = await machine.exec(onHub(hub, ["update"]), { timeoutMs: hubUpdateLimitMs });
+  const reason = updated.output.trim().split("\n").at(-1);
+  if (updated.code === 0) terminal.print(`✓ The hub, ${hub}, took ${host}: its disk watch, tunnels and credentials include it now.`);
+  else if (updated.code === sshFailed || !reason) terminal.print(`· The hub, ${hub}, did not answer. It takes ${host} at its next fleet update, or run fleet update there now.`);
+  else terminal.print(`· The hub, ${hub}, could not update: ${reason} Fix that there and run fleet update there; it takes ${host} then.`);
+  return updated.code === 0;
+}
+
+export async function linkFromHub({ machine, terminal }: HubContext, hub: string, host: string, hubTook: boolean) {
+  const linked = hubTook && (await machine.exec(onHub(hub, ["peers", "link", host]), { timeoutMs: hubLinkLimitMs })).code === 0;
+  terminal.print(linked ? `✓ The hub, ${hub}, linked ${host} in T3 Code.` : `· The hub, ${hub}, has not linked ${host} in T3 Code yet. Its daily fleet peers renew links it, or run fleet peers link ${host} there now.`);
 }

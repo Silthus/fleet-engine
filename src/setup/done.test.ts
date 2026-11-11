@@ -77,7 +77,7 @@ describe("the final check", () => {
   test("runs fleet doctor here and on the devbox, and a signed commit there, before the done screen", async () => {
     const home = temp.make("home-");
     const box = fakeMachine(home);
-    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "box-1"], [], box);
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "node-1"], [], box);
     expect(result.code).toBe(0);
     expect(result.doctored).toHaveLength(1);
     const ran = box.runs.map((run) => onBox(run.command));
@@ -89,10 +89,10 @@ describe("the final check", () => {
   test("the standalone check reads each devbox too, and names it", async () => {
     const home = temp.make("home-");
     const box = fakeMachine(home, {}, { boxFiles: { ".config/fleet/peers.json": "[]", ".claude/settings.json": JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://10.0.0.9:8317" } }) } });
-    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "box-1"], [], box);
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "node-1"], [], box);
     expect(result.code).toBe(0);
-    expect(result.output).toContain("  ! Claude Code on box-1 sends its requests to http://10.0.0.9:8317 (env.ANTHROPIC_BASE_URL in ~/.claude/settings.json).");
-    expect(result.output).toContain("  ! ~/.config/fleet/peers.json on box-1 is left from a Fleet hub. Remove it if this machine no longer uses one.");
+    expect(result.output).toContain("  ! Claude Code on node-1 sends its requests to http://10.0.0.9:8317 (env.ANTHROPIC_BASE_URL in ~/.claude/settings.json).");
+    expect(result.output).toContain("  ! ~/.config/fleet/peers.json on node-1 is left from a Fleet hub. Remove it if this machine no longer uses one.");
   });
 
   test("a devbox added after setup is done makes the next setup check again", async () => {
@@ -100,12 +100,12 @@ describe("the final check", () => {
     const args = ["--non-interactive", "--preset", "starter", "--plan", "claude"];
     expect((await fleetSetup(home, args, [], fakeMachine(home))).code).toBe(0);
     const path = join(home, ".config/fleet/machine.json");
-    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), devboxes: ["box-2"] }));
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), devboxes: ["node-2"] }));
     const box = fakeMachine(home);
     const again = await fleetSetup(home, args, [], box);
     expect(again.code).toBe(0);
-    expect(again.output).toContain("  $ ssh box-2 fleet doctor");
-    expect(again.output).toContain("  ✓ box-2 makes signed commits");
+    expect(again.output).toContain("  $ ssh node-2 fleet doctor");
+    expect(again.output).toContain("  ✓ node-2 makes signed commits");
   });
 
   test("a failing doctor stops setup before the done screen, and a rerun checks again", async () => {

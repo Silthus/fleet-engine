@@ -16,7 +16,9 @@ packs, and your answers live in your own private profile repo.
   releases feed, so the T3 Code installer does not use the GitHub API quota
   that shared networks run out of.
 - `fleet setup` asks plain-language questions and offers a default wherever a
-  pack has one. `--preset` starts from a preset's packs.
+  pack has one. A devbox it sets up is listed in your profile, taken by
+  your hub and linked from it, as `fleet devbox add` does; it refuses the
+  same names. `--preset` starts from a preset's packs.
   `--non-interactive` asks nothing and lists what it still needs, such as
   sign-ins.
 - `fleet apply` puts your profile's packs onto the machine. `fleet doctor`
