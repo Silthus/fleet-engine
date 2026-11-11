@@ -87,12 +87,18 @@ other than `0`. On another system, tell the person that this guide is for a
 Mac, and point them at "Set it up by hand" in the README.
 
 Then check for an earlier setup: `~/.local/bin/fleet packs` lists the packs
-when Fleet already runs here. When it does, show the list and tell them what
-running setup again does. Setup reuses their `fleet-profile` repo. The packs
-of this run replace the earlier ones. Earlier settings stay unless this run
-sets them again. Files that Fleet put in place are updated. Files they
-changed by hand are kept, and step 8 shows them. Ask whether to go on, or to
-change only some packs with `fleet packs` instead.
+and their workflows when Fleet already runs here. When it does, show the list
+and ask:
+
+- **Change only what they name** (recommended): run `fleet packs` with
+  `--add`, `--remove`, and `--workflows` for each change, then go on to step
+  8. Everything else stays as it is.
+- **Run setup again**: setup reuses their profile repo. The packs and
+  workflow switches of this run replace the earlier ones, so a hub pack or a
+  workflow they turned on is off again unless the step 7 command names it.
+  Carry each one from the list into that command. Earlier settings stay
+  unless this run sets them again. Files they changed by hand are kept, and
+  step 8 shows them.
 
 ## 2. Ask what they know
 
@@ -138,8 +144,8 @@ the picks from the page say where Fleet runs:
   machines and watches their disks, and one **node** with a 500 GB disk,
   where threads do the work. Add more nodes later, when the load grows.
 
-Recommend a hub and a node when they can make Coder workspaces, and Mac
-only otherwise. Use their answer. Set up the Mac first in both cases.
+Recommend a hub and a node when they use Coder, and Mac only otherwise.
+When you do not know, ask whether they use Coder in the same call. Use their answer. Set up the Mac first in both cases.
 
 ## 5. Install the tools
 
@@ -261,7 +267,9 @@ Say in plain words what it controls, what Fleet's value does instead, and
 whether `fleet doctor` passes while it stays. Then ask:
 
 - **Take Fleet's version**: run the `fleet apply --adopt <path>` that the
-  line names. Fleet keeps the new file up to date, and their old file stays
+  line names. A line that says `Removed item changed locally` names a file
+  that Fleet no longer installs, so there is nothing to take: keep it, or
+  move it away by hand. Fleet keeps the new file up to date, and their old file stays
   in `~/.local/state/fleet/backups/`. When the old file holds their own
   skills or rules, agents stop reading them. Say which ones they lose, and
   offer to move the ones they still want to the "About me" file in their
@@ -283,20 +291,26 @@ creates something, show the command and ask whether to go on. Creating a
 workspace and `fleet devbox add` take minutes; use each wait (see "While
 something runs").
 
-Before step 3, run `fleet hub status` and `coder list`, and ask whether to
-reuse a hub:
+Before item 3 below, run `fleet hub status` and `coder list`, and ask
+whether to reuse a hub:
 
-- **Reuse** a hub that `fleet hub status` names, or a Coder workspace that
-  already runs Fleet for this profile. It keeps its links and disk watch.
-  Skip steps 3 to 7 for it.
-- **Make a new one** (recommended when nothing is named): when there is no
+- **Reuse** the hub that `fleet hub status` names: skip items 3 to 7 for
+  it. It keeps its links and disk watch. A Coder workspace that runs Fleet
+  but is not named as the hub skips items 3 to 6 only.
+- **Make a new one** (recommended when no hub is named): when there is no
   hub, or the old one is on another Coder deployment, another account, or a
   disk under 200 GB.
 
-**Clean up what you replace.** When the new hub or node replaces an old
-workspace, ask before you remove anything. Then delete the old workspace with
-`coder delete <old name>`, and remove its environment from T3 Code's
-settings, so threads do not start there.
+**Clean up what you replace.** When a new hub or node replaces an old
+workspace, clean up only after item 10 passes on the new one, and ask before
+you remove anything:
+
+1. Remove the old host from the `devboxes` list in
+   `~/.local/share/fleet/profile/fleet.json`, then commit and push it. The hub stops
+   its tunnel, disk watch, and link to that host at its next `fleet update`.
+2. Delete the old workspace with `coder delete <old name>`.
+3. Remove its environment from T3 Code's settings, so threads do not start
+   there.
 
 When devboxes were new to them, explain the hub first: it is the one devbox
 that looks after the others. It keeps an SSH tunnel and a T3 link to every
@@ -435,17 +449,20 @@ the steps below, follow the note.
 
     Explain each line as in step 8. A `To do:` line on the hub that needs
     their keyboard runs in a Terminal window as `ssh -t coder.<hub>` with the
-    same `PATH` line. Then go on to step 10.
+    same `PATH` line.
 
-To add a node later, when the load grows, run steps 3, 4, 5 and 9 again with
-a new name and a 500 GB disk, then `fleet doctor` on it.
+To add a node later, when the load grows, run items 3, 4, 5 and 9 above
+again with a new name and a 500 GB disk, then `fleet doctor` on it.
+
+Then go on to step 10.
 
 ## 10. Hand over
 
-Add their profile as a T3 Code project, so they can open a thread there:
+Add their profile as a T3 Code project named `fleet-profile`, so they can
+open a thread there. Skip it when T3 Code already lists that project:
 
 ```sh
-t3 project add ~/.local/share/fleet/profile
+t3 project add --title fleet-profile ~/.local/share/fleet/profile
 ```
 
 Then give them these habits, one line each:

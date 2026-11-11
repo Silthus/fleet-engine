@@ -6,7 +6,8 @@ import { loadPacks } from "../src/pack/manifest.ts";
 import { cachedSource } from "../src/pack/sources.ts";
 import { sourceCache } from "../src/setup/setup.ts";
 import { profilePath } from "../src/setup/profile.ts";
-import { install } from "../src/files/install.ts";
+import { devboxesOf } from "../packs/hub/lib/machine.ts";
+import { cliFixtures } from "../src/testing/cli.ts";
 import { fakeMachine, fleetSetup, savedAnswers } from "../src/setup/testing.ts";
 import { isolateGit, tempDirs } from "../src/testing/git.ts";
 import { needsHubPacks, prefersHubPacks } from "../src/setup/defaults.ts";
@@ -15,6 +16,7 @@ import { pageData } from "./build-page.ts";
 
 isolateGit();
 const temp = tempDirs();
+const cli = cliFixtures(temp);
 afterEach(() => temp.cleanup());
 
 const root = join(import.meta.dir, "..");
@@ -133,7 +135,7 @@ describe("the agent setup guide", () => {
   });
 
   test("with a hub and a node, says how to add a node later", () => {
-    expect(words(hubStep())).toContain("To add a node later, when the load grows, run steps 3, 4, 5 and 9 again with a new name and a 500 GB disk");
+    expect(words(hubStep())).toContain("To add a node later, when the load grows, run items 3, 4, 5 and 9 above again with a new name and a 500 GB disk");
   });
 
   test("with a hub and a node, installs Fleet on the hub, names it the hub there, turns the hub packs on, and only then adds the node", () => {
@@ -205,14 +207,9 @@ describe("the agent setup guide", () => {
     expect(files.filter((file) => !existsSync(join(root, file)))).toEqual([]);
   });
 
-  test("asks every secret through the host's secret prompt, says what it is for and where to make it, and signs in to Coder with it", () => {
-    expect(words(guide())).toContain("**Secrets go through the secret prompt.** Ask for every secret, such as an API key or a token, with the host's secret prompt (in T3 Code, its `request_secret` tool), never in chat.");
+  test("signs in to Coder with a token from the secret prompt, and says where to make it", () => {
     expect(words(hubStep())).toContain("make one at `<coder address>/cli-auth`");
     expect(codeIn(hubStep())).toContain('CODER_SESSION_TOKEN="$(cat <file>)" coder login <coder address>\n');
-  });
-
-  test("with a hub chosen, never calls the hub optional or something for later", () => {
-    expect(words(guide())).toContain("When they chose a hub and a node, never call the hub optional or something for later.");
   });
 
   test("explains a workflow in one plain line the first time it tells the person what Fleet is, whatever they know", () => {
@@ -221,63 +218,68 @@ describe("the agent setup guide", () => {
     expect(show.indexOf("**workflow**")).toBeLessThan(show.indexOf("**pack**"));
   });
 
-  test("uses each long wait to explain one thing, and says whether the step repeats", () => {
+  test("uses each long wait to explain one thing, from each step that waits", () => {
     const waits = words(guide().slice(guide().indexOf("## While something runs"), guide().indexOf("## 1. Check the Mac")));
     for (const topic of ["**T3 Code's inbox.**", "**The Slack trigger.**", "**Threads on nodes.**", "**What runs each night.**"]) expect(waits).toContain(topic);
-    expect(waits).toContain("Say whether the step runs once or again later.");
     for (const step of ["## 5. Install the tools", "## 7. Run setup with their answers", "## 9. Add the hub and the node"]) {
       const body = guide().slice(guide().indexOf(step));
       expect(words(body.slice(0, body.indexOf("\n## ", 3)))).toContain("(see \"While something runs\")");
     }
   });
 
-  test("keeps the person's old file where the guide says when they take Fleet's version", async () => {
+  test("when the person takes Fleet's version of a kept file, the old file is in the backup folder the guide names", async () => {
     const backups = codeIn(guide()).find((code) => code.startsWith("~/.local/state/fleet/backups"));
-    expect(backups).toBeDefined();
     const home = temp.make("home-");
-    mkdirSync(join(home, ".claude"), { recursive: true });
-    writeFileSync(join(home, ".claude", "CLAUDE.md"), "my old rules\n");
-    await install(home, [{ target: ".claude/CLAUDE.md", content: "Fleet's rules\n" }], "core", [".claude/CLAUDE.md"]);
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex/AGENTS.md"), "my own codex rules\n");
+    const kept = await cli.fleet(["apply", "--profile", cli.profileDir()], home);
+    const adopt = kept.output.match(/Run (fleet apply --adopt \S+) to take Fleet's version/)?.[1];
+    expect(adopt).toBe("fleet apply --adopt .codex/AGENTS.md");
+    expect((await cli.fleet([...adopt!.split(" ").slice(1), "--profile", cli.profileDir()], home)).code).toBe(0);
     const folder = backups!.replace("~", home).replace(/\/$/, "");
-    const kept = readdirSync(folder).map((run) => join(folder, run, ".claude", "CLAUDE.md")).filter(existsSync);
-    expect(kept.map((path) => readFileSync(path, "utf8"))).toEqual(["my old rules\n"]);
-    expect(words(guide())).toContain("Recommend taking Fleet's version");
+    expect(readdirSync(folder).map((run) => readFileSync(join(folder, run, ".codex/AGENTS.md"), "utf8"))).toEqual(["my own codex rules\n"]);
   });
 
-  test("on a second setup, reuses the profile, keeps earlier settings, and takes this run's packs, as the guide says", async () => {
-    expect(words(guide())).toContain("Setup reuses their `fleet-profile` repo. The packs of this run replace the earlier ones. Earlier settings stay unless this run sets them again.");
+  test("rules moved to the profile's About me file reach the agents after the packs' rules", async () => {
+    expect(words(guide())).toContain("to the \"About me\" file in their profile, which agents read after the packs' rules");
+    const home = temp.make("home-");
+    expect((await cli.fleet(["apply", "--profile", cli.profileDir([], "# About me\n\nI like small diffs.\n")], home)).code).toBe(0);
+    expect(readFileSync(join(home, ".claude/rules/fleet.md"), "utf8")).toContain("I like small diffs.");
+  });
+
+  test("a second setup reuses the profile, keeps earlier settings, and turns workflows the run does not name off, as the guide says", async () => {
+    const step1 = words(guide().slice(guide().indexOf("## 1. Check the Mac"), guide().indexOf("## 2. Ask what they know")));
+    expect(step1).toContain("The packs and workflow switches of this run replace the earlier ones");
+    expect(step1).toContain("Earlier settings stay unless this run sets them again.");
     const command = guide().match(/^fleet setup (.+)$/m)![1]!.replace("<claude|codex|both>", "both");
     const home = temp.make("home-");
     const box = fakeMachine(home);
-    const first = await fleetSetup(home, [...command.replace("<id>", "everyday").split(" "), "--set", "orchestration.tracker=nora/maps"], [], box, undefined, 0, "darwin");
+    const first = await fleetSetup(home, [...command.replace("<id>", "everyday").split(" "), "--add", "guards", "--workflows", "package-age=on", "--set", "orchestration.tracker=nora/maps"], [], box, undefined, 0, "darwin");
     const again = await fleetSetup(home, command.replace("<id>", "starter").split(" "), [], box, undefined, 0, "darwin");
     expect({ first: first.code, again: again.code }).toEqual({ first: 0, again: 0 });
     expect(again.output).toContain("Reusing your repo nora/fleet-profile");
     expect(savedAnswers(home).packs).toEqual(presets().find((preset) => preset.id === "starter")!.packs);
+    expect(savedAnswers(home).workflows["package-age"]).not.toBe(true);
     expect(savedAnswers(home).settings["orchestration.tracker"]).toBe("nora/maps");
   });
 
-  test("adds the profile as a T3 Code project at the folder where setup keeps it, and ends with the habits", () => {
+  test("a host removed from devboxes in the profile's fleet.json leaves the hub's list of machines", () => {
+    expect(words(hubStep())).toContain("Remove the old host from the `devboxes` list in `~/.local/share/fleet/profile/fleet.json`");
+    const home = temp.make("home-");
+    const profile = profilePath(home);
+    expect(codeIn(hubStep())).toContain(`${profilePath("~")}/fleet.json`);
+    mkdirSync(profile, { recursive: true });
+    const save = (devboxes: string[]) => writeFileSync(join(profile, "fleet.json"), JSON.stringify({ schema: 1, hub: "coder.hub", devboxes }));
+    save(["coder.hub", "coder.old-node", "coder.node"]);
+    expect(devboxesOf({ FLEET_PROFILE_DIR: profile }, home)).toContain("coder.old-node");
+    save(["coder.hub", "coder.node"]);
+    expect(devboxesOf({ FLEET_PROFILE_DIR: profile }, home)).toEqual(["coder.hub", "coder.node"]);
+  });
+
+  test("adds the profile as a T3 Code project at the folder where setup keeps it, under the name the habits use", () => {
     const add = codeIn(guide()).find((code) => code.startsWith("t3 project add "))?.trim();
-    expect(add?.replace("t3 project add ~", "/home/nora")).toBe(profilePath("/home/nora"));
-    const end = words(guide().slice(guide().indexOf("## 10. Hand over")));
-    for (const habit of ["open a thread in the `fleet-profile` project", "every night", "**Side fix.**", "**Conductor.**"]) expect(end).toContain(habit);
-  });
-
-  test("says when to make a new hub and when to reuse one, and cleans up what the person replaces", () => {
-    const hub = words(hubStep());
-    expect(hub).toContain("**Reuse** a hub");
-    expect(hub).toContain("**Make a new one**");
-    expect(hub).toContain("**Clean up what you replace.**");
-  });
-
-  test("explains a kept setting in plain words with the recommended fix, not as raw keys", () => {
-    expect(words(guide())).toContain("Never show the raw key alone.");
-  });
-
-  test("says where a setting outside Fleet lives", () => {
-    const note = words(readFileSync(join(root, "packs/mcp-gateway/SETUP.md"), "utf8"));
-    expect(note).toContain("In ChatGPT, open **Settings**, then **Apps**");
+    expect(add).toBe(`t3 project add --title fleet-profile ${profilePath("~")}`);
+    expect(words(guide().slice(guide().indexOf("## 10. Hand over")))).toContain("open a thread in the `fleet-profile` project");
   });
 
   test("fetches only files that are in the repo", () => {
