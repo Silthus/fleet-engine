@@ -27,7 +27,7 @@ type Mail = { id: string; thread_id: string; from_: string; subject: string; at:
 
 function gateway() {
   const mailbox: Mail[] = [];
-  const state = { signedIn: true, failRead: undefined as string | undefined, sessions: new Set<string>(), opened: 0 };
+  const state = { signedIn: true, failRead: undefined as string | undefined, failInitialized: false, sessions: new Set<string>(), opened: 0 };
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -42,6 +42,7 @@ function gateway() {
         return Response.json({ jsonrpc: "2.0", id: body.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} } } }, { headers: { "mcp-session-id": id } });
       }
       if (!state.sessions.has(session)) return new Response(null, { status: 404 });
+      if (body.method === "notifications/initialized" && state.failInitialized) return new Response(null, { status: 503 });
       if (body.method !== "tools/call") return new Response(null, { status: 202 });
       const { name, arguments: args } = body.params!;
       const answer = !state.signedIn ? { error: "The Gmail app is not connected to the bridge's ChatGPT sign-in." }
@@ -161,7 +162,9 @@ test("a reply whose thread could not start is delivered later, even after you ar
   t3.faults.refuse = () => false;
   expect(await check()).toBe(true);
   expect(t3.launches.map((thread) => thread.title)).toEqual(["Mail: Ada Lovelace: Re: Quote"]);
-  expect(t3.launches[0]!.prompt).toMatch(/Subject: Re: Quote\n[^]*Subject: Re: Quote, later\n/);
+  expect(t3.launches[0]!.prompt).toContain("Subject: Re: Quote\n");
+  expect(t3.launches[0]!.prompt).not.toContain("Re: Quote, later");
+  expect(t3.delivered).toEqual([{ threadId: "thread-1", text: expect.stringContaining("Subject: Re: Quote, later\n") }]);
 });
 
 test("a reply in a conversation whose thread is gone starts a new thread", async () => {
@@ -190,19 +193,17 @@ test("a follow-up whose answer from T3 is lost goes to the same thread again, an
   expect(t3.delivered.map((message) => message.threadId)).toEqual(["thread-1", "thread-1"]);
 });
 
-test("when T3 starts the first thread but its answer is lost, a newer reply still lands in that one thread", async () => {
+test("when T3 starts the first thread but its answer is lost, a reply that arrives before the retry reaches that one thread", async () => {
   const { t3, later, received, conversation, check } = await setup();
   await conversation();
   t3.faults.lose.add("orchestration.launchThread");
   expect(await check()).toBe(false);
   later(2 * minute);
   received("m3", "conv-1", "Ada Lovelace <ada@example.com>", "Re: Quote, again");
-  await check();
-  later(2 * minute);
-  received("m4", "conv-1", "Ada Lovelace <ada@example.com>", "Re: Quote, third");
-  await check();
+  expect(await check()).toBe(true);
   expect(t3.launches.map((thread) => thread.id)).toEqual(["thread-1"]);
-  expect(t3.delivered).toEqual([{ threadId: "thread-1", text: expect.stringContaining("Re: Quote, third") }]);
+  expect(t3.launches[0]!.prompt).not.toContain("Re: Quote, again");
+  expect(t3.delivered).toEqual([{ threadId: "thread-1", text: expect.stringContaining("Re: Quote, again") }]);
 });
 
 test("a reply delivered in a check where another conversation fails is not delivered again", async () => {
@@ -287,11 +288,12 @@ test("a reply under eleven pages of newer mail still starts its thread", async (
   expect(t3.launches.map((thread) => thread.title)).toEqual(["Mail: Ada Lovelace: Re: Quote"]);
 });
 
-test("each check closes its gateway session", async () => {
+test("each check closes its gateway session, also when the session fails to start", async () => {
   const { mail, conversation, check } = await setup();
   await conversation();
   await check();
-  await check();
+  mail.state.failInitialized = true;
+  expect(await check()).toBe(false);
   expect(mail.state.opened).toBe(2);
   expect(mail.state.sessions.size).toBe(0);
 });

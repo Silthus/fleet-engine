@@ -13,7 +13,9 @@ const protocolVersion = "2025-06-18";
 
 type Email = { id: string; thread_id: string; from_?: string; subject?: string; email_ts?: string; display_url?: string };
 type ThreadMessage = { id: string; label_ids?: string[]; internal_date?: string };
-type State = { armedAt?: number; since?: number; seen?: string[]; threads?: Record<string, string>; pending?: Record<string, Email[]>; failingSince?: number };
+type Launch = { key: string; ids: string[] };
+type State = { armedAt?: number; since?: number; seen?: string[]; threads?: Record<string, string>; pending?: Record<string, Email[]>; launching?: Record<string, Launch>; failingSince?: number };
+type Delivery = Required<Pick<State, "threads" | "pending" | "launching">>;
 
 export type MailWatch = {
   gateway: { url: string; credential: string };
@@ -44,8 +46,8 @@ export async function checkMail(watch: MailWatch, dryRun = false): Promise<boole
     watch.log("Armed. Replies that arrive from now on start a thread.");
     return true;
   }
-  const pending = (state.pending ??= {});
-  const threads = (state.threads ??= {});
+  const delivery: Delivery = { pending: (state.pending ??= {}), threads: (state.threads ??= {}), launching: (state.launching ??= {}) };
+  const { pending } = delivery;
   let failure: string | undefined;
   try {
     const fresh = await findReplies(watch, state);
@@ -61,13 +63,12 @@ export async function checkMail(watch: MailWatch, dryRun = false): Promise<boole
       watch.log(`Would notify: ${replies.length} new in ${conversation}.`);
       continue;
     }
-    const missed = await deliver(watch, threads, conversation, replies);
+    const missed = await deliver(watch, delivery, conversation);
     if (missed) {
       failure ??= `Could not reach a thread for ${conversation}: ${missed}`;
       watch.log(`Could not reach a thread for ${conversation}; the next check tries again.`);
       continue;
     }
-    delete pending[conversation];
     notified++;
     save();
   }
@@ -97,12 +98,26 @@ async function findReplies(watch: MailWatch, state: State): Promise<Map<string, 
   }
 }
 
-async function deliver(watch: MailWatch, threads: Record<string, string>, conversation: string, replies: Email[]): Promise<string | undefined> {
-  const existing = threads[conversation];
+async function deliver(watch: MailWatch, { threads, pending, launching }: Delivery, conversation: string): Promise<string | undefined> {
+  const replies = pending[conversation]!;
+  const followUp = async (id: string, left: Email[]) => {
+    if (left.length && !(await watch.threads.send({ id, text: followUpPrompt(conversation, left) }))) return `thread ${id} is gone`;
+    delete pending[conversation];
+  };
   try {
-    if (existing && (await watch.threads.send({ id: existing, text: followUpPrompt(conversation, replies) }))) return;
-    const key = existing ? `mail-${conversation}-after-${existing}` : `mail-${conversation}`;
-    threads[conversation] = (await watch.threads.start({ key, title: title(replies[0]!), prompt: firstPrompt(conversation, replies), modelRole: "survey" })).id;
+    const existing = threads[conversation];
+    if (existing && !launching[conversation]) {
+      const gone = await followUp(existing, replies);
+      if (!gone) return;
+      launching[conversation] = { key: `mail-${conversation}-after-${existing}`, ids: replies.map((reply) => reply.id) };
+    }
+    const launch = (launching[conversation] ??= { key: `mail-${conversation}`, ids: replies.map((reply) => reply.id) });
+    const prompted = replies.filter((reply) => launch.ids.includes(reply.id));
+    const started = await watch.threads.start({ key: launch.key, title: title(prompted[0]!), prompt: firstPrompt(conversation, prompted), modelRole: "survey" });
+    threads[conversation] = started.id;
+    delete launching[conversation];
+    pending[conversation] = replies.filter((reply) => !launch.ids.includes(reply.id));
+    return await followUp(started.id, pending[conversation]);
   } catch (error) {
     return (error as Error).message;
   }
@@ -153,7 +168,11 @@ async function openGmail({ gateway, fetch }: MailWatch): Promise<Gmail> {
   const id = opened.headers.get("mcp-session-id");
   session = { ...(id && { "mcp-session-id": id }), "mcp-protocol-version": protocolVersion };
   await opened.text();
-  await (await send("POST", { method: "notifications/initialized" })).text();
+  const close = async () => void (id && (await send("DELETE").then((response) => response.text(), () => undefined)));
+  await send("POST", { method: "notifications/initialized" }).then((response) => response.text()).catch(async (error) => {
+    await close();
+    throw error;
+  });
   let next = 1;
   return {
     async call(tool, args) {
@@ -165,7 +184,7 @@ async function openGmail({ gateway, fetch }: MailWatch): Promise<Gmail> {
       if (body.result?.isError) throw new Error(`Gmail ${tool}: ${text.slice(0, 300)}`);
       return body.result?.structuredContent ?? JSON.parse(text);
     },
-    close: async () => void (id && (await send("DELETE").then((response) => response.text(), () => undefined))),
+    close,
   };
 }
 
