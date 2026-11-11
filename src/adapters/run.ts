@@ -9,6 +9,9 @@ export type RunOptions = { input?: string; home?: string; clearEnv?: string[]; i
 export type CommandRunner = (command: string[], options?: RunOptions) => Promise<{ code: number; stdout: string; stderr?: string }>;
 
 export const spawnRunner: CommandRunner = async (command, options = {}) => {
+  let started: { kill(signal: NodeJS.Signals): void } | undefined;
+  const forward = (signal: NodeJS.Signals) => started?.kill(signal);
+  if (options.inherit) process.on("SIGINT", forward).on("SIGTERM", forward);
   try {
     const child = Bun.spawn(command, {
       stdout: options.inherit ? "inherit" : "pipe",
@@ -17,18 +20,16 @@ export const spawnRunner: CommandRunner = async (command, options = {}) => {
       env: Object.fromEntries(Object.entries({ ...Bun.env, ...(options.home === undefined ? {} : { HOME: options.home }) }).filter(([name]) => !options.clearEnv?.includes(name))),
       ...(options.signal ? { detached: true } : {}),
     });
-    if (options.inherit) {
-      const forward = (signal: NodeJS.Signals) => child.kill(signal);
-      process.on("SIGINT", forward).on("SIGTERM", forward);
-      try { return { code: await child.exited, stdout: "" }; }
-      finally { process.off("SIGINT", forward).off("SIGTERM", forward); }
-    }
+    started = child;
+    if (options.inherit) return { code: await child.exited, stdout: "" };
     const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
     if (options.signal) return await stoppable(child.pid, child.exited, output, options.signal);
     const [[stdout, stderr], code] = await Promise.all([output, child.exited]);
     return { code, stdout, stderr };
   } catch (error) {
     return { code: 127, stdout: "", stderr: `${command[0]} could not start: ${error instanceof Error ? error.message : String(error)}\n` };
+  } finally {
+    process.off("SIGINT", forward).off("SIGTERM", forward);
   }
 };
 

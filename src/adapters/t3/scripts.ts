@@ -7,7 +7,7 @@ import { sourceOutage } from "../provider-config/adapter.ts";
 import { same } from "../provider-config/fields.ts";
 import type { T3Rpc } from "./port.ts";
 import { readT3Settings } from "./settings.ts";
-import { activeProjects, expandHome, type ShellProject } from "./tasks.ts";
+import { activeProjects, expandHome, realPath, type ShellProject } from "./tasks.ts";
 
 type Script = { id: string; name: string; command: string; icon: string; runOnWorktreeCreate: boolean; async?: boolean };
 type Entry = Record<string, unknown> & { defaultProjectScripts?: Script[] };
@@ -48,6 +48,7 @@ function effectiveScripts(settings: Settings, project: Project): Script[] {
 }
 
 function matches(pattern: string, root: string, home: string) {
+  if (!pattern.includes("*")) return realPath(expandHome(home, pattern)) === realPath(root);
   const parts = resolve(expandHome(home, pattern)).split("/").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", "[^/]*"));
   return new RegExp(`^${parts.join("/")}$`).test(resolve(root));
 }

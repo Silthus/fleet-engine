@@ -1,5 +1,7 @@
 import type { Pack } from "../../../sdk/index.ts";
 
+export const leakedKey = ["sk", "live", "q7Wm2Rt9".repeat(3)].join("_");
+
 export default {
   sdk: 1,
   name: "issued",
@@ -28,8 +30,8 @@ export default {
         credential: async (ctx, node) => {
           if (await ctx.secrets.read("refuse")) throw new Error("the service said no");
           if (await ctx.secrets.read("leak")) {
-            ctx.print("fleet: leaked-key");
-            throw new Error("the issue of leaked-key failed");
+            ctx.print(`fleet: ${leakedKey}`);
+            throw new Error(`the issue of ${leakedKey} failed`);
           }
           ctx.print(`Issuing a key for ${node}`);
           const count = Number((await ctx.secrets.read("count")) ?? "0") + 1;

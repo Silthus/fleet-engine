@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConfigEntry, ModelRow, Owned, PackJob, Plan, T3ProjectScript } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
@@ -533,6 +533,24 @@ describe("T3 project scripts", () => {
     expect(commands.calls.filter((line) => line.startsWith("t3 project add")).length).toBe(1);
   });
 
+  test("knows a script folder reached through a symlink as the project T3 lists under the other path", async () => {
+    for (const [named, listed] of [["app", "real-app"], ["real-app", "app"]] as const) {
+      const home = temp.make("home-");
+      mkdirSync(join(home, "real-app"));
+      symlinkSync(join(home, "real-app"), join(home, "app"));
+      const { server, commands, adapter } = setup({ projects: [join(home, listed)], settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
+      await apply(withScripts([{ ...prepare, projects: [`~/${named}`] }]), { home, adapters: [adapter] });
+      expect(commands.calls.filter((line) => line.startsWith("t3 project add"))).toEqual([]);
+      expect(server.state.settings.projectSettingsOverrides).toEqual({ "project-0": { defaultProjectScripts: [ours] } });
+    }
+    const home = temp.make("home-");
+    mkdirSync(join(home, "real-app"));
+    symlinkSync(join(home, "real-app"), join(home, "app"));
+    const { commands, adapter } = setup({ settings: { projectSettingsFolded: true, projectSettingsOverrides: {} } });
+    await apply(withScripts([{ ...prepare, projects: ["~/app", "~/real-app"] }]), { home, adapters: [adapter] });
+    expect(commands.calls.filter((line) => line.startsWith("t3 project add"))).toEqual([`t3 project add ${home}/real-app`]);
+  });
+
   test("waits while T3 Code is not running, and doctor names the missing script without writing", async () => {
     const home = temp.make("home-");
     const stopped = await apply(withScripts([prepare]), { home, adapters: [setup({ up: false }).adapter] });
@@ -577,6 +595,21 @@ describe("T3 tasks client", () => {
     expect(server.calls).toContainEqual({ tag: "scheduledTasks.subscribe", payload: {} });
     await client.setEnabled("fleet:quality-loop", false);
     expect(server.calls.at(-1)).toEqual({ tag: "scheduledTasks.setEnabled", payload: { id: "fleet:quality-loop", enabled: false } });
+  });
+
+  test("finds a task's project that T3 lists under the other side of a symlink, and lists the task unchanged", async () => {
+    for (const [named, listed] of [["app", "real-app"], ["real-app", "app"]] as const) {
+      const home = temp.make("home-");
+      mkdirSync(join(home, "real-app"));
+      symlinkSync(join(home, "real-app"), join(home, "app"));
+      const server = fakeServer({ projects: [join(home, listed)] });
+      const { run } = runner(server);
+      const job = { ...loop, task: { ...loop.task!, project: `~/${named}` } };
+      const client = t3Tasks(server.server, home, { plan: plan("linux", [], [job]), run });
+      await client.upsert({ ...wantedTask, project: `~/${named}` });
+      expect(server.state.tasks.get("fleet:quality-loop")?.projectId).toBe("project-0");
+      expect(await client.list()).toEqual([{ ...wantedTask, project: `~/${named}` }]);
+    }
   });
 
   test("lists a task whose model or workspace drifted as different, so Jobs updates it", async () => {
