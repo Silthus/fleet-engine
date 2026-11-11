@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { isolateGit, spawnGit } from "../../src/testing/git.ts";
-import { fire, recallHarness, repoCheckout, shownLog } from "./recall-testing.ts";
+import { fire, fireInstalled, recallHarness, repoCheckout, shownLog } from "./recall-testing.ts";
 
 isolateGit();
 const { machineWithMemory } = recallHarness();
@@ -16,7 +16,7 @@ describe("memory recall at session start", () => {
   test("gives Codex the main index and the index of the repo the session works in", async () => {
     const home = await machineWithMemory(notes);
     const cwd = await repoCheckout(home, "git@github.com:someone/notes-app.git");
-    const { code, context } = await fire(home, "codex", "SessionStart", { session_id: "s1", cwd, source: "startup" });
+    const { code, context } = await fireInstalled(home, "codex", "SessionStart", { session_id: "s1", cwd, source: "startup" });
     expect(code).toBe(0);
     expect(context).toContain("- [Ask before deleting](ask-before-deleting.md)");
     expect(context).toContain("- [Flaky sync test](flaky-sync.md)");

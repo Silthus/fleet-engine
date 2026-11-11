@@ -1,11 +1,14 @@
-import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { appendFileSync, cpSync, mkdirSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import type { AvailableSource, Plan } from "../../src/pack/types.ts";
-import { spawnGit, tempDirs } from "../../src/testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "../../src/testing/git.ts";
 import { devbox, engineSource, resolveEngine, skillSources } from "../../src/testing/packs.ts";
-import { guard, type ToolCall } from "./hooks/guards.ts";
+import { check as nameAModel } from "../base/hooks/name-a-model.ts";
+import { dispatch, type HookResult, type RunHook } from "../base/hooks/run.ts";
+import { answer, guard, type ToolCall } from "./hooks/guards.ts";
 
+isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 let engine: AvailableSource;
@@ -16,6 +19,8 @@ const withGuards = (workflows: Record<string, boolean> = { "shell-guards": true 
 
 function homeWith(plan: Plan, settings?: Record<string, unknown>) {
   const home = temp.make("home-");
+  mkdirSync(join(home, ".bun/bin"), { recursive: true });
+  symlinkSync(process.execPath, join(home, ".bun/bin/bun"));
   for (const file of plan.files.filter((item) => item.target.startsWith(".config/fleet/hooks/"))) {
     const target = join(home, file.target);
     mkdirSync(dirname(target), { recursive: true });
@@ -36,17 +41,57 @@ function projectWithTool(tool: string) {
   return project;
 }
 
-async function preToolUse(home: string, provider: "claude" | "codex", call: ToolCall | string, env: Record<string, string> = {}) {
+type Answer = { code: number; refusal: string | undefined };
+
+function refusalOf({ code, stdout }: HookResult): Answer {
+  const specific = stdout.trim() ? JSON.parse(stdout).hookSpecificOutput : undefined;
+  if (specific) expect(specific.permissionDecision).toBe("deny");
+  return { code, refusal: specific?.permissionDecisionReason as string | undefined };
+}
+
+const stdinOf = (call: ToolCall | string) => (typeof call === "string" ? call : JSON.stringify(call));
+
+async function preToolUseInstalled(home: string, provider: "claude" | "codex", call: ToolCall | string, env: Record<string, string> = {}) {
   const child = Bun.spawn(["sh", join(home, ".config/fleet/hooks/run.sh"), provider, "PreToolUse"], {
     env: { ...process.env, HOME: home, ...env },
-    stdin: new Blob([typeof call === "string" ? call : JSON.stringify(call)]),
+    stdin: new Blob([stdinOf(call)]),
     stdout: "pipe",
     stderr: "pipe",
   });
   const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-  const answer = stdout.trim() ? JSON.parse(stdout).hookSpecificOutput : undefined;
-  if (answer) expect(answer.permissionDecision).toBe("deny");
-  return { code, refusal: answer?.permissionDecisionReason as string | undefined };
+  return refusalOf({ code, stdout, stderr: "" });
+}
+
+const hookAnswer = (code: number, stdout = "", stderr = ""): HookResult => ({ code, stdout, stderr });
+
+const hooksInProcess: Record<string, (provider: string, input: string, home: string) => HookResult> = {
+  "guards.ts": (_, input, home) => {
+    const denial = answer(input, home);
+    return hookAnswer(0, denial ? `${JSON.stringify(denial)}\n` : "");
+  },
+  "name-a-model.ts": (provider, input) => {
+    const problem = nameAModel(provider, JSON.parse(input));
+    return problem ? hookAnswer(2, "", `${problem}\n`) : hookAnswer(0);
+  },
+};
+
+async function hookProcess(path: string, provider: string, input: string, home: string): Promise<HookResult> {
+  const child = Bun.spawn([process.execPath, path, provider], { cwd: dirname(dirname(path)), env: { ...process.env, HOME: home }, stdin: new Blob([input]), stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { code, stdout, stderr };
+}
+
+async function preToolUse(home: string, provider: "claude" | "codex", call: ToolCall | string, { guardAsProcess = false } = {}) {
+  const run: RunHook = async (path, hookProvider, input) => {
+    const inProcess = hooksInProcess[basename(path)];
+    if (!inProcess || (guardAsProcess && basename(path) === "guards.ts")) return hookProcess(path, hookProvider, input, home);
+    try {
+      return inProcess(hookProvider, input, home);
+    } catch (error) {
+      return hookAnswer(1, "", String(error));
+    }
+  };
+  return refusalOf(await dispatch(join(home, ".config/fleet/hooks/PreToolUse"), provider, stdinOf(call), run));
 }
 
 const bash = (command: string, cwd = "/"): ToolCall => ({ tool_name: "Bash", tool_input: { command }, cwd });
@@ -90,7 +135,7 @@ describe("the shell guards through the hook dispatcher", () => {
     mkdirSync(join(agentRoot, "etc/fleet"), { recursive: true });
     const owner = `fleet-test-${crypto.randomUUID().slice(0, 8)}`;
     writeFileSync(join(agentRoot, "etc/fleet/git-allowlist"), `acme\n${owner}\n`);
-    const denied = await preToolUse(home, "claude", bash(`gh pr create -R ${owner}/repo --fill`), { FLEET_SYSTEM_ROOT: agentRoot });
+    const denied = await preToolUseInstalled(home, "claude", bash(`gh pr create -R ${owner}/repo --fill`), { FLEET_SYSTEM_ROOT: agentRoot });
     expect(denied.refusal).toContain(`\`${owner}\` is not one of the GitHub owners`);
   });
 
@@ -673,11 +718,21 @@ describe("the Git guard", () => {
     expect(refusal(command)).toBeUndefined();
   });
 
-  async function repo(branch: string, config: Record<string, string | string[]> = {}, agents?: string) {
-    const dir = temp.make("repo-");
+  const templates = tempDirs();
+  afterAll(() => templates.cleanup());
+  const startedRepos = new Map<string, Promise<string>>();
+  async function startedRepo(branch: string) {
+    const dir = templates.make("repo-");
     await spawnGit(dir, "init", "-q", "-b", branch);
     await spawnGit(dir, "commit", "-q", "--allow-empty", "-m", "start");
     await spawnGit(dir, "remote", "add", "origin", "https://github.com/acme/app.git");
+    return dir;
+  }
+
+  async function repo(branch: string, config: Record<string, string | string[]> = {}, agents?: string) {
+    if (!startedRepos.has(branch)) startedRepos.set(branch, startedRepo(branch));
+    const dir = temp.make("repo-");
+    cpSync(await startedRepos.get(branch)!, dir, { recursive: true });
     for (const [key, value] of Object.entries(config)) for (const each of [value].flat()) await spawnGit(dir, "config", "--add", key, each);
     if (agents) writeFileSync(join(dir, "AGENTS.md"), agents);
     return dir;
@@ -703,7 +758,7 @@ describe("the Git guard", () => {
     const dir = await repo(branch, config);
     const home = homeWith(withGuards(), { "guards.person": "Robin" });
     const at = command.includes("REPO") ? "/" : dir;
-    const denied = await preToolUse(home, "claude", bash(command.replace("REPO", dir), at), { GIT_CONFIG_NOSYSTEM: "1" });
+    const denied = await preToolUse(home, "claude", bash(command.replace("REPO", dir), at), { guardAsProcess: true });
     expect(denied.refusal).toContain(why);
     expect(denied.refusal).toContain("ask Robin");
   });
@@ -712,7 +767,7 @@ describe("the Git guard", () => {
     const dir = await repo("feature");
     await spawnGit(dir, "tag", "main");
     const home = homeWith(withGuards(), { "guards.person": "Robin" });
-    const denied = await preToolUse(home, "claude", bash("git push origin 'refs/tags/*:refs/heads/*'", dir), { GIT_CONFIG_NOSYSTEM: "1" });
+    const denied = await preToolUse(home, "claude", bash("git push origin 'refs/tags/*:refs/heads/*'", dir), { guardAsProcess: true });
     expect(denied.refusal).toContain("pushes to `main` of acme/app");
   });
 
@@ -720,7 +775,7 @@ describe("the Git guard", () => {
     const dir = await repo("feature");
     for (const branch of ["b1", "b2", "b3", "b4", "b5"]) await spawnGit(dir, "branch", branch);
     const home = homeWith(withGuards(), { "guards.person": "Robin" });
-    const denied = await preToolUse(home, "claude", bash("git push --force-with-lease origin 'refs/heads/*:refs/heads/*'", dir), { GIT_CONFIG_NOSYSTEM: "1" });
+    const denied = await preToolUse(home, "claude", bash("git push --force-with-lease origin 'refs/heads/*:refs/heads/*'", dir), { guardAsProcess: true });
     expect(denied.refusal).toContain("force-pushes 6 branches at once");
   });
 
@@ -730,7 +785,7 @@ describe("the Git guard", () => {
     const real = Bun.which("git")!;
     writeFileSync(join(bin, "git"), `#!/bin/sh\ncase "$*" in *"config --list"*) exit 1;; esac\nexec ${real} "$@"\n`, { mode: 0o755 });
     const home = homeWith(withGuards(), { "guards.person": "Robin" });
-    const denied = await preToolUse(home, "claude", bash("git push origin main", dir), { GIT_CONFIG_NOSYSTEM: "1", PATH: `${bin}:${process.env.PATH}` });
+    const denied = await preToolUseInstalled(home, "claude", bash("git push origin main", dir), { PATH: `${bin}:${process.env.PATH}` });
     expect(denied.refusal).toContain("could not check");
   });
 
@@ -744,6 +799,6 @@ describe("the Git guard", () => {
   ])("allows %s", async (_, branch, config, agents, settings, command) => {
     const dir = await repo(branch, config, agents);
     const home = homeWith(withGuards(), settings);
-    expect(await preToolUse(home, "claude", bash(command, dir), { GIT_CONFIG_NOSYSTEM: "1" })).toEqual({ code: 0, refusal: undefined });
+    expect(await preToolUse(home, "claude", bash(command, dir), { guardAsProcess: true })).toEqual({ code: 0, refusal: undefined });
   });
 });

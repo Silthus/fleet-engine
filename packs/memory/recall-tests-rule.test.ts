@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isolateGit } from "../../src/testing/git.ts";
-import { type Provider, bash, fire, notes, recallHarness, shownLog } from "./recall-testing.ts";
+import { type Provider, bash, fire, fireInstalled, notes, recallHarness, shownLog } from "./recall-testing.ts";
 
 isolateGit();
 const { machineWithMemory } = recallHarness();
@@ -87,7 +87,7 @@ describe("the Tests rule before a test edit", () => {
 
   test("shows the rule for a singular test folder", async () => {
     const home = await machineWithGuide();
-    expect((await fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...write("test/helpers.ts") })).context).toContain(testsRule);
+    expect((await fireInstalled(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...write("test/helpers.ts") })).context).toContain(testsRule);
   });
 
   test("skips a Tests heading inside a code fence, and ends the section at the next level-one or level-two heading", async () => {

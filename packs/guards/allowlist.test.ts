@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
@@ -38,13 +38,19 @@ function newKey(dirs: Dirs = temp) {
   return { key, publicKey: readFileSync(`${key}.pub`, "utf8") };
 }
 
+type MachineDirs = { home: string; root: string; profileDir: string };
+
 function machineWith(owners: string, signerKey: string, dirs: Dirs = temp) {
   const home = dirs.make("home-");
-  const root = dirs.make("root-");
-  const profileDir = dirs.make("profile-");
   const settings: Record<string, unknown> = { "guards.person": "Robin", "guards.owners": owners, "guards.signers": signerKey };
   mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
   writeFileSync(join(home, ".local/state/fleet/settings.json"), `${JSON.stringify(settings, null, 2)}\n`);
+  mkdirSync(join(home, "bin"));
+  writeFileSync(join(home, "bin/ssh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> ${join(home, "ssh.log")}\nexit 1\n`, { mode: 0o755 });
+  return machineAt({ home, root: dirs.make("root-"), profileDir: dirs.make("profile-") }, settings, dirs);
+}
+
+function machineAt({ home, root, profileDir }: MachineDirs, settings: Record<string, unknown>, dirs: Dirs) {
   const lines: string[] = [];
   const fleet = (...args: string[]) => {
     lines.length = 0;
@@ -62,8 +68,6 @@ function machineWith(owners: string, signerKey: string, dirs: Dirs = temp) {
   const install = () => run(["sh", join(staged, "install.sh"), "install", root]);
   const sshLog = join(home, "ssh.log");
   const ssh = join(home, "bin/ssh");
-  mkdirSync(dirname(ssh));
-  writeFileSync(ssh, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${sshLog}\nexit 1\n`, { mode: 0o755 });
   const lsRemote = async (url: string) => {
     rmSync(sshLog, { force: true });
     proxied.length = 0;
@@ -89,8 +93,10 @@ function machineWith(owners: string, signerKey: string, dirs: Dirs = temp) {
     const { code, stderr, network } = await lsRemote(url);
     return { refused: code !== 0 && stderr.includes("not on the signed Git allowlist. Stop and ask Robin."), network };
   };
-  return { home, root, settings, fleet, sign, staged, install, lsRemote, refusedByFleet };
+  return { home, root, profileDir, settings, fleet, sign, staged, install, lsRemote, refusedByFleet };
 }
+
+type Machine = ReturnType<typeof machineAt>;
 
 function installed(owners: string, dirs: Dirs = temp) {
   const { key, publicKey } = newKey(dirs);
@@ -99,6 +105,32 @@ function installed(owners: string, dirs: Dirs = temp) {
   machine.fleet("stage", machine.staged);
   expect(machine.install().code).toBe(0);
   return machine;
+}
+
+const prepared = tempDirs();
+afterAll(() => prepared.cleanup());
+const installedMachines = new Map<string, Machine>();
+
+function installedCopy(owners: string) {
+  if (!installedMachines.has(owners)) installedMachines.set(owners, installed(owners, prepared));
+  const source = installedMachines.get(owners)!;
+  const copies: MachineDirs = { home: temp.make("home-"), root: temp.make("root-"), profileDir: temp.make("profile-") };
+  const moves = (["home", "root", "profileDir"] as const).map((dir) => [source[dir], copies[dir]] as const);
+  for (const [from, to] of moves) cpSync(from, to, { recursive: true, verbatimSymlinks: true });
+  for (const [, to] of moves) {
+    for (const entry of readdirSync(to, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const path = join(entry.parentPath, entry.name);
+      const text = readFileSync(path, "utf8");
+      const moved = moves.reduce((result, [from, into]) => result.replaceAll(from, into), text);
+      if (moved !== text) writeFileSync(path, moved);
+    }
+  }
+  const systemConfig = readFileSync(join(copies.root, "etc/gitconfig"), "utf8");
+  expect(systemConfig).toContain(join(copies.root, "etc/fleet/git-allowlist.gitconfig"));
+  expect(systemConfig).not.toContain(source.root);
+  expect(readFileSync(join(copies.root, "etc/fleet/git-allowlist.gitconfig"), "utf8")).toContain(join(copies.root, "usr/local/bin/fleet-git-ssh"));
+  return machineAt(copies, JSON.parse(readFileSync(join(copies.home, ".local/state/fleet/settings.json"), "utf8")), temp);
 }
 
 const contents = (dir: string) =>
@@ -215,7 +247,7 @@ describe("fleet guards allowlist", () => {
     ["the SSH check is gone", (root: string) => rmSync(join(root, "usr/local/bin/fleet-git-ssh"))],
     ["the pinned signers hold another key", (root: string) => writeFileSync(join(root, "etc/fleet/git-allowlist-signers"), `fleet-allowlist namespaces="fleet-git-allowlist" ${newKey().publicKey}`)],
   ])("the doctor probe fails when %s", (_, breakInstall) => {
-    const machine = installed("acme");
+    const machine = installedCopy("acme");
     expect(machine.fleet("--check").code).toBe(0);
     breakInstall(machine.root);
     expect(machine.fleet("--check").code).toBe(1);
@@ -223,7 +255,7 @@ describe("fleet guards allowlist", () => {
   });
 
   test("the doctor probe ignores the Git config of the repository it runs in", () => {
-    const machine = installed("acme");
+    const machine = installedCopy("acme");
     const rules = join(machine.root, "etc/fleet/git-allowlist.gitconfig");
     const saved = join(temp.make("saved-"), "rules.gitconfig");
     writeFileSync(saved, readFileSync(rules, "utf8"));
@@ -300,7 +332,7 @@ describe("fleet guards allowlist", () => {
   });
 
   test("the root step turns the list off again", async () => {
-    const machine = installed("acme");
+    const machine = installedCopy("acme");
     expect(run(["sh", join(machine.staged, "install.sh"), "remove", machine.root])).toMatchObject({ code: 0, stdout: "Git allowlist: off." });
     expect(await machine.refusedByFleet("https://github.com/evil/app")).toEqual({ refused: false, network: ["CONNECT github.com:443 HTTP/1.1"] });
     expect(machine.fleet("--check").code).toBe(1);

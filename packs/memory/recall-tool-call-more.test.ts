@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isolateGit, spawnGit } from "../../src/testing/git.ts";
-import { bash, fire, fleet, notes, proofTraps, recallHarness, shownLog } from "./recall-testing.ts";
+import { bash, fire, fireInstalled, fleet, notes, proofTraps, recallHarness, shownLog } from "./recall-testing.ts";
 
 isolateGit();
 const { machineWithMemory, temp } = recallHarness();
@@ -46,7 +46,7 @@ describe("memory recall on a tool call", () => {
 
   test("shows a note once when parallel calls name its trigger at the same time", async () => {
     const home = await machineWithMemory(notes);
-    const calls = await Promise.all(Array.from({ length: 6 }, () => fire(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })));
+    const calls = await Promise.all(Array.from({ length: 6 }, () => fireInstalled(home, "claude", "PreToolUse", { session_id: "s1", cwd: home, ...bash("fleet proof 12") })));
     expect(calls.filter((call) => call.context.includes("Pass full SHAs"))).toHaveLength(1);
     expect(shownLog(home, "s1")).toHaveLength(1);
   });

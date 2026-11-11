@@ -66,7 +66,7 @@ export function guard(call: ToolCall, home: string, root = "/"): Denial | undefi
   }
 }
 
-function answer(input: string, home: string): Denial | undefined {
+export function answer(input: string, home: string): Denial | undefined {
   let call: ToolCall;
   try {
     call = JSON.parse(input);
