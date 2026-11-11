@@ -85,6 +85,13 @@ test("commits that change only test files carry the final read, and a final read
   expect((await pr.fleet("gate")).code).toBe(0);
   expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${secondTest}.json`), "utf8"))).toMatchObject({ commit: secondTest, from: reviewed, quiet: [secondTest, firstTest], reason: "test-only delta" });
   await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed)).rejects.toThrow(`HEAD needs no final read: final read carried from ${reviewed.slice(0, 7)}: test-only delta`);
+
+  await pr.git("config", "color.grep", "always");
+  await pr.commit("helpers.test.ts", "export const names = [\"a\", \"b\"];\n");
+  await pr.commit("feature.test.ts", "import { names } from \"./helpers.test.ts\";\nfor (const name of names) expect(greet(name)).toBe(`hi ${name}`);\n");
+  const helperOnly = await pr.commit("helpers.test.ts", "export const names = [\"a\", \"b\", \"c\"];\n");
+  expect((await pr.fleet("gate")).output).toContain(`review: final read carried from ${reviewed.slice(0, 7)}: test-only delta`);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "carried", `${helperOnly}.json`), "utf8"))).toMatchObject({ commit: helperOnly, from: reviewed });
   expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--standing", "The test pins a rule the code must keep.")).code).toBe(0);
 });
 
@@ -93,7 +100,11 @@ test("a comment, a test folder, a deleted test, a code change beside a test, a t
   await pr.commit("feature.ts", "export const limit = 3;\n");
   await pr.commit("feature.test.ts", "expect(limit).toBe(3);\n");
   await pr.commit("limits.test.ts", "export const most = 3;\n");
-  await pr.commit("app.ts", "import { most } from \"./limits.test.ts\";\nconsole.log(most);\n");
+  mkdirSync(join(pr.repository, "tests"));
+  await pr.commit("tests/deep.test.ts", "export const deepest = 5;\n");
+  await pr.commit("tests/inner.test.ts", "export const inner = 1;\n");
+  await pr.commit("tests/wrapper.test.ts", "export { inner } from \"./inner.test.ts\";\n");
+  await pr.commit("app.ts", "import { most } from \"./limits.test.ts\";\nimport { deepest } from \"./tests/deep.test.ts\";\nimport { inner } from \"./tests/wrapper.test.ts\";\nconsole.log(most, deepest, inner);\n");
   const reviewed = await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "fixture");
   const changes: [string, () => Promise<unknown>][] = [
@@ -104,6 +115,7 @@ test("a comment, a test folder, a deleted test, a code change beside a test, a t
     ["a test with a code change", async () => { writeFileSync(join(pr.repository, "feature.ts"), "export const limit = 4;\n"); writeFileSync(join(pr.repository, "feature.test.ts"), "expect(limit).toBe(4);\n"); await pr.git("commit", "-q", "-a", "-m", "Raise the limit"); }],
     ["a new symlinked test", async () => { symlinkSync("feature.ts", join(pr.repository, "linked.test.ts")); await pr.git("add", "linked.test.ts"); await pr.git("commit", "-q", "-m", "Link a test"); }],
     ["a test that code imports", () => pr.commit("limits.test.ts", "export const most = 0;\n")],
+    ["a test that code imports through another test", () => pr.commit("tests/inner.test.ts", "export const inner = 0;\n")],
     ["a test whose name ends in a line break", () => pr.commit("policy.test.ts\n\n", "export const allowed = true;\n")],
     ["a symlink", async () => { rmSync(join(pr.repository, "feature.test.ts")); symlinkSync("feature.ts", join(pr.repository, "feature.test.ts")); await pr.git("add", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Link the test"); }],
   ];
@@ -115,10 +127,13 @@ test("a comment, a test folder, a deleted test, a code change beside a test, a t
     await pr.git("commit", "-q", "-a", "-m", "Bump the dependency");
   }]);
 
+  const fromTests = (name: string) => name === "a test that code imports from outside the folder fleet runs in";
+  changes.push(["a test that code imports from outside the folder fleet runs in", () => pr.commit("tests/deep.test.ts", "export const deepest = 0;\n")]);
+
   for (const [name, change] of changes) {
     await pr.git("reset", "-q", "--hard", reviewed);
     await change();
-    const gate = await pr.fleet("gate");
+    const gate = fromTests(name) ? await pr.fleetIn(join(pr.repository, "tests"), "gate") : await pr.fleet("gate");
     expect([name, gate.code]).toEqual([name, 1]);
     expect(gate.output).toContain(`review: HEAD not reviewed, last review covered ${reviewed.slice(0, 7)}`);
   }

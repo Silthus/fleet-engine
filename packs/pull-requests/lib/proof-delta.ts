@@ -24,10 +24,19 @@ export type CommitReader = {
 const importName = (path: string) => /_test\.go$/.test(path) || path.endsWith(".snap") ? undefined : path.split("/").at(-1)!.replace(/\.[cm]?[jt]sx?$|\.py$/, "");
 
 function importedByCode(reader: CommitReader, commit: string, path: string) {
-  const name = importName(path);
-  if (name === undefined) return false;
-  const naming = reader.filesNaming(commit, name);
-  return naming === undefined || naming.some((file) => !isTestFile(file));
+  const seen = new Set([path]);
+  const queue = [path];
+  while (queue.length) {
+    const name = importName(queue.shift()!);
+    if (name === undefined) continue;
+    const naming = reader.filesNaming(commit, name);
+    if (naming === undefined) return true;
+    for (const file of naming) {
+      if (!isTestFile(file)) return true;
+      if (!seen.has(file)) { seen.add(file); queue.push(file); }
+    }
+  }
+  return false;
 }
 
 export function quietStep(reader: CommitReader, commit: string): QuietStep | undefined {
@@ -60,11 +69,11 @@ export function gitCommitReader(run: Run): CommitReader {
   return {
     parents: (commit) => output(["git", "rev-list", "--parents", "-n", "1", commit])?.trim().split(" ").slice(1),
     changes: (from, to) => {
-      const raw = output(["git", "diff", "--raw", "--no-renames", "--no-relative", "--no-abbrev", "--ignore-submodules=none", "--no-ext-diff", "-z", from, to]);
+      const raw = output(["git", "diff", "--raw", "--no-renames", "--no-relative", "--no-abbrev", "--ignore-submodules=none", "--no-ext-diff", "--no-color", "-z", from, to]);
       return raw === undefined ? undefined : parseRawDiff(raw);
     },
     filesNaming: (commit, text) => {
-      const result = run(["git", "grep", "-z", "-l", "-F", "-e", text, commit, "--"]);
+      const result = run(["git", "grep", "--no-color", "-z", "-l", "-F", "-e", text, commit, "--", ":(top)"]);
       if (result.code === 1 && !result.stdout) return [];
       if (result.code !== 0) return undefined;
       return result.stdout.split("\0").filter(Boolean).map((hit) => hit.slice(commit.length + 1));
