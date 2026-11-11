@@ -22,7 +22,7 @@ import { credentialName, packContext, secretStore, type Clock } from "./runner/c
 import { onHub } from "./hub/ssh.ts";
 import { drift } from "./reconciler/drift.ts";
 import { spawnRunner, type CommandRunner } from "./adapters/run.ts";
-import { become, type Become } from "./runner/become.ts";
+import { become, canBecome, type Become } from "./runner/become.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
 export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; fail?: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string; stdin?: () => ReadableStream<Uint8Array>; capture?: CommandRunner; become?: Become };
@@ -162,7 +162,7 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
   const run = loaded?.code?.commands[name];
   const typed = ["fleet", name, ...args];
   const repairs = plan.human.some((step) => step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
-  if (!run && !repairs && options.become) options.become(["bun", command.path, ...args], { ...Bun.env, ...packEnvironment(plan, options) });
+  if (!run && !repairs && options.become) return options.become(["bun", command.path, ...args], { ...Bun.env, ...packEnvironment(plan, options) });
   const exit = run ? await inPack(plan, loaded!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
   return exit === 0 && repairs ? applyProfile(plan.machine.profileDir!, options) : exit;
 }
@@ -374,6 +374,6 @@ if (import.meta.main) {
       process.exit(130);
     });
   }
-  const code = await main(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), engineRoot, platform: process.platform, env: Bun.env, print: (line) => console.log(line), fail: (line) => console.error(line), become });
+  const code = await main(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), engineRoot, platform: process.platform, env: Bun.env, print: (line) => console.log(line), fail: (line) => console.error(line), ...(canBecome() ? { become } : {}) });
   process.exit(code);
 }

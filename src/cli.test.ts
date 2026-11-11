@@ -283,7 +283,7 @@ describe("fleet routing", () => {
     writeFileSync(join(bin, "systemd-run"), `#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done; shift; exec "$@"\n`, { mode: 0o755 });
     const env = { ...Bun.env, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}` };
     const stops = join(home, "stops");
-    const job = Bun.spawn(["sh", join(engine, "fleet"), "heavy", "--", "sh", "-c", `trap 'kill $tail; echo TERM >> "$0"; exit 143' TERM; echo $$; tail -f /dev/null & tail=$!; wait $tail`, stops], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true });
+    const job = Bun.spawn(["sh", join(engine, "fleet"), "heavy", "--", "sh", "-c", `tail -f /dev/null 9>&- & tail=$!; trap 'kill $tail; echo TERM >> "$0"; exit 143' TERM; echo $$; wait $tail`, stops], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe", detached: true });
     try {
       const reader = job.stdout.getReader();
       let said = "";

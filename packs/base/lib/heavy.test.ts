@@ -214,7 +214,7 @@ onLinux("frees the slot when a stop reaches the job's process group, with every 
   }
 });
 
-const recordsStop = `trap 'kill $tail; echo TERM >> "$0"; exit 143' TERM; echo $$; tail -f /dev/null & tail=$!; wait $tail`;
+const recordsStop = `tail -f /dev/null 9>&- & tail=$!; trap 'kill $tail; echo TERM >> "$0"; exit 143' TERM; echo $$; wait $tail`;
 
 onLinux("runs the job as the fleet heavy process itself, so a stop sent only to that process reaches the job and frees the slot", async () => {
   const box = machine();
@@ -240,6 +240,27 @@ onLinux("lets a writer in the job end on a closed pipe, as it does outside fleet
   expect(await job.child.exited).toBe(0);
   await job.err.until("\n");
   expect(job.err.text()).toEndWith("\n141\n");
+});
+
+onLinux("runs the job on a Bun that cannot replace its own process, as before", async () => {
+  const { bin } = stubs();
+  const older = join(bin, "older-bun.ts");
+  writeFileSync(older, "delete (process as { execve?: unknown }).execve;\n");
+  const home = temp.make("home-");
+  const { FLEET_HEAVY_SLOTS: _, ...inherited } = Bun.env;
+  const env = { ...inherited, HOME: home, XDG_RUNTIME_DIR: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_SETTINGS: JSON.stringify(roomy) };
+  const child = Bun.spawn(["bun", "--preload", older, join(import.meta.dir, "../commands/heavy.ts"), "--", "sh", "-c", "echo built"], { env, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ code: await child.exited, stdout }).toEqual({ code: 0, stdout: "built\n" });
+  expect(stderr).not.toContain("cannot run");
+});
+
+onLinux("finds sh where the caller has no PATH, as a spawned command does", async () => {
+  const { PATH: _, ...withoutPath } = Bun.env;
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "../commands/heavy.ts"), "--help"], { env: { ...withoutPath, FLEET_SETTINGS: JSON.stringify(roomy) }, stdout: "pipe", stderr: "pipe" });
+  const [stdout] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(await child.exited).toBe(0);
+  expect(stdout).toStartWith("Usage: fleet heavy");
 });
 
 onLinux("takes a waiting job off the queue when a stop is sent only to its fleet heavy process", async () => {
