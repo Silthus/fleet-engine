@@ -279,7 +279,6 @@ async function linkBothWays(host: string, box: Machine, context: DevboxContext) 
 
 export type HubContext = { terminal: Terminal; machine: Machine };
 
-/** The steps around a devbox's own steps that fleet devbox add also runs: list it in the profile and have the hub take it first, and have the hub link it last. */
 export function hubSteps(host: string, context: HubContext & { profileDir: string | undefined; took: Map<string, boolean> }): { register: Step; link: Step } {
   const hubOf = async () => {
     const hub = context.profileDir ? (await loadProfile(context.profileDir)).hub : undefined;
