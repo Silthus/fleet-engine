@@ -50,11 +50,11 @@ export type TimingsLog = {
   usable(at: number): Promise<void>;
 };
 
-/** Continues the record of a setup that is not usable yet, or starts a new one at the start of get.sh, or now. */
-export function openTimings(home: string, now: number): TimingsLog {
+/** Continues the record of a setup that is not usable yet, or of an unfinished setup that this run resumes. Otherwise it starts a new one at the start of get.sh, or now. */
+export function openTimings(home: string, now: number, resumed = false): TimingsLog {
   const path = timingsPath(home);
   const earlier = read(path);
-  let timings: Timings = earlier && earlier.usable === null ? earlier : fresh(home, now);
+  let timings: Timings = earlier && (earlier.usable === null || resumed) ? earlier : fresh(home, now);
   let wrote = timings === earlier;
   const save = async () => {
     try {
@@ -71,7 +71,7 @@ export function openTimings(home: string, now: number): TimingsLog {
       await save();
     },
     async usable(at) {
-      if (!wrote) return;
+      if (!wrote || timings.usable) return;
       timings = { ...timings, usable: iso(at), usableSeconds: seconds(at - Date.parse(timings.started)) };
       await save();
     },

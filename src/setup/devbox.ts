@@ -53,6 +53,10 @@ export type DevboxContext = {
   terminal: Terminal;
   machine: Machine;
   nonInteractive: boolean;
+  /** Waits for browser sign-ins although it asks nothing, as fleet setup --chat does. */
+  chat?: boolean;
+  /** Counts a wait for the person in the setup timings. */
+  waited?(): void;
   plan: AiPlan;
   models: ModelRow[];
   /** The profile's clone URL and the engine ref it pins, so the box runs what this machine runs. */
@@ -100,7 +104,7 @@ export function devboxQuestion(context: { terminal: Terminal; home: string; flag
 /** The steps that make an SSH host a devbox: install, sign in, apply the profile, and link T3 Code both ways. */
 export function devboxSteps(host: string, context: DevboxContext): Step[] {
   const box = overSsh(context.machine, host);
-  const human: HumanContext = { terminal: context.terminal, machine: box, nonInteractive: context.nonInteractive };
+  const human: HumanContext = { terminal: context.terminal, machine: box, nonInteractive: context.nonInteractive, chat: context.chat, waited: context.waited };
   const on = (signIn: SignIn): SignIn => Object.assign(Object.create(signIn) as SignIn, { id: `devbox:${host}:${signIn.id}`, title: `${signIn.title} on ${host}` });
   const chatgpt = chatgptSignIn(box, context.models);
   return [
@@ -230,6 +234,7 @@ function claudeOnBox(host: string, box: Machine, context: DevboxContext): Step {
       const { terminal } = context;
       if (await signIn.probe()) return terminal.print(`  ✓ ${title}: already done`);
       if (context.nonInteractive) return "unanswered";
+      context.waited?.();
       terminal.print(`▶ ${title}  (step needs you, about 1 min)`);
       terminal.print("  Open the link it prints, sign in, then paste the code back here.");
       terminal.print(`  $ ssh -t ${host} claude auth login`);

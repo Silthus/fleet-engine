@@ -37,4 +37,17 @@ describe("fleet apply --skip", () => {
     expect(existsSync(join(home, "box.txt"))).toBe(true);
     expect(existsSync(join(home, "codex.txt"))).toBe(true);
   });
+
+  test("keeps a step it skips although its pack left the profile, so the next apply undoes it", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithTools();
+    const profile = profileDir(["tools"]);
+    expect(await run(["apply", "--profile", profile], home, engine)).toBe(0);
+    const file = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
+    writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...file, packs: [] }));
+    expect(await run(["apply", "--skip", "tools/box"], home, engine)).toBe(0);
+    expect(existsSync(join(home, "box.txt"))).toBe(true);
+    expect(await run(["apply"], home, engine)).toBe(0);
+    expect(existsSync(join(home, "box.txt"))).toBe(false);
+  });
 });

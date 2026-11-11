@@ -208,11 +208,20 @@ step 2, so the recommendation is ready in the same call.
 The picks from the page line `Mac plus a hub and a node` means one node.
 Below, "the nodes" means as many as they chose.
 
-T3 Code on the Mac starts new threads on the nodes, not on the Mac or the
-hub: each `fleet devbox add` of a node sets this up. A free T3 Connect
-account links up to 3 machines: the hub and each node use one, and the Mac
-uses one when T3 Connect is on there. An answer that names three or more
-nodes needs a paid T3 Chat plan: say so in the option.
+By default, T3 Code on the Mac starts new threads on the nodes, not on the
+Mac or the hub: each `fleet devbox add` of a node sets this up. A choice they
+already made in T3 Code's load balancing settings stays.
+
+**T3 Connect's limit.** A free T3 Connect account links up to 3 machines.
+Each hub and node uses one, the Mac uses one when T3 Connect is on there, and
+so does every other machine already on their account, such as an old hub
+that they keep until its replacement works. Machines reached only over SSH or
+paired directly use none. Before step 5 creates anything, count the machines
+on their account, from the T3 Connect page in T3 Code's account menu, plus
+the new ones. When the count is over 3, say so and let them choose: fewer
+nodes, removing a machine they no longer use from that page, or a paid T3
+Chat plan, which they link in T3 Code's account menu under **T3 Chat** →
+**Link T3 Chat** (up to 10 machines with Pro).
 
 The Mac is ready to use first in both cases. With a hub and nodes, step 5
 creates them while the Mac is set up, and step 9 sets them up after.
@@ -381,7 +390,9 @@ you remove anything:
    host out of their profile, unlinks it in T3 Code here, and drops it from
    load balancing. The hub stops its tunnel, disk watch, and link to that
    host at its next `fleet update`. An old hub can go only after
-   `fleet hub here` named the new one.
+   `fleet hub here` named the new one. When it stops with an error, fix what
+   it names and run it again. When it says T3 Code here has no link it can
+   find, remove the old machine in T3 Code's Settings → Environments.
 2. Delete the old workspace with `coder delete <old name>`.
 
 When devboxes were new to them, explain the hub first: it is the one devbox
@@ -529,8 +540,9 @@ made, replace the early workspaces: see "Clean up what you replace".
    ssh coder.<hub> 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet peers link coder.<node>'
    ```
 
-   Its last line says which machines T3 Code on the Mac starts new threads
-   on. Ask them to quit and reopen T3 Code, so it reads that.
+   The last line of `fleet devbox add` says which machines T3 Code on the
+   Mac starts new threads on. After the last node, ask them to quit and
+   reopen T3 Code once, so it reads that.
 10. **Check.** Run `fleet doctor` on the Mac, and on each workspace over SSH.
     A command over SSH does not read the workspace's login files, so it sets
     the `PATH` itself:

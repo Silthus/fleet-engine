@@ -111,34 +111,54 @@ describe("setup timings", () => {
   });
 });
 
+function fakeTime() {
+  let now = 0;
+  const timers = new Set<{ ms: number; next: number; tick: () => void }>();
+  return {
+    clock: { now: () => now },
+    every(ms: number, tick: () => void) {
+      const timer = { ms, next: now + ms, tick };
+      timers.add(timer);
+      return () => void timers.delete(timer);
+    },
+    advance(seconds: number) {
+      const end = now + seconds * 1000;
+      for (let due = [...timers].filter((timer) => timer.next <= end).sort((a, b) => a.next - b.next)[0]; due; due = [...timers].filter((timer) => timer.next <= end).sort((a, b) => a.next - b.next)[0]) {
+        now = due.next;
+        due.next += due.ms;
+        due.tick();
+      }
+      now = end;
+    },
+  };
+}
+
 describe("live progress", () => {
-  test("a long step that runs by itself says every 15 s that it still runs, and how long", async () => {
+  const step = (run: () => Promise<void>): Step => ({ id: "apply", title: "Set up this Mac", minutes: 3, kind: "auto", run });
+
+  test("a long step that runs by itself says every 15 s that it still runs, and how long, and goes quiet when it ends", async () => {
     const io = scripted([]);
-    let now = 0;
-    const ticks: Array<() => void> = [];
-    let release = () => {};
-    const slow: Step = {
-      id: "apply",
-      title: "Set up this Mac",
-      minutes: 3,
-      kind: "auto",
-      run: () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-          for (const seconds of [15, 30, 75]) (now = seconds * 1000), ticks[0]!();
-          release();
-        }),
-    };
-    const result = await runSteps(() => [slow], {
-      terminal: io.terminal,
-      done: [],
-      save: async () => {},
-      clock: { now: () => now },
-      every: (ms, tick) => (expect(ms).toBe(15_000), ticks.push(tick), () => ticks.splice(0)),
-    });
+    const time = fakeTime();
+    const result = await runSteps(() => [step(async () => time.advance(75))], { terminal: io.terminal, done: [], save: async () => {}, clock: time.clock, every: time.every });
     expect(result.finished).toBe(true);
+    const lines = io.output().split("\n").filter((line) => line.startsWith("  … "));
+    expect(lines).toEqual([15, 30, 45, 60].map((seconds) => `  … Set up this Mac: still running, ${seconds < 60 ? `${seconds}s` : "1m 0s"} so far`).concat("  … Set up this Mac: still running, 1m 15s so far"));
+    const after = io.output();
+    time.advance(60);
+    expect(io.output()).toBe(after);
+  });
+
+  test("goes quiet when the step fails", async () => {
+    const io = scripted([]);
+    const time = fakeTime();
+    const failing = step(async () => {
+      time.advance(15);
+      throw new Error("apply failed");
+    });
+    await expect(runSteps(() => [failing], { terminal: io.terminal, done: [], save: async () => {}, clock: time.clock, every: time.every })).rejects.toThrow("apply failed");
     expect(io.output()).toContain("  … Set up this Mac: still running, 15s so far");
-    expect(io.output()).toContain("  … Set up this Mac: still running, 1m 15s so far");
-    expect(ticks).toEqual([]);
+    const after = io.output();
+    time.advance(60);
+    expect(io.output()).toBe(after);
   });
 });

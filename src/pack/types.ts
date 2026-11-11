@@ -198,7 +198,7 @@ export type Profile = ProfileFile & { dir: string; aboutMe?: string };
 export type SetupProgress = { done: string[]; draft?: Partial<ProfileFile> };
 
 /** coder: this machine is a Coder workspace. Saved once seen, because cron and services lack the Coder variables. name: this machine's SSH name, which the profile's hub names. */
-export type MachineFile = { schema: 1; role: MachineRole; name?: string; coder?: true; profileDir?: string; devboxes?: string[]; setup?: SetupProgress };
+export type MachineFile = { schema: 1; role: MachineRole; name?: string; coder?: true; profileDir?: string; devboxes?: string[]; t3Environments?: Record<string, string>; setup?: SetupProgress };
 
 import type { Action, DesiredFile } from "../files/install.ts";
 import type { Context } from "../sdk/index.ts";
