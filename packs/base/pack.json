@@ -215,11 +215,11 @@
       "id": "nightly-updates",
       "name": "Nightly updates",
       "default": true,
-      "sentence": "Fleet, your profile, Claude Code, and Codex update themselves every night. A failed update tries again each hour until 05:47 UTC.",
+      "sentence": "Fleet, your profile, Claude Code, Codex, their plugins, and T3 Code update themselves every night. T3 Code waits until no agent turn runs. A failed update tries again each hour until 05:47 UTC.",
       "moment": {
         "time": "03:17",
         "title": "Everything updates while you sleep",
-        "body": "Fleet moves to its newest release, pulls your profile, applies it, and updates the agent CLIs. In the morning every machine matches.",
+        "body": "Fleet moves to its newest release, pulls your profile, applies it, and updates the agent CLIs, their plugins, and T3 Code. In the morning every machine matches.",
         "night": true
       }
     },
