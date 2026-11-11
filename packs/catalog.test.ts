@@ -50,16 +50,13 @@ describe("the catalog", () => {
     }
   });
 
-  test("Everything names every pack, on the first machine or once a hub runs, and each preset's hub packs and hub workflows exist", () => {
+  test("Everything names every pack, on the first machine or once a hub runs, and each preset's hub packs need a hub", () => {
     const everything = presets.find((preset) => preset.id === "everything")!;
     const optional = manifests.map((manifest) => manifest.name).filter((name) => name !== "base");
     expect([...everything.packs, ...(everything.hubPacks ?? [])].toSorted()).toEqual(optional.toSorted());
     for (const preset of presets) {
-      const later = [...preset.packs, ...(preset.hubPacks ?? [])];
       expect([preset.id, (preset.hubPacks ?? []).filter((name) => !needsHubPacks.includes(name))]).toEqual([preset.id, []]);
       expect([preset.id, preset.packs.filter((name) => needsHubPacks.includes(name))]).toEqual([preset.id, []]);
-      const offered = workflows().filter((workflow) => later.includes(workflow.pack)).map((workflow) => workflow.id);
-      expect([preset.id, Object.keys(preset.hubWorkflows ?? {}).filter((id) => !offered.includes(id))]).toEqual([preset.id, []]);
     }
   });
 

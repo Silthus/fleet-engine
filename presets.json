@@ -21,7 +21,6 @@
     "blurb": "You get every pack that a Mac can run: Everyday, shared memory, guards, and Slack. With a hub and a node, you also get the Hub, MCP gateway, and Recovery packs, Slack threads, and the nightly loops.",
     "packs": ["pull-requests", "orchestration", "communication", "memory", "guards", "slack"],
     "hubPacks": ["hub", "mcp-gateway", "recovery"],
-    "hubWorkflows": { "slack-thread": true, "own-account-balancing": true, "provider-recovery": true },
     "workflows": { "quality-loop": true, "signal-loop": true, "pr-digest": true, "shell-guards": true, "package-age": true }
   }
 ]
