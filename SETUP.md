@@ -68,10 +68,11 @@ Ask "Mac only, or Mac plus a hub and a node?", with these options:
   workflows that run on a Mac, run on this Mac. Agents stop when the Mac
   sleeps. Workflows that need an always-on machine, such as the loops and
   the PR digest, wait until a node runs. A hub and a node can come later.
-- **Mac plus a hub and a node.** Two Linux devboxes in the cloud: one **hub**
-  with a 200 GB disk, which keeps your machines linked and watches
-  their disks, and one **node** with a 500 GB disk, where threads do the work.
-  Add more nodes later, when the load grows.
+- **Mac plus a hub and a node.** Two Linux devboxes in the cloud that stay
+  on while the Mac sleeps: one **hub** with a 200 GB disk, kept for the Hub
+  pack, which later links your machines and watches their disks, and one
+  **node** with a 500 GB disk, where threads do the work. Add more nodes
+  later, when the load grows.
 
 Use their answer. Set up the Mac first in both cases.
 
@@ -132,7 +133,7 @@ notes of the packs they picked.
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Always | None |
 | `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always | `packs/guards/SETUP.md` |
 | `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always | `packs/slack/SETUP.md` |
-| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | In step 9 | `packs/hub/SETUP.md` |
+| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | Later, once the hub and the node run | None |
 | `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | Later, once the hub runs | None |
 
 ## 7. Run setup with their answers
@@ -233,16 +234,19 @@ creates something, show the command and ask whether to go on.
    Before it opens, explain its sign-ins from the table in step 4 of
    [Getting started](https://github.com/Silthus/fleet-engine/blob/main/docs/getting-started.md).
    Ask them to tell you when it prints that the host is their devbox now.
-7. **Name the hub.** Run `fleet hub here` on it, over SSH:
+7. **Check.** Run `fleet doctor` on the Mac, and on each workspace over SSH.
+   A command over SSH does not read the workspace's login files, so it sets
+   the `PATH` itself:
 
    ```sh
-   ssh coder.<hub> 'bash -lc "fleet hub here coder.<hub>"'
+   ssh coder.<name> 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet doctor'
    ```
 
-8. **Hub pack.** Read `packs/hub/SETUP.md` in the engine and follow it.
-9. **Check.** Run `fleet doctor` on the Mac, and on each workspace with
-   `ssh coder.<name> 'bash -lc "fleet doctor"'`. Explain each line as in
-   step 8.
+   Explain each line as in step 8.
+
+For now the hub is a devbox like the node. The Hub pack comes later: it
+needs the MCP gateway and SSH between the hub and the node, which this guide
+does not set up yet.
 
 To add a node later, when the load grows, run steps 3 to 6 again with a new
 name and a 500 GB disk, then `fleet doctor` on it.
