@@ -41,7 +41,7 @@ const machinePath = (home: string) => join(home, ".config/fleet/machine.json");
 export const proxyOn = (env: Env) => typeof (JSON.parse(env.FLEET_SETTINGS ?? "{}") as Record<string, unknown>)["hub.proxyAccounts"] === "number";
 
 export function readBoxSettings(env: Env): BoxSettings {
-  if (optionalStringSetting("hub.boxTemplate", env) === undefined) throw new Error(boxesTurnedOn(env) ? "Boxes is on, but not ready here. Run fleet apply to see what it still needs." : "Boxes is off. To use boxes, or to release boxes that still run, turn it on with fleet packs --workflows boxes=on, then run fleet apply.");
+  if (optionalStringSetting("hub.boxTemplate", env) === undefined) throw new Error(boxesTurnedOn(env) ? "Boxes is on, but not ready here. It needs a team pack that brings Coder, and its settings answered: fleet apply names each unanswered setting." : "Boxes is off. To use boxes, or to release boxes that still run, turn it on with fleet packs --workflows boxes=on, then run fleet apply.");
   const warmCommand = optionalStringSetting("hub.boxWarmCommand", env);
   const httpsHost = optionalStringSetting("hub.httpsHost", env);
   return {
