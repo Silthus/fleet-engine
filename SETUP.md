@@ -114,17 +114,21 @@ Ask in one call:
   model defaults. Recommend the agent they set up in T3 Code
   (`claude auth status` or `codex login status` passes).
 
-| Pack | What it does | Offer it |
-| --- | --- | --- |
-| `pull-requests` | Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged. | Always |
-| `orchestration` | Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread. | Always |
-| `communication` | Agents write in your voice, give short updates, and share plans and previews as links. | Always |
-| `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always |
-| `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Always |
-| `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always |
-| `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always |
-| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | With a hub and a node |
-| `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | With a hub and a node |
+For each pack they pick whose row names a setup note, read that note in
+`~/.local/share/fleet/engine` now, and follow it in step 7. Read only the
+notes of the packs they picked.
+
+| Pack | What it does | Offer it | Setup note |
+| --- | --- | --- | --- |
+| `pull-requests` | Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged. | Always | None |
+| `orchestration` | Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread. | Always | `packs/orchestration/SETUP.md` |
+| `communication` | Agents write in your voice, give short updates, and share plans and previews as links. | Always | None |
+| `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always | `packs/memory/SETUP.md` |
+| `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Always | None |
+| `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always | `packs/guards/SETUP.md` |
+| `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always | `packs/slack/SETUP.md` |
+| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | With a hub and a node | Step 9 |
+| `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | With a hub and a node | Step 9 |
 
 ## 7. Run setup with their answers
 

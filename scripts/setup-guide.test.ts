@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../src/cli.ts";
 import { loadPacks } from "../src/pack/manifest.ts";
@@ -8,6 +8,10 @@ import { parseSetupFlags } from "../src/setup/flags.ts";
 const root = join(import.meta.dir, "..");
 const guide = () => readFileSync(join(root, "SETUP.md"), "utf8");
 const presets = () => (JSON.parse(readFileSync(join(root, "presets.json"), "utf8")) as Array<{ id: string }>).map((preset) => preset.id);
+
+function packRows() {
+  return [...guide().matchAll(/^\| `([a-z-]+)` \| ([^|]+) \| ([^|]+) \| ([^|]+) \|$/gm)].map((match) => ({ name: match[1]!, summary: match[2]!, note: match[4]! }));
+}
 
 async function fleetCommands() {
   let usage = "";
@@ -35,10 +39,19 @@ describe("the agent setup guide", () => {
   });
 
   test("offers every pack setup can turn on, in the words of its own summary", async () => {
-    const rows = [...guide().matchAll(/^\| `([a-z-]+)` \| (.+?) \| (.+?) \|$/gm)].map((match) => ({ name: match[1], summary: match[2] }));
+    const rows = packRows();
     const packs = (await loadPacks(root)).map((pack) => pack.manifest).filter((manifest) => manifest.name !== "base");
     expect(rows.map((row) => row.name).sort()).toEqual(packs.map((manifest) => manifest.name).sort());
     expect(rows.filter((row) => row.summary !== packs.find((manifest) => manifest.name === row.name)?.summary)).toEqual([]);
+  });
+
+  test("gives each pack its own setup note that is in the repo, or says it needs none, and names every note the packs hold", () => {
+    const rows = packRows();
+    const notes = rows.filter((row) => row.note.startsWith("`")).map((row) => ({ name: row.name, path: row.note.slice(1, -1) }));
+    expect(rows.filter((row) => !row.note.startsWith("`") && !["None", "Step 9"].includes(row.note))).toEqual([]);
+    expect(notes.filter(({ name, path }) => path !== `packs/${name}/SETUP.md` || !existsSync(join(root, path)))).toEqual([]);
+    const held = readdirSync(join(root, "packs")).filter((pack) => existsSync(join(root, "packs", pack, "SETUP.md")));
+    expect(notes.map((note) => note.name).sort()).toEqual(held.sort());
   });
 
   test("fetches only files that are in the repo", () => {
