@@ -36,7 +36,45 @@ export const slack: CodexApp = {
   skinTones: true,
 };
 
-export const builtInApps: CodexApp[] = [slack];
+export const gmail: CodexApp = {
+  kind: "codex-app",
+  name: "gmail",
+  title: "Gmail",
+  app: "connector_2128aebfecb84f64a069897515042a44",
+  plugin: "gmail@openai-curated-remote",
+  prefix: "gmail.",
+  tools: ["search_emails", "search_email_ids", "read_email", "read_email_thread", "batch_read_email", "batch_read_email_threads", "read_attachment", "list_drafts", "list_labels", "get_profile", "create_draft", "update_draft"],
+  refusal: "Fleet's Gmail route only reads mail and writes drafts. Use create_draft and let the person send it.",
+  account: "google",
+};
+
+export const googleCalendar: CodexApp = {
+  kind: "codex-app",
+  name: "google-calendar",
+  title: "Google Calendar",
+  app: "connector_947e0d954944416db111db556030eea6",
+  plugin: "google-calendar@openai-curated-remote",
+  prefix: "google_calendar.",
+  tools: ["search", "fetch", "search_events", "read_event", "batch_read_event", "list_calendars", "get_availability", "get_colors", "list_event_labels", "get_profile"],
+  refusal: "Fleet's Google Calendar route is read-only.",
+  account: "google",
+};
+
+export const googleDrive: CodexApp = {
+  kind: "codex-app",
+  name: "google-drive",
+  title: "Google Drive",
+  app: "connector_5f3c8c41a1e54ad7a76272c89e2554fa",
+  plugin: "google-drive@openai-curated-remote",
+  prefix: "google_drive.",
+  tools: ["search", "fetch", "recent_documents", "list_folder", "list_drives", "get_profile", "get_file_metadata", "export_file", "list_file_revisions", "fetch_file_revision", "get_file_comments", "get_document", "get_document_text", "get_document_tables", "get_document_comments", "get_document_paragraph_range", "find_document_text_range", "get_spreadsheet_metadata", "get_spreadsheet_range", "get_spreadsheet_cells", "get_spreadsheet_comments", "search_spreadsheet_rows", "get_presentation", "get_presentation_text", "get_presentation_outline", "get_presentation_tables", "get_presentation_comments", "get_slide", "get_slide_thumbnail"],
+  refusal: "Fleet's Google Drive route is read-only.",
+  account: "google",
+};
+
+export const googleApps = [gmail, googleCalendar, googleDrive];
+
+export const builtInApps: CodexApp[] = [slack, ...googleApps];
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 

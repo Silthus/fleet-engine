@@ -63,6 +63,20 @@ describe("the plan", () => {
     expect(bridgeSteps(mac, { "slack-bridge": true })).toEqual([]);
   });
 
+  test("each Google app stays off until the profile turns it on; then the hub registers it and asks for one Google sign-in, and native Codex on every machine turns the app off", () => {
+    const hub: MachineFile = { schema: 1, role: "hub", name: "hub-1" };
+    const native = { gmail: "connector_2128aebfecb84f64a069897515042a44", "google-calendar": "connector_947e0d954944416db111db556030eea6", "google-drive": "connector_5f3c8c41a1e54ad7a76272c89e2554fa" };
+    const plan = (machine: MachineFile, workflows: Record<string, boolean> = {}) => resolveEngine(sources, { packs: ["mcp-gateway"], hub: "hub-1", workflows }, machine);
+    const steps = (machine: MachineFile, workflows: Record<string, boolean> = {}) => plan(machine, workflows).human.filter((step) => step.workflow && step.workflow in native).map((step) => step.id);
+    const off = (machine: MachineFile, workflows: Record<string, boolean> = {}) => plan(machine, workflows).config.filter((entry) => entry.provider === "codex" && entry.key.startsWith("apps.")).map((entry) => [entry.key, entry.value]);
+    expect(steps(hub)).toEqual([]);
+    expect(off(devbox)).toEqual([]);
+    expect(steps(hub, { gmail: true, "google-drive": true })).toEqual(["gmail", "gmail-sign-in", "google-drive", "google-drive-sign-in"]);
+    for (const machine of [hub, devbox, mac]) expect(off(machine, { gmail: true, "google-drive": true })).toEqual([[`apps.${native.gmail}.enabled`, false], [`apps.${native["google-drive"]}.enabled`, false]]);
+    expect(steps(devbox, { gmail: true })).toEqual([]);
+    expect(plan(hub, { gmail: true }).human.find((step) => step.id === "gmail-sign-in")).toMatchObject({ command: "fleet mcp-gateway sign-in gmail" });
+  });
+
   test("a profile that lists the Hub pack keeps the gateway until it turns the mcp-gateway workflow off", () => {
     const hubKeys = (workflows: Record<string, boolean>) => resolveEngine(sources, { packs: ["hub"], settings: hubAnswers, workflows }, devbox).config.filter((entry) => entry.pack === "mcp-gateway").length;
     expect(hubKeys({})).toBe(2);

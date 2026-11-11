@@ -1,4 +1,5 @@
 import type { Context, Pack } from "../../src/sdk/index.ts";
+import { googleApps } from "./lib/apps.ts";
 import { gateway as host, gatewayKey } from "./lib/host.ts";
 
 const connect = ["-c", 'exec sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcp-connect'];
@@ -84,6 +85,41 @@ export default {
       test: async (ctx) => (await upstreams()).appSignedIn(await host(ctx), await slackApp()),
       repair: { ask: "Sign the Slack bridge in to ChatGPT.", command: "fleet mcp-gateway slack-bridge sign-in", interactive: true },
     });
+    const google = {
+      gmail: { sentence: "Agents read your mail and leave replies as unsent drafts, through the MCP gateway.", body: "An agent reads the thread a customer replied to and leaves a reply as a draft. You read it and press send." },
+      "google-calendar": { sentence: "Agents read your calendar through the MCP gateway, and change nothing.", body: "An agent finds a free hour for the review across both calendars, and tells you which one." },
+      "google-drive": { sentence: "Agents read your documents, sheets and slides through the MCP gateway, and change nothing.", body: "An agent reads the planning doc and the sheet behind it, and answers from both." },
+    };
+    for (const app of googleApps) {
+      const words = google[app.name as keyof typeof google];
+      const workflow = fleet.workflow({
+        id: app.name,
+        name: app.title,
+        default: false,
+        sentence: words.sentence,
+        moment: { time: "10:10", title: `${app.title}, read through the hub`, body: words.body, words: ["agent"] },
+        risk: `The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns ${app.title} off on every machine.`,
+      });
+      fleet.check({
+        on: "hub",
+        os: "linux",
+        when: workflow,
+        id: app.name,
+        say: `The MCP gateway does not serve ${app.title}, or not Fleet's route. Run fleet mcp-gateway doctor on the hub to see why.`,
+        test: async (ctx) => (await upstreams()).upstreamRegistered(await host(ctx), app).catch(() => false),
+        repair: { ask: `Put the ${app.title} route into the MCP gateway.`, run: async (ctx) => (await upstreams()).registerUpstream(await host(ctx), app) },
+      });
+      fleet.check({
+        on: "hub",
+        os: "linux",
+        when: workflow,
+        id: `${app.name}-sign-in`,
+        say: `${app.title} has no ChatGPT sign-in. Sign in with the account whose workspace has ${app.title} connected.`,
+        test: async (ctx) => (await upstreams()).appSignedIn(await host(ctx), app),
+        repair: { ask: `Sign ${app.title} in to ChatGPT.`, command: `fleet mcp-gateway sign-in ${app.name}`, interactive: true },
+      });
+      fleet.config({ provider: "codex", plans: ["codex", "both"], when: workflow, key: `apps.${app.app}.enabled`, value: false });
+    }
     fleet.check({
       when: flow,
       id: "mcp-gateway-client",
