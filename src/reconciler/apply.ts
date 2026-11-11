@@ -72,7 +72,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     return report;
   }
   const run = viaEngine(plan, options.run ?? spawnRunner(options.home, plan.machine.profileDir));
-  const node = plan.onHub || plan.reachesHub ? plan.machine.name : undefined;
+  const node = plan.onHub || plan.pullsFromHub ? plan.machine.name : undefined;
   const issue = !context.dryRun && node && options.issue ? (ready: CatalogEntry[]) => options.issue!(ready, node) : undefined;
   const gated = await gate(plan, run, !context.dryRun, issue);
   report.findings.push(...gated.issued, ...gated.failed.map((step) => humanFinding(step, context.dryRun)), ...gated.failedChecks.map(checkFinding));
@@ -192,7 +192,7 @@ async function gate(plan: Plan, run: Runner, repair: boolean, issue?: (ready: Ca
   };
   const checkOf = (pack: string, id: string) => plan.human.find((step) => step.pack === pack && step.id === id);
   const ready: CatalogEntry[] = [];
-  for (const entry of plan.catalog ?? []) if (!entry.after || plan.reachesHub || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
+  for (const entry of plan.catalog ?? []) if (!entry.after || plan.pullsFromHub || (await passes(checkOf(entry.pack, entry.after)))) ready.push(entry);
   const issued = issue ? await issue(ready) : [];
   if (repair) for (const step of plan.human) if (step.repair) await passes(step);
   const jobs: Plan["jobs"] = [];

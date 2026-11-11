@@ -37,8 +37,8 @@ setup goes on by itself when you are done:
 
 Setup creates the private repo `fleet-profile` in your GitHub account and saves
 your answers there. When a team pack you picked names a profile org, setup
-creates `fleet-profile-<login>` in that org instead, where its members can
-read it. If you already have a personal profile, setup keeps it and prints the
+creates `fleet-profile-<login>` in that org instead, private to the org, where
+teammates may read it. If you already have a personal profile, setup keeps it and prints the
 two commands that move it to the org. Then it applies your packs to the Mac and checks the result
 with `fleet doctor`. It ends with a screen that lists your packs and what runs
 by itself.
@@ -114,6 +114,20 @@ your devbox and runs the same steps. `fleet devbox` lists your devboxes.
 - `fleet doctor` checks a machine against your profile without changing it.
 - `fleet update` moves the engine and your profile forward. Each machine also
   runs it every night.
+
+## When setup goes wrong
+
+`fleet triage` collects what the Fleet maintainer needs to fix a setup
+problem: the versions of Fleet, T3 Code, Claude Code, Codex, gh, Bun and your
+OS, the `fleet doctor` output, the step that failed and its error, the setup
+timings, and the setup transcript. It removes tokens, keys, email addresses,
+hostnames and home paths, and shows you the report. Then you pick: open a
+public issue on `Silthus/fleet-engine` with it, save it to a file to send
+yourself, or neither.
+
+An agent can run `fleet triage --print` to show you the report in the chat,
+and `fleet triage --send` once you say yes. `--save <file>` writes it to a
+file, and `--note <text>` says what went wrong.
 
 [The Fleet page](https://silthus.github.io/fleet-engine/) shows what each
 pack does, and builds the setup prompt with your picks.

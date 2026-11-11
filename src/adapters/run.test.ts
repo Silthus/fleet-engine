@@ -208,7 +208,7 @@ const quietServer = { answering: async () => false, session: async () => Promise
 describe.each([
   ["jobs", "your scheduled jobs", (run: CommandRunner, accountHome: () => Promise<string | undefined>) => jobsAdapter({ run, accountHome, engineRoot: "/opt/fleet-engine" })],
   ["identity", "your git identity", (run: CommandRunner, accountHome: () => Promise<string | undefined>) => identityAdapter({ run, accountHome, engineRoot: "/opt/fleet-engine", hostname: "devbox" })],
-  ["t3", "T3 Code", (run: CommandRunner, accountHome: () => Promise<string | undefined>) => t3Adapter({ run, accountHome, server: quietServer, user: "octo", wait: async () => {} })],
+  ["t3", "T3 Code", (run: CommandRunner, accountHome: () => Promise<string | undefined>) => t3Adapter({ run, accountHome, server: quietServer, user: "octo", wait: async () => {}, env: {} })],
 ] as const)("the %s adapter's home guard", (name, what, make) => {
   const recorder = () => {
     const calls: string[][] = [];

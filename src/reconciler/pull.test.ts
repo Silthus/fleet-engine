@@ -116,10 +116,14 @@ test("fleet credential on the hub prints only the key for a node that the profil
   expect(await hubFleet(["credential", "issued/issued-api", "node-2"])).toEqual({ code: 0, stdout: "key-2-for-node-2\n", stderr: "Issuing a key for node-2\n" });
 });
 
-test("fleet credential refuses a node that the profile does not name", async () => {
-  const { hub } = linkedFleets(temp);
+test("a Mac on a profile with a hub pulls its credential from the hub at apply, though no devbox list names it", async () => {
+  const { hub, mac: macOf } = linkedFleets(temp);
+  const mac = macOf();
   await hub("apply");
-  expect(await hub("credential", "issued/issued-api", "stranger")).toEqual({ code: 1, output: "fleet: stranger is not a node of your profile. Name it in devboxes, or run fleet devbox add stranger." });
+  const applied = await mac("apply");
+  expect(applied.code).toBe(0);
+  expect(applied.output).not.toContain("Could not pull");
+  expect(await mac("issued", "use")).toEqual({ code: 0, output: "http://127.0.0.1:4600 key-2-for-laptop-3" });
 });
 
 test("fleet credential refuses to run off the hub", async () => {

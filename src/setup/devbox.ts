@@ -175,12 +175,30 @@ export function coderAddress(whoami: string): string | undefined {
   return address?.replace(/\/+$/, "");
 }
 
-/** Signs the workspace in to Coder with a new token from this machine, sent on standard input, then writes its SSH config, so it reaches every coder.<workspace> by name. */
+type CoderSession = { address: string; userId?: string };
+
+/** Who a machine is signed in to Coder as. A deployment can answer at another address on another network, so its user ID tells two sessions apart, and the address does so only for a Coder CLI too old to print the ID. */
+async function coderSession(machine: Machine): Promise<CoderSession | undefined> {
+  const json = await machine.exec(["coder", "whoami", "-o", "json"]);
+  if (json.code === 0) {
+    try {
+      const [session] = JSON.parse(json.stdout) as Array<{ url?: unknown; user_id?: unknown }>;
+      if (typeof session?.url === "string" && typeof session.user_id === "string" && session.user_id) return { address: session.url.replace(/\/+$/, ""), userId: session.user_id };
+    } catch {}
+  }
+  const text = await machine.exec(["coder", "whoami"]);
+  const address = text.code === 0 ? coderAddress(text.output) : undefined;
+  return address ? { address } : undefined;
+}
+
+const sameCoderUser = (here: CoderSession, box: CoderSession | undefined) => box !== undefined && (here.userId && box.userId ? here.userId === box.userId : here.address === box.address);
+
+/** Signs the workspace in to Coder with a new token from this machine, sent on standard input, then writes its SSH config, so it reaches every coder.<workspace> by name. A workspace already signed in as the same Coder user keeps its session, whatever address it reaches Coder by. */
 async function coderOnBox(host: string, box: Machine, here: Machine) {
-  const address = coderAddress((await here.exec(["coder", "whoami"])).output);
-  if (!address) throw new Error(`Coder is not signed in on this machine. Run coder login <your Coder address> here, then fleet devbox add ${host} again.`);
-  const signedIn = await box.exec(["coder", "whoami"]);
-  if (signedIn.code !== 0 || coderAddress(signedIn.output) !== address) {
+  const session = await coderSession(here);
+  if (!session) throw new Error(`Coder is not signed in on this machine. Run coder login <your Coder address> here, then fleet devbox add ${host} again.`);
+  const { address } = session;
+  if (!sameCoderUser(session, await coderSession(box))) {
     const token = await here.exec(["coder", "tokens", "create"]);
     if (token.code !== 0 || !token.output.trim()) throw new Error(`Coder made no token for ${host}: ${token.output.trim()}`);
     const cli = `"$HOME/.local/bin/coder"`;

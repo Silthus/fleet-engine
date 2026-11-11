@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ConfigEntry, ModelRow, Owned, PackJob, Plan, T3ProjectScript } from "../../pack/types.ts";
 import { apply, check } from "../../reconciler/apply.ts";
@@ -143,7 +143,7 @@ function fakeServer(options: { up?: boolean; settings?: Record<string, unknown>;
   return { state, calls, tags, server };
 }
 
-type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; sudo?: boolean; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean; feed?: string; installFailures?: number };
+type Machine = { t3?: boolean; service?: "installed" | "not installed" | "unavailable"; manager?: boolean; linger?: "yes" | "no" | ""; sudo?: boolean; originHead?: string; refs?: string[]; remotes?: string[]; gitBroken?: boolean; feed?: string; installFailures?: number; env?: Record<string, string>; reloadFailures?: number; restartFailures?: number };
 
 const releasesFeed = ["mobile-android-build%2F2.3.0%2Fabc", "v0.1.9-nightly.20990102.7", "v0.1.9-nightly.20990101.3"]
   .map((tag) => `<entry><link rel="alternate" type="text/html" href="https://github.com/pingdotgg/t3code/releases/tag/${tag}"/></entry>`)
@@ -163,6 +163,7 @@ function envOf(command: string[]) {
 function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
   const calls: string[] = [];
   const state = { t3: machine.t3 ?? true, service: machine.service ?? "installed", installFailures: machine.installFailures ?? 0, installerVersions: [] as string[] };
+  const systemd = { reloadFailures: machine.reloadFailures ?? 0, restartFailures: machine.restartFailures ?? 0, loaded: false, tokenInT3: false, starts: 1 };
   const run: CommandRunner = async (command) => {
     const line = command.join(" ");
     calls.push(line);
@@ -182,6 +183,15 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
     if (line === "t3 service install") return (state.service = "installed"), { code: 0, stdout: "" };
     if (line === "systemctl --user show-environment") return machine.manager === false ? { code: 1, stdout: "", stderr: "Failed to connect to bus" } : { code: 0, stdout: "HOME=/home/octo\n" };
     if (line === "sudo -n loginctl enable-linger octo") return machine.sudo ? { code: 0, stdout: "" } : { code: 1, stdout: "", stderr: "sudo: a password is required" };
+    if (line === "systemctl --user daemon-reload") {
+      if (systemd.reloadFailures > 0) return systemd.reloadFailures--, { code: 1, stdout: "", stderr: "Failed to reload daemon" };
+      return (systemd.loaded = true), { code: 0, stdout: "" };
+    }
+    if (line === "systemctl --user try-restart t3code.service" || line === "systemctl --user restart t3code.service") {
+      if (systemd.restartFailures > 0) return systemd.restartFailures--, { code: 1, stdout: "", stderr: "Job for t3code.service failed" };
+      return systemd.starts++, (systemd.tokenInT3 = systemd.loaded), { code: 0, stdout: "" };
+    }
+    if (line === "systemctl --user show t3code.service --property=InvocationID --value") return { code: 0, stdout: `invocation${systemd.starts}\n` };
     if (line === "loginctl show-user octo --property=Linger --value") return { code: 0, stdout: `${machine.linger ?? "yes"}\n` };
     if (command[0] === "t3" && command[1] === "project" && command[2] === "add") {
       server.state.projects.push({ id: `project-${server.state.projects.length}`, title: command[3]!, workspaceRoot: command[3]!, deletedAt: null, scripts: [] });
@@ -194,20 +204,20 @@ function runner(server: ReturnType<typeof fakeServer>, machine: Machine = {}) {
     if (command[0] === "git" && command.includes("rev-parse")) return (machine.refs ?? ["refs/remotes/origin/main"]).includes(command.at(-1)!.replace(/\^\{commit\}$/, "")) ? { code: 0, stdout: "abc\n" } : { code: 1, stdout: "" };
     return { code: 127, stdout: "" };
   };
-  return { calls, state, run };
+  return { calls, state: { ...state, systemd }, run };
 }
 
 function setup(options: Parameters<typeof fakeServer>[0] = {}, machine: Machine = {}) {
   const server = fakeServer(options);
   const commands = runner(server, machine);
   const waits: number[] = [];
-  const adapter = t3Adapter({ run: commands.run, server: server.server, user: "octo", wait: async (ms) => void waits.push(ms) });
+  const adapter = t3Adapter({ run: commands.run, server: server.server, user: "octo", wait: async (ms) => void waits.push(ms), env: machine.env ?? {} });
   return { server, commands, adapter, waits };
 }
 
 function seed(target: Plan, home: string, options: { adopt?: string[] } = {}) {
   const stopped = fakeServer({ up: false });
-  return t3Adapter({ run: runner(stopped).run, server: stopped.server, user: "octo" }).apply(target, { home, dryRun: false, adopt: options.adopt ?? [] });
+  return t3Adapter({ run: runner(stopped).run, server: stopped.server, user: "octo", env: {} }).apply(target, { home, dryRun: false, adopt: options.adopt ?? [] });
 }
 
 describe("T3 settings while T3 Code is stopped", () => {
@@ -814,7 +824,7 @@ describe("T3 on Linux", () => {
       seen.push({ line: command.join(" "), settings: existsSync(join(home, settingsFile)) ? read(home, settingsFile) : undefined });
       return commands.run(command);
     };
-    const watched = t3Adapter({ run, server: server.server, user: "octo" });
+    const watched = t3Adapter({ run, server: server.server, user: "octo", env: {} });
     const report = await apply(plan("linux", base), { home, adapters: [watched] });
     const starts = seen.filter(({ line }) => line.includes("t3.codes/install.sh") || line === "t3 service install");
     expect(starts).toHaveLength(2);
@@ -837,6 +847,153 @@ describe("T3 on Linux", () => {
     const report = await apply(plan("linux", []), { home, adapters: [adapter] });
     expect(report.findings.map((item) => item.id)).not.toContain("t3:linger");
     expect(report.actions.map((action) => action.target)).toContain("t3 linger");
+  });
+
+  describe("the session's Claude token", () => {
+    const tokenFile = ".config/claude-env/oauth.env";
+    const dropInFile = ".config/systemd/user/t3code.service.d/claude-token.conf";
+    const dropInText = "[Service]\nEnvironmentFile=%h/.config/claude-env/oauth.env\n";
+    const fakeToken = () => ["sk", "test", "claude", "A1b2.C3~d4+e5/f6="].join("-");
+    const withToken = (machine: Machine = {}, extra: Record<string, string> = {}) => {
+      const token = fakeToken();
+      const env: Record<string, string> = { CLAUDE_CODE_OAUTH_TOKEN: token, ...extra };
+      return { token, env, ...setup({}, { ...machine, env }) };
+    };
+    const restarts = (calls: string[]) => calls.filter((line) => line.includes("restart"));
+
+    test("reaches T3 Code's service through a private file, with one restart", async () => {
+      const home = temp.make("home-");
+      const { token, commands, adapter } = withToken();
+      const file = join(home, tokenFile);
+      const elsewhere = join(home, "elsewhere");
+      writeFileSync(elsewhere, "keep\n");
+      mkdirSync(join(home, ".config/claude-env"), { recursive: true });
+      symlinkSync(elsewhere, file);
+      const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(commands.state.systemd.tokenInT3).toBe(true);
+      expect(readFileSync(elsewhere, "utf8")).toBe("keep\n");
+      expect(readFileSync(file, "utf8")).toBe(`CLAUDE_CODE_OAUTH_TOKEN=${token}\n`);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe(dropInText);
+      expect(JSON.stringify(report)).not.toContain(token);
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(restarts(commands.calls)).toEqual(["systemctl --user try-restart t3code.service"]);
+      chmodSync(file, 0o644);
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    });
+
+    test("keeps the token folder private when it already exists or someone opens it later", async () => {
+      const home = temp.make("home-");
+      const { adapter } = withToken();
+      const folder = join(home, ".config/claude-env");
+      mkdirSync(folder, { recursive: true });
+      chmodSync(folder, 0o755);
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(statSync(folder).mode & 0o777).toBe(0o700);
+      chmodSync(folder, 0o755);
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(statSync(folder).mode & 0o777).toBe(0o700);
+    });
+
+    test.each([
+      [".config/claude-env", "the token folder"],
+      [".config/systemd", "the drop-in folder"],
+    ])("refuses to write through a linked %s (%s) and says so", async (linked) => {
+      const home = temp.make("home-");
+      const shared = temp.make("shared-");
+      const { token, commands, adapter } = withToken();
+      mkdirSync(join(home, linked, ".."), { recursive: true });
+      symlinkSync(shared, join(home, linked));
+      const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(readdirSync(shared)).toEqual([]);
+      expect(existsSync(join(home, ".config/claude-env/oauth.env"))).toBe(false);
+      expect(restarts(commands.calls)).toEqual([]);
+      expect(report.findings.find((item) => item.id === "t3:claude-token")?.repair).toBe("human");
+      expect(JSON.stringify(report)).not.toContain(token);
+    });
+
+    test.each([
+      ["a newline", (token: string) => `${token}\nANOTHER=1`],
+      ["quotes", (token: string) => `"${token}"`],
+      ["a space", (token: string) => `${token} more`],
+    ])("refuses a token with %s, without echoing it", async (_shape, shape) => {
+      const home = temp.make("home-");
+      const token = shape(fakeToken());
+      const { commands, adapter } = setup({}, { env: { CLAUDE_CODE_OAUTH_TOKEN: token } });
+      const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(existsSync(join(home, ".config/claude-env"))).toBe(false);
+      expect(existsSync(join(home, dropInFile))).toBe(false);
+      expect(restarts(commands.calls)).toEqual([]);
+      expect(report.findings.find((item) => item.id === "t3:claude-token")?.repair).toBe("human");
+      expect(JSON.stringify(report)).not.toContain(fakeToken());
+    });
+
+    test("does not restart T3 Code from inside T3 Code, and the next apply outside it does", async () => {
+      const home = temp.make("home-");
+      const { token, env, commands, adapter } = withToken({}, { T3CODE_THREAD_ID: "thread-1" });
+      const inside = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, tokenFile), "utf8")).toBe(`CLAUDE_CODE_OAUTH_TOKEN=${token}\n`);
+      expect(restarts(commands.calls)).toEqual([]);
+      expect(inside.findings.find((item) => item.id === "t3:claude-token")?.say).toContain("systemctl --user restart t3code.service");
+      expect(JSON.stringify(inside)).not.toContain(token);
+      const still = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(still.findings.map((item) => item.id)).toContain("t3:claude-token");
+      delete env.T3CODE_THREAD_ID;
+      const outside = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(commands.state.systemd.tokenInT3).toBe(true);
+      expect(outside.findings.map((item) => item.id)).not.toContain("t3:claude-token");
+    });
+
+    test("needs no second restart when you restarted T3 Code yourself after the finding", async () => {
+      const home = temp.make("home-");
+      const { env, commands, adapter } = withToken({}, { T3CODE_THREAD_ID: "thread-1" });
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      await commands.run(["systemctl", "--user", "restart", "t3code.service"]);
+      delete env.T3CODE_THREAD_ID;
+      const report = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(restarts(commands.calls)).toEqual(["systemctl --user restart t3code.service"]);
+      expect(report.findings.map((item) => item.id)).not.toContain("t3:claude-token");
+    });
+
+    test.each([
+      ["reload", { reloadFailures: 1 }],
+      ["restart", { restartFailures: 1 }],
+    ])("reports a failed %s and tries again on the next apply until T3 Code has the token, then leaves the service alone", async (_step, failures) => {
+      const home = temp.make("home-");
+      const { token, commands, adapter } = withToken(failures);
+      const failed = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(commands.state.systemd.tokenInT3).toBe(false);
+      expect(failed.findings.find((item) => item.id === "t3:claude-token")?.repair).toBe("human");
+      expect(JSON.stringify(failed)).not.toContain(token);
+      const retried = await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(commands.state.systemd.tokenInT3).toBe(true);
+      expect(retried.findings.map((item) => item.id)).not.toContain("t3:claude-token");
+      const before = commands.calls.length;
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(commands.calls.slice(before).filter((line) => line.includes("t3code.service"))).toEqual([]);
+    });
+
+    test("leaves a drop-in with other content alone", async () => {
+      const home = temp.make("home-");
+      const { commands, adapter } = withToken();
+      const theirs = "[Service]\nEnvironmentFile=%h/.config/fleet/box-claude-token.env\n";
+      mkdirSync(join(home, ".config/systemd/user/t3code.service.d"), { recursive: true });
+      writeFileSync(join(home, dropInFile), theirs);
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe(theirs);
+      expect(existsSync(join(home, ".config/claude-env"))).toBe(false);
+      expect(restarts(commands.calls)).toEqual([]);
+    });
+
+    test("changes nothing when the session has no token", async () => {
+      const home = temp.make("home-");
+      const { commands, adapter } = setup();
+      await apply(plan("linux", []), { home, adapters: [adapter] });
+      expect(existsSync(join(home, ".config/claude-env"))).toBe(false);
+      expect(existsSync(join(home, dropInFile))).toBe(false);
+      expect(restarts(commands.calls)).toEqual([]);
+    });
   });
 
   test("reports a missing user manager and leaves the service alone", async () => {
