@@ -4,7 +4,7 @@ import { basename, dirname, join } from "node:path";
 
 export type Provider = "claude" | "codex";
 export type HookInput = { session_id?: string; agent_id?: string; cwd?: string; source?: string; tool_name?: string; tool_input?: unknown };
-export type Shown = { at: string; event: "memoryShown"; session: string; agent?: string; via: "index" | "trigger"; note: string; trigger?: string };
+export type Shown = { at: string; event: "memoryShown"; session: string; agent?: string; via: "index" | "trigger" | "guide"; note: string; trigger?: string };
 
 export const memoryRoot = (home: string) => join(home, ".agents/memory");
 export const stateDir = (home: string) => join(home, ".local/state/fleet/memory");
