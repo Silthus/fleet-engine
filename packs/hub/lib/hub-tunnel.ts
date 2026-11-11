@@ -5,7 +5,7 @@ import { gatewayPort, localGatewayUrl, readGatewayClient, saveGatewayClient, typ
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { relayPortOf } from "./run.ts";
 
-export type MacTunnelMode = "plan" | "install" | "doctor" | "remove";
+export type MacTunnelMode = "plan" | "install" | "doctor" | "remove" | "left";
 export type MacTunnel = {
   /** gateway: the MCP gateway's workflow is on. httpsHost: hub HTTPS is on, and the browser reaches it through the relay port. */
   home: string; platform: NodeJS.Platform; uid: number; alias: string; relayPort: number; gateway: boolean; httpsHost?: string; coder?: string;
@@ -70,6 +70,7 @@ function forwardedPorts(mac: MacTunnel): number[] {
 }
 
 export async function hubTunnel(mode: MacTunnelMode, mac: MacTunnel): Promise<number> {
+  if (mode === "left") return (await readOwned(mac.home, agentPath(mac), marker, "hub tunnel")) !== undefined || (mac.platform === "darwin" && (await agentLoaded(mac))) ? 0 : 1;
   const ports = forwardedPorts(mac);
   if (!ports.length) return withoutTunnel(mode, mac);
   if (mac.platform !== "darwin") throw new Error("Only a Mac opens its own hub tunnel. The hub opens the devbox tunnels with fleet ssh-tunnels.");

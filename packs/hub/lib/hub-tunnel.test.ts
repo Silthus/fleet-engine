@@ -250,3 +250,13 @@ test("fleet hub-tunnel reads from the profile whether the MCP gateway is on, whi
   expect(relay.code).not.toBe(0);
   expect(relay.output).toContain(tunnel);
 });
+
+test("left reports a launch agent Fleet wrote or one that is loaded, and nothing once remove took it away", async () => {
+  const { deps, home } = mac();
+  await hubTunnel("install", deps);
+  expect(await hubTunnel("left", deps)).toBe(0);
+  expect(await hubTunnel("remove", deps)).toBe(0);
+  expect(existsSync(agent(home))).toBe(false);
+  expect(await hubTunnel("left", deps)).toBe(1);
+  expect(await hubTunnel("left", mac({ loaded: true }).deps)).toBe(0);
+});

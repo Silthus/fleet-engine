@@ -7,14 +7,14 @@ import { parse, stringify } from "smol-toml";
 import { management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
 import { requireHubRole } from "./hub-job.ts";
 import { quote, readRole, remoteFleet } from "./machine.ts";
-import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed } from "./managed.ts";
+import { changedFiles, ownedFiles, readIfThere, removeUnits, requireInstalled, writeFiles, type Managed } from "./managed.ts";
 import { refuseLinks, writePrivateFile, type Fetch } from "../../mcp-gateway/lib/client.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { isKeptForBoxes } from "../../../src/hub/names.ts";
 import { must, proxyPort } from "./run.ts";
 
 export { proxyPort, proxyUrl };
-export type ProxyMode = "plan" | "install" | "doctor" | "connect" | "disconnect" | "check";
+export type ProxyMode = "plan" | "install" | "doctor" | "connect" | "disconnect" | "check" | "remove" | "left";
 export type Release = { version: string; url: string; sha256: string };
 export type AiPlan = "claude" | "codex" | "both";
 export type ProxyMachine = {
@@ -356,5 +356,7 @@ export async function cliProxy(mode: ProxyMode, machine: ProxyMachine, agent: Ag
   if (mode === "connect") await connect(machine);
   if (mode === "disconnect") await disconnect(machine);
   if (mode === "check") return (await check(machine, agent)) ? 0 : 1;
+  if (mode === "left") return (await ownedFiles(machine.home, [paths.unit], marker, what)).length ? 0 : 1;
+  if (mode === "remove") await removeUnits(machine.home, [paths.unit], marker, what, machine.run);
   return 0;
 }

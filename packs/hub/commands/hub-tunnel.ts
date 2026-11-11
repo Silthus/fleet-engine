@@ -1,16 +1,18 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { runCommand } from "../../base/lib/command.ts";
+import { failedExit, runCommand } from "../../base/lib/command.ts";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { gatewayOn, hubTunnel, type MacTunnelMode } from "../lib/hub-tunnel.ts";
 import { run } from "../lib/run.ts";
 
-const modes = ["plan", "install", "doctor", "remove"];
+const modes = ["plan", "install", "doctor", "remove", "left"];
 
 await runCommand(() => {
   const [mode = "plan", ...rest] = Bun.argv.slice(2);
-  if (rest.length || !modes.includes(mode)) return console.error("Usage: fleet hub-tunnel [plan|install|doctor|remove]"), 2;
+  if (rest.length || !modes.includes(mode)) return console.error("Usage: fleet hub-tunnel [plan|install|doctor|remove|left]"), 2;
+  const quiet = { home: homedir(), platform: process.platform, uid: process.getuid?.() ?? 0, alias: "", relayPort: 0, gateway: false, run, fetch, sleep: (ms: number) => Bun.sleep(ms), print: (line: string) => console.log(line) };
+  if (mode === "remove" || mode === "left") return hubTunnel(mode, quiet);
   const relayPort = numberSetting("hub.relayPort");
   const coder = Bun.which("coder") ?? undefined;
   const profile = Bun.env.FLEET_PROFILE_DIR ? join(Bun.env.FLEET_PROFILE_DIR, "fleet.json") : undefined;
@@ -21,4 +23,4 @@ await runCommand(() => {
     ...(httpsHost ? { httpsHost } : {}), ...(coder ? { coder } : {}),
     run, fetch, sleep: (ms) => Bun.sleep(ms), print: (line) => console.log(line),
   });
-}, "fleet hub-tunnel");
+}, "fleet hub-tunnel", failedExit(Bun.argv[2]));

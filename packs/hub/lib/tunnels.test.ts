@@ -177,6 +177,33 @@ test("the hub opens no SSH tunnel to a box in the devbox list, says so once, and
   expect(await sshTunnels("doctor", machine("hub", { home, devboxes: ["devbox-1", "box-lane"] }).deps)).toBe(0);
 });
 
+test("remove on the hub stops and deletes every tunnel unit Fleet wrote, and left then reports nothing left", async () => {
+  const { deps, home } = machine("hub");
+  await sshTunnels("install", deps);
+  const mine = join(home, ".config/systemd/user/fleet-ssh-mine.service");
+  writeFileSync(mine, "[Unit]\nDescription=mine\n");
+  expect(await sshTunnels("left", deps)).toBe(0);
+  const removing = machine("hub", { home, devboxes: [] });
+  expect(await sshTunnels("remove", removing.deps)).toBe(0);
+  expect(removing.calls).toEqual(["systemctl --user disable --now fleet-ssh-devbox-1.service", "systemctl --user disable --now fleet-ssh-devbox-2.service", "systemctl --user daemon-reload"]);
+  expect([existsSync(unitPath(home, "devbox-1")), existsSync(unitPath(home, "devbox-2")), existsSync(mine)]).toEqual([false, false, true]);
+  expect(await sshTunnels("left", removing.deps)).toBe(1);
+});
+
+test("remove on a devbox takes its hosts entry out through sudo, and left then reports nothing left", async () => {
+  const { deps, hosts } = machine("devbox");
+  writeFileSync(hosts, hostsWith(readFileSync(hosts, "utf8"), host));
+  expect(await sshTunnels("left", deps)).toBe(0);
+  const removing = machine("devbox", { home: deps.home, hosts, httpsHost: undefined });
+  expect(await sshTunnels("remove", removing.deps)).toBe(0);
+  expect(removing.calls).toEqual([`sudo -n tee ${hosts}`]);
+  expect(removing.inputs).toEqual(["127.0.0.1 localhost\n10.0.0.1 unrelated.example\n"]);
+  writeFileSync(hosts, removing.inputs[0]!);
+  expect(await sshTunnels("left", removing.deps)).toBe(1);
+  expect(await sshTunnels("remove", removing.deps)).toBe(0);
+  expect(removing.calls).toHaveLength(1);
+});
+
 test("the hub treats every name fleet devbox add keeps for pool boxes as a box, even one listed by hand", async () => {
   const home = roleHome(temp.make("fleet-tunnels-"), "hub");
   const { deps, calls, printed } = machine("hub", { home, devboxes: ["devbox-1", "box-7.old"] });

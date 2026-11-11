@@ -1,6 +1,8 @@
-import { mkdir, readFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, readFile, rm } from "node:fs/promises";
+import { basename, dirname } from "node:path";
 import { refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
+import type { Run } from "../../mcp-gateway/lib/hub.ts";
+import { must } from "./run.ts";
 
 export type Managed = { path: string; content: string };
 
@@ -34,4 +36,21 @@ export async function writeFiles(files: Managed[]): Promise<void> {
 export async function requireInstalled(home: string, files: Managed[], marker: string, what: string, fix: string, stale: string[] = []): Promise<void> {
   const differing = [...(await changedFiles(home, files, marker, what)).map((file) => file.path), ...stale];
   if (differing.length) throw new Error(`These ${what} files differ from what install writes now: ${differing.join(", ")}. Run ${fix}.`);
+}
+
+/** The files at paths that Fleet wrote and that are still there. A file Fleet did not write stops it, so nothing removes it. */
+export async function ownedFiles(home: string, paths: string[], marker: string, what: string): Promise<string[]> {
+  const owned: string[] = [];
+  for (const path of paths) if ((await readOwned(home, path, marker, what)) !== undefined) owned.push(path);
+  return owned;
+}
+
+/** Stops, disables and deletes the user units that Fleet wrote at paths, then reloads systemd once. */
+export async function removeUnits(home: string, paths: string[], marker: string, what: string, run: Run): Promise<void> {
+  const owned = await ownedFiles(home, paths, marker, what);
+  for (const path of owned) {
+    await must(run, ["systemctl", "--user", "disable", "--now", basename(path)]);
+    await rm(path);
+  }
+  if (owned.length) await must(run, ["systemctl", "--user", "daemon-reload"]);
 }

@@ -1,13 +1,13 @@
 import { lstat, readdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { changedFiles, ownedBy, readIfThere, requireInstalled, writeFiles } from "./managed.ts";
+import { changedFiles, ownedBy, readIfThere, removeUnits, requireInstalled, writeFiles } from "./managed.ts";
 import { peersOf, readRole } from "./machine.ts";
 import { gatewayPort, refuseLinks } from "../../mcp-gateway/lib/client.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
 import { isKeptForBoxes, sshName } from "../../../src/hub/names.ts";
 import { hostPattern, must, proxyPort, relayPortOf } from "./run.ts";
 
-export type TunnelMode = "plan" | "install" | "doctor";
+export type TunnelMode = "plan" | "install" | "doctor" | "remove" | "left";
 /** dialsHub: the devboxes that the profile names, which reach the hub's served ports through their own forward. */
 export type TunnelMachine = { home: string; devboxes: string[]; dialsHub: string[]; relayPort: number; httpsHost?: string; proxy?: boolean; hosts: string; run: Run; print(line: string): void };
 
@@ -44,6 +44,7 @@ export function hostsWith(previous: string, host: string): string {
 }
 
 export async function sshTunnels(mode: TunnelMode, machine: TunnelMachine): Promise<number> {
+  if (mode === "remove" || mode === "left") return withoutTunnels(mode, machine);
   const role = readRole(machine.home);
   if (role === "hub") return hubTunnels(mode, machine);
   if (role === "devbox") return devboxHosts(mode, machine);
@@ -77,6 +78,22 @@ async function hubTunnels(mode: TunnelMode, machine: TunnelMachine) {
     }
     machine.print(`${unit.alias}: SSH tunnel ${mode === "plan" ? "planned" : "active"}`);
   }
+  return 0;
+}
+
+/** On any role, remove takes away every tunnel unit and the hosts entry Fleet wrote, and left exits 0 while one is here. */
+async function withoutTunnels(mode: "remove" | "left", machine: TunnelMachine) {
+  const directory = join(machine.home, ".config/systemd/user");
+  const units = (await staleUnits(machine.home, directory, [])).sort().map((name) => join(directory, name));
+  const hosts = (await readIfThere(machine.hosts)) ?? "";
+  const entry = hosts.split("\n").some((line) => line.endsWith(hostsMarker));
+  if (mode === "left") return machine.print(units.length || entry ? "Hub SSH tunnels: still here." : "Hub SSH tunnels: nothing left."), units.length || entry ? 0 : 1;
+  await removeUnits(machine.home, units, marker, "tunnel", machine.run);
+  if (entry) {
+    if ((await lstat(machine.hosts)).isSymbolicLink()) throw new Error(`Keep linked hosts file: ${machine.hosts}`);
+    await must(machine.run, ["sudo", "-n", "tee", machine.hosts], hosts.split("\n").filter((line) => !line.endsWith(hostsMarker)).join("\n"));
+  }
+  machine.print("Hub SSH tunnels: removed.");
   return 0;
 }
 
