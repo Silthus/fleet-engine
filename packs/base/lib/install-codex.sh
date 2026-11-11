@@ -6,43 +6,65 @@ fail() {
   exit 1
 }
 
+os=$(uname -s)
+if [ "$os" = Darwin ]; then
+  swap() { mv -h "$1" "$2"; }
+  publish() { [ ! -e "$2" ] && mv "$1" "$2"; }
+  sha256() { shasum -a 256 "$1" | awk '{ print $1 }'; }
+else
+  swap() { mv -T "$1" "$2"; }
+  publish() { mv -T "$1" "$2"; }
+  sha256() { sha256sum "$1" | awk '{ print $1 }'; }
+fi
+
 point() {
   [ "$(readlink "$1" 2>/dev/null || true)" != "$2" ] || return 0
   rm -f "$1.new.$$"
-  { ln -s "$2" "$1.new.$$" && mv -T "$1.new.$$" "$1"; } || fail "could not point $1 at $2."
+  { ln -s "$2" "$1.new.$$" && swap "$1.new.$$" "$1"; } || fail "could not point $1 at $2."
 }
 
 published() {
   [ -x "$1/bin/codex" ] && "$1/bin/codex" --version >/dev/null 2>&1 9>&-
 }
 
-case "$(uname -m)" in
-  x86_64|amd64) target=x86_64-unknown-linux-musl ;;
-  aarch64|arm64) target=aarch64-unknown-linux-musl ;;
+case "$os $(uname -m)" in
+  "Linux x86_64"|"Linux amd64") target=x86_64-unknown-linux-musl ;;
+  "Linux aarch64"|"Linux arm64") target=aarch64-unknown-linux-musl ;;
+  "Darwin x86_64") target=x86_64-apple-darwin ;;
+  "Darwin arm64") target=aarch64-apple-darwin ;;
   *) fail "no Codex build for $(uname -m). Install Codex from https://github.com/openai/codex." ;;
 esac
 
-command -v flock >/dev/null 2>&1 || fail "needs flock to install Codex safely. Install util-linux or BusyBox, then run fleet apply."
+[ "$os" = Darwin ] || command -v flock >/dev/null 2>&1 || fail "needs flock to install Codex safely. Install util-linux or BusyBox, then run fleet apply."
 share="$HOME/.local/share/fleet"
 package="$share/codex"
 releases="$package/releases"
 current="$package/current"
 link="$HOME/.local/bin/codex"
 mkdir -p "$share" || fail "could not create $share."
-exec 9>"$share/codex.lock" || fail "could not open $share/codex.lock."
-flock 9 || fail "could not lock $share/codex.lock."
+lock=""
+work=""
+trap 'rm -rf "$work"; rm -f "$current.new.$$" "$link.new.$$"; [ -z "$lock" ] || rm -rf "$lock"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [ "$os" = Darwin ]; then
+  until mkdir "$share/codex.lock.d" 2>/dev/null; do
+    holder=$(cat "$share/codex.lock.d/pid" 2>/dev/null || true)
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$share/codex.lock.d"; else sleep 1; fi
+  done
+  lock="$share/codex.lock.d"
+  echo $$ >"$lock/pid"
+else
+  exec 9>"$share/codex.lock" || fail "could not open $share/codex.lock."
+  flock 9 || fail "could not lock $share/codex.lock."
+fi
 if [ -e "$link" ] || [ -L "$link" ]; then
   case "$(readlink "$link" || true)" in
     "$current/bin/codex"|"$package/bin/codex") ;;
     *) fail "$link exists and Fleet did not install it. Move it away, then run fleet apply." ;;
   esac
 fi
-
-work=""
-trap 'rm -rf "$work"; rm -f "$current.new.$$" "$link.new.$$"' EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
 
 latest=$(curl -fsSIL -o /dev/null -w '%{url_effective}' https://github.com/openai/codex/releases/latest) || fail "could not find the latest Codex release."
 tag=${latest##*/}
@@ -60,12 +82,12 @@ if [ ! -d "$releases/$tag" ]; then
   curl -fsSL "$base/$asset" -o "$work/$asset" || fail "could not download $base/$asset."
   want=$(awk -v asset="$asset" '$2 == asset { print $1 }' "$work/sums")
   [ -n "$want" ] || fail "the Codex $tag checksums do not list $asset."
-  [ "$(sha256sum "$work/$asset" | awk '{ print $1 }')" = "$want" ] || fail "$asset does not match its checksum."
+  [ "$(sha256 "$work/$asset")" = "$want" ] || fail "$asset does not match its checksum."
   mkdir "$work/package"
   tar -xzf "$work/$asset" -C "$work/package" || fail "could not unpack $asset."
   "$work/package/bin/codex" --version >/dev/null 9>&- || fail "the downloaded Codex does not run on this machine."
   mkdir -p "$releases"
-  mv -T "$work/package" "$releases/$tag" 2>/dev/null || published "$releases/$tag" || fail "could not move Codex $tag into $releases."
+  publish "$work/package" "$releases/$tag" 2>/dev/null || published "$releases/$tag" || fail "could not move Codex $tag into $releases."
 fi
 
 mkdir -p "$(dirname "$link")"
@@ -85,6 +107,8 @@ if [ -n "$previous" ] && [ "$previous" != "releases/$tag" ]; then
   done
 fi
 exec 9>&-
+[ -z "$lock" ] || rm -rf "$lock"
+lock=""
 
 if [ "$(command -v codex || true)" = "$HOME/.bun/bin/codex" ] && command -v bun >/dev/null 2>&1; then
   bun remove -g @openai/codex >/dev/null 2>&1 || fail "$HOME/.bun/bin/codex comes before $link on PATH. Run bun remove -g @openai/codex."
