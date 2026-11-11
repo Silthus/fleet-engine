@@ -4,7 +4,9 @@ Read this when the person picks the Slack pack.
 
 Their own Slack message with `:t3code:`, their `:t3code:` reaction, or a
 mention of their Slack app starts a T3 thread. It needs their own Slack app.
-Without a hub, the trigger runs on the Mac and stops while the Mac sleeps.
+While no hub is named, the trigger runs on the Mac and stops while the Mac
+sleeps. Once a machine is named the hub, the trigger moves there, and the
+app step below runs on the hub.
 
 1. The workflow starts off. Add `--workflows slack-thread=on` to the setup
    command.
