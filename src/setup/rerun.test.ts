@@ -14,7 +14,6 @@ afterEach(() => temp.cleanup());
 
 const onMac = (home: string, args: string[], replies: string[] = []) => fleetSetup(home, args, replies, fakeMachine(home), undefined, 0, "darwin");
 
-/** A Mac with a finished starter setup whose profile then gained a pack, the Hub pack with its hub, and a workflow through fleet packs. The Hub pack's certificate step later stops a non-interactive rerun, after the profile is pushed. */
 async function grownProfile() {
   const home = temp.make("home-");
   expect((await onMac(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"])).code).toBe(0);
@@ -45,6 +44,17 @@ describe("a second fleet setup", () => {
   });
 });
 
+async function withTeamSwitch() {
+  const home = temp.make("home-");
+  const team = temp.make("team-");
+  mkdirSync(join(team, "packs/posthog"), { recursive: true });
+  writeFileSync(join(team, "packs/posthog/pack.json"), JSON.stringify({ schema: 1, name: "posthog", summary: "Team rules.", workflows: [{ id: "team-reviews", name: "Team reviews", default: true, sentence: "Agents ask the team for reviews." }] }));
+  const fetched = async (ref: SourceRef): Promise<FetchedSource> => ({ ref, dir: team, packs: await loadPacks(team) });
+  expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--workflows", "team-reviews=off", "--plan", "claude", "--devbox", "skip"], [], fakeMachine(home, {}, { org: true }), fetched)).code).toBe(0);
+  expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "posthog"], workflows: { "team-reviews": false } });
+  return home;
+}
+
 describe("a rerun that changes picks", () => {
   test("after a stop before the GitHub sign-in, --remove applies to the saved packs, not to the default preset", async () => {
     const home = temp.make("home-");
@@ -56,15 +66,8 @@ describe("a rerun that changes picks", () => {
   });
 
   test("keeps a team workflow switch while the team's pack cannot be fetched", async () => {
-    const home = temp.make("home-");
-    const team = temp.make("team-");
-    mkdirSync(join(team, "packs/posthog"), { recursive: true });
-    writeFileSync(join(team, "packs/posthog/pack.json"), JSON.stringify({ schema: 1, name: "posthog", summary: "Team rules.", workflows: [{ id: "team-reviews", name: "Team reviews", default: true, sentence: "Agents ask the team for reviews." }] }));
-    const fetched = async (ref: SourceRef): Promise<FetchedSource> => ({ ref, dir: team, packs: await loadPacks(team) });
+    const home = await withTeamSwitch();
     const offline = async (ref: SourceRef): Promise<FetchedSource> => ({ ref, error: "offline" });
-    const first = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--workflows", "team-reviews=off", "--plan", "claude", "--devbox", "skip"], [], fakeMachine(home, {}, { org: true }), fetched);
-    expect(first.code).toBe(0);
-    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "posthog"], workflows: { "team-reviews": false } });
     await fleetSetup(home, ["--non-interactive", "--add", "communication"], [], fakeMachine(home, {}, { org: true }), offline);
     expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "posthog", "communication"], workflows: { "team-reviews": false } });
   });
@@ -78,10 +81,13 @@ describe("a rerun that changes picks", () => {
   });
 });
 
-/** A profile repo on GitHub that another machine set up and grew, and a home that has never run Fleet. The fake GitHub lives under the home, so the new machine shares it. */
 async function newMachineWithProfile() {
   const home = temp.make("home-");
   expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--add", "guards", "--workflows", "package-age=on", "--plan", "claude", "--devbox", "skip"])).code).toBe(0);
+  return forgetMachine(home);
+}
+
+function forgetMachine(home: string) {
   rmSync(join(home, ".config/fleet"), { recursive: true });
   rmSync(profilePath(home), { recursive: true });
   return home;
@@ -99,5 +105,19 @@ describe("fleet setup on a new machine whose profile repo exists", () => {
     const home = await newMachineWithProfile();
     expect((await fleetSetup(home, ["--non-interactive", "--add", "communication", "--devbox", "skip"])).code).toBe(0);
     expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "guards", "communication"], workflows: { "package-age": true }, plan: "claude" });
+  });
+
+  test("keeps the plan a run before the GitHub sign-in already set with --plan", async () => {
+    const home = await newMachineWithProfile();
+    const args = ["--non-interactive", "--preset", "starter", "--plan", "codex", "--devbox", "skip"];
+    expect((await fleetSetup(home, args, [], fakeMachine(home, { github: 1 }))).code).toBe(2);
+    expect((await fleetSetup(home, args)).code).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests"], plan: "codex" });
+  });
+
+  test("keeps a workflow switch of a team source the person is no longer a member of", async () => {
+    const home = forgetMachine(await withTeamSwitch());
+    expect((await fleetSetup(home, ["--non-interactive", "--add", "communication", "--devbox", "skip"])).code).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "posthog", "communication"], workflows: { "team-reviews": false } });
   });
 });

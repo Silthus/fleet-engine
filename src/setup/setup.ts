@@ -118,7 +118,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     if (!existing) return;
     const saved = profileDraft(existing);
     const sources = [...existing.sources, ...(progress.draft.sources ?? []).filter((ref) => !existing.sources.some((kept) => kept.name === ref.name))];
-    await context.answer({ ...saved, ...(hasPicks(flags) ? picksFrom(flags, catalog, saved) : {}), sources, settings: { ...existing.settings, ...progress.draft.settings } });
+    await context.answer({ ...saved, ...(hasPicks(flags) ? picksFrom(flags, catalog, saved) : {}), plan: flags.plan ?? saved.plan, sources, settings: { ...existing.settings, ...progress.draft.settings } });
   };
   const profile = profileStep({
     terminal,
