@@ -44,16 +44,25 @@ cat "${replies}/$reply.json"
   };
   const call = async (...args: string[]) => {
     const printed: string[] = [];
+    const warned: string[] = [];
     const print = spyOn(console, "log").mockImplementation((...line: unknown[]) => void printed.push(line.join(" ")));
+    const warn = spyOn(console, "error").mockImplementation((...line: unknown[]) => void warned.push(line.join(" ")));
     const saved = { FLEET_HANDLERS: process.env.FLEET_HANDLERS, FLEET_SETTINGS: process.env.FLEET_SETTINGS };
     Object.assign(process.env, env);
     try {
-      return { code: await prCommand(args, home), out: printed.join("\n").trim(), err: "" };
-    } catch (error) {
-      return { code: 1, out: printed.join("\n").trim(), err: `fleet pr: ${(error as Error).message}` };
+      return { code: await prCommand(args, home), out: printed.join("\n").trim(), err: warned.join("\n").trim() };
     } finally {
       print.mockRestore();
+      warn.mockRestore();
       for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  };
+  const refusal = async (...args: string[]) => {
+    try {
+      await call(...args);
+      return undefined;
+    } catch (error) {
+      return error;
     }
   };
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []);
@@ -63,7 +72,7 @@ cat "${replies}/$reply.json"
     env.FLEET_HANDLERS = JSON.stringify({ "review-bot": path });
   };
   const botArgs = () => JSON.parse(readFileSync(join(root, "bot-args.json"), "utf8"));
-  return { home, env, reply, run, call, calls, reviewBot, botArgs };
+  return { home, env, reply, run, call, refusal, calls, reviewBot, botArgs };
 }
 
 const user = (login: string) => ({ __typename: "User", login });
@@ -258,9 +267,9 @@ test("forecast refuses review and stamp flags, and says there is nothing to fore
   const box = sandbox();
   box.reviewBot(0);
   for (const args of [["forecast", "--minutes", "5"], ["forecast", "--deep"], ["review", "--request"], ["stamp", "--request"]]) {
-    const result = await box.call(args[0]!, "--repo", "acme/widgets", "--pr", "12", ...args.slice(1));
-    expect(result.code).toBe(1);
-    expect(`${result.out}\n${result.err}`).toContain("Usage: fleet pr");
+    const refused = await box.refusal(args[0]!, "--repo", "acme/widgets", "--pr", "12", ...args.slice(1));
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toContain("Usage: fleet pr");
   }
   expect(existsSync(join(box.home, "..", "bot-args.json"))).toBe(false);
   box.env.FLEET_HANDLERS = "{}";
@@ -313,10 +322,13 @@ test("stopping review stops the review-bot handler before review exits", async (
 test("wrong arguments print the usage and exit 1", async () => {
   const box = sandbox();
   for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"], ["review", "--repo", "acme/widgets"], ["review", "--repo", "acme/widgets", "--pr", "1", "--minutes", "0"], ["stamp", "--repo", "acme/widgets", "--pr", "1", "--deep"]]) {
-    const result = await box.call(...args);
-    expect(result.code).toBe(1);
-    expect(result.err).toStartWith("fleet pr: Usage: fleet pr ");
+    const refused = await box.refusal(...args);
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toStartWith("Usage: fleet pr ");
   }
+  const cli = box.run("threads");
+  expect(cli.code).toBe(1);
+  expect(cli.err).toStartWith("fleet pr: Usage: fleet pr ");
   expect(box.calls()).toEqual([]);
 });
 

@@ -162,7 +162,7 @@ run_in_slot() {
   slot=$1 holder="$locks/slot-$1.holder"
   shift
   describe_job "$@" > "$holder.$$" && mv -f "$holder.$$" "$holder"
-  [ -z "$waited" ] || disk_has_room
+  disk_has_room
   rm -f "$waiting"
   exec 8>&-
   trap - EXIT INT TERM
@@ -179,7 +179,7 @@ mv "$locks/new-$queued_at-$$" "$waiting"
 trap 'rm -f "$waiting"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-reported=0 waited=''
+reported=0
 while :; do
   queue_place
   if [ "$ahead" -eq 0 ]; then
@@ -197,5 +197,4 @@ while :; do
     reported=$now
   fi
   sleep 1
-  waited=1
 done
