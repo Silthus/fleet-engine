@@ -112,5 +112,19 @@ your devbox and runs the same steps. `fleet devbox` lists your devboxes.
 - `fleet update` moves the engine and your profile forward. Each machine also
   runs it every night.
 
+## When setup goes wrong
+
+`fleet triage` collects what the Fleet maintainer needs to fix a setup
+problem: the versions of Fleet, T3 Code, Claude Code, Codex, gh, Bun and your
+OS, the `fleet doctor` output, the step that failed and its error, the setup
+timings, and the setup transcript. It removes tokens, keys, email addresses,
+hostnames and home paths, and shows you the report. Then you pick: open a
+public issue on `Silthus/fleet-engine` with it, save it to a file to send
+yourself, or neither.
+
+An agent can run `fleet triage --print` to show you the report in the chat,
+and `fleet triage --send` once you say yes. `--save <file>` writes it to a
+file, and `--note <text>` says what went wrong.
+
 [The Fleet page](https://silthus.github.io/fleet-engine/) shows what each
 pack does, and builds the setup prompt with your picks.

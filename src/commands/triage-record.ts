@@ -1,0 +1,120 @@
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import type { Terminal } from "../setup/terminal.ts";
+
+export const stateDir = (home: string) => join(home, ".local", "state", "fleet");
+export const transcriptPath = (home: string) => join(stateDir(home), "setup.log");
+export const failurePath = (home: string) => join(stateDir(home), "setup-failed.json");
+export const timingsPath = (home: string) => join(stateDir(home), "setup-timings.json");
+
+const keptBytes = 512 * 1024;
+
+/** The last failed setup run: when, at which step, and the error it printed. */
+export type SetupFailure = { at: string; step?: string; error: string };
+
+export type TimedStep = { id: string; title?: string; start?: string; end?: string; blocked?: boolean; outcome?: string; error?: string };
+
+/** The setup timings file that fleet setup writes after each step. */
+export type SetupTimings = { started?: string; usable?: string; steps: TimedStep[] };
+
+export type Recorder = {
+  terminal: Terminal;
+  print(line: string): void;
+  /** Saves the failure of this run, with the step the transcript last showed. */
+  failed(error: string, now?: Date): void;
+};
+
+/**
+ * Records one fleet setup run: every line it prints and every answer typed,
+ * appended to the setup transcript, which keeps only its newest part. A
+ * new run clears the last failure.
+ */
+export function recordSetup(home: string, terminal: Terminal, args: string[], now = new Date()): Recorder {
+  const path = transcriptPath(home);
+  mkdirSync(dirname(path), { recursive: true });
+  trim(path);
+  rmSync(failurePath(home), { force: true });
+  const write = (line: string) => {
+    try {
+      appendFileSync(path, `${line}\n`);
+    } catch {}
+  };
+  write(`=== fleet setup${args.length ? ` ${args.join(" ")}` : ""} at ${now.toISOString()}`);
+  let header: string | undefined;
+  let step: string | undefined;
+  const print = (line: string) => {
+    write(line);
+    if (/^Fleet setup · \d+ of \d+/.test(line)) [header, step] = [line.split(" · ").slice(1, 2).join(""), undefined];
+    else if (header && step === undefined && line.trim()) step = line.trim().replace(/^▶ /, "");
+  };
+  return {
+    print,
+    terminal: {
+      ...terminal,
+      print(line) {
+        print(line);
+        terminal.print(line);
+      },
+      async ask(prompt) {
+        const answer = await terminal.ask(prompt);
+        write(`${prompt}${answer}`);
+        return answer;
+      },
+    },
+    failed(error, at = new Date()) {
+      write(`✗ ${error}`);
+      const where = header ? `${header}${step ? `: ${step}` : ""}` : undefined;
+      const failure: SetupFailure = { at: at.toISOString(), ...(where ? { step: where } : {}), error };
+      try {
+        writeFileSync(failurePath(home), `${JSON.stringify(failure, null, 2)}\n`);
+      } catch {}
+    },
+  };
+}
+
+function trim(path: string) {
+  if (!existsSync(path) || statSync(path).size <= keptBytes) return;
+  const text = readFileSync(path, "utf8");
+  const tail = text.slice(-keptBytes);
+  writeFileSync(path, tail.slice(tail.indexOf("\n") + 1));
+}
+
+export function readFailure(home: string): SetupFailure | undefined {
+  const file = readJson(failurePath(home)) as Partial<SetupFailure> | undefined;
+  return typeof file?.error === "string" && typeof file.at === "string" ? { at: file.at, error: file.error, ...(typeof file.step === "string" ? { step: file.step } : {}) } : undefined;
+}
+
+export function readTimings(home: string): SetupTimings | undefined {
+  const file = readJson(timingsPath(home)) as { started?: unknown; usable?: unknown; steps?: unknown } | undefined;
+  if (!file || !Array.isArray(file.steps)) return undefined;
+  const steps = file.steps.filter((step): step is TimedStep => typeof step === "object" && step !== null && typeof (step as TimedStep).id === "string");
+  return { ...(typeof file.started === "string" ? { started: file.started } : {}), ...(typeof file.usable === "string" ? { usable: file.usable } : {}), steps };
+}
+
+/** Seconds from the start of setup to t_usable, when the timings reached it. */
+export function usableSeconds(timings: SetupTimings | undefined): number | undefined {
+  if (!timings?.started || !timings.usable) return undefined;
+  const seconds = (Date.parse(timings.usable) - Date.parse(timings.started)) / 1000;
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.round(seconds) : undefined;
+}
+
+export function duration(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+}
+
+/** The newest lines of the setup transcript. */
+export function transcriptTail(home: string, lines: number): { lines: string[]; cut: number } {
+  const path = transcriptPath(home);
+  if (!existsSync(path)) return { lines: [], cut: 0 };
+  const all = readFileSync(path, "utf8").replace(/\n$/, "").split("\n");
+  return { lines: all.slice(-lines), cut: Math.max(0, all.length - lines) };
+}
+
+function readJson(path: string): unknown {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}

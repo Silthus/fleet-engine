@@ -23,6 +23,7 @@ describe("the done screen", () => {
       "  Profile         nora/fleet-profile, private. Change it with fleet packs and fleet set.",
       "  Runs by itself  Nightly updates, every day at 03:17",
       "                  Shared memory, every 5 minutes",
+      "  Report          fleet triage sends a report of this setup to the Fleet maintainer.",
       "",
       "Paste this into a new thread in T3 Code to start:",
       "",
