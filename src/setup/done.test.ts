@@ -10,7 +10,7 @@ isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
-const summary = { role: "mac" as const, packs: ["Pull-requests", "Memory"], devboxes: [], profileRepo: "nora/fleet-profile", runsByItself: ["Nightly updates, every day at 03:17", "Shared memory, every 5 minutes"] };
+const summary = { role: "mac" as const, packs: ["Pull requests", "Memory"], devboxes: [], profileRepo: "nora/fleet-profile", runsByItself: ["Nightly updates, every day at 03:17", "Shared memory, every 5 minutes"] };
 
 describe("the done screen", () => {
   test("sums up this Mac, the profile, and what runs by itself, then gives a first prompt", () => {
@@ -18,7 +18,7 @@ describe("the done screen", () => {
       "",
       "✓ Fleet is set up.",
       "",
-      "  This Mac        Pull-requests, Memory. fleet doctor passes.",
+      "  This Mac        Pull requests, Memory. fleet doctor passes.",
       "  Devbox          none. Add one with fleet devbox add <ssh host>.",
       "  Profile         nora/fleet-profile, private. Change it with fleet packs and fleet set.",
       "  Runs by itself  Nightly updates, every day at 03:17",

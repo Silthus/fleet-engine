@@ -136,7 +136,7 @@ describe("fleet packs", () => {
     expect((await fleet(home, ["packs", "--add", "orchestration"])).code).toBe(0);
     const result = await fleet(home, ["packs", "--remove", "pull-requests"]);
     expect(result.code).toBe(2);
-    expect(result.output).toStartWith("fleet packs: Orchestration needs Pull-requests. Add pull-requests, or remove orchestration.");
+    expect(result.output).toStartWith("fleet packs: Orchestration needs Pull requests. Add pull-requests, or remove orchestration.");
     expect((await pushed()).packs).toEqual(["pull-requests", "orchestration"]);
   });
 

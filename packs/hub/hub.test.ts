@@ -228,7 +228,6 @@ describe("the Own-account balancing workflow", () => {
   test("is off by default, needs only the hub, and its risk quotes the Anthropic terms word for word", () => {
     const workflow = manifest().workflows!.find((item) => item.id === "own-account-balancing")!;
     expect(workflow).toMatchObject({ name: "Own-account balancing", default: false, needs: ["hub"] });
-    expect(workflow.moment).toBeDefined();
     for (const quote of [
       "https://www.anthropic.com/legal/aup",
       "Do Not Abuse Our Platform",

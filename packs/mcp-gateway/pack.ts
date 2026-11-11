@@ -23,12 +23,6 @@ export default {
       name: "MCP gateway",
       default: true,
       sentence: "The hub signs in to your MCP servers once, and agents on every machine reach them through it.",
-      moment: {
-        time: "09:20",
-        title: "Every tool, signed in once",
-        body: "An agent on your laptop reads a Slack thread and an agent on a fresh box queries your analytics, both through the hub. You signed in to each tool once.",
-        words: ["hub", "agent", "MCP server"],
-      },
     });
     const installed = fleet.check({
       on: "hub",
@@ -61,12 +55,6 @@ export default {
       name: "Slack bridge",
       default: false,
       sentence: "Agents read Slack as you through the MCP gateway, and leave only unsent drafts and canvases.",
-      moment: {
-        time: "11:40",
-        title: "A reply waits for you, unsent",
-        body: "An agent reads the incident thread and the canvas, fills the canvas in, and leaves a reply as a draft in the thread. You read it and press send.",
-        words: ["agent"],
-      },
       risk: "The bridge acts as your Slack account. It reads what you can read, and writes only drafts you send yourself and canvases.",
     });
     fleet.check({
@@ -87,20 +75,18 @@ export default {
       test: async (ctx) => (await upstreams()).appSignedIn(await host(ctx), await slackApp()),
       repair: { ask: "Sign the Slack bridge in to ChatGPT.", command: "fleet mcp-gateway slack-bridge sign-in", interactive: true },
     });
-    const google = {
-      gmail: { sentence: "Agents read your mail and leave replies as unsent drafts, through the MCP gateway.", body: "An agent reads the thread a customer replied to and leaves a reply as a draft. You read it and press send." },
-      "google-calendar": { sentence: "Agents read your calendar through the MCP gateway, and change nothing.", body: "An agent finds a free hour for the review across both calendars, and tells you which one." },
-      "google-drive": { sentence: "Agents read your documents, sheets and slides through the MCP gateway, and change nothing.", body: "An agent reads the planning doc and the sheet behind it, and answers from both." },
+    const sentences = {
+      gmail: "Agents read your mail and leave replies as unsent drafts, through the MCP gateway.",
+      "google-calendar": "Agents read your calendar through the MCP gateway, and change nothing.",
+      "google-drive": "Agents read your documents, sheets and slides through the MCP gateway, and change nothing.",
     };
     for (const app of googleApps) {
-      const words = google[app.name as keyof typeof google];
       const workflow = fleet.workflow({
         id: app.name,
         name: app.title,
         default: false,
         requires: ["mcp-gateway"],
-        sentence: words.sentence,
-        moment: { time: "10:10", title: `${app.title}, read through the hub`, body: words.body, words: ["agent"] },
+        sentence: sentences[app.name as keyof typeof sentences],
         risk: `The route acts as your Google account through a ChatGPT sign-in. Only its allowlist keeps agents from tools that send, change or delete, so native Codex turns ${app.title} off on every machine.`,
       });
       fleet.check({
@@ -136,12 +122,6 @@ export default {
       requires: ["gmail"],
       settings: [query],
       sentence: "A reply in a Gmail conversation that you wrote in starts a T3 thread about it, and later replies in that conversation go to the same thread.",
-      moment: {
-        time: "08:40",
-        title: "A reply waits in a thread",
-        body: "A customer answers the mail you sent yesterday. Two minutes later a thread sums up what they ask and proposes a reply. Their next answer lands in the same thread.",
-        words: ["hub", "thread"],
-      },
       risk: "Mail from outside becomes agent prompts. The prompt treats every email as data, and the Gmail route can only read mail and write drafts.",
     });
     const watchOf = async (ctx: Context) => ({
@@ -180,12 +160,6 @@ export default {
       requires: ["slack-bridge"],
       settings: [reviewSearch, reviewAsks],
       sentence: "When a ready pull request of yours waits 4 hours on a review nobody gave, the T3 thread that links it wakes up, and again at 24 hours.",
-      moment: {
-        time: "14:00",
-        title: "A silent review request speaks up",
-        body: "Your pull request has waited on the team since the morning. The thread that owns it wakes and asks whether to ping a named reviewer, nudge the team in Slack, or keep waiting.",
-        words: ["hub", "thread"],
-      },
       risk: "Reads your pull requests on GitHub and your own Slack messages from the last 12 hours. It messages your threads and changes nothing on GitHub or Slack.",
     });
     const reviewWaitOf = async (ctx: Context) => {

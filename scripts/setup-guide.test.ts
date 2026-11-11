@@ -188,6 +188,12 @@ describe("the agent setup guide", () => {
     expect(new Set(paths)).toEqual(new Set([guidePath]));
   });
 
+  test("names only files that are in the repo", () => {
+    const files = [...guide().matchAll(/`([\w./-]+\.(?:json|md|svg|ts|sh|html))`|\]\((?!https?:|#)([^)#\s]+)/g)].map((match) => (match[1] ?? match[2])!);
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.filter((file) => !existsSync(join(root, file)))).toEqual([]);
+  });
+
   test("fetches only files that are in the repo", () => {
     const paths = [...guide().matchAll(/https:\/\/raw\.githubusercontent\.com\/Silthus\/fleet-engine\/main\/(\S+?)[`)\s]/g)].map((match) => match[1]!);
     expect(paths.length).toBeGreaterThan(0);

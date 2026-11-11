@@ -13,14 +13,14 @@ const withPack = (fields = {}, machine = mac) =>
   resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs: ["pull-requests", "orchestration"], ...fields }, machine);
 
 describe("the Orchestration pack", () => {
-  test("adds its rules after the Pull-requests pack", () => {
+  test("adds its rules after the Pull requests pack", () => {
     const result = withPack();
     const agents = fileContent(result, ".agents/AGENTS.md");
     expect(agents.indexOf("# Orchestration")).toBeGreaterThan(agents.indexOf("# Pull requests"));
     expect(agents.slice(agents.indexOf("# Orchestration"))).toMatchSnapshot();
   });
 
-  test("needs the Pull-requests pack", () => {
+  test("needs the Pull requests pack", () => {
     const result = resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs: ["orchestration"] });
     expect(result.packs.find((pack) => pack.name === "orchestration")).toMatchObject({ available: false, reason: "requires pull-requests" });
   });

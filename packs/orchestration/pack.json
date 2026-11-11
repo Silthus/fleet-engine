@@ -103,31 +103,13 @@
         "orchestration.goals",
         "orchestration.analyticsProject"
       ],
-      "sentence": "Big work becomes a map of tickets, and a conductor thread works through it with one worker thread per ticket.",
-      "moment": {
-        "time": "09:30",
-        "title": "One request, many threads",
-        "body": "You describe a change that spans a week of work. The conductor charts it as a map of tickets and starts a worker thread for each ticket that is ready.",
-        "words": [
-          "map",
-          "conductor",
-          "thread"
-        ]
-      }
+      "sentence": "Big work becomes a map of tickets, and a conductor thread works through it with one worker thread per ticket."
     },
     {
       "id": "side-threads",
       "name": "Side threads",
       "default": true,
-      "sentence": "When you agree to a side fix, it starts in its own T3 thread, and this thread stays on its task.",
-      "moment": {
-        "time": "12:00",
-        "title": "A side fix gets its own thread",
-        "body": "Mid-task, the agent spots an unrelated bug. You say yes, and the fix starts in its own thread while this one stays on its task.",
-        "words": [
-          "thread"
-        ]
-      }
+      "sentence": "When you agree to a side fix, it starts in its own T3 thread, and this thread stays on its task."
     },
     {
       "id": "quality-loop",
@@ -143,15 +125,6 @@
         "orchestration.ledgerRepo"
       ],
       "sentence": "Each night, agents improve one area of a repo through small, proven draft pull requests that you review.",
-      "moment": {
-        "time": "01:00",
-        "title": "The quality loop",
-        "body": "Overnight, agents add tests to one area of your repo, then prune and refactor it, one small proven draft pull request at a time.",
-        "night": true,
-        "words": [
-          "always-on devbox"
-        ]
-      },
       "risk": "Spends your AI plan's usage every night."
     },
     {
@@ -169,12 +142,6 @@
         "orchestration.signalSource"
       ],
       "sentence": "Each night, agents turn production errors and friction that nobody handles into small draft fix pull requests.",
-      "moment": {
-        "time": "02:00",
-        "title": "The signal loop",
-        "body": "Overnight, agents read the errors and slow paths your users hit, pick the ones nobody handles, and open a small proven draft fix for each.",
-        "night": true
-      },
       "risk": "Reads production signals and spends your AI plan's usage every night."
     },
     {
@@ -187,12 +154,7 @@
       "settings": [
         "orchestration.loopProject"
       ],
-      "sentence": "Each weekday morning, one thread lists your open pull requests and what blocks each one.",
-      "moment": {
-        "time": "08:00",
-        "title": "Your pull requests on one page",
-        "body": "Before you start, one thread lists every open pull request of yours and the one thing each one waits for."
-      }
+      "sentence": "Each weekday morning, one thread lists your open pull requests and what blocks each one."
     }
   ],
   "jobs": [

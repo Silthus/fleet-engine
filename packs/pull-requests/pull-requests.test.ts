@@ -10,7 +10,7 @@ beforeAll(async () => (engine = await engineSource()));
 
 const withPack = (fields = {}) => resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { packs: ["pull-requests"], ...fields });
 
-describe("the Pull-requests pack", () => {
+describe("the Pull requests pack", () => {
   test("adds its rules after Base and points at its guides", () => {
     const agents = fileContent(withPack(), ".agents/AGENTS.md");
     expect(agents.indexOf("# Pull requests")).toBeGreaterThan(agents.indexOf("## Model selection"));

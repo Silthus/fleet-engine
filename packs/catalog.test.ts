@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { needValues, type AvailableSource, type Concept, type PackManifest, type Preset } from "../src/pack/types.ts";
+import { needValues, type AvailableSource, type PackManifest, type Preset } from "../src/pack/types.ts";
 import { needsHubPacks } from "../src/setup/defaults.ts";
 import { tempDirs } from "../src/testing/git.ts";
 import { skillSources, devbox, engineSource, resolveEngine } from "../src/testing/packs.ts";
@@ -11,16 +11,14 @@ afterEach(() => temp.cleanup());
 let engine: AvailableSource;
 let manifests: PackManifest[];
 let presets: Preset[];
-let concepts: Concept[];
 beforeAll(async () => {
   engine = await engineSource();
   manifests = engine.packs.map((pack) => pack.manifest);
   presets = await Bun.file(join(root, "presets.json")).json();
-  concepts = await Bun.file(join(root, "concepts.json")).json();
 });
 
 const workflows = () => manifests.flatMap((manifest) => (manifest.workflows ?? []).map((workflow) => ({ ...workflow, pack: manifest.name })));
-const posthogTerms = /posthog|hogli|stamphog|reviewhog/i;
+const workflowFields = ["id", "name", "sentence", "needs", "requires", "default", "settings", "risk"];
 
 describe("the catalog", () => {
   test("every pack says what it adds to a day and what it costs", () => {
@@ -29,28 +27,12 @@ describe("the catalog", () => {
     }
   });
 
-  test("every workflow has a name, a sentence, needs from the closed set, a default, and a moment", () => {
+  test("every workflow has a name, a sentence, needs from the closed set, a default, and only the fields the engine reads", () => {
     for (const workflow of workflows()) {
       const label = `${workflow.pack}/${workflow.id}`;
       expect([label, typeof workflow.name, /^[A-Z].*\.$/.test(workflow.sentence), typeof workflow.default]).toEqual([label, "string", true, "boolean"]);
       for (const need of workflow.needs ?? []) expect([label, needValues]).toEqual([label, expect.arrayContaining([need])]);
-      expect([label, workflow.moment?.time]).toEqual([label, expect.stringMatching(/^([01]\d|2[0-3]):[0-5]\d$/)]);
-      expect([label, Boolean(workflow.moment?.title && workflow.moment.body)]).toEqual([label, true]);
-    }
-  });
-
-  test("every word a moment uses has one public concept note", () => {
-    const words = concepts.map((concept) => concept.word);
-    expect(new Set(words).size).toBe(words.length);
-    const publicWords = concepts.filter((concept) => concept.audience !== "posthog").map((concept) => concept.word);
-    const used = workflows().flatMap((workflow) => workflow.moment?.words ?? []);
-    expect(used.filter((word) => !publicWords.includes(word))).toEqual([]);
-  });
-
-  test("marks every PostHog concept for the PostHog audience", () => {
-    for (const concept of concepts) {
-      expect([concept.word, concept.audience ?? "public"]).toEqual([concept.word, expect.stringMatching(/^(public|posthog)$/)]);
-      if (posthogTerms.test(`${concept.word} ${concept.note}`)) expect([concept.word, concept.audience]).toEqual([concept.word, "posthog"]);
+      expect([label, Object.keys(workflow).filter((key) => key !== "pack" && !workflowFields.includes(key))]).toEqual([label, []]);
     }
   });
 

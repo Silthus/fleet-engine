@@ -22,7 +22,7 @@ const teamPack = (manifest: Partial<PackManifest> = {}): LoadedPack => ({
     summary: "A team pack.",
     audience: "posthog",
     workflows: [
-      { id: "team-devbox", name: "Team devbox", sentence: "Setup makes a team devbox.", needs: ["posthog-org"], default: true, settings: ["posthog.region"], moment: { time: "08:45", title: "Your devbox is up", body: "It runs.", words: ["Coder"] } },
+      { id: "team-devbox", name: "Team devbox", sentence: "Setup makes a team devbox.", needs: ["posthog-org"], default: true, settings: ["posthog.region"] },
     ],
     settings: [{ key: "posthog.region", question: "Which region?", type: "choice", default: "us", ask: "setup", choices: [{ value: "us", label: "US" }, { value: "eu", label: "EU" }] }],
     ...manifest,
@@ -55,12 +55,8 @@ describe("the page build", () => {
     expect(icons).not.toContain(teamIcon);
   });
 
-  test("the page shows no day, moment, or word note, and ships none of their data", async () => {
-    const html = await buildPage({ audience: "public" });
-    expect(html).not.toMatch(/A day with|moments?\b|New word/i);
-    const data = await pageData({ audience: "public" });
-    expect(data.packs.flatMap((pack) => pack.workflows).filter((workflow) => "moment" in workflow)).toEqual([]);
-    expect(Object.keys(data)).not.toContain("concepts");
+  test("the page shows no day, moment, or word note", async () => {
+    expect(await buildPage({ audience: "public" })).not.toMatch(/A day with|moments?\b|New word/i);
   });
 
   test("each pack opens in a dialog, and each flow belongs to a pack on the public page and is short", async () => {
@@ -137,7 +133,7 @@ describe("the page build", () => {
   });
 
   test("a workflow that needs a team pack shows only when that pack is in the build, and so do the settings only it lists", async () => {
-    const boxes = { id: "team-boxes", name: "Team boxes", sentence: "Heavy work runs on a box.", needs: ["hub" as const, "coder" as const], default: true, settings: ["acme.template"], moment: { time: "13:00", title: "Tests on a box", body: "A box runs them." } };
+    const boxes = { id: "team-boxes", name: "Team boxes", sentence: "Heavy work runs on a box.", needs: ["hub" as const, "coder" as const], default: true, settings: ["acme.template"] };
     const acme = (name: string) => teamPack({ name, audience: undefined, workflows: [boxes], settings: [{ key: "acme.template", question: "Which template?", type: "string" }] });
     const ids = (data: { packs: Array<{ workflows: Array<{ id: string }> }> }) => data.packs.flatMap((pack) => pack.workflows).map((workflow) => workflow.id);
     const keys = (data: { packs: Array<{ settings: Array<{ key: string }> }> }) => data.packs.flatMap((pack) => pack.settings).map((setting) => setting.key);
