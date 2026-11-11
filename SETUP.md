@@ -32,6 +32,11 @@ passing `fleet doctor` on this Mac.
 - **One PATH.** Your shell started before the install. Begin every command
   that runs `fleet`, `gh`, `bun`, `claude`, or `codex` with
   `export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH";`.
+- **When a step fails.** Explain its last lines and fix what they name. When
+  it still fails, or the cause is not clear, offer `fleet triage`: run
+  `fleet triage --print`, show the person the report, and run
+  `fleet triage --send` only after they say yes. It opens an issue for the
+  Fleet maintainer, with private details taken out.
 - **The keyboard in Terminal.** A command that needs the person's keyboard
   runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
   that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,
@@ -192,6 +197,12 @@ The install from step 1 runs in the background. It is done when
 an error, explain its last lines, fix what they name, and run it again: it
 picks up where it stopped. Use the wait (see "While something runs").
 
+With a hub and a node, use this wait to start them: run items 1 to 5 of
+step 9 now, and start each `coder create` in the background, both at once.
+They take minutes and run on while you go on with step 6. On a first setup,
+skip the question about reusing a hub: there is none yet. Check that item 5
+passes before item 6 of step 9.
+
 ## 6. What they want
 
 Step 2 asks these. Skip the packs question when the picks from the page name
@@ -305,10 +316,12 @@ only, go on to step 10. With a hub and a node, go on to step 9.
 ## 9. Add the hub and the node
 
 The default is one **hub** with a 200 GB disk and one **node** with a 500 GB
-disk, both Coder workspaces. Run each step on this Mac. Before each step that
-creates something, show the command and ask whether to go on. Creating a
-workspace and `fleet devbox add` take minutes; use each wait (see "While
-something runs").
+disk, both Coder workspaces. Run each item on this Mac. Items 1 to 5 start
+early, in step 5, so the workspaces are made while the Mac is set up. Items 6
+to 10 run here, after the Mac is ready to use. Their choice of a hub and a
+node in step 2 is the go-ahead to create them: show each command as you start
+it. Creating a workspace and `fleet devbox add` take minutes; use each wait
+(see "While something runs").
 
 Before item 3 below, run `fleet hub status` and `coder list`, and ask
 whether to reuse a hub:
@@ -367,8 +380,8 @@ the steps below, follow the note.
    ```
 
    The step is done when `coder whoami` passes.
-2. **Template.** List them with `coder templates list` and ask which one to
-   use. Read its parameters, the `coder_parameter` blocks in its files:
+2. **Template.** List them with `coder templates list`. When there is one,
+   use it; ask only when there are more. Read its parameters, the `coder_parameter` blocks in its files:
 
    ```sh
    coder templates pull <template> ~/.cache/fleet-setup/template-<template>
@@ -378,9 +391,9 @@ the steps below, follow the note.
    When `coder templates pull` fails, open the template's page in the Coder
    web app, `<coder address>/templates/<template>`, and ask the person to
    read you the parameters and their allowed values from it.
-3. **Names.** Ask for the two workspace names. Recommend `fleet-hub` and
-   `fleet-node-1`. Below, `<hub>` and `<node>` stand for them, and `<name>`
-   for either.
+3. **Names.** Use `fleet-hub` and `fleet-node-1`. Ask for a name only when
+   `coder list` already has a workspace by that name that they do not reuse.
+   Below, `<hub>` and `<node>` stand for them, and `<name>` for either.
 4. **Create.** Create the hub with a 200 GB disk and the node with a 500 GB
    disk, with every parameter on the command line, so Coder asks nothing.
    `--preset none` stops the preset question that `--yes` does not skip, and
@@ -389,6 +402,8 @@ the steps below, follow the note.
    ```sh
    coder create <name> --template <template> --preset none --use-parameter-defaults --parameter <disk parameter>=<200 or 500> --yes
    ```
+
+   Start both at once, each in the background.
 
    Then keep each one running, because agents work there while the Mac
    sleeps: `coder schedule stop <name> manual`.

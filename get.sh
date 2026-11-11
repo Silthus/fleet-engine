@@ -17,7 +17,11 @@ install_only=
 bun_version=1.4.2
 
 say() { printf 'Fleet: %s\n' "$*" >&2; }
-fail() { say "$*"; exit 1; }
+fail() {
+  say "$*"
+  [ "$(sed -n 2p "$HOME/.local/bin/fleet" 2>/dev/null)" != "# Fleet" ] || say "Stuck? Run fleet triage. It shows a report of this setup that you can send to the Fleet maintainer."
+  exit 1
+}
 has() { command -v "$1" >/dev/null 2>&1; }
 
 while [ $# -gt 0 ]; do
