@@ -64,8 +64,8 @@ Ask "Mac only, or Mac plus a hub and a node?", with these options:
   on this Mac. Agents stop when the Mac sleeps. A hub and a node can come
   later.
 - **Mac plus a hub and a node.** Two Linux devboxes in the cloud: one **hub**
-  with a 200 GB disk, which keeps your machines linked and shares MCP
-  servers, and one **node** with a 500 GB disk, where threads do the work.
+  with a 200 GB disk, which keeps your machines linked and watches
+  their disks, and one **node** with a 500 GB disk, where threads do the work.
   Add more nodes later, when the load grows.
 
 Use their answer. Set up the Mac first in both cases.
@@ -127,8 +127,8 @@ notes of the packs they picked.
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Always | None |
 | `guards` | Hooks that stop an agent's shell commands from running network code, using GitHub outside your owners, or polling in loops. | Always | `packs/guards/SETUP.md` |
 | `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | Always | `packs/slack/SETUP.md` |
-| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | With a hub and a node | Step 9 |
-| `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | With a hub and a node | Step 9 |
+| `hub` | One always-on devbox manages the others: it signs in to your MCP servers once, keeps your devboxes linked, and watches their disks. | In step 9 | `packs/hub/SETUP.md` |
+| `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | Later, once the hub runs | None |
 
 ## 7. Run setup with their answers
 
@@ -176,7 +176,62 @@ only, setup is done. With a hub and a node, go on to step 9.
 
 ## 9. Add the hub and the node
 
-Walk them through steps 3 and 4 of
-[Getting started](https://github.com/Silthus/fleet-engine/blob/main/docs/getting-started.md),
-running each command yourself. Add the hub first, then the node. To add a
-node later, they run the same steps with a new workspace.
+The default is one **hub** with a 200 GB disk and one **node** with a 500 GB
+disk, both Coder workspaces. Run each step on this Mac. Before each step that
+creates something, show the command and ask whether to go on.
+
+1. **Coder CLI.** When `command -v coder` finds nothing, install it with
+   `brew install coder`. When `coder whoami` fails, ask for their Coder
+   address and sign in. `coder login` asks them to paste a token, so run it in
+   a Terminal window:
+
+   ```sh
+   printf '#!/bin/sh\ncoder login %s\n' '<coder address>' > ~/.cache/fleet-setup/coder.command && chmod +x ~/.cache/fleet-setup/coder.command && open ~/.cache/fleet-setup/coder.command
+   ```
+
+   The step is done when `coder whoami` passes.
+2. **Template.** List them with `coder templates list` and ask which one to
+   use. Read its parameters, the `coder_parameter` blocks in its files:
+
+   ```sh
+   coder templates pull <template> ~/.cache/fleet-setup/template-<template>
+   ```
+
+   Find the disk size parameter. Ask for each parameter without a default.
+3. **Names.** Ask for the two workspace names. Recommend `fleet-hub` and
+   `fleet-node-1`.
+4. **Create.** Create the hub with a 200 GB disk and the node with a 500 GB
+   disk, with every parameter on the command line, so Coder asks nothing:
+
+   ```sh
+   coder create <name> --template <template> --parameter <disk parameter>=<200 or 500> --yes
+   ```
+
+   Then keep each one running, because agents work there while the Mac
+   sleeps: `coder schedule stop <name> manual`.
+5. **SSH.** Run `coder config-ssh --yes`. The step is done when
+   `ssh coder.<name> true` passes for both workspaces.
+6. **Fleet on each workspace, the hub first.** `fleet devbox add` installs
+   Fleet, applies their profile, and links T3 Code. Its sign-ins need their
+   keyboard, so run it in a Terminal window:
+
+   ```sh
+   printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:$PATH"\nfleet devbox add %s\n' 'coder.<name>' > ~/.cache/fleet-setup/devbox.command && chmod +x ~/.cache/fleet-setup/devbox.command && open ~/.cache/fleet-setup/devbox.command
+   ```
+
+   Before it opens, explain its sign-ins from the table in step 4 of
+   [Getting started](https://github.com/Silthus/fleet-engine/blob/main/docs/getting-started.md).
+   Ask them to tell you when it prints that the host is their devbox now.
+7. **Name the hub.** Run `fleet hub here` on it, over SSH:
+
+   ```sh
+   ssh coder.<hub> 'bash -lc "fleet hub here coder.<hub>"'
+   ```
+
+8. **Hub pack.** Read `packs/hub/SETUP.md` in the engine and follow it.
+9. **Check.** Run `fleet doctor` on the Mac, and on each workspace with
+   `ssh coder.<name> 'bash -lc "fleet doctor"'`. Explain each line as in
+   step 8.
+
+To add a node later, when the load grows, run steps 3 to 6 again with a new
+name and a 500 GB disk, then `fleet doctor` on it.
