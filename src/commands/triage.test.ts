@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import type { CommandRunner } from "../adapters/run.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { engineRoot, fakeMachine, fleetSetup, scripted } from "../setup/testing.ts";
-import { redact } from "./triage-redact.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -41,6 +40,7 @@ function capture(sent: Sent[], gh: { code: number; stdout: string; stderr?: stri
     if (command[0] === "gh" && command[1] === "issue") return gh;
     if (command[0] === "git" && command.includes("user.name")) return { code: 0, stdout: "Nora Quill\n" };
     if (command[0] === "git" && command.includes("describe")) return { code: 0, stdout: "v1.4.0-3-gabc1234\n" };
+    if (command[0] === "git" && command.includes("get-url")) return { code: 0, stdout: "https://github.com/nora/team-dotfiles.git\n" };
     const version = versions[command[0]!];
     return version ? { code: 0, stdout: version } : { code: 1, stdout: "", stderr: "not found" };
   };
@@ -50,10 +50,10 @@ function capture(sent: Sent[], gh: { code: number; stdout: string; stderr?: stri
 function failedMachine(home: string, leaked = secrets()) {
   const profileDir = join(home, "profile");
   mkdirSync(profileDir, { recursive: true });
-  writeFileSync(join(profileDir, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "v1", channel: "release" }, sources: [{ name: "team", repo: "secret-org/team-packs", ref: "main" }], packs: ["pull-requests", "team"], plan: "both", settings: {}, workflows: {}, hub: "hub-big-box", devboxes: ["node-west-7"] }));
+  writeFileSync(join(profileDir, "fleet.json"), JSON.stringify({ schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "v1", channel: "release" }, sources: [{ name: "team", repo: "secret-org/team-packs", ref: "main" }], packs: ["pull-requests", "team"], plan: "both", settings: { "memory.repo": "nora/agent-notes" }, workflows: {}, hub: "hub-big-box", devboxes: ["node-west-7"] }));
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
-  writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "mac", name: "noras-mbp", profileDir, devboxes: ["node-west-7"], setup: { done: ["bootstrap", "github", "packs"] } }));
-  const state = join(home, ".local/state/fleet");
+  writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "mac", name: "noras-mbp", profileDir, devboxes: ["node-west-7", "q7"], setup: { done: ["bootstrap", "github", "packs"] } }));
+  const state = join(home, ".local/state/fleet/logs");
   mkdirSync(state, { recursive: true });
   writeFileSync(
     join(state, "setup.log"),
@@ -72,9 +72,15 @@ function failedMachine(home: string, leaked = secrets()) {
       leaked.privateKey,
       `  author ${leaked.email} at noras-mbp.local, Nora Quill`,
       `  ssh node-west-7.corp.internal (10.20.30.40) fleet doctor`,
+      `  {"password":"${leaked.password} horse, battery staple"} and {'client_secret': '${leaked.opaque.slice(0, 12)}'}`,
+      `  invited ${leaked.email.replace("@", "%40")} as Nora%20Quill and Nora+Quill, then ssh q7 true (Q7 stays)`,
+      `  read C:\\Users\\NoraQ\\.ssh\\id_ed25519 and C:\\Users\\NoraQ\\.gitconfig`,
+      "  pushed nora/team-dotfiles and cloned nora/agent-notes",
+      "  Created the private repo nora/fleet-profile",
       `  wrote ${home}/.claude/settings.json and /Users/nora/.zshrc`,
       "  fetched secret-org/team-packs at main",
       "  engine at 0123456789abcdef0123456789abcdef01234567",
+      "fleet doctor: Everything matches. engine 0123456789abcdef0123456789abcdef01234567 v1.4.0 at git@github.com:nora/fleet-profile.git",
       "  - Token scopes: 'repo', 'read:org'",
       "fleet: fleet apply could not set up this machine. Fix what it says above, then run fleet setup again.",
     ].join("\n") + "\n",
@@ -116,7 +122,13 @@ describe("fleet triage", () => {
     expect(shown).toContain("## fleet doctor\n\n```text\nfleet: ");
     expect(shown).toContain("▶ Set up this Mac: fleet apply installs your packs");
     expect(shown).toContain("export GITHUB_TOKEN=<redacted>");
-    expect(shown).toContain("https://<credentials>@github.com/nora/fleet-profile.git");
+    expect(shown).toContain("https://<credentials>@github.com/<profile repo>.git");
+    expect(shown).toContain(`{"password":"<redacted>"} and {'client_secret': '<redacted>'}`);
+    expect(shown).toContain("invited <email> as <name> and <name>, then ssh <devbox 2> true (Q7 stays)");
+    expect(shown).toContain("read C:\\Users\\<user>\\.ssh\\id_ed25519 and C:\\Users\\<user>\\.gitconfig");
+    expect(shown).toContain("pushed <profile repo> and cloned <private repo>");
+    expect(shown).toContain("Created the private repo <profile repo>");
+    expect(shown).toContain("fleet doctor: Everything matches. engine 0123456789abcdef0123456789abcdef01234567 v1.4.0 at git@github.com:<profile repo>.git");
     expect(shown).toContain("ssh <devbox 1>.<host> (<ip>) fleet doctor");
     expect(shown).toContain("wrote ~/.claude/settings.json and /Users/<user>/.zshrc");
     expect(shown).toContain("fetched <team source> at main");
@@ -126,7 +138,7 @@ describe("fleet triage", () => {
     expect(shown).toContain("Fleet removed tokens, keys, email addresses, hostnames and home paths from this report.");
     const report = shown.slice(0, shown.indexOf("Send this report"));
     for (const secret of Object.values(leaked)) expect(report).not.toContain(secret.split("\n")[1] ?? secret);
-    for (const name of ["noras-mbp", "node-west-7", "hub-big-box", "10.20.30.40", "secret-org", "Nora Quill", home]) expect(report).not.toContain(name);
+    for (const name of ["noras-mbp", "node-west-7", "hub-big-box", "10.20.30.40", "secret-org", "Nora Quill", "Nora%20Quill", "NoraQ", "horse", "team-dotfiles", "agent-notes", leaked.opaque.slice(0, 12), home]) expect(report).not.toContain(name);
 
     const [file] = savedReports(home);
     expect(shown).toContain(`✓ Saved the report to ${join(home, file!)}.`);
@@ -163,10 +175,10 @@ describe("fleet triage", () => {
   test("when gh cannot open the issue, saves the report and names the page to paste it into", async () => {
     const home = temp.make("home-");
     failedMachine(home);
-    const result = await triage(home, ["--send"], [], [], { code: 4, stdout: "", stderr: `To get started with GitHub CLI, please run:  gh auth login\nnot logged in at ${home}\n` });
+    const result = await triage(home, ["--send"], [], [], { code: 4, stdout: "", stderr: `To get started with GitHub CLI, please run:  gh auth login\nnot logged in at ${home} on noras-mbp as Nora Quill for secret-org/team-packs\n` });
     expect(result.code).toBe(1);
     expect(result.prompts).toEqual([]);
-    expect(result.output).toContain("Could not open the issue: not logged in at ~");
+    expect(result.output).toContain("Could not open the issue: not logged in at ~ on <this machine> as <name> for <team source>");
     const [file] = savedReports(home);
     expect(result.output).toEndWith(`Saved the report to ${join(home, file!)}. Open https://github.com/Silthus/fleet-engine/issues/new and paste it there.`);
   });
@@ -238,15 +250,27 @@ describe("fleet triage", () => {
   test("keeps a long transcript under GitHub's issue size by cutting its oldest lines", async () => {
     const home = temp.make("home-");
     failedMachine(home);
-    const state = join(home, ".local/state/fleet");
+    const state = join(home, ".local/state/fleet/logs");
     writeFileSync(join(state, "setup.log"), Array.from({ length: 400 }, (_, index) => `line ${index} ${"x".repeat(200)}`).join("\n"));
     const result = await triage(home, ["--send"], []);
     const body = result.sent.find((call) => call.command[1] === "issue")!.input!;
     expect(body.length).toBeLessThanOrEqual(60_000);
-    expect(body).toContain("(older lines cut)");
+    expect(body).toMatch(/## Setup transcript \(newest \d+ lines\)\n\n```text\nline \d+ x/);
     expect(body).toContain("line 399 ");
     expect(body).not.toContain("line 0 ");
     expect(body).toEndWith("Made by `fleet triage`.");
+  });
+
+  test("a very long note is cut, and the report still fits once, with its transcript", async () => {
+    const home = temp.make("home-");
+    failedMachine(home);
+    writeFileSync(join(home, ".local/state/fleet/logs/setup.log"), "the only transcript line\n");
+    const result = await triage(home, ["--send", "--note", "z".repeat(130_000)], []);
+    const body = result.sent.find((call) => call.command[1] === "issue")!.input!;
+    expect(body.length).toBeLessThanOrEqual(60_000);
+    expect(body).toStartWith(`## What happened\n\n${"z".repeat(3_999)}…\n\n## Setup\n`);
+    expect(body.split("## What happened").length).toBe(2);
+    expect(body).toEndWith("```text\nthe only transcript line\n```\n\nMade by `fleet triage`.");
   });
 });
 
@@ -257,6 +281,9 @@ describe("fleet setup and triage", () => {
     const failed = await fleetSetup(home, args, [], fakeMachine(home), undefined, 1);
     expect(failed.code).toBe(1);
     expect(failed.output).toEndWith("fleet: fleet doctor found something to fix on this machine. Fix what it says above, then run fleet setup again.\nStuck? Run fleet triage. It shows a report of this setup that you can send to the Fleet maintainer.");
+    expect(statSync(join(home, ".local/state/fleet/logs")).mode & 0o777).toBe(0o700);
+    expect(statSync(join(home, ".local/state/fleet/logs/setup.log")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(home, ".local/state/fleet/logs/setup-failed.json")).mode & 0o777).toBe(0o600);
     const report = await triage(home, ["--print"], []);
     expect(report.output).toMatch(/- Failed at \S+, 9 of 9: Check everything: fleet doctor found something to fix on this machine\./);
     expect(report.output).toContain("=== fleet setup --non-interactive --preset starter --plan claude at ");
@@ -265,10 +292,31 @@ describe("fleet setup and triage", () => {
     const passed = await fleetSetup(home, args, [], fakeMachine(home));
     expect(passed.code).toBe(0);
     expect(passed.output).toContain("  Report          fleet triage sends a report of this setup to the Fleet maintainer.");
-    expect(existsSync(join(home, ".local/state/fleet/setup-failed.json"))).toBe(false);
+    expect(existsSync(join(home, ".local/state/fleet/logs/setup-failed.json"))).toBe(false);
     const after = await triage(home, ["--print"], []);
     expect(after.output).toContain("- No failed setup run is recorded.");
     expect(after.output).toContain("Welcome back. 8 of 9 done, picking up at Check everything.");
+  });
+
+  test("makes records that an earlier run left readable to others private", async () => {
+    const home = temp.make("home-");
+    const logs = join(home, ".local/state/fleet/logs");
+    mkdirSync(logs, { recursive: true, mode: 0o755 });
+    writeFileSync(join(logs, "setup.log"), "an earlier run\n", { mode: 0o644 });
+    await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home));
+    expect(statSync(logs).mode & 0o777).toBe(0o700);
+    expect(statSync(join(logs, "setup.log")).mode & 0o777).toBe(0o600);
+    expect(readFileSync(join(logs, "setup.log"), "utf8")).toStartWith("an earlier run\n=== fleet setup ");
+  });
+
+  test("setup goes on when it cannot write its records", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".local"), { recursive: true });
+    writeFileSync(join(home, ".local/state"), "a file where Fleet's state folder goes");
+    const result = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude"], [], fakeMachine(home), undefined, 1);
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("▶ Check everything");
+    expect(result.output).toEndWith("Stuck? Run fleet triage. It shows a report of this setup that you can send to the Fleet maintainer.");
   });
 
   test("the done screen shows t_usable when setup reached it", async () => {
@@ -287,12 +335,5 @@ describe("fleet setup and triage", () => {
     expect(result.code).toBe(0);
     expect(result.output).toContain("  Report          fleet triage");
     expect(result.output).not.toContain("Ready after");
-  });
-});
-
-describe("redact", () => {
-  test("leaves ordinary words, commit ids, versions and scope lists alone", () => {
-    const text = "fleet doctor: Everything matches. engine 0123456789abcdef0123456789abcdef01234567 v1.4.0 at git@github.com:nora/fleet-profile.git - Token scopes: 'repo' coder login --use-token-as-session https://coder.example.com 127.0.0.1:3773";
-    expect(redact(text, "/home/nora")).toBe(text);
   });
 });

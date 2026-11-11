@@ -1,10 +1,11 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Terminal } from "../setup/terminal.ts";
 
 export const stateDir = (home: string) => join(home, ".local", "state", "fleet");
-export const transcriptPath = (home: string) => join(stateDir(home), "setup.log");
-export const failurePath = (home: string) => join(stateDir(home), "setup-failed.json");
+const logsDir = (home: string) => join(stateDir(home), "logs");
+export const transcriptPath = (home: string) => join(logsDir(home), "setup.log");
+export const failurePath = (home: string) => join(logsDir(home), "setup-failed.json");
 export const timingsPath = (home: string) => join(stateDir(home), "setup-timings.json");
 
 const keptBytes = 512 * 1024;
@@ -27,18 +28,20 @@ export type Recorder = {
 /**
  * Records one fleet setup run: every line it prints and every answer typed,
  * appended to the setup transcript, which keeps only its newest part. A
- * new run clears the last failure.
+ * new run clears the last failure. Only the user can read the records, and
+ * a record that cannot be written never stops setup.
  */
 export function recordSetup(home: string, terminal: Terminal, args: string[], now = new Date()): Recorder {
   const path = transcriptPath(home);
-  mkdirSync(dirname(path), { recursive: true });
-  trim(path);
-  rmSync(failurePath(home), { force: true });
-  const write = (line: string) => {
-    try {
-      appendFileSync(path, `${line}\n`);
-    } catch {}
-  };
+  const ready = quietly(() => {
+    mkdirSync(logsDir(home), { recursive: true, mode: 0o700 });
+    chmodSync(logsDir(home), 0o700);
+    trim(path);
+    rmSync(failurePath(home), { force: true });
+    if (existsSync(path)) chmodSync(path, 0o600);
+    return true;
+  });
+  const write = (line: string) => void (ready && quietly(() => appendFileSync(path, `${line}\n`, { mode: 0o600 })));
   write(`=== fleet setup${args.length ? ` ${args.join(" ")}` : ""} at ${now.toISOString()}`);
   let header: string | undefined;
   let step: string | undefined;
@@ -65,11 +68,17 @@ export function recordSetup(home: string, terminal: Terminal, args: string[], no
       write(`✗ ${error}`);
       const where = header ? `${header}${step ? `: ${step}` : ""}` : undefined;
       const failure: SetupFailure = { at: at.toISOString(), ...(where ? { step: where } : {}), error };
-      try {
-        writeFileSync(failurePath(home), `${JSON.stringify(failure, null, 2)}\n`);
-      } catch {}
+      if (ready) quietly(() => writeFileSync(failurePath(home), `${JSON.stringify(failure, null, 2)}\n`, { mode: 0o600 }));
     },
   };
+}
+
+function quietly<T>(work: () => T): T | undefined {
+  try {
+    return work();
+  } catch {
+    return undefined;
+  }
 }
 
 function trim(path: string) {

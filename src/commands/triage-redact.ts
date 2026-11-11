@@ -15,11 +15,13 @@ const rules: Rule[] = [
   [/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, "$1 <token>"],
   [/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, "$1<credentials>@"],
   [/([?&#][A-Za-z_]*(?:token|key|secret|password|auth|code|sig)[A-Za-z_]*=)[^\s&#"']+/gi, "$1<redacted>"],
-  [new RegExp(String.raw`\b(${secretKey})("?\s*[:=]\s*)(["']?)[^\s"',;]+`, "gi"), "$1$2$3<redacted>"],
-  [/\b[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/g, (email) => (email.startsWith("git@") ? email : "<email>")],
+  [new RegExp(String.raw`\b(${secretKey})(["']?\s*[:=]\s*)(?:(")(?:[^"\\\n]|\\.)*"|(')[^'\n]*'|[^\s"']+)`, "gi"), (_match, key: string, separator: string, double?: string, single?: string) => `${key}${separator}${double ?? single ?? ""}<redacted>${double ?? single ?? ""}`],
+  [/\b[\w.+-]+(?:@|%40)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b/gi, (email) => (email.startsWith("git@") ? email : "<email>")],
+  [/\b[\w.-]+\/fleet-profile(?:-[\w-]+)?\b/g, "<profile repo>"],
   [/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, (ip) => (ip === "127.0.0.1" || ip === "0.0.0.0" ? ip : "<ip>")],
   [/\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:internal|local|lan|corp|home\.arpa|coder|ts\.net|tailscale\.net)\b/g, "<host>"],
   [/(\/Users|\/home)\/[^/\s"'`:]+/g, "$1/<user>"],
+  [/\b([A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/))[^\\/\s"'`:]+/gi, "$1<user>"],
   [/[A-Za-z0-9+/_-]{32,}={0,2}/g, (text) => (/^[0-9a-f]+$/.test(text) || !/[A-Z]/.test(text) || !/[a-z]/.test(text) || !/[0-9]/.test(text) ? text : "<secret>")],
 ];
 
@@ -31,8 +33,9 @@ const rules: Rule[] = [
  */
 export function redact(text: string, home: string, known: KnownName[] = []): string {
   let result = text;
-  for (const name of [...known].filter((entry) => entry.text.length >= 3).sort((a, b) => b.text.length - a.text.length)) {
-    result = result.replace(new RegExp(`(?<![\\w-])${escape(name.text)}(?![\\w-])`, "gi"), name.as);
+  const spellings = known.filter((entry) => entry.text.length >= 2).flatMap((entry) => [...new Set([entry.text, encodeURIComponent(entry.text), entry.text.replace(/ /g, "+")])].map((text) => ({ text, as: entry.as })));
+  for (const name of spellings.sort((a, b) => b.text.length - a.text.length)) {
+    result = result.replace(new RegExp(`(?<![\\w-])${escape(name.text)}(?![\\w-])`, name.text.length < 4 ? "g" : "gi"), name.as);
   }
   if (home.length > 1) result = result.split(home.replace(/\/$/, "")).join("~");
   for (const [pattern, replacement] of rules) result = result.replace(pattern, replacement as string);

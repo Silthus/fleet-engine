@@ -22,10 +22,12 @@ export type TriageContext = {
   now?: Date;
 };
 
-export type TriageReport = { title: string; body: string };
+export type TriageReport = { title: string; body: string; clean(text: string): string };
 
 const transcriptLines = 400;
 const bodyLimit = 60_000;
+const noteLimit = 4_000;
+const doctorLines = 200;
 const issueUrl = `https://github.com/${engineRepo}/issues/new`;
 
 /** fleet triage: builds a redacted report of this machine's setup, shows it, and with a yes opens an issue on the engine repo or saves it to a file. */
@@ -67,35 +69,47 @@ export async function triageReport(context: TriageContext, note?: string): Promi
   const profile = machine?.profileDir ? await loadProfile(machine.profileDir).catch(() => undefined) : undefined;
   const failure = readFailure(context.home);
   const timings = readTimings(context.home);
-  const [versions, doctor, gitName] = await Promise.all([versionLines(context, profile), context.doctor().catch((error: Error) => [`fleet doctor could not run: ${error.message}`]), firstLine(context, ["git", "config", "--global", "user.name"])]);
-  const transcript = transcriptTail(context.home, transcriptLines);
-  const sections = [
-    "## What happened",
-    "",
-    note?.trim() || "Not described.",
-    "",
-    "## Setup",
-    "",
-    ...setupLines(machine, failure, timings),
-    "",
-    "## Versions",
-    "",
-    ...versions,
-    "",
-    "## fleet doctor",
-    "",
-    fence(doctor),
-    "",
-    `## Setup transcript${transcript.cut ? ` (newest ${transcript.lines.length} lines)` : ""}`,
-    "",
-    transcript.lines.length ? fence(transcript.lines) : "No setup transcript on this machine.",
-    "",
-    "Made by `fleet triage`.",
-  ];
-  const known = knownNames(context.hostname, machine, profile, gitName);
+  const [versions, doctor, gitName, origin] = await Promise.all([
+    versionLines(context, profile),
+    context.doctor().catch((error: Error) => [`fleet doctor could not run: ${error.message}`]),
+    firstLine(context, ["git", "config", "--global", "user.name"]),
+    machine?.profileDir ? firstLine(context, ["git", "-C", machine.profileDir, "remote", "get-url", "origin"]) : Promise.resolve(undefined),
+  ]);
+  const known = knownNames(context.hostname, machine, profile, gitName, origin);
   const clean = (text: string) => redact(text, context.home, known);
-  const title = shorten(clean(`fleet triage: ${note?.trim() || (failure ? `setup failed: ${failure.error}` : "setup report")}`));
-  return { title, body: fit(clean(sections.join("\n"))) };
+  const described = note?.trim() ? shortenTo(note.trim(), noteLimit) : "Not described.";
+  const head = clean(
+    [
+      "## What happened",
+      "",
+      described,
+      "",
+      "## Setup",
+      "",
+      ...setupLines(machine, failure, timings),
+      "",
+      "## Versions",
+      "",
+      ...versions,
+      "",
+      "## fleet doctor",
+      "",
+      fence(doctor.length > doctorLines ? [...doctor.slice(0, doctorLines), `(${doctor.length - doctorLines} more lines cut)`] : doctor),
+      "",
+    ].join("\n"),
+  );
+  const ending = "\n\nMade by `fleet triage`.";
+  const transcript = transcriptTail(context.home, transcriptLines);
+  const lines = transcript.lines.map(clean);
+  const room = bodyLimit - head.length - ending.length - 200;
+  let kept = lines.length;
+  let size = lines.reduce((sum, line) => sum + line.length + 1, 0);
+  while (kept > 0 && size > room) size -= lines[lines.length - kept--]!.length + 1;
+  const shown = lines.slice(lines.length - kept);
+  const cut = transcript.cut + lines.length - kept;
+  const tail = [`## Setup transcript${cut ? ` (newest ${shown.length} lines)` : ""}`, "", shown.length ? fence(shown) : lines.length ? "The setup transcript is too long to include." : "No setup transcript on this machine."].join("\n");
+  const title = shortenTo(clean(`fleet triage: ${note?.trim() || (failure ? `setup failed: ${failure.error}` : "setup report")}`).split("\n")[0]!, 120);
+  return { title, body: `${head}\n${tail}${ending}`, clean };
 }
 
 function setupLines(machine: MachineFile | undefined, failure: ReturnType<typeof readFailure>, timings: SetupTimings | undefined) {
@@ -149,8 +163,15 @@ async function firstLine(context: TriageContext, command: string[]) {
   return line || undefined;
 }
 
-function knownNames(hostname: string, machine: MachineFile | undefined, profile: Profile | undefined, gitName: string | undefined): KnownName[] {
+function knownNames(hostname: string, machine: MachineFile | undefined, profile: Profile | undefined, gitName: string | undefined, origin: string | undefined): KnownName[] {
   const names: KnownName[] = [];
+  const profileRepo = origin?.match(/github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?$/)?.[1];
+  if (profileRepo) names.push({ text: profileRepo, as: "<profile repo>" });
+  const settings = { ...machine?.setup?.draft?.settings, ...profile?.settings };
+  for (const value of Object.values(settings)) {
+    const repo = typeof value === "string" ? value.match(/^(?:https:\/\/github\.com\/|git@github\.com:)?([\w.-]+\/[\w.-]+?)(?:\.git)?$/)?.[1] : undefined;
+    if (repo) names.push({ text: repo, as: "<private repo>" });
+  }
   if (hostname && hostname !== "localhost") names.push({ text: hostname, as: "<this machine>" }, { text: hostname.split(".")[0]!, as: "<this machine>" });
   if (profile?.hub) names.push({ text: profile.hub, as: "<hub>" });
   const devboxes = [...new Set([...(machine?.devboxes ?? []), ...(profile?.devboxes ?? [])])].filter((host) => host !== profile?.hub);
@@ -161,9 +182,8 @@ function knownNames(hostname: string, machine: MachineFile | undefined, profile:
   return names;
 }
 
-function shorten(text: string) {
-  const line = text.split("\n")[0]!;
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+function shortenTo(text: string, limit: number) {
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
 function fence(lines: string[]) {
@@ -171,22 +191,12 @@ function fence(lines: string[]) {
   return ["```text", text || "(nothing printed)", "```"].join("\n");
 }
 
-/** Keeps the body under GitHub's issue limit by cutting the oldest transcript lines. */
-function fit(body: string) {
-  if (body.length <= bodyLimit) return body;
-  const start = body.indexOf("## Setup transcript");
-  const fenceStart = body.indexOf("```text\n", start) + "```text\n".length;
-  const over = body.length - bodyLimit + 40;
-  const cutAt = body.indexOf("\n", fenceStart + over);
-  return `${body.slice(0, fenceStart)}(older lines cut)\n${body.slice(cutAt + 1)}`;
-}
-
 async function send(report: TriageReport, context: TriageContext) {
   const answer = await context.capture(["gh", "issue", "create", "--repo", engineRepo, "--title", report.title, "--body-file", "-"], { input: report.body }).catch((error: Error) => ({ code: 1, stdout: "", stderr: error.message }));
   const url = answer.stdout.trim().split("\n").find((line) => line.startsWith("https://"));
   if (answer.code === 0 && url) return context.terminal.print(`✓ Opened ${url}`), 0;
   const why = (answer.stderr ?? answer.stdout).trim().split("\n").at(-1) || `gh exited ${answer.code}`;
-  context.terminal.print(`Could not open the issue: ${redact(why, context.home)}`);
+  context.terminal.print(`Could not open the issue: ${report.clean(why)}`);
   const path = defaultFile(context);
   write(report, path);
   context.terminal.print(`Saved the report to ${path}. Open ${issueUrl} and paste it there.`);
