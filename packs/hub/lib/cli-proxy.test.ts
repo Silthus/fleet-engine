@@ -115,6 +115,7 @@ test("install presents a current Claude Code version upstream, so new Claude mod
   const configPath = join(dataDir(home), "config.yaml");
   const header = 'claude-header-defaults:\n  user-agent: "claude-cli/2.1.322 (external, cli)"\n';
   expect(readFileSync(configPath, "utf8")).toContain(header);
+  expect((Bun.YAML.parse(readFileSync(configPath, "utf8")) as Record<string, Record<string, string>>)["claude-header-defaults"]).toEqual({ "user-agent": "claude-cli/2.1.322 (external, cli)" });
 
   writeFileSync(configPath, readFileSync(configPath, "utf8").replace(header, ""));
   const older = hubMachine({ home });
