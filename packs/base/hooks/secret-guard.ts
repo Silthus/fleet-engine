@@ -100,7 +100,7 @@ export function guard(provider: Provider, event: HookEvent): HookDecision | unde
   return kinds.length ? toolOutputDecision(provider, kinds, event.tool_response) : undefined;
 }
 
-export const hook: Hook = (provider, input) =>
-  provider === "claude" || provider === "codex" ? printing(guard(provider, JSON.parse(input) as HookEvent)) : { code: 1, stdout: "", stderr: "Usage: secret-guard.ts claude|codex\n" };
+export const hook: Hook = async (provider, readInput) =>
+  provider === "claude" || provider === "codex" ? printing(guard(provider, JSON.parse(await readInput()) as HookEvent)) : { code: 1, stdout: "", stderr: "Usage: secret-guard.ts claude|codex\n" };
 
 if (import.meta.main) await runHook(hook);

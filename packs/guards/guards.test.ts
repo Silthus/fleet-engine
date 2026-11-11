@@ -76,7 +76,7 @@ async function preToolUse(home: string, provider: "claude" | "codex", call: Tool
     const inProcess = hooksInProcess[basename(path)];
     if (!inProcess || (guardAsProcess && basename(path) === "guards.ts")) return hookProcess(path, hookProvider, input, home);
     try {
-      return await inProcess(hookProvider, input, home);
+      return await inProcess(hookProvider, async () => input, home);
     } catch (error) {
       return { code: 1, stdout: "", stderr: String(error) };
     }

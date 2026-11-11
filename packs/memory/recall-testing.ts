@@ -119,7 +119,7 @@ function inProcess(home: string): RunHook {
     const hook = hooksInProcess[basename(path)];
     if (!hook) return runInstalledFile(path, provider, input, home);
     try {
-      return await hook(provider, input, home);
+      return await hook(provider, async () => input, home);
     } catch (error) {
       return { code: 1, stdout: "", stderr: String(error) };
     }

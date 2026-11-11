@@ -76,6 +76,6 @@ function answer(input: string, home: string): Denial | undefined {
   return guard(call, home);
 }
 
-export const hook: Hook = (_provider, input, home) => printing(answer(input, home));
+export const hook: Hook = async (_provider, readInput, home) => printing(answer(await readInput(), home));
 
 if (import.meta.main) await runHook(hook);

@@ -86,10 +86,10 @@ export function clip(text: string, limit: number) {
 }
 
 export function contextHook(event: string, answer: (input: HookInput, provider: Provider, home: string) => Promise<string | undefined>): Hook {
-  return async (provider, input, home) => {
+  return async (provider, readInput, home) => {
     if (provider !== "claude" && provider !== "codex") return quiet;
     try {
-      const context = await answer(JSON.parse(input) as HookInput, provider, home);
+      const context = await answer(JSON.parse(await readInput()) as HookInput, provider, home);
       return printing(context ? { hookSpecificOutput: { hookEventName: event, additionalContext: context } } : undefined);
     } catch {
       return quiet;

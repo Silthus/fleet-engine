@@ -26,6 +26,6 @@ function lineCount(text: string) {
   return text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
 }
 
-export const hook: Hook = (provider, input) => (provider === "claude" ? blocking(check(JSON.parse(input) as ToolCall)) : quiet);
+export const hook: Hook = async (provider, readInput) => (provider === "claude" ? blocking(check(JSON.parse(await readInput()) as ToolCall)) : quiet);
 
 if (import.meta.main) await runHook(hook);

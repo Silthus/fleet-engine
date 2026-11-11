@@ -10,6 +10,6 @@ export function check(provider: string, event: ToolEvent): string | undefined {
   return event.tool_input?.model ? undefined : reminder;
 }
 
-export const hook: Hook = (provider, input) => blocking(check(provider, JSON.parse(input) as ToolEvent));
+export const hook: Hook = async (provider, readInput) => blocking(check(provider, JSON.parse(await readInput()) as ToolEvent));
 
 if (import.meta.main) await runHook(hook);
