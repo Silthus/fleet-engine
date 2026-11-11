@@ -1,4 +1,4 @@
-import { redactSecrets } from "../../base/hooks/secret-guard.ts";
+import { replaceSecrets } from "../../base/hooks/secret-guard.ts";
 
 export type ReviewInput = {
   scope: string; from: string; commit: string; diff: string; diffFile: string; crossFamily: boolean;
@@ -7,7 +7,9 @@ export type ReviewInput = {
 
 export const diffCap = 300_000;
 
-export const reviewedDiff = redactSecrets;
+const keptDiffLines = (value: string) => value.split("\n").slice(1).map((line) => `\n${/^[ +-]/.test(line) ? line[0] : ""}`).join("");
+
+export const reviewedDiff = (diff: string) => replaceSecrets(diff, (kind, value) => `[redacted ${kind}]${keptDiffLines(value)}`);
 
 export function capped(text: string, cap: number) {
   return text.length > cap ? `${text.slice(0, cap)}\n[cut at ${cap} characters]` : text;
