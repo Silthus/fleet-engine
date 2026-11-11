@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
 import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
 import { writePrivateFile } from "../files/private.ts";
+import { isBoxName } from "../hub/names.ts";
 
 export class ProfileError extends Error {}
 
@@ -131,7 +132,7 @@ export function inCoderWorkspace(env: Record<string, string | undefined>) {
 /** The SSH name coder config-ssh gives a workspace, which every machine reaches it by. A box from the pool keeps its bare name. */
 export function coderSshName(env: Record<string, string | undefined>): string | undefined {
   const workspace = env.CODER_WORKSPACE_NAME;
-  return workspace && validHost(workspace) && !workspace.startsWith("box-") ? `coder.${workspace}` : undefined;
+  return workspace && validHost(workspace) && !isBoxName(workspace) ? `coder.${workspace}` : undefined;
 }
 
 /** This machine as saved, or its defaults: a Mac, a devbox in a Coder workspace, or a Linux machine. A Coder workspace saved as linux becomes a devbox. Its name is the saved one, then its Coder SSH name, then the host name when that is an SSH name. */

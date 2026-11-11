@@ -10,7 +10,7 @@ import { quote, readRole, remoteFleet } from "./machine.ts";
 import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed } from "./managed.ts";
 import { refuseLinks, writePrivateFile, type Fetch } from "../../mcp-gateway/lib/client.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
-import { isBoxName } from "./names.ts";
+import { isBoxName } from "../../../src/hub/names.ts";
 import { must, proxyPort } from "./run.ts";
 
 export { proxyPort, proxyUrl };

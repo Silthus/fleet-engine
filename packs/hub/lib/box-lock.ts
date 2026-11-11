@@ -1,7 +1,7 @@
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
-import { isBoxName, sshName } from "./names.ts";
+import { isBoxName, sshName } from "../../../src/hub/names.ts";
 
 export type LockOptions = { waitMs: number; waiting?(): void };
 export type HeldLock = { (): void; during<T>(step: () => Promise<T>): Promise<T> };

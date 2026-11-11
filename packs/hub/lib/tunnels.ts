@@ -4,7 +4,7 @@ import { changedFiles, ownedBy, readIfThere, requireInstalled, writeFiles } from
 import { peersOf, readRole } from "./machine.ts";
 import { gatewayPort, refuseLinks } from "../../mcp-gateway/lib/client.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
-import { isBoxName, sshName } from "./names.ts";
+import { isBoxName, sshName } from "../../../src/hub/names.ts";
 import { hostPattern, must, proxyPort, relayPortOf } from "./run.ts";
 
 export type TunnelMode = "plan" | "install" | "doctor";

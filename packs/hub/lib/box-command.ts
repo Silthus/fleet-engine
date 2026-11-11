@@ -1,4 +1,5 @@
-import { boxPrefix, grant, reap, type Coder } from "./coder.ts";
+import { boxPrefix } from "../../../src/hub/names.ts";
+import { grant, reap, type Coder } from "./coder.ts";
 import { assertBox, link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
 import { quote, requireHub, type Machine } from "./machine.ts";
 import { LockBusy, userWaitMs, withBoxLock } from "./box-lock.ts";

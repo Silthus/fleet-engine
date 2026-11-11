@@ -2,11 +2,11 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tryLockBox } from "./box-lock.ts";
-import { boxPrefix, slugFor, type Coder, type Result } from "./coder.ts";
+import { slugFor, type Coder, type Result } from "./coder.ts";
 import { proxyPort, relayPortOf } from "./run.ts";
 import { quote, remoteFleet, type Machine, type PeerLinkInput, type PeerMachine } from "./machine.ts";
 import { GatewayClientError, gatewayPort, localGatewayUrl, readGatewayClient, writePrivateFile, type GatewaySettings } from "../../mcp-gateway/lib/client.ts";
-import { isBoxName } from "./names.ts";
+import { boxPrefix, isBoxName } from "../../../src/hub/names.ts";
 import { poolFile, recorded } from "./pool.ts";
 
 export type BoxCoder = Pick<Coder, "binary" | "env" | "boxes" | "ssh" | "sshAfterStartup" | "remove" | "stop" | "extend" | "start" | "create" | "run">;

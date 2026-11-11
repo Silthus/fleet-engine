@@ -6,7 +6,7 @@ import { boxMarkerPath, forget, linkTarget, pairWith, readRecord, reviveLink, st
 import { changedFiles, readIfThere, writeFiles } from "./managed.ts";
 import type { PeerMachine } from "./machine.ts";
 import { refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
-import { isBoxName, sshName } from "./names.ts";
+import { isBoxName, sshName } from "../../../src/hub/names.ts";
 
 export type PeerLink = Pick<LinkedEnvironment, "environmentId" | "label" | "urls" | "status" | "expiresAt">;
 export type PeerHere = Linker & Pick<PeerMachine, "peers" | "devboxes" | "onPeer" | "print">;

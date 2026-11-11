@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Capture, type Env, type Result } from "./coder.ts";
-import { isBoxName } from "./names.ts";
+import { isBoxName } from "../../../src/hub/names.ts";
 import type { Clock } from "./pool.ts";
 import { onHub } from "../../../src/hub/ssh.ts";
 
