@@ -63,7 +63,7 @@ export function recordRuns(state: string, now = Date.now()): number {
 
 export async function readMemories(checkout: string, git: Git): Promise<Memory[]> {
   const memories = new Map<string, Memory>();
-  const chunks = (await git(["log", "--reverse", "--find-renames", "--name-status", "--format=%x1e%cI%x1f%B%x1f"])).split("\x1e").slice(1);
+  const chunks = (await git(["log", "--relative", "--reverse", "--find-renames", "--name-status", "--format=%x1e%cI%x1f%B%x1f"])).split("\x1e").slice(1);
   for (const chunk of chunks) {
     const [date = "", body = "", changes = ""] = chunk.split("\x1f");
     const topics = [...body.matchAll(/^Topics?:\s*(.+)$/gim)].flatMap((match) => match[1]!.split(/[,\s]+/)).map(slug).filter(Boolean);
@@ -81,7 +81,7 @@ export async function readMemories(checkout: string, git: Git): Promise<Memory[]
       memories.set(path, memory);
     }
   }
-  const merged = (await git(["log", "--first-parent", "-m", "--diff-filter=A", "--name-only", "--format=%x1e%cI"])).split("\x1e").slice(1);
+  const merged = (await git(["log", "--relative", "--first-parent", "-m", "--diff-filter=A", "--name-only", "--format=%x1e%cI"])).split("\x1e").slice(1);
   for (const chunk of merged) {
     const [date = "", ...paths] = chunk.trim().split("\n");
     for (const path of paths.filter(Boolean)) {

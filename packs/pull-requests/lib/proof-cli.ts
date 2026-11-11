@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
 import { ciOf, pushedHeadOf, readPullRequest } from "./pr-ci.ts";
-import { askModel, family, familyOf, modelLabel, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
+import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge } from "./proof-judge.ts";
 import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { reviewPrompt } from "./proof-review.ts";
+import { quietCommitIn } from "./proof-delta.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
 import { listenIn, withoutThread, type ThreadWords } from "./proof-answers.ts";
@@ -120,6 +121,11 @@ finding's anchor against the diff and prints the result after the findings; it k
 review-start. When the reviewer gives no answer, the round stays reserved and the next fleet proof review on the same
 commit retries it. The setting pull-requests.reviewTimeoutMinutes limits the reviewer. FLEET_PROOF_REVIEWER replaces
 its command, and FLEET_PROOF_REVIEWER_MODEL its model.
+Spent quota stops a reviewer or judge early. When its CLI prints two quota lines in a row, such as
+"Reconnecting... 1/5" and "Reconnecting... 2/5", "exceeded retry limit, last status: 429", or "All credentials for
+model <model> are cooling down", and then prints nothing else for 5 minutes, fleet stops it. A run that fails right
+after one such line counts too. The cause starts with "quota exhausted", and fleet proof review exits 4.
+FLEET_PROOF_QUOTA_GRACE_MS changes the 5 minutes; 0 stops the run at once.
 
 With --lens, the round is a qa-swarm panel: one reviewer per lens, each with the Brief of the qa-swarm PANEL.md in
 ~/.agents/skills/qa-swarm, filled by fleet, and the lens's hunting grounds. A lens runs on the family of its PANEL.md
@@ -127,13 +133,13 @@ lane: the fresh-eyes lane on the author's family, the others on the reviewer abo
 --knowledge adds the repo's review material for a lens, and gives the text of a Team perspective that PANEL.md does
 not list. fleet starts the lenses in the background and returns at once; at most pull-requests.panelSlots reviewers
 run at once on this machine, and the rest wait. Each raw answer is kept in lenses/<name>.md. A lens that ends without
-a FINDINGS block or a COVERED list of every changed file runs once more; when it fails again, the round stays
-unfinished with the cause, and the same review --lens command reruns the failed lenses; :same or :other moves a
-failed lens to the family that is up when the other has an outage. When every lens is done, fleet joins the answers
-under one heading per lens as the round's findings.
+a FINDINGS block or a COVERED list of every changed file runs once more, and a lens stopped by spent quota does not;
+when it fails again, the round stays unfinished with the cause, and the same review --lens command reruns the failed
+lenses; :same or :other moves a failed lens to the family that is up when the other has an outage. When every lens
+is done, fleet joins the answers under one heading per lens as the round's findings.
 --wait waits up to 9 minutes for the panel of the unfinished round, the latest round, or --round, and prints each
 lens. Exit 0 when the round is finished, with its findings; 1 when a lens failed; 2 when lenses still run, so run
---wait again. It restarts a lens whose worker died.
+--wait again; 4 when a lens stopped on spent quota. It restarts a lens whose worker died.
 ${overrideHelp}`,
     examples: ["fleet proof review", "fleet proof review --scope fixes --base 1a2b3c4", "fleet proof review --lens fresh-eyes --lens correctness --lens design --knowledge correctness=incidents.md", "fleet proof review --wait"],
     options: ["--scope", "--base", "--phase", "--override", "--thread", "--standing", "--round"], repeatable: ["--lens", "--knowledge"], flags: ["--wait"],
@@ -232,7 +238,11 @@ required. A stacked PR whose base requires nothing is held to the default branch
 requires any, every check counts. On a draft, a required check named "<workflow> / <job>" that never reported counts
 as withheld from drafts when its workflow reported other checks on the commit and all of them passed. CI is unknown
 when GitHub does not answer for the rulesets or branch protection. A clean merge of the PR's base carries the review and the evidence of
-its other parent forward.
+its other parent forward. The review also carries across quiet commits: single-parent commits that only change or add
+test files, named *.test.*, *.spec.*, *_test.go, *_test.py or test_*.py, or snapshots in __snapshots__, as regular
+files with an unchanged mode. A deleted test, a mode change, a symlink, a comment, a file in a test folder, or a test
+file whose name other code holds, such as an import of limits.test.ts, needs a review. The gate then prints "final read carried from <sha>: test-only delta", and the receipt in
+carried/<HEAD>.json names the quiet commits and the reason. Evidence does not carry across quiet commits.
 When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
 picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's
 findings and responses, and the coding standards in ~/.agents/guides/coding-standards.md. It answers four questions:
@@ -241,13 +251,13 @@ question or a high quality finding fails the gate; medium and low findings are l
 of inputs. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
 --kind judge) lets the gate pass once their standing rule covers it, or once they choose "Accept the gap" in your
 question tool for the question that the gate prints. A refusal or a typed message never accepts it. The setting
-pull-requests.reviewTimeoutMinutes limits the judge. FLEET_PROOF_JUDGE replaces its command, and
-FLEET_PROOF_JUDGE_MODEL its model.`,
+pull-requests.reviewTimeoutMinutes limits the judge, and spent quota stops it early, as for fleet proof review.
+FLEET_PROOF_JUDGE replaces its command, and FLEET_PROOF_JUDGE_MODEL its model.`,
     examples: ["fleet proof gate", "fleet proof gate --landed"], flags: ["--landed"],
     run: async ({ flags }, identity, context) => {
       const { print, home, run, now } = context;
       const head = identity();
-      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), now: now?.() });
+      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), now: now?.() });
       for (const line of gate.lines) print(line);
       const judged = gate.code === 0 ? await judgeHead(head, gate, context) : { code: gate.code, lines: [], covered: "" };
       for (const line of judged.lines) print(line);
@@ -314,7 +324,8 @@ change the judge. Exit 1 when no case was scored.`,
     usage: "review-start [--scope full|fixes|final] [--base <reviewed-sha>] [--phase review|babysit] [--override <dated quote> --thread <id> | --standing <reason>]",
     summary: `Reserve a review round before you dispatch its reviewers. Round 1 is --scope full and takes no --base. A later
 round is --scope fixes, and a final read is --scope final; both take --base with the commit of the latest finished
-review. The printed id names the round for review-finish and respond.
+review. The printed id names the round for review-finish and respond. A final read of a HEAD that the gate carries
+across quiet commits is refused, unless the user's --override, or --standing under their standing rule, asks for it.
 A later round with the user's --override, or --standing under their standing rule, may be --scope full: it reviews
 the whole PR diff at HEAD again, such as after a restack.
 ${overrideHelp}`,
@@ -324,7 +335,7 @@ ${overrideHelp}`,
       const head = identity();
       const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
       const scope = options.get("--scope") ?? "full";
-      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run) })));
+      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) })));
       return 0;
     },
   },
@@ -366,6 +377,10 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, diffFile, crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules });
   const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory] }, env, limit);
   const label = reserved.round === "final" ? "The final read" : `Round ${reserved.round}`;
+  if (!answer.ok && isQuotaExhausted(answer.cause)) {
+    print(`The reviewer ${answer.model} stopped: ${answer.cause}. ${label} stays reserved; run fleet proof review again once the quota is back.`);
+    return quotaExitCode;
+  }
   if (!answer.ok) throw new Error(`The reviewer ${answer.model} gave no findings (${answer.cause}). ${label} stays reserved; run fleet proof review again to retry it`);
   const anchors = anchorCheck(answer.text, diff, await reviewRecords(home, head));
   await storeCapturedFindings(reserved.directory, head, roundId(reserved.id), answer.text, answer.model);
@@ -381,7 +396,7 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
   const from = rangeStart(scope, base, head, context.run);
-  const reserved = await startReview(context.home, head, { scope, base, from, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), capturedBy: "fleet" });
+  const reserved = await startReview(context.home, head, { scope, base, from, ...decisionOf(options, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
   return { ...reserved, scope, from };
 }
 
@@ -483,6 +498,7 @@ async function waitForReview(options: Map<string, string>, head: ProofIdentity, 
   if (code === 0) context.print(await readFile(join(directory, "findings.md"), "utf8"));
   if (code === 1) context.print("A lens failed, and the round stays unfinished. Run the same fleet proof review --lens command to rerun the failed lenses.");
   if (code === 2) context.print("Lenses still run. Run fleet proof review --wait again.");
+  if (code === quotaExitCode) context.print("A lens stopped on spent quota, and the round stays unfinished. Run the same fleet proof review --lens command once the quota is back, or move the lens to the family that is up with :same or :other.");
   return code;
 }
 

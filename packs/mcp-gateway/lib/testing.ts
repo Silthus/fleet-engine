@@ -9,7 +9,7 @@ export type FakeMcpHub = {
   servers: string[];
   configs: Record<string, Record<string, unknown>>;
   keepsConfig: boolean;
-  groups: Array<{ id: string; name: string; servers: string[] }>;
+  groups: Array<{ id: string; name: string; servers: Array<string | ({ name: string } & Record<string, unknown>)> }>;
   calls: ApiCall[];
   healthy: boolean;
   openWithoutKey: boolean;
@@ -44,7 +44,7 @@ export function mcphubFetch(state: FakeMcpHub) {
     if (method === "GET" && path === "servers") return Response.json({ success: true, data: state.servers.map((name) => ({ name, status: "connected", tools: [{}, {}] })) });
     if (method === "GET" && path === "groups") return Response.json({ success: true, data: state.groups });
     if (method === "POST" && path === "groups") {
-      const group = { id: `group-${state.groups.length + 1}`, name: String(body!.name), servers: body!.servers as string[] };
+      const group = { id: `group-${state.groups.length + 1}`, name: String(body!.name), servers: body!.servers as FakeMcpHub["groups"][number]["servers"] };
       state.groups.push(group);
       return Response.json({ success: true, data: group }, { status: 201 });
     }
@@ -52,7 +52,7 @@ export function mcphubFetch(state: FakeMcpHub) {
     if (method === "PUT" && group) {
       const found = state.groups.find((item) => item.id === decodeURIComponent(group[1]!));
       if (!found) return new Response(null, { status: 404 });
-      found.servers = body!.servers as string[];
+      found.servers = body!.servers as FakeMcpHub["groups"][number]["servers"];
       return Response.json({ success: true, data: found });
     }
     if (method === "POST" && path === "auth/keys") return Response.json({ success: true, data: { id: "key-new", token: "mcphub_new-machine-token", ...body } }, { status: 201 });
@@ -66,7 +66,7 @@ export function mcphubFetch(state: FakeMcpHub) {
       const { startOnDemand, options, ...rest } = config;
       const kept = { ...options };
       delete kept.startOnDemand;
-      state.configs[name] = state.keepsConfig ? { ...rest, type: "stdio", ...(Object.keys(kept).length && { options: kept }), ...(startOnDemand === true && { startOnDemand: true }) } : { type: "stdio" };
+      state.configs[name] = state.keepsConfig ? { ...rest, type: rest.type ?? "stdio", ...(Object.keys(kept).length && { options: kept }), ...(startOnDemand === true && { startOnDemand: true }) } : { type: "stdio" };
     };
     if (method === "POST" && path === "servers") {
       if (state.servers.includes(name)) return new Response(null, { status: 400 });

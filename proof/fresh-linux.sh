@@ -48,6 +48,7 @@ fails="$work/fails"
 created=
 clean_uids=
 cleanup_failed=
+paused_cron=
 
 home_of() { getent passwd "$1" | cut -d: -f6; }
 
@@ -80,12 +81,34 @@ remove_user() {
   note "removed $user (uid $uid), its home $home, and its crontab"
 }
 
+pause_cron() {
+  for unit in cron.service crond.service; do
+    if systemctl is-active --quiet "$unit"; then
+      paused_cron=$unit
+      systemctl stop "$unit" || die "could not stop $unit. A scheduled job could change the machine between two snapshots."
+      note "stopped $unit, so no scheduled job changes the machine while the proof compares it"
+      return
+    fi
+  done
+}
+
+resume_cron() {
+  [ -n "$paused_cron" ] || return 0
+  if systemctl start "$paused_cron"; then
+    note "started $paused_cron again"
+  else
+    note "could not start $paused_cron again. Start it with: systemctl start $paused_cron"
+    return 1
+  fi
+}
+
 cleanup() {
   code=$?
   set +e
   trap '' HUP INT TERM
   say "Cleanup"
   for entry in $created; do remove_user "${entry%%:*}" "${entry#*:}"; done
+  resume_cron || { [ "$code" -ne 0 ] || code=1; }
   if [ -n "$cleanup_failed" ]; then
     note "kept $work, because an account in it is still there"
     [ "$code" -ne 0 ] || code=1
@@ -99,6 +122,7 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
+pause_cron
 
 pass() { printf 'PASS %s: %s\n' "$1" "$2"; }
 fail() {
@@ -148,10 +172,18 @@ fleet_cmd() {
 check_codex() {
   user=$1
   home=$(home_of "$user")
+  dirs="$home/.local/bin $home/.bun/bin $home/.proof/bin /usr/local/bin /usr/bin /bin"
+  found=$(as_user "$user" env PATH="$(printf '%s' "$dirs" | tr ' ' ':')" /bin/sh -c 'command -v codex' || true)
   path=
-  for dir in "$home/.local/bin" "$home/.bun/bin" "$home/.proof/bin" /usr/local/bin /usr/bin /bin; do
-    if [ -x "$dir/node" ] && [ "${dir#"$home"/}" = "$dir" ]; then
-      note "hid the box's own Node at $dir/node: the check runs without $dir on PATH"
+  if [ -n "$found" ]; then
+    target=$(readlink -f "$found")
+    as_user "$user" mkdir -p "$home/.proof/codex-only"
+    as_user "$user" ln -sfn "$target" "$home/.proof/codex-only/codex"
+    path="$home/.proof/codex-only"
+  fi
+  for dir in $dirs; do
+    if [ -x "$dir/node" ]; then
+      note "hid the Node at $dir/node: the check runs without $dir on PATH"
       continue
     fi
     path="${path:+$path:}$dir"

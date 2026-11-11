@@ -12,6 +12,7 @@ Shared memory is `~/.agents/memory` on every machine with the Memory pack. It ho
 
 - A session starts with the main index, `MEMORY.md`, and the index of the repo it works in, `projects/<repo>/INDEX.md`. Fleet adds them when the session starts. The repo is the last part of the checkout's `origin` URL, such as `notes-app` for `you/notes-app`. Read an index yourself when your harness did not load it.
 - Before a tool call, Fleet shows each memory whose `triggers:` the call names, once per session. A repo memory shows only in a session in that repo. The trigger list comes from the last sync, so a trigger you add shows after the next one.
+- Before the first edit of a test file in a session, Fleet shows the `## Tests` section of `~/.agents/guides/coding-standards.md`. Each subagent sees it once too. An edit is a Claude Code `Write`, `Edit`, or `MultiEdit`, or a Codex patch that adds, updates, or moves to a test file.
 - Search before you research a fact about me, my machines, my tools, or a repo: `grep -ril --exclude-dir=.git <term> ~/.agents/memory`.
 - A memory is true as of when it was written. Check a file, flag, or command it names before you act on it, and fix the memory when it is wrong.
 
