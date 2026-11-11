@@ -147,7 +147,7 @@ const roleFile = `"$HOME/.config/fleet/machine.json"`;
 export async function nameBox(box: Machine, host: string) {
   const read = await box.exec(["sh", "-c", `[ ! -f ${roleFile} ] || cat ${roleFile}`]);
   if (read.code !== 0) throw new Error(`Fleet could not reach ${host} over SSH: ${read.output.trim()}`);
-  const saved = read.output.trim() ? roleOf(host, read.output) : undefined;
+  const saved = read.stdout.trim() ? roleOf(host, read.stdout) : undefined;
   if (saved?.name === host) return;
   if (saved?.name !== undefined) throw new Error(`${host} already calls itself ${String(saved.name)} in ~/.config/fleet/machine.json. Run fleet devbox add ${String(saved.name)} to keep that name, or set its name there to ${host} and run fleet devbox add ${host} again.`);
   const named = { schema: 1, role: "devbox", ...saved, name: host };
@@ -239,7 +239,7 @@ async function connectAddress(machine: Machine): Promise<string | undefined> {
   const status = await machine.exec(["t3", "connect", "status", "--json"]);
   if (status.code !== 0) return undefined;
   try {
-    const state = JSON.parse(status.output) as { authenticated?: unknown; linked?: unknown; relayUrl?: unknown };
+    const state = JSON.parse(status.stdout) as { authenticated?: unknown; linked?: unknown; relayUrl?: unknown };
     return state.authenticated === true && state.linked === true && typeof state.relayUrl === "string" ? new URL(state.relayUrl).origin : undefined;
   } catch {
     return undefined;

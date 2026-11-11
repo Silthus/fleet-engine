@@ -34,14 +34,23 @@ export const realMachine: Machine = {
         process.kill(-child.pid, "SIGKILL");
       } catch {}
     };
+    const release = () => {
+      process.off("exit", endGroup);
+      process.off("SIGINT", interrupted).off("SIGTERM", interrupted);
+    };
+    const interrupted = (signal: NodeJS.Signals) => {
+      endGroup();
+      release();
+      if (!process.listenerCount(signal)) process.kill(process.pid, signal);
+    };
     const deadline = limited ? setTimeout(endGroup, options.timeoutMs) : undefined;
-    if (limited) process.once("exit", endGroup);
+    if (limited) process.once("exit", endGroup).on("SIGINT", interrupted).on("SIGTERM", interrupted);
     try {
       const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       return { code, output: `${stdout}${stderr}`, stdout };
     } finally {
       clearTimeout(deadline);
-      process.off("exit", endGroup);
+      release();
     }
   },
   start(command) {
