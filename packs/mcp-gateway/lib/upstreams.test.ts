@@ -95,6 +95,9 @@ test("a declared file that is not an upstream names its path and what is wrong",
     [{ ...mail, app: slack.app }, "app, plugin and account must differ from those of the built-in Slack"],
     [{ ...mail, plugin: slack.plugin }, "app, plugin and account must differ from those of the built-in Slack"],
     [{ ...mail, account: "slack" }, "app, plugin and account must differ from those of the built-in Slack"],
+    [{ ...mail, app: `${slack.app}.enabled=true #` }, "app must be a ChatGPT app id: letters, digits and underscores"],
+    [{ ...mail, plugin: 'mail@x".enabled=true #' }, "plugin must be a Codex plugin name such as name@marketplace"],
+    [{ ...mail, prefix: "mail" }, "prefix must be the app's tool prefix: lowercase letters, digits and underscores, then a dot"],
     [{ ...mail, account: undefined, name: "mail" }, ""],
   ];
   for (const [value, problem] of cases) {
@@ -130,4 +133,11 @@ test("narrowing an upstream's tools keeps the rest of its group entry, and keeps
   api.groups[0]!.servers = ["tickets", { name: "notes", alias: "n", tools: "all", prompts: [], resources: [], pinnedTools: ["read_note", "delete_note"] }];
   await registerUpstreams(hub);
   expect(api.groups[0]!.servers).toEqual(["tickets", { name: "notes", alias: "n", tools: ["search_notes", "read_note"], prompts: [], resources: [], pinnedTools: ["read_note"] }, "calendar"]);
+});
+
+test("a group entry whose server is named like an object property keeps its own tool selection", async () => {
+  const { api, hub } = hubWith({}, { servers: ["tickets", "constructor"] });
+  api.groups[0]!.servers = ["tickets", { name: "constructor", tools: ["read"] }];
+  await issueKey("box-1", hub);
+  expect(api.groups[0]!.servers).toEqual(["tickets", { name: "constructor", tools: ["read"] }]);
 });

@@ -142,9 +142,12 @@ function narrowed(entry: Entry, tools: string[]): Entry {
 
 /** Puts every server into the Fleet group, and narrows the entry of each declared upstream with an allowlist to its tools. */
 export async function syncGatewayGroup(call: Api, home: string) {
-  const tools = Object.fromEntries((await declaredUpstreams(home)).flatMap((upstream) => (upstream.kind === "oauth" && upstream.tools ? [[upstream.name, upstream.tools]] : [])));
+  const tools = new Map((await declaredUpstreams(home)).flatMap((upstream) => (upstream.kind === "oauth" && upstream.tools ? [[upstream.name, upstream.tools] as const] : [])));
   const { servers, group, missing } = await groupGap(call);
-  const entry = (server: Entry): Entry => (tools[entryName(server)] ? narrowed(server, tools[entryName(server)]!) : server);
+  const entry = (server: Entry): Entry => {
+    const allowed = tools.get(entryName(server));
+    return allowed ? narrowed(server, allowed) : server;
+  };
   if (!group) return void (await call("groups", "POST", { name: gatewayGroup, description: "Every server, for Fleet's machine keys", servers: servers.map((server) => entry(server.name)) }));
   const kept = group.servers.map(entry);
   if (missing.length || kept.some((server, index) => !Bun.deepEquals(server, group.servers[index]))) await call(`groups/${encodeURIComponent(group.id)}`, "PUT", { servers: [...kept, ...missing.map(entry)] });
