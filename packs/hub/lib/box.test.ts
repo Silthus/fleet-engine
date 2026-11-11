@@ -32,7 +32,7 @@ const depsFor = (machine: Machine, coder: BoxDeps["coder"]): BoxDeps => ({ machi
 test("release refuses a workspace that is not a box and deletes nothing", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
   const { coder, done } = fakeCoder();
-  for (const name of ["devbox-2", "my-hub", "compute-lane", "box-"]) await expect(release(coder, machine, name)).rejects.toThrow("not a box");
+  for (const name of ["devbox-2", "my-hub", "compute-lane", "box-", "box-a.b", "box--x"]) await expect(release(coder, machine, name)).rejects.toThrow("not a box");
   expect(done).toEqual([]);
 });
 
@@ -344,7 +344,7 @@ test("an unknown box command prints the usage and fails, and the hold verbs the 
   const { deps, lines } = commandDeps(temp.make("fleet-box-"), "hub");
   const unknown = [
     ["launch"], ["release"], ["release", "box-lane", "--now"], ["run", "devbox-4", "--", "true"], ["run", "box-lane", "true"], ["run", "box-lane", "--"], ["spawn", "lane", "--old"], ["release", "box-lane", "--new"], ["pool", "empty"], ["token", "extra"],
-    ["spawn", "--for"], ["start", "box-lane", "--for", "bad name"], ["link", "box-lane", "--for", "devbox-2"],
+    ["spawn", "--for"], ["start", "box-lane", "--for", "bad name"], ["start", "box-lane", "--for", "Node-1"], ["start", "box-lane", "--for", "worker_1"], ["start", "box-lane", "--for", "box-other"], ["link", "box-lane", "--for", "devbox-2"],
     ...["own", "claim", "hold", "renew", "unhold", "give", "drop"].map((verb) => ["pool", verb, "box-a", "t-1"]),
     ["pool", "claim"],
   ];

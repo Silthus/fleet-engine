@@ -1,4 +1,4 @@
-import { boxPrefix } from "../../../src/hub/names.ts";
+import { boxPrefix, canBeDevbox } from "../../../src/hub/names.ts";
 import { grant, reap, type Coder } from "./coder.ts";
 import { assertBox, link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
 import { quote, requireHub, type Machine } from "./machine.ts";
@@ -42,14 +42,13 @@ so the hub links the box to it.`;
 const hubOnly = ["sweep", "reap", "pool", "grant", "nightly"];
 const onHub = ["spawn", "start", "release"];
 const option = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
-const sshName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function caller(args: string[]): { plain: string[]; devbox?: string; valid: boolean } {
   const at = args.indexOf("--for");
   if (at < 0) return { plain: args, valid: true };
   const devbox = args[at + 1] ?? "";
   const plain = [...args.slice(0, at), ...args.slice(at + 2)];
-  return { plain, devbox, valid: onHub.includes(args[0] ?? "") && sshName.test(devbox) && !plain.includes("--for") };
+  return { plain, devbox, valid: onHub.includes(args[0] ?? "") && canBeDevbox(devbox) && !plain.includes("--for") };
 }
 
 function valid(args: string[]): boolean {

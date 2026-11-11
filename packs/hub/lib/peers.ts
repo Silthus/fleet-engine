@@ -6,7 +6,7 @@ import { boxMarkerPath, forget, linkTarget, pairWith, readRecord, reviveLink, st
 import { changedFiles, readIfThere, writeFiles } from "./managed.ts";
 import type { PeerMachine } from "./machine.ts";
 import { refuseLinks, writePrivateFile } from "../../mcp-gateway/lib/client.ts";
-import { isBoxName, sshName } from "../../../src/hub/names.ts";
+import { isKeptForBoxes, sshName } from "../../../src/hub/names.ts";
 
 export type PeerLink = Pick<LinkedEnvironment, "environmentId" | "label" | "urls" | "status" | "expiresAt">;
 export type PeerHere = Linker & Pick<PeerMachine, "peers" | "devboxes" | "onPeer" | "print">;
@@ -205,7 +205,7 @@ export async function peersCommand(args: string[], here: PeerHere): Promise<numb
   const [mode = "plan", ...rest] = args;
   if (mode !== "link" && (rest.length || !["plan", "install", "doctor", "renew", "restore"].includes(mode))) return here.print(usage), 2;
   if (isThisABox(here)) return here.print("This machine is a box. A box has no peers, so fleet peers has nothing to do."), 0;
-  for (const box of here.devboxes.filter(isBoxName)) here.say(`${box}: skipped: a box is not a peer`);
+  for (const box of here.devboxes.filter(isKeptForBoxes)) here.say(`${box}: skipped: a box is not a peer`);
   if (mode === "link") return linkPeers(here, rest);
   if (mode === "renew") return renewPeers(here);
   if (mode === "restore") return restorePeers(here);

@@ -10,7 +10,7 @@ import { quote, readRole, remoteFleet } from "./machine.ts";
 import { changedFiles, readIfThere, requireInstalled, writeFiles, type Managed } from "./managed.ts";
 import { refuseLinks, writePrivateFile, type Fetch } from "../../mcp-gateway/lib/client.ts";
 import type { Run } from "../../mcp-gateway/lib/hub.ts";
-import { isBoxName } from "../../../src/hub/names.ts";
+import { isKeptForBoxes } from "../../../src/hub/names.ts";
 import { must, proxyPort } from "./run.ts";
 
 export { proxyPort, proxyUrl };
@@ -145,7 +145,7 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
   const beside = machine.plan === "both" ? ` and ${subscriptions(enabled("codex"), "codex")}` : "";
   const balancer = agent === "claude" ? "puts the one whose weekly quota resets first on top" : "frees each one whose quota cooldown its live usage disproves";
   machine.print(`CLI proxy: CLIProxyAPI ${machine.release.version} runs at ${proxyUrl}, loopback only, with ${count} of your own ${subscription[agent]} subscriptions${beside}. Every 5 minutes the balancer ${balancer}.`);
-  for (const devbox of machine.devboxes.filter((name) => !isBoxName(name))) machine.print(`Connect ${devbox}: ssh ${devbox} ${quote(remoteFleet("cli-proxy connect"))} < ~/.config/fleet/cli-proxy.key`);
+  for (const devbox of machine.devboxes.filter((name) => !isKeptForBoxes(name))) machine.print(`Connect ${devbox}: ssh ${devbox} ${quote(remoteFleet("cli-proxy connect"))} < ~/.config/fleet/cli-proxy.key`);
 }
 
 const silent = `The proxy at ${proxyUrl} does not answer.`;
