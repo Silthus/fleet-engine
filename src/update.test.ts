@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProfileFile } from "./pack/types.ts";
-import { isolateGit, spawnGit, tempDirs } from "./testing/git.ts";
+import { isolateGit, spawnGit, template, tempDirs } from "./testing/git.ts";
 import { spawnAsync } from "./testing/spawn.ts";
 import { noticePath, readNotice, update } from "./update.ts";
 
@@ -10,20 +10,25 @@ isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
-async function engineRemote(tags: string[]) {
-  const dir = temp.make("engine-remote-");
-  await spawnGit(dir, "init", "-q", "-b", "main");
-  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "engine" }));
-  writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
-  for (const tag of tags) {
-    writeFileSync(join(dir, "VERSION"), tag);
-    await spawnGit(dir, "add", ".");
-    await spawnGit(dir, "commit", "-q", "-m", tag);
-    await spawnGit(dir, "tag", tag);
-  }
-  writeFileSync(join(dir, "VERSION"), "main");
-  await spawnGit(dir, "commit", "-q", "-am", "main");
-  return dir;
+const engineRemotes = new Map<string, (target: string) => Promise<string>>();
+
+function engineRemote(tags: string[]) {
+  const key = tags.join(" ");
+  const built = engineRemotes.get(key) ?? template(async (dir) => {
+    await spawnGit(dir, "init", "-q", "-b", "main");
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "engine" }));
+    writeFileSync(join(dir, ".gitignore"), "node_modules/\n");
+    for (const tag of tags) {
+      writeFileSync(join(dir, "VERSION"), tag);
+      await spawnGit(dir, "add", ".");
+      await spawnGit(dir, "commit", "-q", "-m", tag);
+      await spawnGit(dir, "tag", tag);
+    }
+    writeFileSync(join(dir, "VERSION"), "main");
+    await spawnGit(dir, "commit", "-q", "-am", "main");
+  });
+  engineRemotes.set(key, built);
+  return built(temp.make("engine-remote-"));
 }
 
 async function engineCheckout(remote: string, ref: string) {

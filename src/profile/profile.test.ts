@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PackManifest, ProfileFile } from "../pack/types.ts";
-import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, template, tempDirs } from "../testing/git.ts";
 import { activeChoices, loadMachine, loadProfile, ProfileError, saveAnswers, saveMachine, thisMachine, workflowOverrides } from "./profile.ts";
 
 isolateGit();
@@ -31,13 +31,18 @@ const profile: ProfileFile = {
   workflows: {},
 };
 
-async function profileRepo(file: unknown = profile) {
-  const dir = temp.make("profile-");
-  await spawnGit(dir, "init", "-q", "-b", "main");
-  writeFileSync(join(dir, "fleet.json"), JSON.stringify(file, null, 2) + "\n");
-  await spawnGit(dir, "add", ".");
-  await spawnGit(dir, "commit", "-q", "-m", "Start");
-  return dir;
+const profileRepos = new Map<string, (target: string) => Promise<string>>();
+
+function profileRepo(file: unknown = profile) {
+  const text = JSON.stringify(file, null, 2) + "\n";
+  const built = profileRepos.get(text) ?? template(async (dir) => {
+    await spawnGit(dir, "init", "-q", "-b", "main");
+    writeFileSync(join(dir, "fleet.json"), text);
+    await spawnGit(dir, "add", ".");
+    await spawnGit(dir, "commit", "-q", "-m", "Start");
+  });
+  profileRepos.set(text, built);
+  return built(temp.make("profile-"));
 }
 
 describe("profile", () => {

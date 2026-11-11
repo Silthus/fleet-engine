@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { main } from "../cli.ts";
 import type { AvailableSource, ProfileFile } from "../pack/types.ts";
 import { defaultSources } from "../setup/defaults.ts";
-import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, template, tempDirs } from "../testing/git.ts";
 import { engineSource, resolveEngine } from "../testing/packs.ts";
 import { settingsCommand } from "./settings.ts";
 
@@ -14,17 +14,29 @@ afterEach(() => temp.cleanup());
 
 const engineRoot = join(import.meta.dir, "../..");
 
+const profiles = new Map<string, (target: string) => Promise<string>>();
+
+function profileTemplate(settings: Record<string, unknown>) {
+  const key = JSON.stringify(settings);
+  const built = profiles.get(key) ?? template(async (home) => {
+    const remote = join(home, "remote.git");
+    await spawnGit(home, "init", "-q", "--bare", "-b", "main", remote);
+    const dir = join(home, "profile");
+    await spawnGit(home, "clone", "-q", remote, dir);
+    const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: defaultSources, packs: ["pull-requests"], plan: "both", settings, workflows: {} };
+    writeFileSync(join(dir, "fleet.json"), JSON.stringify(profile, null, 2) + "\n");
+    await spawnGit(dir, "add", "fleet.json");
+    await spawnGit(dir, "commit", "-q", "-m", "Start");
+    await spawnGit(dir, "push", "-q", "-u", "origin", "main");
+  });
+  profiles.set(key, built);
+  return built;
+}
+
 async function machineWithProfile(settings: Record<string, unknown> = {}) {
-  const home = temp.make("home-");
+  const home = await profileTemplate(settings)(temp.make("home-"));
   const remote = join(home, "remote.git");
-  await spawnGit(home, "init", "-q", "--bare", "-b", "main", remote);
   const dir = join(home, "profile");
-  await spawnGit(home, "clone", "-q", remote, dir);
-  const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: defaultSources, packs: ["pull-requests"], plan: "both", settings, workflows: {} };
-  writeFileSync(join(dir, "fleet.json"), JSON.stringify(profile, null, 2) + "\n");
-  await spawnGit(dir, "add", "fleet.json");
-  await spawnGit(dir, "commit", "-q", "-m", "Start");
-  await spawnGit(dir, "push", "-q", "-u", "origin", "main");
   mkdirSync(join(home, ".config/fleet"), { recursive: true });
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "linux", profileDir: dir }));
   const elsewhere = async (change: (file: ProfileFile) => ProfileFile) => {
