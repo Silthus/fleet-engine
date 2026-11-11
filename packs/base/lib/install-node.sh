@@ -7,7 +7,7 @@ fail() {
 }
 
 PATH="$HOME/.local/bin:$PATH"
-if command -v node >/dev/null 2>&1 && command -v npx >/dev/null 2>&1; then exit 0; fi
+if node --version >/dev/null 2>&1 && npx --version >/dev/null 2>&1; then exit 0; fi
 
 release="$(dirname "$0")/node.release"
 pin() {
@@ -30,7 +30,7 @@ name="node-v$version-$target"
 share="$HOME/.local/share/fleet/node"
 mkdir -p "$HOME/.local/share/fleet" "$HOME/.local/bin" || fail "could not create $HOME/.local/share/fleet."
 work=$(mktemp -d "$HOME/.local/share/fleet/node-new.XXXXXX")
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work"; rm -f "$HOME/.local/bin/"*.new.$$' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -42,9 +42,19 @@ if [ ! -d "$share/$name" ]; then
   { mkdir -p "$share" && mv "$work/$name" "$share/$name"; } || fail "could not move Node.js into $share."
 fi
 
+point() {
+  case "$(readlink "$1" 2>/dev/null || true)" in
+    "$share"/*) ;;
+    *) { [ -e "$1" ] || [ -L "$1" ]; } && return 0 ;;
+  esac
+  rm -f "$1.new.$$"
+  { ln -s "$2" "$1.new.$$" && mv -T "$1.new.$$" "$1"; } || fail "could not link $1."
+}
+
 for tool in node npm npx; do
-  link="$HOME/.local/bin/$tool"
-  [ -e "$link" ] || [ -L "$link" ] || ln -s "$share/$name/bin/$tool" "$link" || fail "could not link $link."
+  point "$HOME/.local/bin/$tool" "$share/$name/bin/$tool"
 done
-"$HOME/.local/bin/npx" --version >/dev/null || fail "the installed npx does not start."
+for tool in node npx; do
+  "$HOME/.local/bin/$tool" --version >/dev/null 2>&1 || fail "$HOME/.local/bin/$tool does not run. If Fleet did not put it there, fix it or move it away, then run fleet apply."
+done
 echo "Node.js: $version in $share/$name."

@@ -148,10 +148,18 @@ fleet_cmd() {
 check_codex() {
   user=$1
   home=$(home_of "$user")
+  dirs="$home/.local/bin $home/.bun/bin $home/.proof/bin /usr/local/bin /usr/bin /bin"
+  found=$(as_user "$user" env PATH="$(printf '%s' "$dirs" | tr ' ' ':')" /bin/sh -c 'command -v codex' || true)
   path=
-  for dir in "$home/.local/bin" "$home/.bun/bin" "$home/.proof/bin" /usr/local/bin /usr/bin /bin; do
-    if [ -x "$dir/node" ] && [ "${dir#"$home"/}" = "$dir" ]; then
-      note "hid the box's own Node at $dir/node: the check runs without $dir on PATH"
+  if [ -n "$found" ]; then
+    target=$(readlink -f "$found")
+    as_user "$user" mkdir -p "$home/.proof/codex-only"
+    as_user "$user" ln -sfn "$target" "$home/.proof/codex-only/codex"
+    path="$home/.proof/codex-only"
+  fi
+  for dir in $dirs; do
+    if [ -x "$dir/node" ]; then
+      note "hid the Node at $dir/node: the check runs without $dir on PATH"
       continue
     fi
     path="${path:+$path:}$dir"

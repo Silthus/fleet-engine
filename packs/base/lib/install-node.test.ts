@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 
@@ -103,6 +103,37 @@ describe("install-node.sh", () => {
     expect((await box.install()).code).toBe(0);
     expect(await runs(box.home, "npm")).toBe("mine");
     expect(await runs(box.home, "npx")).toBe(`npx ${version} linux-x64`);
+  });
+
+  onLinux("repairs its own links when the Node.js release they point at is gone", async () => {
+    const box = await machine("x86_64");
+    expect((await box.install()).code).toBe(0);
+    for (const name of ["node", "npx"]) {
+      rmSync(join(box.home, ".local/bin", name));
+      symlinkSync(join(box.home, `.local/share/fleet/node/node-v1.0.0-linux-x64/bin/${name}`), join(box.home, ".local/bin", name));
+    }
+    expect(await box.install()).toMatchObject({ code: 0 });
+    expect(await runs(box.home, "node")).toBe(`node ${version} linux-x64`);
+    expect(await runs(box.home, "npx")).toBe(`npx ${version} linux-x64`);
+  });
+
+  onLinux("installs Node.js when the node or npx on PATH is there but does not run", async () => {
+    const box = await machine("x86_64");
+    const broken = temp.make("broken-node-");
+    stub(broken, "node", "echo v1");
+    stub(broken, "npx", "exit 42");
+    expect(await box.install(`${box.bin}:${box.home}/.local/bin:${broken}:/usr/bin:/bin`)).toMatchObject({ code: 0 });
+    expect(await runs(box.home, "npx")).toBe(`npx ${version} linux-x64`);
+  });
+
+  onLinux("names a broken npx in ~/.local/bin that Fleet did not put there, and keeps it", async () => {
+    const box = await machine("x86_64");
+    mkdirSync(join(box.home, ".local/bin"), { recursive: true });
+    stub(join(box.home, ".local/bin"), "npx", "exit 42");
+    const result = await box.install();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(join(box.home, ".local/bin/npx"));
+    expect(readFileSync(join(box.home, ".local/bin/npx"), "utf8")).toContain("exit 42");
   });
 
   onLinux("names the machine type when it has no pinned build", async () => {
