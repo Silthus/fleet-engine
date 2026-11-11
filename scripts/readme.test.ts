@@ -15,9 +15,10 @@ function gettingStarted() {
 }
 
 function prompt() {
-  const blocks = [...gettingStarted().matchAll(/^ *```\w*\n *(.+)\n *```$/gm)];
+  const blocks = [...gettingStarted().matchAll(/^ *```\w*\n([\s\S]*?)^ *```$/gm)].map((match) => match[1]!.trim());
   expect(blocks.length).toBe(1);
-  return blocks[0]![1]!;
+  expect(blocks[0]!.split("\n").length).toBe(1);
+  return blocks[0]!;
 }
 
 describe("the README", () => {
