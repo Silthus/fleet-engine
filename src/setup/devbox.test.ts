@@ -114,7 +114,7 @@ describe("the devbox over SSH", () => {
     const output = result.output;
     expect(output.indexOf(question)).toBeGreaterThan(output.indexOf("  ✓ box-1"));
     expect(output.indexOf(question)).toBeLessThan(output.indexOf("▶ Install Fleet on box-1"));
-    expect(pushedAnswers(home).settings["orchestration.loopProject"]).toBe("~/code/app");
+    expect((await pushedAnswers(home)).settings["orchestration.loopProject"]).toBe("~/code/app");
 
     const later = temp.make("home-");
     const waiting = await fleetSetup(later, ["--non-interactive", ...args, "--devbox", "box-9"], [], fakeMachine(later));
@@ -136,7 +136,7 @@ describe("the devbox over SSH", () => {
 
     rmSync(rejecting);
     expect((await fleetSetup(home, ["--non-interactive", ...args], [], fakeMachine(home))).code).toBe(0);
-    expect(pushedAnswers(home).settings["orchestration.loopProject"]).toBe("~/code/app");
+    expect((await pushedAnswers(home)).settings["orchestration.loopProject"]).toBe("~/code/app");
   });
 
   test("fleet devbox add makes a host a devbox later, and a failed install stops with what to do", async () => {

@@ -32,11 +32,16 @@ const scopes = "  - Token scopes: 'admin:public_key', 'admin:ssh_signing_key', '
 export const githubRepo = (home: string, repo: string) => join(home, "github-remotes", `${repo}.git`);
 
 /** Git with github.com rewritten to the bare repos; a clone keeps the rewrite, so later pushes from any code reach them too. */
-function realGit(home: string, args: string[], cwd?: string): ExecResult {
+async function realGit(home: string, args: string[], cwd?: string): Promise<ExecResult> {
   const remotes = `${join(home, "github-remotes")}/`;
-  const child = Bun.spawnSync(["git", "-c", `url.${remotes}.insteadOf=https://github.com/`, ...args], { cwd, env: gitEnv });
-  if (args[0] === "clone" && child.exitCode === 0) Bun.spawnSync(["git", "-C", args.at(-1)!, "config", `url.${remotes}.insteadOf`, "https://github.com/"], { env: gitEnv });
-  return { code: child.exitCode ?? 1, output: `${child.stdout.toString()}${child.stderr.toString()}` };
+  const run = async (command: string[]) => {
+    const child = Bun.spawn(command, { cwd, env: gitEnv, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    return { code, output: `${stdout}${stderr}` };
+  };
+  const result = await run(["git", "-c", `url.${remotes}.insteadOf=https://github.com/`, ...args]);
+  if (args[0] === "clone" && result.code === 0) await run(["git", "-C", args.at(-1)!, "config", `url.${remotes}.insteadOf`, "https://github.com/"]);
+  return result;
 }
 
 type SignInName = "github" | "claude" | "chatgpt" | "coder" | "box:github" | "box:claude" | "box:chatgpt" | "box:t3";
@@ -150,6 +155,6 @@ export const machineFile = (home: string) => JSON.parse(readFileSync(join(home, 
 export const savedAnswers = (home: string) => JSON.parse(readFileSync(join(profilePath(home), "fleet.json"), "utf8"));
 
 /** The answers as pushed to the fake github.com. */
-export function pushedAnswers(home: string, repo = "nora/fleet-profile") {
-  return JSON.parse(realGit(home, ["--git-dir", githubRepo(home, repo), "show", "main:fleet.json"]).output);
+export async function pushedAnswers(home: string, repo = "nora/fleet-profile") {
+  return JSON.parse((await realGit(home, ["--git-dir", githubRepo(home, repo), "show", "main:fleet.json"])).output);
 }
