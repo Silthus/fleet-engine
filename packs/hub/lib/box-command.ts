@@ -1,4 +1,4 @@
-import { boxPrefix, canBeDevbox } from "../../../src/hub/names.ts";
+import { canBeDevbox, isBoxName } from "../../../src/hub/names.ts";
 import { grant, reap, type Coder } from "./coder.ts";
 import { assertBox, link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
 import { quote, requireHub, type Machine } from "./machine.ts";
@@ -63,7 +63,7 @@ function valid(args: string[]): boolean {
     case "spawn":
       return [name, ...rest].filter((arg) => arg !== undefined).every((arg, index) => arg === "--new" || (index === 0 && !arg.startsWith("--")));
     case "run":
-      return !!name?.startsWith(boxPrefix) && rest[0] === "--" && rest.length > 1;
+      return !!name && isBoxName(name) && rest[0] === "--" && rest.length > 1;
     case "grant":
       return !!name && !name.startsWith("-") && rest.every((flag) => flag === "--if-expiring");
     case "reap":

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Capture, type Env, type Result } from "./coder.ts";
-import { isKeptForBoxes } from "../../../src/hub/names.ts";
+import { isKeptForBoxes, isNodeName } from "../../../src/hub/names.ts";
 import type { Clock } from "./pool.ts";
 import { onHub } from "../../../src/hub/ssh.ts";
 
@@ -104,6 +104,11 @@ function savedDevboxes(home: string): string[] {
   return Array.isArray(saved) ? saved.filter((host): host is string => typeof host === "string") : [];
 }
 
+function savedName(home: string): string | undefined {
+  const name = readMachineFile(home)?.name;
+  return typeof name === "string" && isNodeName(name) ? name : undefined;
+}
+
 function namesOfThisMachine(home: string, hub: string): string[] {
   const machine = readMachineFile(home);
   return [...(machine?.role === "hub" ? [hub] : []), ...(typeof machine?.name === "string" ? [machine.name] : [])];
@@ -127,7 +132,7 @@ export function shellsWith(run: Capture, hub: string): Pick<Machine, "onPeer" | 
   };
 }
 
-export function peerMachine(env: Env = Bun.env, home = homedir(), self = hostname(), label = "Fleet box"): PeerMachine {
+export function peerMachine(env: Env = Bun.env, home = homedir(), self = savedName(home) ?? hostname(), label = "Fleet box"): PeerMachine {
   const devboxes = devboxesOf(env, home);
   const hub = stringSetting("hub.alias", env);
   const ownNames = namesOfThisMachine(home, hub);
