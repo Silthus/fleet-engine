@@ -601,6 +601,7 @@ describe("the kill guard", () => {
     "until ! pgrep -f server; do sleep 2; done",
     "bash -c 'pkill -f server'",
     "pkill -f 'server[0-9]*'",
+    "pkill -f '^bash -c'",
   ])("refuses a full-command-line match that would hit its own shell: %s", (command) => {
     expect(refusal(command)).toContain("matches the agent's own shell");
   });
@@ -614,6 +615,7 @@ describe("the kill guard", () => {
     "echo 'pkill -f x'",
     "pgrep -af vite; kill %1",
     "pkill -f '^/usr/bin/node server'",
+    "pkill -f '[n]ode' -u fred",
   ])("allows a kill that cannot match its own shell: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
   });
@@ -630,6 +632,8 @@ describe("the Git guard", () => {
     "git -c core.hooksPath=/dev/null commit -m x",
     "git merge --no-verify feature",
     "NOHOOKS=/dev/null git --config-env=core.hooksPath=NOHOOKS commit -m x",
+    "git commit -S --no-verify -m x",
+    "git commit -amTest --no-verify",
   ])("refuses a call that skips the Git hooks: %s", (command) => {
     expect(refusal(command)).toContain("skips the Git hooks");
   });
@@ -691,6 +695,9 @@ describe("the Git guard", () => {
     ["a push to main whose GitHub push URL comes before another one", "feature", { "remote.origin.pushurl": ["https://github.com/acme/app.git", "/srv/mirror.git"] }, "git push origin HEAD:main", "pushes to `main` of acme/app"],
     ["a wildcard push that lands on main", "main", {}, "git push --force-with-lease origin 'refs/heads/*:refs/heads/*'", "pushes to `main` of acme/app"],
     ["a push to a mirror remote, which forces every ref", "feature", { "remote.origin.mirror": "true" }, "git push origin", "force-pushes without a lease"],
+    ["a push to a remote whose mirror setting says yes", "feature", { "remote.origin.mirror": "yes" }, "git push origin", "force-pushes without a lease"],
+    ["a push to main that a -c setting adds a second push URL to", "feature", { "remote.origin.pushurl": "https://github.com/acme/app.git" }, "git -c remote.origin.pushurl=/srv/mirror.git push origin HEAD:main", "pushes to `main` of acme/app"],
+    ["a bare push that --config-env sends to main", "feature", tracksMain, "MODE=upstream git --config-env=push.default=MODE push", "push.default is upstream"],
   ])("refuses %s of a repository that takes pull requests", async (_, branch, config, command, why) => {
     const dir = await repo(branch, config);
     const home = homeWith(withGuards(), { "guards.person": "Robin" });
@@ -698,6 +705,14 @@ describe("the Git guard", () => {
     const denied = await preToolUse(home, "claude", bash(command.replace("REPO", dir), at), { GIT_CONFIG_NOSYSTEM: "1" });
     expect(denied.refusal).toContain(why);
     expect(denied.refusal).toContain("ask Robin");
+  });
+
+  test("refuses a wildcard push that turns a tag named main into the main branch", async () => {
+    const dir = await repo("feature");
+    await spawnGit(dir, "tag", "main");
+    const home = homeWith(withGuards(), { "guards.person": "Robin" });
+    const denied = await preToolUse(home, "claude", bash("git push origin 'refs/tags/*:refs/heads/*'", dir), { GIT_CONFIG_NOSYSTEM: "1" });
+    expect(denied.refusal).toContain("pushes to `main` of acme/app");
   });
 
   test("refuses a leased wildcard push of more than five branches", async () => {

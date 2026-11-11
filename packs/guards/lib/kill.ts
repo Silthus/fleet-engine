@@ -27,8 +27,24 @@ function matchesItself(pattern: string | undefined, text: string): boolean {
   }
 }
 
-const patternOf = (args: string[]) => args.filter((arg) => !arg.startsWith("-")).at(-1);
-const fullLineMatch = ({ name, args }: Command, text: string) => (name === "pkill" || name === "pgrep") && matchesFullLine(args) && matchesItself(patternOf(args), text);
+const pgrepValuedLong = new Set(["--delimiter", "--pgroup", "--group", "--parent", "--session", "--terminal", "--euid", "--uid", "--pidfile", "--signal", "--ns", "--nslist", "--cgroup", "--env"]);
+const shellPrefixes = ["", "bash -c ", "/bin/bash -c ", "/usr/bin/bash -c ", "sh -c ", "/bin/sh -c ", "zsh -c ", "/bin/zsh -c ", "/usr/bin/zsh -c "];
+
+function patternOf(args: string[]): string | undefined {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--") return args[index + 1];
+    if (pgrepValuedLong.has(arg)) index++;
+    else if (/^-[A-Za-z0-9]+$/.test(arg)) {
+      const valued = [...arg.slice(1)].findIndex((char) => pgrepValued.includes(char));
+      if (valued === arg.length - 2) index++;
+    } else if (!arg.startsWith("-")) return arg;
+  }
+  return undefined;
+}
+
+const fullLineMatch = ({ name, args }: Command, command: string) => (name === "pkill" || name === "pgrep") && matchesFullLine(args)
+  && shellPrefixes.some((prefix) => matchesItself(patternOf(args), `${prefix}${command}`));
 const killsComputedPids = ({ name, args }: Command) => (name === "kill" && args.some((arg) => /[$`]/.test(arg))) || (name === "xargs" && args.includes("kill"));
 
 /** Refuses `pkill -f`, and `pgrep -f` that feeds a kill or runs in a loop, when the pattern matches the command's own text:

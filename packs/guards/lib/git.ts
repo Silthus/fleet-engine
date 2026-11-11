@@ -4,13 +4,14 @@ import { withDirectories } from "./directories.ts";
 import { shortCluster } from "./kill.ts";
 import { commandsIn } from "./shell-words.ts";
 
-export type Repo = { config: (key: string) => string | undefined; values: (key: string) => string[]; branch?: string; branches: string[]; agents?: string };
+export type Repo = { config: (key: string) => string | undefined; values: (key: string) => string[]; branch?: string; branches: string[]; refs: string[]; agents?: string };
 export type ReadRepo = (dir: string, selectors: string[]) => Repo | undefined;
 
 export const largestForcePush = 5;
 const mainBranches = new Set(["main", "master"]);
-const commitValuedLetters = "mFCctSu";
-const commitValued = new Set(["-m", "-F", "-C", "-c", "-t", "--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message", "--fixup", "--squash", "--trailer", "--cleanup"]);
+const commitRequiredLetters = "mFCct";
+const commitOptionalLetters = "Su";
+const commitValued = new Set(["--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message", "--fixup", "--squash", "--trailer", "--cleanup", "--pathspec-from-file"]);
 const pushValued = new Set(["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
 
 const hooksReason = (person: string) => "Fleet blocked this command: it skips the Git hooks, which run the repository's checks. "
@@ -70,14 +71,21 @@ export const readRepo: ReadRepo = (dir, selectors) => {
     values: (key) => values.get(configKey(key)) ?? [],
     config: (key) => values.get(configKey(key))?.at(-1),
     branch: git(["symbolic-ref", "-q", "--short", "HEAD"], false)?.trim() || undefined,
-    branches: git(["for-each-ref", "--format=%(refname:short)", "refs/heads/"])!.split("\n").filter(Boolean),
+    ...refsOf(git(["for-each-ref", "--format=%(refname)"])!),
     agents: agents && existsSync(agents) ? readFileSync(agents, "utf8") : undefined,
   };
 };
 
+function refsOf(listing: string) {
+  const refs = listing.split("\n").filter(Boolean);
+  return { refs, branches: refs.filter((ref) => ref.startsWith("refs/heads/")).map(branchName) };
+}
+
+const isTrue = (value: string | undefined) => value !== undefined && /^(?:true|yes|on|1)$/i.test(value);
+
 type GitCall = { dir: string | undefined; selectors: string[]; settings: string[]; sub?: string; args: string[] };
 
-function gitCall(args: string[], cwd: string | undefined): GitCall {
+function gitCall(args: string[], cwd: string | undefined, env: ReadonlyMap<string, string>): GitCall {
   let dir = cwd;
   const selectors: string[] = [];
   const settings: string[] = [];
@@ -85,9 +93,10 @@ function gitCall(args: string[], cwd: string | undefined): GitCall {
   for (; index < args.length; index++) {
     const arg = args[index];
     if (arg === "-C") dir = dir === undefined ? undefined : resolve(dir, args[++index] ?? ".");
-    else if (arg === "-c" || arg === "--config-env") settings.push(args[++index] ?? "");
+    else if (arg === "-c") settings.push(args[++index] ?? "");
     else if (/^-c./.test(arg)) settings.push(arg.slice(2));
-    else if (arg.startsWith("--config-env=")) settings.push(arg.slice("--config-env=".length));
+    else if (arg === "--config-env") settings.push(fromEnvironment(args[++index] ?? "", env));
+    else if (arg.startsWith("--config-env=")) settings.push(fromEnvironment(arg.slice("--config-env=".length), env));
     else if (arg === "--git-dir" || arg === "--work-tree") selectors.push(`${arg}=${args[++index] ?? ""}`);
     else if (/^--(?:git-dir|work-tree)=/.test(arg)) selectors.push(arg);
     else if (arg === "--namespace") index++;
@@ -96,22 +105,44 @@ function gitCall(args: string[], cwd: string | undefined): GitCall {
   return { dir, selectors, settings, sub: args[index], args: args.slice(index + 1) };
 }
 
+function fromEnvironment(setting: string, env: ReadonlyMap<string, string>): string {
+  const split = setting.indexOf("=");
+  if (split < 0) return setting;
+  const name = setting.slice(split + 1);
+  return `${setting.slice(0, split)}=${env.get(name) ?? process.env[name] ?? ""}`;
+}
+
 function withSettings(repo: Repo, settings: string[]): Repo {
-  const given = new Map<string, string>();
+  const given = new Map<string, string[]>();
   for (const setting of settings) {
     const split = setting.indexOf("=");
-    given.set(configKey(split < 0 ? setting : setting.slice(0, split)), split < 0 ? "true" : setting.slice(split + 1));
+    const key = configKey(split < 0 ? setting : setting.slice(0, split));
+    given.set(key, [...given.get(key) ?? [], split < 0 ? "true" : setting.slice(split + 1)]);
   }
-  return { ...repo, config: (key) => given.get(configKey(key)) ?? repo.config(key), values: (key) => given.has(configKey(key)) ? [given.get(configKey(key))!] : repo.values(key) };
+  return { ...repo, config: (key) => given.get(configKey(key))?.at(-1) ?? repo.config(key), values: (key) => [...repo.values(key), ...given.get(configKey(key)) ?? []] };
+}
+
+function shortSkipsHooks(arg: string): { skips: boolean; takesNext: boolean } {
+  for (let letter = 1; letter < arg.length; letter++) {
+    const char = arg[letter];
+    if (char === "n") return { skips: true, takesNext: false };
+    if (commitRequiredLetters.includes(char)) return { skips: false, takesNext: letter === arg.length - 1 };
+    if (commitOptionalLetters.includes(char)) return { skips: false, takesNext: false };
+  }
+  return { skips: false, takesNext: false };
 }
 
 function skipsCommitHooks(args: string[]): boolean {
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === "--") return false;
+    if (arg === "--no-verify") return true;
     if (commitValued.has(arg)) index++;
-    else if (arg === "--no-verify" || shortCluster(arg, "n", commitValuedLetters)) return true;
-    else if (/^-[A-Za-z]+$/.test(arg) && commitValuedLetters.includes(arg.at(-1)!) && !shortCluster(arg, "n", "")) index++;
+    else if (/^-[A-Za-z]+$/.test(arg)) {
+      const { skips, takesNext } = shortSkipsHooks(arg);
+      if (skips) return true;
+      if (takesNext) index++;
+    }
   }
   return false;
 }
@@ -159,11 +190,11 @@ function remoteOf(push: Push, repo: Repo): { name?: string; urls: string[] } {
 
 const globPattern = (glob: string) => new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace("*", "(.*)")}$`);
 
-function expandWildcard(spec: string, branches: string[]): Target[] {
+function expandWildcard(spec: string, refs: string[]): Target[] {
   const [source, destination = source] = spec.split(":");
   const pattern = globPattern(source.startsWith("refs/") ? source : `refs/heads/${source}`);
-  return branches.flatMap((branch) => {
-    const match = `refs/heads/${branch}`.match(pattern);
+  return refs.flatMap((ref) => {
+    const match = ref.match(pattern);
     return match ? [{ name: branchName(destination.replace("*", match[1])), upstream: false }] : [];
   });
 }
@@ -171,7 +202,7 @@ function expandWildcard(spec: string, branches: string[]): Target[] {
 const configuredSpecs = (push: Push, repo: Repo, remote: string | undefined) =>
   push.refspecs.length > 0 ? push.refspecs : remote ? repo.values(`remote.${remote}.push`) : [];
 
-const mirrors = (repo: Repo, remote: string | undefined) => remote !== undefined && repo.config(`remote.${remote}.mirror`) === "true";
+const mirrors = (repo: Repo, remote: string | undefined) => remote !== undefined && isTrue(repo.config(`remote.${remote}.mirror`));
 
 /** Where each ref of a push lands, as Git resolves it, including a bare `git push` under push.default. */
 function targets(push: Push, repo: Repo, remote: string | undefined): Target[] {
@@ -182,7 +213,7 @@ function targets(push: Push, repo: Repo, remote: string | undefined): Target[] {
   const resolveSpec = (spec: string): Target[] => {
     const bare = spec.replace(/^\+/, "");
     if (bare === ":") return every();
-    if (bare.includes("*")) return expandWildcard(bare, repo.branches);
+    if (bare.includes("*")) return expandWildcard(bare, repo.refs);
     if (bare.includes(":")) return [{ name: branchName(bare.slice(bare.indexOf(":") + 1)), upstream: false }];
     if (bare === "HEAD" || bare === "@") return repo.branch ? [{ name: repo.branch, upstream: false }] : [];
     const local = branchName(bare);
@@ -216,7 +247,7 @@ export function gitRisk(command: string, cwd: string, person: string, mainPushRe
   let forced = 0;
   for (const [call, directory] of withDirectories(commandsIn(command), cwd)) {
     if (call.name !== "git") continue;
-    const { dir, selectors, settings, sub, args } = gitCall(call.args, directory);
+    const { dir, selectors, settings, sub, args } = gitCall(call.args, directory, call.env);
     if (sub !== "commit" && sub !== "push" && sub !== "merge") continue;
     if (settings.some((setting) => /^core\.hookspath=/i.test(setting))) return hooksReason(person);
     if (sub === "commit" && skipsCommitHooks(args)) return hooksReason(person);
