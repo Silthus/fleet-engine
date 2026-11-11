@@ -8,7 +8,7 @@ import { sourceCache } from "../src/setup/setup.ts";
 import { fakeMachine, fleetSetup, savedAnswers } from "../src/setup/testing.ts";
 import { isolateGit, tempDirs } from "../src/testing/git.ts";
 import { needsHubPacks, prefersHubPacks } from "../src/setup/defaults.ts";
-import { presetPicks, promptLabels, promptText, setSetting, toggleWorkflow } from "../page/model.ts";
+import { promptLabels, startPrompt } from "../page/model.ts";
 import { pageData } from "./build-page.ts";
 
 isolateGit();
@@ -149,22 +149,31 @@ describe("the agent setup guide", () => {
 
   test("says how to use each line the page's prompt can carry", async () => {
     const data = await pageData({ audience: "public" });
-    const picks = setSetting(data, toggleWorkflow(data, toggleWorkflow(data, presetPicks(data, "everything", {}, "hub"), "nightly-updates"), "dream"), "base.heavySlots", 4);
-    const prompt = promptText(data, picks);
+    const prompt = startPrompt(data, { where: "hub", off: [] });
     const labels = [...prompt.matchAll(/^- ([^:]+): /gm)].map((match) => match[1]!);
     expect(new Set(labels)).toEqual(new Set(Object.values(promptLabels).filter((label) => label !== promptLabels.intro)));
     const [, intro] = prompt.split("\n\n");
     expect(words(guide())).toContain(`\`${intro!.split("\n")[0]}\``);
-    const rows = [...guide().matchAll(/^\| `([^`|]+)` \| [^|]+ \|$/gm)].map((match) => match[1]!);
-    expect(labels.filter((label) => !rows.includes(label))).toEqual([]);
+    const picks = guide().slice(guide().indexOf("## Picks from the page"), guide().indexOf("## 1. Check the Mac"));
+    const rows = [...picks.matchAll(/^\| `([^`|]+)` \| [^|]+ \|$/gm)].map((match) => match[1]!);
+    expect(rows).toEqual(labels);
   });
 
-  test("lets the page's workflow lines win over a setup note, and turns on no hub pack when the page names none", () => {
+  test("still says how to use each line that only a prompt from the earlier page carries, and skips the hub packs when that prompt names none", () => {
+    const picks = words(guide().slice(guide().indexOf("## Picks from the page"), guide().indexOf("## 1. Check the Mac")));
+    expect(picks).toContain("A prompt from an earlier page can carry more lines. Use them too:");
+    expect(picks).toContain("- `Workflows on the first setup` and `Workflows once the hub runs`: add the list to the command of that step as `--workflows`, without the spaces.");
+    expect(picks).toContain("- `Setting`: add `--set <key>=<value>` to the setup command in step 7, once for each line.");
+    expect(picks).toContain("`none` means no pack, so skip item 8.");
+    expect(words(guide())).toContain("With picks from the page, leave out `--add hub` when the line does not name `hub`:");
+  });
+
+  test("takes a first setup with every pack switched off, and leaves workflows and settings to each pack's setup note", async () => {
+    const data = await pageData({ audience: "public" });
     const text = words(guide());
-    expect(text).toContain("Add no workflow flag from a setup note");
-    expect(text).toContain("the line's value wins");
-    expect(text).toContain("`none` means no pack, so skip item 8");
-    expect(text).toContain("leave out `--add hub` when the line does not name `hub`");
+    expect(startPrompt(data, { where: "mac", off: data.startPacks })).toContain("- Packs on the first setup: none");
+    expect(text).toContain("`none` means no pack.");
+    expect(text).toContain("The page names packs only. Each pack's setup note still asks which of its workflows to turn on and which settings it needs.");
   });
 
   test("offers in step 9 the packs the page keeps for a hub, and Slack with Mac only or in step 9", () => {

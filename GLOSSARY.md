@@ -10,7 +10,7 @@ _Avoid_: Core, framework, starter
 
 **Pack**:
 An opt-in bundle of instruction fragments, guides, skills, skill settings, provider config, jobs, and steps that adds one way of working. It is a `pack.json` plus files.
-_Avoid_: Module, plugin, add-on, group
+_Avoid_: Module, plugin, add-on, extension, group
 
 **Base pack**:
 The one pack every user gets.

@@ -3,7 +3,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths: [page/index.html, .github/workflows/pages.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,7 +15,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-      - run: mkdir _site && cp page/index.html _site/index.html
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - run: bun scripts/build-page.ts --out _site
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: _site

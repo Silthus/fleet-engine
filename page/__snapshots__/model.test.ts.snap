@@ -1,9 +1,0 @@
-// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
-
-exports[`the command for each preset is one line that names only the preset 1`] = `
-{
-  "everyday": "curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh -s -- -- --preset everyday",
-  "everything": "curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh -s -- -- --preset everything",
-  "starter": "curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh -s -- -- --preset starter",
-}
-`;

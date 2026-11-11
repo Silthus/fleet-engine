@@ -35,16 +35,18 @@ Ask everything else as the steps say. Without the list, ask every question.
 | --- | --- |
 | `Where Fleet runs` | The answer to step 4. |
 | `Packs on the first setup` | The packs for step 6, picked one by one. `none` means no pack. Still ask the AI plan, and read each pack's setup note. |
-| `Workflows on the first setup` | Add the list to the setup command in step 7 as `--workflows`, without the spaces. A workflow that it does not name keeps its default. |
-| `Setting` | Add `--set <key>=<value>` to the setup command in step 7, once for each line. |
 | `Packs once the hub runs` | The answer to item 8 of step 9. `none` means no pack, so skip item 8. |
-| `Workflows once the hub runs` | Add the list to the `--workflows` of the command in item 8 of step 9. It names every workflow that runs, so each other workflow of these packs stays off. |
 
-The workflow lines are complete, and the person saw them on the page. Add no
-workflow flag from a setup note, and do not ask which workflows to turn on.
-When a command in this guide or a setup note names a workflow that a line
-names too, the line's value wins. A setup note still asks for the settings
-that a pack or a workflow needs.
+The page names packs only. Each pack's setup note still asks which of its
+workflows to turn on and which settings it needs.
+
+A prompt from an earlier page can carry more lines. Use them too:
+
+- `Workflows on the first setup` and `Workflows once the hub runs`: add the
+  list to the command of that step as `--workflows`, without the spaces. Such
+  a line wins over a workflow flag from a setup note.
+- `Setting`: add `--set <key>=<value>` to the setup command in step 7, once
+  for each line.
 
 ## 1. Check the Mac
 
