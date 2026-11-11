@@ -14,7 +14,7 @@ Without a hub, the trigger runs on the Mac and stops while the Mac sleeps.
    in a Terminal window, and ask them to tell you when it ends:
 
    ```sh
-   printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"\nfleet slack-trigger setup\n' > ~/.cache/fleet-setup/slack.command && chmod +x ~/.cache/fleet-setup/slack.command && open ~/.cache/fleet-setup/slack.command
+   printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nfleet slack-trigger setup\n' > ~/.cache/fleet-setup/slack.command && chmod +x ~/.cache/fleet-setup/slack.command && open ~/.cache/fleet-setup/slack.command
    ```
 
    It gives a link that creates the app in their workspace, then asks for

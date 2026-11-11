@@ -62,6 +62,13 @@ describe("the agent setup guide", () => {
     expect(notes.map((note) => note.name).sort()).toEqual(held.sort());
   });
 
+  test("gives every command in the guide and the pack notes the same PATH, with Bun's Homebrew folders on it", () => {
+    const notes = readdirSync(join(root, "packs")).map((pack) => join(root, "packs", pack, "SETUP.md")).filter(existsSync);
+    const paths = [guide(), ...notes.map((path) => readFileSync(path, "utf8"))].flatMap((text) => [...text.matchAll(/export PATH="([^"]+)"/g)].map((match) => match[1]));
+    expect(paths.length).toBeGreaterThan(1);
+    expect(new Set(paths)).toEqual(new Set(["$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"]));
+  });
+
   test("fetches only files that are in the repo", () => {
     const paths = [...guide().matchAll(/https:\/\/raw\.githubusercontent\.com\/Silthus\/fleet-engine\/main\/(\S+?)[`)\s]/g)].map((match) => match[1]!);
     expect(paths.length).toBeGreaterThan(0);
