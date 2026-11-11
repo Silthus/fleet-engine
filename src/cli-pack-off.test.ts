@@ -32,7 +32,9 @@ else process.exit((await Bun.file(file).exists()) ? 0 : 1);
       const file = JSON.parse(readFileSync(join(profile, "fleet.json"), "utf8"));
       writeFileSync(join(profile, "fleet.json"), JSON.stringify({ ...file, packs: [] }));
     };
-    const run = (args: string[], home: string, engine: string, env: Record<string, string> = {}) => main(args, { home, engineRoot: engine, platform: "linux", env, print: () => {} });
+    const run = (args: string[], home: string, engine: string, env: Record<string, string> = {}, print: (line: string) => void = () => {}): Promise<number> =>
+      main(args, { home, engineRoot: engine, platform: "linux", env, print, run: (command, stepEnv = {}) => (command[1] === join(engine, "fleet") ? run(command.slice(2), home, engine, stepEnv) : spawnStep(command, home, stepEnv)) });
+    const spawnStep = (command: string[], home: string, env: Record<string, string>) => Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home, ...env } }).exited;
 
     test("has its steps undone by the next apply, through the pack's own command", async () => {
       const home = temp.make("home-");
@@ -57,7 +59,7 @@ else process.exit((await Bun.file(file).exists()) ? 0 : 1);
       expect(await run(["apply", "--profile", profile], home, engine)).toBe(0);
       drop(profile);
       const lines: string[] = [];
-      await main(["doctor"], { home, engineRoot: engine, platform: "linux", env: {}, print: (line) => lines.push(line) });
+      await run(["doctor"], home, engine, {}, (line) => lines.push(line));
       expect(lines.join("\n")).toContain("The tools pack is off. Log out with box logout.");
     });
 
