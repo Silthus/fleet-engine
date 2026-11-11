@@ -1,301 +1,194 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { AvailableSource } from "../src/pack/types.ts";
-import { readFileSync } from "node:fs";
+import { main } from "../src/cli.ts";
+import { loadPacks } from "../src/pack/manifest.ts";
 import { parseSetupFlags } from "../src/setup/flags.ts";
-import { filledBySetup, picksFrom, settingsFrom } from "../src/setup/questions.ts";
+import { picksFrom } from "../src/setup/questions.ts";
 import { loadCatalog } from "../src/setup/setup.ts";
-import { tempDirs } from "../src/testing/git.ts";
-import { mac, engineSource, resolveEngine, skillSources } from "../src/testing/packs.ts";
+import { engineRoot, fakeMachine, fleetSetup, pushedAnswers, scripted } from "../src/setup/testing.ts";
+import { isolateGit, tempDirs } from "../src/testing/git.ts";
 import { pageData } from "../scripts/build-page.ts";
-import {
-  activePreset,
-  commandFlags,
-  commandText,
-  chosen,
-  runState,
-  workflowState,
-  presetPicks,
-  profileFile,
-  questions,
-  promptText,
-  setSetting,
-  setupAsks,
-  setupSplit,
-  setWhere,
-  togglePack,
-  toggleWorkflow,
-  type PageData,
-  type Picks,
-} from "./model.ts";
+import { firstStart, installPrompt, promptData, setupSplit, startPrompt, toggleSelected, toggleStart, type PageData, type Start } from "./model.ts";
 
+isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 let data: PageData;
-let engine: AvailableSource;
 beforeAll(async () => {
   data = await pageData({ audience: "public" });
-  engine = await engineSource();
 });
 
-const everyday = () => presetPicks(data, "everyday");
-const workflow = (id: string) => data.packs.flatMap((pack) => pack.workflows).find((item) => item.id === id)!;
+const root = join(import.meta.dir, "..");
+const withHub: Start = { where: "hub", off: [] };
+const flip = (start: Start, ...names: string[]) => names.reduce((picked, name) => toggleStart(data, picked, name), start);
+const select = (...names: string[]) => names.reduce((selected, name) => toggleSelected(data, selected, name), [] as string[]);
+const everyPack = () => select(...data.packs.map((pack) => pack.name));
+const line = (text: string, label: string) => text.match(new RegExp(`^- ${label}: (.*)$`, "m"))?.[1];
+const step = (text: string, start: string) => text.split("\n").find((item) => /^\d+\. /.test(item) && item.includes(start));
 
-async function setupReads(picks: Picks) {
-  const text = commandText(data, picks);
-  const tail = text.slice(text.indexOf("sh -s -- --") + "sh -s -- --".length).replace(/\\\n\s*/g, "");
-  const process = Bun.spawn(["sh", "-c", `printf '%s\\0' ${tail}`]);
-  const words = (await new Response(process.stdout).text()).split("\0").slice(0, -1);
-  const flags = parseSetupFlags(words);
-  const catalog = await loadCatalog(join(import.meta.dir, ".."), [], temp.make("home-"));
-  return { words, picks: picksFrom(flags, catalog), settings: settingsFrom(flags, catalog) };
+async function macWithFleet() {
+  const home = temp.make("home-");
+  expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"], [], fakeMachine(home), undefined, 0, "darwin")).code).toBe(0);
+  const io = scripted([]);
+  const fleet = (args: string[]) => main(args, { home, engineRoot, platform: "darwin", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: fakeMachine(home).machine } });
+  return { home, fleet, output: io.output };
 }
 
-describe("the command", () => {
-  test("for each preset is one line that names only the preset", () => {
-    expect(Object.fromEntries(data.presets.map((preset) => [preset.id, commandText(data, presetPicks(data, preset.id))]))).toMatchSnapshot();
+async function fleetCommands() {
+  let usage = "";
+  await main(["help"], { home: "/nonexistent", engineRoot: root, platform: "darwin", print: (text) => (usage += `${text}\n`) });
+  const commandFiles = (dir: string) => (existsSync(join(dir, "commands")) ? readdirSync(join(dir, "commands")).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts")).map((name) => name.slice(0, -3)) : []);
+  const shipped = (await loadPacks(root)).flatMap(({ dir, code }) => [...Object.keys(code?.commands ?? {}), ...commandFiles(dir)]);
+  return new Set([...[...usage.matchAll(/^ {2}fleet ([a-z][a-z-]*)/gm)].map((match) => match[1]!), ...shipped]);
+}
+
+describe("the Getting started prompt", () => {
+  const readmePrompt = () => readFileSync(join(root, "README.md"), "utf8").match(/```text\n\s*(Set up Fleet[^\n]+)\n/)![1]!;
+
+  test("with Mac only, is the README's prompt plus where Fleet runs and the three packs that are on by default", () => {
+    expect(startPrompt(data, firstStart)).toBe(`${readmePrompt()}\n\nMy picks from the Fleet page:\n- Where Fleet runs: Mac only\n- Packs on the first setup: pull-requests, orchestration, communication`);
   });
 
-  test("carries Everyday plus Memory as --preset everyday --add memory", () => {
-    const picks = togglePack(data, everyday(), "memory");
-    expect(commandFlags(data, picks)).toEqual(["--preset", "everyday", "--add", "memory"]);
-    expect(commandText(data, picks)).toStartWith("curl -fsSL https://raw.githubusercontent.com/Silthus/fleet-engine/main/get.sh | sh -s -- -- ");
+  test("with a hub and a node, changes only the place and adds the Hub pack for once the hub runs", () => {
+    const mac = startPrompt(data, firstStart).split("\n");
+    const hub = startPrompt(data, withHub).split("\n");
+    expect(hub.filter((text) => !mac.includes(text))).toEqual(["- Where Fleet runs: Mac plus a hub and a node", "- Packs once the hub runs: hub"]);
+    expect(mac.filter((text) => !hub.includes(text))).toEqual(["- Where Fleet runs: Mac only"]);
   });
 
-  test("is read back by setup as the same packs, workflows, and settings the page shows", async () => {
-    const tuned = [
-      everyday(),
-      togglePack(data, everyday(), "memory"),
-      togglePack(data, everyday(), "orchestration"),
-      toggleWorkflow(data, presetPicks(data, "everything"), "signal-loop"),
-      toggleWorkflow(data, togglePack(data, presetPicks(data, "starter"), "orchestration"), "quality-loop"),
-      setSetting(data, setSetting(data, everyday(), "pull-requests.commentApproval", "all"), "pull-requests.mergeCommand", "gh pr merge --squash 'now'"),
-      setSetting(data, everyday(), "base.heavySlots", 4),
-    ];
-    for (const picks of tuned) {
-      const read = await setupReads(picks);
-      const file = profileFile(data, picks);
-      expect({ words: read.words, packs: read.picks.packs, workflows: read.picks.workflows, settings: read.settings }).toEqual({ words: read.words, packs: file.packs, workflows: file.workflows, settings: file.settings });
-    }
+  test("a pack that is switched off leaves the first setup, and comes back when it is switched on", () => {
+    expect(line(startPrompt(data, flip(firstStart, "communication")), "Packs on the first setup")).toBe("pull-requests, orchestration");
+    expect(flip(firstStart, "communication", "communication")).toEqual(firstStart);
+    expect(line(startPrompt(data, flip(withHub, "communication")), "Packs once the hub runs")).toBe("hub");
   });
 
-  test("names a preset the picks match exactly, and no flags for it", () => {
-    const back = togglePack(data, togglePack(data, everyday(), "orchestration"), "orchestration");
-    expect(activePreset(data, back)?.id).toBe("everyday");
-    expect(commandFlags(data, back)).toEqual(["--preset", "everyday"]);
-    let everything = presetPicks(data, "starter");
-    for (const id of ["orchestration", "communication", "memory", "guards", "slack"]) everything = togglePack(data, everything, id);
-    for (const id of ["quality-loop", "signal-loop", "pr-digest", "shell-guards", "package-age"]) everything = toggleWorkflow(data, everything, id);
-    expect(activePreset(data, everything)?.id).toBe("everything");
-    expect(commandFlags(data, everything)).toEqual(["--preset", "everything"]);
+  test("with every pack switched off, the first setup names no pack", () => {
+    expect(line(startPrompt(data, flip(firstStart, "pull-requests", "communication")), "Packs on the first setup")).toBe("none");
   });
 
-  test("turns a workflow on or off against the preset, and quotes values for the shell", () => {
-    const picks = setSetting(data, toggleWorkflow(data, toggleWorkflow(data, everyday(), "quality-loop"), "side-threads"), "pull-requests.mergeCommand", "gh pr merge --squash 'now'");
-    expect(commandFlags(data, picks)).toEqual(["--preset", "everyday", "--workflows", "side-threads=off,quality-loop=on", "--set", "pull-requests.mergeCommand=gh pr merge --squash 'now'"]);
-    expect(commandText(data, picks)).toContain(`--set 'pull-requests.mergeCommand=gh pr merge --squash '\\''now'\\'''`);
+  test("switching Pull requests off takes Orchestration with it, and switching Orchestration on brings Pull requests back", () => {
+    const withoutPullRequests = flip(firstStart, "pull-requests");
+    expect(line(startPrompt(data, withoutPullRequests), "Packs on the first setup")).toBe("communication");
+    expect(line(startPrompt(data, flip(withoutPullRequests, "orchestration")), "Packs on the first setup")).toBe("pull-requests, orchestration, communication");
   });
 
-  test("leaves out a setting at its default, and one whose workflow is off", () => {
-    expect(commandFlags(data, setSetting(data, everyday(), "pull-requests.freeReviews", 2))).toEqual(["--preset", "everyday"]);
-    expect(commandFlags(data, setSetting(data, everyday(), "orchestration.qualityArea", "src/billing"))).toEqual(["--preset", "everyday"]);
-  });
-});
-
-describe("the picks", () => {
-  test("adding a pack adds the packs it requires, and removing one removes the packs that require it", () => {
-    const starter = presetPicks(data, "starter");
-    expect(togglePack(data, togglePack(data, starter, "pull-requests"), "orchestration").packs.toSorted()).toEqual(["orchestration", "pull-requests"]);
-    expect(togglePack(data, everyday(), "pull-requests").packs.toSorted()).toEqual(["communication"]);
+  test("switches only the packs of the two boxes", () => {
+    expect(data.startPacks).toEqual(["pull-requests", "orchestration", "communication"]);
+    expect(data.hubStartPacks).toEqual(["hub"]);
+    expect(flip(withHub, "hub", "memory", "base")).toEqual(withHub);
   });
 
-  test("a workflow of a pack that is off is off, and names the pack that turns it on", () => {
-    const off = togglePack(data, everyday(), "orchestration");
-    expect(["maps", "side-threads"].map((id) => workflowState(data, off, workflow(id)))).toEqual([
-      { on: false, fix: { pack: "orchestration" } },
-      { on: false, fix: { pack: "orchestration" } },
-    ]);
-    expect(workflowState(data, everyday(), workflow("maps"))).toEqual({ on: true });
-    expect(workflowState(data, everyday(), workflow("quality-loop"))).toEqual({ on: false, fix: { workflow: "quality-loop" } });
-  });
-
-  test("a workflow that needs a pack stays off until that pack is on", () => {
-    const hub: PageData = {
-      ...data,
-      packs: [...data.packs, { name: "hub", title: "Hub", summary: "", requires: [], always: false, workflows: [{ id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], requires: [], default: true, settings: [] }], settings: [] }],
-      needPacks: { hub: "hub" },
-      needsHubPacks: [],
-    };
-    const boxes = (packs: Picks) => workflowState(hub, packs, { id: "boxes", name: "Boxes", sentence: "Boxes.", needs: ["hub"], requires: [], default: true, settings: [] }, "hub");
-    const picks = presetPicks(hub, "everyday");
-    expect(workflowState(hub, picks, hub.packs.at(-1)!.workflows[0]!)).toEqual({ on: false, fix: { pack: "hub" } });
-    expect(boxes(togglePack(hub, picks, "hub"))).toEqual({ on: true });
-  });
-
-  test("a workflow that requires another stays off until that one is on, and turning it on or off carries the workflows it requires or that require it", () => {
-    const flow = (id: string, requires: string[], fields: Partial<PageData["packs"][number]["workflows"][number]> = {}) => ({ id, name: id.toUpperCase(), sentence: `${id}.`, needs: [], requires, default: false, settings: [], ...fields });
-    const gate: PageData = {
-      ...data,
-      packs: [...data.packs, { name: "gate", title: "Gate", summary: "", requires: [], always: true, workflows: [flow("gateway", [], { default: true }), flow("mail", ["gateway"]), flow("ping", ["pong"]), flow("pong", ["ping"])], settings: [] }],
-    };
-    const state = (picks: Picks, id: string) => workflowState(gate, picks, gate.packs.at(-1)!.workflows.find((item) => item.id === id)!);
-    const start = presetPicks(gate, "everyday");
-    const unmet = { ...start, workflows: { ...start.workflows, gateway: false, mail: true } };
-    expect(state(unmet, "mail")).toEqual({ on: false, fix: { workflow: "gateway" } });
-    const mailOn = toggleWorkflow(gate, { ...start, workflows: { ...start.workflows, gateway: false } }, "mail");
-    expect([mailOn.workflows.gateway, mailOn.workflows.mail, state(mailOn, "mail")]).toEqual([true, true, { on: true }]);
-    const gatewayOff = toggleWorkflow(gate, mailOn, "gateway");
-    expect([gatewayOff.workflows.gateway, gatewayOff.workflows.mail]).toEqual([false, false]);
-    const cycle = toggleWorkflow(gate, start, "ping");
-    expect([state(cycle, "ping"), state(cycle, "pong")]).toEqual([{ on: true }, { on: true }]);
-  });
-});
-
-describe("the questions setup still asks", () => {
-  test("match the engine's own list on the Mac that runs the command, for each preset", () => {
-    const skills = skillSources(temp.make("skills-"), engine);
-    for (const preset of data.presets) {
-      const picks = presetPicks(data, preset.id);
-      const file = profileFile(data, picks);
-      const plan = resolveEngine([engine, ...skills], { packs: file.packs, workflows: file.workflows }, mac);
-      const engineAsks = plan.ask.map((setting) => setting.key).filter((key) => !filledBySetup.has(key));
-      expect([preset.id, questions(data, picks).settings.map((setting) => setting.key).toSorted()]).toEqual([preset.id, engineAsks.toSorted()]);
-      const devboxAsks = resolveEngine([engine, ...skills], { packs: file.packs, workflows: file.workflows }, { ...mac, role: "devbox" }).ask.map((setting) => setting.key).filter((key) => !filledBySetup.has(key) && !engineAsks.includes(key));
-      expect([preset.id, questions(data, picks).devbox.map((setting) => setting.key).toSorted()]).toEqual([preset.id, devboxAsks.toSorted()]);
-    }
-  });
-
-  test("say setup asks the settings only a devbox needs when you add one", () => {
-    const everything = presetPicks(data, "everything");
-    expect(setupAsks(data, everything)).toBe("asks 1 more question, plus 4 when you add a devbox");
-    expect(setupAsks(data, setSetting(data, everything, "orchestration.loopProject", "app"))).toBe("asks 1 more question, plus 3 when you add a devbox");
-    expect(setupAsks(data, presetPicks(data, "starter"))).toBe("asks 1 more question");
-  });
-
-  test("count the AI plans question, and keep the settings only a devbox asks apart until the command answers them", () => {
-    const everything = presetPicks(data, "everything");
-    const before = questions(data, everything);
-    expect(before.count).toBe(before.settings.length + 1);
-    expect(before.devbox.map((setting) => setting.key)).toEqual(["orchestration.loopProject", "orchestration.qualityArea", "orchestration.criticalPaths", "orchestration.ledgerRepo"]);
-    const after = questions(data, setSetting(data, everything, "orchestration.loopProject", "app"));
-    expect([after.count, after.devbox.map((setting) => setting.key)]).toEqual([before.count, ["orchestration.qualityArea", "orchestration.criticalPaths", "orchestration.ledgerRepo"]]);
-  });
-});
-
-describe("where Fleet runs", () => {
-  const optional = () => data.packs.filter((pack) => !pack.always).map((pack) => pack.name);
-
-  test("Everything holds every pack once there is a hub, and every pack a Mac can run with Mac only", () => {
-    expect(presetPicks(data, "everything", {}, "hub").packs.toSorted()).toEqual(optional().toSorted());
-    expect(presetPicks(data, "everything").packs.toSorted()).toEqual(optional().filter((name) => !data.needsHubPacks.includes(name)).toSorted());
-    expect(data.needsHubPacks.length).toBeGreaterThan(0);
-  });
-
-  test("adding a hub turns on the preset's hub packs and keeps the preset, and Mac only drops every pack that needs a hub", () => {
-    const hub = setWhere(data, everyday(), "hub");
-    expect([hub.where, hub.packs.toSorted(), activePreset(data, hub)?.id]).toEqual(["hub", ["communication", "hub", "orchestration", "pull-requests"], "everyday"]);
-    const back = setWhere(data, togglePack(data, hub, "recovery"), "mac");
-    expect([back.where, back.packs.toSorted(), activePreset(data, back)?.id]).toEqual(["mac", ["communication", "orchestration", "pull-requests"], "everyday"]);
-  });
-
-  test("Everything with a hub turns on the workflows that make Slack and Recovery do their work, and Mac only takes them back", () => {
-    const hub = setWhere(data, presetPicks(data, "everything"), "hub");
-    expect(["slack-thread", "provider-recovery", "own-account-balancing"].map((id) => runState(data, hub, workflow(id)))).toEqual([{ on: true }, { on: true }, { on: true }]);
-    expect(activePreset(data, hub)?.id).toBe("everything");
-    const back = setWhere(data, hub, "mac");
-    expect([chosen(back, workflow("slack-thread")), activePreset(data, back)?.id, commandFlags(data, back)]).toEqual([false, "everything", ["--preset", "everything"]]);
-  });
-
-  test("going back to Mac only keeps a workflow the person turned on themselves", () => {
-    const own = toggleWorkflow(data, presetPicks(data, "everything"), "slack-thread");
-    const back = setWhere(data, setWhere(data, own, "hub"), "mac");
-    expect([chosen(back, workflow("slack-thread")), chosen(back, workflow("provider-recovery"))]).toEqual([true, false]);
-    const hub = presetPicks(data, "everything", {}, "hub");
-    const again = toggleWorkflow(data, toggleWorkflow(data, hub, "slack-thread"), "slack-thread");
-    expect(chosen(setWhere(data, again, "mac"), workflow("slack-thread"))).toBe(true);
-  });
-
-  test("a pack that needs a hub stays off with Mac only", () => {
-    expect(togglePack(data, everyday(), "hub")).toEqual(everyday());
-    expect(togglePack(data, setWhere(data, everyday(), "hub"), "recovery").packs).toContain("recovery");
-  });
-
-  test("with Mac only, a workflow that needs a devbox or the hub waits for a hub and a node", () => {
-    const loop = toggleWorkflow(data, everyday(), "quality-loop");
-    expect(runState(data, loop, workflow("quality-loop"))).toEqual({ on: false, fix: { where: "hub" } });
-    expect(runState(data, setWhere(data, loop, "hub"), workflow("quality-loop"))).toEqual({ on: true });
-    expect(runState(data, everyday(), workflow("disk-watch"))).toEqual({ on: false, fix: { where: "hub" } });
-    expect(runState(data, setWhere(data, everyday(), "hub"), workflow("disk-watch"))).toEqual({ on: true });
-    expect(runState(data, everyday(), workflow("maps"))).toEqual({ on: true });
-    expect(runState(data, everyday(), workflow("shared-memory"))).toEqual({ on: false, fix: { pack: "memory" } });
-  });
-
-  test("the command by hand sets up the first machine, so it leaves out the packs that wait for the hub", () => {
-    expect(commandFlags(data, presetPicks(data, "everything", {}, "hub"))).toEqual(["--preset", "everything", "--remove", "slack"]);
-    expect(commandFlags(data, setWhere(data, everyday(), "hub"))).toEqual(["--preset", "everyday"]);
-  });
-});
-
-describe("the prompt", () => {
-  const readmePrompt = () => readFileSync(join(import.meta.dir, "../README.md"), "utf8").match(/```text\n\s*(Set up Fleet[^\n]+)\n/)![1]!;
-  const line = (text: string, label: string) => text.match(new RegExp(`^- ${label}: (.*)$`, "m"))?.[1];
-
-  test("opens with the README's prompt, so both start the same setup guide", () => {
-    expect(promptText(data, everyday()).split("\n")[0]).toBe(readmePrompt());
-  });
-
-  test("with Mac only, names where Fleet runs and the packs for the first setup", () => {
-    expect(promptText(data, everyday())).toBe(`${readmePrompt()}\n\nMy picks from the Fleet page:\n- Where Fleet runs: Mac only\n- Packs on the first setup: pull-requests, orchestration, communication`);
-  });
-
-  test("with a hub, keeps the packs that need one, and Slack, for once the hub runs, each with its own workflows", () => {
-    const picks = toggleWorkflow(data, presetPicks(data, "everything", {}, "hub"), "dream");
-    expect(promptText(data, picks).split("\n").slice(2)).toEqual([
-      "My picks from the Fleet page:",
-      "- Where Fleet runs: Mac plus a hub and a node",
-      "- Packs on the first setup: pull-requests, orchestration, communication, memory, guards",
-      "- Workflows on the first setup: quality-loop=on, signal-loop=on, pr-digest=on, shell-guards=on, package-age=on",
-      "- Packs once the hub runs: hub, mcp-gateway, recovery, slack",
-      "- Workflows once the hub runs: slack-thread=on, disk-watch=on, linked-hub=on, dream=on, own-account-balancing=on, mcp-gateway=on, provider-recovery=on",
-    ]);
-  });
-
-  test("for the hub, names every workflow that is on or starts on, so the list alone says what runs", () => {
-    const hub = presetPicks(data, "everything", {}, "hub");
-    expect(line(promptText(data, hub), "Workflows once the hub runs")).toBe("slack-thread=on, disk-watch=on, linked-hub=on, own-account-balancing=on, mcp-gateway=on, provider-recovery=on");
-    const quiet = toggleWorkflow(data, toggleWorkflow(data, hub, "slack-thread"), "mcp-gateway");
-    expect(line(promptText(data, quiet), "Workflows once the hub runs")).toBe("disk-watch=on, linked-hub=on, own-account-balancing=on, mcp-gateway=off, provider-recovery=on");
-  });
-
-  test("names no pack as none, and carries each changed setting on its own line", () => {
-    const bare = togglePack(data, presetPicks(data, "starter"), "pull-requests");
-    expect(line(promptText(data, bare), "Packs on the first setup")).toBe("none");
-    const tuned = setSetting(data, setSetting(data, everyday(), "base.heavySlots", 4), "pull-requests.mergeCommand", "gh pr merge --squash, now");
-    expect(promptText(data, tuned).split("\n").slice(-2)).toEqual(["- Setting: base.heavySlots=4", "- Setting: pull-requests.mergeCommand=gh pr merge --squash, now"]);
-  });
-
-  test("its first setup picks, as the guide's one by one command, are read by setup as the packs and workflows the page shows", async () => {
-    const tuned = [
-      everyday(),
-      togglePack(data, presetPicks(data, "starter"), "pull-requests"),
-      toggleWorkflow(data, presetPicks(data, "everything"), "nightly-updates"),
-      toggleWorkflow(data, presetPicks(data, "everything", {}, "hub"), "slack-thread"),
-      setSetting(data, togglePack(data, everyday(), "memory"), "base.heavySlots", 4),
-    ];
-    const catalog = await loadCatalog(join(import.meta.dir, ".."), [], temp.make("home-"));
-    for (const picks of tuned) {
-      const text = promptText(data, picks);
-      const packs = line(text, "Packs on the first setup")!.split(", ").filter((name) => name !== "none");
+  test("its first setup packs, as the guide's one by one command, are the packs setup turns on", async () => {
+    const catalog = await loadCatalog(root, [], temp.make("home-"));
+    for (const start of [firstStart, flip(firstStart, "orchestration"), flip(withHub, "pull-requests"), flip(firstStart, "pull-requests", "communication")]) {
+      const packs = setupSplit(data, start).first;
       const flags = ["--preset", "starter", ...(packs.includes("pull-requests") ? [] : ["--remove", "pull-requests"]), ...packs.filter((name) => name !== "pull-requests").flatMap((name) => ["--add", name])];
-      const workflows = line(text, "Workflows on the first setup");
-      if (workflows) flags.push("--workflows", workflows.replaceAll(", ", ","));
-      for (const [, pair] of text.matchAll(/^- Setting: (.*)$/gm)) flags.push("--set", pair!);
-      const parsed = parseSetupFlags(flags);
-      const read = picksFrom(parsed, catalog);
-      const first = setupSplit(data, picks).first;
-      const shown = data.packs.filter((pack) => pack.always || first.includes(pack.name)).flatMap((pack) => pack.workflows);
-      expect({ text, packs: read.packs.toSorted(), workflows: shown.map((item) => [item.id, read.workflows[item.id] ?? item.default]) }).toEqual({ text, packs: first.toSorted(), workflows: shown.map((item) => [item.id, chosen(picks, item)]) });
-      expect([text, settingsFrom(parsed, catalog)]).toEqual([text, Object.fromEntries(Object.entries(picks.settings))]);
+      expect(picksFrom(parseSetupFlags(flags), catalog).packs.toSorted()).toEqual(packs.toSorted());
     }
+  });
+
+  test("the data a page carries builds the same prompts as the full pack data", () => {
+    const carried = JSON.parse(JSON.stringify(promptData(data)));
+    expect(startPrompt(carried, flip(withHub, "communication"))).toBe(startPrompt(data, flip(withHub, "communication")));
+    expect(installPrompt(carried, everyPack())).toBe(installPrompt(data, everyPack()));
+  });
+});
+
+describe("the install prompt", () => {
+  test("is empty until a pack is selected", () => {
+    expect(installPrompt(data, [])).toBe("");
+  });
+
+  test("names the selected packs, each setup note, and one fleet packs command that adds them", () => {
+    expect(installPrompt(data, select("guards", "memory", "communication"))).toBe(
+      [
+        "Add these Fleet packs to my setup with me: Communication, Memory, and Guards.",
+        "",
+        "Fleet already runs on this machine. Ask me each choice with your question tool, and run every command yourself.",
+        "",
+        "1. Run `fleet update`, so this machine has the newest engine and packs. Then run `fleet packs`, and leave out each pack that is already on.",
+        '2. Read the setup note of each pack. Ask me what it asks, and collect the flags that it names. Where a note names "the setup command" or "the command in step 9", use the `fleet packs` command of this prompt. Do not run a step that a note puts after that command yet.',
+        "   - Memory: ~/.local/share/fleet/engine/packs/memory/SETUP.md",
+        "   - Guards: ~/.local/share/fleet/engine/packs/guards/SETUP.md",
+        "3. Turn the packs on with one command, and add the flags that the notes name:",
+        "   fleet packs --add communication --add memory --add guards",
+        "4. Do the steps that each note puts after the command.",
+        "5. Run `fleet doctor`, and explain each line. Do each `To do:` line with me, and say what a sign-in is for before it opens.",
+        "6. My other machines take the change at their next `fleet update`. To give it to one now, run `fleet update` there.",
+      ].join("\n"),
+    );
+  });
+
+  test("for one pack without a setup note, names that pack alone and no note", () => {
+    const text = installPrompt(data, select("communication"));
+    expect(text.split("\n")[0]).toBe("Add this Fleet pack to my setup with me: Communication.");
+    expect(text).not.toMatch(/\bnotes?\b/);
+    expect(text).toContain("3. Run `fleet doctor`");
+    expect(text).toContain("2. Turn the packs on with one command:\n   fleet packs --add communication\n");
+  });
+
+  test("selecting a pack selects the packs it requires, and taking one back takes back the packs that require it", () => {
+    expect(select("orchestration")).toEqual(["pull-requests", "orchestration"]);
+    expect(select("orchestration", "memory", "pull-requests")).toEqual(["memory"]);
+    expect(select("base")).toEqual([]);
+  });
+
+  test("for a pack that needs a hub, checks for the hub before it reads a note, in the words fleet hub status prints", async () => {
+    const text = installPrompt(data, select("memory", "recovery", "hub"));
+    expect(step(text, "need a hub")).toBe(
+      '2. These packs need a hub: Hub and Recovery. Run `fleet hub status`. When it prints "The hub: not named", I have no hub yet. Tell me, leave those packs out, and offer to add a hub and a node first with step 9 of https://raw.githubusercontent.com/Silthus/fleet-engine/main/SETUP.md. Otherwise the name after "The hub:" is the SSH name of the hub. Use it as the host of each SSH command in a note.',
+    );
+    expect(installPrompt(data, select("recovery"))).toContain("2. This pack needs a hub: Recovery.");
+    expect(installPrompt(data, select("recovery"))).toContain("leave that pack out");
+    expect(installPrompt(data, select("memory", "slack"))).not.toContain("hub");
+    const mac = await macWithFleet();
+    expect(await mac.fleet(["hub", "status"])).toBe(0);
+    expect(mac.output()).toContain("\nThe hub: not named.");
+    expect(readFileSync(join(root, "SETUP.md"), "utf8")).toContain("\n## 9. Add the hub and the node\n");
+  });
+
+  test("for a pack that needs a hub, updates the hub after the command and before the steps a note puts after it", () => {
+    const steps = installPrompt(data, select("recovery")).split("\n").filter((item) => /^\d+\. /.test(item)).map((item) => item.replace(/^\d+\. /, "").split(/[.,:]/)[0]);
+    expect(steps).toEqual([
+      "Run `fleet update`",
+      "This pack needs a hub",
+      "Read the setup note of each pack",
+      "Turn the packs on with one command",
+      "Run `fleet update` on the hub over SSH",
+      "Do the steps that each note puts after the command",
+      "Run `fleet doctor`",
+      "My other machines take the change at their next `fleet update`",
+    ]);
+  });
+
+  test("names only fleet commands that exist", async () => {
+    const known = await fleetCommands();
+    const used = [...installPrompt(data, everyPack()).matchAll(/\bfleet ([a-z][a-z-]*)\b/g)].map((match) => match[1]!);
+    expect(new Set(used)).toEqual(new Set(["update", "packs", "hub", "doctor"]));
+    expect(used.filter((command) => !known.has(command))).toEqual([]);
+  });
+
+  test("names the setup note of every pack that has one, at the path where a machine that runs Fleet keeps it", () => {
+    const named = [...installPrompt(data, everyPack()).matchAll(/^ {3}- [^:]+: ~\/\.local\/share\/fleet\/engine\/(\S+)$/gm)].map((match) => match[1]!);
+    const held = readdirSync(join(root, "packs")).filter((pack) => existsSync(join(root, "packs", pack, "SETUP.md")));
+    expect(named.toSorted()).toEqual(held.map((pack) => `packs/${pack}/SETUP.md`).toSorted());
+  });
+
+  test("Memory's note gives a Fleet that already runs the flag that names the new memory repo, and the command of the prompt takes it", async () => {
+    const note = readFileSync(join(root, "packs/memory/SETUP.md"), "utf8").replace(/\s+/g, " ");
+    const flag = note.match(/On a Fleet that already runs, `fleet packs` creates no repo\. First run `gh repo create <their GitHub login>\/fleet-memory --private`, then add `(--set memory\.repo=<their GitHub login>\/fleet-memory)`/)![1]!;
+    const mac = await macWithFleet();
+    const command = installPrompt(data, select("memory")).match(/^ {3}fleet (packs .*)$/m)![1]!;
+    expect(await mac.fleet([...command.split(" "), ...flag.replace("<their GitHub login>", "nora").split(" ")])).toBe(0);
+    expect(await pushedAnswers(mac.home)).toMatchObject({ packs: expect.arrayContaining(["memory"]), settings: { "memory.repo": "nora/fleet-memory" } });
+  });
+
+  test("its command turns the selected packs on in the profile of a machine that runs Fleet", async () => {
+    const mac = await macWithFleet();
+    const selected = select("communication", "guards");
+    const command = installPrompt(data, selected).match(/^ {3}fleet (packs .*)$/m)![1]!;
+    expect(await mac.fleet(command.split(" "))).toBe(0);
+    expect((await pushedAnswers(mac.home)).packs).toEqual(expect.arrayContaining(selected));
   });
 });

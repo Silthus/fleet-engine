@@ -18,17 +18,25 @@ const workflow = () => Bun.YAML.parse(read(".github/workflows/pages.yml")) as Wo
 const actions = (job: Job) => job.steps.flatMap((step) => (step.uses ? [step.uses.split("@")[0]] : []));
 
 describe("GitHub Pages", () => {
-  test("runs on every push to main, so the first push after the repo turns public deploys, and on pull requests that change the page", () => {
+  test("runs on every push to main, so the first push after the repo turns public deploys, and on pull requests that change what the site is built from", () => {
     const { on } = workflow();
     expect(on.push).toEqual({ branches: ["main"] });
-    expect(on.pull_request?.paths).toEqual(expect.arrayContaining(["page/index.html", ".github/workflows/pages.yml"]));
+    expect(on.pull_request?.paths).toEqual(["page/**", "packs/**", "presets.json", "scripts/build-page.ts", ".github/workflows/pages.yml"]);
     expect(on).toHaveProperty("workflow_dispatch");
   });
 
-  test("checks out, copies the committed page, then uploads that directory as the Pages artifact", () => {
-    const [checkout, copy, upload, ...rest] = workflow().jobs.stage.steps;
-    expect([checkout!.uses?.split("@")[0], upload!.uses?.split("@")[0], rest]).toEqual(["actions/checkout", "actions/upload-pages-artifact", []]);
-    expect(copy!.run).toBe(`mkdir ${upload!.with!.path} && cp page/index.html ${upload!.with!.path}/index.html`);
+  test("builds the site from the pack data with the Bun version of CI, then uploads that folder as the Pages artifact", () => {
+    const [checkout, bun, install, build, upload, ...rest] = workflow().jobs.stage.steps;
+    expect([checkout!.uses?.split("@")[0], bun!.uses?.split("@")[0], upload!.uses?.split("@")[0], rest]).toEqual(["actions/checkout", "oven-sh/setup-bun", "actions/upload-pages-artifact", []]);
+    const ci = Bun.YAML.parse(read(".github/workflows/ci.yml")) as { jobs: Record<string, Job> };
+    const ciBun = Object.values(ci.jobs).flatMap((job) => job.steps).find((step) => step.uses?.startsWith("oven-sh/setup-bun@"))!;
+    expect(bun!.with).toEqual({ "bun-version": ciBun.with!["bun-version"]! });
+    expect(install!.run).toBe("bun install --frozen-lockfile");
+    expect(build!.run).toBe(`bun scripts/build-page.ts --out ${upload!.with!.path}`);
+  });
+
+  test("git ignores the folder a local build writes to, so the repository holds no built site", () => {
+    expect(read(".gitignore").split("\n")).toContain("/site/");
   });
 
   test("deploys after staging, from main only, once the repo is public, with only the Pages permissions", () => {
@@ -51,7 +59,7 @@ describe("GitHub Pages", () => {
   test("pins every action to a full commit", () => {
     const { stage, deploy } = workflow().jobs;
     const uses = [...stage.steps, ...deploy.steps].flatMap((step) => (step.uses ? [step.uses] : []));
-    expect(uses).toHaveLength(4);
+    expect(uses).toHaveLength(5);
     for (const use of uses) expect(use).toMatch(/@[0-9a-f]{40}$/);
   });
 

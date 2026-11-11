@@ -55,13 +55,18 @@ packs, and your answers live in your own private profile repo.
 Team packs plug in as pack sources. The presets are Starter, Everyday, and
 Everything.
 
-### The page
+### The site
 
-[The Fleet page](https://silthus.github.io/fleet-engine/) says what Fleet is
-and asks where Fleet runs, Mac only or Mac plus a hub and a node, and which
-packs you want. Each pack opens in a dialog that shows what it does, its
-workflows, and its settings. The page gives the Getting started steps with a
-prompt that carries your picks to the agent that sets Fleet up.
+[The Fleet site](https://silthus.github.io/fleet-engine/) says what Fleet is
+and offers two setups side by side: Mac only, and Mac plus a hub and a node.
+Each setup has a switch for Pull requests, Orchestration, and Communication.
+The Getting started prompt sits under the two setups and changes with each
+choice. Copy it, or open it in T3 Code.
+
+[The Packs page](https://silthus.github.io/fleet-engine/packs/) shows every
+pack, and each pack has its own page with its workflows, its cost, and its
+settings. For a Fleet that already runs, select packs, and the page builds an
+install prompt that adds them with `fleet packs --add`.
 
 ### Known gaps
 
