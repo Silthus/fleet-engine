@@ -30,7 +30,7 @@ export async function updateAgents(run: Run): Promise<{ ok: boolean; lines: stri
   return { ok, lines };
 }
 
-const pluginId = /^[a-z0-9][a-z0-9._-]*@[a-z0-9][a-z0-9._-]*$/;
+const pluginId = /^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** Updates the Claude Code marketplaces and user-scope plugins, and refreshes the Codex marketplaces. Skips a CLI that is not installed. */
 export async function updatePlugins(run: Run): Promise<{ ok: boolean; lines: string[] }> {
@@ -65,25 +65,34 @@ function userPlugins(out: string): string[] | undefined {
   }
 }
 
-export type T3Options = { busy: () => boolean; service: boolean; origin: () => string };
+export type T3Options = { busy: () => boolean; service: boolean; origin: () => string; wait: (ms: number) => Promise<void> };
+
+const deferred = "T3 Code: an agent turn is running, so the update waits for the next run.";
 
 /** Moves T3 Code to the newest nightly while no agent turn runs, since the update restarts its service. Where the service runs, it compacts the state first and checks that the service answers after. */
 export async function updateT3(run: Run, options: T3Options): Promise<{ ok: boolean; lines: string[] }> {
   if ((await run(["t3", "--version"])).code !== 0) return { ok: true, lines: ["T3 Code: not installed, skipped."] };
-  if (options.busy()) return { ok: false, lines: ["T3 Code: an agent turn is running, so the update waits for the next run."] };
+  if (options.busy()) return { ok: false, lines: [deferred] };
   const lines: string[] = [];
   if (options.service) {
     const compacted = await run(["t3", "doctor", "--fix"]);
     if (compacted.code !== 0) lines.push(`T3 Code: t3 doctor --fix failed (exit ${compacted.code}).`);
+    if (options.busy()) return { ok: false, lines: [...lines, deferred] };
   }
   const updated = await run(["t3", "update", "--yes", "--channel", "nightly"]);
   if (updated.code !== 0) return { ok: false, lines: [...lines, `T3 Code: t3 update failed (exit ${updated.code}).`] };
-  if (!options.service) return { ok: lines.length === 0, lines: [...lines, "T3 Code: up to date."] };
-  const origin = options.origin();
-  const answer = await run(["curl", "--fail", "--silent", "--max-time", "10", "--retry", "5", "--retry-connrefused", "--retry-delay", "1", `${origin}/.well-known/t3/environment`]);
-  if (answer.code !== 0 || !describesServer(answer.out)) return { ok: false, lines: [...lines, `T3 Code: updated, but its service at ${origin} does not answer. Run t3 service status.`] };
-  return { ok: lines.length === 0, lines: [...lines, "T3 Code: up to date, and its service answers."] };
+  if (!options.service) return { ok: lines.length === 0, lines: [...lines, "T3 Code: the t3 CLI is up to date."] };
+  let origin = "";
+  for (let attempt = 1; attempt <= healthAttempts; attempt++) {
+    if (attempt > 1) await options.wait(2000);
+    origin = options.origin();
+    const answer = await run(["curl", "--fail", "--silent", "--max-time", "5", `${origin}/.well-known/t3/environment`]);
+    if (answer.code === 0 && describesServer(answer.out)) return { ok: lines.length === 0, lines: [...lines, "T3 Code: up to date, and its service answers."] };
+  }
+  return { ok: false, lines: [...lines, `T3 Code: updated, but its service at ${origin} does not answer. Run t3 service status.`] };
 }
+
+const healthAttempts = 10;
 
 function describesServer(out: string): boolean {
   try {
@@ -102,7 +111,7 @@ export function t3Busy(statePath: string): boolean {
     db = new Database(statePath, { readonly: true });
     const live = db.query("select 1 from sqlite_master where type = 'table' and name = 'orchestration_v2_projection_runs'").get();
     const table = live ? "orchestration_v2_projection_runs" : "projection_thread_sessions";
-    const row = db.query(`select count(*) running from ${table} where status in ('preparing', 'starting', 'running')`).get() as { running: number };
+    const row = db.query(`select count(*) running from ${table} where status in ('queued', 'preparing', 'starting', 'running', 'waiting')`).get() as { running: number };
     return row.running > 0;
   } catch {
     return true;
@@ -111,17 +120,31 @@ export function t3Busy(statePath: string): boolean {
   }
 }
 
-function t3Origin(home: string): string {
+function t3Origin(userdata: string): string {
   try {
-    const runtime = JSON.parse(readFileSync(join(home, ".t3/userdata/server-runtime.json"), "utf8")) as { origin?: unknown };
+    const runtime = JSON.parse(readFileSync(join(userdata, "server-runtime.json"), "utf8")) as { origin?: unknown };
     if (typeof runtime.origin === "string") return runtime.origin;
   } catch {}
   return "http://127.0.0.1:3773";
 }
 
-function t3State(home: string): string {
-  const current = join(home, ".t3/userdata/statev2.sqlite");
-  return existsSync(current) ? current : join(home, ".t3/userdata/state.sqlite");
+function t3State(userdata: string): string {
+  const current = join(userdata, "statev2.sqlite");
+  return existsSync(current) ? current : join(userdata, "state.sqlite");
+}
+
+export type Machine = { home: string; env: Record<string, string | undefined>; wait: (ms: number) => Promise<void> };
+
+/** The nightly agent update: the agent CLIs, their plugins, then T3 Code, read from the T3 home that t3 itself uses. */
+export async function nightlyAgentUpdate(run: Run, machine: Machine): Promise<{ ok: boolean; lines: string[] }> {
+  const userdata = join(machine.env.T3CODE_HOME || join(machine.home, ".t3"), "userdata");
+  const service = existsSync(join(machine.home, ".config/systemd/user/t3code.service"));
+  const results = [
+    await updateAgents(run),
+    await updatePlugins(run),
+    await updateT3(run, { busy: () => t3Busy(t3State(userdata)), service, origin: () => t3Origin(userdata), wait: machine.wait }),
+  ];
+  return { ok: results.every((result) => result.ok), lines: results.flatMap((result) => result.lines) };
 }
 
 async function runCommand(command: string[]) {
@@ -135,12 +158,7 @@ async function runCommand(command: string[]) {
 }
 
 if (import.meta.main) {
-  const home = homedir();
-  const results = [
-    await updateAgents(runCommand),
-    await updatePlugins(runCommand),
-    await updateT3(runCommand, { busy: () => t3Busy(t3State(home)), service: existsSync(join(home, ".config/systemd/user/t3code.service")), origin: () => t3Origin(home) }),
-  ];
-  for (const line of results.flatMap((result) => result.lines)) console.log(line);
-  process.exit(results.every((result) => result.ok) ? 0 : 1);
+  const { ok, lines } = await nightlyAgentUpdate(runCommand, { home: homedir(), env: process.env, wait: (ms) => Bun.sleep(ms) });
+  for (const line of lines) console.log(line);
+  process.exit(ok ? 0 : 1);
 }
