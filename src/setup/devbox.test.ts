@@ -121,7 +121,6 @@ describe("the devbox over SSH", () => {
     ["an https origin", { runtimeOrigin: "https://127.0.0.1:41773" }],
     ["a pid that is not a number", { runtimePid: "4242" }],
     ["a server record whose process is gone", { serverGone: true }],
-    ["a port that another process listens at", { listenerPid: 5151 }],
   ])("never issues a T3 session for %s", async (_, server) => {
     const home = homeWithHosts();
     const box = fakeMachine(home, {}, server);
@@ -148,7 +147,7 @@ describe("the devbox over SSH", () => {
     expect(box.sessions().filter((session) => !session.revoked)).toEqual([]);
   });
 
-  test.each(["a..b", ".", "-box.example", "box_1.example", `${"a".repeat(64)}.example`, "bücher.example", "box.example:8443", "user@box.example", "box.example/path"])("refuses the tunnel hostname %s", async (tunnel) => {
+  test.each(["a..b", ".", "-box.example", "box_1.example", `${"a".repeat(64)}.example`, "bücher.example", "box.example:8443", "user@box.example", "box.example/path", "box-.example", Array(4).fill("a".repeat(63)).join(".")])("refuses the tunnel hostname %s", async (tunnel) => {
     const home = homeWithHosts();
     const box = fakeMachine(home, {}, { cliPrintsTunnel: true, boxTunnel: tunnel });
     const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);

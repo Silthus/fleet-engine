@@ -285,7 +285,7 @@ async function tunnelFromServer(machine: Machine): Promise<string | undefined> {
   if (typeof session?.sessionId !== "string" || typeof session.token !== "string") return undefined;
   try {
     const headers = `authorization: Bearer ${session.token}\nx-t3-orchestration-protocol: 2\n`;
-    const linkState = parsed<{ tunnelHostname?: unknown }>(await machine.exec(["curl", "-fsS", "--max-time", "15", "-H", "@-", `${origin}/api/connect/link-state`], { input: headers }));
+    const linkState = parsed<{ tunnelHostname?: unknown }>(await machine.exec(["curl", "-q", "--noproxy", "*", "-fsS", "--max-time", "15", "-H", "@-", `${origin}/api/connect/link-state`], { input: headers }));
     return hostnameOf(linkState?.tunnelHostname);
   } finally {
     await machine.exec(["t3", "auth", "session", "revoke", session.sessionId]);
@@ -301,17 +301,14 @@ function parsed<T>(result: ExecResult): T | undefined {
   }
 }
 
-/** The T3 server's own record of where it listens, trusted only on loopback and only while the recorded process is the one listening at that port. */
+/** The T3 server's own record of where it listens, trusted only on loopback and while its process runs: the same record T3's own CLI sends its relay sessions to. */
 async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
   const runtime = parsed<{ origin?: unknown; pid?: unknown }>(await machine.exec(["sh", "-c", `cat "$HOME/.t3/userdata/server-runtime.json"`]));
   const url = loopbackUrl(runtime?.origin);
   const pid = runtime?.pid;
   if (!url || typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return undefined;
-  const listening = await machine.exec(["sh", "-c", listensAt, "sh", String(pid), url.port || "80"]);
-  return listening.code === 0 ? url.origin : undefined;
+  return (await machine.exec(["sh", "-c", `kill -0 ${pid}`])).code === 0 ? url.origin : undefined;
 }
-
-const listensAt = `lsof -a -nP -p "$1" -iTCP:"$2" -sTCP:LISTEN -t 2>/dev/null | grep -qx "$1" || ss -Hltnp "sport = :$2" 2>/dev/null | grep -q "pid=$1,"`;
 
 function loopbackUrl(value: unknown) {
   try {
