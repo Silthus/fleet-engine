@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
@@ -152,6 +152,34 @@ describe("the devbox over SSH", () => {
     expect(result.output).toContain("but Link T3 Connect on node-1 still does not pass its check");
     expect(box.calls.map((call) => call.command.join(" "))).not.toContainEqual(expect.stringContaining("t3 environment link"));
     expect(box.sessions()).toEqual([]);
+  });
+
+  test.each([
+    ["~ that T3 expands", () => "~/.t3"],
+    ["a relative path that T3 resolves", () => "relative/t3"],
+    ["blanks that T3 ignores", () => "  "],
+    ["a trailing blank that T3 trims", (home: string) => `${home}/t3 `],
+    ["a .. that T3 resolves before the link it passes through", (home: string) => (mkdirSync(join(home, "deep", "inner"), { recursive: true }), symlinkSync(join(home, "deep", "inner"), join(home, "x")), `${home}/x/../t3`)],
+    ["a trailing .. that T3 resolves before the link it passes through", (home: string) => (mkdirSync(join(home, "deep", "inner"), { recursive: true }), symlinkSync(join(home, "deep", "inner"), join(home, "x")), `${home}/x/..`)],
+  ])("never issues a T3 session when T3CODE_HOME holds %s", async (_, t3Home) => {
+    const home = homeWithHosts();
+    const box = fakeMachine(home, {}, { t3Home: t3Home(home), connectHere: true });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.output).toContain("node-1 has no T3 Connect address yet.");
+    expect(box.sessions()).toEqual([]);
+    expect(box.calls.flatMap((call) => call.command).join(" ")).not.toContain(":6666");
+  });
+
+  test("reads the T3 record under an absolute T3CODE_HOME, and none while a dev server moves T3's state", async () => {
+    const home = homeWithHosts();
+    const custom = fakeMachine(home, {}, { t3Home: join(home, "custom-t3") });
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], custom)).code).toBe(0);
+    expect(remote(custom)).toContainEqual(expect.stringContaining("http://127.0.0.1:41773/api/connect/link-state"));
+
+    const devHome = homeWithHosts();
+    const dev = fakeMachine(devHome, {}, { devServerUrl: "http://127.0.0.1:5173" });
+    expect((await fleetSetup(devHome, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], dev)).output).toContain("node-1 has no T3 Connect address yet.");
+    expect(dev.sessions()).toEqual([]);
   });
 
   test("waits for a tunnel that is still starting after T3 Connect links", async () => {

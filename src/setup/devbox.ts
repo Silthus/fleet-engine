@@ -301,7 +301,7 @@ function parsed<T>(result: ExecResult): T | undefined {
   }
 }
 
-/** The T3 server's own record of where it listens, read from the same base directory the t3 commands here use, trusted only at a numeric loopback address and while its process runs: the record T3's own CLI sends its relay sessions to. A dev server keeps its record elsewhere, so Fleet does not guess it. */
+/** The T3 server's own record of where it listens, read from the same base directory the t3 commands here use (a T3CODE_HOME that T3 would trim, expand, or resolve is refused), trusted only at a numeric loopback address and while its process runs: the record T3's own CLI sends its relay sessions to. A dev server keeps its record elsewhere, so Fleet does not guess it. */
 async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
   const runtime = parsed<{ origin?: unknown; pid?: unknown }>(await machine.exec(["sh", "-c", runtimeRecord]));
   const url = loopbackUrl(runtime?.origin);
@@ -310,7 +310,7 @@ async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
   return (await machine.exec(["sh", "-c", `kill -0 ${pid}`])).code === 0 ? url.origin : undefined;
 }
 
-const runtimeRecord = `[ -z "$VITE_DEV_SERVER_URL" ] && cat "\${T3CODE_HOME:-$HOME/.t3}/userdata/server-runtime.json"`;
+const runtimeRecord = `case "$T3CODE_HOME" in *[![:graph:]]* | [!/]* | */../* | */..) exit 1 ;; esac; [ -z "$VITE_DEV_SERVER_URL" ] && cat "\${T3CODE_HOME:-$HOME/.t3}/userdata/server-runtime.json"`;
 
 function loopbackUrl(value: unknown) {
   try {
