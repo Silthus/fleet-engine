@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { numberSetting, optionalStringSetting, stringSetting } from "../../base/lib/settings.ts";
 import { withT3Session } from "../../base/lib/t3/index.ts";
 import { capture, type Capture, type Env, type Result } from "./coder.ts";
-import { isBoxName } from "../../../src/hub/names.ts";
+import { isKeptForBoxes } from "../../../src/hub/names.ts";
 import type { Clock } from "./pool.ts";
 import { onHub } from "../../../src/hub/ssh.ts";
 
@@ -111,7 +111,7 @@ function namesOfThisMachine(home: string, hub: string): string[] {
 
 export function profileDevboxes(env: Env): string[] {
   const profile = readProfile(env);
-  return profile.hub ? profile.devboxes.filter((name) => name !== profile.hub && !isBoxName(name)) : [];
+  return profile.hub ? profile.devboxes.filter((name) => name !== profile.hub && !isKeptForBoxes(name)) : [];
 }
 
 export function devboxesOf(env: Env, home: string): string[] {
@@ -135,7 +135,7 @@ export function peerMachine(env: Env = Bun.env, home = homedir(), self = hostnam
   return {
     home,
     self,
-    peers: peersOf(hub, devboxes, self).filter((alias) => !ownNames.includes(alias) && !isBoxName(alias)),
+    peers: peersOf(hub, devboxes, self).filter((alias) => !ownNames.includes(alias) && !isKeptForBoxes(alias)),
     devboxes,
     onPeer,
     run,
