@@ -24,6 +24,8 @@ export function gitconfig(home: string, identity: Identity, signer: Signer) {
     "\tgpgsign = true",
     "[tag]",
     "\tgpgsign = true",
+    "[push]",
+    "\tdefault = simple",
     "",
   ].join("\n");
 }

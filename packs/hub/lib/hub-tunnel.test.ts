@@ -152,3 +152,12 @@ test("the doctor fails when the owned agent differs from what install writes now
   await expect(hubTunnel("doctor", mac({ home, loaded: true, alias: "new-hub" }).deps)).rejects.toThrow("Run fleet hub-tunnel install");
   await expect(hubTunnel("doctor", mac({ home, loaded: true, coder: "/usr/local/bin/coder" }).deps)).rejects.toThrow(agent(home));
 });
+
+test("a hub named by its Coder SSH name, as coder config-ssh writes it, forwards from its workspace", async () => {
+  const { deps, home, printed } = mac({ alias: "coder.my-hub" });
+  expect(await hubTunnel("install", deps)).toBe(0);
+  const args = [...readFileSync(agent(home), "utf8").matchAll(/<string>([^<]*)<\/string>/g)].map((match) => match[1]);
+  expect(args.slice(1, 4)).toEqual(["/opt/bin/coder", "port-forward", "my-hub"]);
+  expect(printed.at(-1)).toBe("Hub tunnel: forwards 127.0.0.1:3317 and 127.0.0.1:60002 to coder.my-hub from login.");
+  await expect(hubTunnel("install", mac({ alias: "other.my-hub" }).deps)).rejects.toThrow("hub.alias");
+});
