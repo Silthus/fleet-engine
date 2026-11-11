@@ -43,8 +43,8 @@ async function rebasing(dir: string) {
  * caller removes a workflow override by saving the full override set.
  */
 export async function saveAnswers(dir: string, answers: Partial<ProfileFile>, options: { push?: boolean } = {}) {
-  if (options.push) await pullProfile(dir);
   const path = join(dir, "fleet.json");
+  if (options.push) await pullUnder(dir, path, answers);
   const current = (await readJson(path)) ?? { schema: 1 };
   if (current.schema !== 1) throw new ProfileError(`${path}: unknown schema ${String(current.schema)}`);
   const settings = { ...(current.settings as Record<string, unknown> | undefined), ...answers.settings };
@@ -58,6 +58,14 @@ export async function saveAnswers(dir: string, answers: Partial<ProfileFile>, op
     if (!committed.ok) throw new ProfileError(`${dir}: could not commit answers: ${committed.stderr}`);
   }
   if (options.push) await push(dir);
+}
+
+async function pullUnder(dir: string, path: string, answers: Partial<ProfileFile>) {
+  const before = await readJson(path);
+  await pullProfile(dir);
+  const after = await readJson(path);
+  const changed = Object.keys(answers).filter((key) => key !== "settings" && JSON.stringify(before?.[key]) !== JSON.stringify(after?.[key]));
+  if (changed.length) throw new ProfileError(`${dir}: another machine changed ${changed.join(" and ")} in your profile while this command ran. Run the command again to change them on top of that.`);
 }
 
 export function bothChanged(dir: string, other: string) {
