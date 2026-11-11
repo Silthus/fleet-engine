@@ -1,7 +1,8 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
+import { prCommand } from "./pr.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -38,8 +39,31 @@ cat "${replies}/$reply.json"
   const reply = (name: string, value: unknown) => writeFileSync(join(replies, `${name}.json`), JSON.stringify(value));
   const env: Record<string, string> = { FLEET_HANDLERS: "{}", FLEET_SETTINGS: "{}" };
   const run = (...args: string[]) => {
-    const result = Bun.spawnSync(["bun", command, ...args], { cwd: root, env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ...env } });
+    const result = Bun.spawnSync([process.execPath, command, ...args], { cwd: root, env: { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH}`, ...env } });
     return { code: result.exitCode, out: result.stdout.toString().trim(), err: result.stderr.toString().trim() };
+  };
+  const call = async (...args: string[]) => {
+    const printed: string[] = [];
+    const warned: string[] = [];
+    const print = spyOn(console, "log").mockImplementation((...line: unknown[]) => void printed.push(line.join(" ")));
+    const warn = spyOn(console, "error").mockImplementation((...line: unknown[]) => void warned.push(line.join(" ")));
+    const saved = { FLEET_HANDLERS: process.env.FLEET_HANDLERS, FLEET_SETTINGS: process.env.FLEET_SETTINGS };
+    Object.assign(process.env, env);
+    try {
+      return { code: await prCommand(args, home), out: printed.join("\n").trim(), err: warned.join("\n").trim() };
+    } finally {
+      print.mockRestore();
+      warn.mockRestore();
+      for (const [key, value] of Object.entries(saved)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  };
+  const refusal = async (...args: string[]) => {
+    try {
+      await call(...args);
+      return undefined;
+    } catch (error) {
+      return error;
+    }
   };
   const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []);
   const reviewBot = (exitCode: number) => {
@@ -48,7 +72,7 @@ cat "${replies}/$reply.json"
     env.FLEET_HANDLERS = JSON.stringify({ "review-bot": path });
   };
   const botArgs = () => JSON.parse(readFileSync(join(root, "bot-args.json"), "utf8"));
-  return { home, env, reply, run, calls, reviewBot, botArgs };
+  return { home, env, reply, run, call, refusal, calls, reviewBot, botArgs };
 }
 
 const user = (login: string) => ({ __typename: "User", login });
@@ -239,27 +263,27 @@ test("forecast hands its parsed arguments to the review-bot handler and exits wi
   expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--pr", "12"]);
 });
 
-test("forecast refuses review and stamp flags, and says there is nothing to forecast without a review bot", () => {
+test("forecast refuses review and stamp flags, and says there is nothing to forecast without a review bot", async () => {
   const box = sandbox();
   box.reviewBot(0);
   for (const args of [["forecast", "--minutes", "5"], ["forecast", "--deep"], ["review", "--request"], ["stamp", "--request"]]) {
-    const result = box.run(args[0]!, "--repo", "acme/widgets", "--pr", "12", ...args.slice(1));
-    expect(result.code).toBe(1);
-    expect(`${result.out}\n${result.err}`).toContain("Usage: fleet pr");
+    const refused = await box.refusal(args[0]!, "--repo", "acme/widgets", "--pr", "12", ...args.slice(1));
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toContain("Usage: fleet pr");
   }
   expect(existsSync(join(box.home, "..", "bot-args.json"))).toBe(false);
   box.env.FLEET_HANDLERS = "{}";
-  expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine, so there is no forecast. Ask for a review the way the repo's docs say.", err: "" });
+  expect(await box.call("forecast", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine, so there is no forecast. Ask for a review the way the repo's docs say.", err: "" });
 });
 
-test("without a review-bot handler, review and stamp print the fallback the settings name and exit 2", () => {
+test("without a review-bot handler, review and stamp print the fallback the settings name and exit 2", async () => {
   const box = sandbox();
   box.env.FLEET_SETTINGS = JSON.stringify({ "pull-requests.reviewFallback": "Comment `review please` on {repo}#{pr}.", "pull-requests.stampFallback": "Add the `approve-me` label to {repo}#{pr}." });
-  expect(box.run("review", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Comment `review please` on acme/widgets#12.", err: "" });
-  expect(box.run("stamp", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Add the `approve-me` label to acme/widgets#12.", err: "" });
+  expect(await box.call("review", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Comment `review please` on acme/widgets#12.", err: "" });
+  expect(await box.call("stamp", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Add the `approve-me` label to acme/widgets#12.", err: "" });
   box.env.FLEET_SETTINGS = "{}";
-  expect(box.run("review", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Ask for a review the way the repo's docs say.", err: "" });
-  expect(box.run("stamp", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Ask for an approval the way the repo's docs say.", err: "" });
+  expect(await box.call("review", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Ask for a review the way the repo's docs say.", err: "" });
+  expect(await box.call("stamp", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 2, out: "No review bot is on for this machine. Ask for an approval the way the repo's docs say.", err: "" });
   expect(box.calls()).toEqual([]);
 });
 
@@ -268,7 +292,7 @@ test("run outside fleet, review and stamp still print the default fallback and e
   delete box.env.FLEET_HANDLERS;
   delete box.env.FLEET_SETTINGS;
   const { FLEET_HANDLERS: _, FLEET_SETTINGS: __, ...inherited } = process.env;
-  const result = Bun.spawnSync(["bun", command, "review", "--repo", "acme/widgets", "--pr", "12"], { env: { ...inherited, HOME: box.home } });
+  const result = Bun.spawnSync([process.execPath, command, "review", "--repo", "acme/widgets", "--pr", "12"], { env: { ...inherited, HOME: box.home } });
   expect(result.exitCode).toBe(2);
   expect(result.stdout.toString().trim()).toBe("No review bot is on for this machine. Ask for a review the way the repo's docs say.");
 });
@@ -278,7 +302,7 @@ test("stopping review stops the review-bot handler before review exits", async (
   const stopped = join(box.home, "stopped");
   const handler = join(box.home, "slow-bot.ts");
   writeFileSync(handler, `process.on("SIGTERM", async () => { await Bun.write(${JSON.stringify(stopped)}, "stopped"); process.exit(5); });\nconsole.log("ready");\nsetInterval(() => {}, 1000);\n`);
-  const child = Bun.spawn(["bun", command, "review", "--repo", "acme/widgets", "--pr", "12"], { env: { ...process.env, HOME: box.home, FLEET_SETTINGS: "{}", FLEET_HANDLERS: JSON.stringify({ "review-bot": handler }) }, stdout: "pipe" });
+  const child = Bun.spawn([process.execPath, command, "review", "--repo", "acme/widgets", "--pr", "12"], { env: { ...process.env, HOME: box.home, FLEET_SETTINGS: "{}", FLEET_HANDLERS: JSON.stringify({ "review-bot": handler }) }, stdout: "pipe" });
   try {
     const reader = child.stdout.getReader();
     let seen = "";
@@ -295,19 +319,22 @@ test("stopping review stops the review-bot handler before review exits", async (
   }
 });
 
-test("wrong arguments print the usage and exit 1", () => {
+test("wrong arguments print the usage and exit 1", async () => {
   const box = sandbox();
   for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"], ["review", "--repo", "acme/widgets"], ["review", "--repo", "acme/widgets", "--pr", "1", "--minutes", "0"], ["stamp", "--repo", "acme/widgets", "--pr", "1", "--deep"]]) {
-    const result = box.run(...args);
-    expect(result.code).toBe(1);
-    expect(result.err).toStartWith("fleet pr: Usage: fleet pr ");
+    const refused = await box.refusal(...args);
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toStartWith("Usage: fleet pr ");
   }
+  const cli = box.run("threads");
+  expect(cli.code).toBe(1);
+  expect(cli.err).toStartWith("fleet pr: Usage: fleet pr ");
   expect(box.calls()).toEqual([]);
 });
 
-test("help lists every subcommand", () => {
+test("help lists every subcommand", async () => {
   const box = sandbox();
-  const result = box.run("--help");
+  const result = await box.call("--help");
   expect(result.code).toBe(0);
   expect(result.out).toContain("fleet pr bot-threads --repo <owner/repo> --pr <number> [--resolve]");
   expect(result.out).toContain("fleet pr blockers --repo <owner/repo> --pr <number> [--record]");
