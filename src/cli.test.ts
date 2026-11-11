@@ -274,10 +274,18 @@ describe("fleet routing", () => {
     cpSync(join(repoRoot, "src"), join(engine, "src"), { recursive: true });
     symlinkSync(join(repoRoot, "node_modules"), join(engine, "node_modules"));
     const bin = temp.make("bin-");
-    writeFileSync(join(bin, "bun"), `#!/bin/sh\ntrap 'kill -KILL $! 2>/dev/null; echo stopped > "$HOME/stopped"; exit 143' TERM; kill -TERM $PPID; sleep 600 & wait $!\n`, { mode: 0o755 });
+    writeFileSync(join(bin, "bun"), `#!/bin/sh\necho $$ > "$HOME/fake.pid"; trap 'kill -KILL $! 2>/dev/null; echo stopped > "$HOME/stopped"; exit 143' TERM; kill -TERM $PPID; sleep 600 & wait $!\n`, { mode: 0o755 });
     const fleetProcess = Bun.spawn([process.execPath, join(engine, "src/cli.ts"), "hello"], { env: { ...Bun.env, HOME: home, PATH: `${bin}:${Bun.env.PATH}` }, stdin: "ignore", stdout: "ignore", stderr: "ignore" });
-    expect(await fleetProcess.exited).toBe(143);
-    expect(readFileSync(join(home, "stopped"), "utf8")).toBe("stopped\n");
+    try {
+      expect(await fleetProcess.exited).toBe(143);
+      expect(readFileSync(join(home, "stopped"), "utf8")).toBe("stopped\n");
+    } finally {
+      const fake = Number(readFileSync(join(home, "fake.pid"), "utf8"));
+      if (fake > 1) {
+        await Bun.spawn(["pkill", "-KILL", "-P", String(fake)]).exited;
+        try { process.kill(fake, "SIGKILL"); } catch {}
+      }
+    }
   });
 
   test("runs a leading fleet in a pack step with this engine's launcher, not one on PATH", async () => {
