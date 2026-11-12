@@ -178,6 +178,23 @@
       ],
       "default": "ssh",
       "ask": "never"
+    },
+    {
+      "key": "base.usageHost",
+      "question": "Which analytics host receives Fleet's usage events? Give its capture URL, such as https://us.i.posthog.com.",
+      "type": "string"
+    },
+    {
+      "key": "base.usageProjectKey",
+      "question": "Which project key does that analytics host take the events with? A PostHog project key starts with phc_.",
+      "type": "string"
+    },
+    {
+      "key": "base.usageDistinctId",
+      "question": "Which id should every usage event carry? Leave it empty to give each machine its own id, fleet-<machine>.",
+      "type": "string",
+      "default": "",
+      "ask": "never"
     }
   ],
   "workflows": [
@@ -222,6 +239,18 @@
         "devbox"
       ],
       "sentence": "Agents check free disk before big jobs and run builds and tests in a capped slot, so one job cannot fill or freeze a devbox."
+    },
+    {
+      "id": "usage-events",
+      "name": "Usage events",
+      "default": false,
+      "settings": [
+        "base.usageHost",
+        "base.usageProjectKey",
+        "base.usageDistinctId"
+      ],
+      "sentence": "Fleet counts how often you and your agents run its commands and recall memory, and sends the counts to your own analytics project every five minutes.",
+      "risk": "Command names, counts, and the machine name leave the machine for the analytics project you name. Arguments, prompts, file contents, and secrets never do."
     }
   ],
   "config": [
@@ -598,6 +627,18 @@
         "every": "5m"
       },
       "workflow": "worktree-cleanup"
+    },
+    {
+      "id": "usage-flush",
+      "command": [
+        "fleet",
+        "usage",
+        "flush"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "workflow": "usage-events"
     }
   ],
   "steps": [
