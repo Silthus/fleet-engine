@@ -30,14 +30,12 @@ const url = (pr: Pick<Pr, "repo" | "number">) => `https://github.com/${pr.repo}/
 function github() {
   const prs: Pr[] = [];
   const queries: string[] = [];
-  const quota = { fails: [] as number[], reset: () => 0, error: "" };
+  const quota = { fails: [] as number[], reset: () => 0, remaining: 0, error: "", failure: "GraphQL: API rate limit already exceeded for user ID 1." };
   let calls = 0;
   const gh = async (args: string[]) => {
-    if (args.join(" ") === "api rate_limit --jq .resources.graphql.reset") return String(quota.reset() / 1000);
+    if (args[0] === "api" && args[1] === "rate_limit") return JSON.stringify({ resources: { graphql: { limit: 5000, used: 5000 - quota.remaining, remaining: quota.remaining, reset: quota.reset() / 1000 } } });
     if (quota.error) throw new Error(`gh api failed: ${quota.error}`);
-    if (quota.fails.includes(++calls)) {
-      throw new Error("gh api failed: GraphQL: API rate limit already exceeded for user ID 1.");
-    }
+    if (quota.fails.includes(++calls)) throw new Error(`gh api failed: ${quota.failure}`);
     const [api, graphql, f1, query, f2, q, ...rest] = args;
     const after = rest.length === 2 && rest[0] === "-f" && rest[1]!.startsWith("after=") ? Number(rest[1]!.slice(6)) : rest.length ? NaN : 0;
     if (api !== "api" || graphql !== "graphql" || f1 !== "-f" || !query?.startsWith("query=") || f2 !== "-f" || !q?.startsWith("q=") || Number.isNaN(after)) throw new Error(`gh: unexpected arguments ${args.join(" ")}`);
@@ -109,7 +107,7 @@ async function t3() {
   const links: LinkedEnvironment[] = [];
   const delivered: { threadId: string; text: string }[] = [];
   const linkedSends: { environmentId: string; threadId: string; message: string }[] = [];
-  const faults = { dispatch: false };
+  const faults = { dispatch: false, list: false };
   let launched = 0;
   const stub = await startT3Stub({
     shell,
@@ -117,7 +115,10 @@ async function t3() {
     links,
     environmentId: "env-hub",
     tools(name, args: any) {
-      if (name === "t3_thread_list") return { threads: linked, nextCursor: null };
+      if (name === "t3_thread_list") {
+        if (faults.list) throw new ToolRefusal("environment_unreachable", "the machine did not answer");
+        return { threads: linked, nextCursor: null };
+      }
       if (name === "t3_thread_read") {
         const thread = linked.find((each) => each.threadId === args.threadId);
         const tail = linkedTails[args.threadId];
@@ -458,6 +459,19 @@ test.each([
   expect(t3.delivered).toEqual([]);
 });
 
+test("a secondary rate limit is never waited out while the GraphQL quota is left", async () => {
+  const { hub, t3, at, pr, check, slept, now } = await setup();
+  t3.shell.threads.push(localThread("t-1", "Export stack", [pr()]));
+  at(4);
+  hub.quota.fails = [1];
+  hub.quota.failure = "HTTP 403: You have exceeded a secondary rate limit. Please wait a few minutes before you try again.";
+  hub.quota.remaining = 4200;
+  hub.quota.reset = () => now() + 20 * minute;
+  expect(await check()).toBe(false);
+  expect(slept).toEqual([]);
+  expect(t3.delivered).toEqual([]);
+});
+
 test("another GitHub failure is never waited out", async () => {
   const { hub, t3, at, pr, check, slept } = await setup();
   t3.shell.threads.push(localThread("t-1", "Export stack", [pr()]));
@@ -536,6 +550,63 @@ describe("the parked question sweep", () => {
     at(2);
     expect(await check()).toBe(true);
     expect(t3.delivered.filter((message) => message.text.startsWith("Parked question"))).toHaveLength(2);
+  });
+
+  test("tells a snoozed thread nothing new once its snooze ends", async () => {
+    const { t3, at, check } = await setup();
+    t3.shell.threads.push(watching("t-1"));
+    t3.turnItems["t-1"] = turn(["assistant_message", asks, 1]);
+    at(1);
+    await check();
+    expect(t3.delivered).toHaveLength(1);
+    t3.shell.threads[0] = watching("t-1", { snoozedUntil: iso(after(150)) });
+    at(2);
+    expect(await check()).toBe(true);
+    t3.shell.threads[0] = watching("t-1");
+    at(3);
+    expect(await check()).toBe(true);
+    expect(t3.delivered).toHaveLength(1);
+  });
+
+  const parkedRemote = (id: string) => ({ ...linkedThread(id, `Remote ${id}`, []), status: "running" });
+
+  test("tells the threads of a machine nothing new after one sweep could not read that machine", async () => {
+    const { t3, at, check } = await setup();
+    t3.link("env-devbox", "devbox-a");
+    t3.linked.push(parkedRemote("r-1"));
+    t3.linkedTails["r-1"] = { pendingRequestCount: 0, items: [tailItem("assistant_message", asks, 1)] };
+    at(1);
+    await check();
+    expect(t3.linkedSends).toHaveLength(1);
+    t3.faults.list = true;
+    at(2);
+    await check();
+    t3.faults.list = false;
+    at(3);
+    await check();
+    expect(t3.linkedSends).toHaveLength(1);
+  });
+
+  test("still tells the other threads of a machine when one thread cannot be read, and that thread nothing new later", async () => {
+    const { t3, at, check } = await setup();
+    t3.link("env-devbox", "devbox-a");
+    t3.linked.push(parkedRemote("r-1"), parkedRemote("r-2"));
+    const tail = { pendingRequestCount: 0, items: [tailItem("assistant_message", asks, 1)] };
+    t3.linkedTails["r-1"] = tail;
+    t3.linkedTails["r-2"] = tail;
+    at(1);
+    await check();
+    expect(t3.linkedSends.map((send) => send.threadId).sort()).toEqual(["r-1", "r-2"]);
+    delete t3.linkedTails["r-2"];
+    t3.linked.push(parkedRemote("r-3"));
+    t3.linkedTails["r-3"] = tail;
+    at(2);
+    await check();
+    expect(t3.linkedSends.map((send) => send.threadId).slice(2)).toEqual(["r-3"]);
+    t3.linkedTails["r-2"] = tail;
+    at(3);
+    await check();
+    expect(t3.linkedSends).toHaveLength(3);
   });
 
   test("reaches a thread of a linked machine that runs on a watch with a prose question as its last activity", async () => {

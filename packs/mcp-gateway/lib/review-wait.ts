@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Threads } from "../../../src/sdk/index.ts";
 import { sendLinkedMessage, withT3Session, type T3SessionOptions } from "../../base/lib/t3/index.ts";
-import { readLinkedOpenWork, readLinkedParkedThreads, readOpenWork, readParkedThreads, type OpenWork, type ParkedThread } from "../../orchestration/lib/activity.ts";
+import { readLinkedOpenWork, readLinkedParkedThreads, readOpenWork, readParkedThreads, type OpenWork, type ParkedThreads } from "../../orchestration/lib/activity.ts";
 import { asksForDecision } from "../../orchestration/lib/prose-question.ts";
 import { readEachMachine, readMachines } from "../../orchestration/lib/machines.ts";
 import type { Gh } from "../../pull-requests/lib/gh.ts";
@@ -141,6 +141,15 @@ async function check(wait: ReviewWait, dryRun: boolean): Promise<boolean> {
   return ok;
 }
 
+async function graphqlQuota(wait: ReviewWait): Promise<{ remaining?: number; reset: number }> {
+  try {
+    const quota = (JSON.parse(await wait.gh(["api", "rate_limit"])) as { resources?: { graphql?: { remaining?: number; reset?: number } } }).resources?.graphql;
+    return { remaining: quota?.remaining, reset: quota?.reset ?? Number.NaN };
+  } catch {
+    return { reset: Number.NaN };
+  }
+}
+
 async function search(wait: ReviewWait): Promise<SearchNode[]> {
   const q = [baseQuery, wait.qualifiers.trim()].filter(Boolean).join(" ");
   const nodes: SearchNode[] = [];
@@ -150,8 +159,9 @@ async function search(wait: ReviewWait): Promise<SearchNode[]> {
     const args = ["api", "graphql", "-f", `query=${graphQuery}`, "-f", `q=${q}`, ...(after ? ["-f", `after=${after}`] : [])];
     const out = await wait.gh(args).catch(async (error: Error) => {
       if (waited || !/rate limit/i.test(error.message)) throw error;
-      const reset = Number((await wait.gh(["api", "rate_limit", "--jq", ".resources.graphql.reset"])).trim()) * 1000 - wait.now();
-      if (!(reset > 0 && reset < quotaWaitMs)) throw error;
+      const quota = await graphqlQuota(wait);
+      const reset = quota.reset * 1000 - wait.now();
+      if (quota.remaining !== 0 || !(reset > 0 && reset < quotaWaitMs)) throw error;
       waited = true;
       wait.log(`GitHub's GraphQL quota is spent; retrying after its reset in ${Math.ceil(reset / 60_000)} min.`);
       await wait.sleep(reset + afterResetMs);
@@ -237,12 +247,15 @@ async function send(wait: ReviewWait, owner: Owner, text: string): Promise<boole
 }
 
 async function sweepParked(wait: ReviewWait, dryRun: boolean): Promise<boolean> {
-  const reports = await withT3Session(async (client) => readEachMachine<{ threads: ParkedThread[]; environmentId?: string }>(
+  const reports = await withT3Session(async (client) => readEachMachine<ParkedThreads & { environmentId?: string }>(
     await readMachines(client, wait.host),
-    async () => ({ threads: await readParkedThreads(client) }),
-    async (environmentId) => ({ threads: await readLinkedParkedThreads(client, environmentId), environmentId }),
+    async () => readParkedThreads(client),
+    async (environmentId) => ({ ...await readLinkedParkedThreads(client, environmentId), environmentId }),
   ), wait.session);
   const now = wait.now();
+  const unseen = reports.flatMap((report) => (report.error !== undefined ? [`${report.host} `]
+    : [...report.unread, ...report.threads.filter((thread) => thread.snoozedUntil && Date.parse(thread.snoozedUntil) > now).map((thread) => thread.id)]
+      .map((id) => `${report.host} ${id} `)));
   const parked = reports.flatMap((report) => (report.error !== undefined ? [] : report.threads.flatMap((thread) => {
     if (thread.snoozedUntil && Date.parse(thread.snoozedUntil) > now) return [];
     if (!(now - Date.parse(thread.message.at) >= parkedGraceMs) || !asksForDecision(thread.message.text)) return [];
@@ -250,7 +263,7 @@ async function sweepParked(wait: ReviewWait, dryRun: boolean): Promise<boolean> 
     return [{ owner, at: thread.message.at, key: `${report.host} ${thread.id} ${thread.message.at}` }];
   })));
   const previous = new Set(readList(wait.parkedPath));
-  const kept = parked.filter(({ key }) => previous.has(key)).map(({ key }) => key);
+  const kept = [...previous].filter((key) => parked.some((thread) => thread.key === key) || unseen.some((prefix) => key.startsWith(prefix)));
   const fresh = parked.filter(({ key }) => !previous.has(key));
   if (fresh.length) wait.log(`${parked.length} threads wait on a prose question, ${fresh.length} not told yet.`);
   let ok = true;
