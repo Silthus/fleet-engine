@@ -139,7 +139,7 @@ test("a sign-in whose ChatGPT account has no Slack app fails and says where to c
   await registerSlackBridge(hub);
   codexLogin(home, `echo new > "$CODEX_HOME/auth.json"`);
   expect(await signInSlackBridge(hub)).toBe(1);
-  expect(hub.printed.at(-1)).toBe("The gateway finds no Slack tools: the ChatGPT account you signed in with has no Slack app. Connect Slack in ChatGPT, Settings, Apps, then run: fleet mcp-gateway reconnect slack");
+  expect(hub.printed.at(-1)).toBe("The gateway finds no Slack tools for this sign-in. Connect Slack in ChatGPT, Settings, Apps, with this ChatGPT account, then run: fleet mcp-gateway reconnect slack");
   expect(hub.printed).not.toContain("Slack signed in. Agents reach them through the gateway now.");
 });
 

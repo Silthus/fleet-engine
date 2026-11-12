@@ -58,7 +58,7 @@ describe("the plan", () => {
     const bridgeSteps = (machine: MachineFile, workflows: Record<string, boolean> = {}) =>
       resolveEngine(sources, { packs: ["mcp-gateway"], hub: "hub-1", workflows }, machine).human.filter((step) => step.workflow === "slack-bridge").map((step) => step.id);
     expect(bridgeSteps(hub)).toEqual([]);
-    expect(bridgeSteps(hub, { "slack-bridge": true })).toEqual(["slack-bridge", "slack-bridge-sign-in", "slack-bridge-tools"]);
+    expect(bridgeSteps(hub, { "slack-bridge": true })).toEqual(["slack-bridge", "slack-bridge-sign-in"]);
     expect(bridgeSteps(devbox, { "slack-bridge": true })).toEqual([]);
     expect(bridgeSteps(mac, { "slack-bridge": true })).toEqual([]);
   });
@@ -238,16 +238,20 @@ describe("on the hub", () => {
     expect((await fleet(["mcp-gateway", "sign", "in"])).code).toBe(2);
   });
 
-  test("doctor names a Slack bridge that is signed in yet lists no tools, and says where to connect Slack", async () => {
+  test("doctor asks for the Slack sign-in while the bridge has none or the gateway lists it with no tools, and not while it lists them or does not answer", async () => {
     const { home, fleet } = machine(hubMachine, { workflows: { "slack-bridge": true } });
     writeMcpHubSettings(home);
-    const { state } = gatewayServer({ home, servers: ["tickets", "calendar", "slack"], toolCounts: { slack: 0 } });
-    const finding = "The Slack bridge serves no Slack tools: the ChatGPT account it signed in with has no Slack app. Connect Slack in ChatGPT, Settings, Apps.";
-    expect((await fleet(["doctor"])).output).not.toContain(finding);
+    const { state } = gatewayServer({ home, servers: ["tickets", "calendar", "slack"], toolCounts: { slack: 21 } });
+    const finding = "To do: The Slack bridge has no ChatGPT sign-in, or the gateway finds no Slack tools for it. Connect Slack in ChatGPT, Settings, Apps, then sign in with that ChatGPT account. Run: fleet mcp-gateway slack-bridge sign-in";
+    expect((await fleet(["doctor"])).output).toContain(finding);
     mkdirSync(join(home, ".local/share/fleet-mcphub/data/slack-codex"), { recursive: true });
     writeFileSync(join(home, ".local/share/fleet-mcphub/data/slack-codex/auth.json"), "{}");
-    expect((await fleet(["doctor"])).output).toContain(`To do: ${finding} Run: fleet mcp-gateway reconnect slack`);
+    state.toolCounts.slack = 0;
+    expect((await fleet(["doctor"])).output).toContain(finding);
     state.toolCounts.slack = 21;
+    expect((await fleet(["doctor"])).output).not.toContain(finding);
+    state.toolCounts.slack = 0;
+    state.notReadyFor = 1000;
     expect((await fleet(["doctor"])).output).not.toContain(finding);
   });
 

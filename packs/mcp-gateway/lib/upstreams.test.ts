@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { gmail, googleApps, googleCalendar, slack } from "./apps.ts";
@@ -157,13 +158,16 @@ test("one ChatGPT sign-in serves every Google route and the gateway reloads all 
 test("two Google sign-ins that overlap each finish, and the one that finishes last stays", async () => {
   const { home, hub } = hubWith({});
   for (const app of googleApps) await registerUpstream(hub, app);
+  const [started, release] = [join(home, "started"), join(home, "release")];
+  expect(await Bun.spawn(["mkfifo", started, release]).exited).toBe(0);
   const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
-  const wait = (file: string) => `until [ -f "${home}/${file}" ]; do sleep 0.01; done`;
-  writeFileSync(codex, `#!/bin/sh\nif mkdir "${home}/first" 2>/dev/null; then\n  echo first > "$CODEX_HOME/auth.json"\n  touch "${home}/first-started"\n  ${wait("second-done")}\nelse\n  ${wait("first-started")}\n  echo second > "$CODEX_HOME/auth.json"\n  touch "${home}/second-done"\nfi\n`);
+  writeFileSync(codex, `#!/bin/sh\nif mkdir "${home}/first" 2>/dev/null; then\n  echo first > "$CODEX_HOME/auth.json"\n  echo > "${started}"\n  read go < "${release}"\nelse\n  echo second > "$CODEX_HOME/auth.json"\nfi\n`);
   chmodSync(codex, 0o755);
   const first = signInApp(hub, gmail);
-  const second = signInApp(hub, googleCalendar);
-  expect(await second).toBe(0);
+  await readFile(started);
+  const second = await signInApp(hub, googleCalendar).catch((error: Error) => error.message);
+  await writeFile(release, "go\n");
+  expect(second).toBe(0);
   expect(await first).toBe(0);
   expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "utf8")).toBe("first\n");
 });

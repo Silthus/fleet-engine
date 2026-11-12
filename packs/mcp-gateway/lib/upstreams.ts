@@ -110,14 +110,12 @@ async function deviceSignIn(hub: Hub, app: CodexApp) {
   } finally { await rm(fresh, { recursive: true, force: true }); }
 }
 
-export async function appToolsMissing(hub: Hub, app: CodexApp) {
-  if (!(await appSignedIn(hub, app))) return false;
-  const server = (await (await managementApi(hub))<Array<{ name: string; tools?: unknown[] }>>("servers")).find((item) => item.name === app.name);
-  return server !== undefined && !server.tools?.length;
-}
+const listsNoTools = async (call: Api, app: CodexApp) => !(await call<{ tools?: unknown[] }>(`servers/${encodeURIComponent(app.name)}`)).tools?.length;
 
-const servesNoTools = async (call: Api, app: CodexApp) => !(await call<{ tools?: unknown[] }>(`servers/${encodeURIComponent(app.name)}`)).tools?.length;
-const connectHint = (app: CodexApp) => `Connect ${app.title} in ChatGPT, Settings, Apps, then run: fleet mcp-gateway reconnect ${app.name}`;
+export async function appReady(hub: Hub, app: CodexApp) {
+  if (!(await appSignedIn(hub, app))) return false;
+  return !(await managementApi(hub).then((call) => listsNoTools(call, app)).catch(() => false));
+}
 
 export async function signInApp(hub: Hub, app: CodexApp) {
   if (!(await exists(hubCodex(hub.home)))) throw new Error(`${app.title} runs through Codex, and this hub has no Codex from Fleet. Run: fleet install-codex`);
@@ -130,9 +128,9 @@ export async function signInApp(hub: Hub, app: CodexApp) {
   for (const other of sharing) {
     if (!(await upstreamRegistered(hub, other))) continue;
     await call(`servers/${encodeURIComponent(other.name)}/reload`, "POST");
-    if (await servesNoTools(call, other)) toolless.push(other);
+    if (await listsNoTools(call, other)) toolless.push(other);
   }
-  for (const other of toolless) hub.print(`The gateway finds no ${other.title} tools: the ChatGPT account you signed in with has no ${other.title} app. ${connectHint(other)}`);
+  for (const other of toolless) hub.print(`The gateway finds no ${other.title} tools for this sign-in. Connect ${other.title} in ChatGPT, Settings, Apps, with this ChatGPT account, then run: fleet mcp-gateway reconnect ${other.name}`);
   if (toolless.length) return 1;
   hub.print(`${sharing.map((other) => other.title).join(", ")} signed in. Agents reach them through the gateway now.`);
   return 0;
