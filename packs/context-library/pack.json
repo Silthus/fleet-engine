@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "name": "context-library",
+  "title": "Context library",
+  "summary": "Agents find your plans, research, decisions and saved threads in a private notes repo, and you save new ones with one command.",
+  "day": "You mention last week's planning in a prompt, and the agent gets a link to the note about it before it starts.",
+  "cost": "You need a small private GitHub repo of Markdown notes. It syncs every five minutes, and saving a link runs one short agent.",
+  "risk": "Agents read the library on every prompt, and saving a link writes a note from other people's text into it. Keep the repo private.",
+  "instructions": "AGENTS.md",
+  "settings": [
+    {
+      "key": "context-library.repo",
+      "question": "Which private GitHub repo holds your context library, such as you/notes?",
+      "type": "string",
+      "ask": "setup"
+    },
+    {
+      "key": "context-library.path",
+      "question": "Which folder holds the checkout of your context library?",
+      "type": "string",
+      "default": "~/dev/context-library",
+      "ask": "never"
+    },
+    {
+      "key": "context-library.url",
+      "question": "Which web address opens a document of the library, before its path? Leave it empty for the repo's page on GitHub.",
+      "type": "string",
+      "default": "",
+      "ask": "never"
+    },
+    {
+      "key": "context-library.owner",
+      "question": "Whose library is it, as the related context names it, such as Sam? Leave it empty for \"your library\".",
+      "type": "string",
+      "default": "",
+      "ask": "never"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "context-library",
+      "name": "Context library",
+      "default": false,
+      "needs": [
+        "gh"
+      ],
+      "settings": [
+        "context-library.repo",
+        "context-library.path",
+        "context-library.url",
+        "context-library.owner"
+      ],
+      "sentence": "A prompt about a topic of your private notes repo gets links to its documents, fleet context searches and saves notes, and every machine pulls the repo every five minutes."
+    }
+  ],
+  "files": [
+    {
+      "path": "hooks/context-recall.ts",
+      "target": ".config/fleet/hooks/UserPromptSubmit/context-recall.ts",
+      "workflow": "context-library"
+    }
+  ],
+  "jobs": [
+    {
+      "id": "context-sync",
+      "command": [
+        "fleet",
+        "context",
+        "sync"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "workflow": "context-library"
+    }
+  ]
+}
