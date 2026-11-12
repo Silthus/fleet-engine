@@ -34,7 +34,11 @@ packs, and your answers live in your own private profile repo.
 
 - **Base** (always on): safety rules, the model table, T3 Code defaults written
   before its first start, linked machines, worktree cleanup, a disk guard, and
-  nightly updates.
+  nightly updates. With Codex, a rules file lets Codex run Git fetches and
+  pushes, read-only `gh` and `fleet` commands, and installs outside its
+  sandbox without asking. A pack ships its own Codex rules with `codexRules`;
+  Fleet writes them as `~/.codex/rules/fleet-<pack>.rules` and keeps a rules
+  file you changed.
 - **Pull requests** (on): every fix or feature ends as a proven, reviewed draft
   pull request. Ship words take it to merged.
 - **Orchestration** (on): big work becomes a map of tickets that a conductor
@@ -56,7 +60,8 @@ packs, and your answers live in your own private profile repo.
   they block it. With the MCP gateway, the hub serves a read-only
   `context_search` tool over the same notes.
 - **Hub** (off): one always-on devbox manages the others. It signs in to your
-  MCP servers once, keeps your devboxes linked, and watches their disks. A
+  MCP servers once, keeps your devboxes linked, and watches their disks. The
+  Slack bridge and the Google apps turn off the native Codex app they replace. A
   pack can run its own small MCP server in the gateway, with folders mounted
   read-only. The nightly Dream task and own-account balancing are opt-in.
   Own-account balancing routes Claude Code across several of your own

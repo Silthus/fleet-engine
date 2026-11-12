@@ -245,7 +245,7 @@ describe("fleet apply", () => {
   test("--dry-run previews without writing machine state", async () => {
     const home = temp.make("home-");
     const result = await fleet(["apply", "--dry-run", "--profile", profileDir()], home);
-    expect(result.output).toContain("Preview: 12 changes to apply. Nothing was written.");
+    expect(result.output).toContain("Preview: 13 changes to apply. Nothing was written.");
     expect(readdirSync(home)).toEqual([]);
   });
 

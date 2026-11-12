@@ -67,6 +67,12 @@ describe("loadPacks", () => {
     expect((await loadPacks(sourceWith({ base: { ...base, settings: sound } })))[0]?.manifest.settings?.[0]?.defaultByTimeZone).toEqual({ "Europe/": 3 });
   });
 
+  test("rejects Codex rules without a path or tied to a workflow the pack lacks, and an unless that is not a list of workflow ids", async () => {
+    expect(loadPacks(sourceWith({ base: { ...base, codexRules: [{}] } }))).rejects.toThrow("codexRules [0]: needs a path");
+    expect(loadPacks(sourceWith({ base: { ...base, codexRules: [{ path: "codex.rules", workflow: "missing" }] } }))).rejects.toThrow("codexRules codex.rules names unknown workflow missing");
+    expect(loadPacks(sourceWith({ base: { ...base, config: [{ provider: "claude", key: "a", value: 1, unless: "bridge" }] } }))).rejects.toThrow("config a: unless must list workflow ids");
+  });
+
   test("rejects a workflow need outside the closed set", async () => {
     const workflows = [{ ...base.workflows[0], needs: ["laptop"] }];
     expect(loadPacks(sourceWith({ base: { ...base, workflows } }))).rejects.toThrow("workflow heavy has unknown need laptop");

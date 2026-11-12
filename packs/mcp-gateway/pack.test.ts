@@ -63,6 +63,17 @@ describe("the plan", () => {
     expect(bridgeSteps(mac, { "slack-bridge": true })).toEqual([]);
   });
 
+  test("the Slack bridge turns native Codex's Slack app off on every machine, and leaves it alone while the bridge is off", () => {
+    const hub: MachineFile = { schema: 1, role: "hub", name: "hub-1" };
+    const slackApp = "apps.asdk_app_69a1d78e929881919bba0dbda1f6436d.enabled";
+    const off = (machine: MachineFile, fields: Partial<Profile>) => resolveEngine(sources, { packs: ["mcp-gateway"], hub: "hub-1", ...fields }, machine).config.filter((entry) => entry.key === slackApp).map((entry) => [entry.provider, entry.value]);
+    for (const machine of [hub, devbox, mac]) {
+      expect(off(machine, { workflows: { "slack-bridge": true } })).toEqual([["codex", false]]);
+      expect(off(machine, {})).toEqual([]);
+    }
+    expect(off(devbox, { plan: "claude", workflows: { "slack-bridge": true } })).toEqual([]);
+  });
+
   test("each Google app stays off until the profile turns it on; then the hub registers it and asks for one Google sign-in, and native Codex on every machine turns the app off", () => {
     const hub: MachineFile = { schema: 1, role: "hub", name: "hub-1" };
     const native = { gmail: "connector_2128aebfecb84f64a069897515042a44", "google-calendar": "connector_947e0d954944416db111db556030eea6", "google-drive": "connector_5f3c8c41a1e54ad7a76272c89e2554fa" };

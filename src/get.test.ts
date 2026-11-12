@@ -15,7 +15,7 @@ describe("get.sh", () => {
   test("on Linux installs gh and T3 Code, fetches the engine at its pin, and applies the profile", () => {
     const box = sandbox("Linux");
     const result = getSh(box, ["--ref", "v0.1.0", "--profile", profile()]);
-    expect(result.output).toContain("Applied 14 changes.");
+    expect(result.output).toContain("Applied 15 changes.");
     expect(result.code).toBe(0);
     expect(existsSync(join(box.home, ".local/bin/gh"))).toBe(true);
     expect(result.calls).toContain("t3 installer channel=nightly");

@@ -52,7 +52,8 @@ export type T3Task = {
 };
 
 /** Limits an item to some machines, plans, or one workflow. An item without a field fits every value. The role solo fits the only machine: it is not a devbox, the Hub pack is off, and the profile lists no devboxes. oncePerFleet keeps the item on one machine: the first node the profile lists, else the hub. */
-export type Scope = { on?: Os[]; roles?: Array<MachineRole | "solo">; oncePerFleet?: boolean; plans?: AiPlan[]; workflow?: string };
+/** unless: workflows of any pack that the item gives way to: it stays out of the plan while one of them is on. */
+export type Scope = { on?: Os[]; roles?: Array<MachineRole | "solo">; oncePerFleet?: boolean; plans?: AiPlan[]; workflow?: string; unless?: string[] };
 
 export type TimerSchedule = { every: "5m" | "15m" | "1h" | "1d"; at?: string };
 
@@ -119,6 +120,9 @@ export type CatalogEntry = { pack: string; id: string; port: number; health: str
 /** A file from the pack, linked at target under the home directory. */
 export type PackFile = Scope & { path: string; target: string };
 
+/** A Codex rules file of the pack. Fleet joins the ones that fit the machine and writes them as one plain file, .codex/rules/fleet-<pack>.rules, for a Codex plan only. */
+export type CodexRules = Scope & { path: string };
+
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** One row of the model table: the model and effort agents use for one kind of work. */
@@ -147,6 +151,7 @@ export type PackManifest = {
   steps?: PackStep[];
   checks?: PackCheck[];
   files?: PackFile[];
+  codexRules?: CodexRules[];
   t3ProjectScripts?: T3ProjectScript[];
   handlers?: PackHandler[];
   served?: ServedService[];
