@@ -63,7 +63,8 @@ packs, and your answers live in your own private profile repo.
   subscriptions. It is off by default, and the page shows the Anthropic terms
   it touches.
 - **Slack** (off): your own message, reaction, or mention in Slack starts a T3
-  thread about it.
+  thread about it. With the Context library on, your `:brain:` reaction saves
+  the thread and its canvases to your notes.
 - **incident.io** (off): an agent that watches a risky change pages you, and
   only you, through your own incident.io alert source with `fleet page`. With
   a hub, the token lives on the hub and every other machine pages through it.

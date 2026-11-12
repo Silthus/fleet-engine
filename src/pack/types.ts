@@ -156,10 +156,10 @@ export type PackManifest = {
 
 export type PackCheck = Scope & { id: string; run: string[]; say: string };
 
-export const handlerSeams = ["review-bot", "heavy-route", "pr-command"] as const;
+export const handlerSeams = ["review-bot", "heavy-route", "pr-command", "slack-capture"] as const;
 export type HandlerSeam = (typeof handlerSeams)[number];
 
-/** A script of the pack that a command of another pack hands its work to, such as the review bot behind fleet pr review, the heavy-route handler that decides where a fleet heavy command runs, or the pr-command handler that runs the fleet pr subcommands a pack adds. */
+/** A script of the pack that a command of another pack hands its work to, such as the review bot behind fleet pr review, the heavy-route handler that decides where a fleet heavy command runs, the pr-command handler that runs the fleet pr subcommands a pack adds, or the slack-capture handler that saves a Slack thread the owner reacts to. */
 export type PackHandler = Scope & { seam: HandlerSeam; path: string; /** The fleet pr words a pr-command handler runs; fleet pr routes only these to it. */ subcommands?: string[] };
 
 export type SourceRef = { name: string; repo: string; ref: string };

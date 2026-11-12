@@ -103,5 +103,12 @@
       ],
       "workflow": "context-library"
     }
+  ],
+  "handlers": [
+    {
+      "seam": "slack-capture",
+      "path": "handlers/slack-capture.ts",
+      "workflow": "context-library"
+    }
   ]
 }
