@@ -7,7 +7,7 @@ export default {
   name: "issued",
   summary: "A served service that issues a key for each node.",
   register(fleet) {
-    const extra = fleet.workflow({ id: "issued-extra", name: "Issued extra", sentence: "The hub serves one more service.", default: false });
+    const extra = fleet.workflow({ id: "issued-extra", name: "Issued extra", sentence: "The hub serves one more service.", needs: ["devbox"], default: false });
     const installed = fleet.check({
       on: "hub",
       id: "issued-installed",

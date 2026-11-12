@@ -203,10 +203,11 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
     options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }
-  if (command.workflow && !plan.workflows.some((entry) => entry.id === command.workflow && entry.active)) throw new Error(`fleet ${name} belongs to the ${command.workflow} workflow, which is off. Turn it on with fleet packs --workflows ${command.workflow}=on.`);
   if (command.on === "hub" && !plan.onHub) return runOnHub(name, args, plan, options);
+  const workflow = command.workflow ? plan.workflows.find((entry) => entry.id === command.workflow) : undefined;
+  if (workflow && !workflow.active) throw new Error(`fleet ${name} belongs to the ${workflow.id} workflow, which ${workflow.reason === "turned off" ? `is off. Turn it on with fleet packs --workflows ${workflow.id}=on.` : `is off on this machine: it ${workflow.reason}.`}`);
   const loaded = loadedPack(sources, command.pack);
-  const run = loaded?.code?.commands[name];
+  const run = loaded?.code?.commands[name]?.run;
   const repairs = plan.human.some((step) => step.command?.trim().split(/\s+/).join("\n") === typed.join("\n"));
   if (!run && !repairs && options.become) return options.become(["bun", command.path, ...args], { ...Bun.env, ...packEnvironment(plan, options) });
   const exit = run ? await inPack(plan, loaded!, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
@@ -227,7 +228,7 @@ async function runUndo(name: string, args: string[], pack: string, options: CliO
   const owner = command?.pack === pack ? loadedPack(sources, pack) : undefined;
   if (!command || !owner) return cannot(`the ${pack} pack has no command ${name} here`);
   if (command.on === "hub" && !plan.onHub) return cannot("it runs on the hub");
-  const run = owner.code?.commands[name];
+  const run = owner.code?.commands[name]?.run;
   return run ? await inPack(plan, owner, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
 }
 
