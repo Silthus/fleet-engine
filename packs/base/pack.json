@@ -200,6 +200,12 @@
       "sentence": "Fleet, your profile, Claude Code, Codex, their plugins, and T3 Code update themselves every night. T3 Code waits until no agent turn runs. A failed update tries again each hour until 05:47 UTC."
     },
     {
+      "id": "source-refresh",
+      "name": "Fresh skills",
+      "default": true,
+      "sentence": "Every five minutes, Fleet fetches each pack source that follows a branch, such as your skills repository. When one moved, Fleet updates the skills, guides, and instructions it brings, and keeps your own edits as fleet apply does. Everything else waits for the nightly update."
+    },
+    {
       "id": "linked-machines",
       "name": "Linked machines",
       "default": true,
@@ -586,6 +592,17 @@
         "at": "00:47"
       },
       "workflow": "nightly-updates"
+    },
+    {
+      "id": "source-refresh",
+      "command": [
+        "fleet",
+        "refresh"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "workflow": "source-refresh"
     },
     {
       "id": "worktree-prune",

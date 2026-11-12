@@ -117,6 +117,10 @@ takes the old one out of your profile and unlinks it in T3 Code.
 - `fleet doctor` checks a machine against your profile without changing it.
 - `fleet update` moves the engine and your profile forward. Each machine also
   runs it every night.
+- `fleet refresh` fetches each pack source that follows a branch, such as a
+  skills repository. When one moved, it updates the files your packs place,
+  such as skills, guides, and instructions, and leaves steps, settings, and
+  jobs to the nightly update. Each machine runs it every five minutes.
 
 ## When setup goes wrong
 

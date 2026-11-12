@@ -101,6 +101,20 @@ async function git(dir: string, ...args: string[]) {
   return { ok: code === 0, stdout: stdout.trim(), stderr: message };
 }
 
+export function sourceCache(home: string) {
+  return join(home, ".local", "share", "fleet", "sources");
+}
+
+export async function followsBranch(ref: SourceRef, cacheRoot: string) {
+  const fetched = await readFile(join(cacheRoot, ref.name, ".git", "FETCH_HEAD"), "utf8").catch(() => "");
+  const branch = ref.ref.replace(/^refs\/heads\//, "");
+  return fetched.split("\n")[0]?.includes(`\tbranch '${branch}' of `) ?? false;
+}
+
+export async function loadedCommit(ref: SourceRef, cacheRoot: string) {
+  return (await lastGood(join(cacheRoot, ref.name)))?.commit;
+}
+
 export async function cachedSource(ref: SourceRef, cacheRoot: string): Promise<FetchedSource> {
   const dir = join(cacheRoot, ref.name);
   if (!existsSync(join(dir, ".git"))) return { ref, error: "never fetched; run fleet apply" };
