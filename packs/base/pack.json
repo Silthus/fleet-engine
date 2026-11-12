@@ -222,6 +222,13 @@
         "devbox"
       ],
       "sentence": "Agents check free disk before big jobs and run builds and tests in a capped slot, so one job cannot fill or freeze a devbox."
+    },
+    {
+      "id": "format-on-edit",
+      "name": "Format on edit",
+      "default": false,
+      "sentence": "After Claude edits a file, the repository's own lint-staged formatters and fixers rewrite it, and Claude sees what they could not fix.",
+      "risk": "It runs the commands the repository names in its lint-staged config, as its commit hook would. It skips shell snippets, Git commands, and tools that are not installed."
     }
   ],
   "config": [
@@ -264,7 +271,7 @@
             {
               "type": "command",
               "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude PostToolUse",
-              "timeout": 30
+              "timeout": 90
             }
           ]
         }
@@ -279,6 +286,21 @@
             {
               "type": "command",
               "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude SessionStart",
+              "timeout": 30
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "claude",
+      "key": "hooks.Stop",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude Stop",
               "timeout": 30
             }
           ]
@@ -351,6 +373,25 @@
             {
               "type": "command",
               "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex SessionStart",
+              "timeout": 30
+            }
+          ]
+        }
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "hooks.Stop",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex Stop",
               "timeout": 30
             }
           ]
@@ -537,6 +578,15 @@
         "claude",
         "both"
       ]
+    },
+    {
+      "path": "hooks/format-on-edit.ts",
+      "target": ".config/fleet/hooks/PostToolUse/format-on-edit.ts",
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "format-on-edit"
     },
     {
       "path": "fleet-heavy.slice",

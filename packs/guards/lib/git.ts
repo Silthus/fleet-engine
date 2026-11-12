@@ -4,7 +4,7 @@ import { withDirectories } from "./directories.ts";
 import { shortCluster } from "./kill.ts";
 import { commandsIn } from "./shell-words.ts";
 
-export type Repo = { config: (key: string) => string | undefined; values: (key: string) => string[]; branch?: string; branches: string[]; refs: string[]; agents?: string };
+export type Repo = { config: (key: string) => string | undefined; values: (key: string) => string[]; branch?: string; branches: string[]; refs: string[]; agents?: string; stack?: number };
 export type ReadRepo = (dir: string, selectors: string[]) => Repo | undefined;
 
 export const largestForcePush = 5;
@@ -67,14 +67,45 @@ export const readRepo: ReadRepo = (dir, selectors) => {
     values.set(key, [...values.get(key) ?? [], split < 0 ? "true" : entry.slice(split + 1)]);
   }
   const agents = top && join(top, "AGENTS.md");
+  const branch = git(["symbolic-ref", "-q", "--short", "HEAD"], false)?.trim() || undefined;
+  const commonDir = git(["rev-parse", "--path-format=absolute", "--git-common-dir"], false)?.trim();
   return {
     values: (key) => values.get(configKey(key)) ?? [],
     config: (key) => values.get(configKey(key))?.at(-1),
-    branch: git(["symbolic-ref", "-q", "--short", "HEAD"], false)?.trim() || undefined,
+    branch,
     ...refsOf(git(["for-each-ref", "--format=%(refname)"])!),
     agents: agents && existsSync(agents) ? readFileSync(agents, "utf8") : undefined,
+    stack: commonDir && branch ? stackSize(join(commonDir, "gh-stack"), branch) : undefined,
   };
 };
+
+type StackCatalog = { stacks?: { branches?: { branch?: string; pullRequest?: { merged?: boolean } }[] }[] };
+
+export function stackSize(catalog: string, branch: string): number | undefined {
+  if (!existsSync(catalog)) return undefined;
+  try {
+    const file = JSON.parse(readFileSync(catalog, "utf8")) as StackCatalog;
+    const stack = file.stacks?.find((each) => each.branches?.some((ref) => ref.branch === branch));
+    return stack?.branches?.filter((ref) => !ref.pullRequest?.merged).length;
+  } catch {
+    return undefined;
+  }
+}
+
+const stackPushActions = new Set(["push", "submit", "sync"]);
+const stackValued = new Set(["--base", "--remote", "-b", "-r", "-R", "--repo"]);
+
+function stackPushes(args: string[], repo: () => Repo | undefined): number {
+  const operands = args.filter((arg, index) => !arg.startsWith("-") && !stackValued.has(args[index - 1] ?? ""));
+  const [group, action, ...rest] = operands;
+  if (group !== "stack") return 0;
+  if (stackPushActions.has(action ?? "")) {
+    const found = repo();
+    return found ? found.stack ?? 0 : largestForcePush + 1;
+  }
+  if (action !== "link") return 0;
+  return rest.filter((arg) => !/^\d+$/.test(arg) && !/^https?:\/\//.test(arg)).length;
+}
 
 function refsOf(listing: string) {
   const refs = listing.split("\n").filter(Boolean);
@@ -248,6 +279,7 @@ export function gitRisk(command: string, cwd: string, person: string, mainPushRe
   };
   let forced = 0;
   for (const [call, directory] of withDirectories(commandsIn(command), cwd)) {
+    if (call.name === "gh") forced += stackPushes(call.args, () => repoAt(directory, []));
     if (call.name !== "git") continue;
     const { dir, selectors, settings, sub, args } = gitCall(call.args, directory, call.env);
     if (sub !== "commit" && sub !== "push" && sub !== "merge") continue;

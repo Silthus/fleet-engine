@@ -112,6 +112,12 @@
       "sentence": "When you agree to a side fix, it starts in its own T3 thread, and this thread stays on its task."
     },
     {
+      "id": "question-guard",
+      "name": "Question guard",
+      "default": true,
+      "sentence": "A top-level T3 thread that ends its turn with a decision for you in prose is stopped once and told to ask with the question tool, and the hub's hourly check wakes a thread that still waits on one."
+    },
+    {
       "id": "quality-loop",
       "name": "Quality loop",
       "default": false,
@@ -155,6 +161,13 @@
         "orchestration.loopProject"
       ],
       "sentence": "Each weekday morning, one thread lists your open pull requests and what blocks each one."
+    }
+  ],
+  "files": [
+    {
+      "path": "hooks/ask-guard.ts",
+      "target": ".config/fleet/hooks/Stop/ask-guard.ts",
+      "workflow": "question-guard"
     }
   ],
   "jobs": [
