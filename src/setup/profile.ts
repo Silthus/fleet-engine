@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { PackManifest, Profile, ProfileFile } from "../pack/types.ts";
+import type { PackManifest, Profile, ProfileFile, SettingValue } from "../pack/types.ts";
 import { bothChanged, loadProfile, saveAnswers } from "../profile/profile.ts";
 import type { Machine } from "./commands.ts";
 import { defaultSources, engineRepo } from "./defaults.ts";
@@ -121,9 +121,12 @@ async function makeProfile(context: ProfileContext) {
   await git(machine, dir, "config", "user.email", `${login}@users.noreply.github.com`);
   await startFiles(dir, context, same(profileRepo, team) ? org : undefined);
   const started = await untracked(machine, dir, startFileNames);
+  const answeredElsewhere = (draft.inferred ?? []).filter((key) => Object.hasOwn(saved, key));
+  Object.assign(draft, { settings: { ...draft.settings, ...Object.fromEntries(answeredElsewhere.map((key) => [key, saved[key] as SettingValue])) } });
+  const { inferred: _inferred, ...picked } = draft;
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, plan: "both", settings: {}, workflows: {} }),
-    ...draft,
+    ...picked,
     ...(memory && memory.repo !== namedMemory ? { settings: { ...draft.settings, "memory.repo": memory.repo } } : {}),
   };
   if (started.length) {

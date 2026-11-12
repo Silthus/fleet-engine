@@ -1,12 +1,12 @@
 import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import { cachedSource, fetchSource } from "../pack/sources.ts";
-import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SourceRef } from "../pack/types.ts";
+import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SetupProgress, SourceRef } from "../pack/types.ts";
 import { loadMachine, loadProfile, saveAnswers, saveMachine, thisMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo, makesOwnDevbox } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
-import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, waitsForTeams, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
+import { answered, packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, waitsForTeams, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { devboxQuestion, devboxSteps, hubSteps, notTakenByHub, profileForBox, type DevboxContext } from "./devbox.ts";
@@ -50,9 +50,9 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   let flags: SetupFlags;
   const machine: MachineFile = thisMachine(await loadMachine(options.home), options.platform, options.env ?? process.env);
   const unfinished = Boolean(machine.setup?.done.length) && !checked(machine.setup?.done);
-  const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
+  const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : withInferred(machine.setup ?? { done: [] }) };
   const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
-  const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, draft: progress.draft } });
+  const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, ...withoutInferred(progress.draft) } });
   const box: Machine = { ...realMachine, ...options.machine };
   const fetchTeam = (ref: SourceRef) => (options.fetchSource ?? fetchSource)(ref, sourceCache(options.home));
   if (progress.done.includes("github")) {
@@ -76,7 +76,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     if (reopened.length || Object.entries(fromFlags).some(([key, value]) => saved.settings?.[key] !== value)) reopened.push(...answersChanged);
     progress.done = progress.done.filter((id) => !reopened.some((step) => id === step || id.startsWith(`${step}:`)));
     if (Object.keys(fromFlags).length && !waitsForTeams(flags, catalog)) {
-      progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
+      Object.assign(progress.draft, answered(progress.draft, fromFlags));
       await remember();
     }
   } catch (error) {
@@ -91,6 +91,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     catalog,
     draft: progress.draft,
     timeZone: options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    draftMayBeBehind: Boolean(machine.profileDir),
     async answer(fields) {
       Object.assign(progress.draft, fields);
       await remember();
@@ -115,7 +116,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     if (!machine.profileDir) await startFromExisting();
     picksFrom(flags, catalog, progress.draft);
     const fromFlags = settingsFrom(flags, catalog);
-    if (Object.keys(fromFlags).length) await context.answer({ settings: { ...progress.draft.settings, ...fromFlags } });
+    if (Object.keys(fromFlags).length) await context.answer(answered(progress.draft, fromFlags));
   };
   const startFromExisting = async () => {
     const existing = await existingProfile(box, options.home, catalog.packs.map((pack) => pack.manifest), progress.draft.packs ?? catalog.teamPacks);
@@ -283,6 +284,17 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
 }
 
 const later = (step: Step): Step => ({ ...step, later: true });
+
+function withInferred({ draft, inferred }: SetupProgress): Draft {
+  if (!inferred) return { ...draft } as Draft;
+  return { ...draft, settings: { ...inferred, ...draft?.settings }, inferred: Object.keys(inferred) };
+}
+
+function withoutInferred({ inferred, ...draft }: Draft): Pick<SetupProgress, "draft" | "inferred"> {
+  if (!inferred?.length) return { draft };
+  const settings = Object.entries(draft.settings ?? {});
+  return { draft: { ...draft, settings: Object.fromEntries(settings.filter(([key]) => !inferred.includes(key))) }, inferred: Object.fromEntries(settings.filter(([key]) => inferred.includes(key))) };
+}
 
 function profileDraft(profile: Profile): Draft {
   return { packs: profile.packs, plan: profile.plan, settings: profile.settings, workflows: profile.workflows, sources: profile.sources };
