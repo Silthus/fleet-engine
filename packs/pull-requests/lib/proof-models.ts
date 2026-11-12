@@ -125,4 +125,9 @@ export async function readRubric(home: string) {
   return standards;
 }
 
+export async function readRiskRubric(home: string) {
+  const skill = (await readFile(join(home, ".agents/skills/merge-risk/SKILL.md"), "utf8").catch(() => "")).trim();
+  return skill || undefined;
+}
+
 export const skillReferences = (home: string) => ["tdd", "codebase-design"].map((skill) => join(home, ".agents/skills", skill, "SKILL.md"));
