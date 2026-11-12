@@ -197,6 +197,14 @@ describe("resolve", () => {
     expect(states({ "base-route": false }).slice(0, 3)).toEqual([["direct", true, undefined], ["after-direct", true, undefined], ["routed", false, "needs workflow base-route"]]);
   });
 
+  test("settles a chain of yields: the first stays on when the one it yields to yields in turn", () => {
+    const flow = (id: string, yields: string[] = []) => ({ id, name: id, sentence: `${id}.`, default: true, yields });
+    const chain = withPack({ schema: 1, name: "chain", summary: "Chain.", workflows: [flow("a", ["b"]), flow("b", ["c"]), flow("c")] });
+    const states = (workflows: Record<string, boolean>) => plan({ packs: ["chain"], workflows }, mac, [engine, chain]).workflows.filter((state) => state.pack === "chain").map(({ id, active, reason }) => [id, active, reason]);
+    expect(states({})).toEqual([["a", true, undefined], ["b", false, "yields to workflow c"], ["c", true, undefined]]);
+    expect(states({ c: false })).toEqual([["a", false, "yields to workflow b"], ["b", true, undefined], ["c", false, "turned off"]]);
+  });
+
   test("limits items by os and role", () => {
     expect(plan({ packs: ["posthog"] }).human.map((step) => step.id)).toEqual(["coder"]);
     expect(plan({ packs: ["posthog"] }, devbox).human).toEqual([]);

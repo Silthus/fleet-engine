@@ -49,6 +49,20 @@ async function machineWithProfile(settings: Record<string, unknown> = {}) {
   return { home, elsewhere, pushed: async () => JSON.parse(await spawnGit(home, "--git-dir", remote, "show", "main:fleet.json")) };
 }
 
+/** Puts a fetched source with a pack whose first workflow yields to its second in this machine's cache, and turns that pack on in the profile. */
+async function withYieldingPack(home: string) {
+  const source = join(home, ".local/share/fleet/sources/team");
+  mkdirSync(join(source, ".git"), { recursive: true });
+  mkdirSync(join(source, "packs/team"), { recursive: true });
+  const flow = (id: string, yields: string[] = []) => ({ id, name: id, sentence: `${id}.`, default: true, yields });
+  writeFileSync(join(source, "packs/team/pack.json"), JSON.stringify({ schema: 1, name: "team", summary: "Team rules.", workflows: [flow("direct", ["routed"]), flow("routed")] }));
+  const dir = join(home, "profile");
+  const file = JSON.parse(readFileSync(join(dir, "fleet.json"), "utf8")) as ProfileFile;
+  writeFileSync(join(dir, "fleet.json"), JSON.stringify({ ...file, sources: [...file.sources, { name: "team", repo: "team/packs", ref: "main" }], packs: [...file.packs, "team"] }, null, 2) + "\n");
+  await spawnGit(dir, "commit", "-q", "-am", "Team");
+  await spawnGit(dir, "push", "-q");
+}
+
 async function fleet(home: string, args: string[], applyCode = 0) {
   const lines: string[] = [];
   const applied: string[] = [];
@@ -146,6 +160,17 @@ describe("fleet packs", () => {
     expect(result.code).toBe(1);
     expect((await pushed()).packs).toEqual(["pull-requests", "communication"]);
     expect(result.output).toEndWith("The change is saved. Fix what it says above, then run fleet apply.");
+  });
+
+  test("says why a workflow is off when it yields, in the list and when a choice to turn it on has no effect", async () => {
+    const { home } = await machineWithProfile();
+    await withYieldingPack(home);
+    expect((await fleet(home, ["packs"])).output).toContain("      Workflows: direct off: yields to workflow routed, routed on");
+    const turnedOn = await fleet(home, ["packs", "--workflows", "direct=on"]);
+    expect(turnedOn.code).toBe(0);
+    expect(turnedOn.output).toContain("direct is on in your profile, but stays off: yields to workflow routed.");
+    const swapped = await fleet(home, ["packs", "--workflows", "direct=on,routed=off"]);
+    expect(swapped.output).not.toContain("stays off");
   });
 
   test("refuses unknown packs and workflows without touching the profile", async () => {

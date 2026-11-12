@@ -161,10 +161,12 @@ function applyProfile(dir: string, options: CliOptions, skip: string[] = []) {
 async function change(command: keyof typeof changes | "hub", args: string[], options: CliOptions) {
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, pull: changesProfile(command, args) });
   const profileDir = plan.machine.profileDir!;
+  const profile = await loadProfile(profileDir);
   const context: ChangeContext = {
     profileDir,
-    profile: await loadProfile(profileDir),
+    profile,
     plan,
+    preview: (answers) => resolve({ ...profile, dir: profileDir, ...answers }, plan.machine, sources),
     packs: sources.flatMap((source) => ("error" in source ? [] : source.packs)),
     machine: { ...realMachine, ...options.setup?.machine },
     print: options.print,
