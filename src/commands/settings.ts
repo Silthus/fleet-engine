@@ -3,7 +3,7 @@ import { FlagError, parseSettingValue } from "../setup/flags.ts";
 import { activePacks, type ChangeContext, manifests, saveAndApply } from "./change.ts";
 
 /** Lists the settings of the packs that are on, with where each value comes from. */
-export function settingsCommand(args: string[], context: Omit<ChangeContext, "machine">): number {
+export function settingsCommand(args: string[], context: Pick<ChangeContext, "plan" | "packs" | "profile" | "print">): number {
   if (args.length) throw new FlagError("usage: fleet settings. Change a setting with fleet set <pack.key>=<value>.");
   const packs = listedSettings(activePacks(context));
   if (!packs.length) return context.print("The packs you have on have no settings."), 0;
@@ -27,7 +27,7 @@ function listedSettings(manifests: PackManifest[]) {
     .filter((manifest) => manifest.settings.length);
 }
 
-function shown(setting: PackSetting, context: Omit<ChangeContext, "machine">) {
+function shown(setting: PackSetting, context: Pick<ChangeContext, "plan" | "packs" | "profile" | "print">) {
   const value = context.plan.settings[setting.key];
   if (value === undefined) return context.plan.unanswered.some((item) => item.key === setting.key) ? "not set yet, Fleet needs it" : "not set";
   if (setting.key in context.profile.settings) return String(value);

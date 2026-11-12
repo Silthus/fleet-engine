@@ -183,7 +183,7 @@ describe("fleet settings and fleet set", () => {
     const plan = resolveEngine([engine, team], { packs: ["team"] });
     const lines: string[] = [];
     const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [team.ref], packs: ["team"], plan: "both", settings: {}, workflows: {} } satisfies ProfileFile;
-    const code = settingsCommand([], { profileDir: "/profile", profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line), apply: async () => 0 });
+    const code = settingsCommand([], { profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line) });
     expect(code).toBe(0);
     expect(lines.filter((line) => line.includes("identity.signer ="))).toEqual(["  identity.signer = 1password (default)"]);
     expect(lines).not.toContain("team:");
@@ -197,7 +197,7 @@ describe("fleet settings and fleet set", () => {
     expect(plan.settings["identity.signer"]).toBeUndefined();
     const lines: string[] = [];
     const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [team.ref], packs: ["team"], plan: "both", settings: {}, workflows: {} } satisfies ProfileFile;
-    settingsCommand([], { profileDir: "/profile", profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line), apply: async () => 0 });
+    settingsCommand([], { profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line) });
     expect(lines.filter((line) => line.includes("identity.signer ="))).toEqual(["  identity.signer = not set"]);
   });
 

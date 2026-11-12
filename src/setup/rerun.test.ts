@@ -30,9 +30,8 @@ async function packsAfterSetup() {
     home,
     packs: async (args: string[], options: Parameters<typeof fakeMachine>[2] = {}) => {
       const io = scripted([]);
-      const box = fakeMachine(home, {}, options);
-      const code = await main(["packs", ...args], { home, engineRoot, platform: "darwin", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine } });
-      return { code, output: io.output(), gh: box.calls.filter((call) => call.command[0] === "gh") };
+      const code = await main(["packs", ...args], { home, engineRoot, platform: "darwin", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: fakeMachine(home, {}, options).machine } });
+      return { code, output: io.output() };
     },
   };
 }
@@ -59,11 +58,19 @@ describe("fleet packs --add memory", () => {
 
   test("makes no repo when the same command removes Memory again", async () => {
     const { home, packs } = await packsAfterSetup();
-    const result = await packs(["--add", "memory", "--remove", "memory"]);
+    const result = await packs(["--add", "memory", "--remove", "memory"], { createFails: "nora" });
     expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
     expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(false);
     expect((await pushedAnswers(home)).packs).toEqual(["pull-requests"]);
+  });
+
+  test("uses a memory repo URL as it is, and looks nothing up on GitHub", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const url = "git@example.com:nora/notes.git";
+    const result = await packs(["--add", "memory", "--set", `memory.repo=${url}`], { lookupFails: "nora", createFails: "nora" });
+    expect(result.code).toBe(0);
+    expect(result.output).toContain(`✓ Using your memory repo ${url}`);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "memory"], settings: { "memory.repo": url } });
   });
 
   test("refuses a public memory repo and changes nothing", async () => {

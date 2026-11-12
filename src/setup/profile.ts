@@ -45,13 +45,13 @@ function github(machine: Machine) {
   return { gh, exists, visibility, login: () => gh("api", "user", "--jq", ".login") };
 }
 
-/** The Memory pack's private repo: the one named, or <login>/fleet-memory. make() creates it when it is missing, or says it is reused. */
 export async function memoryRepo(machine: Machine, named: unknown, login?: string) {
+  if (typeof named === "string" && !/^[\w.-]+\/[\w.-]+$/.test(named)) return { repo: named, missing: false, make: async (print: (line: string) => void) => print(`✓ Using your memory repo ${named}`) };
   const { gh, visibility, login: signedIn } = github(machine);
   const repo = typeof named === "string" ? named : `${login ?? (await signedIn())}/${memoryRepoName}`;
   const seen = await visibility(repo);
   const missing = seen === undefined;
-  if (!missing && !["PRIVATE", "INTERNAL"].includes(seen)) throw new Error(`${repo} is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.`);
+  if (!missing && !isPrivate(seen)) throw new Error(`${repo} is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.`);
   const make = async (print: (line: string) => void) => {
     if (missing) await gh("repo", "create", repo, "--private", "--description", "My agents' shared memory");
     print(missing ? `✓ Created the private repo ${repo}` : `✓ Reusing your repo ${repo}`);
@@ -136,9 +136,10 @@ async function clonedProfile(machine: Machine, dir: string, login: string) {
   return repo && (repo.toLowerCase() === names[0] || repo.toLowerCase().endsWith(names[1]!)) ? repo : undefined;
 }
 
+const isPrivate = (visibility: string | undefined) => visibility === "PRIVATE" || visibility === "INTERNAL";
+
 async function requirePrivate(machine: Machine, repo: string) {
-  const visibility = await machine.exec(["gh", "repo", "view", repo, "--json", "visibility", "--jq", ".visibility"]);
-  if (visibility.code !== 0 || !["PRIVATE", "INTERNAL"].includes(visibility.output.trim())) throw new Error(`${repo} is not private. Make it private, then run fleet setup again.`);
+  if (!isPrivate(await github(machine).visibility(repo))) throw new Error(`${repo} is not private. Make it private, then run fleet setup again.`);
 }
 
 /** The GitHub org where the first picked pack that names one keeps its members' profiles. */
