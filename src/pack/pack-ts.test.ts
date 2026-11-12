@@ -39,6 +39,13 @@ describe("a pack.ts", () => {
     }
   }
 
+  test("ships its instructions to every agent while the pack is on", async () => {
+    const engine = await engineSource();
+    const plan = resolveEngine([engine, await twin("ts")], { packs: ["twin"], plan: "claude" }, machines.solo!);
+    const agents = plan.files.find((file) => file.target === ".agents/AGENTS.md");
+    expect(agents && "content" in agents ? agents.content : "").toContain("# Twin\n\n- Greet the person once a day.\n");
+  });
+
   test("is listed by fleet packs and by the page builder", async () => {
     const { fleet, lines } = machineWith({ twin: cpTwin });
     expect(await fleet("apply", "--profile", "<profile>")).toBe(0);

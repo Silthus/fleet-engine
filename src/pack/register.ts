@@ -100,7 +100,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   return { manifest: { schema: 1, ...fields, settings, workflows, jobs, human, ...(served.length ? { served } : {}), ...(config.length ? { config } : {}) }, code };
 }
 
-const namedFields: Record<Exclude<keyof Pack, "sdk" | "register">, true> = { name: true, summary: true, title: true, day: true, cost: true, risk: true, requires: true };
+const namedFields: Record<Exclude<keyof Pack, "sdk" | "register">, true> = { name: true, summary: true, title: true, day: true, cost: true, risk: true, requires: true, instructions: true };
 const packFields = Object.keys(namedFields);
 
 function isPack(value: unknown): value is { sdk: 1; name: string; register(fleet: Fleet): void } & Record<string, unknown> {

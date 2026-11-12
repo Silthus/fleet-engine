@@ -57,12 +57,16 @@ test("a machine that the profile does not name cannot run a hub command, and say
   expect(await box("issued-admin")).toEqual({ code: 1, output: "fleet: fleet issued-admin runs on the hub, hub-1. Run it there." });
 });
 
-test("while the hub does not answer, a hub command says so and fails", async () => {
+test("while the hub does not answer, a hub command says so and exits 1, so a caller can fall back", async () => {
   const { node, hosts } = linkedFleets(temp);
   hosts["hub-1"] = "down";
-  const ran = await node("issued-admin");
-  expect(ran.code).toBe(255);
-  expect(ran.output).toContain("ssh: connect to host hub-1 port 22: Connection refused");
+  expect(await node("issued-admin")).toEqual({ code: 1, output: "ssh: connect to host hub-1 port 22: Connection refused\nfleet issued-admin: could not reach the hub hub-1 over SSH." });
+});
+
+test("a Mac on a profile with a hub runs a hub command on the hub", async () => {
+  const { hub, mac } = linkedFleets(temp);
+  await hub("apply");
+  expect(await mac()("issued-admin", "here")).toEqual({ code: 0, output: 'yes ["here"]' });
 });
 
 test("doctor names the profile commit", async () => {

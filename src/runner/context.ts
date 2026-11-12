@@ -1,4 +1,5 @@
-import { chmod, mkdir, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, mkdir, open } from "node:fs/promises";
 import { join } from "node:path";
 import { writePrivateFile } from "../files/private.ts";
 import { t3Threads } from "../integrations/t3/index.ts";
@@ -56,11 +57,23 @@ export function secretStore(home: string, pack: string): Secrets {
   };
   return {
     async read(name) {
+      const shown = `~/.config/fleet/secrets/${pack}/${name}`;
+      let file;
       try {
-        return await readFile(path(name), "utf8");
+        file = await open(path(name), constants.O_RDONLY | constants.O_NOFOLLOW);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return undefined;
+        if (code === "ELOOP") throw new Error(`${shown} is a link. A secret must be a file of its own: delete it and save the secret again.`);
         throw error;
+      }
+      try {
+        const info = await file.stat();
+        if (!info.isFile()) throw new Error(`${shown} is not a file. Delete it and save the secret again.`);
+        if (info.mode & 0o077) throw new Error(`${shown} is open to other users. Run chmod 600 ${shown}, or save the secret again.`);
+        return await file.readFile("utf8");
+      } finally {
+        await file.close();
       }
     },
     async write(name, value) {

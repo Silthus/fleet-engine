@@ -230,14 +230,19 @@ async function runUndo(name: string, args: string[], pack: string, options: CliO
   return run ? await inPack(plan, owner, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
 }
 
-/** A node of the profile runs a hub command on the hub over the one SSH path, with this terminal. Any other machine is told where it runs. */
+/** A node of the profile, or a Mac on a profile with a hub, runs a hub command on the hub over the one SSH path, with this terminal. Any other machine is told where it runs. When ssh cannot reach the hub, it exits 1, so a caller can fall back to another way. */
 async function runOnHub(name: string, args: string[], plan: Plan, options: CliOptions) {
-  if (!plan.reachesHub) throw new Error(`fleet ${name} runs on the hub${plan.hub ? `, ${plan.hub}` : ""}. Run it there.`);
+  if (!plan.reachesHub && !plan.pullsFromHub) throw new Error(`fleet ${name} runs on the hub${plan.hub ? `, ${plan.hub}` : ""}. Run it there.`);
   const answer = await (options.capture ?? spawnRunner)(onHub(plan.hub!, [name, ...args]), { inherit: true });
+  const fail = options.fail ?? options.print;
   for (const line of lines(answer.stdout)) options.print(line);
-  for (const line of lines(answer.stderr ?? "")) (options.fail ?? options.print)(line);
-  return answer.code;
+  for (const line of lines(answer.stderr ?? "")) fail(line);
+  if (answer.code !== sshUnreachable) return answer.code;
+  fail(`fleet ${name}: could not reach the hub ${plan.hub} over SSH.`);
+  return 1;
 }
+
+const sshUnreachable = 255;
 
 const lines = (text: string) => (text ? text.replace(/\n$/, "").split("\n") : []);
 

@@ -4,6 +4,7 @@
   "title": "Twin",
   "summary": "The hub greets you once you pick a greeting.",
   "risk": "None.",
+  "instructions": "instructions.md",
   "settings": [{ "key": "twin.greeting", "type": "string", "question": "Which greeting?" }],
   "workflows": [{ "id": "twin-hello", "name": "Greet", "sentence": "The hub greets you.", "default": false, "settings": ["twin.greeting"] }],
   "jobs": [

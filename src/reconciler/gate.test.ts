@@ -126,7 +126,7 @@ test("a pack.json sign-in command matches the words you type, however that pack 
 });
 
 test("a repair command that another pack ships installs the service once it passes", async () => {
-  const keeper = `export default { sdk: 1, name: "keeper", summary: "Keeps tokens.", register(fleet) { fleet.command("keeper", { summary: "Save", run: async () => { const dir = process.env.HOME + "/.config/fleet/secrets/gated"; await Bun.$\`mkdir -p \${dir}\`; await Bun.write(dir + "/token", "value"); return 0; } }); } };\n`;
+  const keeper = `export default { sdk: 1, name: "keeper", summary: "Keeps tokens.", register(fleet) { fleet.command("keeper", { summary: "Save", run: async () => { const dir = process.env.HOME + "/.config/fleet/secrets/gated"; await Bun.$\`mkdir -p \${dir}\`; (await import("node:fs")).writeFileSync(dir + "/token", "value", { mode: 0o600 }); return 0; } }); } };\n`;
   const { profile, fleet, service } = machine("fleet keeper save", "linux", { "keeper/pack.ts": keeper });
   await fleet("apply", "--profile", profile);
   expect(service("gated-worker")).toBe("gone");
