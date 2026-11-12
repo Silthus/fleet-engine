@@ -1,10 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { t3Threads } from "../../src/integrations/t3/index.ts";
 import { startT3Stub, ToolRefusal, type LaunchedThread } from "../../src/integrations/t3/testing.ts";
-import type { LinkedEnvironment, LinkedThread } from "../../src/integrations/t3/environments.ts";
-import type { ShellThread } from "../../src/integrations/t3/threads.ts";
+import type { LinkedEnvironment, LinkedThread, LinkedTimelineItem } from "../../src/integrations/t3/environments.ts";
+import type { ShellThread, TurnItem } from "../../src/integrations/t3/threads.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { tempDirs } from "../../src/testing/git.ts";
 import { checkReviews, type ReviewWait } from "./lib/review-wait.ts";
@@ -30,7 +30,14 @@ const url = (pr: Pick<Pr, "repo" | "number">) => `https://github.com/${pr.repo}/
 function github() {
   const prs: Pr[] = [];
   const queries: string[] = [];
+  const quota = { fails: [] as number[], reset: () => 0, error: "" };
+  let calls = 0;
   const gh = async (args: string[]) => {
+    if (args.join(" ") === "api rate_limit --jq .resources.graphql.reset") return String(quota.reset() / 1000);
+    if (quota.error) throw new Error(`gh api failed: ${quota.error}`);
+    if (quota.fails.includes(++calls)) {
+      throw new Error("gh api failed: GraphQL: API rate limit already exceeded for user ID 1.");
+    }
     const [api, graphql, f1, query, f2, q, ...rest] = args;
     const after = rest.length === 2 && rest[0] === "-f" && rest[1]!.startsWith("after=") ? Number(rest[1]!.slice(6)) : rest.length ? NaN : 0;
     if (api !== "api" || graphql !== "graphql" || f1 !== "-f" || !query?.startsWith("query=") || f2 !== "-f" || !q?.startsWith("q=") || Number.isNaN(after)) throw new Error(`gh: unexpected arguments ${args.join(" ")}`);
@@ -47,7 +54,7 @@ function github() {
     const more = after + 100 < prs.length;
     return JSON.stringify({ data: { search: { pageInfo: { hasNextPage: more, endCursor: more ? String(after + 100) : null }, nodes } } });
   };
-  return { prs, queries, gh };
+  return { prs, queries, gh, quota };
 }
 
 type SlackMessage = { text: string; at: number; from: string };
@@ -96,6 +103,8 @@ function search(messages: SlackMessage[], args: Record<string, any>): string {
 
 async function t3() {
   const shell = { projects: [], threads: [] as ShellThread[] };
+  const turnItems: Record<string, TurnItem[]> = {};
+  const linkedTails: Record<string, { pendingRequestCount: number; items: LinkedTimelineItem[] }> = {};
   const linked: LinkedThread[] = [];
   const links: LinkedEnvironment[] = [];
   const delivered: { threadId: string; text: string }[] = [];
@@ -104,10 +113,17 @@ async function t3() {
   let launched = 0;
   const stub = await startT3Stub({
     shell,
+    turnItems,
     links,
     environmentId: "env-hub",
     tools(name, args: any) {
       if (name === "t3_thread_list") return { threads: linked, nextCursor: null };
+      if (name === "t3_thread_read") {
+        const thread = linked.find((each) => each.threadId === args.threadId);
+        const tail = linkedTails[args.threadId];
+        if (!thread || !tail || args.view !== "activity") throw new ToolRefusal("thread_not_found", "no such thread");
+        return { thread: { ...thread, archived: false, pendingRequestCount: tail.pendingRequestCount, branch: null, worktreePath: null }, items: tail.items, nextPosition: null, hasMore: false };
+      }
       if (name === "t3_project_list") return { projects: [], nextCursor: null };
       if (name === "t3_thread_send") {
         if (!linked.some((thread) => thread.threadId === args.threadId)) throw new ToolRefusal("thread_not_found", "no such thread");
@@ -127,7 +143,7 @@ async function t3() {
   });
   stops.push(() => stub.stop());
   const link = (environmentId: string, label: string) => links.push({ environmentId, label, urls: [], access: "full", linkedAt: "", expiresAt: "", lastReachedAt: null, lastError: null, status: "reachable" });
-  return { stub, shell, linked, link, delivered, linkedSends, faults, launches: stub.threads as LaunchedThread[] };
+  return { stub, shell, turnItems, linkedTails, linked, link, delivered, linkedSends, faults, launches: stub.threads as LaunchedThread[] };
 }
 
 const localThread = (id: string, title: string, prs: Pick<Pr, "repo" | "number">[]): ShellThread =>
@@ -144,7 +160,9 @@ async function setup(qualifiers = "") {
   const server = await t3();
   let now = readyAt;
   const lines: string[] = [];
-  const statePath = join(temp.make("state-"), "review-wait.json");
+  const slept: number[] = [];
+  const stateDir = temp.make("state-");
+  const statePath = join(stateDir, "review-wait.json");
   const wait: ReviewWait = {
     gh: hub.gh,
     qualifiers,
@@ -153,14 +171,16 @@ async function setup(qualifiers = "") {
     session: { home: server.stub.home },
     host: "hub",
     statePath,
+    parkedPath: join(stateDir, "parked-questions.json"),
     now: () => now,
+    sleep: async (ms) => void (slept.push(ms), (now += ms)),
     log: (line) => lines.push(line),
   };
   const at = (hours: number) => (now = readyAt + hours * hour);
   const pr = (fields: Partial<Pr> = {}) => (hub.prs.push({ repo: "acme/app", number: 7, title: "Add export", readyAt, requested: ["team platform"], ...fields }), hub.prs.at(-1)!);
   const ask = (text: string, hours: number) => chat.messages.push({ text, at: readyAt + hours * hour, from: "<@U012ABCDEF>" });
   const check = (dryRun?: boolean) => checkReviews(wait, dryRun);
-  return { hub, chat, t3: server, lines, at, pr, ask, check, statePath };
+  return { hub, chat, t3: server, lines, slept, at, pr, ask, check, statePath, stateDir, now: () => now };
 }
 
 test("a ready PR that nobody reviewed wakes the thread that links it once at 4 hours and once more at 24 hours", async () => {
@@ -402,4 +422,133 @@ test("a person's review stays seen behind a hundred newer bot reviews", async ()
   at(4);
   await check();
   expect(t3.delivered).toEqual([]);
+});
+
+const minute = 60_000;
+const iso = (ms: number) => new Date(ms).toISOString();
+
+test("when GitHub's GraphQL quota is spent and resets within 50 minutes, the check waits once for the reset and then wakes the thread", async () => {
+  const { hub, t3, at, pr, check, lines, slept, now } = await setup();
+  t3.shell.threads.push(localThread("t-1", "Export stack", [pr()]));
+  at(4);
+  hub.quota.fails = [1];
+  const resetAt = now() + 20 * minute;
+  hub.quota.reset = () => resetAt;
+  expect(await check()).toBe(true);
+  expect(slept).toEqual([20 * minute + 30_000]);
+  expect(lines).toContain("GitHub's GraphQL quota is spent; retrying after its reset in 20 min.");
+  expect(t3.delivered).toEqual([{ threadId: "t-1", text: expect.stringContaining("(4 h)") }]);
+});
+
+test.each([
+  ["resets in more than 50 minutes", [1], 51, 0],
+  ["is still spent after the one wait", [1, 2], 10, 1],
+  ["is spent again on a later page after the one wait", [1, 3], 10, 1],
+  ["reset already passed", [1], -1, 0],
+])("when GitHub's GraphQL quota %s, the check fails and wakes nobody", async (_, fails, resetMinutes, waits) => {
+  const { hub, t3, at, pr, check, lines, slept, now } = await setup();
+  for (let number = 1; number <= 150; number++) pr({ number: 1000 + number, readyAt: readyAt + hour });
+  t3.shell.threads.push(localThread("t-1", "Export stack", [pr()]));
+  at(4);
+  hub.quota.fails = fails;
+  hub.quota.reset = () => now() + resetMinutes * minute;
+  expect(await check()).toBe(false);
+  expect(slept.length).toBe(waits);
+  expect(lines.at(-1)).toContain("rate limit");
+  expect(t3.delivered).toEqual([]);
+});
+
+test("another GitHub failure is never waited out", async () => {
+  const { hub, t3, at, pr, check, slept } = await setup();
+  t3.shell.threads.push(localThread("t-1", "Export stack", [pr()]));
+  at(4);
+  hub.quota.error = "HTTP 502: Bad Gateway";
+  hub.quota.reset = () => Date.parse("2026-11-11T04:10:00Z");
+  expect(await check()).toBe(false);
+  expect(slept).toEqual([]);
+});
+
+const watching = (id: string, fields: Partial<ShellThread> = {}): ShellThread =>
+  ({ ...localThread(id, `Thread ${id}`, []), pendingBackgroundTasks: [{ kind: "pull_request_watch" }], ...fields });
+const turn = (...items: [type: string, text: string, minutes: number][]): TurnItem[] =>
+  items.map(([type, text, minutes]) => ({ item: { type, text, startedAt: iso(readyAt + minutes * minute), createdBy: type === "user_message" ? "user" : "agent" } }));
+const tailItem = (type: string, text: string, minutes: number): LinkedTimelineItem =>
+  ({ position: 1, itemId: `item-${minutes}`, type, text, createdBy: null, creationSource: null, updatedAt: iso(readyAt + minutes * minute) });
+
+describe("the parked question sweep", () => {
+  const asks = "The stack is green. Should I merge the bottom layer?";
+  const after = (minutes: number) => readyAt + minutes * minute;
+
+  test("tells a thread that waits on a watch after a prose question once, after 30 minutes, and again for a newer question", async () => {
+    const { t3, at, check, lines } = await setup();
+    t3.shell.threads.push(watching("t-1"));
+    t3.turnItems["t-1"] = turn(["user_message", "Ship it", 0], ["assistant_message", asks, 1]);
+    at(30 / 60);
+    expect(await check()).toBe(true);
+    expect(t3.delivered).toEqual([]);
+    at(31 / 60);
+    expect(await check()).toBe(true);
+    expect(t3.delivered).toEqual([{ threadId: "t-1", text: expect.stringContaining(`your last message (${iso(after(1))}) asks the person a decision in prose`) }]);
+    expect(t3.delivered[0]!.text).toContain("AskUserQuestion");
+    expect(lines).toContain("Told hub thread t-1 (Thread t-1) to ask with the question tool.");
+    at(2);
+    await check();
+    at(2.5);
+    await check();
+    expect(t3.delivered).toHaveLength(1);
+    t3.turnItems["t-1"] = turn(["user_message", "Ship it", 0], ["assistant_message", asks, 1], ["assistant_message", "Rebased. Which base do you want?", 90]);
+    at(121 / 60);
+    await check();
+    expect(t3.delivered).toHaveLength(2);
+  });
+
+  test.each([
+    ["it asks the person nothing", watching("t-1"), [["assistant_message", "Merged. Nothing needs your decision.", 1]]],
+    ["the person wrote after the question", watching("t-1"), [["assistant_message", asks, 1], ["user_message", "Why not both?", 2]]],
+    ["a question tool request is pending", watching("t-1", { pendingRuntimeRequest: { id: "r-1" } }), [["assistant_message", asks, 1]]],
+    ["the person snoozed it", watching("t-1", { snoozedUntil: iso(after(600)) }), [["assistant_message", asks, 1]]],
+    ["its turn still runs", watching("t-1", { activeRunId: "run-1" }), [["assistant_message", asks, 1]]],
+    ["it only waits on a background shell", watching("t-1", { pendingBackgroundTasks: [{ kind: "command" }] }), [["assistant_message", asks, 1]]],
+    ["it waits on nothing", watching("t-1", { pendingBackgroundTasks: [] }), [["assistant_message", asks, 1]]],
+    ["it is a subagent thread", watching("t-1", { lineage: { parentThreadId: "t-0" } }), [["assistant_message", asks, 1]]],
+    ["it is settled", watching("t-1", { settledAt: iso(after(2)) }), [["assistant_message", asks, 1]]],
+  ] as [string, ShellThread, [string, string, number][]][])("leaves a thread alone when %s", async (_, thread, items) => {
+    const { t3, at, check } = await setup();
+    t3.shell.threads.push(thread);
+    t3.turnItems["t-1"] = turn(...items);
+    at(1);
+    expect(await check()).toBe(true);
+    expect(t3.delivered).toEqual([]);
+  });
+
+  test("wakes the thread again later when it could not be told, and a dry run tells nobody and records nothing", async () => {
+    const { t3, at, check, lines, stateDir } = await setup();
+    t3.shell.threads.push(watching("t-1"));
+    t3.turnItems["t-1"] = turn(["assistant_message", asks, 1]);
+    at(1);
+    expect(await check(true)).toBe(true);
+    expect(lines).toContain("Would tell hub thread t-1 (Thread t-1) to ask with the question tool.");
+    expect(existsSync(join(stateDir, "parked-questions.json"))).toBe(false);
+    t3.faults.dispatch = true;
+    expect(await check()).toBe(false);
+    expect(lines).toContain("Could not tell hub thread t-1 (Thread t-1).");
+    t3.faults.dispatch = false;
+    at(2);
+    expect(await check()).toBe(true);
+    expect(t3.delivered.filter((message) => message.text.startsWith("Parked question"))).toHaveLength(2);
+  });
+
+  test("reaches a thread of a linked machine that runs on a watch with a prose question as its last activity", async () => {
+    const { t3, at, check } = await setup();
+    t3.link("env-devbox", "devbox-a");
+    const parked = (id: string, status = "running") => ({ ...linkedThread(id, `Remote ${id}`, []), status });
+    t3.linked.push(parked("r-1"), parked("r-pending"), parked("r-busy"), parked("r-idle", "idle"));
+    t3.linkedTails["r-1"] = { pendingRequestCount: 0, items: [tailItem("tool_call", "watch", 0), tailItem("assistant_message", asks, 1)] };
+    t3.linkedTails["r-pending"] = { pendingRequestCount: 1, items: [tailItem("assistant_message", asks, 1)] };
+    t3.linkedTails["r-busy"] = { pendingRequestCount: 0, items: [tailItem("assistant_message", asks, 1), tailItem("tool_call", "Which test failed?", 2)] };
+    t3.linkedTails["r-idle"] = { pendingRequestCount: 0, items: [tailItem("assistant_message", asks, 1)] };
+    at(1);
+    expect(await check()).toBe(true);
+    expect(t3.linkedSends).toEqual([{ environmentId: "env-devbox", threadId: "r-1", message: expect.stringContaining("Parked question") }]);
+  });
 });
