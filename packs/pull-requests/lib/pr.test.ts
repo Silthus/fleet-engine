@@ -47,7 +47,7 @@ cat "${replies}/$reply.json"
     const warned: string[] = [];
     const print = spyOn(console, "log").mockImplementation((...line: unknown[]) => void printed.push(line.join(" ")));
     const warn = spyOn(console, "error").mockImplementation((...line: unknown[]) => void warned.push(line.join(" ")));
-    const saved = { FLEET_HANDLERS: process.env.FLEET_HANDLERS, FLEET_SETTINGS: process.env.FLEET_SETTINGS };
+    const saved = { FLEET_HANDLERS: process.env.FLEET_HANDLERS, FLEET_HANDLER_SUBCOMMANDS: process.env.FLEET_HANDLER_SUBCOMMANDS, FLEET_SETTINGS: process.env.FLEET_SETTINGS };
     Object.assign(process.env, env);
     try {
       return { code: await prCommand(args, home), out: printed.join("\n").trim(), err: warned.join("\n").trim() };
@@ -72,10 +72,11 @@ cat "${replies}/$reply.json"
     env.FLEET_HANDLERS = JSON.stringify({ "review-bot": path });
   };
   const botArgs = () => JSON.parse(readFileSync(join(root, "bot-args.json"), "utf8"));
-  const packCommands = (exitCode: number) => {
+  const packCommands = (exitCode: number, subcommands = ["queue-wait"]) => {
     const path = join(root, "pr-command.ts");
     writeFileSync(path, `await Bun.write(${JSON.stringify(join(root, "pack-args.json"))}, JSON.stringify(Bun.argv.slice(2)));\nconsole.log("pack says hi");\nprocess.exit(${exitCode});\n`);
     env.FLEET_HANDLERS = JSON.stringify({ ...JSON.parse(env.FLEET_HANDLERS || "{}"), "pr-command": path });
+    env.FLEET_HANDLER_SUBCOMMANDS = JSON.stringify({ "pr-command": subcommands });
   };
   const packArgs = () => (existsSync(join(root, "pack-args.json")) ? JSON.parse(readFileSync(join(root, "pack-args.json"), "utf8")) : undefined);
   return { home, env, reply, run, call, refusal, calls, reviewBot, botArgs, packCommands, packArgs };
@@ -291,31 +292,53 @@ test("forecast takes exactly one of --pr, --branch and --paths, and --request on
   expect((await box.call("forecast", "--repo", "acme/widgets", "--branch", "feat/x")).code).toBe(2);
 });
 
-test("a subcommand the engine does not know goes to the pack's pr-command handler with every argument", () => {
+test("a subcommand the pack declares goes to its pr-command handler with every argument", () => {
   const box = sandbox();
   box.packCommands(3);
   expect(box.run("queue-wait", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 3, out: "pack says hi", err: "" });
   expect(box.packArgs()).toEqual(["queue-wait", "--repo", "acme/widgets", "--pr", "12"]);
 });
 
-test("the engine's own subcommands never reach the pr-command handler", async () => {
+test("a typo or a bare fleet pr shows the engine's usage and never reaches the pack", () => {
   const box = sandbox();
   box.packCommands(0);
+  for (const args of [["queue-wiat", "--pr", "12"], [], ["--repo", "acme/widgets"]]) {
+    const result = box.run(...args);
+    expect(result.code).toBe(1);
+    expect(result.err).toStartWith("fleet pr: Usage: fleet pr <subcommand>");
+    expect(result.err).toContain("bot-threads, blockers, review, stamp, forecast, queue-wait");
+  }
+  expect(box.packArgs()).toBeUndefined();
+});
+
+test("the engine's own subcommands never reach the pr-command handler, even when the pack declares them", async () => {
+  const box = sandbox();
   box.reviewBot(4);
+  box.packCommands(0, ["forecast", "bot-threads", "queue-wait"]);
   expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12").code).toBe(4);
   const refused = await box.refusal("bot-threads", "--repo", "widgets");
   expect((refused as Error).message).toStartWith("Usage: fleet pr ");
   expect(box.packArgs()).toBeUndefined();
 });
 
-test("help lists the pack's subcommands after the engine's", () => {
+test("help lists the pack's subcommands after the engine's and exits 0 whatever the pack's help returns", () => {
   const box = sandbox();
-  box.packCommands(0);
-  const result = box.run("--help");
-  expect(result.code).toBe(0);
-  expect(result.out).toStartWith("fleet pr: review threads");
-  expect(result.out).toEndWith("pack says hi");
-  expect(box.packArgs()).toEqual(["help"]);
+  box.packCommands(5, ["queue-wait", "ownerless"]);
+  for (const word of ["--help", "help"]) {
+    const result = box.run(word);
+    expect(result.code).toBe(0);
+    expect(result.out).toStartWith("fleet pr: review threads");
+    expect(result.out).toContain("From packs: queue-wait, ownerless");
+    expect(result.out).toEndWith("pack says hi");
+    expect(box.packArgs()).toEqual(["help"]);
+  }
+});
+
+test("without a pack, a bare fleet pr shows the engine's usage", () => {
+  const box = sandbox();
+  const result = box.run();
+  expect(result.code).toBe(1);
+  expect(result.err).toBe("fleet pr: Usage: fleet pr <subcommand>, one of bot-threads, blockers, review, stamp, forecast. Run fleet pr --help for each one's flags.");
 });
 
 test("forecast refuses review and stamp flags, and says there is nothing to forecast without a review bot", async () => {

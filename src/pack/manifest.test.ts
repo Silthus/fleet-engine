@@ -140,6 +140,15 @@ describe("loadPacks", () => {
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler, handler] } }))).rejects.toThrow("handlers review-bot is declared twice");
   });
 
+  test("takes the fleet pr words a pr-command handler runs, and subcommands on no other seam", async () => {
+    const pr = { seam: "pr-command", path: "lib/pr.ts" };
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: ["queue-wait", "ownerless"] }] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [pr] } }))).rejects.toThrow("handlers pr-command: needs subcommands, the fleet pr words it runs");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: [] }] } }))).rejects.toThrow("handlers pr-command: needs subcommands, the fleet pr words it runs");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: ["Queue wait"] }] } }))).rejects.toThrow("handlers pr-command: each subcommand must be lowercase words joined by dashes");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ seam: "review-bot", path: "lib/bot.ts", subcommands: ["x"] }] } }))).rejects.toThrow("handlers review-bot: only a pr-command handler takes subcommands");
+  });
+
   test("accepts a job that runs always only without a time, a T3 runner, or a task", async () => {
     const service = { id: "listen", command: ["fleet", "listen"], schedule: { every: "always" as const } };
     const task = { prompt: "Listen.", projectSetting: "base.project", modelRole: "worker", workspaceStrategy: "worktree", runtimeMode: "auto" };

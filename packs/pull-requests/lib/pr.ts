@@ -18,15 +18,29 @@ export const help = `fleet pr: review threads, blockers, and review bots of a pu
                      Ask the review bot whether it will likely refuse the PR and who owns it; with --request, request those owners;
                      with --branch or --paths, forecast work that has no PR yet; 2 without a bot`;
 
-const engineSubcommands = new Set(["help", "--help", "bot-threads", "blockers", "review", "stamp", "forecast"]);
+const engineSubcommands = ["bot-threads", "blockers", "review", "stamp", "forecast"];
 
-export async function prCommand(args: string[], home: string, env: Record<string, string | undefined> = Bun.env): Promise<number> {
-  const packCommands = (JSON.parse(env.FLEET_HANDLERS || "{}") as Record<string, string>)["pr-command"];
-  if (packCommands && !engineSubcommands.has(args[0] ?? "")) return runHandler(["bun", packCommands, ...args], env);
-  if (args[0] === "help" || args[0] === "--help") {
+type Env = Record<string, string | undefined>;
+
+/** The pack that adds fleet pr subcommands: its handler, and the words it declared in its pack.json. Engine words always stay with the engine. */
+function packCommands(env: Env): { handler: string; words: string[] } | undefined {
+  const handler = (JSON.parse(env.FLEET_HANDLERS || "{}") as Record<string, string>)["pr-command"];
+  const declared = (JSON.parse(env.FLEET_HANDLER_SUBCOMMANDS || "{}") as Record<string, string[]>)["pr-command"] ?? [];
+  return handler ? { handler, words: declared.filter((word) => !engineSubcommands.includes(word)) } : undefined;
+}
+
+export async function prCommand(args: string[], home: string, env: Env = Bun.env): Promise<number> {
+  const pack = packCommands(env);
+  const word = args[0] ?? "";
+  if (pack && pack.words.includes(word)) return runHandler(["bun", pack.handler, ...args], env);
+  if (word === "help" || word === "--help") {
     console.log(help);
-    return packCommands ? runHandler(["bun", packCommands, "help"], env) : 0;
+    if (!pack?.words.length) return 0;
+    console.log(`\nFrom packs: ${pack.words.join(", ")}\n`);
+    await runHandler(["bun", pack.handler, "help"], env);
+    return 0;
   }
+  if (!engineSubcommands.includes(word)) throw new Error(`Usage: fleet pr <subcommand>, one of ${[...engineSubcommands, ...(pack?.words ?? [])].join(", ")}. Run fleet pr --help for each one's flags.`);
   if (args[0] === "review" || args[0] === "stamp" || args[0] === "forecast") return askReviewBot(parseReviewBotArgs(args[0], args.slice(1)));
   const report = args[0] === "blockers"
     ? await prBlockers(parseBlockerArgs(args.slice(1)), runGh, join(home, ".local/state/fleet/pr-blockers"), new Date())

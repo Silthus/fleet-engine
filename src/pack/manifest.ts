@@ -215,6 +215,11 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("handlers", (item, label) => {
     need((handlerSeams as readonly unknown[]).includes(item.seam), `${label}: seam must be one of ${handlerSeams.join(", ")}`);
     need(filled(item.path), `${label}: needs a path`);
+    if (item.seam !== "pr-command") need(item.subcommands === undefined, `${label}: only a pr-command handler takes subcommands`);
+    else {
+      need(isStrings(item.subcommands) && item.subcommands.length > 0, `${label}: needs subcommands, the fleet pr words it runs`);
+      need((item.subcommands as string[]).every((word) => packName.test(word)), `${label}: each subcommand must be lowercase words joined by dashes`);
+    }
     filters(item, label);
   });
   each("checks", (item, label) => {
