@@ -47,8 +47,9 @@ packs, and your answers live in your own private profile repo.
 - **Context library** (off): a prompt about a topic of your private notes repo
   gets links to its documents. `fleet context` searches the notes, saves a link
   as a condensed note, and keeps a catalog and topic hubs. Every machine pulls
-  the repo every five minutes and keeps local changes. With the MCP gateway,
-  the hub serves a read-only `context_search` tool over the same notes.
+  the repo every five minutes, keeps local changes, and fails the sync while
+  they block it. With the MCP gateway, the hub serves a read-only
+  `context_search` tool over the same notes.
 - **Hub** (off): one always-on devbox manages the others. It signs in to your
   MCP servers once, keeps your devboxes linked, and watches their disks. A
   pack can run its own small MCP server in the gateway, with folders mounted

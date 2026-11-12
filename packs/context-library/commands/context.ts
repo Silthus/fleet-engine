@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../base/lib/command.ts";
 import { modelFor } from "../../base/lib/models.ts";
+import { redactSecrets } from "../../base/hooks/secret-guard.ts";
 import { capture, captureAgent, type Agent } from "../lib/capture.ts";
 import { cacheFile, librarySettings, writePointer } from "../lib/config.ts";
 import { runGit, type Git } from "../lib/git.ts";
@@ -19,7 +20,7 @@ export const usage = `usage:
   fleet context related <prompt>            Show what the prompt hook would show for this prompt
   fleet context catalog                     Rewrite CATALOG.md in the library checkout
   fleet context topics                      List topics with three or more documents and whether their hub is stale
-  fleet context sync                        Clone the library, or fast-forward it and keep local changes
+  fleet context sync                        Clone the library, or fast-forward it; fails while local changes block that
   fleet context upstream install|doctor|remove  Declare the library's search to the hub's MCP gateway`;
 
 export async function contextCommand(args: string[], deps: ContextDeps): Promise<number> {
@@ -35,7 +36,7 @@ export async function contextCommand(args: string[], deps: ContextDeps): Promise
   }
   if (mode === "search" && rest.length) {
     const all = rest.includes("--all");
-    const hits = search(docs(), rest.filter((word) => word !== "--all").join(" "), (path) => readFileSync(join(root, path), "utf8"), { all });
+    const hits = search(docs(), rest.filter((word) => word !== "--all").join(" "), (path) => redactSecrets(readFileSync(join(root, path), "utf8")), { all });
     for (const hit of hits) {
       const facts = [hit.doc.type, hit.doc.date, hit.doc.status === "superseded" ? "superseded" : ""].filter(Boolean).join(", ");
       deps.print(`${join(root, hit.doc.path)}\n  ${hit.doc.title} (${facts})${hit.line ? `\n  ${hit.line}` : ""}`);
