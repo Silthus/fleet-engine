@@ -8,7 +8,7 @@ import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { parseSetupFlags } from "./flags.ts";
 import { profilePath } from "./profile.ts";
 import { packList, settingSteps, type Catalog, type Draft } from "./questions.ts";
-import { engineRoot, fakeMachine, githubRepo, pushedAnswers, scripted } from "./testing.ts";
+import { engineRoot, fakeMachine, githubRepo, machineFile, pushedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -142,6 +142,12 @@ describe("a time-zone default that setup saved before it stopped", () => {
     await pushFromAnotherMachine(home, { "acme.region": "us" });
     expect(await unattendedSetup(home, "Europe/Lisbon", { ...team, set: ["acme.team=web", "orchestration.loopProject=~/code/web"] })).toBe(0);
     expect((await pushedAnswers(home)).settings).toEqual({ "acme.region": "us", "acme.team": "web", "orchestration.loopProject": "~/code/web" });
+  });
+
+  test("stays out of the draft an older engine would resume as answers", async () => {
+    const home = temp.make("home-");
+    expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [teamRegion, teamName] })).toBe(2);
+    expect(machineFile(home).setup.draft.settings ?? {}).toEqual({});
   });
 
   test("an explicit answer on the resumed run wins over another machine's", async () => {
