@@ -3,7 +3,8 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Threads } from "../../../src/sdk/index.ts";
 import { sendLinkedMessage, withT3Session, type T3SessionOptions } from "../../base/lib/t3/index.ts";
-import { readLinkedOpenWork, readOpenWork, type OpenWork } from "../../orchestration/lib/activity.ts";
+import { readLinkedOpenWork, readLinkedParkedThreads, readOpenWork, readParkedThreads, type OpenWork, type ParkedThreads } from "../../orchestration/lib/activity.ts";
+import { asksForDecision } from "../../orchestration/lib/prose-question.ts";
 import { readEachMachine, readMachines } from "../../orchestration/lib/machines.ts";
 import type { Gh } from "../../pull-requests/lib/gh.ts";
 import { openRoute, type RouteReach } from "./route.ts";
@@ -22,6 +23,9 @@ const graphQuery = `query($q: String!, $after: String) { search(query: $q, type:
   reviewRequests(first: 20) { nodes { requestedReviewer { ... on Team { slug } ... on User { login } } } }
 } } } }`;
 const sendScopes = ["orchestration:read", "orchestration:operate", "access:read"];
+const quotaWaitMs = 50 * 60_000;
+const afterResetMs = 30_000;
+const parkedGraceMs = 30 * 60_000;
 
 type Stage = 1 | 2;
 type Entry = { readyAt: string; stage?: Stage; partial?: { stage: Stage; threads: string[] } };
@@ -45,29 +49,38 @@ export type ReviewWait = {
   session: T3SessionOptions;
   host: string;
   statePath: string;
+  parkedPath: string;
   now(): number;
+  sleep(ms: number): Promise<void>;
   log(line: string): void;
 };
 
-export async function watchReviews(wait: ReviewWait, sleep: (ms: number) => Promise<void>): Promise<never> {
+export async function watchReviews(wait: ReviewWait): Promise<never> {
   for (;;) {
     await checkReviews(wait);
-    await sleep(checkEveryMs);
+    await wait.sleep(checkEveryMs);
   }
 }
 
 export async function checkReviews(wait: ReviewWait, dryRun = false): Promise<boolean> {
+  const reviewed = await reporting(wait, "Check", () => check(wait, dryRun));
+  const swept = await reporting(wait, "Parked question sweep", () => sweepParked(wait, dryRun));
+  return reviewed && swept;
+}
+
+async function reporting(wait: ReviewWait, name: string, run: () => Promise<boolean>): Promise<boolean> {
   try {
-    return await check(wait, dryRun);
+    return await run();
   } catch (error) {
-    wait.log(`Check failed: ${(error as Error).message}`);
+    wait.log(`${name} failed: ${(error as Error).message}`);
     return false;
   }
 }
 
 async function check(wait: ReviewWait, dryRun: boolean): Promise<boolean> {
+  const nodes = await search(wait);
   const now = wait.now();
-  const waiting = waitingPrs(await search(wait));
+  const waiting = waitingPrs(nodes);
   const previous = readState(wait.statePath);
   const state: State = {};
   let due: { pr: WaitingPr; stage: Stage }[] = [];
@@ -128,12 +141,32 @@ async function check(wait: ReviewWait, dryRun: boolean): Promise<boolean> {
   return ok;
 }
 
+async function graphqlQuota(wait: ReviewWait): Promise<{ remaining?: number; reset: number }> {
+  try {
+    const quota = (JSON.parse(await wait.gh(["api", "rate_limit"])) as { resources?: { graphql?: { remaining?: number; reset?: number } } }).resources?.graphql;
+    return { remaining: quota?.remaining, reset: quota?.reset ?? Number.NaN };
+  } catch {
+    return { reset: Number.NaN };
+  }
+}
+
 async function search(wait: ReviewWait): Promise<SearchNode[]> {
   const q = [baseQuery, wait.qualifiers.trim()].filter(Boolean).join(" ");
   const nodes: SearchNode[] = [];
   let after: string | undefined;
+  let waited = false;
   for (;;) {
-    const out = await wait.gh(["api", "graphql", "-f", `query=${graphQuery}`, "-f", `q=${q}`, ...(after ? ["-f", `after=${after}`] : [])]);
+    const args = ["api", "graphql", "-f", `query=${graphQuery}`, "-f", `q=${q}`, ...(after ? ["-f", `after=${after}`] : [])];
+    const out = await wait.gh(args).catch(async (error: Error) => {
+      if (waited || !/rate limit/i.test(error.message)) throw error;
+      const quota = await graphqlQuota(wait);
+      const reset = quota.reset * 1000 - wait.now();
+      if (quota.remaining !== 0 || !(reset > 0 && reset < quotaWaitMs)) throw error;
+      waited = true;
+      wait.log(`GitHub's GraphQL quota is spent; retrying after its reset in ${Math.ceil(reset / 60_000)} min.`);
+      await wait.sleep(reset + afterResetMs);
+      return wait.gh(args);
+    });
     const page = (JSON.parse(out) as { data: { search: { nodes: SearchNode[]; pageInfo?: { hasNextPage: boolean; endCursor: string | null } } } }).data.search;
     nodes.push(...page.nodes);
     if (!page.pageInfo?.hasNextPage || !page.pageInfo.endCursor || page.pageInfo.endCursor === after) return nodes;
@@ -213,6 +246,43 @@ async function send(wait: ReviewWait, owner: Owner, text: string): Promise<boole
   }
 }
 
+async function sweepParked(wait: ReviewWait, dryRun: boolean): Promise<boolean> {
+  const reports = await withT3Session(async (client) => readEachMachine<ParkedThreads & { environmentId?: string }>(
+    await readMachines(client, wait.host),
+    async () => readParkedThreads(client),
+    async (environmentId) => ({ ...await readLinkedParkedThreads(client, environmentId), environmentId }),
+  ), wait.session);
+  const now = wait.now();
+  const unseen = reports.flatMap((report) => (report.error !== undefined ? [`${report.host} `]
+    : [...report.unread, ...report.threads.filter((thread) => thread.snoozedUntil && Date.parse(thread.snoozedUntil) > now).map((thread) => thread.id)]
+      .map((id) => `${report.host} ${id} `)));
+  const parked = reports.flatMap((report) => (report.error !== undefined ? [] : report.threads.flatMap((thread) => {
+    if (thread.snoozedUntil && Date.parse(thread.snoozedUntil) > now) return [];
+    if (!(now - Date.parse(thread.message.at) >= parkedGraceMs) || !asksForDecision(thread.message.text)) return [];
+    const owner: Owner = { host: report.host, id: thread.id, title: thread.title, environmentId: report.environmentId };
+    return [{ owner, at: thread.message.at, key: `${report.host} ${thread.id} ${thread.message.at}` }];
+  })));
+  const previous = new Set(readList(wait.parkedPath));
+  const kept = [...previous].filter((key) => parked.some((thread) => thread.key === key) || unseen.some((prefix) => key.startsWith(prefix)));
+  const fresh = parked.filter(({ key }) => !previous.has(key));
+  if (fresh.length) wait.log(`${parked.length} threads wait on a prose question, ${fresh.length} not told yet.`);
+  let ok = true;
+  for (const { owner, at, key } of fresh) {
+    const target = `${owner.host} thread ${owner.id} (${owner.title})`;
+    if (dryRun) { wait.log(`Would tell ${target} to ask with the question tool.`); continue; }
+    if (await send(wait, owner, parkedMessage(at))) { kept.push(key); wait.log(`Told ${target} to ask with the question tool.`); }
+    else { ok = false; wait.log(`Could not tell ${target}.`); }
+  }
+  if (!dryRun) writeState(wait.parkedPath, kept);
+  return ok;
+}
+
+function parkedMessage(at: string): string {
+  return `Parked question: Fleet's hourly check on the hub found that your last message (${at}) asks the person a decision in prose, while a PR watch, a thread wait, or a Monitor keeps this thread under Working, out of their inbox. They have not seen it.
+
+If it still needs their answer, ask it now with the question tool (AskUserQuestion in Claude, request_user_input in Codex): restate the decision in full, with options. Keep your watches; a pending question brings the thread back to them anyway. If it no longer needs them, end your turn without a reply.`;
+}
+
 const hoursWaited = (pr: WaitingPr, now: number) => Math.floor((now - Date.parse(pr.readyAt)) / hour);
 const line = (pr: WaitingPr, now: number) =>
   `- [${pr.repo.split("/")[1]}#${pr.number}](${pr.url}) title ${JSON.stringify(pr.title.replace(/\s+/g, " ").slice(0, 120))}: ready since ${pr.readyAt.replace(/:\d\d(\.\d+)?Z$/, "Z")} (${hoursWaited(pr, now)} h), requested: ${pr.requested.join(", ") || "nobody"}`;
@@ -247,7 +317,16 @@ function readState(path: string): State {
   }
 }
 
-function writeState(path: string, state: State): void {
+function readList(path: string): string[] {
+  try {
+    const list: unknown = JSON.parse(readFileSync(path, "utf8"));
+    return Array.isArray(list) ? list.filter((key): key is string => typeof key === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeState(path: string, state: State | string[]): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(`${path}.tmp`, `${JSON.stringify(state)}\n`, { mode: 0o600 });
   renameSync(`${path}.tmp`, path);
