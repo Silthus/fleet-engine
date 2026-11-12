@@ -44,7 +44,6 @@ export type QuestionContext = {
   answer(fields: Draft): Promise<void>;
   /** This machine's IANA time zone, such as Europe/Berlin, when it has one. */
   timeZone: string | undefined;
-  draftMayBeBehind?: boolean;
 };
 
 /** The value of the longest prefix of the time zone in the setting's defaultByTimeZone. */
@@ -195,7 +194,7 @@ async function askSetting(context: QuestionContext, setting: PackSetting): Promi
   const saved = draft.settings?.[setting.key];
   const zoned = timeZoneDefault(setting, context.timeZone);
   if (flags.nonInteractive) {
-    if (saved === undefined && zoned !== undefined && !context.draftMayBeBehind) return save(zoned);
+    if (saved === undefined && zoned !== undefined) return save(zoned);
     const fallback = saved ?? setting.default;
     if (fallback !== undefined) return terminal.print(`  ✓ ${label(setting, fallback)}`);
     if (setting.optional) return terminal.print(`  ✓ Skipped. Set it later with fleet set ${setting.key}=<value>.`);

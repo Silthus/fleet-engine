@@ -92,6 +92,13 @@ describe("a setting's time-zone default", () => {
     expect((await pushedAnswers(home)).settings).toEqual({ "posthog.region": "us" });
   });
 
+  test("--non-interactive on a machine with a profile saves the time-zone default of a setting the profile lacks", async () => {
+    const home = temp.make("home-");
+    expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [] })).toBe(0);
+    expect(await unattendedSetup(home, "Europe/Lisbon", { plan: "both" })).toBe(0);
+    expect(await pushedAnswers(home)).toMatchObject({ plan: "both", settings: { "posthog.region": "eu" } });
+  });
+
   test("--non-interactive on a machine whose profile clone is behind keeps the region another machine pushed", async () => {
     const home = temp.make("home-");
     expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [] })).toBe(0);
