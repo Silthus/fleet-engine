@@ -362,7 +362,8 @@ export async function reviewDirectory(home: string, identity: ProofIdentity, rou
 }
 
 export async function finishReview(home: string, identity: ProofIdentity, round: RoundId, findings: string, reviewer: string) {
-  if (!reviewer.trim() || reviewer.includes("\n")) throw new Error("--reviewer needs the model that wrote the findings, such as gpt-6.1-sol");
+  // The judge reads the name outside its <untrusted> wrapper, so it stays to name characters.
+  if (!/^[\w.:@/+[\] -]+$/.test(reviewer) || !reviewer.trim()) throw new Error("--reviewer needs the model that wrote the findings, such as gpt-6.1-sol, in letters, digits and . : @ / + [ ] -");
   const bytes = await readFile(findings);
   if (!bytes.toString().trim()) throw new Error(`${findings} is empty. Save the reviewer's findings, or "No findings." when it found none`);
   const directory = await roundDirectory(home, identity, round);

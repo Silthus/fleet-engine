@@ -595,6 +595,7 @@ async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContex
     ask: (request) => askModel("judge", row, request, env, limit), model: modelLabel("judge", row, env), arbiter: arbiterOf(context),
     directory: judgeDirectory(home, head), commit: head.commit, now: today,
   });
+  if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
   if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}` };
   const gap = await judgeGap(home, head, today);
   if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}` };

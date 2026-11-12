@@ -348,6 +348,29 @@ test("a round after the PR merged its base reads and demands only the files the 
   expect(read).toContain("It leaves out 1 file(s) that a merge of the base brought in.");
 });
 
+test("after a base merge, a round keeps the PR's renames and non-ASCII file names whole", async () => {
+  const pr = await checkout();
+  const greeting = "greet\nwelcome\nshow the rules\npoint to the help page\n";
+  const reviewed = await pr.commit("feature.txt", greeting);
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewer = fakeModel(pr, "REVIEWER", clean);
+  await pr.fleet("review", "--lens", "correctness");
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await pr.advanceBase("base.md", "the base moves on\n");
+  await pr.git("merge", "-q", "--no-edit", "main");
+  await pr.git("mv", "feature.txt", "grüße.txt");
+  await pr.commit("grüße.txt", `${greeting}greet the member\n`);
+  reviewer.answer("FINDINGS:\n(none)\nCOVERED: grüße.txt\n");
+
+  await pr.fleet("review", "--lens", "correctness", "--scope", "fixes", "--base", reviewed);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  const brief = reviewer.prompts().at(-1)!;
+  expect(brief).toContain("rename from feature.txt");
+  expect(brief).toContain("+greet the member");
+  expect(brief).not.toContain("the base moves on");
+  expect(brief).toContain("It leaves out 1 file(s)");
+});
+
 test("a panel that fails to plan gives its round back, so the same command plans it again", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "greet\n");

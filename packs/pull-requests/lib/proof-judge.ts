@@ -130,7 +130,7 @@ ${risk.rubric}
 
 ## PR body, with its merge-risk callout
 
-${untrusted("PR body", risk.body)}
+${untrusted("PR body", capped(risk.body, evidenceCap))}
 `;
 
 function parseVerdict(text: string, asked: QuestionName[]): Verdict | undefined {
