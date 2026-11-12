@@ -78,7 +78,7 @@ describe("the Base pack", () => {
   test("installs Codex hooks, Codex config, and the Codex CLI only when the plan has Codex", () => {
     const codex = (result: Plan) => result.config.filter((entry) => entry.provider === "codex").map((entry) => entry.key);
     expect(codex(plan("claude"))).toEqual([]);
-    expect(codex(plan("codex"))).toEqual(["hooks.UserPromptSubmit", "hooks.PreToolUse", "hooks.PostToolUse", "hooks.SessionStart", "model", "model_reasoning_effort"]);
+    expect(codex(plan("codex"))).toEqual(["hooks.UserPromptSubmit", "hooks.PreToolUse", "hooks.PostToolUse", "hooks.SessionStart", "hooks.Stop", "model", "model_reasoning_effort"]);
     expect(plan("both", devbox).steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli", "codex-cli"]);
     expect(plan("claude", devbox).steps.map((step) => step.id).filter(isAgentCli)).toEqual(["claude-cli"]);
     expect(plan("codex", devbox).steps.map((step) => step.id).filter(isAgentCli)).toEqual(["codex-cli"]);
