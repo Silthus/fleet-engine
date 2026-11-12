@@ -20,6 +20,11 @@ export function quote(word: string) {
 
 /** The one ssh call from a node to the hub: batch mode, a checked host name, each word quoted, and Fleet's launcher at its install path, not the login PATH. */
 export function onHub(hub: string, args: string[]): string[] {
-  if (!validHost(hub)) throw new Error(`${hub} is not an SSH host name`);
-  return ["ssh", "-T", ...batch, hub, [launcher, ...args.map(quote)].join(" ")];
+  return onHost(hub, args);
+}
+
+/** The same ssh call from the hub to a node. */
+export function onHost(host: string, args: string[]): string[] {
+  if (!validHost(host)) throw new Error(`${host} is not an SSH host name`);
+  return ["ssh", "-T", ...batch, host, [launcher, ...args.map(quote)].join(" ")];
 }

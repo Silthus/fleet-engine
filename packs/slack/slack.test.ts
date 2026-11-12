@@ -9,7 +9,7 @@ import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { secretStore } from "../../src/runner/context.ts";
 import { listen, ownerOf, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
-import { launchHere, launchOnBox, type Run } from "./lib/launch.ts";
+import { launchHere, launchOnBox, launchOnNodes, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
 import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
 import { startSlackStub, type Message } from "./testing.ts";
@@ -163,6 +163,42 @@ describe("fleet slack-trigger run", () => {
     expect(ran.map((call) => call.argv.slice(1).join(" "))).toEqual(["box spawn", "box run box-7 -- fleet slack-trigger launch"]);
     expect(JSON.parse(ran[1]!.input!)).toMatchObject({ title: "Slack: deploy check", prompt: expect.stringContaining("> deploy check :t3code:") });
     expect(slack.method("chat.postEphemeral")[0]!.args.text).toBe("Started <https://app.t3.codes/threads/env-box-7/thread-on-box|Slack: deploy check> on box-7.");
+  });
+
+  test("with slack.nodes set, threads start on those nodes in turn over SSH, even while Boxes is on, and no box is spawned", async () => {
+    const slack = slackStub([{ user: ownerId, ts: "210.1", text: "first :t3code:" }, { user: ownerId, ts: "210.2", text: "second :t3code:" }, { user: ownerId, ts: "210.3", text: "third :t3code:" }]);
+    const home = await homeWithTokens();
+    const stop = new AbortController();
+    let started = 0;
+    const fleet = processes((argv) => (argv[0] === "ssh" ? { code: 0, stdout: `${JSON.stringify({ threadId: `t-${++started}`, url: `https://app.t3.codes/threads/env-${argv.at(-2)}/t-${started}` })}\n` } : undefined));
+    const deps = commandDeps(home, { slackBase: slack.base, stop: stop.signal, run: fleet.run, env: { FLEET_SETTINGS: settings({ "slack.nodes": "devbox-1 devbox-2", "hub.boxTemplate": "devbox" }), FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
+    const running = listen(deps);
+    await slack.connected();
+    for (const ts of ["210.1", "210.2", "210.3"]) {
+      slack.send({ type: "message", user: ownerId, channel: "C1", ts, text: "go :t3code:" });
+      await slack.until(() => slack.method("chat.postEphemeral").length === Number(ts.slice(-1)));
+    }
+    stop.abort();
+    await running;
+
+    const ssh = fleet.calls.filter((call) => call.argv[0] === "ssh");
+    expect(ssh.map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-2", "devbox-1"]);
+    expect(ssh[0]!.argv.at(-1)).toEndWith('/.local/share/fleet/engine/fleet" slack-trigger launch');
+    expect(ssh[0]!.argv).toContain("BatchMode=yes");
+    expect(JSON.parse(ssh[0]!.input!)).toMatchObject({ title: "Slack: first", commandId: expect.any(String) });
+    expect(fleet.calls.some((call) => call.argv.includes("box"))).toBe(false);
+    expect(slack.method("chat.postEphemeral").map((call) => call.args.text)).toEqual([
+      "Started <https://app.t3.codes/threads/env-devbox-1/t-1|Slack: first> on devbox-1.",
+      "Started <https://app.t3.codes/threads/env-devbox-2/t-2|Slack: second> on devbox-2.",
+      "Started <https://app.t3.codes/threads/env-devbox-1/t-3|Slack: third> on devbox-1.",
+    ]);
+  });
+
+  test("refuses a slack.nodes entry that is not a node's SSH name, or that names a box", async () => {
+    const home = await homeWithTokens();
+    for (const nodes of ["devbox-1 -oProxyCommand=x", "box-lane", "Devbox_1"]) {
+      await expect(listen(commandDeps(home, { run: processes().run, slackBase: "http://127.0.0.1:9", stop: AbortSignal.abort(), env: { FLEET_SETTINGS: settings({ "slack.nodes": nodes }) } }))).rejects.toThrow("slack.nodes names");
+    }
   });
 
   test("starts no thread on a disk below the start floor, logs why, and names the devbox with the most room", async () => {
@@ -342,6 +378,33 @@ describe("a launch that fails", () => {
     expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/env-box-8/thread-on-box|Slack: why?> on box-8.");
   });
 
+  test("on nodes, a launch that failed before it reached T3 retries on the next node, and a lost T3 answer replays on the same node", async () => {
+    const answers = [
+      { code: 255, stdout: "", stderr: "ssh: connect to host devbox-1 port 22: Connection timed out\n" },
+      { code: 1, stdout: `${JSON.stringify({ failed: "T3 did not answer", reachedT3: true })}\n` },
+      { code: 0, stdout: `${JSON.stringify({ threadId: "thread-on-node", url: "https://app.t3.codes/threads/env-2/thread-on-node" })}\n` },
+    ];
+    const fleet = processes((argv) => (argv[0] === "ssh" ? answers.shift() : undefined));
+    const { deps, replies, later } = rig([]);
+    deps.launch = launchOnNodes(["devbox-1", "devbox-2", "devbox-3"], fleet.run);
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    later(60_000);
+    await retryPending(deps);
+    later(60_000);
+    await retryPending(deps);
+    const ssh = fleet.calls.filter((call) => call.argv[0] === "ssh");
+    expect(ssh.map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-2", "devbox-2"]);
+    const sent = ssh.map((call) => JSON.parse(call.input!));
+    expect(new Set(sent.map((request) => request.commandId)).size).toBe(1);
+    expect(sent.map((request) => request.replay)).toEqual([undefined, undefined, true]);
+    expect(sent.every((request) => !("claim" in request))).toBe(true);
+    expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day.", "Started <https://app.t3.codes/threads/env-2/thread-on-node|Slack: why?> on devbox-2."]);
+  });
+
+  test("a node launch has nothing to release when the trigger gives up", () => {
+    expect(launchOnNodes(["devbox-1"], processes().run).release).toBeUndefined();
+  });
+
   test("keeps a trigger whose Slack thread could not be read, and starts it on the next retry", async () => {
     const { deps, titles } = rig([{ threadId: "T1", where: "this machine" }]);
     const slack = deps.slack;
@@ -498,7 +561,7 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
     const t3 = await t3Server();
     const deps = commandDeps(temp.make("home-"), { threads: t3Threads(models, { home: t3.home }), readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }) });
     expect(await slackTrigger(["launch"], deps)).toBe(0);
-    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1" });
+    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1", url: "https://app.t3.codes/threads/env-here/thread-1" });
     expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")?.payload).toMatchObject({ commandId: "command-1", title: "Slack: hi", initialMessage: { text: "Do it." } });
   });
 
@@ -526,7 +589,7 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
       readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }),
     });
     expect(await slackTrigger(["launch"], deps)).toBe(0);
-    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1" });
+    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1", url: "https://app.t3.codes/threads/env-here/thread-1" });
   });
 });
 
@@ -558,6 +621,13 @@ describe("where the trigger runs", () => {
   test("runs nowhere without a hub when the profile has devboxes", () => {
     expect(runsHere(resolve({ packs: ["slack"], devboxes: ["box-1"] }, mac))).toBe(false);
     expect(runsHere(resolve({ packs: ["slack"], devboxes: ["box-1"] }, devbox))).toBe(false);
+  });
+
+  test("passes slack.nodes to the trigger only when it is set, and never asks for it", () => {
+    expect(resolve({ packs: ["slack"], settings: { "slack.userId": ownerId, "slack.nodes": "devbox-1 devbox-2" } }).settings["slack.nodes"]).toBe("devbox-1 devbox-2");
+    const unset = resolve({ packs: ["slack"] });
+    expect(unset.settings["slack.nodes"]).toBeUndefined();
+    expect(unset.unanswered).toEqual([]);
   });
 
   test("is off by default", () => {

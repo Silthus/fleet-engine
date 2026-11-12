@@ -1,3 +1,4 @@
+import { onHost } from "../../../src/hub/ssh.ts";
 import { threadUrl, UnansweredLaunch } from "../../../src/integrations/t3/index.ts";
 import type { Threads } from "../../../src/sdk/index.ts";
 import type { DiskStatus } from "../../base/lib/disk.ts";
@@ -55,11 +56,24 @@ export function launchOnBox(fleet: string, run: Run): Launch {
   return launch;
 }
 
-function answerOf(line: string): { threadId?: string; failed?: string; reachedT3?: true } {
+export function launchOnNodes(nodes: string[], run: Run): Launch {
+  let next = 0;
+  return async ({ claim, ...request }) => {
+    const node = claim?.box ?? nodes[next++ % nodes.length]!;
+    const ran = await run(onHost(node, ["slack-trigger", "launch"]), JSON.stringify(request));
+    const answer = answerOf(lastLine(ran.stdout));
+    if (ran.code === 0 && answer.threadId) return { threadId: answer.threadId, url: answer.url, where: node };
+    const failed = `fleet slack-trigger launch on ${node}: ${answer.failed ?? why(ran)}`;
+    return answer.reachedT3 ? { failed, claim: { box: node }, reachedT3: true } : { failed };
+  };
+}
+
+function answerOf(line: string): { threadId?: string; url?: string; failed?: string; reachedT3?: true } {
   try {
-    const value = JSON.parse(line) as { threadId?: unknown; failed?: unknown; reachedT3?: unknown };
+    const value = JSON.parse(line) as { threadId?: unknown; url?: unknown; failed?: unknown; reachedT3?: unknown };
     return {
       ...(typeof value.threadId === "string" && value.threadId ? { threadId: value.threadId } : {}),
+      ...(typeof value.url === "string" && value.url.startsWith("https://") ? { url: value.url } : {}),
       ...(typeof value.failed === "string" ? { failed: value.failed } : {}),
       ...(value.reachedT3 === true ? { reachedT3: true } : {}),
     };
