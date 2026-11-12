@@ -115,7 +115,7 @@
       "id": "question-guard",
       "name": "Question guard",
       "default": true,
-      "sentence": "A top-level T3 thread that ends its turn with a decision for you in prose is stopped once and told to ask with the question tool, and the hub's hourly check wakes a thread that still waits on one."
+      "sentence": "A top-level T3 thread that ends its turn with a decision for you in prose is stopped once and told to ask with the question tool, so the decision reaches you even while the thread waits on a watch."
     },
     {
       "id": "quality-loop",
