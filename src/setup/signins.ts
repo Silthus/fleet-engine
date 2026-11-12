@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tokenScopes } from "../adapters/identity/github.ts";
+import { environmentToken, tokenScopes } from "../adapters/identity/github.ts";
 import type { ModelRow, SourceRef } from "../pack/types.ts";
 import type { Machine } from "./commands.ts";
 import type { SignIn } from "./human.ts";
@@ -15,7 +15,8 @@ export async function githubScopesMissing(machine: Machine): Promise<string[] | 
   const status = await machine.exec(["gh", "auth", "status", "--active", "--hostname", "github.com"]);
   if (status.code !== 0) return undefined;
   const granted = tokenScopes(status.output) ?? [];
-  return githubScopes.filter((scope) => !granted.includes(scope));
+  const wanted = environmentToken(status.output) ? githubScopes.filter((scope) => scope !== "workflow") : githubScopes;
+  return wanted.filter((scope) => !granted.includes(scope));
 }
 
 export function githubSignIn(machine: Machine, signedIn: () => Promise<void>): SignIn {

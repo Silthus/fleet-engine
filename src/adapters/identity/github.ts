@@ -65,5 +65,9 @@ export async function workflowScopeMissing(run: CommandRunner) {
   const text = `${status.stdout}\n${status.stderr ?? ""}`;
   const scopes = tokenScopes(text);
   if (!scopes?.length || scopes.includes("workflow")) return undefined;
-  return { fromEnvironment: /\((GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN)\)/.exec(text)?.[1] };
+  return { fromEnvironment: environmentToken(text) };
+}
+
+export function environmentToken(status: string) {
+  return /\((GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN)\)/.exec(status)?.[1];
 }
