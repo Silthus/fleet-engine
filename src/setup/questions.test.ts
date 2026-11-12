@@ -36,10 +36,10 @@ function teamSource(settings: PackSetting[]): (ref: SourceRef) => Promise<Fetche
   return async (ref) => ({ ref, dir, packs: await loadPacks(dir) });
 }
 
-async function unattendedSetup(home: string, timeZone: string, { settings = [teamRegion], plan = "claude" } = {}) {
+async function unattendedSetup(home: string, timeZone: string, { settings = [teamRegion], plan = "claude", set = [] as string[] } = {}) {
   const io = scripted([]);
   const box = fakeMachine(home, {}, { org: true });
-  return main(["setup", "--non-interactive", "--preset", "starter", "--plan", plan, "--devbox", "skip"], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine, clock: box.clock, doctor: async () => 0, env: {}, timeZone, fetchSource: teamSource(settings) } });
+  return main(["setup", "--non-interactive", "--preset", "starter", "--plan", plan, "--devbox", "skip", ...set.flatMap((value) => ["--set", value])], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine, clock: box.clock, doctor: async () => 0, env: {}, timeZone, fetchSource: teamSource(settings) } });
 }
 
 async function pushFromAnotherMachine(home: string, settings: Record<string, string>) {
@@ -104,6 +104,43 @@ describe("a setting's time-zone default", () => {
     const result = await ask(undefined);
     expect(result.output).toContain("  1) US (default)");
     expect(result.settings).toEqual({ "team.region": "us" });
+  });
+});
+
+describe("a time-zone default that setup saved before it stopped", () => {
+  const teamName: PackSetting = { key: "posthog.team", question: "Which team are you on?", type: "string", ask: "setup" };
+  const forget = (home: string) => {
+    rmSync(join(home, ".config/fleet"), { recursive: true });
+    rmSync(profilePath(home), { recursive: true });
+  };
+
+  test("gives way to the answer another machine pushed while setup was stopped", async () => {
+    const home = temp.make("home-");
+    expect(await unattendedSetup(home, "Asia/Tokyo", { settings: [] })).toBe(0);
+    forget(home);
+    expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [teamRegion, teamName] })).toBe(2);
+    await pushFromAnotherMachine(home, { "posthog.region": "us" });
+    expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [teamRegion, teamName], set: ["posthog.team=web"] })).toBe(0);
+    expect((await pushedAnswers(home)).settings).toEqual({ "posthog.region": "us", "posthog.team": "web" });
+  });
+
+  test("still lands when no machine answered it in the meantime", async () => {
+    const home = temp.make("home-");
+    expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [teamRegion, teamName] })).toBe(2);
+    expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [teamRegion, teamName], set: ["posthog.team=web"] })).toBe(0);
+    const pushed = await pushedAnswers(home);
+    expect(pushed.settings).toEqual({ "posthog.region": "eu", "posthog.team": "web" });
+    expect(Object.keys(pushed).sort()).toEqual(["engine", "packs", "plan", "schema", "settings", "sources", "workflows"]);
+  });
+
+  test("an explicit answer on the resumed run wins over another machine's", async () => {
+    const home = temp.make("home-");
+    expect(await unattendedSetup(home, "Asia/Tokyo", { settings: [] })).toBe(0);
+    forget(home);
+    expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [teamRegion, teamName] })).toBe(2);
+    await pushFromAnotherMachine(home, { "posthog.region": "us" });
+    expect(await unattendedSetup(home, "Europe/Lisbon", { settings: [teamRegion, teamName], set: ["posthog.team=web", "posthog.region=eu"] })).toBe(0);
+    expect((await pushedAnswers(home)).settings).toEqual({ "posthog.region": "eu", "posthog.team": "web" });
   });
 });
 

@@ -5,7 +5,13 @@ import type { Step, StepOutcome } from "./runner.ts";
 import { teamSources } from "./signins.ts";
 import type { Terminal } from "./terminal.ts";
 
-export type Draft = Partial<Pick<ProfileFile, "packs" | "plan" | "settings" | "workflows" | "sources">>;
+export type Draft = Partial<Pick<ProfileFile, "packs" | "plan" | "settings" | "workflows" | "sources">> & {
+  inferred?: string[];
+};
+
+export function answered(draft: Draft, settings: Record<string, SettingValue>): Draft {
+  return { settings: { ...draft.settings, ...settings }, inferred: draft.inferred?.filter((key) => !Object.hasOwn(settings, key)) };
+}
 
 export type Catalog = {
   presets: Preset[];
@@ -187,15 +193,16 @@ async function askPlan(context: QuestionContext): Promise<StepOutcome> {
 
 async function askSetting(context: QuestionContext, setting: PackSetting): Promise<StepOutcome> {
   const { terminal, flags, draft } = context;
-  const save = async (value: SettingValue) => {
-    await context.answer({ settings: { ...draft.settings, [setting.key]: value } });
+  const save = async (value: SettingValue, inferred = false) => {
+    const answer = answered(draft, { [setting.key]: value });
+    await context.answer(inferred ? { ...answer, inferred: [...(answer.inferred ?? []), setting.key] } : answer);
     terminal.print(`  ✓ ${label(setting, value)}`);
   };
   if (flags.set[setting.key] !== undefined) return save(parseSettingValue(setting, flags.set[setting.key]!));
   const saved = draft.settings?.[setting.key];
   const zoned = timeZoneDefault(setting, context.timeZone);
   if (flags.nonInteractive) {
-    if (saved === undefined && zoned !== undefined && !context.draftMayBeBehind) return save(zoned);
+    if (saved === undefined && zoned !== undefined && !context.draftMayBeBehind) return save(zoned, true);
     const fallback = saved ?? setting.default;
     if (fallback !== undefined) return terminal.print(`  ✓ ${label(setting, fallback)}`);
     if (setting.optional) return terminal.print(`  ✓ Skipped. Set it later with fleet set ${setting.key}=<value>.`);

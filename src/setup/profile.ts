@@ -95,10 +95,12 @@ async function makeProfile(context: ProfileContext) {
   await git(machine, dir, "config", "user.email", `${login}@users.noreply.github.com`);
   await startFiles(dir, context, same(profileRepo, team) ? org : undefined);
   const started = await untracked(machine, dir, startFileNames);
+  const { inferred = [], ...picked } = draft;
+  const settings = Object.fromEntries(Object.entries(draft.settings ?? {}).filter(([key]) => !(inferred.includes(key) && Object.hasOwn(saved, key))));
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, plan: "both", settings: {}, workflows: {} }),
-    ...draft,
-    ...(memoryRepo && namedMemory === undefined ? { settings: { ...draft.settings, "memory.repo": memoryRepo } } : {}),
+    ...picked,
+    settings: { ...settings, ...(memoryRepo && namedMemory === undefined ? { "memory.repo": memoryRepo } : {}) },
   };
   if (started.length) {
     await git(machine, dir, "add", "--", ...started);

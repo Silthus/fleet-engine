@@ -6,7 +6,7 @@ import { loadMachine, loadProfile, saveAnswers, saveMachine, thisMachine } from 
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo, makesOwnDevbox } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
-import { packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, waitsForTeams, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
+import { answered, packList, packsStep, picksFrom, title, plansStep, settingSteps, settingsFrom, waitsForTeams, type Catalog, type Draft, type QuestionContext } from "./questions.ts";
 import { realMachine, type Machine } from "./commands.ts";
 import { humanStep, packSignIn, type HumanContext } from "./human.ts";
 import { devboxQuestion, devboxSteps, hubSteps, notTakenByHub, profileForBox, type DevboxContext } from "./devbox.ts";
@@ -76,7 +76,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     if (reopened.length || Object.entries(fromFlags).some(([key, value]) => saved.settings?.[key] !== value)) reopened.push(...answersChanged);
     progress.done = progress.done.filter((id) => !reopened.some((step) => id === step || id.startsWith(`${step}:`)));
     if (Object.keys(fromFlags).length && !waitsForTeams(flags, catalog)) {
-      progress.draft.settings = { ...progress.draft.settings, ...fromFlags };
+      Object.assign(progress.draft, answered(progress.draft, fromFlags));
       await remember();
     }
   } catch (error) {
@@ -116,7 +116,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     if (!machine.profileDir) await startFromExisting();
     picksFrom(flags, catalog, progress.draft);
     const fromFlags = settingsFrom(flags, catalog);
-    if (Object.keys(fromFlags).length) await context.answer({ settings: { ...progress.draft.settings, ...fromFlags } });
+    if (Object.keys(fromFlags).length) await context.answer(answered(progress.draft, fromFlags));
   };
   const startFromExisting = async () => {
     const existing = await existingProfile(box, options.home, catalog.packs.map((pack) => pack.manifest), progress.draft.packs ?? catalog.teamPacks);
