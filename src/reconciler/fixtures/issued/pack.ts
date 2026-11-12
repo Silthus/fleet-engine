@@ -7,7 +7,7 @@ export default {
   name: "issued",
   summary: "A served service that issues a key for each node.",
   register(fleet) {
-    const extra = fleet.workflow({ id: "issued-extra", name: "Issued extra", sentence: "The hub serves one more service.", default: false });
+    const extra = fleet.workflow({ id: "issued-extra", name: "Issued extra", sentence: "The hub serves one more service.", needs: ["devbox"], default: false });
     const installed = fleet.check({
       on: "hub",
       id: "issued-installed",
@@ -45,6 +45,12 @@ export default {
       on: "hub",
       summary: "Show what the hub holds",
       run: async (args, ctx) => (ctx.print(`${(await ctx.secrets.read("installed")) ?? "not installed"} ${JSON.stringify(args)}`), args.includes("fail") ? 3 : 0),
+    });
+    fleet.command("issued-extra-admin", {
+      on: "hub",
+      when: extra,
+      summary: "Show the extra service on the hub",
+      run: async (args, ctx) => (ctx.print(`extra ${JSON.stringify(args)}`), 0),
     });
     fleet.command("issued", {
       summary: "Use the issued service",

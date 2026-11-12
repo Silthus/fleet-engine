@@ -26,11 +26,12 @@ export type Pack = {
   cost?: string;
   risk?: string;
   requires?: string[];
+  instructions?: string;
   register(fleet: Fleet): void;
 };
 
-/** on: "hub" runs the command on the hub, also when a person types it on another node. */
-export type Command = { summary: string; on?: "hub"; run(args: string[], ctx: Context): Promise<number> };
+/** on: "hub" runs the command on the hub, also when a person types it on another node. when: the command runs only while that workflow is on. */
+export type Command = { summary: string; on?: "hub"; when?: Workflow; run(args: string[], ctx: Context): Promise<number> };
 export type Process = { run(ctx: Context): Promise<void> };
 /** A service that every node reaches at http://127.0.0.1:<port>. credential returns the value for one node, by its SSH name. */
 export type Serve = { port: number; health: string; credential(ctx: Context, node: string): Promise<string> };

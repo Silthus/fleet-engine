@@ -166,8 +166,7 @@ export type PackCode = {
   settingKey(handle: unknown): string;
   serviceId(handle: unknown): string;
   repairs: Record<string, (ctx: Context) => Promise<void>>;
-  commands: Record<string, (args: string[], ctx: Context) => Promise<number>>;
-  hubCommands: string[];
+  commands: Record<string, { run(args: string[], ctx: Context): Promise<number>; on?: "hub"; workflow?: string }>;
   services: Record<string, (ctx: Context) => Promise<void>>;
   credentials: Record<string, (ctx: Context, node: string) => Promise<string>>;
   checks: Record<string, (ctx: Context) => Promise<boolean>>;
@@ -236,7 +235,7 @@ export type Plan = {
   /** Every served service of the profile, on every node, with its port. */
   catalog?: CatalogEntry[];
   t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
-  commands: Record<string, { pack: string; path: string; on?: "hub" }>;
+  commands: Record<string, { pack: string; path: string; on?: "hub"; workflow?: string }>;
   handlers: Partial<Record<HandlerSeam, { pack: string; path: string }>>;
   models: ModelRow[];
   settings: Record<string, SettingValue>;

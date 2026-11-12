@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { secretStore } from "./context.ts";
 import { main, type CliOptions } from "../cli.ts";
@@ -92,6 +92,20 @@ test("a write closes a store directory that was left open to others", async () =
   mkdirSync(dir, { recursive: true, mode: 0o755 });
   expect((await fleet("kit", "save", "token", "value")).code).toBe(0);
   expect(statSync(dir).mode & 0o777).toBe(0o700);
+});
+
+test("a store refuses a secret that other users can read, or a link, and names the file but not the value", async () => {
+  const { home, fleet } = await machine();
+  const dir = join(home, ".config/fleet/secrets/kit");
+  expect((await fleet("kit", "save", "token", "kept-value")).code).toBe(0);
+  chmodSync(join(dir, "token"), 0o640);
+  expect(await fleet("kit", "show", "token")).toEqual({ code: 1, lines: ["fleet: ~/.config/fleet/secrets/kit/token is open to other users. Run chmod 600 ~/.config/fleet/secrets/kit/token, or save the secret again."] });
+  chmodSync(join(dir, "token"), 0o600);
+  renameSync(join(dir, "token"), join(home, "elsewhere"));
+  symlinkSync(join(home, "elsewhere"), join(dir, "token"));
+  expect(await fleet("kit", "show", "token")).toEqual({ code: 1, lines: ["fleet: ~/.config/fleet/secrets/kit/token is a link. A secret must be a file of its own: delete it and save the secret again."] });
+  mkdirSync(join(dir, "folder"));
+  expect(await fleet("kit", "show", "folder")).toEqual({ code: 1, lines: ["fleet: ~/.config/fleet/secrets/kit/folder is not a file. Delete it and save the secret again."] });
 });
 
 test("a secret's name cannot leave the pack's store", async () => {

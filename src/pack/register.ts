@@ -27,7 +27,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
     if (found?.kind !== kind) throw new Error(`${label} names a ${kind} that the ${fields.name} pack did not declare`);
     return found.id;
   };
-  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), serviceId: (handle) => own(handle, "service", "ctx.use"), commands: Object.create(null), hubCommands: [], services: Object.create(null), checks: Object.create(null), credentials: Object.create(null), repairs: Object.create(null) };
+  const code: PackCode = { settingKey: (handle) => own(handle, "setting", "ctx.get"), serviceId: (handle) => own(handle, "service", "ctx.use"), commands: Object.create(null), services: Object.create(null), checks: Object.create(null), credentials: Object.create(null), repairs: Object.create(null) };
   const place = (scope: SdkScope, label: string): Scope & { after?: string } => {
     if (scope.on !== undefined && scope.on !== "hub") throw new Error(`${label}: on takes only "hub"`);
     return {
@@ -52,11 +52,10 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
       workflows.push({ ...def, ...(handles ? { settings: handles.map((handle) => own(handle, "setting", `workflow ${def.id}`)) } : {}) });
       return declare("workflow", def.id);
     },
-    command(name, { run, on }) {
+    command(name, { run, on, when }) {
       if (code.commands[name]) throw new Error(`command ${name} is declared twice`);
       if (on !== undefined && on !== "hub") throw new Error(`command ${name}: on takes only "hub"`);
-      code.commands[name] = run;
-      if (on === "hub") code.hubCommands.push(name);
+      code.commands[name] = { run, ...(on === "hub" ? { on } : {}), ...(when ? { workflow: own(when, "workflow", `command ${name}`) } : {}) };
     },
     service({ id, run, serve, ...scope }) {
       const label = `service ${id}`;
@@ -100,7 +99,7 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
   return { manifest: { schema: 1, ...fields, settings, workflows, jobs, human, ...(served.length ? { served } : {}), ...(config.length ? { config } : {}) }, code };
 }
 
-const namedFields: Record<Exclude<keyof Pack, "sdk" | "register">, true> = { name: true, summary: true, title: true, day: true, cost: true, risk: true, requires: true };
+const namedFields: Record<Exclude<keyof Pack, "sdk" | "register">, true> = { name: true, summary: true, title: true, day: true, cost: true, risk: true, requires: true, instructions: true };
 const packFields = Object.keys(namedFields);
 
 function isPack(value: unknown): value is { sdk: 1; name: string; register(fleet: Fleet): void } & Record<string, unknown> {

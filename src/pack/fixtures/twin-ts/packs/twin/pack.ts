@@ -6,6 +6,7 @@ export default {
   title: "Twin",
   summary: "The hub greets you once you pick a greeting.",
   risk: "None.",
+  instructions: "instructions.md",
   register(fleet) {
     const greeting = fleet.setting({ key: "twin.greeting", type: "string", question: "Which greeting?" });
     const hello = fleet.workflow({ id: "twin-hello", name: "Greet", sentence: "The hub greets you.", default: false, settings: [greeting] });

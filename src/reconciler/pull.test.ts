@@ -1,4 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
+import { chmodSync, lstatSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { tempDirs } from "../testing/git.ts";
 import { linkedFleets } from "../testing/linked.ts";
 import type { Clock } from "../runner/context.ts";
@@ -35,6 +37,44 @@ test("when the hub does not answer or refuses, the node keeps its stored credent
   const refused = await node("apply");
   expect(refused.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (fleet credential exited 1 there. Run fleet credential issued/issued-api node-2 on the hub to see why). Kept the one this machine has.");
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-2-for-node-2");
+});
+
+const nodeCredential = (home: string) => join(home, ".config/fleet/secrets/issued/credential.issued-api");
+
+test("a stored credential that other users can read, or a link, is replaced by the pulled one, and apply goes on", async () => {
+  const { hub, node, nodeHome } = linkedFleets(temp);
+  await hub("apply");
+  await node("apply");
+  const file = nodeCredential(nodeHome);
+
+  chmodSync(file, 0o644);
+  const loose = await node("apply");
+  expect(loose.code).toBe(0);
+  expect(loose.output).not.toContain("Could not pull");
+  expect(statSync(file).mode & 0o777).toBe(0o600);
+  expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-3-for-node-2");
+
+  const elsewhere = join(nodeHome, "elsewhere");
+  writeFileSync(elsewhere, "not a credential", { mode: 0o600 });
+  renameSync(file, `${file}.old`);
+  symlinkSync(elsewhere, file);
+  const linked = await node("apply");
+  expect(linked.code).toBe(0);
+  expect(linked.output).not.toContain("Could not pull");
+  expect(lstatSync(file).isSymbolicLink()).toBe(false);
+  expect(readFileSync(elsewhere, "utf8")).toBe("not a credential");
+  expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-4-for-node-2");
+});
+
+test("when the hub does not answer and the stored credential is open to other users, the finding says how to fix the file", async () => {
+  const { hub, node, nodeHome, hosts } = linkedFleets(temp);
+  await hub("apply");
+  await node("apply");
+  chmodSync(nodeCredential(nodeHome), 0o640);
+  hosts["hub-1"] = "down";
+  const down = await node("apply");
+  expect(down.code).toBe(0);
+  expect(down.output).toContain("Fix: Could not pull the credential of issued/issued-api from the hub hub-1 (ssh exited 255. Run ssh hub-1 true to see why). ~/.config/fleet/secrets/issued/credential.issued-api is open to other users. Run chmod 600 ~/.config/fleet/secrets/issued/credential.issued-api, or save the secret again.");
 });
 
 /** A clock that moves only when the test advances it. next resolves when the next sleep after the call starts. */
