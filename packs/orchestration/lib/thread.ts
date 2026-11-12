@@ -1,5 +1,5 @@
 import {
-  listLinkedThreads, readLinkedThread, readSnapshots, readThread, sendLinkedMessage, sendMessage, T3ToolError, withT3Session,
+  listLinkedThreads, readLinkedThread, readLinkedThreadWords, readSnapshots, readThread, readThreadWords, sendLinkedMessage, sendMessage, T3ToolError, withT3Session,
   type ShellThread, type T3HttpClient, type T3SessionOptions,
 } from "../../base/lib/t3/index.ts";
 import { runActivity } from "./activity.ts";
@@ -10,20 +10,27 @@ export type ThreadIo = { home: string; host: string; print(line: string): void; 
 type Place = { local: ShellThread } | { environmentId: string; threadId: string };
 
 const usage = `Usage: fleet thread list [host] [--limit count] [--json]
-       fleet thread read [--host host] <id>
+       fleet thread find <id>
+       fleet thread read [--host host] <id> [--words]
        fleet thread send [--host host] <id> [message]
-Without --host, Fleet finds the machine that has the thread. The message comes from stdin when you leave it out.`;
+Without --host, Fleet finds the machine that has the thread. find names that machine and reads nothing of the thread.
+--words prints only the messages a person typed; on a linked machine it leaves out answers to question tools.
+The message comes from stdin when you leave it out.`;
 const threadIdPattern = /^[a-zA-Z0-9][a-zA-Z0-9:._%-]{0,511}$/;
 const sendScopes = ["orchestration:read", "orchestration:operate", "access:read"];
 
 export async function runThread(args: string[], io: ThreadIo): Promise<number> {
   const [action, ...rest] = args;
   if (action === "list") return runActivity(rest, io);
-  if (action !== "read" && action !== "send") throw new Error(usage);
-  const { host, threadId, words } = parseTarget(rest, action);
+  if (action !== "find" && action !== "read" && action !== "send") throw new Error(usage);
+  const { host, threadId, words, typed } = parseTarget(rest, action);
   const text = action === "send" ? await readMessage(words, io) : "";
   const result = await withT3Session(async (client) => {
     const { machine, place } = await placeThread(client, io.host, threadId, host, action);
+    if (action === "find") return { host: machine, threadId: "local" in place ? place.local.id : place.threadId };
+    if (action === "read" && typed) {
+      return { host: machine, words: "local" in place ? await readThreadWords(client, place.local.id) : await readLinkedThreadWords(client, place.environmentId, place.threadId) };
+    }
     if (action === "read") {
       return { host: machine, thread: "local" in place ? await readThread(client, place.local.id) : await readLinkedThread(client, place.environmentId, { threadId: place.threadId }) };
     }
@@ -33,18 +40,19 @@ export async function runThread(args: string[], io: ThreadIo): Promise<number> {
   return 0;
 }
 
-function parseTarget(args: string[], action: "read" | "send") {
+function parseTarget(args: string[], action: "find" | "read" | "send") {
   let host: string | undefined;
   const rest = [...args];
-  while (rest[0] === "--host") {
+  while (rest[0] === "--host" && action !== "find") {
     rest.shift();
     host = rest.shift();
     if (!host) throw new Error(usage);
   }
   const [threadId, ...words] = rest;
-  if (!threadId || threadId.startsWith("-") || (action === "read" && words.length)) throw new Error(usage);
+  const typed = action === "read" && words.length === 1 && words[0] === "--words";
+  if (!threadId || threadId.startsWith("-") || (action !== "send" && words.length && !typed)) throw new Error(usage);
   if (!threadIdPattern.test(threadId)) throw new Error("Invalid thread id.");
-  return { host, threadId, words };
+  return { host, threadId, words, typed };
 }
 
 async function readMessage(words: string[], io: ThreadIo): Promise<string> {
@@ -53,7 +61,7 @@ async function readMessage(words: string[], io: ThreadIo): Promise<string> {
   return text;
 }
 
-async function placeThread(client: T3HttpClient, thisHost: string, value: string, host: string | undefined, action: "read" | "send"): Promise<{ machine: string; place: Place }> {
+async function placeThread(client: T3HttpClient, thisHost: string, value: string, host: string | undefined, action: "find" | "read" | "send"): Promise<{ machine: string; place: Place }> {
   const machines = await readMachines(client, thisHost);
   const reports = await readEachMachine<{ ids: string[]; locals?: ShellThread[]; environmentId?: string }>(
     host ? [pickMachine(machines, host)] : machines,

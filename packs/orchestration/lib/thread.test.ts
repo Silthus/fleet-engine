@@ -170,6 +170,53 @@ test("fleet thread read finds a linked thread and prints its messages", async ()
   expect(read.thread.items.map((item: { text: string }) => item.text)).toEqual(["Ship it", "Shipped."]);
 });
 
+test("fleet thread find names the machine that has a thread, local or linked, without reading the thread", async () => {
+  const t3 = await stub();
+
+  expect(JSON.parse((await thread(t3, ["find", "remote-only"])).output)).toEqual({ host: "devbox-2", threadId: "mcp:remote-only" });
+  expect(JSON.parse((await thread(t3, ["find", "mcp:local-idle"])).output)).toEqual({ host: "this-box", threadId: "mcp:local-idle" });
+  await expect(thread(t3, ["find", "mcp:everywhere"])).rejects.toThrow("Thread mcp:everywhere is on this-box, devbox-2. Choose one with --host.");
+  await expect(thread(t3, ["find", "mcp:local-idle", "extra"])).rejects.toThrow("Usage: fleet thread list");
+  expect(t3.toolCalls.filter((call) => call.name === "t3_thread_read").map((call) => call.args.limit)).toEqual([1, 1]);
+  expect(t3.rpcCalls.filter((call) => call.tag === "orchestration.getThreadProjection")).toEqual([]);
+});
+
+test("fleet thread read --words exports only what a person typed in a thread on a linked machine, each with the reply it answered", async () => {
+  const long = "z".repeat(60_000);
+  const t3 = await stub(fixture([linkedEnvironment], [linkedThread("mcp:talk", { items: [
+    linkedItem("user_message", "First ask"),
+    linkedItem("assistant_message", "Which branch?"),
+    linkedItem("user_message", "agent says hi", { createdBy: "agent", creationSource: "mcp" }),
+    linkedItem("user_message", "server relay", { createdBy: "user", creationSource: "server" }),
+    linkedItem("user_message", "agent from the web", { createdBy: "agent", creationSource: "web" }),
+    linkedItem("user_message", long, { itemId: "long-ask", creationSource: "mobile" }),
+  ] })]));
+  const { code, output } = await thread(t3, ["read", "talk", "--words"]);
+  const read = JSON.parse(output);
+
+  expect(code).toBe(0);
+  expect(read.host).toBe("devbox-2");
+  expect(read.words.map((word: { thread: string; text: string; answered: string; source: string }) => [word.thread, word.text.length, word.answered, word.source])).toEqual([
+    ["mcp:talk", "First ask".length, "", "typed"],
+    ["mcp:talk", 60_000, "Which branch?", "typed"],
+  ]);
+  expect(read.words[1].text).toBe(long);
+});
+
+test("fleet thread read --words reads every page of a long thread on a linked machine, each word at the time T3 gives its item", async () => {
+  const items = Array.from({ length: 150 }, (_, index) => index === 1 || index === 140
+    ? linkedItem("user_message", `Ask ${index}`, { itemId: `ask-${index}`, updatedAt: `2026-10-25T07:${String(index % 60).padStart(2, "0")}:00.000Z` })
+    : linkedItem("assistant_message", `Reply ${index}`, { itemId: `reply-${index}` }));
+  const t3 = await stub(fixture([linkedEnvironment], [linkedThread("mcp:long", { items })]));
+  const read = JSON.parse((await thread(t3, ["read", "long", "--words"])).output);
+
+  expect(read.words.map((word: { text: string; answered: string; at: string }) => [word.text, word.answered, word.at])).toEqual([
+    ["Ask 1", "Reply 0", "2026-10-25T07:01:00.000Z"],
+    ["Ask 140", "Reply 139", "2026-10-25T07:20:00.000Z"],
+  ]);
+  expect(t3.toolCalls.filter((call) => call.name === "t3_thread_read" && call.args.view === "messages").map((call) => call.args.afterPosition)).toEqual([undefined, 99]);
+});
+
 test("fleet thread list lists the threads of this machine and each linked environment", async () => {
   const t3 = await stub();
   const { code, output } = await thread(t3, ["list", "--json"]);

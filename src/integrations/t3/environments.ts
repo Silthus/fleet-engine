@@ -75,6 +75,19 @@ export async function readLinkedItemText(client: Pick<T3HttpClient, "callTool">,
   return text;
 }
 
+/** Every message of a thread on a linked machine, page by page. A page that does not move past the last one stops the read, so a T3 that repeats a page cannot loop it forever. */
+export async function readLinkedMessages(client: Pick<T3HttpClient, "callTool">, environmentId: string, threadId: string): Promise<{ thread: LinkedThreadDetail; items: LinkedTimelineItem[] }> {
+  const items: LinkedTimelineItem[] = [];
+  let afterPosition: number | undefined;
+  for (;;) {
+    const page = await readLinkedThread(client, environmentId, { threadId, view: "messages", ...(afterPosition === undefined ? {} : { afterPosition }), limit: 100, maxCharsPerItem: 50_000 });
+    items.push(...page.items);
+    if (!page.hasMore || page.nextPosition === null) return { thread: page.thread, items };
+    if (afterPosition !== undefined && page.nextPosition <= afterPosition) throw new Error(`T3 answered ${threadId} with position ${page.nextPosition} again`);
+    afterPosition = page.nextPosition;
+  }
+}
+
 export type LinkedSend = { threadId: string; messageId: string; delivery: "started" | "queued" | "steered" | "restarted" };
 
 export async function sendLinkedMessage(client: Pick<T3HttpClient, "callTool">, environmentId: string, threadId: string, message: string): Promise<LinkedSend> {
