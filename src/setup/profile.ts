@@ -35,20 +35,23 @@ function github(machine: Machine) {
     if (result.code !== 0) throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${lastLine(result.output)}`);
     return result.output.trim();
   };
-  const exists = async (repo: string) => {
-    const view = await machine.exec(["gh", "repo", "view", repo, "--json", "name"]);
-    if (view.code === 0) return true;
-    if (view.output.includes("Could not resolve to a Repository")) return false;
+  const visibility = async (repo: string) => {
+    const view = await machine.exec(["gh", "repo", "view", repo, "--json", "visibility", "--jq", ".visibility"]);
+    if (view.code === 0) return view.output.trim();
+    if (view.output.includes("Could not resolve to a Repository")) return undefined;
     throw new Error(`could not look up ${repo}: ${lastLine(view.output)}`);
   };
-  return { gh, exists, login: () => gh("api", "user", "--jq", ".login") };
+  const exists = async (repo: string) => (await visibility(repo)) !== undefined;
+  return { gh, exists, visibility, login: () => gh("api", "user", "--jq", ".login") };
 }
 
 /** The Memory pack's private repo: the one named, or <login>/fleet-memory. make() creates it when it is missing, or says it is reused. */
 export async function memoryRepo(machine: Machine, named: unknown, login?: string) {
-  const { gh, exists, login: signedIn } = github(machine);
+  const { gh, visibility, login: signedIn } = github(machine);
   const repo = typeof named === "string" ? named : `${login ?? (await signedIn())}/${memoryRepoName}`;
-  const missing = !(await exists(repo));
+  const seen = await visibility(repo);
+  const missing = seen === undefined;
+  if (!missing && !["PRIVATE", "INTERNAL"].includes(seen)) throw new Error(`${repo} is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.`);
   const make = async (print: (line: string) => void) => {
     if (missing) await gh("repo", "create", repo, "--private", "--description", "My agents' shared memory");
     print(missing ? `✓ Created the private repo ${repo}` : `✓ Reusing your repo ${repo}`);

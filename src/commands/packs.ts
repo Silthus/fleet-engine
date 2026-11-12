@@ -35,7 +35,7 @@ export async function packsCommand(args: string[], context: ChangeContext): Prom
       if (isOn && (!wasOn || flags.workflows[workflow.id] === true)) context.print(`Before you use ${workflow.name}: ${workflow.risk}`);
     }
   }
-  if (flags.add.includes("memory")) {
+  if (flags.add.includes("memory") && packs.includes("memory")) {
     const memory = await memoryRepo(context.machine, settings["memory.repo"] ?? context.profile.settings["memory.repo"]);
     await memory.make(context.print);
     settings["memory.repo"] = memory.repo;

@@ -152,6 +152,15 @@ describe("fleet setup profile", () => {
     expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": "nora/fleet-memory" });
   });
 
+  test("with Memory on it refuses a memory repo that is public, before it creates anything", async () => {
+    const home = temp.make("home-");
+    await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/fleet-memory"));
+    const result = await fleetSetup(home, ["--preset", "starter", "--add", "memory", "--plan", "claude"], [""], fakeMachine(home, {}, { publicRepos: ["nora/fleet-memory"] }));
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: nora/fleet-memory is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.");
+    expect(existsSync(githubRepo(home, "nora/fleet-profile"))).toBe(false);
+  });
+
   test("n creates nothing and keeps the draft for the next run", async () => {
     const home = temp.make("home-");
     const declined = await fleetSetup(home, starter, ["", "n"]);

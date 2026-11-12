@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { main } from "../cli.ts";
 import { loadPacks } from "../pack/manifest.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
-import { isolateGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { profilePath } from "./profile.ts";
-import { engineRoot, fakeMachine, fleetSetup, githubRepo, machineFile, pushedAnswers, scripted } from "./testing.ts";
+import { engineRoot, fakeMachine, fleetSetup, githubRepo, machineFile, pushedAnswers, savedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -28,10 +28,11 @@ async function packsAfterSetup() {
   expect((await onMac(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"])).code).toBe(0);
   return {
     home,
-    packs: async (args: string[]) => {
+    packs: async (args: string[], options: Parameters<typeof fakeMachine>[2] = {}) => {
       const io = scripted([]);
-      const code = await main(["packs", ...args], { home, engineRoot, platform: "darwin", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: fakeMachine(home).machine } });
-      return { code, output: io.output() };
+      const box = fakeMachine(home, {}, options);
+      const code = await main(["packs", ...args], { home, engineRoot, platform: "darwin", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine } });
+      return { code, output: io.output(), gh: box.calls.filter((call) => call.command[0] === "gh") };
     },
   };
 }
@@ -54,6 +55,36 @@ describe("fleet packs --add memory", () => {
     expect(back.output).toContain("✓ Reusing your repo nora/custom-notes");
     expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(false);
     expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "memory"], settings: { "memory.repo": "nora/custom-notes" } });
+  });
+
+  test("makes no repo when the same command removes Memory again", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const result = await packs(["--add", "memory", "--remove", "memory"]);
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(false);
+    expect((await pushedAnswers(home)).packs).toEqual(["pull-requests"]);
+  });
+
+  test("refuses a public memory repo and changes nothing", async () => {
+    const { home, packs } = await packsAfterSetup();
+    await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/fleet-memory"));
+    const before = savedAnswers(home);
+    const result = await packs(["--add", "memory"], { publicRepos: ["nora/fleet-memory"] });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: nora/fleet-memory is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.");
+    expect(savedAnswers(home)).toEqual(before);
+    expect(await pushedAnswers(home)).toEqual(before);
+  });
+
+  test("stops before it saves when GitHub refuses to make the repo", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const before = savedAnswers(home);
+    const result = await packs(["--add", "memory"], { createFails: "nora" });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: gh repo create failed: GraphQL: you cannot create repos in nora");
+    expect(savedAnswers(home)).toEqual(before);
+    expect(await pushedAnswers(home)).toEqual(before);
   });
 });
 
