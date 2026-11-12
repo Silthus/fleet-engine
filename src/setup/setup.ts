@@ -91,6 +91,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     catalog,
     draft: progress.draft,
     timeZone: options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    draftMayBeBehind: Boolean(machine.profileDir),
     async answer(fields) {
       Object.assign(progress.draft, fields);
       await remember();
