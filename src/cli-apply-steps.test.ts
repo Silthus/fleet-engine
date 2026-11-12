@@ -51,3 +51,27 @@ describe("fleet apply --skip", () => {
     expect(existsSync(join(home, "box.txt"))).toBe(false);
   });
 });
+
+describe("fleet apply progress", () => {
+  test("names each step before its work is done, and stays quiet for a step that already holds", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithTools();
+    const profile = profileDir(["tools"]);
+    const progress: string[] = [];
+    const doneWhenNamed: Record<string, boolean> = {};
+    const print = (line: string) => {
+      const step = line.match(/^  … tools: (\w+)$/)?.[1];
+      if (!step) return;
+      progress.push(step);
+      doneWhenNamed[step] = existsSync(join(home, `${step}.txt`));
+    };
+    const apply = (args: string[]) => main(args, { home, engineRoot: engine, platform: "linux", env: {}, print });
+    expect(await apply(["apply", "--profile", profile])).toBe(0);
+    expect(progress).toEqual(["box", "codex"]);
+    expect(doneWhenNamed).toEqual({ box: false, codex: false });
+    expect([existsSync(join(home, "box.txt")), existsSync(join(home, "codex.txt"))]).toEqual([true, true]);
+    progress.length = 0;
+    expect(await apply(["apply"])).toBe(0);
+    expect(progress).toEqual([]);
+  });
+});
