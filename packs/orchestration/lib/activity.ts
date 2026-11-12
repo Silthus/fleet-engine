@@ -1,5 +1,5 @@
 import {
-  lastActivityAt, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedThread, readSnapshots, readThread, readThreadWords, readTurnItems, withT3Session,
+  lastActivityAt, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedThread, readLinkedThreadWords, readSnapshots, readThread, readThreadWords, readTurnItems, withT3Session,
   type LinkedThread, type LinkedTimelineItem, type ShellPullRequest, type ShellSnapshot, type T3Client, type T3HttpClient, type T3SessionOptions, type ThreadWord,
 } from "../../base/lib/t3/index.ts";
 import { liveStatuses, pickMachine, readEachMachine, readMachines, type MachineReport } from "./machines.ts";
@@ -204,7 +204,9 @@ async function readLocal(client: T3HttpClient, query: Query) {
 async function readLinked(client: T3HttpClient, environmentId: string, query: Query) {
   if (query.kind === "open") return { work: await readLinkedOpenWork(client, environmentId) };
   if (query.kind === "since") return { work: await readLinkedWorkSince(client, environmentId, query.since) };
-  if (query.kind === "thread") return { thread: await readLinkedThread(client, environmentId, { threadId: query.threadId }) };
+  if (query.kind === "thread") {
+    return query.words ? { words: await readLinkedThreadWords(client, environmentId, query.threadId) } : { thread: await readLinkedThread(client, environmentId, { threadId: query.threadId }) };
+  }
   return { threads: await readLinkedActivity(client, environmentId, query.limit) };
 }
 
@@ -213,9 +215,6 @@ export async function runActivity(args: string[], io: ActivityIo): Promise<numbe
   const reports = await withT3Session(async (client) => {
     const machines = local ? [{ host: io.host }] : await readMachines(client, io.host);
     const chosen = host ? [pickMachine(machines, host)] : machines;
-    if (query.kind === "thread" && query.words && chosen[0]?.environment) {
-      throw new Error("--words reads threads on this machine only, because only its T3 event store tells who answered. Run it there with --local.");
-    }
     return readEachMachine<{ threads?: Activity[]; thread?: unknown; words?: ThreadWord[]; work?: Work[] }>(
       chosen, () => readLocal(client, query), (environmentId) => readLinked(client, environmentId, query),
     );

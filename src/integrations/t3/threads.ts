@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
+import { readLinkedItemText, readLinkedThread, type LinkedTimelineItem } from "./environments.ts";
 import { t3StatePath, t3UserData } from "./server.ts";
 import type { T3Client, T3HttpClient } from "./session.ts";
 
@@ -106,6 +107,25 @@ export async function readThreadWords(client: T3HttpClient, value: string, state
   }
   return words;
 }
+
+export async function readLinkedThreadWords(client: Pick<T3HttpClient, "callTool">, environmentId: string, threadId: string): Promise<ThreadWord[]> {
+  const words: ThreadWord[] = [];
+  let lastAssistant = "";
+  let afterPosition: number | undefined;
+  for (;;) {
+    const page = await readLinkedThread(client, environmentId, { threadId, view: "messages", ...(afterPosition === undefined ? {} : { afterPosition }), limit: 100, maxCharsPerItem: 50_000 });
+    for (const item of page.items) {
+      if (item.type === "assistant_message" && item.text) lastAssistant = item.text;
+      if (typedByUserRemotely(item) && item.text) {
+        words.push({ thread: threadId, id: item.itemId, text: (await readLinkedItemText(client, environmentId, threadId, item))!, answered: lastAssistant.slice(0, answeredCap), at: item.updatedAt, source: "typed" });
+      }
+    }
+    if (!page.hasMore || page.nextPosition === null) return words;
+    afterPosition = page.nextPosition;
+  }
+}
+
+const typedByUserRemotely = (item: LinkedTimelineItem) => item.type === "user_message" && item.createdBy === "user" && ["web", "mobile"].includes(item.creationSource ?? "");
 
 const clientCommand = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
