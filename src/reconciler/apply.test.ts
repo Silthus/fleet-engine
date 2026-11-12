@@ -56,6 +56,19 @@ describe("apply", () => {
     expect((await apply(plan(), { home })).actions).toContainEqual({ target: ".agents/skills/team", operation: "remove" });
   });
 
+  test("--adopt-from keeps the other setup's claim while an outage keeps its file", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".agents"), { recursive: true });
+    writeFileSync(join(home, ".agents/AGENTS.md"), "old rules\n");
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    const state = JSON.stringify({ version: 1, groups: { core: { ".agents/AGENTS.md": { kind: "file", hash: "0".repeat(64) } } } });
+    writeFileSync(join(home, ".local/state/fleet/state.json"), state);
+    const offline = plan({ packs: [...plan().packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] });
+    await expect(apply(offline, { home, adoptFrom: ["core"] })).rejects.toThrow("Run fleet apply --adopt-from core again once it can apply .agents/AGENTS.md.");
+    expect(readFileSync(join(home, ".local/state/fleet/state.json"), "utf8")).toBe(state);
+    expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toBe("old rules\n");
+  });
+
   test("keeps skills whose source is unreachable, and shared files that would lose an unreachable pack's part", async () => {
     const home = temp.make("home-");
     const skill = temp.make("skill-");

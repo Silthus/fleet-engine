@@ -85,6 +85,10 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
   const state = await readState(home);
   for (const name of release) if (name === group || !state.groups[name]) throw new Error(`nothing to adopt from ${name}: Fleet's state names no other setup by that name`);
   const released = release.flatMap((name) => Object.keys(state.groups[name]!));
+  for (const name of release) {
+    const kept = hold.find((target) => Object.keys(state.groups[name]!).some((owned) => overlaps(owned, target)));
+    if (kept) throw new Error(`Fleet keeps ${kept} as it is in this run, so it cannot take over ${name} yet. Run fleet apply --adopt-from ${name} again once it can apply ${kept}.`);
+  }
   const previous = state.groups[group] ?? {};
   files = files.filter((file) => !skip.includes(file.target) && !hold.includes(file.target));
   const targets = new Set<string>();
@@ -98,13 +102,19 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
   const taken = (target: string) => adopt.includes(target) || released.some((owned) => overlaps(owned, target));
   const folders = new Map<string, string | undefined>();
   for (const file of files) folders.set(file.target, await linkedFolder(home, file.target));
-  const moved = new Set(files.filter((file) => taken(file.target) && !owner(file.target)).map((file) => folders.get(file.target)));
+  const claimant = (target: string) => owner(target) ?? (folders.get(target) ? owner(folders.get(target)!) : undefined);
+  const moved = new Set<string>();
+  for (const file of files) {
+    const folder = folders.get(file.target);
+    if (!folder || claimant(file.target)) continue;
+    if (taken(file.target) || (previous[folder] && await matches(inside(home, folder), previous[folder]))) moved.add(folder);
+  }
   for (const file of files) {
     if (targets.has(file.target)) throw new Error(`Duplicate target: ${file.target}`);
     targets.add(file.target);
     const path = inside(home, file.target);
     if ("source" in file && !(await stat(file.source))) throw new Error(`Missing source: ${file.source}`);
-    const other = owner(file.target);
+    const other = claimant(file.target);
     const folder = folders.get(file.target);
     const adopted = taken(file.target) || (folder !== undefined && moved.has(folder));
     if (other) actions.push({ target: file.target, operation: "conflict", reason: `Kept by the ${other} setup`, owner: other });
@@ -116,7 +126,7 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
     } else actions.push({ target: file.target, operation: "conflict", reason: previous[file.target] ? "Managed file changed locally" : file.conflict ?? "Existing unmanaged item" });
   }
   for (const [target, entry] of Object.entries(previous)) {
-    if (targets.has(target) || skip.includes(target)) continue;
+    if (targets.has(target) || skip.includes(target) || moved.has(target)) continue;
     if (hold.includes(target)) {
       actions.push({ target, operation: "keep" });
       continue;
