@@ -1,4 +1,4 @@
-import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { builtInApps, type CodexApp, type Upstream } from "./apps.ts";
 import { declaredUpstreams } from "./declared.ts";
@@ -8,7 +8,6 @@ import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBr
 
 const account = (app: CodexApp) => `${app.account ?? app.name}-codex`;
 export const appHome = (home: string, app: CodexApp) => join(dataDir(home), "data", account(app));
-const signInHome = (home: string, app: CodexApp) => join(dataDir(home), "sign-in", account(app));
 export const hubCodex = (home: string) => join(codexPackage(home), "current/bin/codex");
 
 type Config = Record<string, unknown>;
@@ -100,10 +99,10 @@ export async function codexApps(home: string) {
 }
 
 async function deviceSignIn(hub: Hub, app: CodexApp) {
-  const fresh = signInHome(hub.home, app);
-  await rm(fresh, { recursive: true, force: true });
-  await mkdir(fresh, { recursive: true, mode: 0o700 });
+  const signIns = join(dataDir(hub.home), "sign-in");
+  await mkdir(signIns, { recursive: true, mode: 0o700 });
   await mkdir(appHome(hub.home, app), { recursive: true, mode: 0o700 });
+  const fresh = await mkdtemp(join(signIns, `${account(app)}-`));
   try {
     const code = await Bun.spawn([hubCodex(hub.home), "login", "--device-auth"], { env: { ...process.env, CODEX_HOME: fresh }, stdio: ["inherit", "inherit", "inherit"] }).exited;
     if (!code) await rename(join(fresh, "auth.json"), join(appHome(hub.home, app), "auth.json"));

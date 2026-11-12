@@ -154,6 +154,20 @@ test("one ChatGPT sign-in serves every Google route and the gateway reloads all 
   expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
 });
 
+test("two Google sign-ins that overlap each finish, and the one that finishes last stays", async () => {
+  const { home, hub } = hubWith({});
+  for (const app of googleApps) await registerUpstream(hub, app);
+  const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
+  const wait = (file: string) => `until [ -f "${home}/${file}" ]; do sleep 0.01; done`;
+  writeFileSync(codex, `#!/bin/sh\nif mkdir "${home}/first" 2>/dev/null; then\n  echo first > "$CODEX_HOME/auth.json"\n  touch "${home}/first-started"\n  ${wait("second-done")}\nelse\n  ${wait("first-started")}\n  echo second > "$CODEX_HOME/auth.json"\n  touch "${home}/second-done"\nfi\n`);
+  chmodSync(codex, 0o755);
+  const first = signInApp(hub, gmail);
+  const second = signInApp(hub, googleCalendar);
+  expect(await second).toBe(0);
+  expect(await first).toBe(0);
+  expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "utf8")).toBe("first\n");
+});
+
 test("a group entry whose server is named like an object property keeps its own tool selection", async () => {
   const { api, hub } = hubWith({}, { servers: ["tickets", "constructor"] });
   api.groups[0]!.servers = ["tickets", { name: "constructor", tools: ["read"] }];
