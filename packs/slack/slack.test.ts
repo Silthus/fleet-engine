@@ -8,10 +8,10 @@ import { t3CliRunner, t3Threads } from "../../src/integrations/t3/index.ts";
 import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { secretStore } from "../../src/runner/context.ts";
-import { listen, ownerOf, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
-import { launchHere, launchOnBox, launchOnNodes, type Run } from "./lib/launch.ts";
+import { launcher, listen, ownerOf, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
+import { launchHere, launchOnBox, launchOnNodes, spawnRunner, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
-import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
+import { handleTrigger, retryPending, takeTurn, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
 import { startSlackStub, type Message } from "./testing.ts";
 
 const temp = tempDirs();
@@ -39,9 +39,9 @@ const saveApp = (home: string, tokens: Record<string, string>) => secretStore(ho
 const statePath = (home: string) => join(home, ".local/state/fleet/slack/slack-trigger.json");
 
 function processes(answers: (argv: string[], input?: string) => { code: number; stdout: string; stderr?: string } | undefined = () => undefined) {
-  const calls: Array<{ argv: string[]; input?: string }> = [];
-  const run: Run = async (argv, input) => {
-    calls.push({ argv, input });
+  const calls: Array<{ argv: string[]; input?: string; timeoutMs?: number }> = [];
+  const run: Run = async (argv, input, options) => {
+    calls.push({ argv, input, ...(options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) });
     if (argv.join(" ") === "git config --get user.name") return { code: 0, stdout: "Nora Example\n", stderr: "" };
     const answer = answers(argv, input);
     return answer ? { stderr: "", ...answer } : { code: 127, stdout: "", stderr: `${argv[0]}: not found` };
@@ -386,7 +386,7 @@ describe("a launch that fails", () => {
     ];
     const fleet = processes((argv) => (argv[0] === "ssh" ? answers.shift() : undefined));
     const { deps, replies, later } = rig([]);
-    deps.launch = launchOnNodes(["devbox-1", "devbox-2", "devbox-3"], fleet.run);
+    deps.launch = launchOnNodes(["devbox-1", "devbox-2", "devbox-3"], fleet.run, () => takeTurn(deps.statePath));
     await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
     later(60_000);
     await retryPending(deps);
@@ -402,7 +402,70 @@ describe("a launch that fails", () => {
   });
 
   test("a node launch has nothing to release when the trigger gives up", () => {
-    expect(launchOnNodes(["devbox-1"], processes().run).release).toBeUndefined();
+    expect(launchOnNodes(["devbox-1"], processes().run, () => 0).release).toBeUndefined();
+  });
+
+  test("on nodes, a launch whose answer is lost after it reached the node, such as a dropped SSH or a timeout, replays on that node only", async () => {
+    for (const lost of [
+      { code: 255, stdout: "", stderr: "Connection to devbox-1 closed by remote host.\n" },
+      { code: 124, stdout: "", stderr: "timed out after 300 s\n" },
+    ]) {
+      const answers = [lost, { code: 255, stdout: "", stderr: "ssh: connect to host devbox-1 port 22: Connection refused\n" }, { code: 0, stdout: `${JSON.stringify({ threadId: "thread-1" })}\n` }];
+      const fleet = processes((argv) => (argv[0] === "ssh" ? answers.shift() : undefined));
+      const { deps, later } = rig([]);
+      deps.launch = launchOnNodes(["devbox-1", "devbox-2"], fleet.run, () => takeTurn(deps.statePath));
+      await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+      for (const _ of [1, 2]) {
+        later(60_000);
+        await retryPending(deps);
+      }
+      const ssh = fleet.calls.filter((call) => call.argv[0] === "ssh");
+      expect(ssh.map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-1", "devbox-1"]);
+      expect(ssh.map((call) => JSON.parse(call.input!).replay)).toEqual([undefined, true, true]);
+    }
+  });
+
+  test("on nodes, a node with no room to start passes the launch to the next node", async () => {
+    const answers = [{ code: 1, stdout: `${JSON.stringify({ failed: "Free disk is below the start floor.", noRoom: true })}\n` }, { code: 0, stdout: `${JSON.stringify({ threadId: "thread-2" })}\n` }];
+    const fleet = processes((argv) => (argv[0] === "ssh" ? answers.shift() : undefined));
+    const { deps, later } = rig([]);
+    deps.launch = launchOnNodes(["devbox-1", "devbox-2"], fleet.run, () => takeTurn(deps.statePath));
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    later(60_000);
+    await retryPending(deps);
+    expect(fleet.calls.filter((call) => call.argv[0] === "ssh").map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-2"]);
+  });
+
+  test("on nodes, a claim left from box mode or from a node no longer listed does not hold", async () => {
+    for (const box of ["box-7", "devbox-9"]) {
+      const fleet = processes((argv) => (argv[0] === "ssh" ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-3" })}\n` } : undefined));
+      const launch = launchOnNodes(["devbox-1", "devbox-2"], fleet.run, () => 0);
+      expect(await launch({ title: "Slack: hi", prompt: "Do it.", commandId: "c1", claim: { box }, replay: true })).toMatchObject({ threadId: "thread-3", where: "devbox-1" });
+      expect(JSON.parse(fleet.calls[0]!.input!).replay).toBeUndefined();
+      expect(fleet.calls.some((call) => call.argv.includes(box))).toBe(false);
+    }
+  });
+
+  test("a node launch runs ssh with keepalives and a 300 s limit, and the limit kills a launch that hangs", async () => {
+    const fleet = processes((argv) => (argv[0] === "ssh" ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-4" })}\n` } : undefined));
+    await launchOnNodes(["devbox-1"], fleet.run, () => 0)({ title: "Slack: hi", prompt: "Do it.", commandId: "c1" });
+    expect(fleet.calls[0]!.timeoutMs).toBe(300_000);
+    expect(fleet.calls[0]!.argv.join(" ")).toContain("-o ServerAliveInterval=30 -o ServerAliveCountMax=3 devbox-1");
+
+    const limits: number[] = [];
+    const run = spawnRunner((fire, ms) => (limits.push(ms), queueMicrotask(fire), { cancel: () => {} }));
+    const hung = await run(["sh", "-c", "exec sleep 30"], undefined, { timeoutMs: 300_000 });
+    expect(limits).toEqual([300_000]);
+    expect(hung).toMatchObject({ code: 124, stderr: "timed out after 300 s\n" });
+    expect(await spawnRunner((fire) => (queueMicrotask(fire), { cancel: () => {} }))(["sh", "-c", "echo done"])).toEqual({ code: 0, stdout: "done\n", stderr: "" });
+  });
+
+  test("the turn among the nodes goes on where it stopped after the trigger restarts", async () => {
+    const home = await homeWithTokens();
+    const fleet = processes((argv) => (argv[0] === "ssh" ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-5" })}\n` } : undefined));
+    const deps = commandDeps(home, { env: { FLEET_SETTINGS: settings({ "slack.nodes": "devbox-1 devbox-2" }), FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
+    for (const commandId of ["c1", "c2", "c3"]) await launcher(deps, fleet.run)({ title: "Slack: hi", prompt: "Do it.", commandId });
+    expect(fleet.calls.map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-2", "devbox-1"]);
   });
 
   test("keeps a trigger whose Slack thread could not be read, and starts it on the next retry", async () => {

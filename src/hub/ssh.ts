@@ -23,8 +23,8 @@ export function onHub(hub: string, args: string[]): string[] {
   return onHost(hub, args);
 }
 
-/** The same ssh call from the hub to a node. */
-export function onHost(host: string, args: string[]): string[] {
+/** The same ssh call from the hub to a node. options: more ssh options, such as keepalives. */
+export function onHost(host: string, args: string[], options: string[] = []): string[] {
   if (!validHost(host)) throw new Error(`${host} is not an SSH host name`);
-  return ["ssh", "-T", ...batch, host, [launcher, ...args.map(quote)].join(" ")];
+  return ["ssh", "-T", ...batch, ...options, host, [launcher, ...args.map(quote)].join(" ")];
 }

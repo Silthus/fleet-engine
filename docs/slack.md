@@ -76,11 +76,15 @@ sends each event within a second, and no address is public.
 4. A failed launch retries every minute for a day, with the same command ID,
    so T3 starts one thread even when an answer got lost. On a box, the retries
    go to the same box, and Fleet releases that box when it gives up. On nodes,
-   a launch that did not reach T3 retries on the next node, and one that
-   reached T3 retries on the same node. You get one ephemeral reply about it.
+   a launch retries on the next node only when SSH could not connect, or the
+   node's disk was below the start floor. Any other failure, such as a dropped
+   connection or a launch that ran past its 300 s limit, retries on the same
+   node, because T3 there may have the thread already. You get one ephemeral
+   reply about it.
 
 `~/.local/state/fleet/slack/slack-trigger.json` keeps the handled messages for 31
-days, so each message starts one thread. The log is
+days, so each message starts one thread, and the next node in turn, so a
+restart does not start over with the first node. The log is
 `~/.local/state/fleet/jobs/slack-trigger.log`.
 
 ## Set up the Slack app

@@ -6,7 +6,7 @@ import type { Secrets, Threads } from "../../../src/sdk/index.ts";
 import { launchHere, launchOnBox, launchOnNodes, spawnRun, type Launch, type LaunchRequest, type Run } from "./launch.ts";
 import { manifest, manifestLink, serve, slackApi, slackApiBase, slackApp, type Sleep } from "./slack.ts";
 import { Interrupted, secretReader, type ReadSecret } from "./secret.ts";
-import { handleTrigger, retryPending, triggerOf, type Owner, type TriggerDeps } from "./trigger.ts";
+import { handleTrigger, retryPending, takeTurn, triggerOf, type Owner, type TriggerDeps } from "./trigger.ts";
 
 type Env = Record<string, string | undefined>;
 export type Every = (work: () => void, ms: number) => () => void;
@@ -73,9 +73,11 @@ export function nodesOf(env: Env): string[] {
   return [...new Set(nodes)];
 }
 
+const triggerState = (deps: SlackCommandDeps) => join(deps.stateDir, "slack-trigger.json");
+
 export function launcher(deps: SlackCommandDeps, run: Run): Launch {
   const nodes = nodesOf(deps.env);
-  if (nodes.length) return launchOnNodes(nodes, run);
+  if (nodes.length) return launchOnNodes(nodes, run, () => takeTurn(triggerState(deps)));
   if (optionalStringSetting("hub.boxTemplate", deps.env) !== undefined) return launchOnBox(join(deps.env.FLEET_ENGINE_DIR ?? "", "fleet"), run);
   return launchHere(deps.threads, roomHere(deps));
 }
@@ -103,7 +105,7 @@ export async function listen(deps: SlackCommandDeps): Promise<void> {
   const { appToken, userToken } = slackApp(saved);
   const replaced = new AbortController();
   const stop = deps.stop ? AbortSignal.any([deps.stop, replaced.signal]) : replaced.signal;
-  const trigger: TriggerDeps = { owner, now, log, slack: slackApi(userToken, deps.slackBase, deps.sleep), launch: launcher(deps, run), statePath: join(deps.stateDir, "slack-trigger.json") };
+  const trigger: TriggerDeps = { owner, now, log, slack: slackApi(userToken, deps.slackBase, deps.sleep), launch: launcher(deps, run), statePath: triggerState(deps) };
   const active = new Set<Promise<void>>();
   const track = (work: Promise<void>, failed: (error: unknown) => void) => {
     const tracked = work.catch(failed).finally(() => active.delete(tracked));
@@ -208,7 +210,7 @@ async function launchFromStdin(deps: SlackCommandDeps): Promise<number> {
   const request = JSON.parse(await deps.readStdin()) as Partial<LaunchRequest>;
   if (typeof request.title !== "string" || typeof request.prompt !== "string" || typeof request.commandId !== "string") throw new Error("fleet slack-trigger launch reads {\"title\", \"prompt\", \"commandId\"} as JSON on standard input");
   const launched = await launchHere(deps.threads, roomHere(deps))({ title: request.title, prompt: request.prompt, commandId: request.commandId, replay: request.replay === true });
-  if ("failed" in launched) return deps.print(JSON.stringify({ failed: launched.failed, ...(launched.reachedT3 ? { reachedT3: true } : {}) })), 1;
+  if ("failed" in launched) return deps.print(JSON.stringify({ failed: launched.failed, ...(launched.reachedT3 ? { reachedT3: true } : {}), ...(launched.noRoom ? { noRoom: true } : {}) })), 1;
   deps.print(JSON.stringify({ threadId: launched.threadId, ...(launched.url ? { url: launched.url } : {}) }));
   return 0;
 }
