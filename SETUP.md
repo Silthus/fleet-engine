@@ -14,10 +14,11 @@ passing `fleet doctor` on this Mac.
   tool takes fewer questions in one call, ask the rest in a second call right
   after the first.
 - **Secrets go through the secret prompt.** Ask for every secret, such as an
-  API key or a token, with the host's secret prompt (in T3 Code, its
-  `request_secret` tool), never in chat. Say in one line what the secret is
-  for and where to make it. A command that asks for a hidden secret itself,
-  such as `fleet slack-trigger setup`, runs in Terminal instead.
+  API key, a token, or a code to paste, with the host's secret prompt (in T3
+  Code, its `request_secret` tool), delivered as a file. Never ask in chat,
+  and never send a paste to a Terminal window. Say in one line what the
+  secret is for and where to make it. Then give the file to the command as
+  the step shows, on its standard input or in a variable, also over SSH.
 - **Say a word before you use it.** The first time you say a Fleet word to the
   person, such as workflow, pack, profile, hub, or node, explain it in one
   plain line.
@@ -42,10 +43,13 @@ passing `fleet doctor` on this Mac.
   maintainer, with private details taken out, so ask before you run the same
   command with `--send`. When `gh` is not signed in, `--send` saves the
   report to a file, says where, and exits 1. That exit is not a new failure.
-- **The keyboard in Terminal.** A command that needs the person's keyboard
-  runs in a Terminal window: write it to a file in `~/.cache/fleet-setup`
-  that ends in `.command`, with a `#!/bin/sh` line and the `PATH` line above,
-  make it executable, and `open` it. Ask them to tell you when it ends.
+- **Terminal only for a terminal screen.** A command that draws its own
+  screen in a terminal and reads the person's keys there, such as
+  `claude auth login` inside `fleet devbox add`, runs in a Terminal window:
+  write it to a file in `~/.cache/fleet-setup` that ends in `.command`, with
+  a `#!/bin/sh` line and the `PATH` line above, make it executable, and
+  `open` it. Ask them to tell you when it ends. Each step that needs this
+  says so.
 
 ## Picks from the page
 
@@ -311,8 +315,11 @@ When it ends with code `2`, it lists what it still needs:
 - **A line `--set <pack.key>=<value>   <question>`.** Ask the question with
   your question tool, then add `--set <pack.key>=<answer>` to the command.
 - **A line `Needs you: <sign-in>`, then `In a terminal, run: <command>`.**
-  It needs the person's keyboard, for example to paste a token. Say what it
-  is for, then run it in Terminal (see "The keyboard in Terminal").
+  Say what it is for. When the pack's setup note says how to give the
+  command its secrets, such as `fleet slack-trigger setup` in the Slack note,
+  follow the note: ask with the secret prompt and give the files to the
+  command. Only a command that draws its own terminal screen runs in Terminal
+  (see "Terminal only for a terminal screen").
 
 Then run the same command again. Every step skips what is done. On any other
 stop, read the last lines, explain them, and fix what they name. Use each
@@ -485,8 +492,9 @@ made, replace the early workspaces: see "Clean up what you replace".
    **Reuse**, delete the early hub with `coder delete <name>` after the
    person says yes, and skip items 6 and 7. Otherwise, `fleet devbox add`
    installs Fleet, applies their profile, and links T3 Code. It also signs
-   the workspace in to Coder, so the hub reaches the node over SSH. Its
-   sign-ins need their keyboard, so run it in a Terminal window:
+   the workspace in to Coder, so the hub reaches the node over SSH. Its Claude
+   sign-in, `claude auth login` on the workspace, draws its own terminal
+   screen and reads a code there, so run it in a Terminal window:
 
    ```sh
    printf '#!/bin/sh\nexport PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"\nfleet devbox add %s\n' 'coder.<hub>' > ~/.cache/fleet-setup/devbox.command && chmod +x ~/.cache/fleet-setup/devbox.command && open ~/.cache/fleet-setup/devbox.command
@@ -559,9 +567,11 @@ made, replace the early workspaces: see "Clean up what you replace".
     ssh coder.<name> 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet doctor'
     ```
 
-    Explain each line as in step 8. A `To do:` line on the hub that needs
-    their keyboard runs in a Terminal window as `ssh -t coder.<hub>` with the
-    same `PATH` line.
+    Explain each line as in step 8. When a `To do:` line on the hub names a
+    command that takes a token or a code, ask for it with the secret prompt
+    and give the file to the command over SSH, as its pack's setup note
+    shows. Only a command that draws its own terminal screen runs in a
+    Terminal window, as `ssh -t coder.<hub>` with the same `PATH` line.
 
 To add a node later, when the load grows, run items 3, 4, 5 and 9 above
 again with the next node name and a 500 GB disk, then `fleet doctor` on it.
