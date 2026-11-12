@@ -4,96 +4,179 @@ import type { CommandRunner } from "../run.ts";
 import { get, keyPath, type Document } from "./fields.ts";
 import { readState, writeWithBackups } from "./store.ts";
 
-export const pluginsTarget = ".config/fleet/plugins.json";
+export const pluginsTarget = ".config/fleet/provider-plugins.json";
+const earlierTarget = ".config/fleet/plugins.json";
 const pluginId = /^[a-z0-9][a-z0-9._-]*@[a-z0-9][a-z0-9._-]*$/;
 
-export type Manager = "claude" | "codex";
-type Owned = Record<Manager, string[]>;
-type Cli = (args: string[]) => ReturnType<CommandRunner>;
+type CodexOwned = { id: string; version: string; enabled: boolean; pending?: true };
+type ClaudeOwned = { id: string; enabled?: boolean };
+type Owned = { claude: ClaudeOwned[]; codex: CodexOwned[] };
+type Installed = { id: string; version: string; enabled: boolean };
+type Claude = (args: string[]) => ReturnType<CommandRunner>;
+type Codex = Claude;
 type Sources = Record<string, string | null>;
 
-const managers: Manager[] = ["claude", "codex"];
-const names: Record<Manager, string> = { claude: "Claude", codex: "Codex" };
 const officialMarketplaces: Sources = { "claude-plugins-official": "anthropics/claude-plugins-official" };
 
-const declared: Record<Manager, (path: string[], value: unknown) => string | undefined> = {
-  claude: ([root, id, ...rest], value) => (root === "enabledPlugins" && id && !rest.length && value === true ? id : undefined),
-  codex: ([root, id, ...rest], value) => (root === "plugins" && id && !rest.length && (value as { enabled?: unknown } | null)?.enabled === true ? id : undefined),
-};
-
-const commands: Record<Manager, { list: string[]; install: (id: string) => string[]; remove: (id: string) => string[]; clearEnv: string[] }> = {
-  claude: { list: ["list", "--json"], install: (id) => ["install", id, "--scope", "user"], remove: (id) => ["uninstall", id, "--scope", "user", "--keep-data"], clearEnv: [] },
-  codex: { list: ["list", "--json"], install: (id) => ["add", id, "--json"], remove: (id) => ["remove", id, "--json"], clearEnv: ["CODEX_HOME"] },
-};
-
-export function wantedPlugins(plan: Plan, manager: Manager = "claude") {
+export function wantedPlugins(plan: Plan) {
   return plan.config.flatMap((entry) => {
-    const id = entry.provider === manager ? declared[manager](keyPath(entry.key), entry.value) : undefined;
-    if (id === undefined) return [];
-    if (!pluginId.test(id)) throw new Error(`${entry.pack} enables an invalid ${names[manager]} plugin id: ${id}`);
+    const [root, id, ...rest] = keyPath(entry.key);
+    if (entry.provider !== "claude" || root !== "enabledPlugins" || !id || rest.length || entry.value !== true) return [];
+    if (!pluginId.test(id)) throw new Error(`${entry.pack} enables an invalid Claude plugin id: ${id}`);
     return [id];
   });
 }
 
-export function acceptedPlugins(manager: Manager, document: Document) {
-  const root = get(document, manager === "claude" ? ["enabledPlugins"] : ["plugins"]);
-  if (!root || typeof root !== "object") return [];
-  return Object.entries(root).flatMap(([id, on]) => ((manager === "claude" ? on : (on as { enabled?: unknown } | null)?.enabled) === true ? [id] : []));
+export function wantedCodexPlugins(plan: Plan) {
+  return plan.config.flatMap((entry) => {
+    const [root, id, field, ...rest] = keyPath(entry.key);
+    if (entry.provider !== "codex" || root !== "plugins" || !id || field !== "enabled" || rest.length || entry.value !== true) return [];
+    if (!pluginId.test(id)) throw new Error(`${entry.pack} enables an invalid Codex plugin id: ${id}`);
+    return [id];
+  });
 }
 
-/** Installs the plugins packs enable, through each provider's CLI in the given home. Removes only plugins that Fleet installed. */
-export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: { outage: boolean; accepted?: Partial<Owned>; marketplaces?: Sources }): Promise<Finding[]> {
+type PluginSettings = { outage: boolean; accepted?: string[]; claudeEnabled?: Record<string, boolean>; marketplaces?: Sources; acceptedCodex?: string[] };
+
+/** Installs the plugins packs enable, through Claude Code and Codex in the given home. Removes only plugins that Fleet installed. Reads the earlier Fleet's record, and never writes it. */
+export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: PluginSettings): Promise<Finding[]> {
   const text = await readState(home, pluginsTarget);
-  const { owned, inherited } = parseOwned(text);
-  const findings: Finding[] = [];
-  const next: Owned = { claude: [], codex: [] };
-  for (const manager of managers) {
-    const result = await reconcileManager(manager, plan, home, dryRun, run, settings, owned[manager], inherited[manager]);
-    findings.push(...result.findings);
-    next[manager] = result.owned;
+  const record = parseOwned(text ?? (await readState(home, earlierTarget)), text === undefined ? earlierTarget : pluginsTarget);
+  let saved = text;
+  const save = async (next: Owned) => {
+    const after = encodeOwned(next);
+    if (dryRun || after === (saved ?? encodeOwned({ claude: [], codex: [] }))) return;
+    await writeWithBackups(home, [{ target: pluginsTarget, before: saved, after }]);
+    saved = after;
+  };
+  const claude = await reconcileClaude(plan, home, dryRun, run, settings, record.claude);
+  if (claude.owned) await save({ ...record, claude: claude.owned });
+  const owned = { ...record, ...(claude.owned ? { claude: claude.owned } : {}) };
+  const codex = await reconcileCodex(plan, home, dryRun, run, settings, owned.codex, (next) => save({ ...owned, codex: next }));
+  return [...claude.findings, ...codex];
+}
+
+async function reconcileClaude(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: PluginSettings, record: ClaudeOwned[]): Promise<{ findings: Finding[]; owned?: ClaudeOwned[] }> {
+  const outage = settings.outage;
+  const planned = wantedPlugins(plan);
+  const owned = record.map((entry) => entry.id);
+  const wanted = planned.filter((id) => settings.accepted?.includes(id));
+  if (!planned.length && !owned.length) return { findings: [] };
+  if (!settings.accepted) return { findings: planned.length ? [{ id: "plugins:claude", pack: "engine", say: `Claude plugins wait until Fleet can change .claude/settings.json: ${planned.join(", ")}.`, repair: "apply" }] : [] };
+  const claude = (args: string[]) => run(["claude", "plugin", ...args], { home });
+  const installed = await listInstalled(claude);
+  if (!installed) {
+    return { findings: planned.length ? [{ id: "plugins:claude", pack: "engine", say: `Claude Code is not installed yet, so its plugins wait: ${planned.join(", ")}.`, repair: "apply" }] : [] };
   }
-  if (dryRun || (text !== undefined && !Object.values(inherited).every((ids) => !ids.length) && !next.claude.length && !next.codex.length)) return findings;
-  const after = `${JSON.stringify(next.codex.length ? next : { claude: next.claude }, null, 2)}\n`;
-  if (after !== (text ?? `${JSON.stringify({ claude: [] }, null, 2)}\n`)) await writeWithBackups(home, [{ target: pluginsTarget, before: text, after }]);
+  const missing = wanted.filter((id) => !installed.includes(id));
+  const leaving = outage ? [] : record.filter((entry) => !planned.includes(entry.id) && installed.includes(entry.id));
+  const changedOutside = (entry: ClaudeOwned) => entry.enabled !== undefined && settings.claudeEnabled?.[entry.id] !== undefined && settings.claudeEnabled[entry.id] !== entry.enabled;
+  const released = leaving.filter(changedOutside).map((entry) => entry.id);
+  const departed = leaving.map((entry) => entry.id).filter((id) => !released.includes(id));
+  const releasedFindings = released.map((id) => ({ id: `plugin:${id}`, pack: "engine", say: `Kept the Claude plugin ${id}, which no pack enables any more, because it changed outside Fleet. It is yours now.` }));
+  if (dryRun) {
+    return { findings: [
+      ...missing.map((id) => ({ id: `plugin:${id}`, pack: "engine", say: `The Claude plugin ${id} needs to be installed.`, repair: "apply" as const })),
+      ...departed.map((id) => ({ id: `plugin:${id}`, pack: "engine", say: `The Claude plugin ${id} needs to be removed.`, repair: "apply" as const })),
+      ...releasedFindings,
+    ] };
+  }
+  const { findings, unreachable } = await fetchMarketplaces(claude, missing, { ...officialMarketplaces, ...settings.marketplaces });
+  findings.push(...releasedFindings);
+  const next = new Map(record.filter((entry) => !released.includes(entry.id) && (installed.includes(entry.id) || (outage && !planned.includes(entry.id)))).map((entry) => [entry.id, entry]));
+  for (const id of missing.filter((id) => !unreachable.includes(marketplaceOf(id)))) {
+    if ((await claude(["install", id, "--scope", "user"])).code === 0) next.set(id, { id, enabled: true });
+    else findings.push({ id: `plugin:${id}`, pack: "engine", say: `Could not install the Claude plugin ${id}.`, repair: "apply" });
+  }
+  for (const id of departed) {
+    if ((await claude(["uninstall", id, "--scope", "user", "--keep-data"])).code === 0) next.delete(id);
+    else findings.push({ id: `plugin:${id}`, pack: "engine", say: `Could not remove the Claude plugin ${id}.`, repair: "apply" });
+  }
+  return { findings, owned: [...next.values()].sort((a, b) => a.id.localeCompare(b.id)) };
+}
+
+const codexFinding = (id: string, say: string): Finding => ({ id: `plugin:codex:${id}`, pack: "engine", say, repair: "apply" });
+
+async function reconcileCodex(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: PluginSettings, owned: CodexOwned[], save: (next: CodexOwned[]) => Promise<void>): Promise<Finding[]> {
+  const planned = wantedCodexPlugins(plan);
+  if (!planned.length && !owned.length) return [];
+  if (!settings.acceptedCodex) return planned.length ? [{ id: "plugins:codex", pack: "engine", say: `Codex plugins wait until Fleet can change .codex/config.toml: ${planned.join(", ")}.`, repair: "apply" }] : [];
+  const wanted = planned.filter((id) => settings.acceptedCodex!.includes(id));
+  const codex: Codex = (args) => run(["codex", "plugin", ...args], { home });
+  const installed = await listCodex(codex);
+  if (!installed) return planned.length ? [{ id: "plugins:codex", pack: "engine", say: `Codex is not installed yet, so its plugins wait: ${planned.join(", ")}.`, repair: "apply" }] : [];
+  const findings: Finding[] = [];
+  const record = new Map(owned.map((entry) => [entry.id, entry]));
+  const commit = () => save([...record.values()].sort((a, b) => a.id.localeCompare(b.id)));
+  const present = (id: string) => installed.find((entry) => entry.id === id);
+  const install = async (id: string) => {
+    if (dryRun) return void findings.push(codexFinding(id, `The Codex plugin ${id} needs to be installed.`));
+    record.set(id, { id, version: "", enabled: false, pending: true });
+    await commit();
+    const added = await codex(["add", id, "--json"]);
+    const listed = await listCodex(codex);
+    const after = listed?.find((entry) => entry.id === id);
+    if (after) record.set(id, after);
+    else if (listed) record.delete(id);
+    await commit();
+    if (added.code !== 0 || !after) findings.push(codexFinding(id, `Could not install the Codex plugin ${id}: ${added.code !== 0 ? reasonOf(added) : listed ? "Codex does not list it afterwards" : "Codex cannot list its plugins afterwards"}. Fleet tries again at the next apply.`));
+  };
+  for (const id of wanted) {
+    const found = present(id);
+    const mine = record.get(id);
+    if (!found) {
+      const twin = installed.find((entry) => nameOf(entry.id) === nameOf(id));
+      if (twin) findings.push(codexFinding(id, `Did not install the Codex plugin ${id}: ${twin.id} is already installed under the same name. Remove one of them.`));
+      else await install(id);
+      continue;
+    }
+    if (!mine) continue;
+    if (mine.pending) {
+      record.set(id, found);
+      continue;
+    }
+    if (found.enabled !== mine.enabled) {
+      findings.push(codexFinding(id, `Kept the Codex plugin ${id} as you left it: it is ${found.enabled ? "enabled" : "disabled"} now, and Fleet installed it ${mine.enabled ? "enabled" : "disabled"}.`));
+      continue;
+    }
+    if (found.version !== mine.version) record.set(id, { ...mine, version: found.version });
+  }
+  for (const mine of [...record.values()].filter((entry) => !planned.includes(entry.id))) {
+    if (settings.outage) continue;
+    const found = present(mine.id);
+    if (!found) {
+      if (!dryRun) record.delete(mine.id);
+      continue;
+    }
+    if (!mine.pending && found.enabled !== mine.enabled) {
+      findings.push(codexFinding(mine.id, `Kept the Codex plugin ${mine.id}, which no pack enables any more, because it changed outside Fleet. It is yours now.`));
+      if (!dryRun) record.delete(mine.id);
+      continue;
+    }
+    if (dryRun) {
+      findings.push(codexFinding(mine.id, `The Codex plugin ${mine.id} needs to be removed.`));
+      continue;
+    }
+    const removed = await codex(["remove", mine.id, "--json"]);
+    if (removed.code === 0) record.delete(mine.id);
+    else findings.push(codexFinding(mine.id, `Could not remove the Codex plugin ${mine.id}: ${reasonOf(removed)}.`));
+  }
+  await commit();
   return findings;
 }
 
-async function reconcileManager(manager: Manager, plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: { outage: boolean; accepted?: Partial<Owned>; marketplaces?: Sources }, previous: string[], inherited: string[]): Promise<{ findings: Finding[]; owned: string[] }> {
-  const outage = settings.outage;
-  const name = names[manager];
-  const planned = wantedPlugins(plan, manager);
-  const accepted = settings.accepted?.[manager];
-  const wanted = planned.filter((id) => accepted?.includes(id));
-  if (!planned.length && !previous.length) return { findings: [], owned: previous };
-  if (!accepted) return { findings: planned.length ? [{ id: `plugins:${manager}`, pack: "engine", say: `${name} plugins wait until Fleet can change ${manager === "claude" ? ".claude/settings.json" : ".codex/config.toml"}: ${planned.join(", ")}.`, repair: "apply" }] : [], owned: previous };
-  const cli: Cli = (args) => run([manager, "plugin", ...args], { home, ...(commands[manager].clearEnv.length ? { clearEnv: commands[manager].clearEnv } : {}) });
-  const installed = await listInstalled(manager, cli);
-  if (!installed) {
-    return { findings: planned.length ? [{ id: `plugins:${manager}`, pack: "engine", say: `${manager === "claude" ? "Claude Code" : "Codex"} is not installed yet, so its plugins wait: ${planned.join(", ")}.`, repair: "apply" }] : [], owned: previous };
-  }
-  const owned = [...new Set([...previous, ...inherited.filter((id) => planned.includes(id))])];
-  const missing = wanted.filter((id) => !installed.includes(id));
-  const departed = outage ? [] : owned.filter((id) => !planned.includes(id) && installed.includes(id));
-  if (dryRun) {
-    return {
-      owned,
-      findings: [
-        ...missing.map((id) => ({ id: `plugin:${id}`, pack: "engine", say: `The ${name} plugin ${id} needs to be installed.`, repair: "apply" as const })),
-        ...departed.map((id) => ({ id: `plugin:${id}`, pack: "engine", say: `The ${name} plugin ${id} needs to be removed.`, repair: "apply" as const })),
-      ],
-    };
-  }
-  const { findings, unreachable } = manager === "claude" ? await fetchMarketplaces(cli, missing, { ...officialMarketplaces, ...settings.marketplaces }) : { findings: [] as Finding[], unreachable: [] as string[] };
-  const next = new Set(owned.filter((id) => installed.includes(id) || (outage && !planned.includes(id))));
-  for (const id of missing.filter((id) => !unreachable.includes(marketplaceOf(id)))) {
-    if ((await cli(commands[manager].install(id))).code === 0) next.add(id);
-    else findings.push({ id: `plugin:${id}`, pack: "engine", say: `Could not install the ${name} plugin ${id}.`, repair: "apply" });
-  }
-  for (const id of departed) {
-    if ((await cli(commands[manager].remove(id))).code === 0) next.delete(id);
-    else findings.push({ id: `plugin:${id}`, pack: "engine", say: `Could not remove the ${name} plugin ${id}.`, repair: "apply" });
-  }
-  return { findings, owned: [...next].sort() };
+const nameOf = (id: string) => id.slice(0, id.indexOf("@"));
+
+async function listCodex(codex: Codex): Promise<Installed[] | undefined> {
+  const result = await codex(["list", "--json"]);
+  if (result.code !== 0) return undefined;
+  const entries = (JSON.parse(result.stdout) as { installed?: unknown })?.installed;
+  if (!Array.isArray(entries)) throw new Error("Codex printed an unknown plugin list format");
+  return entries.flatMap((entry) => {
+    const value = entry as Record<string, unknown>;
+    if (typeof value?.pluginId !== "string" || typeof value.version !== "string" || typeof value.enabled !== "boolean") throw new Error("Codex printed an unknown plugin list entry");
+    return [{ id: value.pluginId, version: value.version, enabled: value.enabled }];
+  });
 }
 
 export function declaredMarketplaces(settings: Document): Sources {
@@ -112,7 +195,7 @@ function addSource(source: unknown) {
   return Object.keys(fields).length === 1 && typeof value === "string" ? value : undefined;
 }
 
-async function fetchMarketplaces(claude: Cli, plugins: string[], sources: Sources): Promise<{ findings: Finding[]; unreachable: string[] }> {
+async function fetchMarketplaces(claude: Claude, plugins: string[], sources: Sources): Promise<{ findings: Finding[]; unreachable: string[] }> {
   const needed = [...new Set(plugins.map(marketplaceOf))];
   const fetched = needed.length ? await listMarketplaces(claude) : undefined;
   const findings: Finding[] = [];
@@ -134,7 +217,7 @@ async function fetchMarketplaces(claude: Cli, plugins: string[], sources: Source
   return { findings, unreachable };
 }
 
-async function listMarketplaces(claude: Cli): Promise<string[] | undefined> {
+async function listMarketplaces(claude: Claude): Promise<string[] | undefined> {
   const result = await claude(["marketplace", "list", "--json"]);
   if (result.code !== 0) return undefined;
   try {
@@ -148,30 +231,49 @@ async function listMarketplaces(claude: Cli): Promise<string[] | undefined> {
 const marketplaceOf = (id: string) => id.slice(id.indexOf("@") + 1);
 const reasonOf = (result: { code: number; stdout: string; stderr?: string }) => withoutCredentials((result.stderr || result.stdout).trim().split("\n")[0]!.replace(/^✘\s*/, "").replace(/\.$/, "")) || `exit ${result.code}`;
 
-async function listInstalled(manager: Manager, cli: Cli): Promise<string[] | undefined> {
-  const result = await cli(commands[manager].list);
+async function listInstalled(claude: Claude): Promise<string[] | undefined> {
+  const result = await claude(["list", "--json"]);
   if (result.code !== 0) return undefined;
-  const value = JSON.parse(result.stdout) as unknown;
-  const entries = manager === "claude" ? value : (value as { installed?: unknown } | null)?.installed;
-  if (!Array.isArray(entries)) throw new Error(`${names[manager]} printed an unknown plugin list format`);
-  return manager === "claude"
-    ? entries.flatMap((entry) => (entry && typeof entry.id === "string" && entry.scope === "user" ? [entry.id as string] : []))
-    : entries.flatMap((entry) => (entry && typeof entry.pluginId === "string" && entry.installed !== false ? [entry.pluginId as string] : []));
+  const entries = JSON.parse(result.stdout) as unknown;
+  if (!Array.isArray(entries)) throw new Error("Claude Code printed an unknown plugin list format");
+  return entries.flatMap((entry) => (entry && typeof entry.id === "string" && entry.scope === "user" ? [entry.id as string] : []));
 }
 
-const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every((id) => typeof id === "string");
+function encodeOwned(owned: Owned): string {
+  return `${JSON.stringify({ claude: owned.claude, ...(owned.codex.length ? { codex: owned.codex } : {}) }, null, 2)}\n`;
+}
 
-function parseOwned(text: string | undefined): { owned: Owned; inherited: Owned } {
-  const none = (): Owned => ({ claude: [], codex: [] });
-  if (text === undefined) return { owned: none(), inherited: none() };
+const isClaudeOwned = (entry: unknown): entry is ClaudeOwned | string => {
+  if (typeof entry === "string") return pluginId.test(entry);
+  const value = entry as Record<string, unknown>;
+  return typeof value?.id === "string" && pluginId.test(value.id) && (value.enabled === undefined || typeof value.enabled === "boolean");
+};
+const claudeOwned = (entry: ClaudeOwned | string): ClaudeOwned => (typeof entry === "string" ? { id: entry, enabled: true } : { id: entry.id, ...(entry.enabled === undefined ? {} : { enabled: entry.enabled }) });
+
+const isCodexOwned = (entry: unknown): entry is CodexOwned => {
+  const value = entry as Record<string, unknown>;
+  return typeof value?.id === "string" && pluginId.test(value.id) && typeof value.version === "string" && typeof value.enabled === "boolean" && (value.pending === undefined || value.pending === true);
+};
+
+function parseOwned(text: string | undefined, target: string): Owned {
+  if (text === undefined) return { claude: [], codex: [] };
   const value = JSON.parse(text) as { claude?: unknown; codex?: unknown; version?: unknown; installed?: unknown };
-  if (strings(value?.claude) && (value.codex === undefined || strings(value.codex))) return { owned: { claude: value.claude, codex: value.codex ?? [] }, inherited: none() };
-  if (value?.version === 1 && Array.isArray(value.installed)) {
-    const inherited = none();
-    for (const entry of value.installed as Array<{ provider?: unknown; id?: unknown }>) {
-      if ((entry?.provider === "claude" || entry?.provider === "codex") && typeof entry.id === "string") inherited[entry.provider].push(entry.id);
-    }
-    return { owned: none(), inherited };
-  }
-  throw new Error(`${pluginsTarget} is not a plugin record`);
+  const owned = value?.version === 1 && Array.isArray(value.installed) ? fromEarlierFleet(value.installed, target) : value;
+  const codex = owned?.codex ?? [];
+  const claude = owned?.claude;
+  if (!Array.isArray(claude) || !claude.every(isClaudeOwned) || !Array.isArray(codex) || !codex.every(isCodexOwned)) throw new Error(`${target} is not a plugin record`);
+  const unique = (ids: string[]) => new Set(ids).size === ids.length;
+  const parsed = { claude: claude.map(claudeOwned), codex: codex.map(({ id, version, enabled, pending }) => ({ id, version, enabled, ...(pending ? { pending } : {}) })) };
+  if (!unique(parsed.claude.map((entry) => entry.id)) || !unique(parsed.codex.map((entry) => entry.id))) throw new Error(`${target} is not a plugin record`);
+  return parsed;
+}
+
+function fromEarlierFleet(installed: unknown[], target: string): { claude: ClaudeOwned[]; codex: CodexOwned[] } {
+  const entries = installed.map((entry) => entry as Record<string, unknown>);
+  if (!entries.every((entry) => (entry?.provider === "claude" || entry?.provider === "codex") && isCodexOwned(entry))) throw new Error(`${target} is not a plugin record`);
+  const of = (provider: string) => entries.filter((entry) => entry.provider === provider) as unknown as CodexOwned[];
+  return {
+    claude: of("claude").map(({ id, enabled, pending }) => ({ id, ...(pending ? {} : { enabled }) })),
+    codex: of("codex"),
+  };
 }

@@ -262,7 +262,7 @@ describe("the site build", () => {
 
   test("the public build shows the Hub pack without its box workflow and box settings", () => {
     const hub = data.packs.find((pack) => pack.name === "hub")!;
-    expect(hub.workflows.map((workflow) => workflow.id)).toEqual(["disk-watch", "linked-hub", "dream", "own-account-balancing"]);
+    expect(hub.workflows.map((workflow) => workflow.id)).toEqual(["disk-watch", "linked-hub", "dream", "own-account-balancing", "proxy-panel"]);
     expect(hub.settings.map((setting) => setting.key).filter((key) => key.startsWith("hub.box"))).toEqual([]);
     expect(Object.keys(data.needLabels)).not.toContain("coder");
   });
