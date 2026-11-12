@@ -238,6 +238,23 @@ describe("on the hub", () => {
     expect((await fleet(["mcp-gateway", "sign", "in"])).code).toBe(2);
   });
 
+  test("doctor asks for the Slack sign-in while the bridge has none or the gateway lists it with no tools, and not while it lists them or does not answer", async () => {
+    const { home, fleet } = machine(hubMachine, { workflows: { "slack-bridge": true } });
+    writeMcpHubSettings(home);
+    const { state } = gatewayServer({ home, servers: ["tickets", "calendar", "slack"], toolCounts: { slack: 21 } });
+    const finding = "To do: The Slack bridge has no ChatGPT sign-in, or the gateway finds no Slack tools for it. Connect Slack in ChatGPT, Settings, Apps, then sign in with that ChatGPT account. Run: fleet mcp-gateway slack-bridge sign-in";
+    expect((await fleet(["doctor"])).output).toContain(finding);
+    mkdirSync(join(home, ".local/share/fleet-mcphub/data/slack-codex"), { recursive: true });
+    writeFileSync(join(home, ".local/share/fleet-mcphub/data/slack-codex/auth.json"), "{}");
+    state.toolCounts.slack = 0;
+    expect((await fleet(["doctor"])).output).toContain(finding);
+    state.toolCounts.slack = 21;
+    expect((await fleet(["doctor"])).output).not.toContain(finding);
+    state.toolCounts.slack = 0;
+    state.notReadyFor = 1000;
+    expect((await fleet(["doctor"])).output).not.toContain(finding);
+  });
+
   test("a solo machine, with no hub in the profile, is its own hub and issues its own key", async () => {
     const { home, fleet } = machine({ schema: 1, role: "linux", name: "only-1" }, { hub: undefined, devboxes: undefined });
     writeMcpHubSettings(home);

@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { gmail, googleApps, googleCalendar, slack } from "./apps.ts";
@@ -139,7 +140,7 @@ test("one ChatGPT sign-in serves every Google route and the gateway reloads all 
   const { api, home, hub } = hubWith({});
   for (const app of googleApps) await registerUpstream(hub, app);
   const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
-  writeFileSync(codex, `#!/bin/sh\necho "$*" >> "$CODEX_HOME/logins"\necho '{}' > "$CODEX_HOME/auth.json"\n`);
+  writeFileSync(codex, `#!/bin/sh\necho "$*" >> "${home}/logins"\necho '{}' > "$CODEX_HOME/auth.json"\n`);
   chmodSync(codex, 0o755);
   api.calls.length = 0;
   expect(await signInApp(hub, gmail)).toBe(0);
@@ -149,9 +150,45 @@ test("one ChatGPT sign-in serves every Google route and the gateway reloads all 
   writeFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "broken");
   api.calls.length = 0;
   expect(await signInApp(hub, googleCalendar)).toBe(0);
-  expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/logins"), "utf8")).toBe("login --device-auth\nlogin --device-auth\n");
+  expect(readFileSync(join(home, "logins"), "utf8")).toBe("login --device-auth\nlogin --device-auth\n");
   expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "utf8")).toBe("{}\n");
   expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
+});
+
+test("a sign-in reloads every Google route even when the gateway fails to list one route's tools", async () => {
+  const { api, home, hub } = hubWith({});
+  for (const app of googleApps) await registerUpstream(hub, app);
+  const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
+  writeFileSync(codex, `#!/bin/sh\necho '{}' > "$CODEX_HOME/auth.json"\n`);
+  chmodSync(codex, 0o755);
+  const gateway = hub.fetch;
+  let gmailReloaded = false;
+  hub.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/servers/gmail/reload")) gmailReloaded = true;
+    if (gmailReloaded && url.endsWith("/api/servers/gmail") && (init?.method ?? "GET") === "GET") return new Response(null, { status: 500 });
+    return gateway(input, init);
+  };
+  api.calls.length = 0;
+  expect(await signInApp(hub, gmail)).toBe(0);
+  expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
+});
+
+test("two Google sign-ins that overlap each finish, and the one that finishes last stays", async () => {
+  const { home, hub } = hubWith({});
+  for (const app of googleApps) await registerUpstream(hub, app);
+  const [started, release] = [join(home, "started"), join(home, "release")];
+  expect(await Bun.spawn(["mkfifo", started, release]).exited).toBe(0);
+  const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
+  writeFileSync(codex, `#!/bin/sh\nif mkdir "${home}/first" 2>/dev/null; then\n  echo first > "$CODEX_HOME/auth.json"\n  echo > "${started}"\n  read go < "${release}"\nelse\n  echo second > "$CODEX_HOME/auth.json"\nfi\n`);
+  chmodSync(codex, 0o755);
+  const first = signInApp(hub, gmail);
+  await readFile(started);
+  const second = await signInApp(hub, googleCalendar).catch((error: Error) => error.message);
+  await writeFile(release, "go\n");
+  expect(second).toBe(0);
+  expect(await first).toBe(0);
+  expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "utf8")).toBe("first\n");
 });
 
 test("a group entry whose server is named like an object property keeps its own tool selection", async () => {
