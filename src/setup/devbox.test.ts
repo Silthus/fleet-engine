@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { overSsh, pairing, profileForBox, sshHosts } from "./devbox.ts";
 import { claudeProbeTimeoutMs } from "./signins.ts";
-import { deadEnvironmentToken, fakeMachine, fleetSetup, machineFile, onBox, remote } from "./testing.ts";
+import { boxHome, deadEnvironmentToken, fakeMachine, fleetSetup, machineFile, onBox, remote } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -51,7 +51,7 @@ describe("the devbox over SSH", () => {
 
     const onTheBox = remote(box);
     expect(onTheBox).toContainEqual(expect.stringMatching(/curl -fsSL \S+\/get\.sh -o "\$installer" && sh "\$installer" --ref main --install-only/));
-    expect(onTheBox).toContain("gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,admin:public_key,admin:ssh_signing_key");
+    expect(onTheBox).toContain("gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,admin:public_key,admin:ssh_signing_key,workflow");
     expect(onTheBox).toContain("gh auth setup-git");
     expect(onTheBox).toContainEqual(expect.stringContaining(`gh repo clone https://github.com/nora/fleet-profile.git "$HOME/.local/share/fleet/profile" -- -q && sh "$HOME/.local/share/fleet/engine/get.sh" --ref main --profile "$HOME/.local/share/fleet/profile"`));
     expect(onTheBox).toContain("codex login --device-auth");
@@ -112,6 +112,34 @@ describe("the devbox over SSH", () => {
     expect(result.output).toContain("node-1 has no T3 Connect address yet. Update T3 Code on node-1, then run fleet setup again.");
     expect(box.calls.map((call) => call.command.join(" "))).not.toContainEqual(expect.stringContaining("t3 environment link"));
     expect(box.sessions().filter((session) => !session.revoked)).toEqual([]);
+  });
+
+  const limitRefusal = "[10:02:11.904] WARN (#12): T3 Connect could not provision the managed tunnel\n    error: 'Relay managed tunnel limit reached: this account allows at most 3 tunnels'\n";
+  const serverStart = "[10:02:11.120] INFO (#12): Listening on http://127.0.0.1:3773\n";
+
+  function nodeWithServiceLog(log: string) {
+    const home = homeWithHosts();
+    const path = join(boxHome(home, "node-1"), ".t3/userdata/logs/boot-service.log");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, log);
+    return home;
+  }
+
+  test("names the T3 Connect tunnel limit and the way out when the relay gave node-1 no tunnel", async () => {
+    const home = nodeWithServiceLog(`${serverStart}${limitRefusal}[10:02:12.001] INFO (#12): Agent scopes are on\n`);
+    const box = fakeMachine(home, {}, { tunnelStartsAfter: Number.POSITIVE_INFINITY });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("node-1 has no T3 Connect tunnel: T3 Code there says Relay managed tunnel limit reached: this account allows at most 3 tunnels. Free one: run t3 connect logout on a machine that no longer needs T3 Connect, or unlink it in T3 Connect. Then run systemctl --user restart t3code.service on node-1, and run fleet setup again.");
+    expect(result.output).not.toContain("Update T3 Code on node-1");
+  });
+
+  test("does not blame the tunnel limit that T3 Code on node-1 hit before its last restart", async () => {
+    const home = nodeWithServiceLog(`${serverStart}${limitRefusal}${serverStart}[10:09:40.300] WARN (#12): Relay client exited; restarting\n`);
+    const box = fakeMachine(home, {}, { tunnelStartsAfter: Number.POSITIVE_INFINITY });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.output).toContain("node-1 has no T3 Connect address yet. Update T3 Code on node-1, then run fleet setup again.");
+    expect(result.output).not.toContain("tunnel limit");
   });
 
   test.each([

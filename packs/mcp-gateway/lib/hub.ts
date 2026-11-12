@@ -22,7 +22,8 @@ export type Hub = {
 };
 
 type BearerKey = { id: string; name?: string; token: string; enabled: boolean; accessType?: string; allowedGroups?: string[] };
-type McpHubSettings = { mcpServers: Record<string, { oauth?: { pendingAuthorization?: { authorizationUrl?: string } } }>; systemConfig: { install: { baseUrl: string } }; bearerKeys: BearerKey[] };
+type ServerSettings = { type?: string; command?: string; startOnDemand?: boolean; oauth?: { pendingAuthorization?: { authorizationUrl?: string } } };
+type McpHubSettings = { mcpServers: Record<string, ServerSettings>; systemConfig: { install: { baseUrl: string } }; bearerKeys: BearerKey[] };
 
 export type Container = { Config: { Labels?: Record<string, string>; Env?: string[] }; Image: string; State: { Running: boolean }; Mounts?: Array<{ Destination: string }> };
 
@@ -124,8 +125,10 @@ export async function managementApi(hub: Hub) {
 }
 type Group = { id: string; name: string; servers: Array<string | ({ name: string; tools?: string[] | "all"; pinnedTools?: string[] } & Record<string, unknown>)> };
 
+type ServerState = { name: string; status: string; tools?: unknown[]; error?: string | null; enabled?: boolean };
+
 async function groupGap(call: Api) {
-  const servers = (await call<Array<{ name: string; status: string; tools?: unknown[] }>>("servers"));
+  const servers = (await call<ServerState[]>("servers"));
   const group = (await call<Group[]>("groups")).find((item) => item.name === gatewayGroup);
   const members = new Set((group?.servers ?? []).map((server) => (typeof server === "string" ? server : server.name)));
   return { servers, group, missing: servers.map((server) => server.name).filter((name) => !members.has(name)) };
@@ -174,6 +177,10 @@ export async function issueKey(machine: string, hub: Hub) {
   return key.token;
 }
 
+const sleepsBetweenCalls = (config: ServerSettings | undefined) => config?.startOnDemand === true && (config.type === "stdio" || (!config.type && Boolean(config.command)));
+const sleeping = (server: ServerState, config: ServerSettings | undefined) => server.status === "disconnected" && !server.error && server.enabled !== false && sleepsBetweenCalls(config);
+const shownStatus = (server: ServerState, config: ServerSettings | undefined) => (sleeping(server, config) ? "idle (on demand)" : server.status);
+
 export async function doctor(hub: Hub): Promise<boolean> {
   const settings = await readSettings(hub.home);
   if (!settings) return hub.print("MCPHub is not installed. Run: fleet apply"), false;
@@ -186,7 +193,7 @@ export async function doctor(hub: Hub): Promise<boolean> {
   if (!ok) hub.print("MCPHub accepts calls without a key. Check routing.skipAuth in its settings.");
   hub.print(`MCPHub dashboard: ${settings.systemConfig.install.baseUrl}/`);
   const { servers, missing } = await groupGap(api(hub, settings));
-  for (const server of servers) hub.print(`${server.name}: ${server.status}, ${server.tools?.length ?? 0} tools`);
+  for (const server of servers) hub.print(`${server.name}: ${shownStatus(server, settings.mcpServers[server.name])}, ${server.tools?.length ?? 0} tools`);
   if (missing.length) ok = false, hub.print(`The ${gatewayGroup} group lacks ${missing.join(", ")}. Run: fleet apply`);
   return ok;
 }

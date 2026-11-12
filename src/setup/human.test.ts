@@ -29,12 +29,12 @@ function teamSource(coder: { interactive?: true } = {}, manifest: typeof teamPac
 }
 
 describe("fleet setup sign-ins", () => {
-  test("GitHub opens the device page, polls every 2 s with no key press, and asks for all four scopes", async () => {
+  test("GitHub opens the device page, polls every 2 s with no key press, and asks for all five scopes", async () => {
     const home = temp.make("home-");
     const box = fakeMachine(home, { github: 3 });
     const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], box);
     expect(result.code).toBe(0);
-    expect(box.starts[0]).toEqual(["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--scopes", "repo,read:org,admin:public_key,admin:ssh_signing_key"]);
+    expect(box.starts[0]).toEqual(["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web", "--scopes", "repo,read:org,admin:public_key,admin:ssh_signing_key,workflow"]);
     expect(box.opened).toEqual(["https://github.com/login/device"]);
     expect(box.sleeps).toEqual([2000, 2000, 2000]);
     expect(result.prompts).toEqual(["Press ↵ to keep them, or e to change them: ", "  Go ahead? (Y/n) "]);
@@ -54,7 +54,22 @@ describe("fleet setup sign-ins", () => {
     const home = temp.make("home-");
     const box = fakeMachine(home, {}, narrow);
     expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], box)).code).toBe(0);
-    expect(box.starts[0]).toEqual(["gh", "auth", "refresh", "--hostname", "github.com", "--scopes", "repo,read:org,admin:public_key,admin:ssh_signing_key"]);
+    expect(box.starts[0]).toEqual(["gh", "auth", "refresh", "--hostname", "github.com", "--scopes", "repo,read:org,admin:public_key,admin:ssh_signing_key,workflow"]);
+  });
+
+  test("GitHub refreshes a sign-in made before Fleet asked for the workflow scope", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, {}, { scopes: "  - Token scopes: 'admin:public_key', 'admin:ssh_signing_key', 'gist', 'read:org', 'repo'" });
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], box)).code).toBe(0);
+    expect(box.starts[0]).toEqual(["gh", "auth", "refresh", "--hostname", "github.com", "--scopes", "repo,read:org,admin:public_key,admin:ssh_signing_key,workflow"]);
+  });
+
+  test("a GH_TOKEN that lacks only the workflow scope passes the GitHub step, since gh cannot refresh it", async () => {
+    const home = temp.make("home-");
+    const box = fakeMachine(home, {}, { scopes: "  ✓ Logged in to github.com account nora (GH_TOKEN)\n  - Token scopes: 'admin:public_key', 'admin:ssh_signing_key', 'read:org', 'repo'" });
+    expect((await fleetSetup(home, ["--preset", "starter", "--plan", "claude"], ["", ""], box)).code).toBe(0);
+    expect(box.starts.filter((command) => command[0] === "gh")).toEqual([]);
+    expect(machineFile(home).setup.done).toContain("github");
   });
 
   test("a member of the PostHog org gets its pack ticked, and the pack's sign-in runs its waiting steps", async () => {

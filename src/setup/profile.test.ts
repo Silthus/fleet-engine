@@ -152,6 +152,36 @@ describe("fleet setup profile", () => {
     expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": "nora/fleet-memory" });
   });
 
+  test("with Memory on it refuses a memory repo that is public, before it creates anything", async () => {
+    const home = temp.make("home-");
+    await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/fleet-memory"));
+    const result = await fleetSetup(home, ["--preset", "starter", "--add", "memory", "--plan", "claude"], [""], fakeMachine(home, {}, { publicRepos: ["nora/fleet-memory"] }));
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: nora/fleet-memory is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.");
+    expect(existsSync(githubRepo(home, "nora/fleet-profile"))).toBe(false);
+  });
+
+  test("with Memory on it refuses a public memory repo named by its GitHub URL, and keeps a private one as named", async () => {
+    const home = temp.make("home-");
+    await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/public-notes"));
+    const url = (name: string) => `git@github.com:nora/${name}.git`;
+    for (const named of [url("public-notes"), "https://GitHub.com:443/nora/public-notes/"]) {
+      const refused = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--add", "memory", "--plan", "claude", "--set", `memory.repo=${named}`], [], fakeMachine(home, {}, { publicRepos: ["nora/public-notes"] }));
+      expect({ named, code: refused.code, refused: refused.output.includes("fleet: nora/public-notes is not private") }).toEqual({ named, code: 1, refused: true });
+    }
+    const kept = await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--add", "memory", "--plan", "claude", "--set", `memory.repo=${url("notes")}`]);
+    expect(kept.code).toBe(0);
+    expect(kept.output).toContain("✓ Created the private repo nora/notes");
+    expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": url("notes") });
+  });
+
+  test("with Memory on and a GitHub scp form without a user it saves the owner/name the memory sync can read", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--add", "memory", "--plan", "claude", "--set", "memory.repo=github.com:nora/notes"])).code).toBe(0);
+    expect(existsSync(githubRepo(home, "nora/notes"))).toBe(true);
+    expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": "nora/notes" });
+  });
+
   test("n creates nothing and keeps the draft for the next run", async () => {
     const home = temp.make("home-");
     const declined = await fleetSetup(home, starter, ["", "n"]);

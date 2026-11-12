@@ -8,8 +8,8 @@ import { engineCommand } from "./engine-command.ts";
 import { changeLedger, ledgerKey, readLedger, undoVariable, type Ledger, type LedgerStep } from "./ledger.ts";
 import { hublessReason } from "./resolve.ts";
 
-export type AdapterContext = { home: string; dryRun: boolean; adopt: string[] };
-export type AdapterResult = { actions: Action[]; findings: Finding[] };
+export type AdapterContext = { home: string; dryRun: boolean; adopt: string[]; adoptFrom?: string[] };
+export type AdapterResult = { actions: Action[]; findings: Finding[]; blocked?: boolean };
 export type Adapter = {
   name: "files" | "config" | "jobs" | "identity" | "t3";
   /** The targets that --adopt may name for this adapter. */
@@ -31,36 +31,53 @@ export const filesGroup = "fleet";
 export const filesAdapter: Adapter = {
   name: "files",
   targets: (plan) => plan.files.map((file) => file.target),
-  async apply(plan, { home, dryRun, adopt }) {
+  async apply(plan, { home, dryRun, adopt, adoptFrom = [] }) {
     const own = adopt.filter((target) => plan.files.some((file) => file.target === target));
-    const first = await planFiles(home, plan.files, filesGroup, own);
+    const choices = { adopt: own, release: adoptFrom };
+    const first = await planFiles(home, plan.files, filesGroup, choices);
     const outage = unreachable(plan);
     const parked = outage.length ? first.filter((action) => action.operation === "remove" || action.operation === "replace") : [];
-    const kept = first.filter((action) => action.operation === "conflict");
+    const kept = first.filter((action) => action.operation === "conflict" && !action.owner);
+    const claimed = first.filter((action) => action.operation === "conflict" && action.owner);
+    if (claimed.length) return { actions: [...claimed, ...kept], findings: [...claimFindings(claimed), ...keptFindings(kept)], blocked: true };
     const hold = [...kept, ...parked].map((action) => action.target);
-    const findings: Finding[] = kept.map((action) => ({
-      id: `kept:${action.target}`,
-      pack: "engine",
-      say: `Kept your ${action.target} (${action.reason}). Run fleet apply --adopt ${action.target} to take Fleet's version.`,
-    }));
+    const findings = keptFindings(kept);
     if (parked.length) {
       findings.push({ id: "outage", pack: "engine", say: `Left ${parked.map((action) => action.target).join(", ")} as they are until ${outage.join(", ")} can be fetched.`, repair: "apply" });
     }
-    const preview = hold.length ? await planFiles(home, plan.files, filesGroup, own, [], hold) : first;
+    const preview = hold.length ? await planFiles(home, plan.files, filesGroup, { ...choices, hold }) : first;
     if (dryRun) {
       for (const action of preview.filter((item) => ["create", "replace", "remove"].includes(item.operation))) {
         findings.push({ id: `files:${action.target}`, pack: "engine", say: `${action.target} needs to ${action.operation === "create" ? "be created" : action.operation === "replace" ? "be updated" : "be removed"}.`, repair: "apply" });
       }
       return { actions: [...preview, ...kept], findings };
     }
-    const { actions } = await install(home, plan.files, filesGroup, own, [], hold);
+    const { actions } = await install(home, plan.files, filesGroup, { ...choices, hold });
     return { actions: [...actions, ...kept], findings };
   },
 };
 
+function keptFindings(kept: Action[]): Finding[] {
+  return kept.map((action) => ({
+      id: `kept:${action.target}`,
+      pack: "engine",
+      say: `Kept your ${action.target} (${action.reason}). Run fleet apply --adopt ${action.target} to take Fleet's version.`,
+  }));
+}
+
+function claimFindings(claimed: Action[]): Finding[] {
+  const owners = Map.groupBy(claimed, (action) => action.owner!);
+  return [...owners].map(([owner, actions]) => ({
+    id: `owner:${owner}`,
+    pack: "engine",
+    say: `Another Fleet setup keeps ${actions.length} of the files your profile writes, such as ${actions[0]!.target}, under the name ${owner} in ~/.local/state/fleet/state.json. Run fleet apply --adopt-from ${owner} to take them over. Fleet backs up that state and each file or linked folder it replaces in ~/.local/state/fleet/backups. A linked folder moves whole, with everything in it.`,
+    repair: "human",
+  }));
+}
+
 /** Skipped steps, named pack/id, wait for a later apply: this run neither runs nor undoes them. */
-export async function apply(plan: Plan, options: { home: string; dryRun?: boolean; adopt?: string[]; skip?: string[]; adapters?: Adapter[]; run?: Runner; issue?: Issuer; progress?: (line: string) => void }): Promise<Report> {
-  const context = { home: options.home, dryRun: options.dryRun ?? false, adopt: options.adopt ?? [] };
+export async function apply(plan: Plan, options: { home: string; dryRun?: boolean; adopt?: string[]; adoptFrom?: string[]; skip?: string[]; adapters?: Adapter[]; run?: Runner; issue?: Issuer; progress?: (line: string) => void }): Promise<Report> {
+  const context = { home: options.home, dryRun: options.dryRun ?? false, adopt: options.adopt ?? [], adoptFrom: options.adoptFrom ?? [] };
   const adapters = options.adapters ?? [filesAdapter];
   const adoptable = new Set(adapters.flatMap((adapter) => adapter.targets(plan)));
   const unknown = context.adopt.filter((target) => !adoptable.has(target));
@@ -81,6 +98,9 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
     const result = await adapter.apply(gated.plan, context);
     report.actions.push(...result.actions);
     report.findings.push(...result.findings);
+    if (!result.blocked) continue;
+    report.ok = false;
+    if (!context.dryRun) return report;
   }
   const before = await readLedger(options.home);
   const record = async (key: string, step?: LedgerStep) => {

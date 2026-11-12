@@ -8,7 +8,7 @@ import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { linkOnPath, readState, withLock, writeWithBackups, type Write } from "../provider-config/store.ts";
 import { skipOtherHome, spawnRunner, type CommandRunner } from "../run.ts";
 import { allowedSigners, fleetGitconfig, gitconfig, withInclude } from "./gitconfig.ts";
-import { githubIdentity, keyFields, registeredKeys, registerKey } from "./github.ts";
+import { githubIdentity, keyFields, registeredKeys, registerKey, workflowScopeMissing } from "./github.ts";
 import { coderScript, signer, signerNames, signerSetting, sshKeyTarget, type Signer, type SignerName } from "./signers.ts";
 
 export { signerSetting } from "./signers.ts";
@@ -50,6 +50,9 @@ async function reconcileIdentity(plan: Plan, signer: Signer, context: Context) {
   }
   const identity = await githubIdentity(run);
   if ("error" in identity) return void result.findings.push(finding("github", `Your Git identity waits for the GitHub sign-in (${identity.error}). Run gh auth login, then fleet apply.`, "human"));
+  const workflow = await workflowScopeMissing(run);
+  const refused = "lacks the workflow scope, so GitHub can refuse a push to a large repo even when it changes no workflow file.";
+  if (workflow) result.findings.push({ id: "identity:workflow", pack: "engine", say: workflow.fromEnvironment ? `The ${workflow.fromEnvironment} in your environment ${refused} Give that token the workflow scope.` : `Your GitHub sign-in ${refused} Run gh auth refresh -h github.com -s workflow.` });
   const key = await signingKey(signer, context);
   if (key === null) return;
   const wanted: Write[] = [{ target: fleetGitconfig, after: gitconfig(home, identity, signer) }];

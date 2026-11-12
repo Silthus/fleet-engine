@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import { loadPacks } from "../pack/manifest.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
-import { isolateGit, tempDirs } from "../testing/git.ts";
+import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { profilePath } from "./profile.ts";
-import { engineRoot, fakeMachine, fleetSetup, machineFile, pushedAnswers, scripted } from "./testing.ts";
+import { engineRoot, fakeMachine, fleetSetup, githubRepo, machineFile, pushedAnswers, savedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -22,6 +22,116 @@ async function grownProfile() {
   expect(await packs(["--add", "communication", "--add", "hub", "--workflows", "pr-digest=on", "--set", "hub.alias=coder.fleet-hub"])).toBe(0);
   return home;
 }
+
+async function packsAfterSetup() {
+  const home = temp.make("home-");
+  expect((await onMac(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"])).code).toBe(0);
+  return {
+    home,
+    packs: async (args: string[], options: Parameters<typeof fakeMachine>[2] = {}) => {
+      const io = scripted([]);
+      const code = await main(["packs", ...args], { home, engineRoot, platform: "darwin", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: fakeMachine(home, {}, options).machine } });
+      return { code, output: io.output() };
+    },
+  };
+}
+
+describe("fleet packs --add memory", () => {
+  test("creates the private memory repo, as setup does, and points memory.repo at it", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const added = await packs(["--add", "memory"]);
+    expect(added.code).toBe(0);
+    expect(added.output).toContain("✓ Created the private repo nora/fleet-memory");
+    expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(true);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "memory"], settings: { "memory.repo": "nora/fleet-memory" } });
+  });
+
+  test("reuses the memory repo the profile names when the pack comes back", async () => {
+    const { home, packs } = await packsAfterSetup();
+    expect((await packs(["--add", "memory", "--set", "memory.repo=nora/custom-notes"])).code).toBe(0);
+    expect((await packs(["--remove", "memory"])).code).toBe(0);
+    const back = await packs(["--add", "memory"]);
+    expect(back.output).toContain("✓ Reusing your repo nora/custom-notes");
+    expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(false);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "memory"], settings: { "memory.repo": "nora/custom-notes" } });
+  });
+
+  test("makes no repo when the same command removes Memory again", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const result = await packs(["--add", "memory", "--remove", "memory"], { createFails: "nora" });
+    expect(result.code).toBe(0);
+    expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(false);
+    expect((await pushedAnswers(home)).packs).toEqual(["pull-requests"]);
+  });
+
+  test("uses a memory repo URL as it is, and looks nothing up on GitHub", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const url = "git@example.com:nora/notes.git";
+    const result = await packs(["--add", "memory", "--set", `memory.repo=${url}`], { lookupFails: "nora", createFails: "nora" });
+    expect(result.code).toBe(0);
+    expect(result.output).toContain(`✓ Using your memory repo ${url}`);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "memory"], settings: { "memory.repo": url } });
+  });
+
+  test("refuses a public memory repo and changes nothing", async () => {
+    const { home, packs } = await packsAfterSetup();
+    await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/fleet-memory"));
+    const before = savedAnswers(home);
+    const result = await packs(["--add", "memory"], { publicRepos: ["nora/fleet-memory"] });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: nora/fleet-memory is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.");
+    expect(savedAnswers(home)).toEqual(before);
+    expect(await pushedAnswers(home)).toEqual(before);
+  });
+
+  test("makes a missing repo named by its GitHub SSH URL, and saves the URL as named", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const url = "git@github.com:nora/notes.git";
+    const result = await packs(["--add", "memory", "--set", `memory.repo=${url}`]);
+    expect(result.output).toContain("✓ Created the private repo nora/notes");
+    expect(existsSync(githubRepo(home, "nora/notes"))).toBe(true);
+    expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": url });
+  });
+
+  test("saves owner/name for a GitHub scp form without a user, which the memory sync cannot read", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const result = await packs(["--add", "memory", "--set", "memory.repo=github.com:nora/notes"]);
+    expect(result.code).toBe(0);
+    expect(existsSync(githubRepo(home, "nora/notes"))).toBe(true);
+    expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": "nora/notes" });
+  });
+
+  test("refuses a public memory repo named by any form of its GitHub URL", async () => {
+    const { home, packs } = await packsAfterSetup();
+    await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/public-notes"));
+    const before = savedAnswers(home);
+    for (const url of ["https://github.com/nora/public-notes.git", "https://GitHub.com/nora/public-notes.git", "https://github.com:443/nora/public-notes", "http://www.github.com/nora/public-notes/", "ssh://git@github.com:22/nora/public-notes.git", "git@GITHUB.COM:nora/public-notes.git", "github.com:nora/public-notes"]) {
+      const result = await packs(["--add", "memory", "--set", `memory.repo=${url}`], { publicRepos: ["nora/public-notes"] });
+      expect({ url, code: result.code, refused: result.output.includes("fleet: nora/public-notes is not private") }).toEqual({ url, code: 1, refused: true });
+    }
+    expect(await pushedAnswers(home)).toEqual(before);
+  });
+
+  test("refuses a GitHub URL whose path is not owner/name", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const before = savedAnswers(home);
+    const url = "https://github.com/nora/notes/tree/main";
+    const result = await packs(["--add", "memory", "--set", `memory.repo=${url}`]);
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(`fleet: ${url} is on GitHub, but Fleet cannot read its owner/name. Set memory.repo=<owner/name>.`);
+    expect(await pushedAnswers(home)).toEqual(before);
+  });
+
+  test("stops before it saves when GitHub refuses to make the repo", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const before = savedAnswers(home);
+    const result = await packs(["--add", "memory"], { createFails: "nora" });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: gh repo create failed: GraphQL: you cannot create repos in nora");
+    expect(savedAnswers(home)).toEqual(before);
+    expect(await pushedAnswers(home)).toEqual(before);
+  });
+});
 
 describe("a second fleet setup", () => {
   test("with no flags keeps the profile's packs, Hub pack, and workflows", async () => {

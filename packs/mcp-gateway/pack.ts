@@ -71,8 +71,8 @@ export default {
       os: "linux",
       when: slack,
       id: "slack-bridge-sign-in",
-      say: "The Slack bridge has no ChatGPT sign-in. Sign in with the account whose Slack app it should use.",
-      test: async (ctx) => (await upstreams()).appSignedIn(await host(ctx), await slackApp()),
+      say: "The Slack bridge has no ChatGPT sign-in, or the gateway finds no Slack tools for it. Connect Slack in ChatGPT, Settings, Apps, then sign in with that ChatGPT account.",
+      test: async (ctx) => (await upstreams()).appReady(await host(ctx), await slackApp()),
       repair: { ask: "Sign the Slack bridge in to ChatGPT.", command: "fleet mcp-gateway slack-bridge sign-in", interactive: true },
     });
     const sentences = {

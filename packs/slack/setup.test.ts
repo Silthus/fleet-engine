@@ -132,6 +132,40 @@ describe("fleet slack-trigger setup", () => {
     expect(slack.methods).toEqual(["apps.connections.open", "auth.test", "auth.test"]);
   });
 
+  for (const form of [{ where: "on the Mac", line: /^ *(printf .* \| fleet slack-trigger setup)$/m }, { where: "over SSH on the hub", line: /^ *(printf .* \| ssh coder\.<hub> '.*; fleet slack-trigger setup')$/m }]) {
+    test(`the setup note's command ${form.where} pipes both tokens from the secret prompt's files into setup, which saves them without printing them`, async () => {
+      const slack = slackStub();
+      const home = temp.make("home-");
+      const bin = join(home, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "fleet"), `#!/bin/sh\n[ "$*" = "slack-trigger setup" ] || exit 64\nexec bun '${harness(home)}' '${slack.base}'\n`, { mode: 0o755 });
+      writeFileSync(join(bin, "ssh"), `#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = coder.hub ] || exit 64\nexec sh -c "$2"\n`, { mode: 0o755 });
+      writeFileSync(join(home, "app-token"), appToken);
+      writeFileSync(join(home, "user-token"), `${userToken}\n`);
+      const note = readFileSync(join(import.meta.dir, "SETUP.md"), "utf8");
+      const command = note.match(form.line)![1]!.replace("<app token file>", join(home, "app-token")).replace("<user token file>", join(home, "user-token")).replace("coder.<hub>", "coder.hub");
+      const child = Bun.spawn(["sh", "-c", command], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`, HOME: home, FLEET_SETTINGS: settings } });
+      const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect([code, err]).toEqual([0, ""]);
+      expect(out).toContain("Saved both tokens where only you can read them.");
+      for (const token of tokens) expect(out).not.toContain(token);
+      expect(JSON.parse(readFileSync(tokensPath(home), "utf8"))).toEqual({ appToken, userToken });
+    });
+  }
+
+  test("with piped tokens, stops at the first token Slack refuses, names it, and saves nothing, instead of reading the next token as a second try", async () => {
+    const slack = slackStub();
+    const home = temp.make("home-");
+    const child = Bun.spawn(["bun", harness(home), slack.base], { stdin: new TextEncoder().encode(`xapp-test-refused\n${userToken}\n`), stdout: "pipe", stderr: "pipe", env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, FLEET_SETTINGS: settings } });
+    const [code, out] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+    expect(code).toBe(130);
+    expect(out).toContain("Paste the app-level token (xapp-…, hidden):    Slack did not accept it: apps.connections.open: invalid_auth.");
+    expect(out).not.toContain("does not start with");
+    expect(out).not.toContain("Try again");
+    expect(out).toContain("Nothing was saved");
+    expect(existsSync(tokensPath(home))).toBe(false);
+  });
+
   test("asks again for a token with the wrong prefix or one Slack refuses, and saves nothing when stopped", async () => {
     const slack = slackStub();
     const home = temp.make("home-");

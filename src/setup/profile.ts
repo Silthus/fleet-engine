@@ -29,19 +29,49 @@ export function profileStep(context: ProfileContext): Step {
   return { id: "profile", title: "Make your profile", minutes: 1, kind: "auto", run: () => makeProfile(context) };
 }
 
-async function lookUp(machine: Machine, home: string, packs: PackManifest[], picked: string[]) {
+function github(machine: Machine) {
   const gh = async (...args: string[]) => {
     const result = await machine.exec(["gh", ...args]);
     if (result.code !== 0) throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${lastLine(result.output)}`);
     return result.output.trim();
   };
-  const login = await gh("api", "user", "--jq", ".login");
-  const exists = async (repo: string) => {
-    const view = await machine.exec(["gh", "repo", "view", repo, "--json", "name"]);
-    if (view.code === 0) return true;
-    if (view.output.includes("Could not resolve to a Repository")) return false;
+  const visibility = async (repo: string) => {
+    const view = await machine.exec(["gh", "repo", "view", repo, "--json", "visibility", "--jq", ".visibility"]);
+    if (view.code === 0) return view.output.trim();
+    if (view.output.includes("Could not resolve to a Repository")) return undefined;
     throw new Error(`could not look up ${repo}: ${lastLine(view.output)}`);
   };
+  const exists = async (repo: string) => (await visibility(repo)) !== undefined;
+  return { gh, exists, visibility, login: () => gh("api", "user", "--jq", ".login") };
+}
+
+export async function memoryRepo(machine: Machine, named: unknown, login?: string) {
+  const onGitHub = typeof named === "string" ? githubSlug(named) : undefined;
+  if (typeof named === "string" && !onGitHub) return { repo: named, missing: false, make: async (print: (line: string) => void) => print(`✓ Using your memory repo ${named}`) };
+  const { gh, visibility, login: signedIn } = github(machine);
+  const slug = onGitHub ?? `${login ?? (await signedIn())}/${memoryRepoName}`;
+  const seen = await visibility(slug);
+  const missing = seen === undefined;
+  if (!missing && !isPrivate(seen)) throw new Error(`${slug} is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.`);
+  const make = async (print: (line: string) => void) => {
+    if (missing) await gh("repo", "create", slug, "--private", "--description", "My agents' shared memory");
+    print(missing ? `✓ Created the private repo ${slug}` : `✓ Reusing your repo ${slug}`);
+  };
+  return { repo: typeof named === "string" && /:\/\/|@/.test(named) ? named : slug, missing, make };
+}
+
+function githubSlug(named: string) {
+  if (/^[\w.-]+\/[\w.-]+$/.test(named)) return named;
+  const [, host, path] = /^[a-z][\w+.-]*:\/\/(?:[^@/]*@)?([^/:?#]+)(?::\d*)?(\/[^?#]*)?/i.exec(named) ?? /^(?:[^@/:]+@)?([^/:]+):(?!\/\/)(.*)$/.exec(named) ?? [];
+  if (!host || !/^(?:www\.)?github\.com\.?$/i.test(host)) return undefined;
+  const slug = /^\/?([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(path ?? "")?.[1];
+  if (!slug) throw new Error(`${named} is on GitHub, but Fleet cannot read its owner/name. Set memory.repo=<owner/name>.`);
+  return slug;
+}
+
+async function lookUp(machine: Machine, home: string, packs: PackManifest[], picked: string[]) {
+  const { gh, exists, login: signedIn } = github(machine);
+  const login = await signedIn();
   const personal = `${login}/${profileRepoName}`;
   const org = profileOrg(packs, picked);
   const team = org && `${org}/${profileRepoName}-${login}`;
@@ -67,9 +97,8 @@ async function makeProfile(context: ProfileContext) {
   let profileRepo = found ?? team ?? personal;
   const saved = found ? savedSettings(dir) : {};
   const namedMemory = draft.settings?.["memory.repo"] ?? saved["memory.repo"];
-  const memoryRepo = draft.packs?.includes("memory") ? (typeof namedMemory === "string" ? namedMemory : `${login}/${memoryRepoName}`) : undefined;
-  const memoryMissing = memoryRepo !== undefined && !(await exists(memoryRepo));
-  await confirm(context, [...(found ? [] : [profileRepo]), ...(memoryMissing ? [memoryRepo] : [])], org && !found ? org : undefined);
+  const memory = draft.packs?.includes("memory") ? await memoryRepo(machine, namedMemory, login) : undefined;
+  await confirm(context, [...(found ? [] : [profileRepo]), ...(memory?.missing ? [memory.repo] : [])], org && !found ? org : undefined);
   if (!found) {
     const made = await create(profileRepo, "My Fleet profile");
     if (made.code !== 0 && same(profileRepo, team) && !(await exists(profileRepo))) {
@@ -80,10 +109,7 @@ async function makeProfile(context: ProfileContext) {
     if (same(profileRepo, team)) await requirePrivate(machine, profileRepo);
     terminal.print(`  ✓ Created the private repo ${profileRepo}${same(profileRepo, team) ? ` in the ${org} org` : ""}`);
   } else terminal.print(`  ✓ Reusing your repo ${found}`);
-  if (memoryRepo && memoryMissing) {
-    await gh("repo", "create", memoryRepo, "--private", "--description", "My agents' shared memory");
-    terminal.print(`  ✓ Created the private repo ${memoryRepo}`);
-  } else if (memoryRepo) terminal.print(`  ✓ Reusing your repo ${memoryRepo}`);
+  await memory?.make((line) => terminal.print(`  ${line}`));
   if (team && same(found, personal)) {
     terminal.print(`  · Your team keeps profiles in the ${org} org. To move yours there, run:`);
     terminal.print(`      gh api -X POST repos/${personal}/transfer -f new_owner=${org} -f new_name=${profileRepoName}-${login}`);
@@ -101,7 +127,7 @@ async function makeProfile(context: ProfileContext) {
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, plan: "both", settings: {}, workflows: {} }),
     ...picked,
-    ...(memoryRepo && namedMemory === undefined ? { settings: { ...draft.settings, "memory.repo": memoryRepo } } : {}),
+    ...(memory && memory.repo !== namedMemory ? { settings: { ...draft.settings, "memory.repo": memory.repo } } : {}),
   };
   if (started.length) {
     await git(machine, dir, "add", "--", ...started);
@@ -123,9 +149,10 @@ async function clonedProfile(machine: Machine, dir: string, login: string) {
   return repo && (repo.toLowerCase() === names[0] || repo.toLowerCase().endsWith(names[1]!)) ? repo : undefined;
 }
 
+const isPrivate = (visibility: string | undefined) => visibility === "PRIVATE" || visibility === "INTERNAL";
+
 async function requirePrivate(machine: Machine, repo: string) {
-  const visibility = await machine.exec(["gh", "repo", "view", repo, "--json", "visibility", "--jq", ".visibility"]);
-  if (visibility.code !== 0 || !["PRIVATE", "INTERNAL"].includes(visibility.output.trim())) throw new Error(`${repo} is not private. Make it private, then run fleet setup again.`);
+  if (!isPrivate(await github(machine).visibility(repo))) throw new Error(`${repo} is not private. Make it private, then run fleet setup again.`);
 }
 
 /** The GitHub org where the first picked pack that names one keeps its members' profiles. */

@@ -1,12 +1,17 @@
+import { withoutCredentials } from "../../credentials.ts";
 import type { Finding, Plan } from "../../pack/types.ts";
 import type { CommandRunner } from "../run.ts";
-import { keyPath } from "./fields.ts";
+import { get, keyPath, type Document } from "./fields.ts";
 import { readState, writeWithBackups } from "./store.ts";
 
 export const pluginsTarget = ".config/fleet/plugins.json";
 const pluginId = /^[a-z0-9][a-z0-9._-]*@[a-z0-9][a-z0-9._-]*$/;
 
 type Owned = { claude: string[] };
+type Claude = (args: string[]) => ReturnType<CommandRunner>;
+type Sources = Record<string, string | null>;
+
+const officialMarketplaces: Sources = { "claude-plugins-official": "anthropics/claude-plugins-official" };
 
 export function wantedPlugins(plan: Plan) {
   return plan.config.flatMap((entry) => {
@@ -18,7 +23,7 @@ export function wantedPlugins(plan: Plan) {
 }
 
 /** Installs the plugins packs enable, through Claude Code in the given home. Removes only plugins that Fleet installed. */
-export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: { outage: boolean; accepted?: string[] }): Promise<Finding[]> {
+export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: { outage: boolean; accepted?: string[]; marketplaces?: Sources }): Promise<Finding[]> {
   const outage = settings.outage;
   const planned = wantedPlugins(plan);
   const wanted = planned.filter((id) => settings.accepted?.includes(id));
@@ -39,9 +44,9 @@ export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean
       ...departed.map((id) => ({ id: `plugin:${id}`, pack: "engine", say: `The Claude plugin ${id} needs to be removed.`, repair: "apply" as const })),
     ];
   }
-  const findings: Finding[] = [];
+  const { findings, unreachable } = await fetchMarketplaces(claude, missing, { ...officialMarketplaces, ...settings.marketplaces });
   const next = new Set(owned.claude.filter((id) => installed.includes(id) || (outage && !planned.includes(id))));
-  for (const id of missing) {
+  for (const id of missing.filter((id) => !unreachable.includes(marketplaceOf(id)))) {
     if ((await claude(["install", id, "--scope", "user"])).code === 0) next.add(id);
     else findings.push({ id: `plugin:${id}`, pack: "engine", say: `Could not install the Claude plugin ${id}.`, repair: "apply" });
   }
@@ -54,7 +59,59 @@ export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean
   return findings;
 }
 
-async function listInstalled(claude: (args: string[]) => ReturnType<CommandRunner>): Promise<string[] | undefined> {
+export function declaredMarketplaces(settings: Document): Sources {
+  const declared = get(settings, ["extraKnownMarketplaces"]);
+  if (!declared || typeof declared !== "object" || Array.isArray(declared)) return {};
+  return Object.fromEntries(Object.entries(declared).map(([name, entry]) => [name, addSource((entry as { source?: unknown } | null)?.source) ?? null]));
+}
+
+const addSourceField: Record<string, string> = { github: "repo", git: "url", url: "url", directory: "path", file: "path" };
+
+function addSource(source: unknown) {
+  if (!source || typeof source !== "object") return undefined;
+  const { source: kind, ...fields } = source as Record<string, unknown>;
+  const field = typeof kind === "string" ? addSourceField[kind] : undefined;
+  const value = field ? fields[field] : undefined;
+  return Object.keys(fields).length === 1 && typeof value === "string" ? value : undefined;
+}
+
+async function fetchMarketplaces(claude: Claude, plugins: string[], sources: Sources): Promise<{ findings: Finding[]; unreachable: string[] }> {
+  const needed = [...new Set(plugins.map(marketplaceOf))];
+  const fetched = needed.length ? await listMarketplaces(claude) : undefined;
+  const findings: Finding[] = [];
+  const unreachable: string[] = [];
+  for (const name of fetched ? needed : []) {
+    const source = Object.hasOwn(sources, name) ? sources[name] : undefined;
+    if (fetched!.includes(name)) {
+      const updated = await claude(["marketplace", "update", name]);
+      if (updated.code !== 0) findings.push({ id: `plugin-marketplace:${name}`, pack: "engine", say: `Could not update the Claude plugin marketplace ${name}: ${reasonOf(updated)}.`, repair: "apply" });
+      continue;
+    }
+    if (!source) continue;
+    const added = await claude(["marketplace", "add", source, "--scope", "user"]);
+    if (added.code === 0) continue;
+    unreachable.push(name);
+    const waiting = plugins.filter((id) => marketplaceOf(id) === name).join(", ");
+    findings.push({ id: `plugin-marketplace:${name}`, pack: "engine", say: `Could not add the Claude plugin marketplace ${name} from ${withoutCredentials(source)}: ${reasonOf(added)}. Its plugins wait: ${waiting}.`, repair: "apply" });
+  }
+  return { findings, unreachable };
+}
+
+async function listMarketplaces(claude: Claude): Promise<string[] | undefined> {
+  const result = await claude(["marketplace", "list", "--json"]);
+  if (result.code !== 0) return undefined;
+  try {
+    const entries = JSON.parse(result.stdout) as unknown;
+    return Array.isArray(entries) ? entries.flatMap((entry) => (entry && typeof entry.name === "string" ? [entry.name as string] : [])) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const marketplaceOf = (id: string) => id.slice(id.indexOf("@") + 1);
+const reasonOf = (result: { code: number; stdout: string; stderr?: string }) => withoutCredentials((result.stderr || result.stdout).trim().split("\n")[0]!.replace(/^✘\s*/, "").replace(/\.$/, "")) || `exit ${result.code}`;
+
+async function listInstalled(claude: Claude): Promise<string[] | undefined> {
   const result = await claude(["list", "--json"]);
   if (result.code !== 0) return undefined;
   const entries = JSON.parse(result.stdout) as unknown;

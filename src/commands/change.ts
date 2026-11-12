@@ -1,5 +1,6 @@
 import type { LoadedPack, Plan, ProfileFile } from "../pack/types.ts";
 import { saveAnswers } from "../profile/profile.ts";
+import type { Machine } from "../setup/commands.ts";
 
 /** What fleet packs, fleet settings and fleet set work on: the profile on this machine and every pack its sources offer. */
 export type ChangeContext = {
@@ -7,6 +8,7 @@ export type ChangeContext = {
   profile: ProfileFile;
   plan: Plan;
   packs: LoadedPack[];
+  machine: Machine;
   print(line: string): void;
   apply(): Promise<number>;
 };
@@ -21,11 +23,11 @@ export async function saveAndApply(context: ChangeContext, answers: Partial<Prof
   return 0;
 }
 
-export function manifests(context: ChangeContext) {
+export function manifests(context: Pick<ChangeContext, "packs">) {
   return context.packs.map((pack) => pack.manifest);
 }
 
-export function activePacks(context: ChangeContext) {
+export function activePacks(context: Pick<ChangeContext, "plan" | "packs">) {
   const on = new Set(context.plan.packs.filter((pack) => pack.available).map((pack) => pack.name));
   return manifests(context).filter((manifest) => on.has(manifest.name));
 }

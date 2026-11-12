@@ -39,7 +39,9 @@ function plan(os: "darwin" | "linux", settings: Record<string, SettingValue> = {
   };
 }
 
-type Account = { user?: { login: string; id: number; name: string | null; email: string | null }; emails?: Array<{ email: string; primary: boolean; verified: boolean; visibility: string | null }>; scopes?: boolean; otherKeys?: string[]; agent?: string[] };
+type Account = { user?: { login: string; id: number; name: string | null; email: string | null }; emails?: Array<{ email: string; primary: boolean; verified: boolean; visibility: string | null }>; scopes?: boolean; token?: { from: string; scopes?: string[] }; otherKeys?: string[]; agent?: string[] };
+
+const authStatus = (login: string, token: NonNullable<Account["token"]>) => ["github.com", `  ✓ Logged in to github.com account ${login} (${token.from})`, "  - Active account: true", "  - Git operations protocol: https", `  - Token: ${["gho", "*".repeat(36)].join("_")}`, ...(token.scopes ? [`  - Token scopes: ${token.scopes.map((scope) => `'${scope}'`).join(", ") || "none"}`] : []), ""].join("\n");
 
 function github(home: string, account: Account) {
   const keys = { authentication: [] as string[], signing: [] as string[] };
@@ -53,6 +55,7 @@ function github(home: string, account: Account) {
       const list = { "user/keys": keys.authentication, "user/ssh_signing_keys": keys.signing }[command.at(-1)!];
       if (list && command.includes("--paginate") && command.join(" ").includes("--jq .[].key")) return { code: 0, stdout: [...(account.otherKeys ?? []), ...list].map((key) => `${key}\n`).join("") };
     }
+    if (tool === "gh" && verb === "auth" && path === "status" && account.token && account.user) return { code: 0, stdout: authStatus(account.user.login, account.token) };
     if (tool === "gh" && verb === "ssh-key" && command[2] === "add") {
       if (account.scopes === false) return { code: 1, stdout: "", stderr: "HTTP 404: needs the admin:ssh_signing_key scope" };
       const type = command[command.indexOf("--type") + 1] as "authentication" | "signing";
@@ -73,7 +76,7 @@ function github(home: string, account: Account) {
     if (tool === "/bin/sh" && verb === `${engine}/scripts/coder-git-key.sh` && path === "public") return { code: 0, stdout: `${coderKey}\n` };
     return { code: 127, stdout: "" };
   };
-  return { keys, calls, adapter: identityAdapter({ run, engineRoot: engine, hostname: host }) };
+  return { keys, calls, run, adapter: identityAdapter({ run, engineRoot: engine, hostname: host }) };
 }
 
 const octo: Account = {
@@ -256,6 +259,50 @@ describe("the ssh signer", () => {
 
     expect(report.findings).toContainEqual({ id: "identity:signing", pack: "engine", say: "Could not register your Fleet key on GitHub for signing (HTTP 404: needs the admin:ssh_signing_key scope). Run gh auth refresh -h github.com -s admin:public_key,admin:ssh_signing_key, then fleet apply.", repair: "human" });
     expect(existsSync(join(home, ".config/fleet/gitconfig"))).toBe(true);
+  });
+});
+
+describe("the workflow scope", () => {
+  const signedIn = (scopes?: string[], from = "/home/octo/.config/gh/hosts.yml"): Account => ({ ...octo, token: { from, ...(scopes ? { scopes } : {}) } });
+  const workflowFindings = async (account: Account) => {
+    const home = temp.make("home-");
+    const report = await check(plan("linux"), { home, adapters: [github(home, account).adapter] });
+    return report.findings.filter((finding) => finding.id === "identity:workflow");
+  };
+
+  test("doctor names the command that adds it when the gh sign-in lacks it", async () => {
+    expect(await workflowFindings(signedIn(["gist", "read:org", "repo"]))).toEqual([
+      { id: "identity:workflow", pack: "engine", say: "Your GitHub sign-in lacks the workflow scope, so GitHub can refuse a push to a large repo even when it changes no workflow file. Run gh auth refresh -h github.com -s workflow." },
+    ]);
+  });
+
+  test("doctor says to replace a token from the environment, which gh auth refresh cannot change", async () => {
+    expect(await workflowFindings(signedIn(["read:org", "repo"], "GH_TOKEN"))).toEqual([
+      { id: "identity:workflow", pack: "engine", say: "The GH_TOKEN in your environment lacks the workflow scope, so GitHub can refuse a push to a large repo even when it changes no workflow file. Give that token the workflow scope." },
+    ]);
+  });
+
+  test("is a note, so doctor still passes on a machine that has everything else", async () => {
+    const home = temp.make("home-");
+    const gh = github(home, signedIn(["read:org", "repo"]));
+    expect((await apply(plan("linux"), { home, adapters: [gh.adapter] })).ok).toBe(true);
+    const report = await check(plan("linux"), { home, adapters: [gh.adapter] });
+    expect(report.findings.map((finding) => finding.id)).toEqual(["identity:workflow"]);
+    expect(report.ok).toBe(true);
+  });
+
+  test("doctor finds nothing when the sign-in has it, or when the token lists no scopes", async () => {
+    expect(await workflowFindings(signedIn(["read:org", "repo", "workflow"]))).toEqual([]);
+    expect(await workflowFindings(signedIn([]))).toEqual([]);
+    expect(await workflowFindings(signedIn())).toEqual([]);
+  });
+
+  test("doctor reads the scopes an older gh prints to stderr", async () => {
+    const home = temp.make("home-");
+    const gh = github(home, octo);
+    const run: CommandRunner = async (command) => (command.join(" ") === "gh auth status --active --hostname github.com" ? { code: 0, stdout: "", stderr: authStatus("octo", { from: "keyring", scopes: ["repo"] }) } : gh.run(command));
+    const report = await check(plan("linux"), { home, adapters: [identityAdapter({ run, engineRoot: engine, hostname: host })] });
+    expect(report.findings.map((finding) => finding.id)).toContain("identity:workflow");
   });
 });
 

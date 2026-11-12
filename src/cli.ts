@@ -37,7 +37,7 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
               [--workflows <id=on|off,...>] [--set <pack.key=value>]...
               [--plan <claude|codex|both>] [--non-interactive | --chat]
                      Answer a few questions and set up this machine
-  fleet apply [--profile <dir>] [--adopt <path>]... [--skip <pack>/<step>]... [--dry-run]
+  fleet apply [--profile <dir>] [--adopt <path>]... [--adopt-from <name>]... [--skip <pack>/<step>]... [--dry-run]
                      Put your profile's packs onto this machine
   fleet doctor [--profile <dir>]
                      Check this machine against your profile without changing it
@@ -126,7 +126,7 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const { plan, sources } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview, inherit: preview });
   const adapters = (options.adapters ?? engineAdapters)();
   const issue: Issuer = (entries, node) => issueCredentials(entries, node, plan, sources, options);
-  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, skip: flags.skip, dryRun: flags.dryRun, adapters, run: options.run, issue, progress: options.print });
+  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, adoptFrom: flags.adoptFrom, skip: flags.skip, dryRun: flags.dryRun, adapters, run: options.run, issue, progress: options.print });
   if (doctor) {
     const drifted = await drift(plan, report.humanLeft);
     report.findings.push(...drifted);
@@ -166,6 +166,7 @@ async function change(command: keyof typeof changes | "hub", args: string[], opt
     profile: await loadProfile(profileDir),
     plan,
     packs: sources.flatMap((source) => ("error" in source ? [] : source.packs)),
+    machine: { ...realMachine, ...options.setup?.machine },
     print: options.print,
     apply: () => applyProfile(profileDir, options),
   };
@@ -403,7 +404,7 @@ async function loadPlan(options: CliOptions, profileFlag: string | undefined, mo
 }
 
 function parseFlags(args: string[]) {
-  const flags: { profile?: string; adopt: string[]; skip: string[]; dryRun: boolean } = { adopt: [], skip: [], dryRun: false };
+  const flags: { profile?: string; adopt: string[]; adoptFrom: string[]; skip: string[]; dryRun: boolean } = { adopt: [], adoptFrom: [], skip: [], dryRun: false };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     const value = () => {
@@ -413,6 +414,7 @@ function parseFlags(args: string[]) {
     };
     if (arg === "--profile") flags.profile = value();
     else if (arg === "--adopt") flags.adopt.push(value());
+    else if (arg === "--adopt-from") flags.adoptFrom.push(value());
     else if (arg === "--skip") flags.skip.push(value());
     else if (arg === "--dry-run") flags.dryRun = true;
     else throw new Error(`unknown option ${arg}`);

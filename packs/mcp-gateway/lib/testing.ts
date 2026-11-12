@@ -7,6 +7,7 @@ export const managementToken = "management-token";
 export type ApiCall = { method: string; path: string; body?: Record<string, unknown> };
 export type FakeMcpHub = {
   servers: string[];
+  toolCounts: Record<string, number>;
   configs: Record<string, Record<string, unknown>>;
   keepsConfig: boolean;
   groups: Array<{ id: string; name: string; servers: Array<string | ({ name: string } & Record<string, unknown>)> }>;
@@ -18,7 +19,7 @@ export type FakeMcpHub = {
 };
 
 export function fakeMcpHub(fields: Partial<FakeMcpHub> = {}): FakeMcpHub {
-  return { servers: ["tickets", "calendar"], configs: {}, keepsConfig: true, groups: [], calls: [], healthy: true, openWithoutKey: false, notReadyFor: 0, ...fields };
+  return { servers: ["tickets", "calendar"], toolCounts: {}, configs: {}, keepsConfig: true, groups: [], calls: [], healthy: true, openWithoutKey: false, notReadyFor: 0, ...fields };
 }
 
 function keyOf(state: FakeMcpHub) {
@@ -26,6 +27,8 @@ function keyOf(state: FakeMcpHub) {
   const settings = JSON.parse(readFileSync(join(state.home, ".local/share/fleet-mcphub/data/mcp_settings.json"), "utf8")) as { bearerKeys: Array<{ id: string; token: string }> };
   return settings.bearerKeys.find((key) => key.id === "fleet-management")!.token;
 }
+
+const toolsOf = (state: FakeMcpHub, name: string) => Array.from({ length: state.toolCounts[name] ?? 2 }, () => ({}));
 
 export function mcphubFetch(state: FakeMcpHub) {
   return async (input: string | URL | Request, init: RequestInit = {}) => {
@@ -41,7 +44,7 @@ export function mcphubFetch(state: FakeMcpHub) {
     const path = url.pathname.slice("/mcphub/api/".length);
     const body = init.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined;
     state.calls.push({ method, path, ...(body ? { body } : {}) });
-    if (method === "GET" && path === "servers") return Response.json({ success: true, data: state.servers.map((name) => ({ name, status: "connected", tools: [{}, {}] })) });
+    if (method === "GET" && path === "servers") return Response.json({ success: true, data: state.servers.map((name) => ({ name, status: "connected", tools: toolsOf(state, name) })) });
     if (method === "GET" && path === "groups") return Response.json({ success: true, data: state.groups });
     if (method === "POST" && path === "groups") {
       const group = { id: `group-${state.groups.length + 1}`, name: String(body!.name), servers: body!.servers as FakeMcpHub["groups"][number]["servers"] };
@@ -74,7 +77,7 @@ export function mcphubFetch(state: FakeMcpHub) {
       return Response.json({ success: true }, { status: 201 });
     }
     if (!server || !state.servers.includes(name)) return new Response(null, { status: 404 });
-    if (method === "GET") return Response.json({ success: true, data: { name, status: "connected", tools: [], config: state.configs[name] ?? {} } });
+    if (method === "GET") return Response.json({ success: true, data: { name, status: "connected", tools: toolsOf(state, name), config: state.configs[name] ?? {} } });
     if (method === "PUT") return stored(body!.config as Record<string, unknown>), Response.json({ success: true });
     return new Response(null, { status: 404 });
   };
