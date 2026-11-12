@@ -23,8 +23,15 @@ const rules: Rule[] = [
   [/(?<![A-Za-z0-9-]|[A-Za-z0-9-]\.)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:internal|local|lan|corp|home\.arpa|coder|ts\.net|tailscale\.net)\b/g, "<host>"],
   [/(\/Users|\/home)\/(?:[^/\n"'`:]{1,64}?(?=\/)|[^/\s"'`:]+)/g, "$1/<user>"],
   [/\b([A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/))(?:[^\\/\n"'`:]{1,64}?(?=[\\/])|[^\\/\s"'`:]+)/gi, "$1<user>"],
-  [/[A-Za-z0-9+/_-]{32,}={0,2}/g, (text) => (/^[0-9a-f]+$/.test(text) || !/[A-Z]/.test(text) || !/[a-z]/.test(text) || !/[0-9]/.test(text) ? text : "<secret>")],
+  [/[A-Za-z0-9+/_-]{32,}={0,2}/g, (text) => (looksRandom(text) ? "<secret>" : text)],
 ];
+
+function looksRandom(text: string) {
+  const upper = text.match(/[A-Z]/g)?.length ?? 0;
+  const lower = text.match(/[a-z]/g)?.length ?? 0;
+  if (!upper || !lower) return false;
+  return /[0-9]/.test(text) || Math.min(upper, lower) * 4 >= upper + lower;
+}
 
 /**
  * Removes what must not leave the machine in a report: keys, tokens, private

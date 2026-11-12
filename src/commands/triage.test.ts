@@ -10,25 +10,27 @@ isolateGit();
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
 
-const pick = (alphabet: string, length: number) => Array.from({ length }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
-const mixed = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+const spell = (alphabet: string, length: number, start: number) => Array.from({ length }, (_, index) => alphabet[(start + index * 11) % alphabet.length]).join("");
+const letters = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const mixed = `${letters}23456789`;
 const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ234567";
 
 /** Secrets in the shapes real services issue, built at run time so no real-looking secret is in the repository. */
 function secrets() {
   return {
-    github: ["gh", "p_", pick(mixed, 36)].join(""),
-    githubPat: ["github", "_pat_", pick(mixed, 22), "_", pick(mixed, 59)].join(""),
-    anthropic: ["sk", "-ant-api03-", pick(mixed, 90)].join(""),
-    openai: ["sk", "-proj-", pick(mixed, 48)].join(""),
-    slack: ["xo", "xb-", pick("0123456789", 12), "-", pick(mixed, 24)].join(""),
-    aws: ["AK", "IA", pick(upper, 16)].join(""),
-    jwt: ["ey", "J", pick(mixed, 20), ".", pick(mixed, 30), ".", pick(mixed, 30)].join(""),
-    opaque: pick(mixed, 44),
-    password: pick(mixed, 14),
-    privateKey: ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\n", pick(mixed, 64).match(/.{16}/g)!.join("\n"), "\n-----END OPENSSH ", "PRIVATE KEY-----"].join(""),
-    multiline: [pick(mixed, 10), " river\npearl ", pick(mixed, 10)].join(""),
-    email: ["nora.", pick("abcdefgh", 5), "@", "example-corp.io"].join(""),
+    github: ["gh", "p_", spell(mixed, 36, 1)].join(""),
+    githubPat: ["github", "_pat_", spell(mixed, 22, 2), "_", spell(mixed, 59, 3)].join(""),
+    anthropic: ["sk", "-ant-api03-", spell(mixed, 90, 4)].join(""),
+    openai: ["sk", "-proj-", spell(mixed, 48, 5)].join(""),
+    slack: ["xo", "xb-", spell("0123456789", 12, 6), "-", spell(mixed, 24, 7)].join(""),
+    aws: ["AK", "IA", spell(upper, 16, 8)].join(""),
+    jwt: ["ey", "J", spell(mixed, 20, 9), ".", spell(mixed, 30, 10), ".", spell(mixed, 30, 11)].join(""),
+    opaque: spell(mixed, 44, 12),
+    opaqueLetters: spell(letters, 44, 13),
+    password: spell(mixed, 14, 14),
+    privateKey: ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\n", spell(mixed, 64, 15).match(/.{16}/g)!.join("\n"), "\n-----END OPENSSH ", "PRIVATE KEY-----"].join(""),
+    multiline: [spell(mixed, 10, 16), " river\npearl ", spell(mixed, 10, 17)].join(""),
+    email: ["nora.", spell("abcdefgh", 5, 18), "@", "example-corp.io"].join(""),
   };
 }
 
@@ -70,7 +72,8 @@ function failedMachine(home: string, leaked = secrets()) {
       `  ANTHROPIC_API_KEY="${leaked.anthropic}"`,
       `  OPENAI_API_KEY: ${leaked.openai}`,
       `  pat ${leaked.githubPat} slack ${leaked.slack} aws ${leaked.aws}`,
-      `  opaque ${leaked.opaque} in a log`,
+      `  opaque ${leaked.opaque} and ${leaked.opaqueLetters} in a log`,
+      "  tapped /opt/homebrew/Library/Taps/homebrew/homebrew-core for AbstractSingletonProxyFactoryBean",
       `  cloning https://nora:${leaked.password}@github.com/nora/fleet-profile.git`,
       `  Pairing URL: http://127.0.0.1:3773/pair#token=${leaked.password}`,
       leaked.privateKey,
@@ -129,6 +132,8 @@ describe("fleet triage", () => {
     expect(shown).toContain("## fleet doctor\n\n```text\nfleet: ");
     expect(shown).toContain("▶ Set up this Mac: fleet apply installs your packs");
     expect(shown).toContain("export GITHUB_TOKEN=<redacted>");
+    expect(shown).toContain("opaque <secret> and <secret> in a log");
+    expect(shown).toContain("tapped /opt/homebrew/Library/Taps/homebrew/homebrew-core for AbstractSingletonProxyFactoryBean");
     expect(shown).toContain("https://<credentials>@github.com/<profile repo>.git");
     expect(shown).toContain(`{"password":"<redacted>"} and {'client_secret': '<redacted>'}`);
     expect(shown).toContain("invited <email> as <name> and <name>, then ssh <devbox 2> true (Q7 stays)");
@@ -176,7 +181,7 @@ describe("fleet triage", () => {
   test("a long note is redacted before it is cut, so a cut never leaves part of a secret", async () => {
     const home = temp.make("home-");
     failedMachine(home);
-    const password = pick(mixed, 8);
+    const password = spell(mixed, 8, 19);
     const result = await triage(home, ["--send", "--note", `${"x".repeat(3_970)} PASSWORD="${password} river pearl mountain"`], []);
     const body = result.sent.find((call) => call.command[1] === "issue")!.input!;
     expect(body).toContain(`${"x".repeat(3_970)} PASSWORD="<redacted>"`);
