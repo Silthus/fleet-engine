@@ -16,3 +16,7 @@ With the MCP gateway on, the hub also serves the library's search as the
 `context_search` tool. It mounts the hub's checkout read-only and logs only
 the time and the number of results of each search, never the words or the
 results.
+
+With the Slack pack's trigger on, their own `:brain:` reaction on a Slack
+message saves its thread as a note. The reaction shows `:eyes:` while it runs
+and goes away once the note is saved. A second `:brain:` updates the note.

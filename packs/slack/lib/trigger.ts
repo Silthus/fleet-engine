@@ -9,9 +9,11 @@ const day = 86_400_000;
 const retryFor = day;
 const keepFor = 31 * day;
 
-export type Owner = { name: string; slackUserId: string; emoji: string };
-export type Trigger = { kind: "message" | "reaction"; channel: string; ts: string };
-type Message = { user?: string; text?: string; ts: string; thread_ts?: string };
+export type Owner = { name: string; slackUserId: string; emoji: string; captureEmoji?: string };
+export type Trigger = { kind: "message" | "reaction" | "capture"; channel: string; ts: string };
+type Message = { user?: string; text?: string; ts: string; thread_ts?: string; files?: Array<{ id?: string; title?: string; filetype?: string; permalink?: string }> };
+export type Captured = { path: string; title: string; url: string; updated: boolean };
+export type Capture = (input: { source: string; material: string }) => Promise<Captured>;
 type Pending = { trigger: Trigger; since: number; commandId: string; told?: true; claim?: Claim; reachedT3?: true };
 type State = { handled: Record<string, number>; pending: Record<string, Pending> };
 export type Started = { threadId: string; url?: string; where: string };
@@ -22,6 +24,7 @@ export type TriggerDeps = {
   log: (line: string) => void;
   slack: SlackApi;
   launch: Launch;
+  capture?: Capture;
 };
 
 const withoutSkinTone = (reaction: string) => reaction.split("::")[0];
@@ -29,6 +32,7 @@ const withoutSkinTone = (reaction: string) => reaction.split("::")[0];
 export function triggerOf(event: Record<string, any>, owner: Owner): Trigger | undefined {
   if (event.user !== owner.slackUserId) return undefined;
   if (event.type === "reaction_added") {
+    if (withoutSkinTone(String(event.reaction ?? "")) === owner.captureEmoji && event.item?.type === "message") return { kind: "capture", channel: event.item.channel, ts: event.item.ts };
     return withoutSkinTone(String(event.reaction ?? "")) === owner.emoji && event.item?.type === "message" ? { kind: "reaction", channel: event.item.channel, ts: event.item.ts } : undefined;
   }
   if (event.type === "app_mention") return { kind: "message", channel: event.channel, ts: event.ts };
@@ -42,6 +46,17 @@ const inFlight = new Set<string>();
 
 export async function handleTrigger(trigger: Trigger, deps: TriggerDeps): Promise<void> {
   const key = `${trigger.channel}:${trigger.ts}`;
+  if (trigger.kind === "capture") {
+    const capture = deps.capture;
+    if (!capture || inFlight.has(`capture:${key}`)) return;
+    inFlight.add(`capture:${key}`);
+    try {
+      await saveToContext(trigger, key, capture, deps);
+    } finally {
+      inFlight.delete(`capture:${key}`);
+    }
+    return;
+  }
   if (readState(deps.statePath).handled[key] || inFlight.has(key)) return;
   inFlight.add(key);
   try {
@@ -118,6 +133,36 @@ async function start(trigger: Trigger, key: string, { commandId, claim, reachedT
   const name = title(message.text ?? "", deps.owner.emoji);
   const launched = await deps.launch({ title: name, prompt: prompt(deps.owner, trigger, message.text ?? "", permalink, context), commandId, claim, replay: reachedT3 });
   return "failed" in launched ? { failed: launched.failed, thread, claim: launched.claim, reachedT3: launched.reachedT3 } : { started: launched, name, thread };
+}
+
+async function saveToContext(trigger: Trigger, key: string, capture: Capture, deps: TriggerDeps): Promise<void> {
+  const emoji = deps.owner.captureEmoji!;
+  const react = (method: "reactions.add" | "reactions.remove", name: string) =>
+    deps.slack(method, { channel: trigger.channel, timestamp: trigger.ts, name }).catch((error) => deps.log(`${key}: ${method} :${name}: failed: ${error}`));
+  await react("reactions.add", ackEmoji);
+  let thread: string | undefined;
+  try {
+    const first = (await deps.slack("conversations.replies", { channel: trigger.channel, ts: trigger.ts, limit: "1" })).messages?.[0] as Message | undefined;
+    if (!first) throw new Error("the message is gone");
+    thread = first.thread_ts;
+    const threadTs = first.thread_ts ?? first.ts;
+    const messages = await readMessages(deps.slack, trigger.channel, threadTs);
+    const permalink = String((await deps.slack("chat.getPermalink", { channel: trigger.channel, message_ts: threadTs })).permalink);
+    const files = messages.flatMap((message) => message.files ?? []).filter((file) => file.id);
+    const material = [
+      await formatThread(deps.slack, messages),
+      ...(files.length ? ["", "Files in the thread (read each canvas with slack_read_canvas and its id):", ...files.map((file) => `- ${[file.id, file.filetype, file.title, file.permalink].filter(Boolean).join(" ")}`)] : []),
+    ].join("\n");
+    const saved = await capture({ source: permalink, material });
+    deps.log(`${key}: ${saved.updated ? "updated" : "saved"} ${saved.path}`);
+    await react("reactions.remove", ackEmoji);
+    await react("reactions.remove", emoji);
+    await reply(trigger, key, thread, deps, `:${emoji}: ${saved.updated ? "Updated" : "Added"} <${saved.url}|${slackText(saved.title)}> in your context library (\`${slackText(saved.path)}\`).`);
+  } catch (error) {
+    deps.log(`${key}: capture failed: ${(error as Error).message}`);
+    await react("reactions.remove", ackEmoji);
+    await reply(trigger, key, thread, deps, `:${emoji}: Could not save this to your context library: ${slackText((error as Error).message)}. React again to retry.`);
+  }
 }
 
 async function exactMessage(slack: SlackApi, trigger: Trigger, threadTs: string): Promise<Message | undefined> {

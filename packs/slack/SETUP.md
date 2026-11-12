@@ -5,7 +5,9 @@ in step 9 with a hub.
 
 Their own Slack message or reaction with their trigger emoji (default
 `:t3code:`, set by `slack.emoji`), or a mention of their Slack app, starts a
-T3 thread. It needs their own Slack app.
+T3 thread. It needs their own Slack app. With the Context library pack on,
+their own `:brain:` reaction (set by `slack.captureEmoji`) saves the message's
+thread and its canvases to their context library.
 With Mac only, the trigger runs on the Mac and stops while the Mac sleeps.
 With a hub, the trigger runs on the hub, so it runs while the Mac sleeps,
 and the Slack app step below runs on the hub.

@@ -253,6 +253,94 @@ describe("fleet slack-trigger run", () => {
 
 });
 
+describe("saving to the context library", () => {
+  const thread: Message[] = [
+    { user: "U0OTHER", ts: "200.1", text: "Sprint planning notes in the canvas" , files: [{ id: "F0CANVAS", title: "Sprint plan", filetype: "canvas" }] },
+    { user: ownerId, ts: "200.2", text: "load test first" },
+  ];
+  const handlers = JSON.stringify({ "slack-capture": "/opt/context/slack-capture.ts" });
+  const captured = { path: "notes/sprint-planning-2026-11-11.md", title: "Sprint <planning>", url: "https://notes.example.com/blob/main/notes/sprint-planning-2026-11-11.md", updated: false };
+
+  async function listening(answer: (input: string) => { code: number; stdout: string }, extra: Partial<SlackCommandDeps> = {}) {
+    const slack = slackStub(thread);
+    const home = await homeWithTokens();
+    const stop = new AbortController();
+    const ran = processes((argv, input) => (argv.join(" ") === "bun /opt/context/slack-capture.ts" ? answer(input ?? "") : undefined));
+    const deps = commandDeps(home, { env: { FLEET_SETTINGS: settings(), FLEET_HANDLERS: handlers }, slackBase: slack.base, stop: stop.signal, run: ran.run, ...extra });
+    const running = listen(deps);
+    await slack.connected();
+    const end = async () => (stop.abort(), await running);
+    return { slack, ran, deps, end };
+  }
+  const captures = (ran: ReturnType<typeof processes>) => ran.calls.filter((call) => call.argv[0] === "bun").map((call) => JSON.parse(call.input!));
+  const reactionCalls = (slack: ReturnType<typeof slackStub>) => slack.calls.filter((call) => call.method.startsWith("reactions.")).map((call) => `${call.method} ${call.args.timestamp} ${call.args.name}`);
+
+  test("the owner's :brain: hands the whole thread and its canvases to the context library, shows :eyes: while it runs, then clears both and says where the note went", async () => {
+    const { slack, ran, end } = await listening(() => ({ code: 0, stdout: `${JSON.stringify(captured)}\n` }));
+    slack.send({ type: "reaction_added", user: "U0OTHER", reaction: "brain", item: { type: "message", channel: "C1", ts: "200.2" } });
+    slack.send({ type: "reaction_added", user: ownerId, reaction: "brain::skin-tone-3", item: { type: "message", channel: "C1", ts: "200.2" } });
+    await slack.until(() => slack.method("chat.postEphemeral").length === 1);
+    await end();
+    expect(captures(ran)).toEqual([{
+      source: "https://example.slack.com/archives/C1/p200.1",
+      material: "Sam (200.1): Sprint planning notes in the canvas\nNora (200.2): load test first\n\nFiles in the thread (read each canvas with slack_read_canvas and its id):\n- F0CANVAS canvas Sprint plan",
+    }]);
+    expect(reactionCalls(slack)).toEqual(["reactions.add 200.2 eyes", "reactions.remove 200.2 eyes", "reactions.remove 200.2 brain"]);
+    const told = slack.method("chat.postEphemeral")[0]!.args;
+    expect(told).toMatchObject({ channel: "C1", user: ownerId, thread_ts: "200.1" });
+    expect(told.text).toBe(`:brain: Added <${captured.url}|Sprint &lt;planning&gt;> in your context library (\`${captured.path}\`).`);
+  });
+
+  test("a failed capture keeps the :brain:, says why, and a second :brain: tries again and updates the note", async () => {
+    let calls = 0;
+    const { slack, ran, end } = await listening(() => (++calls === 1 ? { code: 1, stdout: `${JSON.stringify({ failed: "the push to main kept failing; nothing was saved" })}\n` } : { code: 0, stdout: JSON.stringify({ ...captured, updated: true }) }));
+    slack.send({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "200.1" } });
+    await slack.until(() => slack.method("chat.postEphemeral").length === 1);
+    slack.send({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "200.1" } });
+    await slack.until(() => slack.method("chat.postEphemeral").length === 2);
+    await end();
+    expect(captures(ran)).toHaveLength(2);
+    expect(slack.method("chat.postEphemeral").map((call) => call.args.text)).toEqual([
+      ":brain: Could not save this to your context library: the push to main kept failing; nothing was saved. React again to retry.",
+      `:brain: Updated <${captured.url}|Sprint &lt;planning&gt;> in your context library (\`${captured.path}\`).`,
+    ]);
+    expect(reactionCalls(slack)).toEqual(["reactions.add 200.1 eyes", "reactions.remove 200.1 eyes", "reactions.add 200.1 eyes", "reactions.remove 200.1 eyes", "reactions.remove 200.1 brain"]);
+    expect(ran.calls.some((call) => call.argv[0] !== "bun" && call.argv[0] !== "git")).toBe(false);
+  });
+
+  test("a second :brain: while the first capture runs starts no second capture", async () => {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => (finish = resolve));
+    const capture = async () => (await finished, captured);
+    const deps: TriggerDeps = { owner: { ...owner, captureEmoji: "brain" }, statePath: statePath(temp.make("home-")), now: () => 0, log: () => {}, slack: async (method) => (method === "conversations.replies" ? { messages: [{ ts: "1.1" }] } : method === "chat.getPermalink" ? { permalink: "https://example.slack.com/archives/C1/p11" } : {}), launch: async () => ({ failed: "no" }), capture: async (input) => (calls.push(input.source), capture()) };
+    const calls: string[] = [];
+    const trigger = { kind: "capture" as const, channel: "C1", ts: "1.1" };
+    const first = handleTrigger(trigger, deps);
+    await handleTrigger(trigger, deps);
+    finish();
+    await first;
+    await handleTrigger(trigger, deps);
+    expect(calls).toEqual(["https://example.slack.com/archives/C1/p11", "https://example.slack.com/archives/C1/p11"]);
+  });
+
+  test("without the Context library pack, :brain: does nothing, and slack.captureEmoji picks another emoji", async () => {
+    expect(triggerOf({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "1.1" } }, owner)).toBeUndefined();
+    const { slack, ran, end } = await listening(() => ({ code: 0, stdout: JSON.stringify(captured) }), { env: { FLEET_SETTINGS: settings() } });
+    slack.send({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "200.2" } });
+    await slack.until(() => slack.acked.length === 1);
+    await end();
+    expect(captures(ran)).toEqual([]);
+    expect(reactionCalls(slack)).toEqual([]);
+    const chosen = await listening(() => ({ code: 0, stdout: JSON.stringify(captured) }), { slackCaptureEmoji: () => ":books:" });
+    chosen.slack.send({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "200.2" } });
+    chosen.slack.send({ type: "reaction_added", user: ownerId, reaction: "books", item: { type: "message", channel: "C1", ts: "200.2" } });
+    await chosen.slack.until(() => chosen.slack.method("chat.postEphemeral").length === 1);
+    await chosen.end();
+    expect(captures(chosen.ran)).toHaveLength(1);
+    expect(chosen.slack.method("chat.postEphemeral")[0]!.args.text).toStartWith(":books: Added");
+  });
+});
+
 describe("a launch that fails", () => {
   function rig(launches: Array<Started | { failed: string }>) {
     const replies: string[] = [];

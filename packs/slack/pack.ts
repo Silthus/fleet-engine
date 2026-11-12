@@ -1,10 +1,10 @@
 import { homedir } from "node:os";
 import type { Context, Pack, Setting } from "../../src/sdk/index.ts";
 
-async function commandDeps(ctx: Context, userId: Setting<string>, emoji: Setting<string>) {
+async function commandDeps(ctx: Context, userId: Setting<string>, emoji: Setting<string>, captureEmoji?: Setting<string>) {
   const { everyOn } = await import("./lib/command.ts");
   return {
-    env: process.env, home: homedir(), slackUserId: () => ctx.get(userId), slackEmoji: () => ctx.get(emoji), secrets: ctx.secrets, stateDir: ctx.stateDir, threads: ctx.threads,
+    env: process.env, home: homedir(), slackUserId: () => ctx.get(userId), slackEmoji: () => ctx.get(emoji), ...(captureEmoji ? { slackCaptureEmoji: () => ctx.get(captureEmoji) } : {}), secrets: ctx.secrets, stateDir: ctx.stateDir, threads: ctx.threads,
     print: ctx.print, now: ctx.now, sleep: ctx.sleep, every: everyOn(ctx.sleep), readStdin: () => Bun.stdin.text(),
   };
 }
@@ -29,12 +29,19 @@ export default {
       default: "t3code",
       question: "Which Slack emoji starts a thread? Give its name, such as eye or +1.",
     });
+    const captureEmoji = fleet.setting({
+      key: "slack.captureEmoji",
+      type: "string",
+      default: "brain",
+      ask: "never",
+      question: "Which Slack emoji saves a message and its thread to your context library? Give its name, such as brain. It works while the Context library pack is on.",
+    });
     const threads = fleet.workflow({
       id: "slack-thread",
       name: "Start a thread from Slack",
       default: false,
-      settings: [userId, emoji],
-      sentence: "Your own Slack message or reaction with your trigger emoji (default :t3code:), or a mention of your Slack app starts a T3 thread, and Slack shows you its link.",
+      settings: [userId, emoji, captureEmoji],
+      sentence: "Your own Slack message or reaction with your trigger emoji (default :t3code:), or a mention of your Slack app starts a T3 thread, and Slack shows you its link. With the Context library pack on, your :brain: reaction saves the thread to your notes.",
       risk: "Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread.",
     });
     const hub = { on: "hub", when: threads } as const;
@@ -61,7 +68,7 @@ export default {
       ...hub,
       after: app,
       id: "slack-trigger",
-      run: async (ctx) => (await import("./lib/command.ts")).listen(await commandDeps(ctx, userId, emoji)),
+      run: async (ctx) => (await import("./lib/command.ts")).listen(await commandDeps(ctx, userId, emoji, captureEmoji)),
     });
   },
 } satisfies Pack;
