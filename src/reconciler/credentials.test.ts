@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main, type CliOptions } from "../cli.ts";
 import type { MachineFile } from "../pack/types.ts";
@@ -35,11 +35,12 @@ function machine(saved: MachineFile) {
     run: engineSteps(engine, (args) => main(args, { ...options, print: () => {} })),
     adapters: () => [filesAdapter],
   };
-  return async (...args: string[]) => {
+  const fleet = async (...args: string[]) => {
     lines = [];
     const code = await main(args, options);
     return { code, output: lines.join("\n") };
   };
+  return Object.assign(fleet, { home });
 }
 
 test("on the hub, apply runs the install repair, issues the hub's own key once, and ctx.use returns it with the loopback URL", async () => {
@@ -70,6 +71,16 @@ test("a repair that fails leaves the check as a To do, and the hub issues no key
   expect(applied.code).toBe(0);
   expect(applied.output).toContain("To do: The issued service is not installed.\n");
   expect((await fleet("issued", "use")).output).toBe("fleet: issued/issued-api has no credential on this machine yet. Run fleet apply on the hub.");
+});
+
+test("on the hub, a stored credential that other users can read gives a finding that says how to fix the file", async () => {
+  const fleet = machine(hub);
+  await fleet("apply");
+  chmodSync(join(fleet.home, ".config/fleet/secrets/issued/credential.issued-api"), 0o644);
+  const applied = await fleet("apply");
+  expect(applied.code).toBe(0);
+  expect(applied.output).toContain("To do: ~/.config/fleet/secrets/issued/credential.issued-api is open to other users. Run chmod 600 ~/.config/fleet/secrets/issued/credential.issued-api, or save the secret again.");
+  expect(applied.output).not.toContain("Could not issue");
 });
 
 test("a service that refuses to issue a key gives a finding, and apply stores nothing", async () => {

@@ -60,7 +60,7 @@ test("a machine that the profile does not name cannot run a hub command, and say
 test("while the hub does not answer, a hub command says so and exits 1, so a caller can fall back", async () => {
   const { node, hosts } = linkedFleets(temp);
   hosts["hub-1"] = "down";
-  expect(await node("issued-admin")).toEqual({ code: 1, output: "ssh: connect to host hub-1 port 22: Connection refused\nfleet issued-admin: could not reach the hub hub-1 over SSH." });
+  expect(await node("issued-admin")).toEqual({ code: 1, output: "ssh: connect to host hub-1 port 22: Connection refused\nfleet issued-admin: ssh to the hub hub-1 exited 255. Either ssh could not reach the hub, or the command failed there with 255." });
 });
 
 test("a Mac on a profile with a hub runs a hub command on the hub", async () => {

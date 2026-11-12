@@ -26,7 +26,6 @@ export type Pack = {
   cost?: string;
   risk?: string;
   requires?: string[];
-  /** A Markdown file in the pack's directory that every agent loads while the pack is on. */
   instructions?: string;
   register(fleet: Fleet): void;
 };
