@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, lstatSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, join, normalize, relative, resolve as resolvePath, sep } from "node:path";
 import type {
+  AiPlan,
   AvailableSource,
   DesiredFile,
   FetchedSource,
@@ -73,7 +74,10 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
   const hubless = !profile.hub && Boolean(profile.devboxes?.length);
   const onceRunner = profile.devboxes?.find((name) => name !== profile.hub) ?? profile.hub;
   if (machine.role === "hub" || solo) plan.onHub = true;
+  const declared = declaredWorkflows(sources);
   const fits = (pack: string, item: Scope, label: string) => {
+    const unknown = declared && item.unless?.find((id) => !declared.has(id));
+    if (unknown) throw new ResolveError(`${pack}: ${label} gives way to workflow ${unknown}, which no pack declares`);
     const elected = item.oncePerFleet && onceRunner ? machine.name === onceRunner : undefined;
     const reason =
       item.on && !item.on.includes(os) ? `not on ${os}`
@@ -81,6 +85,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
       : !elected && item.roles && !item.roles.includes(machine.role) && !(solo && item.roles.includes("solo")) ? (hubless && item.roles.includes("hub") ? hublessReason : `not on a ${machine.role}`)
       : item.plans && !item.plans.includes(profile.plan) ? `not for plan ${profile.plan}`
       : item.workflow && !active.has(item.workflow) ? `workflow ${item.workflow} is off`
+      : item.unless?.some((id) => active.has(id)) ? `gives way to workflow ${item.unless.find((id) => active.has(id))}`
       : undefined;
     if (reason) plan.dropped.push({ pack, item: label, reason });
     return !reason;
@@ -91,6 +96,8 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
   for (const { manifest, dir } of order) {
     const pack = manifest.name;
     for (const entry of manifest.files ?? []) if (fits(pack, entry, `file ${entry.target}`)) packFiles.push({ target: entry.target, source: within(dir, entry.path, pack) });
+    const rules = (manifest.codexRules ?? []).filter((entry) => fits(pack, { ...entry, plans: entry.plans ?? codexPlans }, `codex rules ${entry.path}`));
+    if (rules.length) packFiles.push({ target: `.codex/rules/fleet-${pack}.rules`, content: rules.map((entry) => readFileSync(within(dir, entry.path, pack), "utf8").replace(/\n?$/, "\n")).join("") });
     for (const job of manifest.jobs ?? []) if (fits(pack, job, `job ${job.id}`)) plan.jobs.push({ ...job, pack });
     for (const step of manifest.human ?? []) if (fits(pack, step, `human ${step.id}`)) plan.human.push({ ...step, pack });
     for (const step of manifest.steps ?? []) {
@@ -188,6 +195,14 @@ function checkUniqueIds(order: Candidate[]) {
       }
     }
   }
+}
+
+const codexPlans: AiPlan[] = ["codex", "both"];
+
+/** The workflow ids every source declares, or undefined while a source is unreachable and may declare more. */
+function declaredWorkflows(sources: FetchedSource[]) {
+  if (sources.some((source) => "error" in source)) return undefined;
+  return new Set(sources.flatMap((source) => ("error" in source ? [] : source.packs.flatMap((pack) => (pack.manifest.workflows ?? []).map((workflow) => workflow.id)))));
 }
 
 /** Every target stays inside the home directory, and no two files share one. */

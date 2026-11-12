@@ -16,7 +16,7 @@ describe("get.sh", () => {
     expect(calls).toContain("brew install --cask t3-code");
     expect(calls.filter((call) => call.startsWith("brew install ") && !call.includes("--cask"))).toEqual([]);
     expect(result.calls).toContain("t3 installer channel=nightly");
-    expect(result.output).toContain("Applied 14 changes.");
+    expect(result.output).toContain("Applied 15 changes.");
   });
 
   onLinuxHost("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {

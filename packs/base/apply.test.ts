@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { cargoGitCliCommand } from "./lib/cargo-git-cli.ts";
 import { join } from "node:path";
 import { parse as parseToml } from "smol-toml";
@@ -252,5 +252,54 @@ describe("the settings snapshot", () => {
     expect((await fleet(["doctor"], home)).output).toContain("Step settings-snapshot of the base pack does not pass its check.");
     await fleet(["apply"], home);
     expect(statSync(snapshotFile(home)).mode & 0o777).toBe(0o600);
+  });
+});
+
+describe("the Codex rules", () => {
+  const rules = ".codex/rules/fleet-base.rules";
+  const profileFor = (plan: string) => {
+    const dir = profileWith();
+    const file = join(dir, "fleet.json");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), plan }));
+    return dir;
+  };
+
+  test("a Codex plan gets Fleet's rules as a plain file under the engine's command names, next to the person's own rules", async () => {
+    const { home, code } = await appliedHome();
+    expect(code).toBe(0);
+    const path = join(home, rules);
+    expect(statSync(path).isFile()).toBe(true);
+    expect(lstatSync(path).isSymbolicLink()).toBe(false);
+    const text = readFileSync(path, "utf8");
+    expect(text).toContain('prefix_rule(pattern = ["fleet", ["heavy", "proof", "providers", "activity", "disk", "frontier", "doctor"]], decision = "allow")');
+    expect(text).toContain('prefix_rule(pattern = ["fleet", "apply", "--dry-run"], decision = "allow")');
+    expect(text).toContain('prefix_rule(pattern = ["fleet", "thread", ["find", "read", "list"]], decision = "allow")');
+    expect(text).not.toMatch(/availability|"plan"|dev\/fleet|FLEET_HOME|worktree-box/);
+  });
+
+  test("a plan that drops Codex removes Fleet's unchanged rules file", async () => {
+    const { home } = await appliedHome();
+    expect(existsSync(join(home, rules))).toBe(true);
+    expect((await fleet(["apply", "--profile", profileFor("claude")], home)).code).toBe(0);
+    expect(existsSync(join(home, rules))).toBe(false);
+  });
+
+  test("keeps a rules file the person wrote at Fleet's path, and the person's other rules files", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".codex/rules"), { recursive: true });
+    writeFileSync(join(home, rules), "# mine\n");
+    writeFileSync(join(home, ".codex/rules/default.rules"), "# Codex's own\n");
+    const { output } = await fleet(["apply", "--profile", profileFor("both")], home);
+    expect(output).toContain(`Kept your ${rules}`);
+    expect(readFileSync(join(home, rules), "utf8")).toBe("# mine\n");
+    expect(readFileSync(join(home, ".codex/rules/default.rules"), "utf8")).toBe("# Codex's own\n");
+  });
+
+  test("keeps Fleet's rules file once the person changes it, also when the plan drops Codex", async () => {
+    const { home } = await appliedHome();
+    writeFileSync(join(home, rules), "# changed\n");
+    expect((await fleet(["apply"], home)).output).toContain(`Kept your ${rules}`);
+    await fleet(["apply", "--profile", profileFor("claude")], home);
+    expect(readFileSync(join(home, rules), "utf8")).toBe("# changed\n");
   });
 });

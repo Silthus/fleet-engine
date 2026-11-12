@@ -58,7 +58,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
   if (typeof raw.name !== "string" || !packName.test(raw.name)) return fail("name must be lowercase words joined by dashes");
   if (raw.title !== undefined && !filled(raw.title)) return fail("title must be the name people read");
   if (typeof raw.summary !== "string" || raw.summary === "") return fail("summary must be one plain sentence");
-  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "t3ProjectScripts", "handlers", "served"]) {
+  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "codexRules", "t3ProjectScripts", "handlers", "served"]) {
     if (raw[field] !== undefined && !Array.isArray(raw[field])) fail(`${field} must be a list`);
   }
   checkShapes(raw, fail);
@@ -82,6 +82,7 @@ function scopeProblem(item: Record<string, unknown>) {
   if (item.oncePerFleet !== undefined && typeof item.oncePerFleet !== "boolean") return "oncePerFleet must be true or false";
   if (item.plans !== undefined && !isListOf(item.plans, plans)) return "plans must list claude, codex, or both";
   if (item.workflow !== undefined && typeof item.workflow !== "string") return "workflow must be an id";
+  if (item.unless !== undefined && !isStrings(item.unless)) return "unless must list workflow ids";
   return undefined;
 }
 
@@ -182,6 +183,10 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(typeof item.path === "string" && typeof item.target === "string", `${label}: needs a path and a target`);
     filters(item, label);
   });
+  each("codexRules", (item, label) => {
+    need(typeof item.path === "string", `${label}: needs a path`);
+    filters(item, label);
+  });
   checkModels(raw.models, fail);
   each("human", (item, label) => {
     need(typeof item.id === "string" && typeof item.say === "string" && isStrings(item.probe), `${label}: needs an id, a say, and a probe list`);
@@ -268,10 +273,10 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
     }
   }
   checkYields(manifest.workflows ?? [], fail);
-  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, t3ProjectScripts: manifest.t3ProjectScripts, handlers: manifest.handlers, served: manifest.served };
+  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, codexRules: manifest.codexRules, t3ProjectScripts: manifest.t3ProjectScripts, handlers: manifest.handlers, served: manifest.served };
   for (const [field, items] of Object.entries(tied)) {
     for (const item of items ?? []) {
-      const label = "id" in item ? item.id : "key" in item ? item.key : "seam" in item ? item.seam : item.target;
+      const label = "id" in item ? item.id : "key" in item ? item.key : "seam" in item ? item.seam : "target" in item ? item.target : item.path;
       if (item.workflow !== undefined && !ids.has(item.workflow)) fail(`${field} ${label} names unknown workflow ${item.workflow}`);
     }
   }

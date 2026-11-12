@@ -1,0 +1,17 @@
+# Fleet: commands that Codex runs outside its sandbox without asking.
+# In T3 Auto, Codex has a workspace-write sandbox with no network. Fleet's
+# PreToolUse guards still check every command.
+
+prefix_rule(pattern = ["git", ["fetch", "pull", "push", "ls-remote"]], decision = "allow")
+
+prefix_rule(pattern = ["gh", "pr", ["view", "list", "checks", "diff", "status", "create", "ready", "edit"]], decision = "allow")
+prefix_rule(pattern = ["gh", "run", ["view", "list", "watch"]], decision = "allow")
+prefix_rule(pattern = ["gh", "issue", ["view", "list"]], decision = "allow")
+prefix_rule(pattern = ["gh", "repo", "view"], decision = "allow")
+prefix_rule(pattern = ["gh", "search"], decision = "allow")
+
+prefix_rule(pattern = [["bun", "pnpm"], "install"], decision = "allow")
+
+prefix_rule(pattern = ["fleet", ["heavy", "proof", "providers", "activity", "disk", "frontier", "doctor"]], decision = "allow")
+prefix_rule(pattern = ["fleet", "apply", "--dry-run"], decision = "allow")
+prefix_rule(pattern = ["fleet", "thread", ["find", "read", "list"]], decision = "allow")

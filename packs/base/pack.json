@@ -16,6 +16,11 @@
       "path": "t3.md"
     }
   ],
+  "codexRules": [
+    {
+      "path": "codex.rules"
+    }
+  ],
   "models": {
     "claude": [
       {
