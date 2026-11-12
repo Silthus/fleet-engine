@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { readLinkedItemText, readLinkedThread, type LinkedTimelineItem } from "./environments.ts";
+import { readLinkedItemText, readLinkedMessages, type LinkedTimelineItem } from "./environments.ts";
 import { t3StatePath, t3UserData } from "./server.ts";
 import type { T3Client, T3HttpClient } from "./session.ts";
 
@@ -99,10 +99,10 @@ export async function readThreadWords(client: T3HttpClient, value: string, state
   let lastAssistant = "";
   for (const { item } of items) {
     if (item.type === "assistant_message" && item.text) lastAssistant = item.text;
-    if (typedByUser(item) && item.text) words.push({ thread: threadId, id: item.messageId ?? item.id ?? "", text: item.text, answered: lastAssistant.slice(0, answeredCap), at: item.startedAt, source: "typed" });
+    if (typedByUser(item) && item.text) words.push({ thread: threadId, id: item.messageId ?? item.id ?? "", text: item.text, answered: lastAssistant.slice(0, answeredCap), at: item.updatedAt ?? item.startedAt, source: "typed" });
     const answer = item.type === "user_input_request" && answeredInClient().has(item.requestId ?? "") ? item.questionAnswer : undefined;
     Object.entries(answer?.answers ?? {}).forEach(([question, text], index) => words.push({
-      thread: threadId, id: `${item.id}:${index}`, text: [text].flat().join(", "), answered: (answer!.questionTextById[question] ?? question).slice(0, answeredCap), at: item.startedAt, source: "question",
+      thread: threadId, id: `${item.id}:${index}`, text: [text].flat().join(", "), answered: (answer!.questionTextById[question] ?? question).slice(0, answeredCap), at: item.updatedAt ?? item.startedAt, source: "question",
     }));
   }
   return words;
@@ -111,18 +111,13 @@ export async function readThreadWords(client: T3HttpClient, value: string, state
 export async function readLinkedThreadWords(client: Pick<T3HttpClient, "callTool">, environmentId: string, threadId: string): Promise<ThreadWord[]> {
   const words: ThreadWord[] = [];
   let lastAssistant = "";
-  let afterPosition: number | undefined;
-  for (;;) {
-    const page = await readLinkedThread(client, environmentId, { threadId, view: "messages", ...(afterPosition === undefined ? {} : { afterPosition }), limit: 100, maxCharsPerItem: 50_000 });
-    for (const item of page.items) {
-      if (item.type === "assistant_message" && item.text) lastAssistant = item.text;
-      if (typedByUserRemotely(item) && item.text) {
-        words.push({ thread: threadId, id: item.itemId, text: (await readLinkedItemText(client, environmentId, threadId, item))!, answered: lastAssistant.slice(0, answeredCap), at: item.updatedAt, source: "typed" });
-      }
+  for (const item of (await readLinkedMessages(client, environmentId, threadId)).items) {
+    if (item.type === "assistant_message" && item.text) lastAssistant = item.text;
+    if (typedByUserRemotely(item) && item.text) {
+      words.push({ thread: threadId, id: item.itemId, text: (await readLinkedItemText(client, environmentId, threadId, item))!, answered: lastAssistant.slice(0, answeredCap), at: item.updatedAt, source: "typed" });
     }
-    if (!page.hasMore || page.nextPosition === null) return words;
-    afterPosition = page.nextPosition;
   }
+  return words;
 }
 
 const typedByUserRemotely = (item: LinkedTimelineItem) => item.type === "user_message" && item.createdBy === "user" && ["web", "mobile"].includes(item.creationSource ?? "");

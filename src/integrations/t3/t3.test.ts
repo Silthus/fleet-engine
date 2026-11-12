@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverT3Server, launchScratchThread, listLinkedEnvironments, listLinkedThreads, readLinkedThread, readT3Settings, readThreadWords, t3CliRunner, T3ToolError, withT3Session, type LinkedEnvironment, type T3Deadline } from "./index.ts";
+import { discoverT3Server, launchScratchThread, listLinkedEnvironments, listLinkedThreads, readLinkedThread, readLinkedThreadWords, readT3Settings, readThreadWords, t3CliRunner, T3ToolError, withT3Session, type LinkedEnvironment, type T3Deadline } from "./index.ts";
 import { startT3Stub, ToolRefusal, writeT3EventStore, type Resolution, type T3Stub } from "./testing.ts";
 
 const cleanups: (() => unknown)[] = [];
@@ -219,7 +219,7 @@ function t3EventStore(resolutions: Resolution[]) {
 }
 
 test("only the user's own messages and question answers in T3 count as their words", async () => {
-  const item = (fields: Record<string, unknown>) => ({ item: { startedAt: "2026-10-25T07:00:00Z", completedAt: "2026-10-25T07:01:00Z", ...fields } });
+  const item = (fields: Record<string, unknown>) => ({ item: { startedAt: "2026-10-25T07:00:00Z", completedAt: "2026-10-25T07:01:00Z", updatedAt: "2026-10-25T07:02:00Z", ...fields } });
   const items = [
     item({ type: "assistant_message", text: "Shall I run round 3?" }),
     item({ type: "user_message", createdBy: "user", creationSource: "web", messageId: "m1", text: "Yes, run it." }),
@@ -250,6 +250,21 @@ test("only the user's own messages and question answers in T3 count as their wor
     ["mcp:thread-1", "m2", "Yes from the phone.", "Shall I run round 3?", "typed"],
     ["mcp:thread-1", "q1:0", "Accept both (Recommended)", "Accept both gaps?", "question"],
   ]);
+  expect(new Set(words.map((word) => word.at))).toEqual(new Set(["2026-10-25T07:02:00Z"]));
+});
+
+test("a linked thread whose next page does not move forward stops the words export with an error", async () => {
+  const item = { position: 5, itemId: "u1", type: "user_message", text: "Again", createdBy: "user", creationSource: "web", updatedAt: "2026-10-25T07:02:00Z" };
+  const asked: unknown[] = [];
+  const client = {
+    callTool: async (_name: string, args: Record<string, unknown>) => {
+      asked.push(args.afterPosition);
+      if (asked.length > 3) throw new Error("read the same page again and again");
+      return { thread: {}, items: [item], nextPosition: 5, hasMore: true };
+    },
+  };
+  await expect(readLinkedThreadWords(client as never, "env-1", "mcp:stuck")).rejects.toThrow("T3 answered mcp:stuck with position 5 again");
+  expect(asked).toEqual([undefined, 5]);
 });
 
 test("a thread starts in T3's scratch project with the model row's provider, model, and effort, through a session that may only read and operate, and is revoked", async () => {

@@ -203,6 +203,20 @@ test("fleet thread read --words exports only what a person typed in a thread on 
   expect(read.words[1].text).toBe(long);
 });
 
+test("fleet thread read --words reads every page of a long thread on a linked machine, each word at the time T3 gives its item", async () => {
+  const items = Array.from({ length: 150 }, (_, index) => index === 1 || index === 140
+    ? linkedItem("user_message", `Ask ${index}`, { itemId: `ask-${index}`, updatedAt: `2026-10-25T07:${String(index % 60).padStart(2, "0")}:00.000Z` })
+    : linkedItem("assistant_message", `Reply ${index}`, { itemId: `reply-${index}` }));
+  const t3 = await stub(fixture([linkedEnvironment], [linkedThread("mcp:long", { items })]));
+  const read = JSON.parse((await thread(t3, ["read", "long", "--words"])).output);
+
+  expect(read.words.map((word: { text: string; answered: string; at: string }) => [word.text, word.answered, word.at])).toEqual([
+    ["Ask 1", "Reply 0", "2026-10-25T07:01:00.000Z"],
+    ["Ask 140", "Reply 139", "2026-10-25T07:20:00.000Z"],
+  ]);
+  expect(t3.toolCalls.filter((call) => call.name === "t3_thread_read" && call.args.view === "messages").map((call) => call.args.afterPosition)).toEqual([undefined, 99]);
+});
+
 test("fleet thread list lists the threads of this machine and each linked environment", async () => {
   const t3 = await stub();
   const { code, output } = await thread(t3, ["list", "--json"]);

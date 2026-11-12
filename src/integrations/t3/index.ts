@@ -5,7 +5,7 @@ export {
 export { T3ToolError } from "./mcp.ts";
 export { readT3Settings, withT3Session, type T3Client, type T3Deadline, type T3HttpClient, type T3SessionOptions } from "./session.ts";
 export {
-  listLinkedEnvironments, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedThread, sendLinkedMessage,
+  listLinkedEnvironments, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedMessages, readLinkedThread, sendLinkedMessage,
   type LinkedEnvironment, type LinkedSend, type LinkedPullRequest, type LinkedReadQuery, type LinkedThread, type LinkedThreadDetail, type LinkedThreadQuery, type LinkedThreadRead, type LinkedTimelineItem,
 } from "./environments.ts";
 export {
