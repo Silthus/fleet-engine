@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isolateGit, spawnGit, tempDirs } from "../testing/git.ts";
 import { linkedFleets } from "../testing/linked.ts";
@@ -43,6 +43,18 @@ test("a hub command from a node gives back the hub's exit code", async () => {
   const { hub, node } = linkedFleets(temp);
   await hub("apply");
   expect(await node("issued-admin", "fail")).toEqual({ code: 3, output: 'yes ["fail"]' });
+});
+
+test("a command of a workflow that is off is refused on every machine, and runs on the hub once the workflow is on", async () => {
+  const { hub, node, profile, hosts } = linkedFleets(temp);
+  const refusal = "fleet: fleet issued-extra-admin belongs to the issued-extra workflow, which is off. Turn it on with fleet packs --workflows issued-extra=on.";
+  hosts["hub-1"] = "down";
+  expect(await node("issued-extra-admin", "here")).toEqual({ code: 1, output: refusal });
+  expect(await hub("issued-extra-admin", "here")).toEqual({ code: 1, output: refusal });
+
+  const file = join(profile, "fleet.json");
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), workflows: { "issued-extra": true } }));
+  expect(await hub("issued-extra-admin", "here")).toEqual({ code: 0, output: 'extra ["here"]' });
 });
 
 test("the hub runs its own hub command", async () => {

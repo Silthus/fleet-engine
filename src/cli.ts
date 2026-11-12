@@ -203,6 +203,7 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
     options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }
+  if (command.workflow && !plan.workflows.some((entry) => entry.id === command.workflow && entry.active)) throw new Error(`fleet ${name} belongs to the ${command.workflow} workflow, which is off. Turn it on with fleet packs --workflows ${command.workflow}=on.`);
   if (command.on === "hub" && !plan.onHub) return runOnHub(name, args, plan, options);
   const loaded = loadedPack(sources, command.pack);
   const run = loaded?.code?.commands[name];
