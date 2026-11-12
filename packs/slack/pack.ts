@@ -36,11 +36,18 @@ export default {
       ask: "never",
       question: "Which Slack emoji saves a message and its thread to your context library? Give its name, such as brain. It works while the Context library pack is on.",
     });
+    const nodes = fleet.setting({
+      key: "slack.nodes",
+      type: "string",
+      optional: true,
+      ask: "never",
+      question: "Which nodes start the threads that Slack asks for, as SSH names separated by spaces, such as devbox-1 devbox-2? Fleet takes them in turn. Leave it empty to start them on the hub, or on a box while Boxes is on.",
+    });
     const threads = fleet.workflow({
       id: "slack-thread",
       name: "Start a thread from Slack",
       default: false,
-      settings: [userId, emoji, captureEmoji],
+      settings: [userId, emoji, captureEmoji, nodes],
       sentence: "Your own Slack message or reaction with your trigger emoji (default :t3code:), or a mention of your Slack app starts a T3 thread, and Slack shows you its link. With the Context library pack on, your :brain: reaction saves the thread to your notes.",
       risk: "Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread.",
     });
