@@ -44,7 +44,7 @@ test("explicit adoption preserves the full replaced directory in a backup", asyn
   const { home, source } = await fixture();
   await mkdir(join(home, "skill/nested"), { recursive: true });
   await writeFile(join(home, "skill/nested/local.txt"), "keep this");
-  const result = await install(home, [{ target: "skill", source }], "core", ["skill"]);
+  const result = await install(home, [{ target: "skill", source }], "core", { adopt: ["skill"] });
   expect(result.backupRoot).toBeDefined();
   expect(await readFile(join(result.backupRoot!, "skill/nested/local.txt"), "utf8")).toBe("keep this");
   expect(await readlink(join(home, "skill"))).toBe(source);
@@ -89,8 +89,64 @@ test("path traversal and linked parent directories cannot receive configuration"
   const outside = join(root, "outside");
   await mkdir(outside);
   await symlink(outside, join(home, ".config"));
-  await expect(install(home, [{ target: ".config/settings", content: "shared" }])).rejects.toThrow("Parent is not a real directory");
+  await expect(install(home, [{ target: ".config/settings", content: "shared" }])).rejects.toThrow("Resolve, adopt, or skip: .config/settings");
   await expect(install(home, [{ target: "../outside/settings", content: "shared" }])).rejects.toThrow("Path leaves its root");
+  await install(home, [{ target: ".config/settings", content: "shared" }], "core", { adopt: [".config/settings"] });
+  await expect(lstat(join(outside, "settings"))).rejects.toThrow();
+  expect(await readFile(join(home, ".config/settings"), "utf8")).toBe("shared");
+});
+
+test("a folder link that Fleet installed gives way to the files it now writes inside it", async () => {
+  const { home, source } = await fixture();
+  await install(home, [{ target: "guides", source }], "fleet");
+  const result = await install(home, [{ target: "guides/new.md", content: "new guide" }], "fleet");
+  expect(await readFile(join(home, "guides/new.md"), "utf8")).toBe("new guide");
+  expect(await readlink(join(result.backupRoot!, "guides"))).toBe(source);
+  expect(await readFile(join(source, "SKILL.md"), "utf8")).toBe("A shared skill.\n");
+});
+
+test("adopting a file never moves a linked folder that holds another setup's file", async () => {
+  const { root, home } = await fixture();
+  const outside = join(root, "outside");
+  await mkdir(outside);
+  await writeFile(join(outside, "other.md"), "theirs");
+  await symlink(outside, join(home, "guides"));
+  await install(home, [{ target: "kept", content: "core" }], "core");
+  const state = join(home, ".local/state/fleet/state.json");
+  const owned = JSON.parse(await readFile(state, "utf8"));
+  owned.groups.core["guides/other.md"] = { kind: "file", hash: owned.groups.core.kept.hash };
+  await writeFile(state, JSON.stringify(owned));
+  await expect(install(home, [{ target: "guides/new.md", content: "new" }], "fleet", { adopt: ["guides/new.md"] })).rejects.toThrow("Resolve, adopt, or skip: guides/new.md");
+  expect(await readlink(join(home, "guides"))).toBe(outside);
+});
+
+test("taking over a setup that owns a file inside a linked folder moves that folder and writes the new file", async () => {
+  const { root, home } = await fixture();
+  const outside = join(root, "outside");
+  await mkdir(outside);
+  await writeFile(join(outside, "other.md"), "theirs");
+  await symlink(outside, join(home, "guides"));
+  await install(home, [{ target: "kept", content: "core" }], "core");
+  const state = join(home, ".local/state/fleet/state.json");
+  const owned = JSON.parse(await readFile(state, "utf8"));
+  owned.groups.core["guides/other.md"] = { kind: "file", hash: owned.groups.core.kept.hash };
+  await writeFile(state, JSON.stringify(owned));
+  const result = await install(home, [{ target: "guides/new.md", content: "new" }], "fleet", { release: ["core"] });
+  expect(await readFile(join(home, "guides/new.md"), "utf8")).toBe("new");
+  expect(await readlink(join(result.backupRoot!, "guides"))).toBe(outside);
+  expect(Object.keys(JSON.parse(await readFile(state, "utf8")).groups)).toEqual(["fleet"]);
+});
+
+test("a failed adoption puts a linked folder it moved aside back", async () => {
+  const { root, home } = await fixture();
+  const outside = join(root, "outside");
+  await mkdir(outside);
+  await symlink(outside, join(home, ".config"));
+  await expect(install(home, [
+    { target: ".config/settings", content: "shared" },
+    { target: `parent/${"x".repeat(256)}`, content: "cannot write" },
+  ], "core", { adopt: [".config/settings"] })).rejects.toThrow();
+  expect(await readlink(join(home, ".config"))).toBe(outside);
   await expect(lstat(join(outside, "settings"))).rejects.toThrow();
 });
 
@@ -120,7 +176,7 @@ test("managed targets cannot replace Fleet state through ancestors or aliases", 
     await expect(install(home, [
       { target: "settings", content: "updated" },
       { target, content: "would replace state" },
-    ], "core", [target])).rejects.toThrow();
+    ], "core", { adopt: [target] })).rejects.toThrow();
     expect(await readFile(state, "utf8")).toBe(before);
     expect(await readFile(join(home, "settings"), "utf8")).toBe("original");
   }

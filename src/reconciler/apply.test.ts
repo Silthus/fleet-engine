@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Plan } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
@@ -54,6 +54,46 @@ describe("apply", () => {
     expect(readFileSync(join(home, ".agents/skills/team"), "utf8")).toBe("team skill\n");
     expect(report.findings).toContainEqual({ id: "pack:team", pack: "team", say: "The team pack is not applied: not found; unreachable sources: team" });
     expect((await apply(plan(), { home })).actions).toContainEqual({ target: ".agents/skills/team", operation: "remove" });
+  });
+
+  test("--adopt-from keeps the other setup's claim while an outage keeps its file", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".agents"), { recursive: true });
+    writeFileSync(join(home, ".agents/AGENTS.md"), "old rules\n");
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    const state = JSON.stringify({ version: 1, groups: { core: { ".agents/AGENTS.md": { kind: "file", hash: "0".repeat(64) } } } });
+    writeFileSync(join(home, ".local/state/fleet/state.json"), state);
+    const offline = plan({ packs: [...plan().packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] });
+    await expect(apply(offline, { home, adoptFrom: ["core"] })).rejects.toThrow("Run fleet apply --adopt-from core again once it can apply .agents/AGENTS.md.");
+    expect(readFileSync(join(home, ".local/state/fleet/state.json"), "utf8")).toBe(state);
+    expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toBe("old rules\n");
+  });
+
+  test("--adopt-from keeps the other setup's claim while an outage keeps a file in its linked folder", async () => {
+    const home = temp.make("home-");
+    const outside = temp.make("outside-");
+    writeFileSync(join(outside, "other.md"), "theirs\n");
+    symlinkSync(outside, join(home, "guides"));
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    const state = JSON.stringify({ version: 1, groups: { core: { "guides/other.md": { kind: "file", hash: "0".repeat(64) } } } });
+    writeFileSync(join(home, ".local/state/fleet/state.json"), state);
+    const inside = plan({ files: [{ target: "guides/new.md", content: "new\n" }] });
+    const offline = { ...inside, packs: [...inside.packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] };
+    await expect(apply(offline, { home, adoptFrom: ["core"] })).rejects.toThrow("Run fleet apply --adopt-from core again once it can apply guides/new.md.");
+    expect(readFileSync(join(home, ".local/state/fleet/state.json"), "utf8")).toBe(state);
+    expect(lstatSync(join(home, "guides")).isSymbolicLink()).toBe(true);
+  });
+
+  test("keeps Fleet's own folder link while an outage keeps the file it now writes inside it", async () => {
+    const home = temp.make("home-");
+    const guides = temp.make("guides-");
+    await apply(plan({ files: [{ target: "guides", source: guides }] }), { home });
+    const inside = plan({ files: [{ target: "guides/new.md", content: "new\n" }] });
+    const offline = { ...inside, packs: [...inside.packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] };
+    await apply(offline, { home });
+    expect(lstatSync(join(home, "guides")).isSymbolicLink()).toBe(true);
+    await apply(inside, { home });
+    expect(readFileSync(join(home, "guides/new.md"), "utf8")).toBe("new\n");
   });
 
   test("keeps skills whose source is unreachable, and shared files that would lose an unreachable pack's part", async () => {

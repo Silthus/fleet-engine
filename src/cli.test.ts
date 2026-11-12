@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join, relative } from "node:path";
 import { cliFixtures, repoRoot } from "./testing/cli.ts";
@@ -141,6 +142,104 @@ describe("fleet apply", () => {
     const backups = join(home, ".local/state/fleet/backups");
     const [run] = readdirSync(backups);
     expect(readFileSync(join(backups, run ?? "", ".codex/AGENTS.md"), "utf8")).toBe("my own codex rules\n");
+  });
+
+  describe("on a machine that another Fleet set up", () => {
+    function anotherFleet() {
+      const home = temp.make("home-");
+      const old = temp.make("old-fleet-");
+      mkdirSync(join(old, "guides"));
+      writeFileSync(join(old, "AGENTS.md"), "old rules\n");
+      writeFileSync(join(old, "guides/old.md"), "old guide\n");
+      mkdirSync(join(home, ".agents"), { recursive: true });
+      symlinkSync(join(old, "AGENTS.md"), join(home, ".agents/AGENTS.md"));
+      symlinkSync(join(old, "guides"), join(home, ".agents/guides"));
+      writeFileSync(join(home, ".old-tool"), "old tool\n");
+      const state = { version: 1, groups: { core: {
+        ".agents/AGENTS.md": { kind: "link", source: join(old, "AGENTS.md") },
+        ".agents/guides": { kind: "link", source: join(old, "guides") },
+        ".old-tool": { kind: "file", hash: createHash("sha256").update("old tool\n").digest("hex") },
+      } } };
+      mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+      writeFileSync(join(home, ".local/state/fleet/state.json"), JSON.stringify(state));
+      return { home, old, state };
+    }
+    const clash = "To do: Another Fleet setup keeps 4 of the files your profile writes, such as .agents/AGENTS.md, under the name core in ~/.local/state/fleet/state.json. Run fleet apply --adopt-from core to take them over. Fleet backs up that state and each file or linked folder it replaces in ~/.local/state/fleet/backups. A linked folder moves whole, with everything in it.";
+
+    test("dry-run and doctor report the clash with the way out, and apply stops before it writes", async () => {
+      const { home } = anotherFleet();
+      const profile = profileDir();
+      const before = snapshot(home);
+      const preview = await fleet(["apply", "--dry-run", "--profile", profile], home);
+      expect(preview).toMatchObject({ code: 1 });
+      expect(preview.output).toContain(clash);
+      expect(preview.output).toContain("Preview: Fleet could not apply your profile. Nothing was written.");
+      const doctor = await fleet(["doctor", "--profile", profile], home);
+      expect(doctor).toMatchObject({ code: 1 });
+      expect(doctor.output).toContain(clash);
+      expect(snapshot(home)).toEqual(before);
+
+      const applied = await fleet(["apply", "--profile", profile], home);
+      expect(applied).toMatchObject({ code: 1 });
+      expect(applied.output).toContain(clash);
+      expect(applied.output).toEndWith("Fleet could not apply your profile.");
+      expect(existsSync(join(home, ".codex/AGENTS.md"))).toBe(false);
+      expect(existsSync(join(home, ".claude/settings.json"))).toBe(false);
+      expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toBe("old rules\n");
+    });
+
+    test("--adopt-from backs up the other Fleet's state and files, takes its files over, and forgets the rest", async () => {
+      const { home, old, state } = anotherFleet();
+      const profile = profileDir();
+      const result = await fleet(["apply", "--profile", profile, "--adopt-from", "core"], home);
+      expect(result).toMatchObject({ code: 0 });
+      expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toStartWith("# Agent rules\n");
+      expect(lstatSync(join(home, ".agents/guides")).isDirectory()).toBe(true);
+      expect(readFileSync(join(home, ".agents/guides/skill-settings.md"), "utf8")).toContain("identity.signer");
+      expect(readFileSync(join(home, ".old-tool"), "utf8")).toBe("old tool\n");
+      expect(readFileSync(join(old, "guides/old.md"), "utf8")).toBe("old guide\n");
+      expect(Object.keys(JSON.parse(readFileSync(join(home, ".local/state/fleet/state.json"), "utf8")).groups)).toEqual(["fleet"]);
+
+      const backups = join(home, ".local/state/fleet/backups");
+      const [run] = readdirSync(backups);
+      const backup = join(backups, run ?? "");
+      expect(readlinkSync(join(backup, ".agents/AGENTS.md"))).toBe(join(old, "AGENTS.md"));
+      expect(readlinkSync(join(backup, ".agents/guides"))).toBe(join(old, "guides"));
+      expect(JSON.parse(readFileSync(join(backup, ".local/state/fleet/state.json"), "utf8"))).toEqual(state);
+
+      expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
+    });
+
+    test("--adopt-from refuses a name the state does not hold, and this Fleet's own name", async () => {
+      const { home } = anotherFleet();
+      const profile = profileDir();
+      for (const name of ["other", "constructor"]) {
+        expect(await fleet(["apply", "--profile", profile, "--adopt-from", name], home)).toMatchObject({ code: 1, output: `fleet: nothing to adopt from ${name}: Fleet's state names no other setup by that name` });
+      }
+      expect(await fleet(["apply", "--profile", profile, "--adopt-from", "fleet"], home)).toMatchObject({ code: 1, output: "fleet: nothing to adopt from fleet: that is the name of this Fleet" });
+    });
+  });
+
+  test("keeps a file whose folder is a link, and --adopt moves that link to the backups", async () => {
+    const home = temp.make("home-");
+    const elsewhere = temp.make("guides-");
+    writeFileSync(join(elsewhere, "mine.md"), "my guide\n");
+    mkdirSync(join(home, ".agents"), { recursive: true });
+    symlinkSync(elsewhere, join(home, ".agents/guides"));
+    const profile = profileDir();
+    const kept = await fleet(["apply", "--profile", profile], home);
+    expect(kept).toMatchObject({ code: 0 });
+    expect(kept.output).toContain("Kept your .agents/guides/t3.md (its folder .agents/guides is a link or a file, not a real folder; adopting moves it to the backups). Run fleet apply --adopt .agents/guides/t3.md to take Fleet's version.");
+    expect(readlinkSync(join(home, ".agents/guides"))).toBe(elsewhere);
+
+    const adopted = await fleet(["apply", "--adopt", ".agents/guides/t3.md"], home);
+    expect(adopted).toMatchObject({ code: 0 });
+    expect(lstatSync(join(home, ".agents/guides")).isDirectory()).toBe(true);
+    expect(readdirSync(join(home, ".agents/guides")).sort()).toEqual(["coding-standards.md", "skill-settings.md", "t3.md"]);
+    const backups = join(home, ".local/state/fleet/backups");
+    const [run] = readdirSync(backups);
+    expect(readlinkSync(join(backups, run ?? "", ".agents/guides"))).toBe(elsewhere);
+    expect(readFileSync(join(elsewhere, "mine.md"), "utf8")).toBe("my guide\n");
   });
 
   test("--dry-run previews without writing machine state", async () => {
