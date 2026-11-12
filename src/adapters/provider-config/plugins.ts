@@ -81,7 +81,7 @@ async function fetchMarketplaces(claude: Claude, plugins: string[], sources: Sou
   const findings: Finding[] = [];
   const unreachable: string[] = [];
   for (const name of fetched ? needed : []) {
-    const source = sources[name];
+    const source = Object.hasOwn(sources, name) ? sources[name] : undefined;
     if (fetched!.includes(name)) {
       const updated = await claude(["marketplace", "update", name]);
       if (updated.code !== 0) findings.push({ id: `plugin-marketplace:${name}`, pack: "engine", say: `Could not update the Claude plugin marketplace ${name}: ${reasonOf(updated)}.`, repair: "apply" });

@@ -843,6 +843,15 @@ describe("Claude plugins", () => {
       expect(report.findings).toEqual([{ id: "plugin-marketplace:claude-plugins-official", pack: "engine", say: "Could not update the Claude plugin marketplace claude-plugins-official: Failed to update marketplace(s): network is unreachable.", repair: "apply" }]);
     });
 
+    test("reports a plugin from an undeclared marketplace whose name an object already has", async () => {
+      const home = temp.make("home-");
+      const cli = freshClaude({});
+
+      const report = await apply(plan([{ provider: "claude", key: "enabledPlugins.tool@constructor", value: true }]), { home, adapters: [cli.adapter] });
+
+      expect(report.findings.map((finding) => finding.say)).toEqual(["Could not install the Claude plugin tool@constructor."]);
+    });
+
     test("names the exit code when a failed add printed nothing", async () => {
       const home = temp.make("home-");
       write(home, claude, teamDeclared);
