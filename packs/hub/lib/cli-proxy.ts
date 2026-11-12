@@ -73,6 +73,7 @@ async function savedKey(home: string): Promise<string | undefined> {
 }
 
 async function binaryReady(machine: ProxyMachine, paths: Layout): Promise<boolean> {
+  if (!existsSync(paths.binary)) return false;
   const help = await machine.run([paths.binary, "--help"]);
   return `${help.stdout}${help.stderr}`.includes(`CLIProxyAPI Version: ${machine.release.version}`);
 }

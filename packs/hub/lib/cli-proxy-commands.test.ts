@@ -33,3 +33,10 @@ test("through fleet, the hub-only modes and the balancer refuse on a devbox, and
   expect([codex.code, codex.stdout]).toEqual([1, expect.stringContaining("fleet apply keeps Codex on its own sign-in until the proxy serves it.")]);
   for (const args of [["check", "claude"], ["route"]]) expect((await runFleet(["cli-proxy", ...args], { HOME: home })).code).toBe(2);
 });
+
+test("through fleet, plan and install on a hub without the proxy binary yet name the install instead of stopping at the missing file", async () => {
+  const home = await balancingDevbox();
+  writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")), role: "hub" }));
+  const plan = await runFleet(["cli-proxy", "plan"], { HOME: home });
+  expect([plan.code, plan.stderr, plan.stdout]).toEqual([0, "", expect.stringContaining(`  Install CLIProxyAPI 8.0.46 at ${join(home, ".local/share/fleet-cli-proxy/cli-proxy-api")}.\n`)]);
+});
