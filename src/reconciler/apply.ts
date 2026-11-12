@@ -9,7 +9,6 @@ import { changeLedger, ledgerKey, readLedger, undoVariable, type Ledger, type Le
 import { hublessReason } from "./resolve.ts";
 
 export type AdapterContext = { home: string; dryRun: boolean; adopt: string[]; adoptFrom?: string[] };
-/** blocked: the adapter cannot apply the plan until a person acts, so an apply stops there. */
 export type AdapterResult = { actions: Action[]; findings: Finding[]; blocked?: boolean };
 export type Adapter = {
   name: "files" | "config" | "jobs" | "identity" | "t3";
@@ -66,13 +65,12 @@ function keptFindings(kept: Action[]): Finding[] {
   }));
 }
 
-/** One finding for each other Fleet setup whose state keeps files this plan writes. */
 function claimFindings(claimed: Action[]): Finding[] {
   const owners = Map.groupBy(claimed, (action) => action.owner!);
   return [...owners].map(([owner, actions]) => ({
     id: `owner:${owner}`,
     pack: "engine",
-    say: `Another Fleet setup keeps ${actions.length} of the files your profile writes, such as ${actions[0]!.target}, under the name ${owner} in ~/.local/state/fleet/state.json. Run fleet apply --adopt-from ${owner} to take them over. Fleet backs up that state and each file it replaces in ~/.local/state/fleet/backups.`,
+    say: `Another Fleet setup keeps ${actions.length} of the files your profile writes, such as ${actions[0]!.target}, under the name ${owner} in ~/.local/state/fleet/state.json. Run fleet apply --adopt-from ${owner} to take them over. Fleet backs up that state and each file or linked folder it replaces in ~/.local/state/fleet/backups. A linked folder moves whole, with everything in it.`,
     repair: "human",
   }));
 }

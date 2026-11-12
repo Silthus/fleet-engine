@@ -120,6 +120,23 @@ test("adopting a file never moves a linked folder that holds another setup's fil
   expect(await readlink(join(home, "guides"))).toBe(outside);
 });
 
+test("taking over a setup that owns a file inside a linked folder moves that folder and writes the new file", async () => {
+  const { root, home } = await fixture();
+  const outside = join(root, "outside");
+  await mkdir(outside);
+  await writeFile(join(outside, "other.md"), "theirs");
+  await symlink(outside, join(home, "guides"));
+  await install(home, [{ target: "kept", content: "core" }], "core");
+  const state = join(home, ".local/state/fleet/state.json");
+  const owned = JSON.parse(await readFile(state, "utf8"));
+  owned.groups.core["guides/other.md"] = { kind: "file", hash: owned.groups.core.kept.hash };
+  await writeFile(state, JSON.stringify(owned));
+  const result = await install(home, [{ target: "guides/new.md", content: "new" }], "fleet", { release: ["core"] });
+  expect(await readFile(join(home, "guides/new.md"), "utf8")).toBe("new");
+  expect(await readlink(join(result.backupRoot!, "guides"))).toBe(outside);
+  expect(Object.keys(JSON.parse(await readFile(state, "utf8")).groups)).toEqual(["fleet"]);
+});
+
 test("a failed adoption puts a linked folder it moved aside back", async () => {
   const { root, home } = await fixture();
   const outside = join(root, "outside");

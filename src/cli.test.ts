@@ -164,7 +164,7 @@ describe("fleet apply", () => {
       writeFileSync(join(home, ".local/state/fleet/state.json"), JSON.stringify(state));
       return { home, old, state };
     }
-    const clash = "To do: Another Fleet setup keeps 4 of the files your profile writes, such as .agents/AGENTS.md, under the name core in ~/.local/state/fleet/state.json. Run fleet apply --adopt-from core to take them over. Fleet backs up that state and each file it replaces in ~/.local/state/fleet/backups.";
+    const clash = "To do: Another Fleet setup keeps 4 of the files your profile writes, such as .agents/AGENTS.md, under the name core in ~/.local/state/fleet/state.json. Run fleet apply --adopt-from core to take them over. Fleet backs up that state and each file or linked folder it replaces in ~/.local/state/fleet/backups. A linked folder moves whole, with everything in it.";
 
     test("dry-run and doctor report the clash with the way out, and apply stops before it writes", async () => {
       const { home } = anotherFleet();
@@ -210,10 +210,13 @@ describe("fleet apply", () => {
       expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
     });
 
-    test("--adopt-from refuses a name the state does not hold", async () => {
+    test("--adopt-from refuses a name the state does not hold, and this Fleet's own name", async () => {
       const { home } = anotherFleet();
-      const result = await fleet(["apply", "--profile", profileDir(), "--adopt-from", "other"], home);
-      expect(result).toMatchObject({ code: 1, output: "fleet: nothing to adopt from other: Fleet's state names no other setup by that name" });
+      const profile = profileDir();
+      for (const name of ["other", "constructor"]) {
+        expect(await fleet(["apply", "--profile", profile, "--adopt-from", name], home)).toMatchObject({ code: 1, output: `fleet: nothing to adopt from ${name}: Fleet's state names no other setup by that name` });
+      }
+      expect(await fleet(["apply", "--profile", profile, "--adopt-from", "fleet"], home)).toMatchObject({ code: 1, output: "fleet: nothing to adopt from fleet: that is the name of this Fleet" });
     });
   });
 
@@ -226,7 +229,7 @@ describe("fleet apply", () => {
     const profile = profileDir();
     const kept = await fleet(["apply", "--profile", profile], home);
     expect(kept).toMatchObject({ code: 0 });
-    expect(kept.output).toContain("Kept your .agents/guides/t3.md (.agents/guides is not a real folder). Run fleet apply --adopt .agents/guides/t3.md to take Fleet's version.");
+    expect(kept.output).toContain("Kept your .agents/guides/t3.md (its folder .agents/guides is a link; adopting moves that link to the backups). Run fleet apply --adopt .agents/guides/t3.md to take Fleet's version.");
     expect(readlinkSync(join(home, ".agents/guides"))).toBe(elsewhere);
 
     const adopted = await fleet(["apply", "--adopt", ".agents/guides/t3.md"], home);

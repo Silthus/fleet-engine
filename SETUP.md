@@ -109,12 +109,13 @@ and ask:
   `--workflows`. Everything else stays as it is. Files they changed by hand
   are kept, and step 8 shows them.
 
-When `fleet packs` fails or is missing, but
-`~/.local/state/fleet/state.json` exists, another Fleet manages files here,
-such as one the person set up by hand. Tell them now that setup stops at its
-files, and what happens then (see "Another Fleet keeps the files" in step 7).
-Ask them to stop what still runs that Fleet, such as a LaunchAgent, so it
-does not put its files back. Then start the install as below.
+Also read `~/.local/state/fleet/state.json` when it exists. Its `groups`
+object has one name for each Fleet that manages files here. A name other
+than `fleet` is another Fleet, such as one the person set up by hand. Tell
+them now that setup stops at its files, and what happens then (see "Another
+Fleet keeps the files" in step 7). Ask them to stop what still runs that
+Fleet, such as a LaunchAgent, so it does not put its files back. Then start
+the install as below.
 
 Without an earlier setup, start the install now, so it runs while you ask
 and explain. Download the install script and the presets in one command,
@@ -341,8 +342,9 @@ installs. Ask:
 - **Take them over** (recommended): run the `fleet apply --adopt-from <name>`
   that the line names, then the setup command again. Fleet copies the other
   Fleet's state and every file or linked folder it replaces to
-  `~/.local/state/fleet/backups/`, and leaves the other Fleet's files that
-  this profile does not write as they are.
+  `~/.local/state/fleet/backups/`. A linked folder moves whole, with
+  everything in it, so say which ones move. The other Fleet's files that
+  this profile does not write stay where they are.
 - **Stop here**: nothing changes, and setup cannot finish while the other
   Fleet keeps the files.
 

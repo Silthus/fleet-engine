@@ -7,7 +7,6 @@ export type DesiredFile = { target: string; conflict?: string } & ({ source: str
 type RecordEntry = { kind: "link"; source: string } | { kind: "file"; hash: string };
 type State = { version: 1; groups: Record<string, Record<string, RecordEntry>> };
 export type Action = { target: string; operation: "create" | "keep" | "replace" | "remove" | "conflict"; reason?: string; owner?: string };
-/** Skipped targets leave the group: Fleet neither writes nor tracks them. Held targets stay in the group as they are: Fleet neither writes nor forgets them. Released groups hand every target they own to this group, and leave Fleet's state. */
 export type Choices = { adopt?: string[]; skip?: string[]; hold?: string[]; release?: string[] };
 const statePath = ".local/state/fleet/state.json";
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -81,11 +80,13 @@ function record(file: DesiredFile): RecordEntry {
   return "source" in file ? { kind: "link", source: resolve(file.source) } : { kind: "file", hash: digest(file.content) };
 }
 
+// Skipped targets leave the group: Fleet neither writes nor tracks them.
+// Held targets stay in the group as they are: Fleet neither writes nor forgets them.
 export async function plan(home: string, files: DesiredFile[], group = "core", { adopt = [], skip = [], hold = [], release = [] }: Choices = {}): Promise<Action[]> {
   const state = await readState(home);
-  for (const name of release) if (name === group || !state.groups[name]) throw new Error(`nothing to adopt from ${name}: Fleet's state names no other setup by that name`);
-  const released = release.flatMap((name) => Object.keys(state.groups[name]!));
   for (const name of release) {
+    if (name === group) throw new Error(`nothing to adopt from ${name}: that is the name of this Fleet`);
+    if (!Object.hasOwn(state.groups, name)) throw new Error(`nothing to adopt from ${name}: Fleet's state names no other setup by that name`);
     const kept = hold.find((target) => Object.keys(state.groups[name]!).some((owned) => overlaps(owned, target)));
     if (kept) throw new Error(`Fleet keeps ${kept} as it is in this run, so it cannot take over ${name} yet. Run fleet apply --adopt-from ${name} again once it can apply ${kept}.`);
   }
@@ -98,15 +99,15 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
     if (file.target === ".local/state/fleet" || file.target.startsWith(".local/state/fleet/") || statePath.startsWith(`${file.target}/`)) throw new Error("A managed target cannot replace Fleet state");
     if (files.some((other) => other !== file && other.target.startsWith(`${file.target}/`))) throw new Error(`Overlapping targets: ${file.target}`);
   }
-  const owner = (target: string) => Object.entries(state.groups).find(([name, entries]) => name !== group && !release.includes(name) && Object.keys(entries).some((owned) => overlaps(owned, target)))?.[0];
-  const taken = (target: string) => adopt.includes(target) || released.some((owned) => overlaps(owned, target));
   const folders = new Map<string, string | undefined>();
   for (const file of files) folders.set(file.target, await linkedFolder(home, file.target));
-  const claimant = (target: string) => owner(target) ?? (folders.get(target) ? owner(folders.get(target)!) : undefined);
+  const claims = (name: string, target: string) => [target, folders.get(target)].some((path) => path !== undefined && Object.keys(state.groups[name]!).some((owned) => overlaps(owned, path)));
+  const owner = (target: string) => Object.keys(state.groups).find((name) => name !== group && !release.includes(name) && claims(name, target));
+  const taken = (target: string) => adopt.includes(target) || release.some((name) => claims(name, target));
   const moved = new Set<string>();
   for (const file of files) {
     const folder = folders.get(file.target);
-    if (!folder || claimant(file.target)) continue;
+    if (!folder || owner(file.target)) continue;
     if (taken(file.target) || (previous[folder] && await matches(inside(home, folder), previous[folder]))) moved.add(folder);
   }
   for (const file of files) {
@@ -114,20 +115,19 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
     targets.add(file.target);
     const path = inside(home, file.target);
     if ("source" in file && !(await stat(file.source))) throw new Error(`Missing source: ${file.source}`);
-    const other = claimant(file.target);
+    const other = owner(file.target);
     const folder = folders.get(file.target);
-    const adopted = taken(file.target) || (folder !== undefined && moved.has(folder));
     if (other) actions.push({ target: file.target, operation: "conflict", reason: `Kept by the ${other} setup`, owner: other });
-    else if (folder) actions.push(adopted ? { target: file.target, operation: "replace" } : { target: file.target, operation: "conflict", reason: `${folder} is not a real folder` });
+    else if (folder) actions.push(moved.has(folder) ? { target: file.target, operation: "replace" } : { target: file.target, operation: "conflict", reason: `its folder ${folder} is a link; adopting moves that link to the backups` });
     else if (await matches(path, record(file))) actions.push({ target: file.target, operation: "keep" });
     else if (!(await stat(path))) actions.push({ target: file.target, operation: "create" });
-    else if ((previous[file.target] && await matches(path, previous[file.target])) || adopted) {
+    else if ((previous[file.target] && await matches(path, previous[file.target])) || taken(file.target)) {
       actions.push({ target: file.target, operation: "replace" });
     } else actions.push({ target: file.target, operation: "conflict", reason: previous[file.target] ? "Managed file changed locally" : file.conflict ?? "Existing unmanaged item" });
   }
   for (const [target, entry] of Object.entries(previous)) {
     if (targets.has(target) || skip.includes(target) || moved.has(target)) continue;
-    if (hold.includes(target)) {
+    if (hold.some((held) => held === target || held.startsWith(`${target}/`))) {
       actions.push({ target, operation: "keep" });
       continue;
     }

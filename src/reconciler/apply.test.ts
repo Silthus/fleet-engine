@@ -69,6 +69,18 @@ describe("apply", () => {
     expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toBe("old rules\n");
   });
 
+  test("keeps Fleet's own folder link while an outage keeps the file it now writes inside it", async () => {
+    const home = temp.make("home-");
+    const guides = temp.make("guides-");
+    await apply(plan({ files: [{ target: "guides", source: guides }] }), { home });
+    const inside = plan({ files: [{ target: "guides/new.md", content: "new\n" }] });
+    const offline = { ...inside, packs: [...inside.packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] };
+    await apply(offline, { home });
+    expect(lstatSync(join(home, "guides")).isSymbolicLink()).toBe(true);
+    await apply(inside, { home });
+    expect(readFileSync(join(home, "guides/new.md"), "utf8")).toBe("new\n");
+  });
+
   test("keeps skills whose source is unreachable, and shared files that would lose an unreachable pack's part", async () => {
     const home = temp.make("home-");
     const skill = temp.make("skill-");
