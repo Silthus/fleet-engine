@@ -50,11 +50,13 @@ export async function handleTrigger(trigger: Trigger, deps: TriggerDeps): Promis
     const capture = deps.capture;
     if (!capture || inFlight.has(`capture:${key}`)) return;
     inFlight.add(`capture:${key}`);
+    let answer: { thread?: string; text: string };
     try {
-      await saveToContext(trigger, key, capture, deps);
+      answer = await saveToContext(trigger, key, capture, deps);
     } finally {
       inFlight.delete(`capture:${key}`);
     }
+    await reply(trigger, key, answer.thread, deps, answer.text);
     return;
   }
   if (readState(deps.statePath).handled[key] || inFlight.has(key)) return;
@@ -135,7 +137,7 @@ async function start(trigger: Trigger, key: string, { commandId, claim, reachedT
   return "failed" in launched ? { failed: launched.failed, thread, claim: launched.claim, reachedT3: launched.reachedT3 } : { started: launched, name, thread };
 }
 
-async function saveToContext(trigger: Trigger, key: string, capture: Capture, deps: TriggerDeps): Promise<void> {
+async function saveToContext(trigger: Trigger, key: string, capture: Capture, deps: TriggerDeps): Promise<{ thread?: string; text: string }> {
   const emoji = deps.owner.captureEmoji!;
   const react = (method: "reactions.add" | "reactions.remove", name: string) =>
     deps.slack(method, { channel: trigger.channel, timestamp: trigger.ts, name }).catch((error) => deps.log(`${key}: ${method} :${name}: failed: ${error}`));
@@ -157,11 +159,11 @@ async function saveToContext(trigger: Trigger, key: string, capture: Capture, de
     deps.log(`${key}: ${saved.updated ? "updated" : "saved"} ${saved.path}`);
     await react("reactions.remove", ackEmoji);
     await react("reactions.remove", emoji);
-    await reply(trigger, key, thread, deps, `:${emoji}: ${saved.updated ? "Updated" : "Added"} <${saved.url}|${slackText(saved.title)}> in your context library (\`${slackText(saved.path)}\`).`);
+    return { thread, text: `:${emoji}: ${saved.updated ? "Updated" : "Added"} <${saved.url}|${slackText(saved.title)}> in your context library (\`${slackText(saved.path)}\`).` };
   } catch (error) {
     deps.log(`${key}: capture failed: ${(error as Error).message}`);
     await react("reactions.remove", ackEmoji);
-    await reply(trigger, key, thread, deps, `:${emoji}: Could not save this to your context library: ${slackText((error as Error).message)}. React again to retry.`);
+    return { thread, text: `:${emoji}: Could not save this to your context library: ${slackText((error as Error).message)}. React again to retry.` };
   }
 }
 
