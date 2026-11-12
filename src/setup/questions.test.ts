@@ -29,17 +29,17 @@ const region: PackSetting = {
 
 const teamRegion: PackSetting = { ...region, key: "posthog.region" };
 
-function teamSource(settings: PackSetting[]): (ref: SourceRef) => Promise<FetchedSource> {
+function teamSource(settings: PackSetting[], name = "posthog"): (ref: SourceRef) => Promise<FetchedSource> {
   const dir = temp.make("team-");
-  mkdirSync(join(dir, "packs/posthog"), { recursive: true });
-  writeFileSync(join(dir, "packs/posthog/pack.json"), JSON.stringify({ schema: 1, name: "posthog", summary: "Team rules.", settings }));
+  mkdirSync(join(dir, "packs", name), { recursive: true });
+  writeFileSync(join(dir, "packs", name, "pack.json"), JSON.stringify({ schema: 1, name, summary: "Team rules.", settings }));
   return async (ref) => ({ ref, dir, packs: await loadPacks(dir) });
 }
 
-async function unattendedSetup(home: string, timeZone: string, { settings = [teamRegion], plan = "claude", set = [] as string[] } = {}) {
+async function unattendedSetup(home: string, timeZone: string, { settings = [teamRegion], plan = "claude", set = [] as string[], picks = ["--preset", "starter", "--devbox", "skip"], pack = "posthog" } = {}) {
   const io = scripted([]);
   const box = fakeMachine(home, {}, { org: true });
-  return main(["setup", "--non-interactive", "--preset", "starter", "--plan", plan, "--devbox", "skip", ...set.flatMap((value) => ["--set", value])], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine, clock: box.clock, doctor: async () => 0, env: {}, timeZone, fetchSource: teamSource(settings) } });
+  return main(["setup", "--non-interactive", ...picks, "--plan", plan, ...set.flatMap((value) => ["--set", value])], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine, clock: box.clock, doctor: async () => 0, env: {}, timeZone, fetchSource: teamSource(settings, pack) } });
 }
 
 async function pushFromAnotherMachine(home: string, settings: Record<string, string>) {
@@ -131,6 +131,17 @@ describe("a time-zone default that setup saved before it stopped", () => {
     const pushed = await pushedAnswers(home);
     expect(pushed.settings).toEqual({ "posthog.region": "eu", "posthog.team": "web" });
     expect(Object.keys(pushed).sort()).toEqual(["engine", "packs", "plan", "schema", "settings", "sources", "workflows"]);
+  });
+
+  test("gives way there too when a devbox setting is pushed after the profile is saved", async () => {
+    const home = temp.make("home-");
+    const team = { settings: [{ ...region, key: "acme.region" }, { ...teamName, key: "acme.team" }], pack: "acme", picks: ["--preset", "everyday", "--workflows", "pr-digest=on", "--devbox", "node-1"] };
+    expect(await unattendedSetup(home, "Asia/Tokyo", { ...team, settings: [], set: ["orchestration.loopProject=~/code/app"] })).toBe(0);
+    forget(home);
+    expect(await unattendedSetup(home, "Europe/Lisbon", team)).toBe(2);
+    await pushFromAnotherMachine(home, { "acme.region": "us" });
+    expect(await unattendedSetup(home, "Europe/Lisbon", { ...team, set: ["acme.team=web", "orchestration.loopProject=~/code/web"] })).toBe(0);
+    expect((await pushedAnswers(home)).settings).toEqual({ "acme.region": "us", "acme.team": "web", "orchestration.loopProject": "~/code/web" });
   });
 
   test("an explicit answer on the resumed run wins over another machine's", async () => {
