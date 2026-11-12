@@ -70,11 +70,11 @@ describe("the Hub pack", () => {
     expect(plan({ packs: ["hub"] }).packs.find((pack) => pack.name === "hub")).toMatchObject({ available: true });
   });
 
-  test("asks setup for the hub's name, and for the Coder address and box template only while Boxes is on and a team pack brings Coder", () => {
+  test("asks setup for the hub's name, for the Coder address once a team pack brings Coder, and for the box template only while Boxes is on", () => {
     expect(resolveEngine(sources, { packs: ["hub"] }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias"]);
     expect(resolveEngine(sources, { packs: ["hub"], workflows: { boxes: true } }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias"]);
     const team = [...sources, coderTeam()];
-    expect(resolveEngine(team, { packs: ["hub", "posthog"] }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias"]);
+    expect(resolveEngine(team, { packs: ["hub", "posthog"] }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias", "hub.coderUrl"]);
     expect(resolveEngine(team, { packs: ["hub", "posthog"], workflows: { boxes: true } }, devbox).unanswered.map((setting) => setting.key)).toEqual(["hub.alias", "hub.coderUrl", "hub.boxTemplate"]);
     expect(resolveEngine(team, { packs: ["hub", "posthog"], workflows: { boxes: true }, settings: answers }, devbox).unanswered).toEqual([]);
   });
@@ -115,13 +115,25 @@ describe("the Hub pack", () => {
     expect(plan({ packs: ["hub"] }, hub).jobs.filter((job) => job.pack === "hub" && job.workflow === "boxes")).toEqual([]);
   });
 
-  test("fleet doctor on the hub checks the hub's Coder session while Boxes is on, and names the fix when Coder rejects it", async () => {
+  test("plans the devbox token grants and the Coder session check on the hub whenever a team pack brings Coder, with Boxes off too", () => {
     const hub: MachineFile = { schema: 1, role: "hub" };
-    const sessionChecks = (result: Plan) => result.checks.filter((item) => item.pack === "hub").map((item) => `${item.id}: ${item.run.join(" ")}`);
-    expect(sessionChecks(withBoxes({}, hub))).toEqual(["coder-session: fleet box session"]);
-    expect(sessionChecks(withBoxes({}, devbox))).toEqual([]);
-    expect(sessionChecks(withBoxes({ workflows: { boxes: false } }, hub))).toEqual([]);
-    expect(sessionChecks(plan({ packs: ["hub"] }, hub))).toEqual([]);
+    const items = (result: Plan) => [
+      ...result.jobs.filter((job) => job.pack === "hub" && job.workflow === "devbox-tokens").map((job) => `job ${job.id}: ${job.command.join(" ")} every ${job.schedule.every} at ${job.schedule.at}`),
+      ...result.checks.filter((item) => item.pack === "hub").map((item) => `check ${item.id}: ${item.run.join(" ")}`),
+    ];
+    const team = (fields: Partial<Profile>, machine: MachineFile) => resolveEngine([...sources, coderTeam()], { settings: answers, packs: ["hub", "posthog"], ...fields }, machine);
+    const planned = ["job devbox-grants: fleet box grants every 1d at 02:47", "check coder-session: fleet box session"];
+    expect(items(team({}, hub))).toEqual(planned);
+    expect(items(team({ workflows: { boxes: false } }, hub))).toEqual(planned);
+    expect(items(withBoxes({}, hub))).toEqual(planned);
+    expect(items(team({ workflows: { "devbox-tokens": false } }, hub))).toEqual([]);
+    expect(items(team({}, devbox))).toEqual([]);
+    expect(items(plan({ packs: ["hub"] }, hub))).toEqual([]);
+    expect(withBoxes({}, hub).jobs.find((job) => job.id === "box-nightly")?.command).toEqual(["fleet", "box", "nightly"]);
+  });
+
+  test("fleet doctor on the hub names the fix when Coder rejects the hub's Coder session", async () => {
+    const hub: MachineFile = { schema: 1, role: "hub" };
     const home = temp.make("hub-session-");
     for (const dir of [".config/fleet", ".config/coderv2"]) mkdirSync(join(home, dir), { recursive: true });
     writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ schema: 1, role: "hub" }));
@@ -129,8 +141,8 @@ describe("the Hub pack", () => {
     const rejecting = (async () => Response.json({ message: "API key expired." }, { status: 401 })) as unknown as typeof fetch;
     const { machine } = fakeMachine(home, { self: "my-hub", isHub: true });
     const coder = new Coder({ home, env: {}, coderUrl: "https://coder.example.com", template: "linux", fetch: rejecting });
-    const run = async (command: string[]) => (command.join(" ").endsWith("fleet box session") ? boxCommand(["session"], { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} }) : 0);
-    const report = await check(withBoxes({ workflows: { "linked-hub": false } }, hub), { home, adapters: [], run });
+    const run = async (command: string[]) => (command.join(" ").endsWith("fleet box session") ? boxCommand(["session"], { machine: () => { throw new Error("Boxes is off."); }, coder: () => coder, tokens: () => ({ here: machine, coder }), readStdin: async () => "", hooks: {} }) : 0);
+    const report = await check(resolveEngine([...sources, coderTeam()], { settings: answers, packs: ["hub", "posthog"], workflows: { "linked-hub": false } }, hub), { home, adapters: [], run });
     const finding = report.findings.find((item) => item.id === "check:coder-session");
     expect(report.ok).toBe(false);
     expect(finding?.say).toContain("coder login");

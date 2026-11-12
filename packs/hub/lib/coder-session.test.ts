@@ -30,7 +30,7 @@ function hubWith(files: Record<string, string>, answer: Answer | "network", env:
   }) as unknown as typeof fetch;
   const { machine, lines } = fakeMachine(home, { self: "my-hub", isHub: true });
   const coder = new Coder({ home, env, coderUrl: machine.settings.coderUrl, template: machine.settings.template, ...(answer === "network" ? {} : { fetch: fetcher }) });
-  const run = () => boxCommand(["session"], { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} });
+  const run = () => boxCommand(["session"], { machine: () => machine, coder: () => coder, tokens: () => ({ here: machine, coder }), readStdin: async () => "", hooks: {} });
   return { run, lines, requests };
 }
 
@@ -90,7 +90,7 @@ test("on a machine that is not the hub, fleet box session refuses and says to ru
   writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "devbox" }) });
   const { machine } = fakeMachine(home);
   const coder = new Coder({ home, env: {}, coderUrl: machine.settings.coderUrl, template: machine.settings.template });
-  await expect(boxCommand(["session"], { machine: () => machine, coder: () => coder, readStdin: async () => "", hooks: {} })).rejects.toThrow("Run fleet hub here on the hub");
+  await expect(boxCommand(["session"], { machine: () => machine, coder: () => coder, tokens: () => ({ here: machine, coder }), readStdin: async () => "", hooks: {} })).rejects.toThrow("Run fleet hub here on the hub");
 });
 
 test("fleet box session sends the session to no other address that Coder's address redirects to", async () => {

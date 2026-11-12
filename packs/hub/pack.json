@@ -143,6 +143,21 @@
       "risk": "Each box is a full devbox, and takes its CPUs from your cloud quota while it runs. A warm pool can use up the quota, so your own devboxes fail to start. It starts off. Turn it on when your quota has room for the pool, and your agents need clean machines that your devboxes and worktrees do not give them."
     },
     {
+      "id": "devbox-tokens",
+      "name": "Devbox Coder tokens",
+      "default": true,
+      "needs": [
+        "hub",
+        "coder"
+      ],
+      "settings": [
+        "hub.alias",
+        "hub.coderUrl"
+      ],
+      "sentence": "Each night, the hub checks its Coder session and gives each devbox a fresh Coder token when the devbox's token expires within a week, so the devboxes keep reaching Coder while Boxes is off.",
+      "risk": "The hub mints Coder tokens with your Coder session and writes each one to a devbox over SSH, where only you can read it. It removes the older tokens it made for that devbox."
+    },
+    {
       "id": "disk-watch",
       "name": "Disk watch",
       "default": true,
@@ -307,6 +322,22 @@
         "hub"
       ],
       "workflow": "boxes"
+    },
+    {
+      "id": "devbox-grants",
+      "command": [
+        "fleet",
+        "box",
+        "grants"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "02:47"
+      },
+      "roles": [
+        "hub"
+      ],
+      "workflow": "devbox-tokens"
     },
     {
       "id": "box-restore",
@@ -590,11 +621,11 @@
         "box",
         "session"
       ],
-      "say": "The hub's Coder session expires soon, has expired, or Coder did not answer, so boxes and devbox tokens stop working when it runs out. Run fleet box session on the hub to see which. Most often the fix is coder login <your Coder address> on the hub.",
+      "say": "The hub's Coder session expires soon, has expired, or Coder did not answer, so devbox tokens and boxes stop working when it runs out. Run fleet box session on the hub to see which. Most often the fix is coder login <your Coder address> on the hub.",
       "roles": [
         "hub"
       ],
-      "workflow": "boxes"
+      "workflow": "devbox-tokens"
     },
     {
       "id": "cli-proxy-client",

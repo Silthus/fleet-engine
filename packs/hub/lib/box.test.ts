@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -27,7 +27,7 @@ function hubHome() {
 
 const onHub = (home: string, fields: Partial<Machine> = {}) => fakeMachine(home, { self: "my-hub", isHub: true, peers: ["devbox-1", "devbox-2"], ...fields });
 const answers = (claim: () => string, threads = () => "") => async (_box: string, command: string) => ({ ...ok, stdout: command.startsWith("cut ") ? `${claim()}\n` : command.includes("box threads") ? threads() : command.includes("t3 pair") ? "pair-code\n" : "" });
-const depsFor = (machine: Machine, coder: BoxDeps["coder"]): BoxDeps => ({ machine: () => machine, coder, readStdin: async () => "", hooks: {} });
+const depsFor = (machine: Machine, coder: BoxDeps["coder"]): BoxDeps => ({ machine: () => machine, coder, tokens: () => ({ here: machine, coder: coder(machine) }), readStdin: async () => "", hooks: {} });
 
 test("release refuses a workspace that is not a box and deletes nothing", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
@@ -304,15 +304,64 @@ test("the nightly pool refresh warms each free box with hub.boxWarmCommand in a 
   }
 });
 
-test("the nightly job reaps, grants a Coder token to each profile devbox, refreshes the pool, and fails if any part failed", async () => {
+test("the nightly job checks the session, reaps, refreshes the pool, and fails if any part failed, but grants no devbox token", async () => {
   const { machine, lines } = fakeMachine(temp.make("fleet-box-"), { self: "my-hub", isHub: true, devboxes: ["devbox-1", "devbox-2"] });
-  const steps = nightlySteps(machine, { session: async () => 1, reap: async () => 0, grant: async (devbox) => (devbox === "devbox-2" ? 1 : 0), refresh: async () => 0 });
-  expect(steps.map((step) => step.name)).toEqual(["check the Coder session", "reap", "grant devbox-1", "grant devbox-2", "refresh the pool"]);
+  const steps = nightlySteps({ session: async () => 1, reap: async () => 0, refresh: async () => 0 });
+  expect(steps.map((step) => step.name)).toEqual(["check the Coder session", "reap", "refresh the pool"]);
   expect(await nightly(steps, machine)).toBe(1);
-  expect(lines.filter((line) => line.includes("failed"))).toEqual(["check the Coder session failed (exit 1)", "grant devbox-2 failed (exit 1)"]);
-  const passing = nightlySteps(machine, { session: async () => 0, reap: async () => 0, grant: async () => 0, refresh: async () => { throw new Error("boom"); } });
-  expect(await nightly(passing, machine)).toBe(1);
-  expect(await nightly(nightlySteps(machine, { session: async () => 0, reap: async () => 0, grant: async () => 0, refresh: async () => 0 }), machine)).toBe(0);
+  expect(lines.filter((line) => line.includes("failed"))).toEqual(["check the Coder session failed (exit 1)"]);
+  expect(await nightly(nightlySteps({ session: async () => 0, reap: async () => 0, refresh: async () => { throw new Error("boom"); } }), machine)).toBe(1);
+  expect(await nightly(nightlySteps({ session: async () => 0, reap: async () => 0, refresh: async () => 0 }), machine)).toBe(0);
+});
+
+describe("fleet box grants, while Boxes is off", () => {
+  const now = start;
+  const day = 86_400_000;
+  const boxesOff = () => { throw new Error("Boxes is off."); };
+  function grantsOn(fields: { session?: "valid" | "rejected"; failWriteOn?: string } = {}) {
+    const home = hubHome();
+    const created: string[] = [];
+    const tokens = [
+      { id: "k1", token_name: "fleet-devbox-1-202610010000-abcd", expires_at: new Date(now + day).toISOString() },
+      { id: "k2", token_name: "fleet-devbox-2-202610010000-abcd", expires_at: new Date(now + 30 * day).toISOString() },
+    ];
+    const coder = {
+      env: { CODER_URL: "https://coder.example.com" },
+      sessionFrom: "fleet" as const,
+      sessionKey: async () => (fields.session === "rejected" ? { rejected: true as const } : { rejected: false as const, expiresAt: now + 30 * day, lifetimeMs: 90 * day }),
+      token: async (args: string[]) => (args[0] === "list" ? JSON.stringify(tokens) : args[0] === "create" ? (created.push(args[2]!), "new-secret\n") : ""),
+    };
+    const { machine, lines } = fakeMachine(home, {
+      self: "my-hub", isHub: true, devboxes: ["devbox-1", "devbox-2"],
+      onPeer: async (alias, command) => ({ ...ok, code: alias === fields.failWriteOn && command.startsWith("umask") ? 255 : 0, stdout: command.startsWith("cut ") ? `${alias === "devbox-1" ? "k1" : "k2"}\n` : "" }),
+    });
+    const deps: BoxDeps = { machine: boxesOff, coder: boxesOff, tokens: () => ({ here: machine, coder }), readStdin: async () => "", hooks: {} };
+    return { deps, created, lines };
+  }
+
+  test("renews only the devbox token that expires within a week, after it checks the hub's Coder session", async () => {
+    const { deps, created, lines } = grantsOn();
+    expect(await boxCommand(["grants"], deps)).toBe(0);
+    expect(created).toEqual([expect.stringMatching(/^fleet-devbox-1-/)]);
+    expect(lines.findIndex((line) => line.includes("check the Coder session"))).toBeLessThan(lines.findIndex((line) => line.includes("grant devbox-1")));
+    expect(lines.some((line) => line.startsWith("fleet-devbox-2-202610010000-abcd: still valid"))).toBe(true);
+  });
+
+  test("still grants when the session check fails, and fails when the session or a grant failed", async () => {
+    const rejected = grantsOn({ session: "rejected" });
+    expect(await boxCommand(["grants"], rejected.deps)).toBe(1);
+    expect(rejected.created).toHaveLength(1);
+    const failing = grantsOn({ failWriteOn: "devbox-1" });
+    expect(await boxCommand(["grants"], failing.deps)).toBe(1);
+    expect(failing.lines.some((line) => line.startsWith("grant devbox-1 failed"))).toBe(true);
+  });
+
+  test("fleet box grant and fleet box session also run without the Boxes settings", async () => {
+    const { deps, created } = grantsOn();
+    expect(await boxCommand(["session"], deps)).toBe(0);
+    expect(await boxCommand(["grant", "devbox-2"], deps)).toBe(0);
+    expect(created).toEqual([expect.stringMatching(/^fleet-devbox-2-/)]);
+  });
 });
 
 test("fleet box token saves the pasted token with mode 0600, and refuses an empty paste", async () => {
@@ -331,9 +380,9 @@ function commandDeps(home: string, role?: string) {
   return { deps: depsFor(machine, () => fakeCoder().coder), lines };
 }
 
-test("on a machine that is not the hub, sweep, reap, pool, grant, and nightly refuse and say to run fleet hub here", async () => {
+test("on a machine that is not the hub, sweep, reap, pool, grant, grants, session, and nightly refuse and say to run fleet hub here", async () => {
   const { deps } = commandDeps(temp.make("fleet-box-"), "devbox");
-  for (const args of [["sweep"], ["reap"], ["pool", "list"], ["grant", "devbox-2"], ["nightly"]]) {
+  for (const args of [["sweep"], ["reap"], ["pool", "list"], ["grant", "devbox-2"], ["grants"], ["session"], ["nightly"]]) {
     await expect(boxCommand(args, deps)).rejects.toThrow("Run fleet hub here on the hub");
   }
   const hub = commandDeps(temp.make("fleet-box-"), "hub");
