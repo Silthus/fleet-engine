@@ -156,5 +156,33 @@
       "sentence": "Say \"full send\" or \"stamp it\", and the agent takes a pull request to merged and rolled out.",
       "risk": "The agent merges without asking again once you say the words."
     }
-  ]
+  ],
+  "subcommands": {
+    "pr": [
+      "help",
+      "review",
+      "stamp",
+      "forecast",
+      "blockers",
+      "bot-threads"
+    ],
+    "proof": [
+      "help",
+      "path",
+      "save",
+      "publish",
+      "require",
+      "review",
+      "show",
+      "panel-lens",
+      "respond",
+      "standing",
+      "gap",
+      "gate",
+      "miss",
+      "eval",
+      "review-start",
+      "review-finish"
+    ]
+  }
 }

@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { onHub } from "../../src/hub/ssh.ts";
+import { spawnAsync } from "../../src/testing/spawn.ts";
 import { join } from "node:path";
 import { main } from "../../src/cli.ts";
 import { isolateGit, tempDirs } from "../../src/testing/git.ts";
@@ -64,6 +66,26 @@ describe("the Usage events workflow", () => {
     expect(on.unanswered.map((setting) => setting.key)).toEqual(["base.usageHost", "base.usageProjectKey"]);
   });
 
+  test("names a pack command's own first words, which its pack declares in pack.json or pack.ts", async () => {
+    const engine = await engineSource();
+    const sources = [engine, ...skillSources(temp.make("skills-"), engine)];
+    const plan = resolveEngine(sources, { packs: ["pull-requests", "slack"] }, devbox);
+    expect(plan.commands.pr?.subcommands).toContain("review");
+    expect(plan.commands["slack-trigger"]?.subcommands).toContain("launch");
+    expect(plan.commands.proof?.subcommands).not.toContain("box4817");
+  });
+
+  test("turning the workflow off deletes the spooled events and the batch that waits to be sent", async () => {
+    const home = await machine([], destination());
+    await fleet(["settings"], home);
+    writeFileSync(join(home, ".local/state/fleet/usage.sending.jsonl"), "{}\n");
+    writeFileSync(join(home, ".local/state/fleet/usage.sending.jsonl.new"), "{}\n");
+    writeFileSync(join(home, "profile/fleet.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(home, "profile/fleet.json"), "utf8")), workflows: {} }));
+    expect((await fleet(["apply", "--profile", join(home, "profile")], home)).code).toBe(0);
+    await fleet(["settings"], home);
+    for (const file of ["usage.jsonl", "usage.sending.jsonl", "usage.sending.jsonl.new"]) expect(existsSync(join(home, ".local/state/fleet", file))).toBe(false);
+  });
+
   test("a machine with the workflow off spools nothing, though the profile names a destination", async () => {
     const home = await machine(["memory"], { "memory.repo": "me/notes", ...destination() }, {});
     await fleet(["settings"], home);
@@ -88,7 +110,9 @@ describe("usage events", () => {
     await fleet(["packs", "--add", prompt], home);
     await fleet([token], home);
     await fleet(["hub", "box4817"], home);
+    await fleet(["hub", "status"], home);
     await fleet(["devbox", "list"], home);
+    await fleet(["settings-snapshot", "box4817"], home);
     await fleet(["settings-snapshot", "--check"], home);
     const recalled = await fire(home, "claude", "PreToolUse", { session_id: "s1", tool_name: "Bash", tool_input: { command: `fleet proof ${token} # ${prompt}` } });
     expect(recalled.context).toContain("Pass full SHAs");
@@ -99,7 +123,9 @@ describe("usage events", () => {
       { event: "fleet command", command: "run", subcommand: "", notes: undefined, caller: "person" },
       { event: "fleet command", command: "packs", subcommand: "", notes: undefined, caller: "job" },
       { event: "fleet command", command: "hub", subcommand: "", notes: undefined, caller: "job" },
-      { event: "fleet command", command: "devbox", subcommand: "list", notes: undefined, caller: "job" },
+      { event: "fleet command", command: "hub", subcommand: "status", notes: undefined, caller: "job" },
+      { event: "fleet command", command: "devbox", subcommand: "", notes: undefined, caller: "job" },
+      { event: "fleet command", command: "settings-snapshot", subcommand: "", notes: undefined, caller: "job" },
       { event: "fleet command", command: "settings-snapshot", subcommand: "", notes: undefined, caller: "job" },
       { event: "memory recalled", command: undefined, subcommand: undefined, notes: 1, caller: expect.any(String) },
     ]);
@@ -107,7 +133,7 @@ describe("usage events", () => {
     expect((await fleet(["usage", "flush"], home)).code).toBe(0);
     const sent = JSON.stringify(received);
     for (const leak of [token, "customer", "Please read", "Pass full SHAs", "4817"]) expect(sent).not.toContain(leak);
-    expect(received.map((request) => [request.path, request.body.api_key, request.body.batch.length])).toEqual([["/batch/", key, 7]]);
+    expect(received.map((request) => [request.path, request.body.api_key, request.body.batch.length])).toEqual([["/batch/", key, 9]]);
     expect(received[0]!.body.batch[0]!.properties).toMatchObject({ distinct_id: expect.stringMatching(/^fleet-/), $process_person_profile: false });
     expect(existsSync(spool(home))).toBe(false);
   });
@@ -126,6 +152,21 @@ describe("usage events", () => {
     await fleet(["settings"], home);
     await fleet(["packs"], home);
     expect(spooled(home).map((line) => line.properties.command)).toEqual(["settings"]);
+  });
+});
+
+describe("a command a node forwards to the hub", () => {
+  test("counts once: the hub does not record the call Fleet forwarded to it", async () => {
+    const hub = await machine([], destination());
+    const engine = join(hub, ".local/share/fleet/engine");
+    mkdirSync(engine, { recursive: true });
+    writeFileSync(join(engine, "fleet"), `exec "${process.execPath}" "${join(engineRoot, "src/cli.ts")}" "$@"\n`);
+    const forwarded = onHub("hub-1", ["settings"]).at(-1)!;
+    const ran = await spawnAsync(["sh", "-c", forwarded], { env: { HOME: hub, PATH: "/usr/bin:/bin", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } });
+    expect(ran.exitCode).toBe(0);
+    expect(spooled(hub)).toEqual([]);
+    await fleet(["settings"], hub);
+    expect(spooled(hub)).toHaveLength(1);
   });
 });
 
@@ -152,6 +193,21 @@ describe("fleet usage flush", () => {
     received.length = 0;
     expect(await flush(home, to(), io([]))).toBe(2);
     expect(received[0]!.body.batch.map((event) => event.properties.command).sort()).toEqual(["packs", "settings"]);
+  });
+
+  test("sends a batch that a flush left between its two steps once, whichever step it stopped at", async () => {
+    const event = (command: string) => `${JSON.stringify({ event: "fleet command", properties: { command, machine: "m" }, timestamp: "2026-11-12T00:00:00.000Z" })}\n`;
+    const state = (home: string) => join(home, ".local/state/fleet");
+    for (const stoppedAfterAppend of [false, true]) {
+      const home = await machine([], destination());
+      writeFileSync(join(state(home), "usage.sending.jsonl"), event("waiting") + (stoppedAfterAppend ? event("arrived") : ""));
+      writeFileSync(join(state(home), "usage.sending.jsonl.new"), event("arrived"));
+      writeFileSync(join(state(home), "usage.jsonl"), event("newest"));
+      received.length = 0;
+      expect(await flush(home, to(), io([]))).toBe(3);
+      expect(received[0]!.body.batch.map((item) => item.properties.command).sort()).toEqual(["arrived", "newest", "waiting"]);
+      for (const file of ["usage.jsonl", "usage.sending.jsonl", "usage.sending.jsonl.new"]) expect(existsSync(join(state(home), file))).toBe(false);
+    }
   });
 
   test("refuses a host that would send the project key in the clear", async () => {

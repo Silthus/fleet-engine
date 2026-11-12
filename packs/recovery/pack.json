@@ -57,5 +57,11 @@
         "devbox"
       ]
     }
-  ]
+  ],
+  "subcommands": {
+    "claude-wrapper": [
+      "bind",
+      "check"
+    ]
+  }
 }

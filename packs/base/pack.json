@@ -733,5 +733,10 @@
         "linux"
       ]
     }
-  ]
+  ],
+  "subcommands": {
+    "usage": [
+      "flush"
+    ]
+  }
 }

@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { distinctIdSetting, hostSetting, projectKeySetting, sendingPath, spoolPath, type UsageLine } from "../../../src/usage/usage.ts";
+import { arrivingPath, distinctIdSetting, hostSetting, projectKeySetting, sendingPath, spoolPath, type UsageLine } from "../../../src/usage/usage.ts";
 
 export type FlushIo = { home: string; settings: Record<string, unknown>; send: typeof fetch; wait(ms: number): Promise<void>; print(line: string): void };
 type Destination = { host: string; projectKey: string; distinctId: string };
@@ -27,11 +27,10 @@ function destination(settings: Record<string, unknown>): Destination {
 
 export async function flush(home: string, to: Destination, io: Pick<FlushIo, "send" | "wait">): Promise<number> {
   const sending = sendingPath(home);
+  fold(home);
   if (existsSync(spoolPath(home))) {
-    const waiting = existsSync(sending) ? readFileSync(sending, "utf8") : "";
-    renameSync(spoolPath(home), `${sending}.new`);
-    appendFileSync(`${sending}.new`, waiting, { mode: 0o600 });
-    renameSync(`${sending}.new`, sending);
+    renameSync(spoolPath(home), arrivingPath(home));
+    fold(home);
   }
   if (!existsSync(sending)) return 0;
   const batch = readLines(readFileSync(sending, "utf8")).map((line) => ({
@@ -42,6 +41,16 @@ export async function flush(home: string, to: Destination, io: Pick<FlushIo, "se
   if (batch.length) await post(to, JSON.stringify({ api_key: to.projectKey, batch }), io);
   rmSync(sending, { force: true });
   return batch.length;
+}
+
+/** Moves the arriving events to the end of the batch that waits to be sent. A flush that stopped after the append finds them there already and does not add them twice. */
+function fold(home: string) {
+  const arriving = arrivingPath(home);
+  if (!existsSync(arriving)) return;
+  const text = readFileSync(arriving, "utf8");
+  const waiting = existsSync(sendingPath(home)) ? readFileSync(sendingPath(home), "utf8") : "";
+  if (!waiting.endsWith(text)) appendFileSync(sendingPath(home), `${waiting && !waiting.endsWith("\n") ? "\n" : ""}${text}`, { mode: 0o600 });
+  rmSync(arriving);
 }
 
 function readLines(text: string): UsageLine[] {

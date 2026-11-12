@@ -427,19 +427,20 @@ function skillDir(pack: string, packDir: string, path: string, sources: FetchedS
 
 function packCommands(order: Candidate[]) {
   const commands: Plan["commands"] = Object.create(null);
-  const add = (name: string, pack: string, path: string, { on, workflow }: { on?: "hub"; workflow?: string } = {}) => {
+  const add = (name: string, pack: string, path: string, { on, workflow }: { on?: "hub"; workflow?: string } = {}, subcommands?: string[]) => {
     if (engineCommands.includes(name)) throw new ResolveError(`${pack}: command ${name} is reserved by the engine`);
     const other = commands[name];
     if (other) throw new ResolveError(`command ${name} is shipped by both ${other.pack} and ${pack}`);
-    commands[name] = { pack, path, ...(on ? { on } : {}), ...(workflow ? { workflow } : {}) };
+    commands[name] = { pack, path, ...(on ? { on } : {}), ...(workflow ? { workflow } : {}), ...(subcommands?.length ? { subcommands } : {}) };
   };
   for (const { manifest, dir, code } of order) {
-    for (const name of Object.keys(code?.commands ?? {}).sort()) add(name, manifest.name, join(dir, "pack.ts"), code!.commands[name]);
+    const words = (name: string) => (Object.hasOwn(manifest.subcommands ?? {}, name) ? manifest.subcommands![name] : undefined);
+    for (const name of Object.keys(code?.commands ?? {}).sort()) add(name, manifest.name, join(dir, "pack.ts"), code!.commands[name], code!.commands[name]!.subcommands);
     const root = join(dir, "commands");
     if (!existsSync(root)) continue;
     for (const file of readdirSync(root).filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts")).sort()) {
       within(root, file, manifest.name);
-      add(file.slice(0, -3), manifest.name, join(root, file));
+      add(file.slice(0, -3), manifest.name, join(root, file), {}, words(file.slice(0, -3)));
     }
   }
   return commands;

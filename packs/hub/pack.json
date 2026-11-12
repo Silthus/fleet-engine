@@ -633,5 +633,84 @@
       ],
       "workflow": "own-account-balancing"
     }
-  ]
+  ],
+  "subcommands": {
+    "box": [
+      "list",
+      "idle",
+      "threads",
+      "restore",
+      "token",
+      "sweep",
+      "nightly",
+      "session",
+      "link",
+      "unlink",
+      "start",
+      "release",
+      "spawn",
+      "run",
+      "grant",
+      "reap",
+      "pool",
+      "help"
+    ],
+    "cli-proxy": [
+      "plan",
+      "install",
+      "doctor",
+      "connect",
+      "disconnect",
+      "check",
+      "remove",
+      "left"
+    ],
+    "dream": [
+      "digest",
+      "run",
+      "collect",
+      "prepare",
+      "analyze",
+      "audit",
+      "logs",
+      "search",
+      "publish",
+      "scorecard",
+      "budget",
+      "help"
+    ],
+    "hub-https": [
+      "plan",
+      "install",
+      "doctor",
+      "ca",
+      "trusted",
+      "remove",
+      "left"
+    ],
+    "hub-tunnel": [
+      "plan",
+      "install",
+      "doctor",
+      "remove",
+      "left"
+    ],
+    "peers": [
+      "link",
+      "plan",
+      "install",
+      "doctor",
+      "renew",
+      "restore",
+      "remove",
+      "left"
+    ],
+    "ssh-tunnels": [
+      "plan",
+      "install",
+      "doctor",
+      "remove",
+      "left"
+    ]
+  }
 }

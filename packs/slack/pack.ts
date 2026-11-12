@@ -55,6 +55,7 @@ export default {
     });
     fleet.command("slack-trigger", {
       summary: "Set up or check your Slack app",
+      subcommands: ["manifest", "setup", "check", "launch"],
       run: async (args, ctx) => (await import("./lib/command.ts")).slackTrigger(args, await commandDeps(ctx, userId, emoji)),
     });
     fleet.service({
