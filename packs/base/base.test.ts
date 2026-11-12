@@ -123,7 +123,7 @@ describe("the Base pack", () => {
   });
 
   test("runs the update and prune jobs on every machine and keeps linked machines to devboxes", () => {
-    for (const machine of [mac, devbox]) expect(plan("both", machine).jobs.map((job) => job.id)).toEqual(["fleet-update", "agent-update", "worktree-prune"]);
+    for (const machine of [mac, devbox]) expect(plan("both", machine).jobs.map((job) => job.id)).toEqual(["fleet-update", "agent-update", "source-refresh", "worktree-prune"]);
     expect(plan("both").workflows.find((workflow) => workflow.id === "linked-machines")).toMatchObject({ active: false, reason: "needs devbox" });
     expect(plan("both", devbox).config.some((entry) => entry.key === "linkedEnvironmentsEnabled")).toBe(true);
   });
