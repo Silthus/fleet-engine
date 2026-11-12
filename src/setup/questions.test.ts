@@ -34,11 +34,10 @@ function teamSource(): (ref: SourceRef) => Promise<FetchedSource> {
   return async (ref) => ({ ref, dir, packs: await loadPacks(dir) });
 }
 
-async function unattendedSetup(home: string, timeZone: string, args: string[] = []) {
+async function unattendedSetup(home: string, timeZone: string) {
   const io = scripted([]);
   const box = fakeMachine(home, {}, { org: true });
-  const code = await main(["setup", "--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine, clock: box.clock, doctor: async () => 0, env: {}, timeZone, fetchSource: teamSource() } });
-  return { code, output: io.output() };
+  return main(["setup", "--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine, clock: box.clock, doctor: async () => 0, env: {}, timeZone, fetchSource: teamSource() } });
 }
 
 async function ask(timeZone: string | undefined, args: string[] = []) {
@@ -69,16 +68,16 @@ describe("a setting's time-zone default", () => {
 
   test("--non-interactive saves the time-zone default to the pushed profile", async () => {
     const home = temp.make("home-");
-    expect((await unattendedSetup(home, "Europe/Lisbon")).code).toBe(0);
+    expect(await unattendedSetup(home, "Europe/Lisbon")).toBe(0);
     expect((await pushedAnswers(home)).settings).toEqual({ "posthog.region": "eu" });
   });
 
   test("--non-interactive on another machine keeps the region the profile already has", async () => {
     const home = temp.make("home-");
-    expect((await unattendedSetup(home, "America/New_York")).code).toBe(0);
+    expect(await unattendedSetup(home, "America/New_York")).toBe(0);
     rmSync(join(home, ".config/fleet"), { recursive: true });
     rmSync(profilePath(home), { recursive: true });
-    expect((await unattendedSetup(home, "Europe/Lisbon")).code).toBe(0);
+    expect(await unattendedSetup(home, "Europe/Lisbon")).toBe(0);
     expect((await pushedAnswers(home)).settings).toEqual({ "posthog.region": "us" });
   });
 
