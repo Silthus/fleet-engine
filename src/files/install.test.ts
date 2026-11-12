@@ -44,7 +44,7 @@ test("explicit adoption preserves the full replaced directory in a backup", asyn
   const { home, source } = await fixture();
   await mkdir(join(home, "skill/nested"), { recursive: true });
   await writeFile(join(home, "skill/nested/local.txt"), "keep this");
-  const result = await install(home, [{ target: "skill", source }], "core", ["skill"]);
+  const result = await install(home, [{ target: "skill", source }], "core", { adopt: ["skill"] });
   expect(result.backupRoot).toBeDefined();
   expect(await readFile(join(result.backupRoot!, "skill/nested/local.txt"), "utf8")).toBe("keep this");
   expect(await readlink(join(home, "skill"))).toBe(source);
@@ -89,8 +89,23 @@ test("path traversal and linked parent directories cannot receive configuration"
   const outside = join(root, "outside");
   await mkdir(outside);
   await symlink(outside, join(home, ".config"));
-  await expect(install(home, [{ target: ".config/settings", content: "shared" }])).rejects.toThrow("Parent is not a real directory");
+  await expect(install(home, [{ target: ".config/settings", content: "shared" }])).rejects.toThrow("Resolve, adopt, or skip: .config/settings");
   await expect(install(home, [{ target: "../outside/settings", content: "shared" }])).rejects.toThrow("Path leaves its root");
+  await install(home, [{ target: ".config/settings", content: "shared" }], "core", { adopt: [".config/settings"] });
+  await expect(lstat(join(outside, "settings"))).rejects.toThrow();
+  expect(await readFile(join(home, ".config/settings"), "utf8")).toBe("shared");
+});
+
+test("a failed adoption puts a linked folder it moved aside back", async () => {
+  const { root, home } = await fixture();
+  const outside = join(root, "outside");
+  await mkdir(outside);
+  await symlink(outside, join(home, ".config"));
+  await expect(install(home, [
+    { target: ".config/settings", content: "shared" },
+    { target: `parent/${"x".repeat(256)}`, content: "cannot write" },
+  ], "core", { adopt: [".config/settings"] })).rejects.toThrow();
+  expect(await readlink(join(home, ".config"))).toBe(outside);
   await expect(lstat(join(outside, "settings"))).rejects.toThrow();
 });
 
@@ -120,7 +135,7 @@ test("managed targets cannot replace Fleet state through ancestors or aliases", 
     await expect(install(home, [
       { target: "settings", content: "updated" },
       { target, content: "would replace state" },
-    ], "core", [target])).rejects.toThrow();
+    ], "core", { adopt: [target] })).rejects.toThrow();
     expect(await readFile(state, "utf8")).toBe(before);
     expect(await readFile(join(home, "settings"), "utf8")).toBe("original");
   }

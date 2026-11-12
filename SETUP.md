@@ -109,6 +109,13 @@ and ask:
   `--workflows`. Everything else stays as it is. Files they changed by hand
   are kept, and step 8 shows them.
 
+When `fleet packs` fails or is missing, but
+`~/.local/state/fleet/state.json` exists, another Fleet manages files here,
+such as one the person set up by hand. Tell them now that setup stops at its
+files, and what happens then (see "Another Fleet keeps the files" in step 7).
+Ask them to stop what still runs that Fleet, such as a LaunchAgent, so it
+does not put its files back. Then start the install as below.
+
 Without an earlier setup, start the install now, so it runs while you ask
 and explain. Download the install script and the presets in one command,
 and read the script. Keep it in view, because a pipe into `sh` hides what
@@ -323,6 +330,21 @@ wait (see "While something runs").
 | GitHub | Once, with every permission Fleet needs: it creates their private `fleet-profile` repo, adds their SSH keys, and reads their org's packs. |
 | Claude | Claude Code on this Mac uses their Claude plan. |
 | ChatGPT | Codex on this Mac uses their ChatGPT plan. Setup checks it with a real request. With both plans, it comes after the Mac is ready to use, right after setup installs Codex. |
+
+### Another Fleet keeps the files
+
+When setup stops with a `To do:` line that starts with `Another Fleet setup
+keeps`, the files it names belong to another Fleet on this Mac. Say how many
+files that is, and that they are the same kind of rules and guides Fleet
+installs. Ask:
+
+- **Take them over** (recommended): run the `fleet apply --adopt-from <name>`
+  that the line names, then the setup command again. Fleet copies the other
+  Fleet's state and every file or linked folder it replaces to
+  `~/.local/state/fleet/backups/`, and leaves the other Fleet's files that
+  this profile does not write as they are.
+- **Stop here**: nothing changes, and setup cannot finish while the other
+  Fleet keeps the files.
 
 ## 8. Check the result
 
