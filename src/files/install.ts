@@ -49,6 +49,7 @@ async function linkedFolder(home: string, target: string): Promise<string | unde
 }
 
 const overlaps = (one: string, other: string) => one === other || one.startsWith(`${other}/`) || other.startsWith(`${one}/`);
+const coversAny = (entries: Record<string, RecordEntry>, paths: Array<string | undefined>) => paths.some((path) => path !== undefined && Object.keys(entries).some((owned) => overlaps(owned, path)));
 
 async function readState(home: string): Promise<State> {
   await checkParents(home, statePath);
@@ -87,8 +88,9 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
   for (const name of release) {
     if (name === group) throw new Error(`nothing to adopt from ${name}: that is the name of this Fleet`);
     if (!Object.hasOwn(state.groups, name)) throw new Error(`nothing to adopt from ${name}: Fleet's state names no other setup by that name`);
-    const kept = hold.find((target) => Object.keys(state.groups[name]!).some((owned) => overlaps(owned, target)));
-    if (kept) throw new Error(`Fleet keeps ${kept} as it is in this run, so it cannot take over ${name} yet. Run fleet apply --adopt-from ${name} again once it can apply ${kept}.`);
+    for (const kept of hold) {
+      if (coversAny(state.groups[name]!, [kept, await linkedFolder(home, kept)])) throw new Error(`Fleet keeps ${kept} as it is in this run, so it cannot take over ${name} yet. Run fleet apply --adopt-from ${name} again once it can apply ${kept}.`);
+    }
   }
   const previous = state.groups[group] ?? {};
   files = files.filter((file) => !skip.includes(file.target) && !hold.includes(file.target));
@@ -101,7 +103,7 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
   }
   const folders = new Map<string, string | undefined>();
   for (const file of files) folders.set(file.target, await linkedFolder(home, file.target));
-  const claims = (name: string, target: string) => [target, folders.get(target)].some((path) => path !== undefined && Object.keys(state.groups[name]!).some((owned) => overlaps(owned, path)));
+  const claims = (name: string, target: string) => coversAny(state.groups[name]!, [target, folders.get(target)]);
   const owner = (target: string) => Object.keys(state.groups).find((name) => name !== group && !release.includes(name) && claims(name, target));
   const taken = (target: string) => adopt.includes(target) || release.some((name) => claims(name, target));
   const moved = new Set<string>();

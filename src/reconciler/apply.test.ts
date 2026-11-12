@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Plan } from "../pack/types.ts";
 import { tempDirs } from "../testing/git.ts";
@@ -67,6 +67,21 @@ describe("apply", () => {
     await expect(apply(offline, { home, adoptFrom: ["core"] })).rejects.toThrow("Run fleet apply --adopt-from core again once it can apply .agents/AGENTS.md.");
     expect(readFileSync(join(home, ".local/state/fleet/state.json"), "utf8")).toBe(state);
     expect(readFileSync(join(home, ".agents/AGENTS.md"), "utf8")).toBe("old rules\n");
+  });
+
+  test("--adopt-from keeps the other setup's claim while an outage keeps a file in its linked folder", async () => {
+    const home = temp.make("home-");
+    const outside = temp.make("outside-");
+    writeFileSync(join(outside, "other.md"), "theirs\n");
+    symlinkSync(outside, join(home, "guides"));
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    const state = JSON.stringify({ version: 1, groups: { core: { "guides/other.md": { kind: "file", hash: "0".repeat(64) } } } });
+    writeFileSync(join(home, ".local/state/fleet/state.json"), state);
+    const inside = plan({ files: [{ target: "guides/new.md", content: "new\n" }] });
+    const offline = { ...inside, packs: [...inside.packs, { name: "team", source: "", ref: "", available: false, reason: "not found; unreachable sources: team" }] };
+    await expect(apply(offline, { home, adoptFrom: ["core"] })).rejects.toThrow("Run fleet apply --adopt-from core again once it can apply guides/new.md.");
+    expect(readFileSync(join(home, ".local/state/fleet/state.json"), "utf8")).toBe(state);
+    expect(lstatSync(join(home, "guides")).isSymbolicLink()).toBe(true);
   });
 
   test("keeps Fleet's own folder link while an outage keeps the file it now writes inside it", async () => {
