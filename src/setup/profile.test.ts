@@ -175,6 +175,13 @@ describe("fleet setup profile", () => {
     expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": url("notes") });
   });
 
+  test("with Memory on and a GitHub scp form without a user it saves the owner/name the memory sync can read", async () => {
+    const home = temp.make("home-");
+    expect((await fleetSetup(home, ["--non-interactive", "--preset", "starter", "--add", "memory", "--plan", "claude", "--set", "memory.repo=github.com:nora/notes"])).code).toBe(0);
+    expect(existsSync(githubRepo(home, "nora/notes"))).toBe(true);
+    expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": "nora/notes" });
+  });
+
   test("n creates nothing and keeps the draft for the next run", async () => {
     const home = temp.make("home-");
     const declined = await fleetSetup(home, starter, ["", "n"]);

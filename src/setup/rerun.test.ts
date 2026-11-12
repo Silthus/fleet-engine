@@ -93,6 +93,14 @@ describe("fleet packs --add memory", () => {
     expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": url });
   });
 
+  test("saves owner/name for a GitHub scp form without a user, which the memory sync cannot read", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const result = await packs(["--add", "memory", "--set", "memory.repo=github.com:nora/notes"]);
+    expect(result.code).toBe(0);
+    expect(existsSync(githubRepo(home, "nora/notes"))).toBe(true);
+    expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": "nora/notes" });
+  });
+
   test("refuses a public memory repo named by any form of its GitHub URL", async () => {
     const { home, packs } = await packsAfterSetup();
     await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/public-notes"));

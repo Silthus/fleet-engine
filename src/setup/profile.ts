@@ -57,7 +57,7 @@ export async function memoryRepo(machine: Machine, named: unknown, login?: strin
     if (missing) await gh("repo", "create", slug, "--private", "--description", "My agents' shared memory");
     print(missing ? `✓ Created the private repo ${slug}` : `✓ Reusing your repo ${slug}`);
   };
-  return { repo: typeof named === "string" ? named : slug, missing, make };
+  return { repo: typeof named === "string" && /:\/\/|@/.test(named) ? named : slug, missing, make };
 }
 
 function githubSlug(named: string) {
@@ -124,7 +124,7 @@ async function makeProfile(context: ProfileContext) {
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, plan: "both", settings: {}, workflows: {} }),
     ...draft,
-    ...(memory && namedMemory === undefined ? { settings: { ...draft.settings, "memory.repo": memory.repo } } : {}),
+    ...(memory && memory.repo !== namedMemory ? { settings: { ...draft.settings, "memory.repo": memory.repo } } : {}),
   };
   if (started.length) {
     await git(machine, dir, "add", "--", ...started);
