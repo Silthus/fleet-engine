@@ -155,6 +155,25 @@ test("one ChatGPT sign-in serves every Google route and the gateway reloads all 
   expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
 });
 
+test("a sign-in reloads every Google route even when the gateway fails to list one route's tools", async () => {
+  const { api, home, hub } = hubWith({});
+  for (const app of googleApps) await registerUpstream(hub, app);
+  const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
+  writeFileSync(codex, `#!/bin/sh\necho '{}' > "$CODEX_HOME/auth.json"\n`);
+  chmodSync(codex, 0o755);
+  const gateway = hub.fetch;
+  let gmailReloaded = false;
+  hub.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.endsWith("/api/servers/gmail/reload")) gmailReloaded = true;
+    if (gmailReloaded && url.endsWith("/api/servers/gmail") && (init?.method ?? "GET") === "GET") return new Response(null, { status: 500 });
+    return gateway(input, init);
+  };
+  api.calls.length = 0;
+  expect(await signInApp(hub, gmail)).toBe(0);
+  expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
+});
+
 test("two Google sign-ins that overlap each finish, and the one that finishes last stays", async () => {
   const { home, hub } = hubWith({});
   for (const app of googleApps) await registerUpstream(hub, app);

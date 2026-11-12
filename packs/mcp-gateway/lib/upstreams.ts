@@ -124,12 +124,14 @@ export async function signInApp(hub: Hub, app: CodexApp) {
   if (code) return code;
   const sharing = (await codexApps(hub.home)).filter((other) => account(other) === account(app));
   const call = await managementApi(hub);
-  const toolless: CodexApp[] = [];
+  const reloaded: CodexApp[] = [];
   for (const other of sharing) {
     if (!(await upstreamRegistered(hub, other))) continue;
     await call(`servers/${encodeURIComponent(other.name)}/reload`, "POST");
-    if (await listsNoTools(call, other)) toolless.push(other);
+    reloaded.push(other);
   }
+  const toolless: CodexApp[] = [];
+  for (const other of reloaded) if (await listsNoTools(call, other).catch(() => false)) toolless.push(other);
   for (const other of toolless) hub.print(`The gateway finds no ${other.title} tools for this sign-in. Connect ${other.title} in ChatGPT, Settings, Apps, with this ChatGPT account, then run: fleet mcp-gateway reconnect ${other.name}`);
   if (toolless.length) return 1;
   hub.print(`${sharing.map((other) => other.title).join(", ")} signed in. Agents reach them through the gateway now.`);
