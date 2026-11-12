@@ -49,14 +49,16 @@ describe("fleet routing", () => {
   test("gives a pack command the handlers that enabled packs declare", async () => {
     const home = temp.make("home-");
     const engine = engineWithCommands();
-    writeFileSync(join(engine, "packs/rival/pack.json"), JSON.stringify({ schema: 1, name: "rival", summary: "rival pack.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] }));
-    writeFileSync(join(engine, "packs/tools/commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", Bun.env.FLEET_HANDLERS ?? "none");\n`);
+    writeFileSync(join(engine, "packs/rival/pack.json"), JSON.stringify({ schema: 1, name: "rival", summary: "rival pack.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }, { seam: "pr-command", path: "lib/bot.ts", subcommands: ["queue-wait"] }] }));
+    writeFileSync(join(engine, "packs/tools/commands/hello.ts"), `await Bun.write(Bun.env.HOME + "/hello.txt", JSON.stringify([Bun.env.FLEET_HANDLERS, Bun.env.FLEET_HANDLER_SUBCOMMANDS]));\n`);
     rmSync(join(engine, "packs/rival/commands/hello.ts"));
     mkdirSync(join(engine, "packs/rival/lib"));
     writeFileSync(join(engine, "packs/rival/lib/bot.ts"), "export {};\n");
     expect((await fleet(["apply", "--profile", profileDir(["tools", "rival"])], home, engine)).code).toBe(0);
     expect((await fleet(["hello"], home, engine)).code).toBe(0);
-    expect(JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"))).toEqual({ "review-bot": join(engine, "packs/rival/lib/bot.ts") });
+    const [handlers, subcommands] = JSON.parse(readFileSync(join(home, "hello.txt"), "utf8"));
+    expect(JSON.parse(handlers)).toEqual({ "review-bot": join(engine, "packs/rival/lib/bot.ts"), "pr-command": join(engine, "packs/rival/lib/bot.ts") });
+    expect(JSON.parse(subcommands)).toEqual({ "pr-command": ["queue-wait"] });
   });
 
   test("gives a pack command the model table of the user's AI plan", async () => {

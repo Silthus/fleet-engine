@@ -417,11 +417,15 @@ async function inPack(plan: Plan, loaded: LoadedPack, options: CliOptions, work:
 }
 
 function packEnvironment(plan: Plan, options: CliOptions): Record<string, string | undefined> {
-  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_PLAN: plan.ai, FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) };
+  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_PLAN: plan.ai, FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)), FLEET_HANDLER_SUBCOMMANDS: JSON.stringify(handlerSubcommands(plan)) };
 }
 
 function handlerPaths(plan: Plan) {
   return Object.fromEntries(Object.entries(plan.handlers).map(([seam, handler]) => [seam, handler.path]));
+}
+
+function handlerSubcommands(plan: Plan) {
+  return Object.fromEntries(Object.entries(plan.handlers).flatMap(([seam, handler]) => (handler.subcommands ? [[seam, handler.subcommands]] : [])));
 }
 
 /** withPack resolves the plan as if the profile also had that pack on, for the undo of one of its steps. */

@@ -104,7 +104,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
       if (other) throw new ResolveError(`the ${handler.seam} handler is declared by both ${other.pack} and ${pack}`);
       const path = within(dir, handler.path, pack);
       if (!existsSync(path) || !statSync(path).isFile()) throw new ResolveError(`${pack}: the ${handler.seam} handler ${handler.path} is not a file`);
-      plan.handlers[handler.seam] = { pack, path };
+      plan.handlers[handler.seam] = handler.subcommands ? { pack, path, subcommands: handler.subcommands } : { pack, path };
     }
     for (const script of manifest.t3ProjectScripts ?? []) {
       if (!fits(pack, script, `t3 project script ${script.id}`)) continue;

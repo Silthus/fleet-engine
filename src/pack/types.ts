@@ -156,11 +156,11 @@ export type PackManifest = {
 
 export type PackCheck = Scope & { id: string; run: string[]; say: string };
 
-export const handlerSeams = ["review-bot", "heavy-route"] as const;
+export const handlerSeams = ["review-bot", "heavy-route", "pr-command"] as const;
 export type HandlerSeam = (typeof handlerSeams)[number];
 
-/** A script of the pack that a command of another pack hands its work to, such as the review bot behind fleet pr review, or the heavy-route handler that decides where a fleet heavy command runs. */
-export type PackHandler = Scope & { seam: HandlerSeam; path: string };
+/** A script of the pack that a command of another pack hands its work to, such as the review bot behind fleet pr review, the heavy-route handler that decides where a fleet heavy command runs, or the pr-command handler that runs the fleet pr subcommands a pack adds. */
+export type PackHandler = Scope & { seam: HandlerSeam; path: string; /** The fleet pr words a pr-command handler runs; fleet pr routes only these to it. */ subcommands?: string[] };
 
 export type SourceRef = { name: string; repo: string; ref: string };
 
@@ -238,7 +238,7 @@ export type Plan = {
   catalog?: CatalogEntry[];
   t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
   commands: Record<string, { pack: string; path: string; on?: "hub"; workflow?: string }>;
-  handlers: Partial<Record<HandlerSeam, { pack: string; path: string }>>;
+  handlers: Partial<Record<HandlerSeam, { pack: string; path: string; subcommands?: string[] }>>;
   models: ModelRow[];
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];

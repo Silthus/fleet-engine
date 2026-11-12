@@ -144,10 +144,19 @@ describe("loadPacks", () => {
   test("accepts a handler only for a seam the engine knows, with a path", async () => {
     const handler = { seam: "review-bot", path: "lib/review-bot.ts" };
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler] } }))).resolves.toHaveLength(1);
-    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, seam: "deploy-bot" }] } }))).rejects.toThrow("handlers deploy-bot: seam must be one of review-bot, heavy-route");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, seam: "deploy-bot" }] } }))).rejects.toThrow("handlers deploy-bot: seam must be one of review-bot, heavy-route, pr-command");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, path: "" }] } }))).rejects.toThrow("handlers review-bot: needs a path");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, workflow: "nope" }] } }))).rejects.toThrow("handlers review-bot names unknown workflow nope");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler, handler] } }))).rejects.toThrow("handlers review-bot is declared twice");
+  });
+
+  test("takes the fleet pr words a pr-command handler runs, and subcommands on no other seam", async () => {
+    const pr = { seam: "pr-command", path: "lib/pr.ts" };
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: ["queue-wait", "ownerless"] }] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [pr] } }))).rejects.toThrow("handlers pr-command: needs subcommands, the fleet pr words it runs");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: [] }] } }))).rejects.toThrow("handlers pr-command: needs subcommands, the fleet pr words it runs");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: ["Queue wait"] }] } }))).rejects.toThrow("handlers pr-command: each subcommand must be lowercase words joined by dashes");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ seam: "review-bot", path: "lib/bot.ts", subcommands: ["x"] }] } }))).rejects.toThrow("handlers review-bot: only a pr-command handler takes subcommands");
   });
 
   test("accepts a job that runs always only without a time, a T3 runner, or a task", async () => {

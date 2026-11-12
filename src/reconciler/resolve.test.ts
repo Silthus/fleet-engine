@@ -223,6 +223,8 @@ describe("resolve", () => {
     const bots = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] }, { "lib/bot.ts": "export {};\n" });
     expect(plan().handlers).toEqual({});
     expect(plan({ packs: ["bots"] }, mac, [engine, bots]).handlers).toEqual({ "review-bot": { pack: "bots", path: join(bots.dir, "packs/bots/lib/bot.ts") } });
+    const words = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "pr-command", path: "lib/bot.ts", subcommands: ["queue-wait"] }] }, { "lib/bot.ts": "export {};\n" });
+    expect(plan({ packs: ["bots"] }, mac, [engine, words]).handlers).toEqual({ "pr-command": { pack: "bots", path: join(words.dir, "packs/bots/lib/bot.ts"), subcommands: ["queue-wait"] } });
     const linuxOnly = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib/bot.ts", on: ["linux"] }] });
     expect(plan({ packs: ["bots"] }, mac, [engine, linuxOnly]).handlers).toEqual({});
     const rival = withPack({ schema: 1, name: "rival", summary: "Rival.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] });
