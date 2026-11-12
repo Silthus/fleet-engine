@@ -317,8 +317,12 @@ async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
 
 async function tunnelLimitReached(machine: Machine) {
   const log = await machine.exec(["sh", "-c", recentServiceLog]);
-  return log.code === 0 ? log.stdout.match(tunnelLimit)?.at(-1) : undefined;
+  if (log.code !== 0) return undefined;
+  const sinceStart = log.stdout.slice(log.stdout.lastIndexOf(serverStarted) + 1);
+  return sinceStart.match(tunnelLimit)?.at(-1);
 }
+
+const serverStarted = "Listening on http";
 
 const tunnelLimit = /Relay managed tunnel limit reached: this account allows at most \d+ tunnels?/g;
 
