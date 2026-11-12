@@ -126,6 +126,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     if (problem) fail(`${label}: ${problem}`);
   };
   for (const field of ["requires", "skills"]) need(raw[field] === undefined || isStrings(raw[field]), `${field} must list names`);
+  need(raw.subcommands === undefined || (isRecord(raw.subcommands) && Object.values(raw.subcommands).every((words) => isStrings(words) && words.every((word) => /^[a-z][a-z-]{0,23}$/.test(word)))), "subcommands must map each command to its lowercase first words");
   need(raw.instructions === undefined || typeof raw.instructions === "string", "instructions must be a path");
   need(raw.profileOrg === undefined || (typeof raw.profileOrg === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(raw.profileOrg)), "profileOrg must be a GitHub org name");
   each("guides", (item, label) => {

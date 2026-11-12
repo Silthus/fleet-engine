@@ -237,5 +237,12 @@
       ],
       "oncePerFleet": true
     }
-  ]
+  ],
+  "subcommands": {
+    "thread": [
+      "list",
+      "read",
+      "send"
+    ]
+  }
 }

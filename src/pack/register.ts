@@ -52,10 +52,11 @@ export function recordPack(exported: unknown): { manifest: Record<string, unknow
       workflows.push({ ...def, ...(handles ? { settings: handles.map((handle) => own(handle, "setting", `workflow ${def.id}`)) } : {}) });
       return declare("workflow", def.id);
     },
-    command(name, { run, on, when }) {
+    command(name, { run, on, when, subcommands }) {
       if (code.commands[name]) throw new Error(`command ${name} is declared twice`);
       if (on !== undefined && on !== "hub") throw new Error(`command ${name}: on takes only "hub"`);
-      code.commands[name] = { run, ...(on === "hub" ? { on } : {}), ...(when ? { workflow: own(when, "workflow", `command ${name}`) } : {}) };
+      if (subcommands !== undefined && !(Array.isArray(subcommands) && subcommands.every((word) => typeof word === "string" && /^[a-z][a-z-]{0,23}$/.test(word)))) throw new Error(`command ${name}: subcommands must list lowercase words`);
+      code.commands[name] = { run, ...(on === "hub" ? { on } : {}), ...(when ? { workflow: own(when, "workflow", `command ${name}`) } : {}), ...(subcommands?.length ? { subcommands } : {}) };
     },
     service({ id, run, serve, ...scope }) {
       const label = `service ${id}`;

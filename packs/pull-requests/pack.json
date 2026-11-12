@@ -169,5 +169,33 @@
       "target": ".config/fleet/hooks/PreToolUse/settle-guard.ts",
       "workflow": "pr-owners"
     }
-  ]
+  ],
+  "subcommands": {
+    "pr": [
+      "help",
+      "review",
+      "stamp",
+      "forecast",
+      "blockers",
+      "bot-threads"
+    ],
+    "proof": [
+      "help",
+      "path",
+      "save",
+      "publish",
+      "require",
+      "review",
+      "show",
+      "panel-lens",
+      "respond",
+      "standing",
+      "gap",
+      "gate",
+      "miss",
+      "eval",
+      "review-start",
+      "review-finish"
+    ]
+  }
 }

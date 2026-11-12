@@ -208,5 +208,10 @@
       ],
       "say": "This machine runs a systemd older than 253, which ignores OOMPolicy=continue on T3's agent scopes. An out-of-memory kill still stops the whole agent thread here. Upgrade the OS to get systemd 253 or newer."
     }
-  ]
+  ],
+  "subcommands": {
+    "guards": [
+      "allowlist"
+    ]
+  }
 }

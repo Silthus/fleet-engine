@@ -152,6 +152,8 @@ export type PackManifest = {
   served?: ServedService[];
   models?: Partial<Record<AiPlan, ModelRow[]>>;
   profileOrg?: string;
+  /** The words each command of this pack takes first, such as list or start. Usage events name only these, never a free first argument such as a host. */
+  subcommands?: Record<string, string[]>;
 };
 
 export type PackCheck = Scope & { id: string; run: string[]; say: string };
@@ -168,7 +170,7 @@ export type PackCode = {
   settingKey(handle: unknown): string;
   serviceId(handle: unknown): string;
   repairs: Record<string, (ctx: Context) => Promise<void>>;
-  commands: Record<string, { run(args: string[], ctx: Context): Promise<number>; on?: "hub"; workflow?: string }>;
+  commands: Record<string, { run(args: string[], ctx: Context): Promise<number>; on?: "hub"; workflow?: string; subcommands?: string[] }>;
   services: Record<string, (ctx: Context) => Promise<void>>;
   credentials: Record<string, (ctx: Context, node: string) => Promise<string>>;
   checks: Record<string, (ctx: Context) => Promise<boolean>>;
@@ -237,7 +239,7 @@ export type Plan = {
   /** Every served service of the profile, on every node, with its port. */
   catalog?: CatalogEntry[];
   t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
-  commands: Record<string, { pack: string; path: string; on?: "hub"; workflow?: string }>;
+  commands: Record<string, { pack: string; path: string; on?: "hub"; workflow?: string; subcommands?: string[] }>;
   handlers: Partial<Record<HandlerSeam, { pack: string; path: string; subcommands?: string[] }>>;
   models: ModelRow[];
   settings: Record<string, SettingValue>;

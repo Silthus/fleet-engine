@@ -28,9 +28,10 @@ import { onHub } from "./hub/ssh.ts";
 import { drift } from "./reconciler/drift.ts";
 import { spawnRunner, type CommandRunner } from "./adapters/run.ts";
 import { become, canBecome, type Become } from "./runner/become.ts";
+import { trackCommand } from "./usage/usage.ts";
 
 /** env: the environment that tells a Coder workspace apart; tests pass their own. */
-export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; fail?: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string, skip?: string[]) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone" | "clock">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string; stdin?: () => ReadableStream<Uint8Array>; capture?: CommandRunner; become?: Become };
+export type CliOptions = { home: string; engineRoot: string; platform: NodeJS.Platform; env?: Record<string, string | undefined>; print: (line: string) => void; fail?: (line: string) => void; run?: Runner; terminal?: Terminal; apply?: (profileDir: string, skip?: string[]) => Promise<number>; setup?: Pick<SetupOptions, "machine" | "fetchSource" | "doctor" | "env" | "timeZone" | "clock">; clock?: Clock; adapters?: () => Adapter[]; hostname?: () => string; stdin?: () => ReadableStream<Uint8Array>; capture?: CommandRunner; become?: Become; interactive?: boolean };
 
 const usage = `Fleet: one setup for T3 Code, agents, and your workflows
 
@@ -64,11 +65,13 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet <command>    Run a command that one of your packs ships`;
 
 const changes = { packs: packsCommand, settings: settingsCommand, set: setCommand };
+const builtins: Record<string, string[]> = { apply: [], doctor: [], update: [], packs: [], settings: [], set: [], hub: ["here", "status"], devbox: ["add", "remove"], run: [], credential: [], setup: [], triage: [] };
 
 
 export async function main(argv: string[], options: CliOptions): Promise<number> {
   const [command, ...rest] = argv;
   if (!command || command === "help" || command === "--help") return options.print(usage), 0;
+  if (Object.hasOwn(builtins, command)) trackCommand(options.home, command, rest, builtins[command]!, options.env ?? {}, options.interactive);
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
@@ -228,6 +231,7 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
     options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }
+  if (name !== "usage") trackCommand(options.home, name, args, command.subcommands ?? [], options.env ?? {}, options.interactive);
   if (command.on === "hub" && !plan.onHub) return runOnHub(name, args, plan, options);
   const workflow = command.workflow ? plan.workflows.find((entry) => entry.id === command.workflow) : undefined;
   if (workflow && !workflow.active) throw new Error(`fleet ${name} belongs to the ${workflow.id} workflow, which ${workflow.reason === "turned off" ? `is off. Turn it on with fleet packs --workflows ${workflow.id}=on.` : `is off on this machine: it ${workflow.reason}.`}`);

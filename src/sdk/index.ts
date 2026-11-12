@@ -31,7 +31,8 @@ export type Pack = {
 };
 
 /** on: "hub" runs the command on the hub, also when a person types it on another node. when: the command runs only while that workflow is on. */
-export type Command = { summary: string; on?: "hub"; when?: Workflow; run(args: string[], ctx: Context): Promise<number> };
+/** subcommands: the words the command takes first, such as list or start. Usage events name only these. */
+export type Command = { summary: string; on?: "hub"; when?: Workflow; subcommands?: string[]; run(args: string[], ctx: Context): Promise<number> };
 export type Process = { run(ctx: Context): Promise<void> };
 /** A service that every node reaches at http://127.0.0.1:<port>. credential returns the value for one node, by its SSH name. */
 export type Serve = { port: number; health: string; credential(ctx: Context, node: string): Promise<string> };

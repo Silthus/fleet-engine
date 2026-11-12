@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { track } from "../../../src/usage/usage.ts";
 import { runHook } from "../../base/lib/hook.ts";
 import { claimNote, clip, contextHook, type HookInput, logShown, memoryRoot, repoOf } from "../lib/notes.ts";
 import { testsRuleFor } from "../lib/tests-rule.ts";
@@ -42,6 +43,7 @@ async function triggeredNotes(input: HookInput, home: string, session: string): 
       logShown(home, { session, agent: input.agent_id, via: "trigger", note: hit.note, trigger: hit.term });
     } catch {}
   }
+  if (hits.length) track(home, "memory recalled", { notes: hits.length });
   return hits.length ? hits.map((hit) => `Shared memory ${hit.note}, shown because this call names "${hit.term}":\n${clip(hit.text, noteLimit)}`).join("\n\n") : undefined;
 }
 
