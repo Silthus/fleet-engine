@@ -909,6 +909,63 @@ describe("T3 on Linux", () => {
       expect(readFileSync(join(home, dropInFile), "utf8")).toBe("[Service]\nEnvironment=TZ=Asia/Tokyo\nNice=5\n");
     });
 
+    test("keeps a drop-in that an older Fleet wrote when the setting is empty, and never changes it", async () => {
+      const home = temp.make("home-");
+      const { commands, adapter } = setup();
+      const older = "[Service]\nEnvironment=TZ=Europe/Berlin\n";
+      mkdirSync(join(home, ".config/systemd/user/t3code.service.d"), { recursive: true });
+      writeFileSync(join(home, dropInFile), older);
+      const empty = await apply(zoned(""), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe(older);
+      expect(empty.actions.filter((action) => action.target === "t3 time zone")).toEqual([]);
+      expect(zoneFindings(empty)).toEqual([]);
+      const same = await apply(zoned("Europe/Berlin"), { home, adapters: [adapter] });
+      expect(zoneFindings(same)).toEqual([]);
+      const other = await apply(zoned("America/New_York"), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe(older);
+      expect(zoneFindings(other)).toEqual([expect.objectContaining({ repair: "human", say: expect.stringContaining("is not Fleet's") })]);
+      await apply(zoned(""), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe(older);
+      expect(commands.calls).not.toContain("systemctl --user daemon-reload");
+    });
+
+    test("accepts a zone that only the system's zone files name, with the exact case", async () => {
+      const zoneInfo = temp.make("zoneinfo-");
+      mkdirSync(join(zoneInfo, "Etc"));
+      writeFileSync(join(zoneInfo, "Etc/UTC"), "TZif");
+      writeFileSync(join(zoneInfo, "GMT"), "TZif");
+      for (const zone of ["Etc/UTC", "GMT"]) {
+        const home = temp.make("home-");
+        const commands = runner(fakeServer());
+        const adapter = t3Adapter({ run: commands.run, server: fakeServer().server, user: "octo", env: {}, zoneInfo });
+        await apply(zoned(zone), { home, adapters: [adapter] });
+        expect(readFileSync(join(home, dropInFile), "utf8")).toBe(`[Service]\nEnvironment=TZ=${zone}\n`);
+      }
+      for (const zone of ["etc/utc", "Etc", "Etc/../GMT"]) {
+        const home = temp.make("home-");
+        const commands = runner(fakeServer());
+        const adapter = t3Adapter({ run: commands.run, server: fakeServer().server, user: "octo", env: {}, zoneInfo });
+        const report = await apply(zoned(zone), { home, adapters: [adapter] });
+        expect(zoneFindings(report)).toEqual([expect.objectContaining({ say: expect.stringContaining("is not a time zone") })]);
+        expect(existsSync(join(home, dropInFile))).toBe(false);
+      }
+    });
+
+    test("sets the zone before T3 Code's service starts and before a token restart in the same apply", async () => {
+      const home = temp.make("home-");
+      const server = fakeServer();
+      const commands = runner(server, { service: "not installed" });
+      const zoneAt: Record<string, boolean> = {};
+      const run: CommandRunner = async (command) => {
+        const line = command.join(" ");
+        if (line === "t3 service install" || line === "systemctl --user try-restart t3code.service") zoneAt[line] = existsSync(join(home, dropInFile));
+        return commands.run(command);
+      };
+      const adapter = t3Adapter({ run, server: server.server, user: "octo", env: { CLAUDE_CODE_OAUTH_TOKEN: ["sk", "test", "claude", "zone"].join("-") } });
+      await apply(zoned("Europe/Berlin"), { home, adapters: [adapter] });
+      expect(zoneAt).toEqual({ "t3 service install": true, "systemctl --user try-restart t3code.service": true });
+    });
+
     test("leaves the zone as it was when systemd does not reload, so the next apply tries again", async () => {
       const home = temp.make("home-");
       const { adapter } = setup({}, { reloadFailures: 1 });

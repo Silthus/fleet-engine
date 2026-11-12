@@ -15,7 +15,7 @@ import { activeProjects, expandHome, realPath, t3Tasks } from "./tasks.ts";
 
 export { desktopTarget, recordTarget, settingsTarget } from "./settings.ts";
 
-export type T3Options = { run?: CommandRunner; wait?: Wait; accountHome?: () => Promise<string | undefined>; server?: T3Server; user?: string; env?: Environment };
+export type T3Options = { run?: CommandRunner; wait?: Wait; accountHome?: () => Promise<string | undefined>; server?: T3Server; user?: string; env?: Environment; zoneInfo?: string };
 export type T3Adapter = Adapter & { tasks(): Promise<T3Tasks | undefined> };
 
 type Link = { environmentId: string; label: string; status: "reachable" | "unreachable" | "expired"; lastError: string | null };
@@ -40,9 +40,9 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
         const settings = { adopt, dryRun, outage: sourceOutage(plan) };
         const seeded = !(await server.answering(home));
         if (seeded) merge(result, await reconcileSettings(plan, home, settings));
+        if (plan.os === "linux") await reconcileTimeZone(run, home, String(plan.settings[timeZoneSetting] ?? "").trim(), dryRun, result, options.zoneInfo);
         if (plan.os === "linux") await reconcileService(run, wait, user, dryRun, result);
         if (plan.os === "linux") await reconcileClaudeToken(run, home, options.env ?? process.env, dryRun, result);
-        if (plan.os === "linux") await reconcileTimeZone(run, home, String(plan.settings[timeZoneSetting] ?? "").trim(), dryRun, result);
         result.findings.push(...settingProblems(plan));
         if (!(await server.answering(home))) {
           if (!seeded) merge(result, await reconcileSettings(plan, home, settings));
