@@ -188,6 +188,23 @@ describe("resolve", () => {
     expect(states({ pong: false }).slice(3)).toEqual([["ping", false, "needs workflow pong"], ["pong", false, "turned off"]]);
   });
 
+  test("a workflow that yields stays off while a workflow it yields to is on, and comes back when that one is off or needs a workflow that is off", () => {
+    const flow = (id: string, fields: { requires?: string[]; yields?: string[] }) => ({ id, name: id, sentence: `${id}.`, default: true, ...fields });
+    const pair = withPack({ schema: 1, name: "pair", summary: "Pair.", workflows: [flow("direct", { yields: ["routed"] }), flow("after-direct", { requires: ["direct"] }), flow("routed", { requires: ["base-route"] }), flow("base-route", {})] });
+    const states = (workflows: Record<string, boolean>) => plan({ packs: ["pair"], workflows }, mac, [engine, pair]).workflows.filter((state) => state.pack === "pair").map(({ id, active, reason }) => [id, active, reason]);
+    expect(states({})).toEqual([["direct", false, "yields to workflow routed"], ["after-direct", false, "needs workflow direct"], ["routed", true, undefined], ["base-route", true, undefined]]);
+    expect(states({ routed: false }).slice(0, 2)).toEqual([["direct", true, undefined], ["after-direct", true, undefined]]);
+    expect(states({ "base-route": false }).slice(0, 3)).toEqual([["direct", true, undefined], ["after-direct", true, undefined], ["routed", false, "needs workflow base-route"]]);
+  });
+
+  test("settles a chain of yields: the first stays on when the one it yields to yields in turn", () => {
+    const flow = (id: string, yields: string[] = []) => ({ id, name: id, sentence: `${id}.`, default: true, yields });
+    const chain = withPack({ schema: 1, name: "chain", summary: "Chain.", workflows: [flow("a", ["b"]), flow("b", ["c"]), flow("c")] });
+    const states = (workflows: Record<string, boolean>) => plan({ packs: ["chain"], workflows }, mac, [engine, chain]).workflows.filter((state) => state.pack === "chain").map(({ id, active, reason }) => [id, active, reason]);
+    expect(states({})).toEqual([["a", true, undefined], ["b", false, "yields to workflow c"], ["c", true, undefined]]);
+    expect(states({ c: false })).toEqual([["a", false, "yields to workflow b"], ["b", true, undefined], ["c", false, "turned off"]]);
+  });
+
   test("limits items by os and role", () => {
     expect(plan({ packs: ["posthog"] }).human.map((step) => step.id)).toEqual(["coder"]);
     expect(plan({ packs: ["posthog"] }, devbox).human).toEqual([]);
@@ -206,6 +223,8 @@ describe("resolve", () => {
     const bots = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] }, { "lib/bot.ts": "export {};\n" });
     expect(plan().handlers).toEqual({});
     expect(plan({ packs: ["bots"] }, mac, [engine, bots]).handlers).toEqual({ "review-bot": { pack: "bots", path: join(bots.dir, "packs/bots/lib/bot.ts") } });
+    const words = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "pr-command", path: "lib/bot.ts", subcommands: ["queue-wait"] }] }, { "lib/bot.ts": "export {};\n" });
+    expect(plan({ packs: ["bots"] }, mac, [engine, words]).handlers).toEqual({ "pr-command": { pack: "bots", path: join(words.dir, "packs/bots/lib/bot.ts"), subcommands: ["queue-wait"] } });
     const linuxOnly = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib/bot.ts", on: ["linux"] }] });
     expect(plan({ packs: ["bots"] }, mac, [engine, linuxOnly]).handlers).toEqual({});
     const rival = withPack({ schema: 1, name: "rival", summary: "Rival.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] });

@@ -1,7 +1,7 @@
 import { parse } from "smol-toml";
 
 /** An MCP server that the gateway signs in to with OAuth. tools, when set, is the only tools the Fleet group serves. */
-export type OauthUpstream = { kind: "oauth"; name: string; title: string; url: string; tools?: string[] };
+export type OauthUpstream = { kind: "oauth"; name: string; title: string; url: string; tools?: string[]; loopback?: true; scopes?: string[] };
 
 /**
  * A ChatGPT app that Fleet's app bridge serves through the Codex sign-in of its account. The bridge offers only the
@@ -114,6 +114,8 @@ function problem(value: Field): string | undefined {
   if (value.kind === "oauth") {
     if (typeof value.url !== "string" || !URL.canParse(value.url) || new URL(value.url).protocol !== "https:") return "url must be an https address";
     if (value.tools !== undefined && (!strings(value.tools) || !(value.tools as string[]).every((tool) => toolName.test(tool)))) return "tools of an oauth upstream must be exact tool names";
+    if (value.loopback !== undefined && value.loopback !== true) return "loopback must be true or left out";
+    if (value.scopes !== undefined && (!strings(value.scopes) || !(value.scopes as string[]).every((scope) => /^[\x21\x23-\x5b\x5d-\x7e]+$/.test(scope)))) return "scopes must list OAuth scope names";
     return;
   }
   if (value.kind === "local") return localProblem(value);

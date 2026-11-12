@@ -200,6 +200,12 @@
       "sentence": "Fleet, your profile, Claude Code, Codex, their plugins, and T3 Code update themselves every night. T3 Code waits until no agent turn runs. A failed update tries again each hour until 05:47 UTC."
     },
     {
+      "id": "source-refresh",
+      "name": "Fresh skills",
+      "default": true,
+      "sentence": "Every five minutes, Fleet asks each pack source that follows a branch, such as your skills repository, whether it moved. When it moved forward, Fleet updates the skills, guides, and instructions it brings. A source you edited, such as a changed skill, and a rewritten branch wait for you. Everything else waits for the nightly update."
+    },
+    {
       "id": "linked-machines",
       "name": "Linked machines",
       "default": true,
@@ -222,6 +228,13 @@
         "devbox"
       ],
       "sentence": "Agents check free disk before big jobs and run builds and tests in a capped slot, so one job cannot fill or freeze a devbox."
+    },
+    {
+      "id": "format-on-edit",
+      "name": "Format on edit",
+      "default": false,
+      "sentence": "After Claude edits a file, the repository's own lint-staged formatters and fixers rewrite it, and Claude sees what they could not fix.",
+      "risk": "It runs after every edit in every repository, before you review the change, not only at commit. It runs only known formatters (Prettier, Biome, ESLint, Ruff, Black, gofmt, rustfmt and a few more) that the repository's lint-staged config names, from the repository's node_modules/.bin or your PATH. It never runs package runners such as bunx or npx, interpreters, shells, scripts, or Git. A formatter still loads the repository's own config, and some configs, such as eslint.config.js, are code."
     }
   ],
   "config": [
@@ -264,7 +277,7 @@
             {
               "type": "command",
               "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude PostToolUse",
-              "timeout": 30
+              "timeout": 90
             }
           ]
         }
@@ -279,6 +292,21 @@
             {
               "type": "command",
               "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude SessionStart",
+              "timeout": 30
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "claude",
+      "key": "hooks.Stop",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" claude Stop",
               "timeout": 30
             }
           ]
@@ -351,6 +379,25 @@
             {
               "type": "command",
               "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex SessionStart",
+              "timeout": 30
+            }
+          ]
+        }
+      ],
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "hooks.Stop",
+      "value": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex Stop",
               "timeout": 30
             }
           ]
@@ -539,6 +586,15 @@
       ]
     },
     {
+      "path": "hooks/format-on-edit.ts",
+      "target": ".config/fleet/hooks/PostToolUse/format-on-edit.ts",
+      "plans": [
+        "claude",
+        "both"
+      ],
+      "workflow": "format-on-edit"
+    },
+    {
       "path": "fleet-heavy.slice",
       "target": ".config/systemd/user/fleet-heavy.slice",
       "on": [
@@ -586,6 +642,17 @@
         "at": "00:47"
       },
       "workflow": "nightly-updates"
+    },
+    {
+      "id": "source-refresh",
+      "command": [
+        "fleet",
+        "refresh"
+      ],
+      "schedule": {
+        "every": "5m"
+      },
+      "workflow": "source-refresh"
     },
     {
       "id": "worktree-prune",

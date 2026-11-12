@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota } from "./proof-testing.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
 
@@ -263,4 +263,146 @@ test("a reviewer stops when fleet cannot record it in its slot", async () => {
   expect(answer).toMatchObject({ ok: false, cause: expect.stringContaining("cannot write the slot") });
   expect(reviewer).toBeGreaterThan(0);
   expect(() => process.kill(reviewer, 0)).toThrow();
+});
+
+async function authorRound(pr: Checkout, ...args: string[]) {
+  const reserved = JSON.parse((await pr.fleet("review-start", ...args)).output) as { id: string };
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  expect((await pr.fleet("review-finish", "--round", reserved.id, "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
+}
+
+test("the gate needs a finished --lens panel round: a single reviewer never covers HEAD, and a final read after the panel covers a new HEAD", async () => {
+  const single = await checkout();
+  await single.commit("feature.txt", "greet\n");
+  await single.fleet("require", "--none", "--reason", "docs only");
+  await authorRound(single, "--scope", "full");
+  const refused = await single.fleet("gate");
+  expect(refused.code).toBe(1);
+  expect(refused.output).toContain("review: no finished panel round on the PR; 1 single-reviewer review(s) do not count. Run the qa-swarm panel with fleet proof review --lens");
+  const before = await single.git("rev-parse", "HEAD");
+  await single.commit("feature.txt", "greet the member\n");
+  fakeModel(single, "REVIEWER", clean);
+  await single.fleet("review", "--lens", "correctness", "--scope", "fixes", "--base", before);
+  expect((await single.fleet("review", "--wait")).code).toBe(0);
+  expect((await single.fleet("gate", "--commit", before)).output).toContain("review: HEAD not reviewed, last review covered");
+
+  const pr = await checkout();
+  const reviewed = await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", clean);
+  await pr.fleet("review", "--lens", "correctness");
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  expect((await pr.fleet("gate")).code).toBe(0);
+  await pr.commit("feature.txt", "greet the member\n");
+  await authorRound(pr, "--scope", "final", "--base", reviewed);
+  const after = await pr.fleet("gate");
+  expect(after.code).toBe(0);
+  expect(after.output).toContain("review: HEAD reviewed in final read 1 by gpt-6.1-sol");
+});
+
+test("a panel gap holds the gate until the user accepts it, and still needs a review at HEAD", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reason = "A prune lane runs no QA swarm under the user's rules";
+  await pr.fleet("gap", "--kind", "panel", "--reason", reason);
+  expect((await pr.fleet("gate")).output).toContain(`review: HEAD not reviewed; panel gap from`);
+  expect((await pr.fleet("gate")).code).toBe(1);
+
+  await authorRound(pr, "--scope", "full");
+  const unaccepted = await pr.fleet("gate");
+  expect(unaccepted.code).toBe(3);
+  expect(unaccepted.output).toMatch(new RegExp(`review: HEAD reviewed in round 1 by gpt-6\\.1-sol; panel gap from \\w{7}, not accepted: ${reason}`));
+
+  pr.chooseGap("panel", reason);
+  await pr.fleet("gap", "--kind", "panel", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
+  expect((await pr.fleet("gate")).code).toBe(0);
+});
+
+test("a round after the PR merged its base reads and demands only the files the PR changes", async () => {
+  const pr = await checkout();
+  const reviewed = await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewer = fakeModel(pr, "REVIEWER", clean);
+  await pr.fleet("review", "--lens", "correctness");
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await pr.advanceBase("base.md", "the base moves on\n");
+  await pr.git("merge", "-q", "--no-edit", "main");
+  const fixed = await pr.commit("feature.txt", "greet the member\n");
+
+  await pr.fleet("review", "--lens", "correctness", "--scope", "fixes", "--base", reviewed);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  const brief = reviewer.prompts().at(-1)!;
+  expect(brief).toContain("+greet the member");
+  expect(brief).not.toContain("the base moves on");
+  expect(brief).toContain("It leaves out 1 file(s) that a merge of the base brought in.");
+
+  await pr.advanceBase("base.md", "the base moves again\n");
+  await pr.git("merge", "-q", "--no-edit", "main");
+  await pr.commit("feature.txt", "greet every member\n");
+  reviewer.answer("No findings.");
+  await pr.fleet("review", "--scope", "final", "--base", fixed);
+  const read = reviewer.prompts().at(-1)!;
+  expect(read).toContain("+greet every member");
+  expect(read).not.toContain("the base moves again");
+  expect(read).toContain("It leaves out 1 file(s) that a merge of the base brought in.");
+});
+
+test("after a base merge, a round keeps the PR's renames and non-ASCII file names whole", async () => {
+  const pr = await checkout();
+  const greeting = "greet\nwelcome\nshow the rules\npoint to the help page\n";
+  const reviewed = await pr.commit("feature.txt", greeting);
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewer = fakeModel(pr, "REVIEWER", clean);
+  await pr.fleet("review", "--lens", "correctness");
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await pr.advanceBase("base.md", "the base moves on\n");
+  await pr.git("merge", "-q", "--no-edit", "main");
+  await pr.git("mv", "feature.txt", "grüße.txt");
+  await pr.commit("grüße.txt", `${greeting}greet the member\n`);
+  reviewer.answer("FINDINGS:\n(none)\nCOVERED: grüße.txt\n");
+
+  await pr.fleet("review", "--lens", "correctness", "--scope", "fixes", "--base", reviewed);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  const brief = reviewer.prompts().at(-1)!;
+  expect(brief).toContain("rename from feature.txt");
+  expect(brief).toContain("+greet the member");
+  expect(brief).not.toContain("the base moves on");
+  expect(brief).toContain("It leaves out 1 file(s)");
+});
+
+test("a panel that fails to plan gives its round back, so the same command plans it again", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", clean);
+  const guide = join(pr.home, ".agents/skills/qa-swarm/PANEL.md");
+  writeFileSync(guide, panelGuide.replace("Goal: <goal>", "Goal: the title"));
+  await expect(pr.fleet("review", "--lens", "correctness")).rejects.toThrow("has no <goal>");
+
+  writeFileSync(guide, panelGuide);
+  const started = await pr.fleet("review", "--lens", "correctness");
+  expect(JSON.parse(started.output.split("\n")[0]!)).toMatchObject({ round: 1 });
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+});
+
+test("rerunning a failed lens rebuilds its brief and runs it in the checkout of now", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewer = fakeModel(pr, "REVIEWER", "Looks fine to me.");
+  const cwds = join(pr.home, "reviewer-cwds");
+  pr.env.FLEET_PROOF_REVIEWER = `pwd >> "${cwds}"; ${pr.env.FLEET_PROOF_REVIEWER}`;
+  writeFileSync(join(pr.repository, "incidents.md"), "No incident yet.\n");
+  await pr.fleet("review", "--lens", "correctness", "--knowledge", "correctness=incidents.md");
+  expect((await pr.fleet("review", "--wait")).code).toBe(1);
+
+  const other = fixture("fleet-proof-other-checkout-");
+  await pr.git("worktree", "add", "-q", "--detach", other, head);
+  writeFileSync(join(other, "incidents.md"), "A greeting once leaked a member's email.\n");
+  reviewer.answer(clean);
+  await pr.fleetIn(other, "review", "--lens", "correctness", "--knowledge", "correctness=incidents.md");
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  expect(reviewer.prompts().at(-1)).toContain("A greeting once leaked a member's email.");
+  expect(readFileSync(cwds, "utf8").trim().split("\n").at(-1)).toBe(realpathSync(other));
 });

@@ -74,12 +74,12 @@ describe("fleet setup questions", () => {
     const home = temp.make("home-");
     const kept = await fleetSetup(home, args, ["", ""]);
     expect(kept.code).toBe(0);
-    expect(kept.output).toContain("  From your command: Pull requests, Orchestration, Communication, Context library, Guards, Slack, incident.io\n");
+    expect(kept.output).toContain("  From your command: Pull requests, Orchestration, Communication, Integrations, Context library, Guards, Slack, incident.io\n");
     expect(kept.output).toContain("  Workflows: pr-digest off");
     expect(kept.prompts).toEqual(["Press ↵ to keep them, or e to change them: ", "  Go ahead? (Y/n) "]);
     expect(savedAnswers(home)).toMatchObject({
       settings: { "pull-requests.freeReviews": 3 },
-      packs: ["pull-requests", "orchestration", "communication", "context-library", "guards", "slack", "incident-io"],
+      packs: ["pull-requests", "orchestration", "communication", "integrations", "context-library", "guards", "slack", "incident-io"],
       workflows: { "quality-loop": true, "signal-loop": true, "shell-guards": true, "package-age": true },
       plan: "claude",
     });
@@ -92,13 +92,13 @@ describe("fleet setup questions", () => {
 
   test("picks packs one by one", async () => {
     const home = temp.make("home-");
-    const result = await fleetSetup(home, [], ["4", "y", "n", "", "y", "n", "n", "n", "n", "n", "n", "n", "", ""]);
+    const result = await fleetSetup(home, [], ["4", "y", "n", "", "n", "y", "n", "n", "n", "n", "n", "n", "n", "", ""]);
     expect(result.code).toBe(0);
     expect(savedAnswers(home).packs).toEqual(["pull-requests", "communication", "memory"]);
     expect(result.output).toContain("One always-on devbox manages the others");
 
     const needs = temp.make("home-");
-    const picked = await fleetSetup(needs, [], ["4", "n", "y", "n", "n", "n", "n", "n", "n", "n", "n", "n", "", ""]);
+    const picked = await fleetSetup(needs, [], ["4", "n", "y", "n", "n", "n", "n", "n", "n", "n", "n", "n", "n", "", ""]);
     expect(picked.output).toContain("  Orchestration needs Pull requests, so it is on too.");
     expect(savedAnswers(needs).packs).toEqual(["orchestration", "pull-requests"]);
   });

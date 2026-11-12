@@ -2,12 +2,13 @@ import { existsSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { loadPacks } from "./pack/manifest.ts";
-import { cachedSource, fetchSource } from "./pack/sources.ts";
+import { cachedSource, fetchSource, sourceCache } from "./pack/sources.ts";
 import { cannotTell } from "./pack/types.ts";
-import type { AvailableSource, CatalogEntry, FetchedSource, Finding, LoadedPack, MachineFile, PackCode, Plan, Report } from "./pack/types.ts";
+import type { AvailableSource, CatalogEntry, FetchedSource, Finding, LoadedPack, MachineFile, PackCode, Plan, Report, SourceRef } from "./pack/types.ts";
 import { loadMachine, loadProfile, pullProfile, saveMachine, thisMachine } from "./profile/profile.ts";
 import { engineAdapters } from "./adapters/index.ts";
-import { apply, check, type Adapter, type Issuer, type Runner } from "./reconciler/apply.ts";
+import { apply, check, filesAdapter, type Adapter, type Issuer, type Runner } from "./reconciler/apply.ts";
+import { refresh } from "./refresh.ts";
 import { resolve } from "./reconciler/resolve.ts";
 import { undoingPack } from "./reconciler/ledger.ts";
 import { readNotice, update } from "./update.ts";
@@ -42,6 +43,8 @@ const usage = `Fleet: one setup for T3 Code, agents, and your workflows
   fleet doctor [--profile <dir>]
                      Check this machine against your profile without changing it
   fleet update       Move the engine and your profile forward, then apply
+  fleet refresh      Fetch the pack sources that follow a branch, and when one moved,
+                     update the files, skills, guides, and instructions of your packs
   fleet packs [--add <pack>]... [--remove <pack>]... [--workflows <id=on|off,...>] [--set <pack.key=value>]...
                      List your packs, or turn packs and workflows on and off
   fleet settings     List the settings of your packs
@@ -69,6 +72,7 @@ export async function main(argv: string[], options: CliOptions): Promise<number>
   try {
     if (command === "apply" || command === "doctor") return await reconcile(command, rest, options);
     if (command === "update") return await runUpdate(options);
+    if (command === "refresh") return await runRefresh(rest, options);
     if (Object.hasOwn(changes, command) || command === "hub") return await change(command as keyof typeof changes | "hub", rest, options);
     if (command === "devbox") return await devbox(rest, options);
     if (command === "run") return await runItem(rest, options);
@@ -161,10 +165,12 @@ function applyProfile(dir: string, options: CliOptions, skip: string[] = []) {
 async function change(command: keyof typeof changes | "hub", args: string[], options: CliOptions) {
   const { plan, sources } = await loadPlan(options, undefined, { fetch: false, remember: false, pull: changesProfile(command, args) });
   const profileDir = plan.machine.profileDir!;
+  const profile = await loadProfile(profileDir);
   const context: ChangeContext = {
     profileDir,
-    profile: await loadProfile(profileDir),
+    profile,
     plan,
+    preview: (answers) => resolve({ ...profile, dir: profileDir, ...answers }, plan.machine, sources),
     packs: sources.flatMap((source) => ("error" in source ? [] : source.packs)),
     machine: { ...realMachine, ...options.setup?.machine },
     print: options.print,
@@ -191,6 +197,24 @@ async function runUpdate(options: CliOptions) {
     print: options.print,
     runApply: () => Bun.spawn(["sh", join(options.engineRoot, "fleet"), "apply"], { stdio: ["inherit", "inherit", "inherit"], env: { ...Bun.env, HOME: options.home } }).exited,
   });
+}
+
+async function runRefresh(args: string[], options: CliOptions) {
+  if (args.length) return options.print("Usage: fleet refresh"), 2;
+  const machine = await loadMachine(options.home);
+  if (!machine?.profileDir) throw new Error("no profile on this machine. Run get.sh, or fleet apply --profile <dir>.");
+  const profile = await loadProfile(machine.profileDir);
+  const applyFiles = async (moved: FetchedSource[]) => {
+    const { plan } = await loadPlan(options, machine.profileDir, { fetch: false, remember: false, fetched: moved });
+    if (plan.unanswered.length) {
+      for (const setting of plan.unanswered) options.print(`To do: ${setting.question} Answer it with fleet set ${setting.key}=<value>.`);
+      return false;
+    }
+    const result = await filesAdapter.apply(plan, { home: options.home, dryRun: false, adopt: [], adoptFrom: [] });
+    printReport({ ok: !result.blocked, actions: result.actions, findings: result.findings, humanLeft: [] }, "apply", options.print);
+    return !result.blocked;
+  };
+  return refresh({ home: options.home, cache: sourceCache(options.home), sources: profile.sources, print: options.print, now: options.clock?.now ?? Date.now, apply: applyFiles });
 }
 
 async function runPackCommand(name: string, args: string[], options: CliOptions) {
@@ -393,15 +417,19 @@ async function inPack(plan: Plan, loaded: LoadedPack, options: CliOptions, work:
 }
 
 function packEnvironment(plan: Plan, options: CliOptions): Record<string, string | undefined> {
-  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_PLAN: plan.ai, FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)) };
+  return { HOME: options.home, FLEET_ENGINE_DIR: options.engineRoot, FLEET_PROFILE_DIR: plan.machine.profileDir, FLEET_SETTINGS: JSON.stringify(plan.settings), FLEET_MODELS: JSON.stringify(plan.models), FLEET_PLAN: plan.ai, FLEET_HANDLERS: JSON.stringify(handlerPaths(plan)), FLEET_HANDLER_SUBCOMMANDS: JSON.stringify(handlerSubcommands(plan)) };
 }
 
 function handlerPaths(plan: Plan) {
   return Object.fromEntries(Object.entries(plan.handlers).map(([seam, handler]) => [seam, handler.path]));
 }
 
+function handlerSubcommands(plan: Plan) {
+  return Object.fromEntries(Object.entries(plan.handlers).flatMap(([seam, handler]) => (handler.subcommands ? [[seam, handler.subcommands]] : [])));
+}
+
 /** withPack resolves the plan as if the profile also had that pack on, for the undo of one of its steps. */
-async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean; inherit?: boolean; pull?: boolean; withPack?: string }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
+async function loadPlan(options: CliOptions, profileFlag: string | undefined, mode: { fetch: boolean; remember: boolean; inherit?: boolean; pull?: boolean; withPack?: string; fetched?: FetchedSource[] }): Promise<{ plan: Plan; sources: FetchedSource[] }> {
   const saved = await loadMachine(options.home);
   const inherited = mode.inherit && !profileFlag ? options.env?.FLEET_PROFILE_DIR : undefined;
   const profileDir = profileFlag ? resolvePath(profileFlag) : inherited ? resolvePath(inherited) : saved?.profileDir;
@@ -410,9 +438,10 @@ async function loadPlan(options: CliOptions, profileFlag: string | undefined, mo
   if (mode.pull) await pullProfile(profileDir);
   const loaded = await loadProfile(profileDir);
   const profile = mode.withPack && !loaded.packs.includes(mode.withPack) ? { ...loaded, packs: [...loaded.packs, mode.withPack] } : loaded;
-  const cache = join(options.home, ".local", "share", "fleet", "sources");
+  const cache = sourceCache(options.home);
+  const known = (ref: SourceRef) => mode.fetched?.find((source) => source.ref.name === ref.name && !("error" in source));
   const engine: AvailableSource = { ref: { name: "engine", repo: profile.engine.repo, ref: profile.engine.ref }, dir: options.engineRoot, packs: await loadPacks(options.engineRoot) };
-  const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => (mode.fetch ? fetchSource(ref, cache) : cachedSource(ref, cache)))))];
+  const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => known(ref) ?? (mode.fetch ? fetchSource(ref, cache, undefined, options.clock) : cachedSource(ref, cache)))))];
   const plan = resolve(profile, machine, sources);
   const changed = saved?.profileDir !== profileDir || saved.role !== plan.machine.role || saved.coder !== plan.machine.coder || saved.name !== plan.machine.name;
   if (mode.remember && changed) await saveMachine(options.home, plan.machine);

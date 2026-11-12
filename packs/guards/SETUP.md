@@ -23,6 +23,12 @@ they turn one on. Ask with your question tool, in one call:
   or `master` of any other GitHub repository, unless its `AGENTS.md` says to
   push there. Add `--set guards.main-push-repos=<repos>`.
 
+`gh-stack` installs GitHub's `gh stack` extension at a pinned version and
+checks its digest. The shell guards refuse every other gh extension, and count
+the branches a `gh stack push` sends toward the burst limit. Turn it on only
+when the person stacks pull requests with `gh stack`: add
+`--workflows gh-stack=on`.
+
 Two more guards run only on a Linux devbox and need root and the person's
 keyboard there: `git-allowlist`, a signed list of the GitHub owners Git may
 use, and `oom-survival`, which stops a runaway build before memory runs out.
