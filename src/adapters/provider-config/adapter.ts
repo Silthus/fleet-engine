@@ -5,7 +5,7 @@ import type { Adapter, AdapterResult } from "../../reconciler/apply.ts";
 import { spawnRunner, type CommandRunner } from "../run.ts";
 import { codexHookTrust, isTrustOf } from "./codex-hooks.ts";
 import { checkPath, get, json, keyPath, overlaps, remove, same, samePath, set, toml, type Document, type Field, type Format } from "./fields.ts";
-import { declaredMarketplaces, reconcilePlugins } from "./plugins.ts";
+import { acceptedPlugins, declaredMarketplaces, reconcilePlugins, type Manager } from "./plugins.ts";
 import { staleKeys } from "./stale.ts";
 import { claudeJson, isMcpServer, reconcileServers, wantedServers } from "./claude-servers.ts";
 import { linkOnPath, optional, readState, withLock, writeWithBackups, type Write } from "./store.ts";
@@ -16,7 +16,7 @@ export type { CommandRunner } from "../run.ts";
 type Target = { provider: Provider; path: string; format: Format; owns(path: string[]): boolean };
 export type FieldRecord = { [target: string]: Field[] };
 type Merged = { record: Field[]; kept: string[]; reason: string; after?: string; document: Document };
-type FilesResult = AdapterResult & { plugins?: string[]; marketplaces?: Record<string, string | null> };
+type FilesResult = AdapterResult & { plugins: Partial<Record<Manager, string[]>>; marketplaces?: Record<string, string | null> };
 
 export const recordTarget = ".config/fleet/provider-fields.json";
 const claudeSettings = ".claude/settings.json";
@@ -56,7 +56,7 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
   const previous = await readFieldRecord(home);
   const next: FieldRecord = {};
   const writes: Array<Write & { action: Action }> = [];
-  const result: FilesResult = { actions: [], findings: [] };
+  const result: FilesResult = { actions: [], findings: [], plugins: {} };
   for (const target of configTargets) {
     const old = previous[target.path] ?? [];
     const keepOld = () => void (old.length && (next[target.path] = old));
@@ -77,10 +77,8 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
       continue;
     }
     if (merged.record.length) next[target.path] = merged.record;
-    if (target.path === claudeSettings && !link) {
-      result.plugins = acceptedPlugins(merged.document);
-      result.marketplaces = declaredMarketplaces(merged.document);
-    }
+    if (!link) result.plugins[target.provider as Manager] = acceptedPlugins(target.provider as Manager, merged.document);
+    if (target.path === claudeSettings && !link) result.marketplaces = declaredMarketplaces(merged.document);
     if (merged.kept.length) result.findings.push({ id: `kept:${target.path}`, pack: "engine", say: `Kept your ${merged.kept.join(", ")} in ${target.path}. Run fleet apply --adopt ${target.path} to take Fleet's value.` });
     if (merged.after !== undefined) writes.push({ target: target.path, before, after: merged.after, action: { target: target.path, operation: before === undefined ? "create" : "replace", reason: merged.reason } });
   }
@@ -166,11 +164,6 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
   const reason = [changed.length ? `set ${changed.join(", ")}` : "", removed.length ? `remove ${removed.join(", ")}` : ""].filter(Boolean).join("; ");
   const after = target.format.encode(current);
   return { record, kept, reason, after: after === original ? undefined : after, document: current };
-}
-
-function acceptedPlugins(document: Document) {
-  const enabled = get(document, ["enabledPlugins"]);
-  return enabled && typeof enabled === "object" ? Object.entries(enabled).flatMap(([id, on]) => (on === true ? [id] : [])) : [];
 }
 
 const isHookTrust = (field: Field) => field.path[0] === "hooks" && field.path[1] === "state";

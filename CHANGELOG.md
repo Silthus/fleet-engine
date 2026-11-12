@@ -42,6 +42,11 @@ packs, and your answers live in your own private profile repo.
   the signal loop, and the PR digest are opt-in.
 - **Communication** (on): agents write in your voice, give short updates, and
   share plans and previews as links.
+- **Integrations** (off): Claude Code and Codex get the official GitHub,
+  Context7, and Convex plugins, and with both AI plans Claude hands work to
+  Codex through OpenAI's Codex plugin. Convex is opt-in. Fleet installs and
+  removes only the plugins it installed, through each provider's own CLI, and
+  `fleet doctor` lists each sign-in the plugins still need.
 - **Memory** (off): agents on all your machines share what they learn through
   your own private memory repo.
 - **Hub** (off): one always-on devbox manages the others. It signs in to your

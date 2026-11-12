@@ -875,3 +875,104 @@ describe("Claude plugins", () => {
     });
   });
 });
+
+function pluginClis(installed: { claude?: string[]; codex?: string[] } = {}) {
+  const state = { claude: [...(installed.claude ?? [])], codex: [...(installed.codex ?? [])] };
+  const calls: Array<{ command: string[]; clearEnv?: string[] }> = [];
+  const run: CommandRunner = async (command, options) => {
+    calls.push({ command, clearEnv: options?.clearEnv });
+    const [cli, , verb, id] = command as ["claude" | "codex", string, string, string];
+    if (verb === "list" && cli === "claude") return { code: 0, stdout: JSON.stringify(state.claude.map((item) => ({ id: item, scope: "user", version: "1", enabled: true }))) };
+    if (verb === "list") return { code: 0, stdout: JSON.stringify({ installed: state.codex.map((item) => ({ pluginId: item, installed: true, enabled: true })), available: [] }) };
+    if (verb === "install" || verb === "add") state[cli].push(id);
+    if (verb === "uninstall" || verb === "remove") state[cli].splice(state[cli].indexOf(id), 1);
+    return { code: 0, stdout: "" };
+  };
+  const changes = () => calls.map((call) => call.command).filter((command) => ["install", "add", "uninstall", "remove"].includes(command[2]!));
+  return { state, calls, changes, adapter: providerConfigAdapter({ run }) };
+}
+
+describe("Codex plugins", () => {
+  const enabled = { provider: "codex" as const, key: "plugins.github@openai-curated-remote.enabled", value: true };
+
+  test("install once through codex plugin add, outside any CODEX_HOME, and leave when no pack enables them", async () => {
+    const home = temp.make("home-");
+    const cli = pluginClis();
+
+    await apply(plan([enabled]), { home, adapters: [cli.adapter] });
+    await apply(plan([enabled]), { home, adapters: [cli.adapter] });
+    expect(parse(readFileSync(join(home, codex), "utf8"))).toEqual({ plugins: { "github@openai-curated-remote": { enabled: true } } });
+    expect(cli.changes()).toEqual([["codex", "plugin", "add", "github@openai-curated-remote", "--json"]]);
+    expect(cli.calls.filter((call) => call.command[0] === "codex").every((call) => call.clearEnv?.includes("CODEX_HOME"))).toBe(true);
+
+    await apply(plan(), { home, adapters: [cli.adapter] });
+    expect(cli.changes().at(-1)).toEqual(["codex", "plugin", "remove", "github@openai-curated-remote", "--json"]);
+    expect(cli.state.codex).toEqual([]);
+  });
+
+  test("never remove a plugin the user installed", async () => {
+    const home = temp.make("home-");
+    const cli = pluginClis({ codex: ["github@openai-curated-remote"] });
+
+    await apply(plan([enabled]), { home, adapters: [cli.adapter] });
+    await apply(plan(), { home, adapters: [cli.adapter] });
+
+    expect(cli.changes()).toEqual([]);
+    expect(cli.state.codex).toEqual(["github@openai-curated-remote"]);
+  });
+
+  test("install nothing the user turned off in their config", async () => {
+    const home = temp.make("home-");
+    write(home, codex, '[plugins."github@openai-curated-remote"]\nenabled = false\n');
+    const cli = pluginClis();
+
+    await apply(plan([enabled]), { home, adapters: [cli.adapter] });
+
+    expect(cli.changes()).toEqual([]);
+    expect(readFileSync(join(home, codex), "utf8")).toContain("enabled = false");
+  });
+});
+
+describe("plugins that the Fleet before the engine installed", () => {
+  const legacy = {
+    version: 1,
+    installed: [
+      { id: "github@claude-plugins-official", version: "1", enabled: true, provider: "claude" },
+      { id: "github@openai-curated-remote", version: "1", enabled: true, provider: "codex" },
+      { id: "slack@openai-curated-remote", version: "1", enabled: true, provider: "codex" },
+    ],
+  };
+  const installed = { claude: ["github@claude-plugins-official"], codex: ["github@openai-curated-remote", "slack@openai-curated-remote"] };
+  const github = [
+    { provider: "claude" as const, key: "enabledPlugins.github@claude-plugins-official", value: true },
+    { provider: "codex" as const, key: "plugins.github@openai-curated-remote.enabled", value: true },
+  ];
+
+  test("become the engine's once a pack enables them again, so they leave with the pack, and the rest stay", async () => {
+    const home = temp.make("home-");
+    write(home, ".config/fleet/plugins.json", legacy);
+    const cli = pluginClis(installed);
+
+    await apply(plan(github), { home, adapters: [cli.adapter] });
+    expect(cli.changes()).toEqual([]);
+    await apply(plan(), { home, adapters: [cli.adapter] });
+
+    expect(cli.changes()).toEqual([
+      ["claude", "plugin", "uninstall", "github@claude-plugins-official", "--scope", "user", "--keep-data"],
+      ["codex", "plugin", "remove", "github@openai-curated-remote", "--json"],
+    ]);
+    expect(cli.state.codex).toEqual(["slack@openai-curated-remote"]);
+  });
+
+  test("stay as they are, with their record, while no pack enables a plugin", async () => {
+    const home = temp.make("home-");
+    write(home, ".config/fleet/plugins.json", legacy);
+    const cli = pluginClis(installed);
+
+    const report = await apply(plan(), { home, adapters: [cli.adapter] });
+
+    expect(report.ok).toBe(true);
+    expect(cli.changes()).toEqual([]);
+    expect(read(home, ".config/fleet/plugins.json")).toEqual(legacy);
+  });
+});
