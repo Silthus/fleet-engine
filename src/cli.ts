@@ -203,6 +203,7 @@ async function runPackCommand(name: string, args: string[], options: CliOptions)
     options.print(owner ? `fleet ${name} comes from the ${owner.manifest.title ?? owner.manifest.name} pack, which is off. Turn it on with fleet packs.` : `fleet: unknown command ${name}\n\n${usage}`);
     return 2;
   }
+  if (command.workflow && !plan.workflows.some((entry) => entry.id === command.workflow && entry.active)) throw new Error(`fleet ${name} belongs to the ${command.workflow} workflow, which is off. Turn it on with fleet packs --workflows ${command.workflow}=on.`);
   if (command.on === "hub" && !plan.onHub) return runOnHub(name, args, plan, options);
   const loaded = loadedPack(sources, command.pack);
   const run = loaded?.code?.commands[name];
@@ -230,15 +231,15 @@ async function runUndo(name: string, args: string[], pack: string, options: CliO
   return run ? await inPack(plan, owner, options, (ctx) => run(args, ctx)) : await spawnPackCommand(command.path, args, plan, options);
 }
 
-/** A node of the profile, or a Mac on a profile with a hub, runs a hub command on the hub over the one SSH path, with this terminal. Any other machine is told where it runs. When ssh cannot reach the hub, it exits 1, so a caller can fall back to another way. */
+/** A node of the profile, or a Mac on a profile with a hub, runs a hub command on the hub over the one SSH path, with this terminal. Any other machine is told where it runs. When ssh exits 255, it exits 1, so a caller can fall back to another way. */
 async function runOnHub(name: string, args: string[], plan: Plan, options: CliOptions) {
-  if (!plan.reachesHub && !plan.pullsFromHub) throw new Error(`fleet ${name} runs on the hub${plan.hub ? `, ${plan.hub}` : ""}. Run it there.`);
+  if (!plan.pullsFromHub) throw new Error(`fleet ${name} runs on the hub${plan.hub ? `, ${plan.hub}` : ""}. Run it there.`);
   const answer = await (options.capture ?? spawnRunner)(onHub(plan.hub!, [name, ...args]), { inherit: true });
   const fail = options.fail ?? options.print;
   for (const line of lines(answer.stdout)) options.print(line);
   for (const line of lines(answer.stderr ?? "")) fail(line);
   if (answer.code !== sshUnreachable) return answer.code;
-  fail(`fleet ${name}: could not reach the hub ${plan.hub} over SSH.`);
+  fail(`fleet ${name}: ssh to the hub ${plan.hub} exited 255. Either ssh could not reach the hub, or the command failed there with 255.`);
   return 1;
 }
 
@@ -300,8 +301,13 @@ async function issueCredentials(entries: CatalogEntry[], node: string, plan: Pla
     const issue = loaded?.code?.credentials[entry.id];
     const name = credentialName(entry.id);
     if (!issue) continue;
+    const stored = await storedSecret(options.home, entry.pack, name);
+    if (stored instanceof Error) {
+      findings.push({ id: `credential:${entry.pack}/${entry.id}`, pack: entry.pack, say: stored.message, repair: "human" });
+      continue;
+    }
+    if (stored) continue;
     try {
-      if (await secretStore(options.home, entry.pack).read(name)) continue;
       await inPack(plan, loaded!, options, async (ctx) => {
         await ctx.secrets.write(name, await issued(issue(ctx, node)));
         return 0;
@@ -320,6 +326,9 @@ async function issued(value: Promise<string>) {
   return credential;
 }
 
+/** A stored secret that the store refuses, such as one that other users can read, comes back as the refusal, which names the file and never the value. */
+const storedSecret = (home: string, pack: string, name: string) => secretStore(home, pack).read(name).catch((error: Error) => error);
+
 const pullLimitMs = 90_000;
 
 /** Asks the hub for this node's credential of each service and stores the answer. Each pull ends at a deadline, so a hub that connects but never answers cannot hold the apply. A failed pull keeps what the store holds, and its finding names the exit code and copies nothing the hub printed, since a service may print its key. */
@@ -331,6 +340,7 @@ async function pullCredentials(entries: CatalogEntry[], node: string, hub: strin
     const service = `${entry.pack}/${entry.id}`;
     const store = secretStore(options.home, entry.pack);
     const name = credentialName(entry.id);
+    const stored = await storedSecret(options.home, entry.pack, name);
     const deadline = new AbortController();
     void clock.sleep(pullLimitMs).then(() => deadline.abort());
     const answer = await capture(onHub(hub, ["credential", service, node]), { signal: deadline.signal });
@@ -338,11 +348,11 @@ async function pullCredentials(entries: CatalogEntry[], node: string, hub: strin
     deadline.abort();
     const value = answer.stdout.trim();
     if (answer.code === 0 && value) {
-      if ((await store.read(name)) !== value) await store.write(name, value);
+      if (stored !== value) await store.write(name, value);
       continue;
     }
     const reason = late ? `it did not answer within ${pullLimitMs / 1000} seconds` : answer.code === 255 ? `ssh exited 255. Run ssh ${hub} true to see why` : `fleet credential exited ${answer.code} there. Run fleet credential ${service} ${node} on the hub to see why`;
-    const kept = (await store.read(name)) ? "Kept the one this machine has." : "Fleet tries again at the next apply.";
+    const kept = stored instanceof Error ? stored.message : stored ? "Kept the one this machine has." : "Fleet tries again at the next apply.";
     findings.push({ id: `credential:${service}`, pack: entry.pack, say: `Could not pull the credential of ${service} from the hub ${hub} (${reason}). ${kept}`, repair: "apply" });
   }
   return findings;

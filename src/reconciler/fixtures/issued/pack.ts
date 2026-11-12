@@ -46,6 +46,12 @@ export default {
       summary: "Show what the hub holds",
       run: async (args, ctx) => (ctx.print(`${(await ctx.secrets.read("installed")) ?? "not installed"} ${JSON.stringify(args)}`), args.includes("fail") ? 3 : 0),
     });
+    fleet.command("issued-extra-admin", {
+      on: "hub",
+      when: extra,
+      summary: "Show the extra service on the hub",
+      run: async (args, ctx) => (ctx.print(`extra ${JSON.stringify(args)}`), 0),
+    });
     fleet.command("issued", {
       summary: "Use the issued service",
       run: async ([mode], ctx) => {
