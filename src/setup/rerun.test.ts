@@ -93,13 +93,24 @@ describe("fleet packs --add memory", () => {
     expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": url });
   });
 
-  test("refuses a public memory repo named by its GitHub URL", async () => {
+  test("refuses a public memory repo named by any form of its GitHub URL", async () => {
     const { home, packs } = await packsAfterSetup();
     await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/public-notes"));
     const before = savedAnswers(home);
-    const result = await packs(["--add", "memory", "--set", "memory.repo=https://github.com/nora/public-notes.git"], { publicRepos: ["nora/public-notes"] });
+    for (const url of ["https://github.com/nora/public-notes.git", "https://GitHub.com/nora/public-notes.git", "https://github.com:443/nora/public-notes", "http://www.github.com/nora/public-notes/", "ssh://git@github.com:22/nora/public-notes.git", "git@GITHUB.COM:nora/public-notes.git", "github.com:nora/public-notes"]) {
+      const result = await packs(["--add", "memory", "--set", `memory.repo=${url}`], { publicRepos: ["nora/public-notes"] });
+      expect({ url, code: result.code, refused: result.output.includes("fleet: nora/public-notes is not private") }).toEqual({ url, code: 1, refused: true });
+    }
+    expect(await pushedAnswers(home)).toEqual(before);
+  });
+
+  test("refuses a GitHub URL whose path is not owner/name", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const before = savedAnswers(home);
+    const url = "https://github.com/nora/notes/tree/main";
+    const result = await packs(["--add", "memory", "--set", `memory.repo=${url}`]);
     expect(result.code).toBe(1);
-    expect(result.output).toContain("fleet: nora/public-notes is not private");
+    expect(result.output).toContain(`fleet: ${url} is on GitHub, but Fleet cannot read its owner/name. Set memory.repo=<owner/name>.`);
     expect(await pushedAnswers(home)).toEqual(before);
   });
 

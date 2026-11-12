@@ -46,7 +46,7 @@ function github(machine: Machine) {
 }
 
 export async function memoryRepo(machine: Machine, named: unknown, login?: string) {
-  const onGitHub = typeof named === "string" ? (/^[\w.-]+\/[\w.-]+$/.test(named) ? named : githubRepoOf(named)) : undefined;
+  const onGitHub = typeof named === "string" ? githubSlug(named) : undefined;
   if (typeof named === "string" && !onGitHub) return { repo: named, missing: false, make: async (print: (line: string) => void) => print(`✓ Using your memory repo ${named}`) };
   const { gh, visibility, login: signedIn } = github(machine);
   const slug = onGitHub ?? `${login ?? (await signedIn())}/${memoryRepoName}`;
@@ -58,6 +58,15 @@ export async function memoryRepo(machine: Machine, named: unknown, login?: strin
     print(missing ? `✓ Created the private repo ${slug}` : `✓ Reusing your repo ${slug}`);
   };
   return { repo: typeof named === "string" ? named : slug, missing, make };
+}
+
+function githubSlug(named: string) {
+  if (/^[\w.-]+\/[\w.-]+$/.test(named)) return named;
+  const [, host, path] = /^[a-z][\w+.-]*:\/\/(?:[^@/]*@)?([^/:?#]+)(?::\d*)?(\/[^?#]*)?/i.exec(named) ?? /^(?:[^@/:]+@)?([^/:]+):(?!\/\/)(.*)$/.exec(named) ?? [];
+  if (!host || !/^(?:www\.)?github\.com\.?$/i.test(host)) return undefined;
+  const slug = /^\/?([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(path ?? "")?.[1];
+  if (!slug) throw new Error(`${named} is on GitHub, but Fleet cannot read its owner/name. Set memory.repo=<owner/name>.`);
+  return slug;
 }
 
 async function lookUp(machine: Machine, home: string, packs: PackManifest[], picked: string[]) {
