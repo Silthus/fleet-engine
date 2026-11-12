@@ -9,7 +9,7 @@ export const onLinuxHost = test.if(process.platform === "linux");
 const systemTools = ["sh", "env", "id", "cat", "mkdir", "mktemp", "rm", "chmod", "dirname", "sed", "grep", "head", "install", "tar", "gzip", "git", "bun", "sha256sum", "tr", "tail", "ls", "cp", "mv", "basename", "sleep", "python3", "date"];
 
 type SandboxOptions = { without?: string[]; brewInstaller?: string; t3Failures?: number; releasesFeed?: string; t3App?: boolean };
-export type Sandbox = { root: string; bin: string; home: string; log: string; stub: (name: string, body: string) => void; failDownloads: (pattern: string, times: number) => void; stallDownloads: (pattern: string, times: number) => void };
+export type Sandbox = { root: string; bin: string; home: string; log: string; env: Record<string, string>; stub: (name: string, body: string) => void; failDownloads: (pattern: string, times: number) => void; stallDownloads: (pattern: string, times: number) => void };
 
 const t3Feed = ["mobile-android-build%2F2.3.0%2Fabc", "v0.1.9-nightly.20990102.7", "v0.1.9-nightly.20990101.3"]
   .map((tag) => `<entry><link rel="alternate" type="text/html" href="https://github.com/pingdotgg/t3code/releases/tag/${tag}"/></entry>`)
@@ -38,8 +38,11 @@ export function getShHarness() {
     const root = temp.make("get-");
     const bin = join(root, "bin");
     const home = join(root, "home");
+    const homebrew = join(root, "homebrew-bin");
     mkdirSync(bin);
     mkdirSync(home);
+    mkdirSync(homebrew);
+    const env = { PATH: bin, HOME: home, FLEET_ENGINE_REPO: engine.repo, FLEET_HOMEBREW_BINS: homebrew, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
     for (const tool of systemTools.filter((name) => !options.without?.includes(name))) symlinkSync(Bun.which(tool) ?? `/missing/${tool}`, join(bin, tool));
     const log = join(root, "calls.log");
     const stub = (name: string, body: string) => {
@@ -68,7 +71,7 @@ export function getShHarness() {
     let rules = 0;
     const failDownloads = (pattern: string, times: number) => writeFileSync(join(failures, String(rules++)), `fail ${pattern} ${times}\n`);
     const stallDownloads = (pattern: string, times: number) => writeFileSync(join(failures, String(rules++)), `stall ${pattern} ${times}\n`);
-    const brewInstaller = options.brewInstaller ?? `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${bin}/brew"; chmod +x "${bin}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
+    const brewInstaller = options.brewInstaller ?? `printf '#!/bin/sh\\necho "brew $*" >> "${log}"\\n[ "$2" = gh ] && printf "#!/bin/sh\\\\n" > "${bin}/gh" && chmod +x "${bin}/gh"\\nexit 0\\n' > "${homebrew}/brew"; chmod +x "${homebrew}/brew"; [ -t 0 ] && echo "brew installer stdin=tty" >> "${log}"; true`;
     stub("curl", `
 out=; url=; effective=; connect=0; floor=0; window=0
 while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; -w) effective=1; shift ;; --connect-timeout) connect=$2; shift ;; --speed-limit) floor=$2; shift ;; --speed-time) window=$2; shift ;; -*) ;; *) url=$1 ;; esac; shift; done
@@ -96,7 +99,7 @@ case "$url" in
   *) echo "unexpected url $url" >&2; exit 22 ;;
 esac`);
     symlinkSync(Bun.which("cut") ?? "/usr/bin/cut", join(bin, "cut"));
-    return { root, bin, home, log, stub, failDownloads, stallDownloads };
+    return { root, bin, home, log, env, stub, failDownloads, stallDownloads };
   }
 
   function profile() {
@@ -107,7 +110,7 @@ esac`);
 
   function getSh(box: Sandbox, args: string[], options: { env?: Record<string, string>; cwd?: string } = {}) {
     const result = Bun.spawnSync(["sh", join(repoRoot, "get.sh"), ...args], {
-      env: { PATH: box.bin, HOME: box.home, FLEET_ENGINE_REPO: engine.repo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", ...options.env },
+      env: { ...box.env, ...options.env },
       cwd: options.cwd,
       stdin: "ignore",
     });
