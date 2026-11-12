@@ -79,10 +79,11 @@ function solo(workflow = true) {
   return { home, fleet, setup };
 }
 
-function linked(hub: "up" | "down" = "up", workflow = true) {
-  const shared = profile({ hub: "hub-1", devboxes: ["node-2"], workflows: { "page-owner": workflow } });
+function linked(hub: "up" | "down" = "up", workflow = true, hubWorkflow = workflow) {
+  const copy = (on: boolean) => profile({ hub: "hub-1", devboxes: ["node-2"], workflows: { "page-owner": on } });
+  const shared = copy(workflow);
   const nodeHome = machineHome(shared, { role: "devbox", coder: true, name: "node-2" });
-  const hubHome = machineHome(shared, { role: "linux", name: "hub-1" });
+  const hubHome = machineHome(hubWorkflow === workflow ? shared : copy(hubWorkflow), { role: "linux", name: "hub-1" });
   const bin = temp.make("bin-");
   const sshLog = join(bin, "ssh-args.log");
   const path = `${bin}:/usr/bin:/bin`;
@@ -279,6 +280,19 @@ test("while the workflow is off, the machine that holds the source refuses to pa
   expect(await node(...fire)).toEqual({ code: 1, output: refusal });
   expect(sshCalls()).toHaveLength(1);
   expect(incident.received).toEqual([]);
+});
+
+test("with a hub, the hub's copy of the profile decides whether a page goes out, whatever the node's copy says", async () => {
+  const incident = fakeIncidentIo();
+  const refusal = "fleet: fleet page belongs to the page-owner workflow, which is off. Turn it on with fleet packs --workflows page-owner=on.";
+  const hubOff = linked("up", true, false);
+  await hubOff.hubSetup(incident.url);
+  expect(await hubOff.node(...fire)).toEqual({ code: 1, output: refusal });
+  expect(incident.received).toEqual([]);
+  const hubOn = linked("up", false, true);
+  await hubOn.hubSetup(incident.url);
+  expect(await hubOn.node(...fire)).toEqual({ code: 0, output: "fleet page: sent rollout-errors. HTTP 202: accepted: Event accepted for processing" });
+  expect(incident.received).toHaveLength(1);
 });
 
 test("a node pages through the hub in one hop: the hub sends, and the node shows the hub's answer", async () => {
