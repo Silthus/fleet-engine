@@ -126,7 +126,7 @@ async function reconcile(command: "apply" | "doctor", args: string[], options: C
   const { plan, sources } = await loadPlan(options, flags.profile, { fetch: !preview, remember: !preview, inherit: preview });
   const adapters = (options.adapters ?? engineAdapters)();
   const issue: Issuer = (entries, node) => issueCredentials(entries, node, plan, sources, options);
-  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, skip: flags.skip, dryRun: flags.dryRun, adapters, run: options.run, issue });
+  const report = doctor ? await check(plan, { home: options.home, adapters, run: options.run }) : await apply(plan, { home: options.home, adopt: flags.adopt, skip: flags.skip, dryRun: flags.dryRun, adapters, run: options.run, issue, progress: options.print });
   if (doctor) {
     const drifted = await drift(plan, report.humanLeft);
     report.findings.push(...drifted);

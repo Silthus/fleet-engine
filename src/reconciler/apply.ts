@@ -59,7 +59,7 @@ export const filesAdapter: Adapter = {
 };
 
 /** Skipped steps, named pack/id, wait for a later apply: this run neither runs nor undoes them. */
-export async function apply(plan: Plan, options: { home: string; dryRun?: boolean; adopt?: string[]; skip?: string[]; adapters?: Adapter[]; run?: Runner; issue?: Issuer }): Promise<Report> {
+export async function apply(plan: Plan, options: { home: string; dryRun?: boolean; adopt?: string[]; skip?: string[]; adapters?: Adapter[]; run?: Runner; issue?: Issuer; progress?: (line: string) => void }): Promise<Report> {
   const context = { home: options.home, dryRun: options.dryRun ?? false, adopt: options.adopt ?? [] };
   const adapters = options.adapters ?? [filesAdapter];
   const adoptable = new Set(adapters.flatMap((adapter) => adapter.targets(plan)));
@@ -129,6 +129,7 @@ export async function apply(plan: Plan, options: { home: string; dryRun?: boolea
       await held(step);
       continue;
     }
+    options.progress?.(`  … ${step.pack}: ${step.id}`);
     const ran = (await run(step.run)) === 0;
     const holds = await passes(step);
     if (holds) await held(step);

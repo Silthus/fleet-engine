@@ -51,3 +51,24 @@ describe("fleet apply --skip", () => {
     expect(existsSync(join(home, "box.txt"))).toBe(false);
   });
 });
+
+describe("fleet apply progress", () => {
+  test("names each step as it starts, before the step's own work ends, and stays quiet for a step that already holds", async () => {
+    const home = temp.make("home-");
+    const engine = engineWithTools();
+    const profile = profileDir(["tools"]);
+    const lines: string[] = [];
+    const startedBeforeWork: boolean[] = [];
+    const print = (line: string) => void lines.push(line);
+    const runStep = async (command: string[], env: Record<string, string> = {}) => {
+      if (command.join(" ").includes("touch")) startedBeforeWork.push(lines.includes("  … tools: box"));
+      return Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home, ...env } }).exited;
+    };
+    expect(await main(["apply", "--profile", profile], { home, engineRoot: engine, platform: "linux", env: {}, print, run: runStep })).toBe(0);
+    expect(lines.filter((line) => line.startsWith("  … "))).toEqual(["  … tools: box", "  … tools: codex"]);
+    expect(startedBeforeWork).toEqual([true, true]);
+    lines.length = 0;
+    expect(await main(["apply"], { home, engineRoot: engine, platform: "linux", env: {}, print, run: runStep })).toBe(0);
+    expect(lines.filter((line) => line.startsWith("  … "))).toEqual([]);
+  });
+});
