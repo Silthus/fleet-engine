@@ -89,11 +89,13 @@ test("doctor passes a healthy gateway that refuses calls without a key and serve
   expect(hub.printed).toEqual(["MCPHub dashboard: http://127.0.0.1:3317/mcphub/", "tickets: connected, 2 tools", "calendar: connected, 2 tools"]);
 });
 
-test("doctor shows a stdio server that starts on demand and sleeps between calls as idle, with the tools it keeps; any other server shows its own status", async () => {
+test("doctor shows a stdio server that starts on demand and sleeps between calls as idle, with the tools it keeps; a failed, turned-off or other server shows its own status", async () => {
   const servers = {
     slack: { status: "disconnected", tools: 21, config: { type: "stdio", command: "node", startOnDemand: true } },
     docs: { status: "disconnected", tools: 3, config: { command: "npx", startOnDemand: true } },
     calendar: { status: "connected", tools: 2, config: { type: "stdio", command: "node", startOnDemand: true } },
+    drive: { status: "disconnected", tools: 0, error: "Failed to connect: spawn node ENOENT", config: { type: "stdio", command: "node", startOnDemand: true } },
+    mail: { status: "disconnected", tools: 0, enabled: false, config: { type: "stdio", command: "node", startOnDemand: true } },
     notes: { status: "disconnected", tools: 0, config: { type: "streamable-http", url: "https://notes.example.com/mcp", startOnDemand: true } },
     tickets: { status: "disconnected", tools: 2, config: { type: "stdio", command: "node" } },
   };
@@ -101,7 +103,7 @@ test("doctor shows a stdio server that starts on demand and sleeps between calls
   const gateway = mcphubFetch(fakeMcpHub({ servers: names, groups: [{ id: "g", name: "fleet", servers: names }] }));
   const fetch = async (input: string | URL | Request, init?: RequestInit) => {
     if (!String(input).endsWith("/api/servers")) return gateway(input, init);
-    return Response.json({ success: true, data: Object.entries(servers).map(([name, server]) => ({ name, status: server.status, tools: Array.from({ length: server.tools }, () => ({})) })) });
+    return Response.json({ success: true, data: Object.entries(servers).map(([name, { config, tools, ...server }]) => ({ name, ...server, tools: Array.from({ length: tools }, () => ({})) })) });
   };
   const hub = fakeHub(hubHome({ mcpServers: Object.fromEntries(Object.entries(servers).map(([name, server]) => [name, server.config])) }), { fetch });
   expect(await doctor(hub)).toBe(true);
@@ -109,6 +111,8 @@ test("doctor shows a stdio server that starts on demand and sleeps between calls
     "slack: idle (on demand), 21 tools",
     "docs: idle (on demand), 3 tools",
     "calendar: connected, 2 tools",
+    "drive: disconnected, 0 tools",
+    "mail: disconnected, 0 tools",
     "notes: disconnected, 0 tools",
     "tickets: disconnected, 2 tools",
   ]);
