@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { declaredUpstreams } from "./declared.ts";
+import { loopbackSignedIn } from "./loopback.ts";
 import { browserGatewayUrl, gatewayGroup, gatewayPort, isGatewayUrl, localGatewayUrl, refuseLinks, writePrivateFile, type Fetch, type GatewaySettings } from "./client.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
@@ -207,8 +208,12 @@ export async function reconnect(server: string, hub: Hub) {
 
 export async function signIn(hub: Hub) {
   const settings = await installedSettings(hub);
-  const waiting = Object.entries(settings.mcpServers).flatMap(([name, config]) => (config.oauth?.pendingAuthorization?.authorizationUrl ? [[name, config.oauth.pendingAuthorization.authorizationUrl] as const] : []));
-  if (!waiting.length) return hub.print("No upstream server waits for a sign-in.");
+  const byHand = new Set((await declaredUpstreams(hub.home)).flatMap((upstream) => (upstream.kind === "oauth" && upstream.loopback ? [upstream.name] : [])));
+  const handWaiting = [...byHand].filter((name) => settings.mcpServers[name] && !loopbackSignedIn(settings.mcpServers[name] as Record<string, unknown>));
+  const waiting = Object.entries(settings.mcpServers).flatMap(([name, config]) => (!byHand.has(name) && config.oauth?.pendingAuthorization?.authorizationUrl ? [[name, config.oauth.pendingAuthorization.authorizationUrl] as const] : []));
+  if (!waiting.length && !handWaiting.length) return hub.print("No upstream server waits for a sign-in.");
+  for (const name of handWaiting) hub.print(`${name}: on the hub, run: fleet mcp-gateway sign-in ${name}`);
+  if (!waiting.length) return;
   hub.print(`On your computer, keep this running while you sign in: coder port-forward ${hub.hubName().replace(/^coder\./, "")} --tcp ${gatewayPort}`);
   for (const [name, url] of waiting) hub.print(`${name}: ${url}`);
 }

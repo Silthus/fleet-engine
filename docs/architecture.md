@@ -357,7 +357,10 @@ install step), the client check, and the `config` MCP entries that start
 reconnect, and restart. Its sign-in prints each upstream authorization URL
 directly, not a page that only Caddy serves, and tells the person to run
 `coder port-forward <hub> --tcp 3317` on the Mac. So the browser reaches
-the gateway at loopback without private HTTPS. Apply tests the checks that
+the gateway at loopback without private HTTPS. An upstream that a pack
+marks `loopback` accepts only loopback callbacks: the gateway registers its
+own public client for it, and `fleet mcp-gateway sign-in <name>` signs it in
+by hand with PKCE, from an address the person pastes. Apply tests the checks that
 served services wait for first and issues their credentials, so the client
 check's repair writes today's client file from the new key in the same
 apply. A node pulls its key from the hub at every apply, and the client

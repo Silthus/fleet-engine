@@ -279,16 +279,24 @@ function workflowStates(profile: Profile, machine: MachineFile, order: Candidate
     const reason = !chosen ? "turned off" : unmet.length ? `needs ${unmet.join(", ")}` : undefined;
     return { id: workflow.id, pack, active: !reason, ...(reason ? { reason } : {}) };
   });
-  let states: Plan["workflows"] = own;
-  for (;;) {
-    const on = activeIds(states);
-    const next = states.map((state, index) => {
-      const missing = state.active ? (workflows[index]!.workflow.requires ?? []).filter((id) => !on.has(id)) : [];
-      return missing.length ? { id: state.id, pack: state.pack, active: false, reason: `needs workflow ${missing.join(", ")}` } : state;
-    });
-    if (next.every((state, index) => state === states[index])) return states;
-    states = next;
-  }
+  const settle = (start: Plan["workflows"]) => {
+    let states = start;
+    for (;;) {
+      const on = activeIds(states);
+      const next = states.map((state, index) => {
+        const missing = state.active ? (workflows[index]!.workflow.requires ?? []).filter((id) => !on.has(id)) : [];
+        return missing.length ? { id: state.id, pack: state.pack, active: false, reason: `needs workflow ${missing.join(", ")}` } : state;
+      });
+      if (next.every((state, index) => state === states[index])) return states;
+      states = next;
+    }
+  };
+  const required = settle(own);
+  const on = activeIds(required);
+  return settle(required.map((state, index) => {
+    const winners = state.active ? (workflows[index]!.workflow.yields ?? []).filter((id) => on.has(id)) : [];
+    return winners.length ? { id: state.id, pack: state.pack, active: false, reason: `yields to workflow ${winners.join(", ")}` } : state;
+  }));
 }
 
 function activeSettings(order: Candidate[], active: Set<string>): Array<PackSetting & { pack: string }> {

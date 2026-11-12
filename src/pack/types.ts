@@ -29,6 +29,7 @@ export type Workflow = {
   needs?: Need[];
   /** Workflows that must be on for this one to be on. */
   requires?: string[];
+  yields?: string[];
   default: boolean;
   settings?: string[];
   risk?: string;
