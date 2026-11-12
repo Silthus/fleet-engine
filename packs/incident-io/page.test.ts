@@ -166,7 +166,7 @@ test("an alert source that does not answer exits 1, and the error names neither 
 });
 
 test("doctor names the setup as a to-do until the source is saved", async () => {
-  const todo = 'To do: Save your incident.io alert source for Page you through incident.io. When one is saved and this stays, fleet page --key setup-check --title "Setup check" --dry-run says what is wrong with it. Follow packs/incident-io/SETUP.md, which ends with: fleet page setup <alert source URL> < <token file>';
+  const todo = 'To do: Save your incident.io alert source for the page-owner workflow. When one is saved and this stays, fleet page --key setup-check --title "Setup check" --dry-run says what is wrong with it. Follow packs/incident-io/SETUP.md, which ends with: fleet page setup <alert source URL> < <token file>';
   const { fleet, setup } = solo();
   expect((await fleet("doctor")).output).toContain(todo);
   await setup(closedPort());
@@ -264,16 +264,20 @@ test("an accepted event with an empty answer still exits 0", async () => {
   expect(await fleet(...fire)).toEqual({ code: 0, output: "fleet page: sent rollout-errors. HTTP 202" });
 });
 
-test("while the workflow is off, fleet page refuses on every machine and sends nothing, even with a saved source", async () => {
+test("while the workflow is off, the machine that holds the source refuses to page and sends nothing, and a node hears the hub's refusal", async () => {
   const incident = fakeIncidentIo();
   const refusal = "fleet: fleet page belongs to the page-owner workflow, which is off. Turn it on with fleet packs --workflows page-owner=on.";
+  const saveSource = (home: string) => {
+    mkdirSync(join(home, ".config/fleet/secrets/incident-io"), { recursive: true, mode: 0o700 });
+    writeFileSync(storeFile(home), JSON.stringify({ url: incident.url, token }), { mode: 0o600 });
+  };
   const { home, fleet } = solo(false);
-  mkdirSync(join(home, ".config/fleet/secrets/incident-io"), { recursive: true, mode: 0o700 });
-  writeFileSync(storeFile(home), JSON.stringify({ url: incident.url, token }), { mode: 0o600 });
+  saveSource(home);
   expect(await fleet(...fire)).toEqual({ code: 1, output: refusal });
-  const { node, sshCalls } = linked("up", false);
+  const { node, hubHome, sshCalls } = linked("up", false);
+  saveSource(hubHome);
   expect(await node(...fire)).toEqual({ code: 1, output: refusal });
-  expect(sshCalls()).toEqual([]);
+  expect(sshCalls()).toHaveLength(1);
   expect(incident.received).toEqual([]);
 });
 

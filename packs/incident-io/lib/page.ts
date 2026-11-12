@@ -20,12 +20,12 @@ source decides who is paged, not this command. Set it up to page only you.
 
   setup <URL>          Saves the alert source URL and the token on standard input.
 
-A value that starts with a dash goes after an equals sign: --description=-5% errors.
+A value that starts with a dash goes after an equals sign: --description="-5% errors".
 
 With a hub, the command runs on the hub, so the token lives only there.
 It prints the HTTP status and incident.io's answer, never the token or the URL.
 Exit 0: incident.io accepted the event. 1: it did not, the source is not set up,
-the hub did not answer, or the Page you through incident.io workflow is off. 2: wrong input.`;
+the hub did not answer, or the page-owner workflow is off. 2: wrong input.`;
 
 const setupLine = "fleet page setup <alert source URL> < <token file>";
 

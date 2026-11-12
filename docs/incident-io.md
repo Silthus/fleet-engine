@@ -16,8 +16,10 @@ the route names. Check the route before you rely on it.
 The workflow, `page-owner`, starts off. Turn it on with
 `fleet packs --add incident-io --workflows page-owner=on`. Its
 [setup note](../packs/incident-io/SETUP.md) walks through the incident.io
-side. While the workflow is off, `fleet page` refuses to run on every
-machine, so turning it off stops all pages. The saved source stays.
+side. While the workflow is off, `fleet page` refuses to send, and the
+saved source stays. With a hub, the hub's copy of your profile decides. To
+stop all pages at once, turn the workflow off, then run `fleet update` on the
+hub. Otherwise the hub takes the change at its next `fleet update`.
 
 ## Send and withdraw a page
 
@@ -36,7 +38,7 @@ fleet page --key checkout-rollout-errors --resolve
 - `--resolve` sends status `resolved` for the key. The route's auto-cancel
   withdraws the page.
 - A value that starts with a dash goes after an equals sign, such as
-  `--description=-5% errors`. Without it, `fleet page` refuses the value, so
+  `--description="-5% errors"`. Without it, `fleet page` refuses the value, so
   a flag such as `--dry-run` is never taken as text.
 - `--dry-run` checks the input and the saved source, prints the event with
   the token hidden, and sends nothing.

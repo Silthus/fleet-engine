@@ -21,7 +21,7 @@ export default {
       on: "hub",
       when: paging,
       id: "incident-io-source",
-      say: 'Save your incident.io alert source for Page you through incident.io. When one is saved and this stays, fleet page --key setup-check --title "Setup check" --dry-run says what is wrong with it.',
+      say: 'Save your incident.io alert source for the page-owner workflow. When one is saved and this stays, fleet page --key setup-check --title "Setup check" --dry-run says what is wrong with it.',
       test: async (ctx) => (await import("./lib/page.ts")).sourceSaved(ctx),
       repair: { ask: "Follow packs/incident-io/SETUP.md, which ends with: fleet page setup <alert source URL> < <token file>" },
     });
