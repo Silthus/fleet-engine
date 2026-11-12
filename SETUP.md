@@ -288,6 +288,7 @@ all the notes together, in one call, before step 7.
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Step 9 | `packs/recovery/SETUP.md` |
 | `guards` | Hooks stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops. | Always | `packs/guards/SETUP.md` |
 | `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | With Mac only, or in step 9 | `packs/slack/SETUP.md` |
+| `incident-io` | An agent that watches a risky change pages you, and only you, through incident.io when it goes wrong. | With Mac only, or in step 9 | `packs/incident-io/SETUP.md` |
 | `hub` | One always-on devbox manages the others. It keeps your devboxes linked and watches their disks. | Step 9 | `packs/hub/SETUP.md` |
 | `mcp-gateway` | The hub signs in to your MCP servers once, and agents on every machine reach them through it. | Step 9 | `packs/mcp-gateway/SETUP.md` |
 
@@ -525,6 +526,8 @@ made, replace the early workspaces: see "Clean up what you replace".
      `packs/recovery/SETUP.md`
    - **Slack**, when they did not pick it in step 6: their own Slack
      message starts a thread. `packs/slack/SETUP.md`
+   - **incident.io**, when they did not pick it in step 6: an agent that
+     watches a change pages them. `packs/incident-io/SETUP.md`
 
    Turn them on here on the Mac. Start from this command, add
    `--add <pack>` for each other pack they picked, and change or add the

@@ -4,6 +4,7 @@ export const packFlows: Record<string, string[]> = {
   memory: ["Agent on your Mac", "Your memory repo", "Agent on a devbox"],
   guards: ["Agent's shell command", "Guard hook", "The command runs or stops"],
   slack: ["Your Slack message or reaction", "Your Slack app", "T3 thread", "Link in Slack"],
+  "incident-io": ["Agent watching your change", "Tripwire fires", "Your incident.io alert route", "Your phone rings"],
   "mcp-gateway": ["Agent on any machine", "Tunnel to the hub", "MCP gateway", "Your MCP servers"],
   recovery: ["A thread hits a usage limit", "The hub asks the provider", "The provider answers", "The thread continues"],
 };

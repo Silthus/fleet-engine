@@ -57,7 +57,7 @@ function localTargets(path: string, html: string) {
 describe("the site build", () => {
   test("writes one page for the landing, one for the packs, and one for every pack", () => {
     expect(pagesOf(files).map(([path]) => path)).toEqual(["index.html", "packs/index.html", ...data.packs.map((pack) => `packs/${pack.name}/index.html`)]);
-    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "guards", "slack", "hub", "mcp-gateway", "recovery"]);
+    expect(data.packs.map((pack) => pack.name)).toEqual(["base", "pull-requests", "orchestration", "communication", "memory", "guards", "slack", "incident-io", "hub", "mcp-gateway", "recovery"]);
   });
 
   test("every link and asset on every page leads to a file of the site, from any folder the site is served under", () => {
@@ -96,7 +96,7 @@ describe("the site build", () => {
     const html = page("index.html");
     const boxed = [...data.startPacks, ...data.hubStartPacks];
     const others = data.packs.filter((pack) => !boxed.includes(pack.name));
-    expect(others.map((pack) => pack.title)).toEqual(["Base", "Memory", "Guards", "Slack", "MCP gateway", "Recovery"]);
+    expect(others.map((pack) => pack.title)).toEqual(["Base", "Memory", "Guards", "Slack", "incident.io", "MCP gateway", "Recovery"]);
     const text = visibleText(html);
     expect(others.filter((pack) => new RegExp(`\\b${pack.title}\\b`).test(text)).map((pack) => pack.title)).toEqual([]);
     expect(localTargets("index.html", html).filter((target) => target.startsWith("packs/"))).toEqual(expect.arrayContaining(["packs/index.html"]));
