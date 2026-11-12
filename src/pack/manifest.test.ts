@@ -184,6 +184,7 @@ describe("loadPacks", () => {
       [{ steps: [null] }, "steps[0] must be an object"],
       [{ guides: [{ guide: "../../escape", path: "g.md" }] }, "guide must be lowercase words joined by dashes"],
       [{ steps: [{ id: "cli", run: ["true"], plans: ["gemini"] }] }, "steps cli: plans must list claude, codex, or both"],
+      [{ jobs: [{ ...base.jobs[0], oncePerFleet: "yes" }] }, "oncePerFleet must be true or false"],
       [{ files: [{ path: "hook.ts" }] }, "files [0]: needs a path and a target"],
       [{ files: [{ path: "hook.ts", target: ".hook.ts", workflow: "nope" }] }, "files .hook.ts names unknown workflow nope"],
       [{ models: { gemini: [] } }, "models must map claude, codex, or both to rows"],

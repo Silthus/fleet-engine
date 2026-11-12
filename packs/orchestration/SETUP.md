@@ -8,12 +8,15 @@ live in the issues of their `fleet-profile` repo unless they name another
 repo with `--set orchestration.tracker=<owner/name>`.
 
 Three workflows run by themselves on a schedule and start off:
-`quality-loop`, `signal-loop`, and `pr-digest`. They run only on an always-on
-devbox, such as a node, and never on the Mac. Each needs answers:
+`quality-loop`, `signal-loop`, and `pr-digest`. Each runs once per fleet, on
+the first node the profile lists, or on the hub when there is no node. They
+never run on the Mac. While that node is stopped, they do not run; take it out
+with `fleet devbox remove <host>` and they move to the next node. Each needs
+answers:
 
 | Setting | What to ask | Used by |
 | --- | --- | --- |
-| `orchestration.loopProject` | The folder of a repo they already opened in T3 Code, where the loops and the digest start threads. | All three |
+| `orchestration.loopProject` | The folder of a repo they already opened in T3 Code on that machine, where the loops and the digest start threads. | All three |
 | `orchestration.qualityArea` | The paths in that repo the loops may change, such as `src/api`. | The two loops |
 | `orchestration.ledgerRepo` | A private repo for the loops' ledger. It records production numbers, so it stays private. | The two loops |
 
