@@ -115,6 +115,13 @@
       "type": "number",
       "default": 2,
       "ask": "never"
+    },
+    {
+      "key": "hub.proxyHistoryDays",
+      "question": "For how many days does the proxy panel keep the quota history behind its charts and drain forecasts?",
+      "type": "number",
+      "default": 35,
+      "ask": "never"
     }
   ],
   "workflows": [
@@ -201,6 +208,22 @@
       ],
       "sentence": "The hub holds your own Claude or Codex subscriptions in a local proxy, and Claude Code and Codex on the hub, your devboxes, and boxes go through it, spending the Claude subscription whose weekly quota resets first.",
       "risk": "On the Claude and both plans, the hub keeps your Claude sign-ins in CLIProxyAPI, and every machine in the workflow sends Claude Code through it. On the Codex and both plans, it keeps your ChatGPT sign-ins there, and every machine sends Codex through it. The balancer ranks only Claude subscriptions by reset date. Read Anthropic's terms first, and OpenAI's terms for your plan too. As read on 2026-11-05: the Anthropic Usage Policy, effective Nov 12, 2026, section \"Do Not Abuse Our Platform\" (https://www.anthropic.com/legal/aup), lists: \"Resell, proxy, or otherwise provide access to Claude through unauthorized means, including services that route requests through consumer subscriptions or misrepresent the product or client being used\". The Anthropic Consumer Terms, effective Oct 8, 2025, section 2 (https://www.anthropic.com/legal/consumer-terms), say: \"You may not share your Account login information, Anthropic API key, or Account credentials with anyone else. You also may not make your Account available to anyone else.\" Section 3, item 7 of the same terms lists: \"Except when you are accessing our Services via an Anthropic API Key or where we otherwise explicitly permit it, to access the Services through automated or non-human means, whether through a bot, script, or otherwise.\" Balancing is only for your own subscriptions, never for someone else's."
+    },
+    {
+      "id": "proxy-panel",
+      "name": "Proxy panel",
+      "default": false,
+      "needs": [
+        "hub"
+      ],
+      "requires": [
+        "own-account-balancing"
+      ],
+      "settings": [
+        "hub.proxyHistoryDays"
+      ],
+      "sentence": "The hub's proxy serves its management panel on loopback, with quota history, drain forecasts, and buttons that spend a subscription's banked weekly or Fable reset.",
+      "risk": "The panel can change the proxy's settings and subscriptions, and spend banked resets, which do not come back. It also turns on CLIProxyAPI's plugins, so anyone with the management key can install and run other plugins from CLIProxyAPI's plugin store on the hub; fleet cli-proxy doctor fails on any plugin besides Fleet's pinned quota-ledger. It listens only on the hub's loopback port 8317, which the SSH tunnels also carry to your devboxes and boxes, and it asks for the management key, which stays on the hub. Every tunnelled client reaches the proxy as 127.0.0.1, so 5 wrong sign-ins from any machine ban 127.0.0.1 from the management API for 30 minutes. That also stops the hub's balancer and fleet cli-proxy doctor until the ban ends. Fleet does not route it through the hub's HTTPS."
     }
   ],
   "config": [
