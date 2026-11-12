@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../testing/git.ts";
 import { linkedFleets } from "../testing/linked.ts";
@@ -61,7 +61,7 @@ test("a stored credential that other users can read, or a link, is replaced by t
   const linked = await node("apply");
   expect(linked.code).toBe(0);
   expect(linked.output).not.toContain("Could not pull");
-  expect(statSync(file, { throwIfNoEntry: false })?.isSymbolicLink()).toBe(false);
+  expect(lstatSync(file).isSymbolicLink()).toBe(false);
   expect(readFileSync(elsewhere, "utf8")).toBe("not a credential");
   expect((await node("issued", "use")).output).toBe("http://127.0.0.1:4600 key-4-for-node-2");
 });
