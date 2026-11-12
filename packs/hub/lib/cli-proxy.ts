@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
-import { management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
+import { loginExpired, management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
 import { requireHubRole } from "./hub-job.ts";
 import { quote, readRole, remoteFleet } from "./machine.ts";
 import { changedFiles, ownedFiles, readIfThere, removeUnits, requireInstalled, writeFiles, type Managed } from "./managed.ts";
@@ -203,17 +203,23 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
   await panelDoctor(machine, paths, managementKey);
   const strategy = ((await management(machine.fetch, managementKey, "routing/strategy")) as { strategy?: string }).strategy;
   if (strategy !== "fill-first") throw new Error(`The proxy routes with ${strategy ?? "no strategy"}, not fill-first. Run fleet cli-proxy-balance to restore it.`);
-  const { files } = (await management(machine.fetch, managementKey, "auth-files")) as { files: Array<{ provider?: string; disabled?: boolean }> };
-  const enabled = (agent: Agent) => files.filter((file) => file.provider === agent && !file.disabled).length;
+  const { files } = (await management(machine.fetch, managementKey, "auth-files")) as { files: AuthFile[] };
+  const expired = files.filter((file) => (file.provider === "claude" || file.provider === "codex") && !file.disabled && loginExpired(file));
+  const enabled = (agent: Agent) => files.filter((file) => file.provider === agent && !file.disabled && !expired.includes(file)).length;
   const agent = pooled(machine.plan);
   const count = enabled(agent);
   const floor = machine.accounts ?? 2;
-  if (count < floor) throw new Error(`Add at least ${floor} of your own ${subscription[agent]} subscriptions; found ${count}. Run: ${loginCommand(paths, agent)}`);
+  const lapsed = expired.filter((file) => file.provider === agent).length;
+  if (count < floor) throw new Error(`Add at least ${floor} of your own ${subscription[agent]} subscriptions that work; found ${count}${lapsed ? `, and ${lapsed} whose login expired, which you can sign in again` : ""}. Run: ${loginCommand(paths, agent)}`);
   const reason = await probe(machine.fetch, key, agent);
   if (reason) throw new Error(reason);
   const beside = machine.plan === "both" ? ` and ${subscriptions(enabled("codex"), "codex")}` : "";
   const balancer = agent === "claude" ? "puts the one whose weekly quota resets first on top" : "frees each one whose quota cooldown its live usage disproves";
   machine.print(`CLI proxy: CLIProxyAPI ${machine.release.version} runs at ${proxyUrl}, loopback only, with ${count} of your own ${subscription[agent]} subscriptions${beside}. Every 5 minutes the balancer ${balancer}.`);
+  for (const file of expired) {
+    const provider = file.provider as Agent;
+    machine.print(`CLI proxy: Warning: the ${subscription[provider]} subscription ${shortId(file)} cannot refresh its login, so the proxy cannot use it and the balancer cannot read its usage. Sign it in again with: ${loginCommand(paths, provider)}. Or disable it in the management panel.`);
+  }
   if (machine.panel) machine.print(`Open the management panel at ${panelUrl} on the hub, or on a devbox through its tunnel, and sign in with the MANAGEMENT_PASSWORD in ${paths.management}.`);
   for (const devbox of machine.devboxes.filter((name) => !isKeptForBoxes(name))) machine.print(`Connect ${devbox}: ssh ${devbox} ${quote(remoteFleet("cli-proxy connect"))} < ~/.config/fleet/cli-proxy.key`);
 }
@@ -233,6 +239,14 @@ async function panelDoctor(machine: ProxyMachine, paths: Layout, managementKey: 
   await management(machine.fetch, managementKey, `quota-ledger/samples?since=${machine.now()}`).catch(() => {
     throw new Error("The quota-ledger plugin does not answer, so the panel has no quota history. Run fleet cli-proxy install.");
   });
+}
+
+type AuthFile = { name?: string; auth_index?: string; provider?: string; disabled?: boolean; unavailable?: boolean; status?: string; status_message?: string };
+
+/** The proxy names an auth file after the account's email address, so Fleet shows its auth index, or a hash of its name, instead. */
+function shortId(file: AuthFile): string {
+  const index = typeof file.auth_index === "string" && /^[A-Za-z0-9_-]+$/.test(file.auth_index) ? file.auth_index : createHash("sha256").update(file.name ?? "").digest("hex");
+  return index.slice(0, 8);
 }
 
 const silent = `The proxy at ${proxyUrl} does not answer.`;

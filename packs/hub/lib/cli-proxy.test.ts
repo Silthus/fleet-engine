@@ -28,7 +28,7 @@ function codexRouted(home: string, config: Record<string, unknown> = { ...mine, 
   writeFileSync(codexFile(home), stringify(config));
 }
 
-type Proxy = { strategy?: string; credentials?: Array<{ provider: string; disabled?: boolean }>; models?: string[]; down?: boolean };
+type Proxy = { strategy?: string; credentials?: Array<{ name?: string; auth_index?: string; provider: string; disabled?: boolean; status?: string; unavailable?: boolean; status_message?: string }>; models?: string[]; down?: boolean };
 
 function fakeProxy(proxy: Proxy = {}) {
   const requests: Array<{ path: string; method: string; auth: string }> = [];
@@ -169,9 +169,44 @@ test("the doctor names the login command while the proxy holds too few subscript
   const { machine, home } = hubMachine();
   await cliProxy("install", machine);
   const few = hubMachine({ home }, { credentials: [{ provider: "claude" }, { provider: "claude", disabled: true }, { provider: "codex" }] });
-  await expect(cliProxy("doctor", few.machine)).rejects.toThrow(`Add at least 2 of your own Claude subscriptions; found 1. Run: ${join(dataDir(home), "cli-proxy-api")} -config ${join(dataDir(home), "config.yaml")} -claude-login -no-browser`);
+  await expect(cliProxy("doctor", few.machine)).rejects.toThrow(`Add at least 2 of your own Claude subscriptions that work; found 1. Run: ${join(dataDir(home), "cli-proxy-api")} -config ${join(dataDir(home), "config.yaml")} -claude-login -no-browser`);
   const spread = hubMachine({ home }, { strategy: "round-robin" });
   await expect(cliProxy("doctor", spread.machine)).rejects.toThrow("fleet cli-proxy-balance");
+});
+
+test("the doctor passes but warns about each subscription whose login expired, by a short id and never its email, and names the sign-in command for its provider", async () => {
+  const { machine, home } = hubMachine();
+  await cliProxy("install", machine);
+  const expired = '{"error":"invalid_grant","error_description":"refresh token for alice expired"}';
+  const credentials = [
+    { name: "claude-carol@example.com.json", provider: "claude" },
+    { name: "claude-dave@example.com.json", provider: "claude", status: "active", status_message: expired },
+    { name: "claude-erin@example.com.json", provider: "claude" },
+    { name: "claude-alice@example.com.json", auth_index: "aaaabbbbcccc", provider: "claude", status: "error", status_message: expired },
+    { name: "three.json", provider: "claude", status: "error", status_message: "usage read timed out for alice" },
+    { name: "codex-bob@example.com-team.json", provider: "codex", unavailable: true, status_message: expired },
+    { name: "old.json", provider: "claude", disabled: true, status: "error", status_message: expired },
+  ];
+  const doctor = hubMachine({ home, plan: "both" }, { credentials, models: ["claude-sonnet-5-5", "gpt-6.1-sol"] });
+  expect(await cliProxy("doctor", doctor.machine)).toBe(0);
+  const warnings = doctor.printed.filter((line) => line.includes("Warning"));
+  const login = (agent: string) => `${join(dataDir(home), "cli-proxy-api")} -config ${join(dataDir(home), "config.yaml")} -${agent}-login -no-browser`;
+  const hashed = new Bun.CryptoHasher("sha256").update("codex-bob@example.com-team.json").digest("hex").slice(0, 8);
+  expect(warnings).toEqual([
+    `CLI proxy: Warning: the Claude subscription aaaabbbb cannot refresh its login, so the proxy cannot use it and the balancer cannot read its usage. Sign it in again with: ${login("claude")}. Or disable it in the management panel.`,
+    `CLI proxy: Warning: the Codex subscription ${hashed} cannot refresh its login, so the proxy cannot use it and the balancer cannot read its usage. Sign it in again with: ${login("codex")}. Or disable it in the management panel.`,
+  ]);
+  for (const leak of ["alice", "bob", "carol", "dave", "example.com"]) expect(doctor.printed.join("\n")).not.toContain(leak);
+  expect(doctor.printed.join("\n")).toContain("with 4 of your own Claude subscriptions and 0 Codex subscriptions");
+});
+
+test("the doctor fails when too few subscriptions work, and counts none whose login expired", async () => {
+  const { machine, home } = hubMachine();
+  await cliProxy("install", machine);
+  const expired = '{"error":"invalid_grant"}';
+  const credentials = [{ name: "a.json", provider: "claude" }, { name: "b.json", provider: "claude", status: "error", status_message: expired }];
+  const doctor = hubMachine({ home }, { credentials });
+  await expect(cliProxy("doctor", doctor.machine)).rejects.toThrow(`Add at least 2 of your own Claude subscriptions that work; found 1, and 1 whose login expired, which you can sign in again. Run: ${join(dataDir(home), "cli-proxy-api")} -config ${join(dataDir(home), "config.yaml")} -claude-login -no-browser`);
 });
 
 test("on the Codex plan the doctor counts Codex subscriptions and wants a Codex model, and names the Codex login", async () => {
@@ -182,7 +217,7 @@ test("on the Codex plan the doctor counts Codex subscriptions and wants a Codex 
   expect(await cliProxy("doctor", passing.machine)).toBe(0);
   expect(passing.printed.join("\n")).toContain("with 2 of your own Codex subscriptions");
   const few = hubMachine({ home, plan: "codex" }, { credentials: [{ provider: "codex" }, { provider: "claude" }, { provider: "claude" }], models: ["gpt-6.1-sol"] });
-  await expect(cliProxy("doctor", few.machine)).rejects.toThrow(`Add at least 2 of your own Codex subscriptions; found 1. Run: ${join(dataDir(home), "cli-proxy-api")} -config ${join(dataDir(home), "config.yaml")} -codex-login -no-browser`);
+  await expect(cliProxy("doctor", few.machine)).rejects.toThrow(`Add at least 2 of your own Codex subscriptions that work; found 1. Run: ${join(dataDir(home), "cli-proxy-api")} -config ${join(dataDir(home), "config.yaml")} -codex-login -no-browser`);
   const noModel = hubMachine({ home, plan: "codex" }, { credentials: codexOnly.credentials });
   await expect(cliProxy("doctor", noModel.machine)).rejects.toThrow("lists no Codex model");
 });

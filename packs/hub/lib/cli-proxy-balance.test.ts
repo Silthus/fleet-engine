@@ -195,6 +195,27 @@ test("unreadable Codex usage is logged as unreadable and clears no cooldown", as
   expect(calls.filter((call) => call.path === "reset-quota")).toEqual([]);
 });
 
+test("balance tells an expired login apart from usage it could not read, ranks the rest, and exits 0, without printing the proxy's message", async () => {
+  const files = [
+    { name: "a.json", provider: "claude", auth_index: "1", priority: 1 },
+    { name: "expired.json", provider: "claude", auth_index: "2", priority: 0, status: "error", status_message: '{"error":"invalid_grant","error_description":"refresh token for alice expired"}' },
+    { name: "odd.json", provider: "claude", auth_index: "3", priority: 0, status: "error", status_message: "upstream hiccup for alice" },
+    { name: "back.json", provider: "claude", auth_index: "4", priority: 0, status: "active", status_message: '{"error":"invalid_grant"}' },
+  ];
+  const { fetch } = managementApi({ strategy: "fill-first", files, usage: { "1": { seven_day: { utilization: 20, resets_at: new Date(now + day).toISOString() } } } });
+  const lines: string[] = [];
+  const home = roleHome(temp.make("fleet-balance-"), "hub");
+  mkdirSync(join(home, ".local/share/fleet-cli-proxy"), { recursive: true });
+  writeFileSync(join(home, ".local/share/fleet-cli-proxy/management.env"), `MANAGEMENT_PASSWORD=${managementKey}\n`);
+  expect(await balanceCommand([], { home, fetch, now: () => now, ledger: false, log: (line) => lines.push(line) })).toBe(0);
+  expect(lines.filter((line) => !line.startsWith("a.json"))).toEqual([
+    "expired.json: priority 0, usage unreadable: its login expired. Sign it in again on the hub; fleet cli-proxy doctor names the command",
+    "odd.json: priority 0, usage unreadable",
+    "back.json: priority 0, usage unreadable",
+  ]);
+  expect(lines.join("\n")).not.toContain("alice");
+});
+
 test("balance reports each blocked credential of either provider on every run, and a quota cooldown is not a block", async () => {
   const files = [
     { name: "a.json", provider: "claude", auth_index: "1", priority: 1 },
