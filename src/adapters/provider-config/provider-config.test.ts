@@ -726,7 +726,7 @@ describe("Claude plugins", () => {
         if (verb === "marketplace" && rest[0] === "list") return { code: 0, stdout: JSON.stringify([...fetched.keys()].map((name) => ({ name, source: "github" }))) };
         if (verb === "marketplace" && rest[0] === "add") {
           const marketplace = published[rest[1]!];
-          if (!marketplace) return { code: 1, stdout: "", stderr: "✘ Failed to add marketplace: Failed to clone marketplace repository: SSH authentication failed.\n\nOriginal error: denied\n" };
+          if (!marketplace) return { code: 1, stdout: "", stderr: `✘ Failed to add marketplace: Failed to clone ${rest[1]} (SSH authentication failed).\n\nOriginal error: denied\n` };
           fetched.set(marketplace.name, [...marketplace.plugins]);
           return { code: 0, stdout: "" };
         }
@@ -800,8 +800,34 @@ describe("Claude plugins", () => {
       const report = await apply(plan([team]), { home, adapters: [cli.adapter] });
 
       expect(report.findings).toEqual([
-        { id: "plugin-marketplace:team-market", pack: "engine", say: "Could not add the Claude plugin marketplace team-market from team/market: Failed to add marketplace: Failed to clone marketplace repository: SSH authentication failed. Its plugins wait: tool@team-market.", repair: "apply" },
+        { id: "plugin-marketplace:team-market", pack: "engine", say: "Could not add the Claude plugin marketplace team-market from team/market: Failed to add marketplace: Failed to clone team/market (SSH authentication failed). Its plugins wait: tool@team-market.", repair: "apply" },
       ]);
+    });
+
+    test("keeps the credentials in a marketplace address out of its report", async () => {
+      const home = temp.make("home-");
+      const password = ["pass", "word", "123"].join("-");
+      const address = `https://proof:${password}@git.example.test/market.git?token=${password}`;
+      write(home, claude, { extraKnownMarketplaces: { "team-market": { source: { source: "url", url: address } } } });
+      const cli = freshClaude({});
+
+      const report = await apply(plan([team]), { home, adapters: [cli.adapter] });
+
+      expect(report.findings.map((finding) => finding.say)).toEqual([
+        "Could not add the Claude plugin marketplace team-market from https://git.example.test/market.git: Failed to add marketplace: Failed to clone https://git.example.test/market.git (SSH authentication failed). Its plugins wait: tool@team-market.",
+      ]);
+    });
+
+    test("leaves a marketplace pinned to a ref alone, since claude plugin marketplace add cannot pin it", async () => {
+      const home = temp.make("home-");
+      const pinned = { extraKnownMarketplaces: { "team-market": { source: { source: "github", repo: "team/market", ref: "release" } } } };
+      write(home, claude, pinned);
+      const cli = freshClaude({ "team/market": { name: "team-market", plugins: ["tool"] } });
+
+      await apply(plan([team]), { home, adapters: [cli.adapter] });
+
+      expect([...cli.fetched.keys()]).toEqual([]);
+      expect(read(home, claude).extraKnownMarketplaces).toEqual(pinned.extraKnownMarketplaces);
     });
   });
 });

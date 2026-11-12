@@ -1,3 +1,4 @@
+import { withoutCredentials } from "../../credentials.ts";
 import type { Finding, Plan } from "../../pack/types.ts";
 import type { CommandRunner } from "../run.ts";
 import { get, keyPath, type Document } from "./fields.ts";
@@ -67,11 +68,14 @@ export function declaredMarketplaces(settings: Document): Record<string, string>
   }));
 }
 
+const addSourceField: Record<string, string> = { github: "repo", git: "url", url: "url", directory: "path", file: "path" };
+
 function addSource(source: unknown) {
   if (!source || typeof source !== "object") return undefined;
-  const { source: kind, repo, url, path } = source as Record<string, unknown>;
-  const value = kind === "github" ? repo : kind === "git" || kind === "url" ? url : kind === "directory" || kind === "file" ? path : undefined;
-  return typeof value === "string" ? value : undefined;
+  const { source: kind, ...fields } = source as Record<string, unknown>;
+  const field = typeof kind === "string" ? addSourceField[kind] : undefined;
+  const value = field ? fields[field] : undefined;
+  return Object.keys(fields).length === 1 && typeof value === "string" ? value : undefined;
 }
 
 async function fetchMarketplaces(claude: Claude, plugins: string[], sources: Record<string, string>): Promise<Finding[]> {
@@ -89,7 +93,7 @@ async function fetchMarketplaces(claude: Claude, plugins: string[], sources: Rec
     const added = await claude(["marketplace", "add", source, "--scope", "user"]);
     if (added.code === 0) continue;
     const waiting = plugins.filter((id) => marketplaceOf(id) === name).join(", ");
-    findings.push({ id: `plugin-marketplace:${name}`, pack: "engine", say: `Could not add the Claude plugin marketplace ${name} from ${source}: ${firstLine(added.stderr || added.stdout)}. Its plugins wait: ${waiting}.`, repair: "apply" });
+    findings.push({ id: `plugin-marketplace:${name}`, pack: "engine", say: `Could not add the Claude plugin marketplace ${name} from ${withoutCredentials(source)}: ${withoutCredentials(firstLine(added.stderr || added.stdout))}. Its plugins wait: ${waiting}.`, repair: "apply" });
   }
   return findings;
 }

@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
 import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
+import { withoutCredentials } from "../credentials.ts";
 import { writePrivateFile } from "../files/private.ts";
 import { isKeptForBoxes } from "../hub/names.ts";
 
@@ -85,17 +86,6 @@ async function push(dir: string) {
 function gitReason(stderr: string) {
   const line = stderr.split("\n").map((text) => withoutCredentials(text).replace(/\s+/g, " ").trim()).find((text) => text && !text.startsWith("To ") && !text.startsWith("hint:"));
   return line?.replace(/\.$/, "");
-}
-
-function withoutCredentials(line: string) {
-  return line.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"]+/gi, (address) => {
-    try {
-      const url = new URL(address);
-      return `${url.protocol}//${url.host}${url.pathname.replace(/\/$/, "")}`;
-    } catch {
-      return "the remote";
-    }
-  });
 }
 
 export function workflowDefaults(packs: PackManifest[]): Record<string, boolean> {
