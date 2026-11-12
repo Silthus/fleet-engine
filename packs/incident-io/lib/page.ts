@@ -1,8 +1,9 @@
+import { parseArgs } from "node:util";
 import type { Context } from "../../../src/sdk/index.ts";
 
 export const sourceSecret = "source";
 
-export const usage = `Usage: fleet page --key <key> --title <title> [--description <text>] [--source-url <url>] [--priority <value>] [--dry-run]
+export const usage = `Usage: fleet page --key <key> --title <title> [--description <text>] [--source-url <url>] [--dry-run]
        fleet page --key <key> --resolve [--title <title>] [--dry-run]
        fleet page setup <alert source URL> < <token file>
 
@@ -14,21 +15,21 @@ source decides who is paged, not this command. Set it up to page only you.
   --title <title>      What happened, in a few words. Required unless --resolve.
   --description <text> What to look at, and how to undo it.
   --source-url <url>   A link to the evidence, such as a dashboard.
-  --priority <value>   Goes into the event's metadata. incident.io has no priority field.
   --resolve            Sends status "resolved" for --key. The route withdraws the page.
   --dry-run            Checks the input and the saved source, prints the event, sends nothing.
 
   setup <URL>          Saves the alert source URL and the token on standard input.
 
+A value that starts with a dash goes after an equals sign: --description=-5% errors.
+
 With a hub, the command runs on the hub, so the token lives only there.
 It prints the HTTP status and incident.io's answer, never the token or the URL.
-Exit 0: incident.io accepted the event. 1: it did not, or the source is not set up,
-or the hub did not answer. 2: wrong input.`;
+Exit 0: incident.io accepted the event. 1: it did not, the source is not set up,
+the hub did not answer, or the Page you through incident.io workflow is off. 2: wrong input.`;
 
 const setupLine = "fleet page setup <alert source URL> < <token file>";
 
 type Source = { url: string; token: string };
-type Flags = { key?: string; title?: string; description?: string; sourceUrl?: string; priority?: string; resolve: boolean; dryRun: boolean };
 export type PageEvent = { title: string; status: "firing" | "resolved"; deduplication_key: string; description?: string; source_url?: string; metadata: Record<string, string> };
 
 class InputError extends Error {}
@@ -52,7 +53,7 @@ function urlProblem(url: string): string | undefined {
 
 async function savedSource(ctx: Context): Promise<Source> {
   const saved = await ctx.secrets.read(sourceSecret);
-  if (saved === undefined) throw new Error(`no incident.io alert source is saved here. Set it up: ${setupLine}`);
+  if (saved === undefined) throw new Error(`no incident.io alert source is saved. Set it up: ${setupLine}`);
   let source: Partial<Source>;
   try {
     source = JSON.parse(saved);
@@ -73,24 +74,24 @@ export async function sourceSaved(ctx: Context): Promise<boolean> {
   }
 }
 
-const valued = { "--key": "key", "--title": "title", "--description": "description", "--source-url": "sourceUrl", "--priority": "priority" } as const;
+const flagOptions = {
+  key: { type: "string" },
+  title: { type: "string" },
+  description: { type: "string" },
+  "source-url": { type: "string" },
+  resolve: { type: "boolean" },
+  "dry-run": { type: "boolean" },
+  help: { type: "boolean", short: "h" },
+} as const;
 
-function parseFlags(args: string[]): Flags {
-  const flags: Flags = { resolve: false, dryRun: false };
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index]!;
-    if (arg === "--resolve") flags.resolve = true;
-    else if (arg === "--dry-run") flags.dryRun = true;
-    else {
-      const equals = arg.indexOf("=");
-      const name = equals < 0 ? arg : arg.slice(0, equals);
-      if (!Object.hasOwn(valued, name)) throw new InputError(`unknown argument ${arg}`);
-      const value = equals < 0 ? args[++index] : arg.slice(equals + 1);
-      if (value === undefined) throw new InputError(`${name} needs a value`);
-      flags[valued[name as keyof typeof valued]] = value;
-    }
+type Flags = ReturnType<typeof parseFlags>;
+
+function parseFlags(args: string[]) {
+  try {
+    return parseArgs({ args, options: flagOptions, strict: true }).values;
+  } catch (error) {
+    throw new InputError((error as Error).message.replaceAll("\n", " "));
   }
-  return flags;
 }
 
 function eventOf(flags: Flags): PageEvent {
@@ -99,16 +100,16 @@ function eventOf(flags: Flags): PageEvent {
   if (key.length > 200) throw new InputError("--key must be at most 200 characters");
   const title = flags.title?.trim() || (flags.resolve ? `Resolved: ${key}` : "");
   if (!title) throw new InputError("--title is required");
-  if (flags.sourceUrl !== undefined && !/^https?:\/\/\S+$/.test(flags.sourceUrl)) throw new InputError("--source-url must be an http or https URL");
+  const sourceUrl = flags["source-url"];
+  if (sourceUrl !== undefined && !/^https?:\/\/\S+$/.test(sourceUrl)) throw new InputError("--source-url must be an http or https URL");
   const description = flags.description?.trim();
-  const priority = flags.priority?.trim();
   return {
     title,
     status: flags.resolve ? "resolved" : "firing",
     deduplication_key: key,
     ...(description ? { description } : {}),
-    ...(flags.sourceUrl ? { source_url: flags.sourceUrl } : {}),
-    metadata: { sent_by: "fleet page", ...(priority ? { priority } : {}) },
+    ...(sourceUrl ? { source_url: sourceUrl } : {}),
+    metadata: { sent_by: "fleet page" },
   };
 }
 
@@ -133,11 +134,8 @@ async function send(source: Source, event: PageEvent, ctx: Context): Promise<num
     ctx.print(`fleet page: not sent: ${redact((error as Error).message)}. ${retry}`);
     return 1;
   }
-  const answer = await response.text().catch(() => "");
-  let body: { status?: unknown; message?: unknown; errors?: unknown } = {};
-  try {
-    body = JSON.parse(answer);
-  } catch {}
+  const answer: unknown = await response.json().catch(() => undefined);
+  const body: { status?: unknown; message?: unknown; errors?: unknown } = typeof answer === "object" && answer !== null ? answer : {};
   const errors = Array.isArray(body.errors) ? body.errors.map((each) => (each as { message?: unknown } | null)?.message) : [];
   const parts = [body.status, body.message, ...errors].filter((part) => typeof part === "string" || typeof part === "number").map((part) => redact(String(part)));
   const line = `HTTP ${response.status}${parts.length ? `: ${parts.join(": ")}` : ""}`;
@@ -163,12 +161,13 @@ async function setup(args: string[], ctx: Context): Promise<number> {
 
 export async function page(args: string[], ctx: Context): Promise<number> {
   try {
-    if (!args.length || args.includes("--help") || args.includes("-h")) return ctx.print(usage), args.length ? 0 : 2;
+    if (!args.length) return ctx.print(usage), 2;
     if (args[0] === "setup") return await setup(args.slice(1), ctx);
     const flags = parseFlags(args);
+    if (flags.help) return ctx.print(usage), 0;
     const event = eventOf(flags);
     const source = await savedSource(ctx);
-    if (!flags.dryRun) return await send(source, event, ctx);
+    if (!flags["dry-run"]) return await send(source, event, ctx);
     ctx.print("fleet page: dry run, nothing sent. It would POST this to the saved alert source:");
     ctx.print("Authorization: Bearer [redacted]");
     ctx.print(JSON.stringify(event, null, 2));

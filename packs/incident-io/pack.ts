@@ -21,13 +21,14 @@ export default {
       on: "hub",
       when: paging,
       id: "incident-io-source",
-      say: "Create your incident.io alert source and alert route for Page you through incident.io, then save the source URL and token.",
+      say: 'Save your incident.io alert source for Page you through incident.io. When one is saved and this stays, fleet page --key setup-check --title "Setup check" --dry-run says what is wrong with it.',
       test: async (ctx) => (await import("./lib/page.ts")).sourceSaved(ctx),
       repair: { ask: "Follow packs/incident-io/SETUP.md, which ends with: fleet page setup <alert source URL> < <token file>" },
     });
     fleet.command("page", {
       summary: "Page yourself through incident.io, or withdraw the page",
       on: "hub",
+      when: paging,
       run: async (args, ctx) => (await import("./lib/page.ts")).page(args, ctx),
     });
   },

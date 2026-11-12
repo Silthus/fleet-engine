@@ -16,7 +16,8 @@ the route names. Check the route before you rely on it.
 The workflow, `page-owner`, starts off. Turn it on with
 `fleet packs --add incident-io --workflows page-owner=on`. Its
 [setup note](../packs/incident-io/SETUP.md) walks through the incident.io
-side.
+side. While the workflow is off, `fleet page` refuses to run on every
+machine, so turning it off stops all pages. The saved source stays.
 
 ## Send and withdraw a page
 
@@ -24,8 +25,7 @@ side.
 fleet page --key checkout-rollout-errors \
   --title "Checkout rollout: errors over the tripwire" \
   --description "Undo: switch the rollout flag off. The panel is in the link." \
-  --source-url "https://dashboards.example/checkout" \
-  --priority P1
+  --source-url "https://dashboards.example/checkout"
 
 fleet page --key checkout-rollout-errors --resolve
 ```
@@ -35,9 +35,9 @@ fleet page --key checkout-rollout-errors --resolve
   one key for each tripwire.
 - `--resolve` sends status `resolved` for the key. The route's auto-cancel
   withdraws the page.
-- `--priority` goes into the event's `metadata`, since incident.io has no
-  priority field. How urgently your phone rings comes from your own
-  notification rules in the incident.io app.
+- A value that starts with a dash goes after an equals sign, such as
+  `--description=-5% errors`. Without it, `fleet page` refuses the value, so
+  a flag such as `--dry-run` is never taken as text.
 - `--dry-run` checks the input and the saved source, prints the event with
   the token hidden, and sends nothing.
 
@@ -45,8 +45,9 @@ The command prints the HTTP status and incident.io's `status`, `message`,
 and `errors`. Any 2xx answer means incident.io accepted the event. The live
 API answers `202` with status `accepted`, not the `success` that its docs
 show. The exit code is 0 when incident.io accepted the event, 1 when it did
-not, when the source is not set up, or when the hub did not answer, and 2 on
-wrong input.
+not, when the source is not set up, when the hub did not answer, or when the
+workflow is off, and 2 on wrong input. How urgently your phone rings comes
+from your own notification rules in the incident.io app.
 
 ## Where the token lives
 
@@ -74,9 +75,11 @@ the token changes one file. A hub never forwards the command again.
 With Mac only, the command and the token stay on the Mac.
 
 **The hub is a single point of failure.** When SSH cannot reach the hub,
-`fleet page` exits 1 and says "could not reach the hub". An agent that must
-not miss a page sends it once more, then tells you another way, such as a
-Slack message. The pack's instructions tell agents to do that.
+`fleet page` exits 1 and says that ssh to the hub exited 255. When the hub
+answers SSH but hangs, the command does not finish. An agent that must not
+miss a page treats either as a failed page: it sends it once more, then
+tells you another way, such as a Slack message. The pack's instructions tell
+agents to do that.
 
 ## Risks
 

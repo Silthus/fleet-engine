@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../src/testing/git.ts";
+import { spawnAsync } from "../../src/testing/spawn.ts";
 
 const temp = tempDirs();
 const stops: Array<() => void> = [];
@@ -20,7 +21,7 @@ type Received = { path: string; authorization: string | null; body: Record<strin
 
 function fakeIncidentIo() {
   const received: Received[] = [];
-  const state = { refuse: false };
+  const state = { refuse: false, emptyBody: false };
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -28,7 +29,7 @@ function fakeIncidentIo() {
       const path = new URL(request.url).pathname;
       received.push({ path, authorization: request.headers.get("authorization"), body: await request.json() });
       if (state.refuse) return Response.json({ type: "validation_error", status: 422, errors: [{ code: "invalid", message: `token ${token} is not valid for ${request.url}` }] }, { status: 422 });
-      return Response.json(accepted, { status: 202 });
+      return state.emptyBody ? new Response("null", { status: 202 }) : Response.json(accepted, { status: 202 });
     },
   });
   stops.push(() => server.stop(true));
@@ -45,14 +46,8 @@ function closedPort() {
 type Ran = { code: number; output: string };
 
 async function spawnFleet(home: string, path: string, args: string[], stdin?: string): Promise<Ran> {
-  const child = Bun.spawn([process.execPath, cli, ...args], {
-    env: { HOME: home, PATH: path, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" },
-    stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  return { code, output: (stdout + stderr).trimEnd() };
+  const ran = await spawnAsync([process.execPath, cli, ...args], { env: { HOME: home, PATH: path, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin) });
+  return { code: ran.exitCode, output: (ran.stdout + ran.stderr).trimEnd() };
 }
 
 function profile(fields: Record<string, unknown> = {}) {
@@ -76,16 +71,16 @@ function bunPath() {
   return `${bin}:/usr/bin:/bin`;
 }
 
-function solo() {
-  const home = machineHome(profile(), { role: "linux", name: "solo-1" });
+function solo(workflow = true) {
+  const home = machineHome(profile({ workflows: { "page-owner": workflow } }), { role: "linux", name: "solo-1" });
   const path = bunPath();
   const fleet = (...args: string[]) => spawnFleet(home, path, args);
   const setup = (url: string, input = `${token}\n`) => spawnFleet(home, path, ["page", "setup", url], input);
   return { home, fleet, setup };
 }
 
-function linked(hub: "up" | "down" = "up") {
-  const shared = profile({ hub: "hub-1", devboxes: ["node-2"] });
+function linked(hub: "up" | "down" = "up", workflow = true) {
+  const shared = profile({ hub: "hub-1", devboxes: ["node-2"], workflows: { "page-owner": workflow } });
   const nodeHome = machineHome(shared, { role: "devbox", coder: true, name: "node-2" });
   const hubHome = machineHome(shared, { role: "linux", name: "hub-1" });
   const bin = temp.make("bin-");
@@ -125,7 +120,7 @@ function filesHolding(home: string, secret: string): string[] {
 
 const tellsNoSecret = (ran: Ran) => [token, sourceId].filter((secret) => ran.output.includes(secret));
 
-const fire = ["page", "--key", "rollout-errors", "--title", "Rollout: errors over the tripwire", "--description", "Undo: switch the flag off.", "--source-url", "https://dashboards.example/rollout", "--priority", "P1"];
+const fire = ["page", "--key", "rollout-errors", "--title", "Rollout: errors over the tripwire", "--description", "Undo: switch the flag off.", "--source-url", "https://dashboards.example/rollout"];
 
 test("setup saves the source where only the owner can read it, a page fires once, and the same key resolves it", async () => {
   const incident = fakeIncidentIo();
@@ -142,7 +137,7 @@ test("setup saves the source where only the owner can read it, a page fires once
     {
       path: `/v2/alert_events/http/${sourceId}`,
       authorization: `Bearer ${token}`,
-      body: { title: "Rollout: errors over the tripwire", status: "firing", deduplication_key: "rollout-errors", description: "Undo: switch the flag off.", source_url: "https://dashboards.example/rollout", metadata: { sent_by: "fleet page", priority: "P1" } },
+      body: { title: "Rollout: errors over the tripwire", status: "firing", deduplication_key: "rollout-errors", description: "Undo: switch the flag off.", source_url: "https://dashboards.example/rollout", metadata: { sent_by: "fleet page" } },
     },
     { path: `/v2/alert_events/http/${sourceId}`, authorization: `Bearer ${token}`, body: { title: "Resolved: rollout-errors", status: "resolved", deduplication_key: "rollout-errors", metadata: { sent_by: "fleet page" } } },
   ]);
@@ -171,7 +166,7 @@ test("an alert source that does not answer exits 1, and the error names neither 
 });
 
 test("doctor names the setup as a to-do until the source is saved", async () => {
-  const todo = "To do: Create your incident.io alert source and alert route for Page you through incident.io, then save the source URL and token. Follow packs/incident-io/SETUP.md, which ends with: fleet page setup <alert source URL> < <token file>";
+  const todo = 'To do: Save your incident.io alert source for Page you through incident.io. When one is saved and this stays, fleet page --key setup-check --title "Setup check" --dry-run says what is wrong with it. Follow packs/incident-io/SETUP.md, which ends with: fleet page setup <alert source URL> < <token file>';
   const { fleet, setup } = solo();
   expect((await fleet("doctor")).output).toContain(todo);
   await setup(closedPort());
@@ -179,7 +174,7 @@ test("doctor names the setup as a to-do until the source is saved", async () => 
 });
 
 test("without a saved source, a page exits 1 and says how to set one up", async () => {
-  expect(await solo().fleet(...fire)).toEqual({ code: 1, output: "fleet page: no incident.io alert source is saved here. Set it up: fleet page setup <alert source URL> < <token file>" });
+  expect(await solo().fleet(...fire)).toEqual({ code: 1, output: "fleet page: no incident.io alert source is saved. Set it up: fleet page setup <alert source URL> < <token file>" });
 });
 
 test("a saved source that other users can read, or that is a link, sends nothing", async () => {
@@ -223,9 +218,18 @@ test("a dry run checks the input and the saved source, shows the event without t
   const dry = await fleet(...fire, "--dry-run");
   expect(dry.code).toBe(0);
   expect(dry.output).toStartWith("fleet page: dry run, nothing sent. It would POST this to the saved alert source:\nAuthorization: Bearer [redacted]\n");
-  expect(JSON.parse(dry.output.slice(dry.output.indexOf("{")))).toMatchObject({ status: "firing", deduplication_key: "rollout-errors", metadata: { priority: "P1" } });
+  expect(JSON.parse(dry.output.slice(dry.output.indexOf("{")))).toMatchObject({ status: "firing", deduplication_key: "rollout-errors", description: "Undo: switch the flag off." });
   expect(tellsNoSecret(dry)).toEqual([]);
   expect(incident.received).toEqual([]);
+});
+
+test("--help and -h print the usage and exit 0, and no flags at all print it and exit 2", async () => {
+  const { fleet } = solo();
+  for (const help of ["--help", "-h"]) {
+    const ran = await fleet("page", help);
+    expect([help, ran.code, ran.output.split("\n")[0]]).toEqual([help, 0, "Usage: fleet page --key <key> --title <title> [--description <text>] [--source-url <url>] [--dry-run]"]);
+  }
+  expect(await fleet("page")).toMatchObject({ code: 2, output: expect.stringMatching(/^Usage: fleet page/) });
 });
 
 test("wrong input exits 2 before it reads the source", async () => {
@@ -233,7 +237,44 @@ test("wrong input exits 2 before it reads the source", async () => {
   expect(await fleet("page", "--title", "No key")).toEqual({ code: 2, output: "fleet page: --key is required, so a retry never pages twice\nRun fleet page --help for the flags." });
   expect(await fleet("page", "--key", "k")).toEqual({ code: 2, output: "fleet page: --title is required\nRun fleet page --help for the flags." });
   expect(await fleet("page", "--key", "k", "--title", "t", "--source-url", "file:///etc/passwd")).toEqual({ code: 2, output: "fleet page: --source-url must be an http or https URL\nRun fleet page --help for the flags." });
-  expect(await fleet("page", "--key", "k", "--title", "t", "--to", "someone")).toEqual({ code: 2, output: "fleet page: unknown argument --to\nRun fleet page --help for the flags." });
+  expect(await fleet("page", "--key", "k", "--title", "t", "--to", "someone")).toMatchObject({ code: 2, output: expect.stringContaining("Unknown option '--to'") });
+  expect(await fleet("page", "--key", "k", "--title", "t", "--priority", "P1")).toMatchObject({ code: 2, output: expect.stringContaining("Unknown option '--priority'") });
+});
+
+test("a flag that takes a value never takes the next flag as its value, so --dry-run after it cannot send", async () => {
+  const incident = fakeIncidentIo();
+  const { fleet, setup } = solo();
+  await setup(incident.url);
+  for (const eaten of ["--dry-run", "--resolve", "-h", "--help"]) {
+    const ran = await fleet("page", "--key", "k", "--title", "t", "--description", eaten);
+    expect([eaten, ran.code, ran.output]).toEqual([eaten, 2, expect.stringContaining("Option '--description' argument is ambiguous.")]);
+  }
+  expect(incident.received).toEqual([]);
+  const literal = await fleet("page", "--key", "k", "--title", "t", "--description=--dry-run", "--dry-run");
+  expect(literal.code).toBe(0);
+  expect(JSON.parse(literal.output.slice(literal.output.indexOf("{")))).toMatchObject({ description: "--dry-run" });
+  expect(incident.received).toEqual([]);
+});
+
+test("an accepted event with an empty answer still exits 0", async () => {
+  const incident = fakeIncidentIo();
+  incident.state.emptyBody = true;
+  const { fleet, setup } = solo();
+  await setup(incident.url);
+  expect(await fleet(...fire)).toEqual({ code: 0, output: "fleet page: sent rollout-errors. HTTP 202" });
+});
+
+test("while the workflow is off, fleet page refuses on every machine and sends nothing, even with a saved source", async () => {
+  const incident = fakeIncidentIo();
+  const refusal = "fleet: fleet page belongs to the page-owner workflow, which is off. Turn it on with fleet packs --workflows page-owner=on.";
+  const { home, fleet } = solo(false);
+  mkdirSync(join(home, ".config/fleet/secrets/incident-io"), { recursive: true, mode: 0o700 });
+  writeFileSync(storeFile(home), JSON.stringify({ url: incident.url, token }), { mode: 0o600 });
+  expect(await fleet(...fire)).toEqual({ code: 1, output: refusal });
+  const { node, sshCalls } = linked("up", false);
+  expect(await node(...fire)).toEqual({ code: 1, output: refusal });
+  expect(sshCalls()).toEqual([]);
+  expect(incident.received).toEqual([]);
 });
 
 test("a node pages through the hub in one hop: the hub sends, and the node shows the hub's answer", async () => {
@@ -260,7 +301,7 @@ test("setup from a node saves the token on the hub over SSH standard input, neve
 
 test("a hub without a saved source answers once and never forwards again", async () => {
   const { node, sshCalls } = linked();
-  expect(await node(...fire)).toEqual({ code: 1, output: "fleet page: no incident.io alert source is saved here. Set it up: fleet page setup <alert source URL> < <token file>" });
+  expect(await node(...fire)).toEqual({ code: 1, output: "fleet page: no incident.io alert source is saved. Set it up: fleet page setup <alert source URL> < <token file>" });
   expect(sshCalls()).toHaveLength(1);
 });
 
@@ -272,7 +313,7 @@ test("the hub pages from its own source without ssh", async () => {
   expect(sshCalls()).toEqual([]);
 });
 
-test("when the hub does not answer, a page from a node exits 1 and says it could not reach the hub", async () => {
+test("when the hub does not answer, a page from a node exits 1 and says ssh exited 255", async () => {
   const { node } = linked("down");
-  expect(await node(...fire)).toEqual({ code: 1, output: "ssh: connect to host hub-1 port 22: Connection refused\nfleet page: could not reach the hub hub-1 over SSH." });
+  expect(await node(...fire)).toEqual({ code: 1, output: "ssh: connect to host hub-1 port 22: Connection refused\nfleet page: ssh to the hub hub-1 exited 255. Either ssh could not reach the hub, or the command failed there with 255." });
 });
