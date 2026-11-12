@@ -84,6 +84,25 @@ describe("fleet packs --add memory", () => {
     expect(await pushedAnswers(home)).toEqual(before);
   });
 
+  test("makes a missing repo named by its GitHub SSH URL, and saves the URL as named", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const url = "git@github.com:nora/notes.git";
+    const result = await packs(["--add", "memory", "--set", `memory.repo=${url}`]);
+    expect(result.output).toContain("✓ Created the private repo nora/notes");
+    expect(existsSync(githubRepo(home, "nora/notes"))).toBe(true);
+    expect((await pushedAnswers(home)).settings).toEqual({ "memory.repo": url });
+  });
+
+  test("refuses a public memory repo named by its GitHub URL", async () => {
+    const { home, packs } = await packsAfterSetup();
+    await spawnGit(home, "init", "-q", "--bare", githubRepo(home, "nora/public-notes"));
+    const before = savedAnswers(home);
+    const result = await packs(["--add", "memory", "--set", "memory.repo=https://github.com/nora/public-notes.git"], { publicRepos: ["nora/public-notes"] });
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("fleet: nora/public-notes is not private");
+    expect(await pushedAnswers(home)).toEqual(before);
+  });
+
   test("stops before it saves when GitHub refuses to make the repo", async () => {
     const { home, packs } = await packsAfterSetup();
     const before = savedAnswers(home);

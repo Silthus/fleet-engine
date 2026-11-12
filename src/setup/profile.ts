@@ -46,17 +46,18 @@ function github(machine: Machine) {
 }
 
 export async function memoryRepo(machine: Machine, named: unknown, login?: string) {
-  if (typeof named === "string" && !/^[\w.-]+\/[\w.-]+$/.test(named)) return { repo: named, missing: false, make: async (print: (line: string) => void) => print(`✓ Using your memory repo ${named}`) };
+  const onGitHub = typeof named === "string" ? (/^[\w.-]+\/[\w.-]+$/.test(named) ? named : githubRepoOf(named)) : undefined;
+  if (typeof named === "string" && !onGitHub) return { repo: named, missing: false, make: async (print: (line: string) => void) => print(`✓ Using your memory repo ${named}`) };
   const { gh, visibility, login: signedIn } = github(machine);
-  const repo = typeof named === "string" ? named : `${login ?? (await signedIn())}/${memoryRepoName}`;
-  const seen = await visibility(repo);
+  const slug = onGitHub ?? `${login ?? (await signedIn())}/${memoryRepoName}`;
+  const seen = await visibility(slug);
   const missing = seen === undefined;
-  if (!missing && !isPrivate(seen)) throw new Error(`${repo} is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.`);
+  if (!missing && !isPrivate(seen)) throw new Error(`${slug} is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.`);
   const make = async (print: (line: string) => void) => {
-    if (missing) await gh("repo", "create", repo, "--private", "--description", "My agents' shared memory");
-    print(missing ? `✓ Created the private repo ${repo}` : `✓ Reusing your repo ${repo}`);
+    if (missing) await gh("repo", "create", slug, "--private", "--description", "My agents' shared memory");
+    print(missing ? `✓ Created the private repo ${slug}` : `✓ Reusing your repo ${slug}`);
   };
-  return { repo, missing, make };
+  return { repo: typeof named === "string" ? named : slug, missing, make };
 }
 
 async function lookUp(machine: Machine, home: string, packs: PackManifest[], picked: string[]) {
