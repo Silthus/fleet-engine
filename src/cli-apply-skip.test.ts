@@ -58,15 +58,16 @@ describe("fleet apply progress", () => {
     const engine = engineWithTools();
     const profile = profileDir(["tools"]);
     const lines: string[] = [];
-    const startedBeforeWork: boolean[] = [];
+    const namedBeforeItsWork: Record<string, boolean> = {};
     const print = (line: string) => void lines.push(line);
     const runStep = async (command: string[], env: Record<string, string> = {}) => {
-      if (command.join(" ").includes("touch")) startedBeforeWork.push(lines.includes("  … tools: box"));
+      const step = command.join(" ").match(/touch "\$HOME\/(\w+)\.txt"/)?.[1];
+      if (step) namedBeforeItsWork[step] = lines.includes(`  … tools: ${step}`);
       return Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home, ...env } }).exited;
     };
     expect(await main(["apply", "--profile", profile], { home, engineRoot: engine, platform: "linux", env: {}, print, run: runStep })).toBe(0);
     expect(lines.filter((line) => line.startsWith("  … "))).toEqual(["  … tools: box", "  … tools: codex"]);
-    expect(startedBeforeWork).toEqual([true, true]);
+    expect(namedBeforeItsWork).toEqual({ box: true, codex: true });
     lines.length = 0;
     expect(await main(["apply"], { home, engineRoot: engine, platform: "linux", env: {}, print, run: runStep })).toBe(0);
     expect(lines.filter((line) => line.startsWith("  … "))).toEqual([]);
