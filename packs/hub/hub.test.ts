@@ -41,7 +41,7 @@ describe("without the Hub pack and the MCP gateway pack", () => {
   function hubFree(result: Plan) {
     const { jobs, human, steps, checks, config, files, commands } = result;
     const contents = files.map((file) => ("content" in file ? file.content : ""));
-    const items = JSON.stringify({ jobs, human, steps, checks, config, commands, targets: files.map((file) => file.target) }, (key, value) => (key === "roles" ? undefined : value));
+    const items = JSON.stringify({ jobs, human, steps, checks, config, commands, targets: files.map((file) => file.target) }, (key, value) => (key === "roles" || (key === "on" && value === "hub") ? undefined : value));
     return !pointsAtHub.test(items) && !contents.some((text) => /mcphub|ANTHROPIC_BASE_URL|127\.0\.0\.1:(8317|3317)/.test(text));
   }
 

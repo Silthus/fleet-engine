@@ -29,5 +29,6 @@ the source and add its row here.
 | `sleeping-hog.png` | `frontend/public/hedgehog/sleeping-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
 | `space-hog.png` | `frontend/public/hedgehog/space-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
 | `surprised-hog.png` | `frontend/public/hedgehog/surprised-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
+| `warning-hog.png` | `frontend/public/hedgehog/warning-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
 | `posthog-logo-light.svg` | `.github/posthog-logo-light.svg` | `400d5219124447fd6f3bc3b145fa4fc6ac0a0c20` |
 | `posthog-logo-dark.svg` | `.github/posthog-logo-dark.svg` | `400d5219124447fd6f3bc3b145fa4fc6ac0a0c20` |

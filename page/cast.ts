@@ -14,6 +14,7 @@ export const packCast: Record<string, Role> = {
   memory: { art: hog("reading-hog"), tone: "mint", line: "Agents on every machine share what they learn." },
   guards: { art: hog("police-hog"), tone: "lilac", line: "Hooks stop an agent's risky shell commands." },
   slack: { art: hog("phone-pair-hogs"), tone: "cream", line: "Your own Slack message starts a thread." },
+  "incident-io": { art: hog("warning-hog"), tone: "red", line: "An agent pages you when a risky change goes wrong." },
   hub: { art: hog("space-hog"), tone: "sky", line: "One always-on devbox links and watches the others." },
   "mcp-gateway": { art: hog("hog-welder"), tone: "mint", line: "Sign in to your MCP servers once, on the hub." },
   recovery: { art: hog("hospital-hog"), tone: "peach", line: "Threads continue after a usage limit or an outage." },

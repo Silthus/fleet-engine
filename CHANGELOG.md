@@ -51,6 +51,9 @@ packs, and your answers live in your own private profile repo.
   off by default, and the page shows the Anthropic terms it touches.
 - **Slack** (off): your own message, reaction, or mention in Slack starts a T3
   thread about it.
+- **incident.io** (off): an agent that watches a risky change pages you, and
+  only you, through your own incident.io alert source with `fleet page`. With
+  a hub, the token lives on the hub and every other machine pages through it.
 
 Team packs plug in as pack sources. The presets are Starter, Everyday, and
 Everything.

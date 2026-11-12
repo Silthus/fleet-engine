@@ -18,6 +18,7 @@ export const packIcons: Record<string, string> = {
   "mcp-gateway": drawn(`<path d="M9 3v5"/><path d="M15 3v5"/><path d="M6.5 8h11v3.5a5.5 5.5 0 0 1-11 0V8Z"/><path d="M12 17v4"/>`),
   recovery: drawn(`<path d="M4 12a8 8 0 1 0 2.6-5.9"/><path d="M4 4.5V9h4.5"/><path d="M12 8v4l2.8 1.8"/>`),
   slack: slackLogo,
+  "incident-io": drawn(`<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15L6 16Z"/><path d="M10 20.5a2 2 0 0 0 4 0"/><path d="M12 3v2"/>`),
 };
 
 export const teamIcon = drawn(`<circle cx="9" cy="8" r="3.2"/><path d="M3 20c.4-3.4 2.9-5.5 6-5.5s5.6 2.1 6 5.5"/><circle cx="17" cy="9" r="2.5"/><path d="M16.5 14.6c2.4.2 4.1 2 4.5 4.9"/>`);
