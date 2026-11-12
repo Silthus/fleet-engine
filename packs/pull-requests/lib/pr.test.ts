@@ -102,6 +102,7 @@ test("bot-threads sorts unresolved threads into bot and human, answered or not, 
     "human unanswered src/c.ts:9 https://example.test/3",
     "bot unanswered src/d.ts:1 https://example.test/4",
     "2 unanswered bot threads remain.",
+    "1 human thread waits on me: react 👍 to a fix, or draft the reply for me to post.",
   ].join("\n"));
   expect(result.code).toBe(1);
   expect(box.calls()).toHaveLength(1);
@@ -137,6 +138,75 @@ test("bot-threads --resolve never resolves a thread a person opened, even when o
   const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12", "--resolve");
   expect(result.out).toBe(["human answered src/f.ts:5 https://example.test/6", "bot unanswered src/g.ts:6 https://example.test/7", "1 unanswered bot thread remains."].join("\n"));
   expect(box.calls().filter((call) => call.includes("resolveReviewThread"))).toEqual([]);
+});
+
+const thumbs = (url: string, ...logins: (string | null)[]) => ({ ...comment(user("reviewer"), url), reactions: { nodes: logins.map((login) => ({ user: login === null ? null : { login } })) } });
+
+test("a 👍 from the viewer on the latest comment answers a thread, and human threads that still wait on the viewer are counted", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [
+    thread("H1", "src/a.ts", 1, [thumbs("https://example.test/h1", "someone", "me")]),
+    thread("H2", "src/b.ts", 2, [thumbs("https://example.test/h2", "someone", null)]),
+    thread("H3", "src/c.ts", 3, [thumbs("https://example.test/h3", "me"), comment(user("reviewer"), "https://example.test/h3b")]),
+    thread("B1", "src/d.ts", 4, [{ ...comment(bot("coderabbitai"), "https://example.test/b1"), reactions: { nodes: [{ user: { login: "me" } }] } }]),
+  ]));
+  box.reply("resolve", { data: {} });
+  const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12", "--resolve");
+  expect(result.out).toBe([
+    "human answered src/a.ts:1 https://example.test/h1",
+    "human unanswered src/b.ts:2 https://example.test/h2",
+    "human unanswered src/c.ts:3 https://example.test/h3",
+    "bot answered src/d.ts:4 https://example.test/b1",
+    "resolved src/d.ts:4 https://example.test/b1",
+    "2 human threads wait on me: react 👍 to a fix, or draft the reply for me to post.",
+  ].join("\n"));
+  expect(result.code).toBe(0);
+  expect(box.calls()[0]).toContain("reactions(content: THUMBS_UP");
+});
+
+test("one human thread that waits is named in the singular", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [thread("H4", "src/a.ts", 1, [comment(user("reviewer"), "https://example.test/h4")])]));
+  expect(box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12").out).toEndWith("\n1 human thread waits on me: react 👍 to a fix, or draft the reply for me to post.");
+});
+
+test("--fixed resolves each named bot thread once without a reply, and never a thread a person opened or one it cannot find", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [
+    thread("F1", "src/a.ts", 1, [comment(bot("coderabbitai"), "https://example.test/f1")]),
+    thread("F2", "src/b.ts", 2, [comment(bot("greptile-apps"), "https://example.test/f2")]),
+    thread("F3", "src/c.ts", 3, [comment(user("reviewer"), "https://example.test/f3")]),
+    thread("F4", "src/d.ts", 4, [comment(user("me"), "https://example.test/f4"), comment(bot("coderabbitai"), "https://example.test/f4b")]),
+  ]));
+  box.reply("resolve", { data: {} });
+  const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12",
+    "--fixed", "https://example.test/f1", "--fixed", "https://example.test/f3", "--fixed", "https://example.test/f4", "--fixed", "https://example.test/gone", "--fixed", "https://example.test/f1");
+  expect(result.out).toBe([
+    "bot unanswered src/a.ts:1 https://example.test/f1",
+    "bot unanswered src/b.ts:2 https://example.test/f2",
+    "human unanswered src/c.ts:3 https://example.test/f3",
+    "human unanswered src/d.ts:4 https://example.test/f4",
+    "resolved fixed src/a.ts:1 https://example.test/f1",
+    "skipped human thread, the person resolves it: https://example.test/f3",
+    "skipped human thread, the person resolves it: https://example.test/f4",
+    "not found among unresolved threads: https://example.test/gone",
+    "1 unanswered bot thread remains.",
+    "2 human threads wait on me: react 👍 to a fix, or draft the reply for me to post.",
+  ].join("\n"));
+  expect(result.code).toBe(1);
+  const resolves = box.calls().filter((call) => call.includes("resolveReviewThread"));
+  expect(resolves).toHaveLength(1);
+  expect(resolves[0]).toContain("id=F1");
+});
+
+test("--fixed that resolves the last waiting bot thread passes, and --resolve then leaves it alone", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [thread("F5", "src/a.ts", 1, [comment(bot("coderabbitai"), "https://example.test/f5"), comment(user("me"), "https://example.test/f5r")]), thread("F6", "src/b.ts", 2, [comment(bot("coderabbitai"), "https://example.test/f6")])]));
+  box.reply("resolve", { data: {} });
+  const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12", "--resolve", "--fixed", "https://example.test/f6", "--fixed", "https://example.test/f5");
+  expect(result.out.split("\n").slice(2)).toEqual(["resolved fixed src/b.ts:2 https://example.test/f6", "resolved fixed src/a.ts:1 https://example.test/f5"]);
+  expect(result.code).toBe(0);
+  expect(box.calls().filter((call) => call.includes("resolveReviewThread")).map((call) => call.match(/id=(\w+)/)![1])).toEqual(["F6", "F5"]);
 });
 
 test("bot-threads reads every page of threads and of each thread's comments", () => {
@@ -321,7 +391,7 @@ test("stopping review stops the review-bot handler before review exits", async (
 
 test("wrong arguments print the usage and exit 1", async () => {
   const box = sandbox();
-  for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"], ["review", "--repo", "acme/widgets"], ["review", "--repo", "acme/widgets", "--pr", "1", "--minutes", "0"], ["stamp", "--repo", "acme/widgets", "--pr", "1", "--deep"]]) {
+  for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"], ["review", "--repo", "acme/widgets"], ["review", "--repo", "acme/widgets", "--pr", "1", "--minutes", "0"], ["stamp", "--repo", "acme/widgets", "--pr", "1", "--deep"], ["bot-threads", "--repo", "acme/widgets", "--pr", "1", "--fixed", "example.test/1"], ["bot-threads", "--repo", "acme/widgets", "--pr", "1", "--fixed"]]) {
     const refused = await box.refusal(...args);
     expect(refused).toBeInstanceOf(Error);
     expect((refused as Error).message).toStartWith("Usage: fleet pr ");
@@ -336,7 +406,7 @@ test("help lists every subcommand", async () => {
   const box = sandbox();
   const result = await box.call("--help");
   expect(result.code).toBe(0);
-  expect(result.out).toContain("fleet pr bot-threads --repo <owner/repo> --pr <number> [--resolve]");
+  expect(result.out).toContain("fleet pr bot-threads --repo <owner/repo> --pr <number> [--resolve] [--fixed <thread URL>]...");
   expect(result.out).toContain("fleet pr blockers --repo <owner/repo> --pr <number> [--record]");
   expect(result.out).toContain("fleet pr review --repo <owner/repo> --pr <number> [--deep] [--minutes <n>]");
   expect(result.out).toContain("fleet pr stamp --repo <owner/repo> --pr <number> [--minutes <n>]");

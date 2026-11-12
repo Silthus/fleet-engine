@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync,
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
-import { claimScript, isIdle, nightly, nightlySteps, recycleScript, refreshPool, release, saveToken, setUpScript, spawn, startBox, sweep, unfinishedThreads } from "./box.ts";
+import { claimScript, isIdle, nightly, nightlySteps, recycleScript, refreshPool, release, saveToken, setUpScript, spawn, startBox, sweep, threads, unfinishedThreads } from "./box.ts";
 import { boxCommand, type BoxDeps } from "./box-command.ts";
 import { LockBusy, lockBox } from "./box-lock.ts";
 import type { Box } from "./coder.ts";
@@ -71,8 +71,23 @@ test("release keeps a box whose threads still run or wait for an answer, names t
   expect(await release(coder, machine, "box-lane")).toBe(1);
   expect(lines.join("\n")).toContain("Lane A (runs)");
   expect(lines.join("\n")).toContain("Lane B (waits for an answer)");
+  expect(lines.join("\n")).toContain("these threads still run, wait for an answer, or own an open PR:\n  Lane A (runs)\n  Lane B (waits for an answer)\nFinish or stop them, and hand over their PRs, first");
   expect(done).toEqual([]);
   expect(calls).toEqual([]);
+});
+
+test("box threads also names each thread that owns an open PR, and says when T3 does not answer", async () => {
+  const pr = (n: number) => ({ repository: "acme/app", number: n, url: `https://github.com/acme/app/pull/${n}` });
+  const { machine, lines } = fakeMachine(temp.make("fleet-box-"), { workspace: "box-lane" });
+  expect(await threads(machine, async () => [{ id: "mcp:a", title: "Lane A", projectId: "p", status: "idle", pullRequests: [pr(1)] }, { id: "mcp:b", title: "Lane B", projectId: "p", status: "idle" }])).toBe(0);
+  expect(lines).toEqual(["Lane A (owns open PR https://github.com/acme/app/pull/1)"]);
+  const silent = fakeMachine(temp.make("fleet-box-"), { workspace: "box-lane" });
+  expect(await threads(silent.machine, async () => undefined)).toBe(0);
+  expect(silent.lines).toEqual(["T3 did not answer, so which threads own open PRs is unknown"]);
+  const quiet = fakeMachine(temp.make("fleet-box-"), { workspace: "box-lane" });
+  expect(await threads(quiet.machine, async () => [])).toBe(0);
+  expect(quiet.lines).toEqual([]);
+  await expect(threads(fakeMachine(temp.make("fleet-box-")).machine, async () => [])).rejects.toThrow("devbox-1 is not a box.");
 });
 
 test("release keeps a box it cannot ask about its threads: one that is stopped, gone, or does not answer", async () => {
