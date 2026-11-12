@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AvailableSource } from "../../src/pack/types.ts";
 import { git, isolateGit, tempDirs } from "../../src/testing/git.ts";
@@ -16,6 +16,7 @@ let engine: AvailableSource;
 beforeAll(async () => (engine = await engineSource()));
 
 const slackSource = "https://example.slack.com/archives/C1/p1794409358124319";
+const secretToken = `${"gh"}p_${"a1B2c3D4e5".repeat(4).slice(0, 36)}`;
 const planning = (body = "Load test before new features.") =>
   `---\ntitle: Sprint planning 2026-11-11\ntype: planning\ntopics: [transactional-email, load-testing]\ndate: 2026-11-11\nsource: ${slackSource}\n---\n\n# Sprint planning\n\n${body}\n`;
 
@@ -95,16 +96,40 @@ describe("fleet context sync", () => {
     expect(existsSync(join(machine.checkout, "notes/new.md"))).toBe(true);
   });
 
-  test("keeps a local edit that the incoming change would overwrite, and takes the change once the edit is gone", async () => {
+  test("keeps a local edit that the incoming change would overwrite, fails until the edit is gone, then takes the change", async () => {
     const machine = library();
     await fleetContext(machine, ["sync"]);
     writeFileSync(join(machine.checkout, "ideas.md"), "# Ideas\n\n- my unsaved idea\n");
     pushToLibrary(machine, { "ideas.md": "# Ideas\n\n- someone else's idea\n" });
-    expect(await fleetContext(machine, ["sync"])).toEqual({ code: 0, out: expect.stringContaining("kept the local changes") });
+    expect(await fleetContext(machine, ["sync"])).toEqual({ code: 1, out: expect.stringContaining("is stuck 1 commit behind main: it has uncommitted changes that the new commits would overwrite") });
     expect(readFileSync(join(machine.checkout, "ideas.md"), "utf8")).toContain("my unsaved idea");
     git(machine.checkout, "checkout", "--", "ideas.md");
-    await fleetContext(machine, ["sync"]);
+    expect((await fleetContext(machine, ["sync"])).code).toBe(0);
     expect(readFileSync(join(machine.checkout, "ideas.md"), "utf8")).toContain("someone else's idea");
+  });
+
+  test("fails while a local commit that main lacks keeps the checkout from fast-forwarding", async () => {
+    const machine = library();
+    await fleetContext(machine, ["sync"]);
+    write(machine.checkout, { "notes/mine.md": "# Mine\n" });
+    git(machine.checkout, "add", "-A");
+    git(machine.checkout, "commit", "-q", "-m", "mine");
+    pushToLibrary(machine, { "notes/theirs.md": "# Theirs\n" });
+    expect(await fleetContext(machine, ["sync"])).toEqual({ code: 1, out: expect.stringContaining("is stuck 1 commit behind main: it has 1 local commit that main lacks. Push it or drop it") });
+    expect(existsSync(join(machine.checkout, "notes/theirs.md"))).toBe(false);
+    expect(existsSync(join(machine.checkout, "notes/mine.md"))).toBe(true);
+  });
+
+  test("a catalog written by fleet context catalog gives way to main's catalog instead of blocking the sync", async () => {
+    for (const seeded of [{ "CATALOG.md": "# Old catalog\n" }, {}] as Array<Record<string, string>>) {
+      const machine = library({ ...seeded, "notes/a.md": "# A\n" });
+      await fleetContext(machine, ["sync"]);
+      expect((await fleetContext(machine, ["catalog"])).code).toBe(0);
+      pushToLibrary(machine, { "CATALOG.md": "# Their catalog\n", "notes/b.md": "# B\n" });
+      expect(await fleetContext(machine, ["sync"])).toEqual({ code: 0, out: "" });
+      expect(readFileSync(join(machine.checkout, "CATALOG.md"), "utf8")).toBe("# Their catalog\n");
+      expect(existsSync(join(machine.checkout, "notes/b.md"))).toBe(true);
+    }
   });
 
   test("leaves a folder of another repo or of loose files alone", async () => {
@@ -141,6 +166,18 @@ describe("finding documents", () => {
     expect((await fleetContext(machine, ["search", "quota", "sprint"])).out).toContain("No document matches every word");
   });
 
+  test("search neither matches nor shows a secret: a private key's lines or a token past the excerpt's cut", async () => {
+    const keyBody = `b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACBkZXBsb3kta2V5LWJvZHktbGluZS10d28AAAAAAAAAAAAAAAAAAAAAAAAA`;
+    const runbook = `---\ntitle: Deploy runbook\n---\n\n${"-----BEGIN"} OPENSSH ${"PRIVATE"} KEY-----\n${keyBody}\n${"-----END"} OPENSSH ${"PRIVATE"} KEY-----\n\nquokka ${"step ".repeat(28)}${secretToken}\n`;
+    const machine = library({ "notes/deploy-runbook.md": runbook });
+    await fleetContext(machine, ["sync"]);
+    expect((await fleetContext(machine, ["search", "qynTUxOQAAACBkZXBsb3kta2V5"])).out).toContain("No document matches every word");
+    const found = await fleetContext(machine, ["search", "quokka"]);
+    expect(found.out).toContain("notes/deploy-runbook.md");
+    expect(found.out).toContain("quokka step");
+    expect(found.out).not.toContain(`${"gh"}p_`);
+  });
+
   test("catalog lists each document by type and topics shows a topic without its hub", async () => {
     const machine = library({
       ...docs,
@@ -168,6 +205,19 @@ describe("finding documents", () => {
     expect(await prompt(machine, "Fix the flaky workflows test")).toBe("");
     expect(await prompt(machine, "Fix the billing page", "s3")).toBe("");
     expect((await fleetContext(machine, ["related", "transactional email load testing"])).out).toContain("sprint-planning-2026-11-11.md");
+  });
+
+  test("the prompt hook forgets what it showed sessions idle for over a day", async () => {
+    const machine = library(docs);
+    await fleetContext(machine, ["sync"]);
+    const shown = join(machine.home, ".local/state/fleet/context-library/shown");
+    expect(await prompt(machine, "transactional email load testing", "old")).toContain("sprint-planning-2026-11-11.md");
+    expect(await prompt(machine, "transactional email load testing", "recent")).toContain("sprint-planning-2026-11-11.md");
+    const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000);
+    utimesSync(join(shown, "old"), twoDaysAgo, twoDaysAgo);
+    await prompt(machine, "Fix the flaky workflows test", "new");
+    expect(readdirSync(shown).sort()).toEqual(["recent"]);
+    expect(await prompt(machine, "transactional email load testing", "recent")).toBe("");
   });
 
   test("the prompt hook says your library without an owner, and stays quiet before the first sync", async () => {
@@ -204,6 +254,46 @@ describe("fleet context add", () => {
     expect(saved.out).toStartWith("Updated Sprint planning 2026-11-11");
     expect(seen[0]).toContain("Update the existing document `notes/sprint-planning-2026-11-11.md`");
     expect(git(machine.root, "--git-dir", machine.remote, "show", "main:notes/sprint-planning-2026-11-11.md")).toContain("Ship the queue first.");
+  });
+
+  test("a capture that loses the race for the catalog writes a fresh catalog over the other capture and saves both notes", async () => {
+    const machine = library({ "CATALOG.md": "# Context library catalog\n" });
+    await fleetContext(machine, ["sync"]);
+    const racing: Agent = async (text, cwd, source) => {
+      pushToLibrary(machine, { "notes/hiring-2026-11-10.md": "---\ntitle: Hiring loop\ndate: 2026-11-10\n---\n", "CATALOG.md": "# Context library catalog\n\n- [Hiring loop](notes/hiring-2026-11-10.md)\n" });
+      return agentWriting({ "notes/sprint-planning-2026-11-11.md": planning() })(text, cwd, source);
+    };
+    expect((await fleetContext(machine, ["add", slackSource], racing)).code).toBe(0);
+    const catalog = git(machine.root, "--git-dir", machine.remote, "show", "main:CATALOG.md");
+    expect(catalog).toContain("(notes/hiring-2026-11-10.md)");
+    expect(catalog).toContain("(notes/sprint-planning-2026-11-11.md)");
+  });
+
+  test("a capture that loses the race for its own note keeps the other edit and saves nothing", async () => {
+    const machine = library({ "notes/sprint-planning-2026-11-11.md": planning() });
+    await fleetContext(machine, ["sync"]);
+    const racing: Agent = async (text, cwd, source) => {
+      pushToLibrary(machine, { "notes/sprint-planning-2026-11-11.md": planning("Someone fixed the plan by hand.") });
+      return agentWriting({ "notes/sprint-planning-2026-11-11.md": planning("Ship the queue first.") })(text, cwd, source);
+    };
+    await expect(fleetContext(machine, ["add", slackSource], racing)).rejects.toThrow("notes/sprint-planning-2026-11-11.md changed on main while the capture ran; nothing was saved");
+    expect(git(machine.root, "--git-dir", machine.remote, "show", "main:notes/sprint-planning-2026-11-11.md")).toContain("Someone fixed the plan by hand.");
+    expect(git(machine.checkout, "worktree", "list").split("\n")).toHaveLength(1);
+  });
+
+  test("the capture agent may touch files only in its worktree and fetch pages only from the source's site", async () => {
+    const machine = library();
+    await fleetContext(machine, ["sync"]);
+    const bin = temp.make("claude-bin-");
+    const argvFile = join(bin, "argv.json");
+    writeFileSync(join(bin, "claude"), `#!/usr/bin/env bun\nawait Bun.write(${JSON.stringify(argvFile)}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\nawait Bun.write("notes/sprint-planning-2026-11-11.md", ${JSON.stringify(planning())});\n`, { mode: 0o755 });
+    const { captureAgent } = await import("./lib/capture.ts");
+    expect((await fleetContext(machine, ["add", slackSource], captureAgent({ role: "survey", work: "", provider: "claude", model: "claude-sonnet", effort: "high" }, join(bin, "claude")))).code).toBe(0);
+    const { argv, cwd } = JSON.parse(readFileSync(argvFile, "utf8")) as { argv: string[]; cwd: string };
+    const allowed = argv[argv.indexOf("--allowedTools") + 1]!.split(",");
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("dontAsk");
+    expect(argv[argv.indexOf("--tools") + 1]!.split(",").sort()).toEqual(["Edit", "Glob", "Grep", "Read", "WebFetch", "Write"]);
+    expect(allowed.filter((rule) => !rule.startsWith("mcp__"))).toEqual([`Read(/${cwd}/**)`, `Edit(/${cwd}/**)`, "WebFetch(domain:example.slack.com)"]);
   });
 
   test("saves nothing when the agent changes another file, names another source, or writes a secret", async () => {
