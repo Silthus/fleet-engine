@@ -75,6 +75,15 @@ export default {
       test: async (ctx) => (await upstreams()).appSignedIn(await host(ctx), await slackApp()),
       repair: { ask: "Sign the Slack bridge in to ChatGPT.", command: "fleet mcp-gateway slack-bridge sign-in", interactive: true },
     });
+    fleet.check({
+      on: "hub",
+      os: "linux",
+      when: slack,
+      id: "slack-bridge-tools",
+      say: "The Slack bridge serves no Slack tools: the ChatGPT account it signed in with has no Slack app. Connect Slack in ChatGPT, Settings, Apps.",
+      test: async (ctx) => (await upstreams()).appToolsMissing(await host(ctx), await slackApp()).then((missing) => !missing, () => false),
+      repair: { ask: "Reload the Slack bridge once its ChatGPT account has the Slack app.", command: "fleet mcp-gateway reconnect slack" },
+    });
     const sentences = {
       gmail: "Agents read your mail and leave replies as unsent drafts, through the MCP gateway.",
       "google-calendar": "Agents read your calendar through the MCP gateway, and change nothing.",

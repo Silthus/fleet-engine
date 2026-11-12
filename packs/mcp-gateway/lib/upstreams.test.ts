@@ -139,7 +139,7 @@ test("one ChatGPT sign-in serves every Google route and the gateway reloads all 
   const { api, home, hub } = hubWith({});
   for (const app of googleApps) await registerUpstream(hub, app);
   const codex = join(home, ".local/share/fleet/codex/current/bin/codex");
-  writeFileSync(codex, `#!/bin/sh\necho "$*" >> "$CODEX_HOME/logins"\necho '{}' > "$CODEX_HOME/auth.json"\n`);
+  writeFileSync(codex, `#!/bin/sh\necho "$*" >> "${home}/logins"\necho '{}' > "$CODEX_HOME/auth.json"\n`);
   chmodSync(codex, 0o755);
   api.calls.length = 0;
   expect(await signInApp(hub, gmail)).toBe(0);
@@ -149,7 +149,7 @@ test("one ChatGPT sign-in serves every Google route and the gateway reloads all 
   writeFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "broken");
   api.calls.length = 0;
   expect(await signInApp(hub, googleCalendar)).toBe(0);
-  expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/logins"), "utf8")).toBe("login --device-auth\nlogin --device-auth\n");
+  expect(readFileSync(join(home, "logins"), "utf8")).toBe("login --device-auth\nlogin --device-auth\n");
   expect(readFileSync(join(home, ".local/share/fleet-mcphub/data/google-codex/auth.json"), "utf8")).toBe("{}\n");
   expect(writes(api)).toEqual(["POST servers/gmail/reload", "POST servers/google-calendar/reload", "POST servers/google-drive/reload"]);
 });

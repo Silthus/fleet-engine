@@ -58,7 +58,7 @@ describe("the plan", () => {
     const bridgeSteps = (machine: MachineFile, workflows: Record<string, boolean> = {}) =>
       resolveEngine(sources, { packs: ["mcp-gateway"], hub: "hub-1", workflows }, machine).human.filter((step) => step.workflow === "slack-bridge").map((step) => step.id);
     expect(bridgeSteps(hub)).toEqual([]);
-    expect(bridgeSteps(hub, { "slack-bridge": true })).toEqual(["slack-bridge", "slack-bridge-sign-in"]);
+    expect(bridgeSteps(hub, { "slack-bridge": true })).toEqual(["slack-bridge", "slack-bridge-sign-in", "slack-bridge-tools"]);
     expect(bridgeSteps(devbox, { "slack-bridge": true })).toEqual([]);
     expect(bridgeSteps(mac, { "slack-bridge": true })).toEqual([]);
   });
@@ -236,6 +236,19 @@ describe("on the hub", () => {
     gatewayServer({ home });
     expect(await fleet(["mcp-gateway", "sign-in"])).toEqual({ code: 0, output: "On your computer, keep this running while you sign in: coder port-forward hub-1 --tcp 3317\ntickets: https://auth.example.com/authorize?state=1" });
     expect((await fleet(["mcp-gateway", "sign", "in"])).code).toBe(2);
+  });
+
+  test("doctor names a Slack bridge that is signed in yet lists no tools, and says where to connect Slack", async () => {
+    const { home, fleet } = machine(hubMachine, { workflows: { "slack-bridge": true } });
+    writeMcpHubSettings(home);
+    const { state } = gatewayServer({ home, servers: ["tickets", "calendar", "slack"], toolCounts: { slack: 0 } });
+    const finding = "The Slack bridge serves no Slack tools: the ChatGPT account it signed in with has no Slack app. Connect Slack in ChatGPT, Settings, Apps.";
+    expect((await fleet(["doctor"])).output).not.toContain(finding);
+    mkdirSync(join(home, ".local/share/fleet-mcphub/data/slack-codex"), { recursive: true });
+    writeFileSync(join(home, ".local/share/fleet-mcphub/data/slack-codex/auth.json"), "{}");
+    expect((await fleet(["doctor"])).output).toContain(`To do: ${finding} Run: fleet mcp-gateway reconnect slack`);
+    state.toolCounts.slack = 21;
+    expect((await fleet(["doctor"])).output).not.toContain(finding);
   });
 
   test("a solo machine, with no hub in the profile, is its own hub and issues its own key", async () => {

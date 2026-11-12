@@ -1,4 +1,4 @@
-import { chmod, mkdir, stat } from "node:fs/promises";
+import { chmod, mkdir, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { builtInApps, type CodexApp, type Upstream } from "./apps.ts";
 import { declaredUpstreams } from "./declared.ts";
@@ -8,6 +8,7 @@ import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBr
 
 const account = (app: CodexApp) => `${app.account ?? app.name}-codex`;
 export const appHome = (home: string, app: CodexApp) => join(dataDir(home), "data", account(app));
+const signInHome = (home: string, app: CodexApp) => join(dataDir(home), "sign-in", account(app));
 export const hubCodex = (home: string) => join(codexPackage(home), "current/bin/codex");
 
 type Config = Record<string, unknown>;
@@ -98,15 +99,42 @@ export async function codexApps(home: string) {
   return [...builtInApps, ...(await declaredUpstreams(home)).filter((upstream): upstream is CodexApp => upstream.kind === "codex-app")];
 }
 
+async function deviceSignIn(hub: Hub, app: CodexApp) {
+  const fresh = signInHome(hub.home, app);
+  await rm(fresh, { recursive: true, force: true });
+  await mkdir(fresh, { recursive: true, mode: 0o700 });
+  await mkdir(appHome(hub.home, app), { recursive: true, mode: 0o700 });
+  try {
+    const code = await Bun.spawn([hubCodex(hub.home), "login", "--device-auth"], { env: { ...process.env, CODEX_HOME: fresh }, stdio: ["inherit", "inherit", "inherit"] }).exited;
+    if (!code) await rename(join(fresh, "auth.json"), join(appHome(hub.home, app), "auth.json"));
+    return code;
+  } finally { await rm(fresh, { recursive: true, force: true }); }
+}
+
+export async function appToolsMissing(hub: Hub, app: CodexApp) {
+  if (!(await appSignedIn(hub, app))) return false;
+  const server = (await (await managementApi(hub))<Array<{ name: string; tools?: unknown[] }>>("servers")).find((item) => item.name === app.name);
+  return server !== undefined && !server.tools?.length;
+}
+
+const servesNoTools = async (call: Api, app: CodexApp) => !(await call<{ tools?: unknown[] }>(`servers/${encodeURIComponent(app.name)}`)).tools?.length;
+const connectHint = (app: CodexApp) => `Connect ${app.title} in ChatGPT, Settings, Apps, then run: fleet mcp-gateway reconnect ${app.name}`;
+
 export async function signInApp(hub: Hub, app: CodexApp) {
   if (!(await exists(hubCodex(hub.home)))) throw new Error(`${app.title} runs through Codex, and this hub has no Codex from Fleet. Run: fleet install-codex`);
-  await mkdir(appHome(hub.home, app), { recursive: true, mode: 0o700 });
   hub.print(`Sign in with the ChatGPT account whose ${app.title} app the gateway should use. This sign-in stays in its own Codex home.`);
-  const code = await Bun.spawn([hubCodex(hub.home), "login", "--device-auth"], { env: { ...process.env, CODEX_HOME: appHome(hub.home, app) }, stdio: ["inherit", "inherit", "inherit"] }).exited;
+  const code = await deviceSignIn(hub, app);
   if (code) return code;
   const sharing = (await codexApps(hub.home)).filter((other) => account(other) === account(app));
   const call = await managementApi(hub);
-  for (const other of sharing) if (await upstreamRegistered(hub, other)) await call(`servers/${encodeURIComponent(other.name)}/reload`, "POST");
+  const toolless: CodexApp[] = [];
+  for (const other of sharing) {
+    if (!(await upstreamRegistered(hub, other))) continue;
+    await call(`servers/${encodeURIComponent(other.name)}/reload`, "POST");
+    if (await servesNoTools(call, other)) toolless.push(other);
+  }
+  for (const other of toolless) hub.print(`The gateway finds no ${other.title} tools: the ChatGPT account you signed in with has no ${other.title} app. ${connectHint(other)}`);
+  if (toolless.length) return 1;
   hub.print(`${sharing.map((other) => other.title).join(", ")} signed in. Agents reach them through the gateway now.`);
   return 0;
 }
