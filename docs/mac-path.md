@@ -27,7 +27,7 @@ No agent can run a real Mac. Agents work on Linux devboxes. So this document, pl
 - `src/get.test.ts › get.sh › on macOS stops when the Homebrew installer leaves no brew on PATH` (new)
 - `src/get.test.ts › get.sh › passes sh -n`
 
-These tests stub `uname`, `xcode-select`, `curl`, `brew` and `sleep` in a sandbox `PATH` with a temporary `HOME`. They run only on a Linux host: `get.sh` puts the real `/opt/homebrew/bin` first on `PATH`, so on a Mac they could reach the real `brew`. CI runs Linux.
+These tests stub `uname`, `xcode-select`, `curl`, `brew` and `sleep` in a sandbox `PATH` with a temporary `HOME`. `FLEET_HOMEBREW_BINS` points `get.sh` at a sandbox Homebrew folder, where the fake Homebrew installer puts `brew`. So no test reaches the host's `/opt/homebrew/bin` or `/usr/local/bin`. The tests still run only on a Linux host: `get.sh` checks the absolute path `/Applications/T3 Code.app`, so on a Mac with the app the Homebrew tests would skip Homebrew. CI runs Linux.
 
 **Agent can run.** Yes, with stubs. The real Command Line Tools window, the real Homebrew installer and the real password prompt need a person on a Mac.
 
@@ -229,5 +229,5 @@ Each step is for a person on a clean macOS user account.
 - **No test:** finding the T3 server on the Mac through `ps` and the `.app` bundle (`serverCli` in `src/adapters/t3/session.ts`).
 - **No test:** `open` in place of `xdg-open` on the Mac (`realMachine.openUrl` in `src/setup/commands.ts`). It reads the platform from `node:os`, so a test cannot choose it.
 - **No test with the real files:** the pinned gh and Bun zips. The tests serve a wrong file and check the refusal. An agent ran `get.sh` as a fake arm64 Mac on Linux with the real downloads: both checksums matched, and both binaries are Mach-O.
-- **No test:** the skip for an existing `/Applications/T3 Code.app` (the tests stub `open -Ra`), and `/opt/homebrew/bin` on `PATH` in `get.sh`. Both use absolute paths that a test cannot make.
+- **No test:** the skip for an existing `/Applications/T3 Code.app` (the tests stub `open -Ra`). It uses an absolute path that a test cannot make. The tests prove that `get.sh` puts the Homebrew folders from `FLEET_HOMEBREW_BINS` on `PATH`, but not its default, `/opt/homebrew/bin:/usr/local/bin`.
 - **Shell.** The tests run `get.sh` with Linux's `sh`. macOS runs it with its own `/bin/sh`. `sh -n` and the POSIX-only script lower this risk, but only a Mac run proves it.
