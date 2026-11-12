@@ -1,4 +1,4 @@
-export type SecretReader = { read(prompt: string): Promise<string>; close(): void };
+export type SecretReader = { read(prompt: string): Promise<string>; close(): void; keyboard: boolean };
 export type ReadSecret = (prompt: string) => Promise<string>;
 
 export class Interrupted extends Error {
@@ -58,6 +58,7 @@ export function secretReader(input: Keyboard = process.stdin, output: NodeJS.Wri
   };
   process.once("exit", restore);
   return {
+    keyboard: Boolean(input.isTTY),
     read: (prompt) =>
       new Promise<string>((resolve, reject) => {
         if (!input.listeners("data").includes(onData)) input.on("data", onData).on("end", onEnd);
