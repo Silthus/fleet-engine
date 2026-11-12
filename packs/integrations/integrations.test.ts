@@ -35,7 +35,7 @@ async function applyPack(plan: AiPlan, workflows: Record<string, boolean> = {}) 
   await apply(resolved, { home, adapters: [cli.adapter], run: async () => 1 });
   const codex = (existsSync(join(home, ".codex/config.toml")) ? parse(readFileSync(join(home, ".codex/config.toml"), "utf8")) : {}) as { mcp_servers?: Record<string, unknown> };
   const doctor = await check(resolved, { home, adapters: [cli.adapter], run: async () => 1 });
-  const signIns = doctor.humanLeft.flatMap((step) => (step.pack === "integrations" ? [step.id] : [])).toSorted();
+  const signIns = doctor.findings.flatMap((finding) => (finding.pack === "integrations" && finding.id.startsWith("check:") ? [finding.id.slice("check:".length)] : [])).toSorted();
   return { cli, codex, signIns };
 }
 
@@ -50,7 +50,7 @@ describe("the Integrations pack", () => {
     expect(signIns).toEqual(["context7-claude", "context7-codex", "github-token"]);
   });
 
-  test("installs Convex only once the profile turns it on, and asks for its sign-in then", async () => {
+  test("installs Convex only once the profile turns it on, and lists its sign-in then", async () => {
     const { cli, signIns } = await applyPack("both", { convex: true });
 
     expect(cli.installed.claude).toContain("convex@claude-plugins-official");

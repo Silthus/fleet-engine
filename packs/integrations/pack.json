@@ -4,7 +4,7 @@
   "title": "Integrations",
   "summary": "Claude Code and Codex get the official GitHub, Context7, and Convex plugins, and Claude can hand work to Codex.",
   "day": "Agents read and change your GitHub issues and pull requests, look up current library docs before they write code, and inspect your Convex deployments. With both AI plans, Claude hands a task or a review to Codex.",
-  "cost": "Each plugin signs in once on each machine: a GitHub token for Claude, Context7 through the plugin's own sign-in, and Convex through its CLI. Codex's GitHub and Convex plugins use your ChatGPT sign-in. Convex starts off.",
+  "cost": "Each plugin signs in once on each machine, and fleet doctor says how: a GitHub token for Claude, Context7 through its own sign-in, and Convex through its CLI. Codex's GitHub and Convex plugins use your ChatGPT sign-in. Convex starts off.",
   "risk": "The plugins act with the accounts you sign in with. Fleet removes only plugins that it installed, and keeps a plugin you turn off in your settings off.",
   "workflows": [
     {
@@ -123,65 +123,58 @@
       ]
     }
   ],
-  "human": [
+  "checks": [
     {
       "id": "github-token",
-      "workflow": "github",
-      "plans": [
-        "claude",
-        "both"
-      ],
-      "say": "Give Claude's GitHub plugin a GitHub token. It reads GITHUB_PERSONAL_ACCESS_TOKEN from the shell that starts Claude Code, so add export GITHUB_PERSONAL_ACCESS_TOKEN=\"$(gh auth token)\" to your shell profile, or export a fine-grained token there. Fleet never stores the token.",
-      "probe": [
+      "run": [
         "sh",
         "-c",
         "claude mcp get plugin:github:github 2>/dev/null | grep -q 'Status: .*Connected'"
       ],
-      "undo": "Remove GITHUB_PERSONAL_ACCESS_TOKEN from your shell profile."
+      "say": "Claude's GitHub plugin cannot reach GitHub. It reads a token from GITHUB_PERSONAL_ACCESS_TOKEN in the shell that starts Claude Code, so add export GITHUB_PERSONAL_ACCESS_TOKEN=\"$(gh auth token)\" to your shell profile, or export a fine-grained token there, then start a new shell. Fleet never stores the token.",
+      "workflow": "github",
+      "plans": [
+        "claude",
+        "both"
+      ]
     },
     {
       "id": "context7-claude",
+      "run": [
+        "sh",
+        "-c",
+        "claude mcp get plugin:context7:context7 2>/dev/null | grep -q 'Status: .*Connected'"
+      ],
+      "say": "Claude's Context7 plugin is not signed in. In Claude Code, run /mcp, choose plugin:context7:context7, and authenticate.",
       "workflow": "context7",
       "plans": [
         "claude",
         "both"
-      ],
-      "say": "Sign in to Context7 in Claude Code: run /mcp, choose plugin:context7:context7, and authenticate.",
-      "probe": [
-        "sh",
-        "-c",
-        "claude mcp get plugin:context7:context7 2>/dev/null | grep -q 'Status: .*Connected'"
       ]
     },
     {
       "id": "context7-codex",
-      "workflow": "context7",
-      "plans": [
-        "codex",
-        "both"
-      ],
-      "say": "Sign in to Context7 in Codex.",
-      "command": "codex mcp login context7",
-      "interactive": true,
-      "probe": [
+      "run": [
         "sh",
         "-c",
         "codex mcp list 2>/dev/null | awk '$1 == \"context7\" { print $NF }' | grep -qx OAuth"
       ],
-      "undo": "Run codex mcp logout context7."
+      "say": "Codex is not signed in to Context7. Run codex mcp login context7.",
+      "workflow": "context7",
+      "plans": [
+        "codex",
+        "both"
+      ]
     },
     {
       "id": "convex-login",
-      "workflow": "convex",
-      "say": "Sign in to Convex once on this machine. Each project then picks its own deployment. Never point agents at a production deployment by default.",
-      "command": "npx convex login",
-      "interactive": true,
-      "probe": [
+      "run": [
         "sh",
         "-c",
         "test -s \"$HOME/.convex/config.json\""
       ],
-      "undo": "Run npx convex logout."
+      "say": "Convex is not signed in on this machine. Run npx convex login once. Each project then picks its own deployment, and agents should never point at a production deployment by default.",
+      "workflow": "convex"
     }
   ]
 }
