@@ -120,7 +120,7 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
     const other = owner(file.target);
     const folder = folders.get(file.target);
     if (other) actions.push({ target: file.target, operation: "conflict", reason: `Kept by the ${other} setup`, owner: other });
-    else if (folder) actions.push(moved.has(folder) ? { target: file.target, operation: "replace" } : { target: file.target, operation: "conflict", reason: `its folder ${folder} is a link; adopting moves that link to the backups` });
+    else if (folder) actions.push(moved.has(folder) ? { target: file.target, operation: "replace" } : { target: file.target, operation: "conflict", reason: `its folder ${folder} is a link or a file, not a real folder; adopting moves it to the backups` });
     else if (await matches(path, record(file))) actions.push({ target: file.target, operation: "keep" });
     else if (!(await stat(path))) actions.push({ target: file.target, operation: "create" });
     else if ((previous[file.target] && await matches(path, previous[file.target])) || taken(file.target)) {

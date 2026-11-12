@@ -229,7 +229,7 @@ describe("fleet apply", () => {
     const profile = profileDir();
     const kept = await fleet(["apply", "--profile", profile], home);
     expect(kept).toMatchObject({ code: 0 });
-    expect(kept.output).toContain("Kept your .agents/guides/t3.md (its folder .agents/guides is a link; adopting moves that link to the backups). Run fleet apply --adopt .agents/guides/t3.md to take Fleet's version.");
+    expect(kept.output).toContain("Kept your .agents/guides/t3.md (its folder .agents/guides is a link or a file, not a real folder; adopting moves it to the backups). Run fleet apply --adopt .agents/guides/t3.md to take Fleet's version.");
     expect(readlinkSync(join(home, ".agents/guides"))).toBe(elsewhere);
 
     const adopted = await fleet(["apply", "--adopt", ".agents/guides/t3.md"], home);
