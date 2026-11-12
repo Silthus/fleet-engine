@@ -22,6 +22,9 @@ export type Issuer = (entries: CatalogEntry[], node: string) => Promise<Finding[
 
 export const filesGroup = "fleet";
 
+/** Files the private Fleet wrote that a pack now replaces, which --adopt-from removes while they are unchanged. */
+const retiredTargets = [".codex/rules/fleet.rules"];
+
 /**
  * Files keeps whatever it cannot safely change: a local edit or an unmanaged
  * file (a conflict), and during a source outage every file it would replace or
@@ -33,7 +36,7 @@ export const filesAdapter: Adapter = {
   targets: (plan) => plan.files.map((file) => file.target),
   async apply(plan, { home, dryRun, adopt, adoptFrom = [] }) {
     const own = adopt.filter((target) => plan.files.some((file) => file.target === target));
-    const choices = { adopt: own, release: adoptFrom };
+    const choices = { adopt: own, release: adoptFrom, retire: retiredTargets };
     const first = await planFiles(home, plan.files, filesGroup, choices);
     const outage = unreachable(plan);
     const parked = outage.length ? first.filter((action) => action.operation === "remove" || action.operation === "replace") : [];
@@ -41,7 +44,7 @@ export const filesAdapter: Adapter = {
     const claimed = first.filter((action) => action.operation === "conflict" && action.owner);
     if (claimed.length) return { actions: [...claimed, ...kept], findings: [...claimFindings(claimed), ...keptFindings(kept)], blocked: true };
     const hold = [...kept, ...parked].map((action) => action.target);
-    const findings = keptFindings(kept);
+    const findings = [...keptFindings(kept), ...retiredFindings(first)];
     if (parked.length) {
       findings.push({ id: "outage", pack: "engine", say: `Left ${parked.map((action) => action.target).join(", ")} as they are until ${outage.join(", ")} can be fetched.`, repair: "apply" });
     }
@@ -63,6 +66,10 @@ function keptFindings(kept: Action[]): Finding[] {
       pack: "engine",
       say: `Kept your ${action.target} (${action.reason}). Run fleet apply --adopt ${action.target} to take Fleet's version.`,
   }));
+}
+
+function retiredFindings(actions: Action[]): Finding[] {
+  return actions.filter((action) => action.operation === "keep" && action.reason).map((action) => ({ id: `kept:${action.target}`, pack: "engine", say: `Kept your ${action.target}: ${action.reason}. Remove it once you no longer need it.` }));
 }
 
 function claimFindings(claimed: Action[]): Finding[] {

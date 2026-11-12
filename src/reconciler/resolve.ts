@@ -74,7 +74,10 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
   const hubless = !profile.hub && Boolean(profile.devboxes?.length);
   const onceRunner = profile.devboxes?.find((name) => name !== profile.hub) ?? profile.hub;
   if (machine.role === "hub" || solo) plan.onHub = true;
+  const declared = declaredWorkflows(sources);
   const fits = (pack: string, item: Scope, label: string) => {
+    const unknown = declared && item.unless?.find((id) => !declared.has(id));
+    if (unknown) throw new ResolveError(`${pack}: ${label} gives way to workflow ${unknown}, which no pack declares`);
     const elected = item.oncePerFleet && onceRunner ? machine.name === onceRunner : undefined;
     const reason =
       item.on && !item.on.includes(os) ? `not on ${os}`
@@ -195,6 +198,12 @@ function checkUniqueIds(order: Candidate[]) {
 }
 
 const codexPlans: AiPlan[] = ["codex", "both"];
+
+/** The workflow ids every source declares, or undefined while a source is unreachable and may declare more. */
+function declaredWorkflows(sources: FetchedSource[]) {
+  if (sources.some((source) => "error" in source)) return undefined;
+  return new Set(sources.flatMap((source) => ("error" in source ? [] : source.packs.flatMap((pack) => (pack.manifest.workflows ?? []).map((workflow) => workflow.id)))));
+}
 
 /** Every target stays inside the home directory, and no two files share one. */
 const providerConfigFiles = [".claude/settings.json", ".codex/config.toml"];

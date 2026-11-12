@@ -6,7 +6,7 @@ import { loadPacks } from "./manifest.ts";
 import { tryLock, waitLock } from "../lock.ts";
 import type { AvailableSource, FetchedSource, LoadedPack, SourceRef } from "./types.ts";
 
-const sourceName = /^[a-z0-9][a-z0-9-]*$/;
+export const sourceName = /^[a-z0-9][a-z0-9-]*$/;
 const fetchTimeoutMs = 120_000;
 const cacheWaitMs = 10 * 60_000;
 

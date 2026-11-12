@@ -218,7 +218,7 @@ describe("resolve", () => {
     expect(plan({ packs: ["none"] }, mac, [engine, none]).files.filter((item) => item.target.startsWith(".codex/rules/"))).toEqual([]);
   });
 
-  test("drops an item while a workflow it gives way to is on, also one of another pack, and keeps it while that workflow is off or unknown", () => {
+  test("drops an item while a workflow it gives way to is on, also one of another pack, and keeps it while that workflow is off or its pack is not on", () => {
     const bridge = withPack({ schema: 1, name: "bridge", summary: "Bridge.", workflows: [{ id: "bridge", name: "Bridge", sentence: "Bridge.", default: false }] });
     const native = withPack({ schema: 1, name: "native", summary: "Native.", config: [{ provider: "claude", key: "enabledPlugins.chat@market", value: true, unless: ["bridge"] }] });
     const result = (fields: Partial<Profile>) => plan({ packs: ["bridge", "native"], ...fields }, mac, [engine, bridge, native]);
@@ -226,7 +226,13 @@ describe("resolve", () => {
     expect(chat({})).toEqual(["enabledPlugins.chat@market"]);
     expect(chat({ workflows: { bridge: true } })).toEqual([]);
     expect(result({ workflows: { bridge: true } }).dropped).toContainEqual({ pack: "native", item: "config claude:enabledPlugins.chat@market", reason: "gives way to workflow bridge" });
-    expect(plan({ packs: ["native"] }, mac, [engine, native]).config.filter((entry) => entry.pack === "native")).toHaveLength(1);
+    expect(plan({ packs: ["native"] }, mac, [engine, bridge, native]).config.filter((entry) => entry.pack === "native")).toHaveLength(1);
+  });
+
+  test("refuses an item that gives way to a workflow no pack of any source declares, but not while a source that may declare it is unreachable", () => {
+    const native = withPack({ schema: 1, name: "native", summary: "Native.", config: [{ provider: "claude", key: "enabledPlugins.chat@market", value: true, unless: ["brigde"] }] });
+    expect(() => plan({ packs: ["native"] }, mac, [engine, native])).toThrow("native: config claude:enabledPlugins.chat@market gives way to workflow brigde, which no pack declares");
+    expect(plan({ packs: ["native"] }, mac, [engine, native, { ref: agentSkills.ref, error: "offline" }]).config.filter((entry) => entry.pack === "native")).toHaveLength(1);
   });
 
   test("limits items by os and role", () => {

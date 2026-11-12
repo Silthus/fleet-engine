@@ -2,8 +2,9 @@ import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import type { MachineFile, PackManifest, Profile, ProfileFile } from "../pack/types.ts";
+import type { MachineFile, PackManifest, Profile, ProfileFile, SourceRef } from "../pack/types.ts";
 import { configEntryProblem, isModelRow } from "../pack/manifest.ts";
+import { sourceName } from "../pack/sources.ts";
 import { withoutCredentials } from "../credentials.ts";
 import { writePrivateFile } from "../files/private.ts";
 import { isKeptForBoxes } from "../hub/names.ts";
@@ -174,6 +175,10 @@ function checkProfile(file: Record<string, unknown>, path: string): ProfileFile 
   if (!aiPlans.includes(file.plan as string)) fail("plan must be claude, codex, or both");
   if (!Array.isArray(file.sources) || !file.sources.every((source) => isRecord(source) && ["name", "repo", "ref"].every((key) => typeof source[key] === "string"))) {
     fail("each source needs a name, a repo, and a ref");
+  }
+  for (const source of file.sources as SourceRef[]) {
+    if (!sourceName.test(source.name)) fail(`source name ${JSON.stringify(source.name)} must be lowercase words joined by dashes`);
+    if (source.repo.startsWith("-") || source.ref.startsWith("-")) fail(`source ${source.name}: repo and ref must not start with -`);
   }
   if (!isRecord(file.settings) || !Object.values(file.settings).every((value) => ["string", "number", "boolean"].includes(typeof value))) fail("settings must map keys to text, numbers, or true and false");
   if (!isRecord(file.workflows) || !Object.values(file.workflows).every((value) => typeof value === "boolean")) fail("workflows must map ids to true or false");

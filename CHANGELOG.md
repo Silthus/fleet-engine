@@ -34,9 +34,14 @@ packs, and your answers live in your own private profile repo.
 
 - **Base** (always on): safety rules, the model table, T3 Code defaults written
   before its first start, linked machines, worktree cleanup, a disk guard, and
-  nightly updates. With Codex, a rules file lets Codex run Git fetches and
-  pushes, read-only `gh` and `fleet` commands, and installs outside its
-  sandbox without asking. A pack ships its own Codex rules with `codexRules`;
+  nightly updates. With Codex, a rules file lets Codex run these commands
+  outside its sandbox without asking: Git fetches, pulls, and pushes; `gh`
+  commands that read pull requests, runs, issues, and repos, and
+  `gh pr create`, `edit`, and `ready`, which change pull requests; `bun` and
+  `pnpm` installs, which run package scripts; `fleet heavy` and `fleet proof`,
+  which run any command they are given; and `fleet doctor`,
+  `fleet apply --dry-run`, and other `fleet` commands that read. A pack ships
+  its own Codex rules with `codexRules`;
   Fleet writes them as `~/.codex/rules/fleet-<pack>.rules` and keeps a rules
   file you changed.
 - **Pull requests** (on): every fix or feature ends as a proven, reviewed draft
