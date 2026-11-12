@@ -45,16 +45,33 @@ test("a hub command from a node gives back the hub's exit code", async () => {
   expect(await node("issued-admin", "fail")).toEqual({ code: 3, output: 'yes ["fail"]' });
 });
 
-test("a command of a workflow that is off is refused on every machine, and runs on the hub once the workflow is on", async () => {
-  const { hub, node, profile, hosts } = linkedFleets(temp);
+test("a command of a workflow that is off is refused on the hub, and from a node through the hub, until the workflow is on", async () => {
+  const { hub, node, profile } = linkedFleets(temp);
   const refusal = "fleet: fleet issued-extra-admin belongs to the issued-extra workflow, which is off. Turn it on with fleet packs --workflows issued-extra=on.";
-  hosts["hub-1"] = "down";
-  expect(await node("issued-extra-admin", "here")).toEqual({ code: 1, output: refusal });
   expect(await hub("issued-extra-admin", "here")).toEqual({ code: 1, output: refusal });
+  expect(await node("issued-extra-admin", "here")).toEqual({ code: 1, output: refusal });
 
   const file = join(profile, "fleet.json");
   writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), workflows: { "issued-extra": true } }));
   expect(await hub("issued-extra-admin", "here")).toEqual({ code: 0, output: 'extra ["here"]' });
+  expect(await node("issued-extra-admin", "here")).toEqual({ code: 0, output: 'extra ["here"]' });
+});
+
+test("a Mac runs a hub command on the hub when the command's workflow is on there, though the Mac itself lacks what the workflow needs", async () => {
+  const { mac, profile } = linkedFleets(temp);
+  const file = join(profile, "fleet.json");
+  const { devboxes: _, ...saved } = JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify({ ...saved, workflows: { "issued-extra": true } }));
+  expect(await mac()("issued-extra-admin", "here")).toEqual({ code: 0, output: 'extra ["here"]' });
+});
+
+test("a command of a workflow that is chosen but cannot run on this machine names why", async () => {
+  const { other, profile } = linkedFleets(temp);
+  const file = join(profile, "fleet.json");
+  const { hub: _, devboxes: __, ...saved } = JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify({ ...saved, workflows: { "issued-extra": true } }));
+  const solo = other({ schema: 1, role: "mac", name: "laptop-4" });
+  expect(await solo("issued-extra-admin", "here")).toEqual({ code: 1, output: "fleet: fleet issued-extra-admin belongs to the issued-extra workflow, which is off on this machine: it needs devbox." });
 });
 
 test("the hub runs its own hub command", async () => {

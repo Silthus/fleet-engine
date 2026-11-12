@@ -50,5 +50,5 @@ export function linkedFleets(temp: ReturnType<typeof tempDirs>, port?: number, n
   const hub = machine(hubMachine);
   const node = machine(nodeMachine, nodeClock);
   hosts["hub-1"] = hub.fleet;
-  return { hub: hub.typed, hubFleet: hub.fleet, hubHome: hub.home, node: node.typed, nodeHome: node.home, other: (saved: MachineFile) => machine(saved).typed, mac: () => machine(macMachine, undefined, "darwin").typed, hosts, profile };
+  return { hub: hub.typed, hubFleet: hub.fleet, node: node.typed, nodeHome: node.home, other: (saved: MachineFile) => machine(saved).typed, mac: () => machine(macMachine, undefined, "darwin").typed, hosts, profile };
 }

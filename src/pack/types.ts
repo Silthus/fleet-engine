@@ -166,9 +166,7 @@ export type PackCode = {
   settingKey(handle: unknown): string;
   serviceId(handle: unknown): string;
   repairs: Record<string, (ctx: Context) => Promise<void>>;
-  commands: Record<string, (args: string[], ctx: Context) => Promise<number>>;
-  hubCommands: string[];
-  commandWorkflows: Record<string, string>;
+  commands: Record<string, { run(args: string[], ctx: Context): Promise<number>; on?: "hub"; workflow?: string }>;
   services: Record<string, (ctx: Context) => Promise<void>>;
   credentials: Record<string, (ctx: Context, node: string) => Promise<string>>;
   checks: Record<string, (ctx: Context) => Promise<boolean>>;
