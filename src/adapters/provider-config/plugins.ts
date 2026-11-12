@@ -38,10 +38,14 @@ export function wantedCodexPlugins(plan: Plan) {
 
 type PluginSettings = { outage: boolean; accepted?: string[]; claudeEnabled?: Record<string, boolean>; marketplaces?: Sources; acceptedCodex?: string[] };
 
-/** Installs the plugins packs enable, through Claude Code and Codex in the given home. Removes only plugins that Fleet installed. Reads the earlier Fleet's record, and never writes it. */
+/**
+ * Installs the plugins packs enable, through Claude Code and Codex in the given home. Removes only plugins that Fleet installed.
+ * Reads the earlier Fleet's record, and never writes it: a plugin that Fleet installed becomes this Fleet's only once a pack enables it again.
+ */
 export async function reconcilePlugins(plan: Plan, home: string, dryRun: boolean, run: CommandRunner, settings: PluginSettings): Promise<Finding[]> {
   const text = await readState(home, pluginsTarget);
-  const record = parseOwned(text ?? (await readState(home, earlierTarget)), text === undefined ? earlierTarget : pluginsTarget);
+  const earlier = parseOwned(await readState(home, earlierTarget), earlierTarget);
+  const record = adopt(parseOwned(text, pluginsTarget), earlier, { claude: wantedPlugins(plan), codex: wantedCodexPlugins(plan) });
   let saved = text;
   const save = async (next: Owned) => {
     const after = encodeOwned(next);
@@ -102,7 +106,7 @@ async function reconcileCodex(plan: Plan, home: string, dryRun: boolean, run: Co
   if (!planned.length && !owned.length) return [];
   if (!settings.acceptedCodex) return planned.length ? [{ id: "plugins:codex", pack: "engine", say: `Codex plugins wait until Fleet can change .codex/config.toml: ${planned.join(", ")}.`, repair: "apply" }] : [];
   const wanted = planned.filter((id) => settings.acceptedCodex!.includes(id));
-  const codex: Codex = (args) => run(["codex", "plugin", ...args], { home });
+  const codex: Codex = (args) => run(["codex", "plugin", ...args], { home, clearEnv: ["CODEX_HOME"] });
   const installed = await listCodex(codex);
   if (!installed) return planned.length ? [{ id: "plugins:codex", pack: "engine", say: `Codex is not installed yet, so its plugins wait: ${planned.join(", ")}.`, repair: "apply" }] : [];
   const findings: Finding[] = [];
@@ -266,6 +270,11 @@ function parseOwned(text: string | undefined, target: string): Owned {
   const parsed = { claude: claude.map(claudeOwned), codex: codex.map(({ id, version, enabled, pending }) => ({ id, version, enabled, ...(pending ? { pending } : {}) })) };
   if (!unique(parsed.claude.map((entry) => entry.id)) || !unique(parsed.codex.map((entry) => entry.id))) throw new Error(`${target} is not a plugin record`);
   return parsed;
+}
+
+function adopt(owned: Owned, earlier: Owned, planned: { claude: string[]; codex: string[] }): Owned {
+  const take = <Entry extends { id: string }>(mine: Entry[], theirs: Entry[], wanted: string[]) => [...mine, ...theirs.filter((entry) => wanted.includes(entry.id) && !mine.some((own) => own.id === entry.id))];
+  return { claude: take(owned.claude, earlier.claude, planned.claude), codex: take(owned.codex, earlier.codex, planned.codex) };
 }
 
 function fromEarlierFleet(installed: unknown[], target: string): { claude: ClaudeOwned[]; codex: CodexOwned[] } {
