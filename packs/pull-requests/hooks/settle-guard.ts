@@ -3,12 +3,14 @@ import { join } from "node:path";
 import { type Hook, printing, runHook } from "../../base/lib/hook.ts";
 import type { ShellThread } from "../../base/lib/t3/index.ts";
 import { runGh } from "../lib/gh.ts";
-import { handedOver, isOrganize, prState, readT3Threads, settleRefusal, settleTarget } from "../lib/pr-owners.ts";
+import { isOrganize, prState, readHandovers, readT3Threads, settleRefusal, settleTarget } from "../lib/pr-owners.ts";
 
 type ToolCall = { tool_name?: string; tool_input?: Record<string, unknown> };
-export type SettleDeps = { threads: (home: string) => Promise<ShellThread[] | undefined>; prState: (url: string) => Promise<string>; self?: string };
+export type SettleDeps = { threads: (home: string, environmentId?: string) => Promise<ShellThread[] | undefined>; prState: (url: string) => Promise<string>; self?: string };
 
 const fallbackPerson = "the person who runs this machine";
+const noAnswer = "Fleet blocked this settle: T3 did not answer; retry, or settle in the T3 UI.";
+const deny = (reason: string) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
 
 export function personName(home: string): string {
   try {
@@ -22,12 +24,14 @@ export function personName(home: string): string {
 
 export async function guardSettle(call: ToolCall, home: string, deps: SettleDeps) {
   if (!isOrganize(call.tool_name)) return undefined;
-  const id = settleTarget(call.tool_input ?? {}, deps.self);
+  const input = call.tool_input ?? {};
+  const id = settleTarget(input, deps.self);
   if (!id) return undefined;
-  const threads = await deps.threads(home);
-  if (!threads) return undefined;
-  const reason = await settleRefusal(id, { threads, handedOver: () => handedOver(home), prState: deps.prState }, personName(home));
-  return reason ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } } : undefined;
+  const machine = typeof input.environmentId === "string" && input.environmentId ? input.environmentId : undefined;
+  const threads = await deps.threads(home, machine).catch(() => undefined);
+  if (!threads) return deny(noAnswer);
+  const reason = await settleRefusal(id, { threads, handovers: () => readHandovers(home), prState: deps.prState }, personName(home));
+  return reason ? deny(reason) : undefined;
 }
 
 export const hook: Hook = async (_provider, readInput, home) => {

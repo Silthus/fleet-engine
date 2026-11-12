@@ -1,10 +1,10 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { matchThread, readSnapshots, type ShellThread, withT3Session } from "../../base/lib/t3/index.ts";
+import { type LinkedThread, listLinkedThreads, matchThread, readSnapshots, type ShellThread, type T3HttpClient, withT3Session } from "../../base/lib/t3/index.ts";
 import type { Gh } from "./gh.ts";
 
-export type Handover = { pr: string; from?: string; to: string; at: string };
-export type OwnerDeps = { threads: ShellThread[]; handedOver: () => Promise<Set<string>>; prState: (url: string) => Promise<string> };
+export type Handover = { pr: string; from: string; to: string; at: string };
+export type OwnerDeps = { threads: ShellThread[]; handovers: () => Promise<Handover[]>; prState: (url: string) => Promise<string> };
 
 export const handoverUsage = "Usage: fleet pr handover --pr <PR URL> --to <thread id>";
 export const handoverPath = (home: string) => join(home, ".local/state/fleet/pr-handovers.jsonl");
@@ -21,21 +21,23 @@ export function parseHandover(args: string[]): { pr: string; to: string } {
 
 export async function recordHandover(args: string[], home: string, from: string | undefined, now: Date): Promise<Handover> {
   const { pr, to } = parseHandover(args);
-  const record: Handover = { pr: key(pr), ...(from ? { from } : {}), to, at: now.toISOString() };
+  if (!from) throw new Error("fleet pr handover runs inside a T3 thread: T3CODE_THREAD_ID names the thread that hands the PR over.");
+  const record: Handover = { pr: key(pr), from, to, at: now.toISOString() };
   await mkdir(dirname(handoverPath(home)), { recursive: true, mode: 0o700 });
   await appendFile(handoverPath(home), `${JSON.stringify(record)}\n`, { mode: 0o600 });
   return record;
 }
 
-export async function handedOver(home: string): Promise<Set<string>> {
+export async function readHandovers(home: string): Promise<Handover[]> {
   const text = await readFile(handoverPath(home), "utf8").catch(() => "");
-  return new Set(text.split("\n").filter(Boolean).map((row) => {
+  return text.split("\n").filter(Boolean).flatMap((row) => {
     try {
-      return (JSON.parse(row) as Partial<Handover>).pr ?? "";
+      const record = JSON.parse(row) as Partial<Handover>;
+      return typeof record.pr === "string" && typeof record.from === "string" && typeof record.to === "string" ? [record as Handover] : [];
     } catch {
-      return "";
+      return [];
     }
-  }));
+  });
 }
 
 const live = (thread: ShellThread) => !thread.deletedAt && !thread.archivedAt && !thread.settledAt;
@@ -53,8 +55,18 @@ export function ownedLinks(threads: ShellThread[], id: string): string[] {
   return [...links].filter(([known]) => !others.has(known)).map(([, url]) => url);
 }
 
+function handedOverBy(handovers: Handover[], threads: ShellThread[], id: string): Set<string> {
+  const settling = matchThread(threads, id, (thread) => thread.id);
+  if (!settling) return new Set();
+  const named = (value: string) => matchThread(threads, value, (thread) => thread.id);
+  return new Set(handovers.filter(({ from, to }) => {
+    const taker = named(to);
+    return named(from) === settling && taker !== undefined && taker !== settling && live(taker);
+  }).map(({ pr }) => key(pr)));
+}
+
 export async function settleRefusal(id: string, deps: OwnerDeps, person: string): Promise<string | undefined> {
-  const handovers = await deps.handedOver();
+  const handovers = handedOverBy(await deps.handovers(), deps.threads, id);
   const open: string[] = [];
   for (const url of ownedLinks(deps.threads, id).filter((url) => !handovers.has(key(url)))) {
     const state = await deps.prState(url).catch((error: Error) => `unknown (${error.message.split("\n")[0]})`);
@@ -63,7 +75,7 @@ export async function settleRefusal(id: string, deps: OwnerDeps, person: string)
   if (!open.length) return undefined;
   return `Fleet blocked this settle: the thread owns open PR(s) ${open.join(", ")}, and no other open thread links them. `
     + "Hand each over first: the thread that takes it over links it with link_pull_request, or record the handover with "
-    + `\`fleet pr handover --pr <PR URL> --to <thread id>\`. Or close or merge the PR. ${person} can still settle the thread in T3.`;
+    + `\`fleet pr handover --pr <PR URL> --to <thread id>\`, which counts while the thread it names stays open. Or close or merge the PR. ${person} can still settle the thread in T3.`;
 }
 
 export async function prState(gh: Gh, url: string): Promise<string> {
@@ -76,7 +88,7 @@ export async function prState(gh: Gh, url: string): Promise<string> {
 export const isOrganize = (name = "") => /^mcp__t3[-_]code__t3_thread_organize$/.test(name);
 
 export function settleTarget(input: Record<string, unknown>, self: string | undefined): string | undefined {
-  if (!["settle", "archive"].includes(String(input.action)) || input.environmentId) return undefined;
+  if (!["settle", "archive"].includes(String(input.action))) return undefined;
   return typeof input.threadId === "string" && input.threadId ? input.threadId : self;
 }
 
@@ -87,6 +99,30 @@ export function threadsOwningPrs(threads: ShellThread[]): string[] {
   });
 }
 
-export async function readT3Threads(home: string): Promise<ShellThread[] | undefined> {
-  return withT3Session(async (client) => (await readSnapshots(client)).flatMap((snapshot) => snapshot.threads), { home }).catch(() => undefined);
+async function localEnvironment(client: T3HttpClient): Promise<string | undefined> {
+  const answer = await client.get<{ environmentId?: unknown }>("/.well-known/t3/environment").catch(() => undefined);
+  return typeof answer?.environmentId === "string" ? answer.environmentId : undefined;
+}
+
+function asShellThreads(linked: LinkedThread[]): ShellThread[] {
+  const byId = new Map(linked.map((thread) => [thread.threadId, thread]));
+  const rootOfLinked = (thread: LinkedThread): string => {
+    const parent = thread.parentThreadId ? byId.get(thread.parentThreadId) : undefined;
+    return parent ? rootOfLinked(parent) : thread.parentThreadId ?? thread.threadId;
+  };
+  return linked.map((thread) => ({
+    id: thread.threadId, title: thread.title, projectId: thread.projectId, status: thread.status,
+    ...(thread.settled ? { settledAt: thread.updatedAt || "settled" } : {}),
+    ...(thread.parentThreadId ? { lineage: { parentThreadId: thread.parentThreadId, rootThreadId: rootOfLinked(thread) } } : {}),
+    pullRequests: (thread.pullRequests ?? []).map((pr) => ({ repository: pr.repository, number: pr.number, url: pr.url, ...(pr.state ? { snapshot: { state: pr.state } } : {}) })),
+  }));
+}
+
+export async function readT3Threads(home: string, environmentId?: string): Promise<ShellThread[] | undefined> {
+  return withT3Session(async (client) => {
+    if (environmentId && environmentId !== await localEnvironment(client)) {
+      return asShellThreads(await listLinkedThreads(client, environmentId, { allProjects: true, includeSubagents: true }));
+    }
+    return (await readSnapshots(client)).flatMap((snapshot) => snapshot.threads);
+  }, { home }).catch(() => undefined);
 }
