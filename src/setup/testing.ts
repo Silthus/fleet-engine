@@ -226,6 +226,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line.includes("codex exec")) return result(passes("box:chatgpt"), "ok");
     if (line.startsWith("sh -c 'if [ -f ")) return result(true, Object.entries(options.boxFiles ?? {}).map(([path, text]) => `=== file ${path}\n${text}\n`).join(""));
     if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
+    if (line.includes("/userdata/logs/boot-service.log")) return forReal(line, host, input);
     if (line.startsWith("sh -c ") && line.includes("/userdata/environment-id")) return options.withoutT3?.includes(host) ? result(false, "cat: environment-id: No such file or directory") : result(true, `env-${host}\n`);
     return t3(line, "BOXCODE", input, { name: "box", home: boxHome(home, host), linked: passes("box:t3"), tunnel: options.boxTunnel ?? "box-1.relay.example", sessions: boxSessions }) ?? result(false, `unexpected on the box: ${line}`);
   };

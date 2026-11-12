@@ -315,9 +315,18 @@ async function liveServerOrigin(machine: Machine): Promise<string | undefined> {
   return (await machine.exec(["sh", "-c", `kill -0 ${pid}`])).code === 0 ? url.origin : undefined;
 }
 
+async function tunnelLimitReached(machine: Machine) {
+  const log = await machine.exec(["sh", "-c", recentServiceLog]);
+  return log.code === 0 ? log.stdout.match(tunnelLimit)?.at(-1) : undefined;
+}
+
+const tunnelLimit = /Relay managed tunnel limit reached: this account allows at most \d+ tunnels?/g;
+
 export const t3HomeGuard = `case "$T3CODE_HOME" in *[![:graph:]]* | [!/]* | */../* | */..) exit 1 ;; esac;`;
 
 const runtimeRecord = `${t3HomeGuard} [ -z "$VITE_DEV_SERVER_URL" ] && cat "\${T3CODE_HOME:-$HOME/.t3}/userdata/server-runtime.json"`;
+
+const recentServiceLog = `${t3HomeGuard} tail -c 2000000 "\${T3CODE_HOME:-$HOME/.t3}/userdata/logs/boot-service.log"`;
 
 function loopbackUrl(value: unknown) {
   try {
@@ -355,6 +364,8 @@ async function linkBothWays(host: string, box: Machine, context: DevboxContext) 
     if (linked.code !== 0) throw new Error(`could not link ${fromName} from ${toName}: ${linked.output.trim().split("\n").at(-1) ?? ""}`);
   };
   const boxAddress = await connectAddressWithin(box);
+  const limit = boxAddress ? undefined : await tunnelLimitReached(box);
+  if (limit) throw new Error(`${host} has no T3 Connect tunnel: T3 Code there says ${limit}. Free one: run t3 connect logout on a machine that no longer needs T3 Connect, or unlink it in T3 Connect. Then run systemctl --user restart t3code.service on ${host}, and run fleet setup again.`);
   if (!boxAddress) throw new Error(`${host} has no T3 Connect address yet. Update T3 Code on ${host}, then run fleet setup again.`);
   await link(box, host, boxAddress, context.machine, here);
   const hereAddress = await connectAddress(context.machine);

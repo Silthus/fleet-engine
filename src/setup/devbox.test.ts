@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { overSsh, pairing, profileForBox, sshHosts } from "./devbox.ts";
 import { claudeProbeTimeoutMs } from "./signins.ts";
-import { deadEnvironmentToken, fakeMachine, fleetSetup, machineFile, onBox, remote } from "./testing.ts";
+import { boxHome, deadEnvironmentToken, fakeMachine, fleetSetup, machineFile, onBox, remote } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -112,6 +112,18 @@ describe("the devbox over SSH", () => {
     expect(result.output).toContain("node-1 has no T3 Connect address yet. Update T3 Code on node-1, then run fleet setup again.");
     expect(box.calls.map((call) => call.command.join(" "))).not.toContainEqual(expect.stringContaining("t3 environment link"));
     expect(box.sessions().filter((session) => !session.revoked)).toEqual([]);
+  });
+
+  test("names the T3 Connect tunnel limit and the way out when the relay gave node-1 no tunnel", async () => {
+    const home = homeWithHosts();
+    const log = join(boxHome(home, "node-1"), ".t3/userdata/logs/boot-service.log");
+    mkdirSync(dirname(log), { recursive: true });
+    writeFileSync(log, "[10:02:11.120] INFO (#12): T3 Connect link starting\n[10:02:11.904] WARN (#12): T3 Connect could not provision the managed tunnel\n    error: 'Relay managed tunnel limit reached: this account allows at most 3 tunnels'\n[10:02:12.001] INFO (#12): Server listening\n");
+    const box = fakeMachine(home, {}, { tunnelStartsAfter: Number.POSITIVE_INFINITY });
+    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("node-1 has no T3 Connect tunnel: T3 Code there says Relay managed tunnel limit reached: this account allows at most 3 tunnels. Free one: run t3 connect logout on a machine that no longer needs T3 Connect, or unlink it in T3 Connect. Then run systemctl --user restart t3code.service on node-1, and run fleet setup again.");
+    expect(result.output).not.toContain("Update T3 Code on node-1");
   });
 
   test.each([
