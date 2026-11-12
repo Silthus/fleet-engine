@@ -16,7 +16,8 @@ export const help = `fleet pr: review threads, blockers, and review bots of a pu
                      Ask the review bot to approve the PR and print its verdict; exit 0 only when it approved, 2 without a bot
   fleet pr forecast --repo <owner/repo> (--pr <number> [--request] | --branch <name> | --paths <file>)
                      Ask the review bot whether it will likely refuse the PR and who owns it; with --request, request those owners;
-                     with --branch or --paths, forecast work that has no PR yet; 2 without a bot`;
+                     with --branch or --paths, forecast work that has no PR yet and exit 1 when it needs splitting;
+                     2 without a bot, 3 when the bot's forecast fails`;
 
 const engineSubcommands = ["bot-threads", "blockers", "review", "stamp", "forecast"];
 
