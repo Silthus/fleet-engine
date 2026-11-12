@@ -32,7 +32,7 @@ setup goes on by itself when you are done:
 
 | Sign-in | What it asks |
 | --- | --- |
-| GitHub | A code from the terminal on `github.com/login/device`, then your approval. Fleet asks for `repo`, `read:org`, `admin:public_key`, and `admin:ssh_signing_key` once, so it can make your profile repo and add your keys. |
+| GitHub | A code from the terminal on `github.com/login/device`, then your approval. Fleet asks for `repo`, `read:org`, `admin:public_key`, `admin:ssh_signing_key`, and `workflow` once, so it can make your profile repo, add your keys, and push to large repos, where GitHub can ask for `workflow` even when a push changes no workflow file. |
 | Claude | Your Claude account, in the browser. Only when your plan includes Claude. |
 | ChatGPT | Your ChatGPT account, in the browser. Only when your plan includes Codex. Setup checks the sign-in with a real request, because a stale sign-in still looks signed in. |
 

@@ -1,11 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tokenScopes } from "../adapters/identity/github.ts";
 import type { ModelRow, SourceRef } from "../pack/types.ts";
 import type { Machine } from "./commands.ts";
 import type { SignIn } from "./human.ts";
 
-export const githubScopes = ["repo", "read:org", "admin:public_key", "admin:ssh_signing_key"];
+export const githubScopes = ["repo", "read:org", "admin:public_key", "admin:ssh_signing_key", "workflow"];
 
 /** Team pack sources that setup offers to members of a GitHub org. */
 export const teamSources: Array<{ org: string; source: SourceRef }> = [{ org: "PostHog", source: { name: "posthog", repo: "PostHog/fleet-posthog", ref: "main" } }];
@@ -13,8 +14,7 @@ export const teamSources: Array<{ org: string; source: SourceRef }> = [{ org: "P
 export async function githubScopesMissing(machine: Machine): Promise<string[] | undefined> {
   const status = await machine.exec(["gh", "auth", "status", "--active", "--hostname", "github.com"]);
   if (status.code !== 0) return undefined;
-  const line = status.output.split("\n").find((text) => text.includes("Token scopes:")) ?? "";
-  const granted = [...line.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+  const granted = tokenScopes(status.output) ?? [];
   return githubScopes.filter((scope) => !granted.includes(scope));
 }
 
@@ -24,7 +24,7 @@ export function githubSignIn(machine: Machine, signedIn: () => Promise<void>): S
     id: "github",
     title: "Sign in to GitHub",
     minutes: 1,
-    why: "Once, with every permission Fleet needs: your profile repo, your org's packs, and your keys.",
+    why: "Once, with every permission Fleet needs: your profile repo, your org's packs, your keys, and pushes to large repos.",
     url: "https://github.com/login/device",
     get command() {
       const scopes = githubScopes.join(",");

@@ -33,7 +33,7 @@ const claudeUnauthorized: ExecResult = { code: 1, output: "Failed to authenticat
 
 export const deadEnvironmentToken: ClaudeSignedIn = { authMethod: "oauth_token", reply: claudeUnauthorized };
 
-const scopes = "  - Token scopes: 'admin:public_key', 'admin:ssh_signing_key', 'read:org', 'repo'";
+const scopes = "  - Token scopes: 'admin:public_key', 'admin:ssh_signing_key', 'read:org', 'repo', 'workflow'";
 
 /** The bare repo that stands in for github.com/<repo> under a test home. */
 export const githubRepo = (home: string, repo: string) => join(home, "github-remotes", `${repo}.git`);

@@ -51,7 +51,7 @@ describe("the devbox over SSH", () => {
 
     const onTheBox = remote(box);
     expect(onTheBox).toContainEqual(expect.stringMatching(/curl -fsSL \S+\/get\.sh -o "\$installer" && sh "\$installer" --ref main --install-only/));
-    expect(onTheBox).toContain("gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,admin:public_key,admin:ssh_signing_key");
+    expect(onTheBox).toContain("gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,admin:public_key,admin:ssh_signing_key,workflow");
     expect(onTheBox).toContain("gh auth setup-git");
     expect(onTheBox).toContainEqual(expect.stringContaining(`gh repo clone https://github.com/nora/fleet-profile.git "$HOME/.local/share/fleet/profile" -- -q && sh "$HOME/.local/share/fleet/engine/get.sh" --ref main --profile "$HOME/.local/share/fleet/profile"`));
     expect(onTheBox).toContain("codex login --device-auth");
