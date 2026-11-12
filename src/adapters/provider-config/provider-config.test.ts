@@ -716,7 +716,7 @@ describe("Claude plugins", () => {
     const team = { provider: "claude" as const, key: "enabledPlugins.tool@team-market", value: true };
     const teamDeclared = { extraKnownMarketplaces: { "team-market": { source: { source: "github", repo: "team/market" } } } };
 
-    function freshClaude(published: Record<string, { name: string; plugins: string[] }>) {
+    function freshClaude(published: Record<string, { name: string; plugins: string[] }>, faults: { update?: string; silentAdd?: boolean } = {}) {
       const fetched = new Map<string, string[]>();
       const installed: string[] = [];
       const run: CommandRunner = async (command) => {
@@ -726,6 +726,7 @@ describe("Claude plugins", () => {
         if (verb === "marketplace" && rest[0] === "list") return { code: 0, stdout: JSON.stringify([...fetched.keys()].map((name) => ({ name, source: "github" }))) };
         if (verb === "marketplace" && rest[0] === "add") {
           const marketplace = published[rest[1]!];
+          if (!marketplace && faults.silentAdd) return { code: 1, stdout: "", stderr: "" };
           if (!marketplace) return { code: 1, stdout: "", stderr: `✘ Failed to add marketplace: Failed to clone ${rest[1]} (SSH authentication failed).\n\nOriginal error: denied\n` };
           fetched.set(marketplace.name, [...marketplace.plugins]);
           return { code: 0, stdout: "" };
@@ -733,6 +734,7 @@ describe("Claude plugins", () => {
         if (verb === "marketplace" && rest[0] === "update") {
           const marketplace = Object.values(published).find((item) => item.name === rest[1]);
           if (!marketplace || !fetched.has(marketplace.name)) return missing(rest[1]!);
+          if (faults.update) return { code: 1, stdout: "", stderr: `✘ Failed to update marketplace(s): ${faults.update}\n` };
           fetched.set(marketplace.name, [...marketplace.plugins]);
           return { code: 0, stdout: "" };
         }
@@ -816,6 +818,39 @@ describe("Claude plugins", () => {
       expect(report.findings.map((finding) => finding.say)).toEqual([
         "Could not add the Claude plugin marketplace team-market from https://git.example.test/market.git: Failed to add marketplace: Failed to clone https://git.example.test/market.git (SSH authentication failed). Its plugins wait: tool@team-market.",
       ]);
+    });
+
+    test("leaves the official marketplace alone when the settings pin it to a ref", async () => {
+      const home = temp.make("home-");
+      const pinned = { extraKnownMarketplaces: { "claude-plugins-official": { source: { source: "github", repo: "anthropics/claude-plugins-official", ref: "release" } } } };
+      write(home, claude, pinned);
+      const cli = freshClaude(officialMarketplace);
+
+      await apply(plan([official]), { home, adapters: [cli.adapter] });
+
+      expect([...cli.fetched.keys()]).toEqual([]);
+      expect(read(home, claude).extraKnownMarketplaces).toEqual(pinned.extraKnownMarketplaces);
+    });
+
+    test("says why a marketplace could not be updated, and still installs from the copy it has", async () => {
+      const home = temp.make("home-");
+      const cli = freshClaude(officialMarketplace, { update: "network is unreachable" });
+      cli.fetched.set("claude-plugins-official", ["posthog"]);
+
+      const report = await apply(plan([official]), { home, adapters: [cli.adapter] });
+
+      expect(cli.installed).toEqual(["posthog@claude-plugins-official"]);
+      expect(report.findings).toEqual([{ id: "plugin-marketplace:claude-plugins-official", pack: "engine", say: "Could not update the Claude plugin marketplace claude-plugins-official: Failed to update marketplace(s): network is unreachable.", repair: "apply" }]);
+    });
+
+    test("names the exit code when a failed add printed nothing", async () => {
+      const home = temp.make("home-");
+      write(home, claude, teamDeclared);
+      const cli = freshClaude({}, { silentAdd: true });
+
+      const report = await apply(plan([team]), { home, adapters: [cli.adapter] });
+
+      expect(report.findings.map((finding) => finding.say)).toEqual(["Could not add the Claude plugin marketplace team-market from team/market: exit 1. Its plugins wait: tool@team-market."]);
     });
 
     test("leaves a marketplace pinned to a ref alone, since claude plugin marketplace add cannot pin it", async () => {

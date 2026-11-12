@@ -16,7 +16,7 @@ export type { CommandRunner } from "../run.ts";
 type Target = { provider: Provider; path: string; format: Format; owns(path: string[]): boolean };
 export type FieldRecord = { [target: string]: Field[] };
 type Merged = { record: Field[]; kept: string[]; reason: string; after?: string; document: Document };
-type FilesResult = AdapterResult & { plugins?: string[]; marketplaces?: Record<string, string> };
+type FilesResult = AdapterResult & { plugins?: string[]; marketplaces?: Record<string, string | null> };
 
 export const recordTarget = ".config/fleet/provider-fields.json";
 const claudeSettings = ".claude/settings.json";
