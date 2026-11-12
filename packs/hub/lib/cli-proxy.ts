@@ -4,7 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
-import { management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
+import { loginExpired, management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
 import { requireHubRole } from "./hub-job.ts";
 import { quote, readRole, remoteFleet } from "./machine.ts";
 import { changedFiles, ownedFiles, readIfThere, removeUnits, requireInstalled, writeFiles, type Managed } from "./managed.ts";
@@ -134,7 +134,7 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
   if (!bound.includes(address) || bound.some((local) => local !== address)) throw new Error(`The CLI proxy must listen on loopback only, at ${address}.`);
   const strategy = ((await management(machine.fetch, managementKey, "routing/strategy")) as { strategy?: string }).strategy;
   if (strategy !== "fill-first") throw new Error(`The proxy routes with ${strategy ?? "no strategy"}, not fill-first. Run fleet cli-proxy-balance to restore it.`);
-  const { files } = (await management(machine.fetch, managementKey, "auth-files")) as { files: Array<{ provider?: string; disabled?: boolean }> };
+  const { files } = (await management(machine.fetch, managementKey, "auth-files")) as { files: Array<{ name?: string; provider?: string; disabled?: boolean; status_message?: string }> };
   const enabled = (agent: Agent) => files.filter((file) => file.provider === agent && !file.disabled).length;
   const agent = pooled(machine.plan);
   const count = enabled(agent);
@@ -145,6 +145,10 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
   const beside = machine.plan === "both" ? ` and ${subscriptions(enabled("codex"), "codex")}` : "";
   const balancer = agent === "claude" ? "puts the one whose weekly quota resets first on top" : "frees each one whose quota cooldown its live usage disproves";
   machine.print(`CLI proxy: CLIProxyAPI ${machine.release.version} runs at ${proxyUrl}, loopback only, with ${count} of your own ${subscription[agent]} subscriptions${beside}. Every 5 minutes the balancer ${balancer}.`);
+  for (const file of files.filter((item) => (item.provider === "claude" || item.provider === "codex") && !item.disabled && loginExpired(item))) {
+    const provider = file.provider as Agent;
+    machine.print(`CLI proxy: Warning: the ${subscription[provider]} subscription ${file.name ?? "without a name"} cannot refresh its login, so the proxy cannot use it and the balancer cannot read its usage. Sign it in again with: ${loginCommand(paths, provider)}. Or disable it in the management panel.`);
+  }
   for (const devbox of machine.devboxes.filter((name) => !isKeptForBoxes(name))) machine.print(`Connect ${devbox}: ssh ${devbox} ${quote(remoteFleet("cli-proxy connect"))} < ~/.config/fleet/cli-proxy.key`);
 }
 

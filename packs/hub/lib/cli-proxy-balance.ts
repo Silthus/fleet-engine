@@ -6,7 +6,7 @@ import type { Fetch } from "../../mcp-gateway/lib/client.ts";
 export type UsageWindow = { utilization: number; resetsAt?: number };
 export type Usage = { fiveHour?: UsageWindow; sevenDay?: UsageWindow; scoped: UsageWindow[] };
 export type Provider = "claude" | "codex";
-export type Credential = { name: string; authIndex: string; provider: Provider; priority: number; usage?: Usage; quotaCooldown: boolean; blocked: string | false };
+export type Credential = { name: string; authIndex: string; provider: Provider; priority: number; usage?: Usage; quotaCooldown: boolean; blocked: string | false; loginExpired?: true };
 export type Balance = { fetch: Fetch; managementKey: string; now: number; dryRun: boolean; log(line: string): void };
 export type BalanceDeps = { home: string; fetch: Fetch; now(): number; log(line: string): void };
 
@@ -66,7 +66,7 @@ export async function balance(options: Balance): Promise<void> {
   const credentials = await Promise.all(enabled.map(async (file): Promise<Credential> => {
     const provider = file.provider as Provider;
     const usage = provider === "codex" ? await readCodexUsage(call, file.auth_index!, codexAccount(file)) : await readUsage(call, file.auth_index!);
-    return { name: file.name, authIndex: file.auth_index!, provider, priority: file.priority ?? 0, quotaCooldown: quotaCooldown(file), blocked: blocked(file), usage };
+    return { name: file.name, authIndex: file.auth_index!, provider, priority: file.priority ?? 0, quotaCooldown: quotaCooldown(file), blocked: blocked(file), usage, ...(loginExpired(file) ? { loginExpired: true as const } : {}) };
   }));
   const claude = credentials.filter((credential) => credential.provider === "claude");
   if (!credentials.length) options.log("The proxy holds no enabled Claude or Codex subscription.");
@@ -84,6 +84,10 @@ export async function balance(options: Balance): Promise<void> {
     await call("reset-quota", { method: "POST", body: JSON.stringify({ auth_index: credential.authIndex }) });
     options.log(`${credential.name}: cleared quota cooldown after live usage confirmed capacity`);
   }
+}
+
+export function loginExpired(file: { status_message?: string }): boolean {
+  return /invalid[_ ]grant/i.test(file.status_message ?? "");
 }
 
 function quotaCooldown(file: AuthFile): boolean {
@@ -170,7 +174,7 @@ function usageWindow(raw: RawWindow): UsageWindow | undefined {
 
 function describe(credential: Credential, priority: number, now: number): string {
   const change = credential.priority === priority ? `priority ${priority}` : `priority ${credential.priority} -> ${priority}`;
-  if (!credential.usage) return `${credential.name}: ${change}, usage unreadable`;
+  if (!credential.usage) return `${credential.name}: ${change}, usage unreadable${credential.loginExpired ? ": its login expired. Sign it in again on the hub; fleet cli-proxy doctor names the command" : ""}`;
   const window = (label: string, value?: UsageWindow) => (value ? `${label} ${value.utilization}% resets in ${value.resetsAt === undefined ? "unknown" : duration(value.resetsAt - now)}` : `${label} unknown`);
   return `${credential.name}: ${change}, ${window("7d", credential.usage.sevenDay)}, ${window("5h", credential.usage.fiveHour)}`;
 }
