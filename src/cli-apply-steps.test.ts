@@ -53,23 +53,25 @@ describe("fleet apply --skip", () => {
 });
 
 describe("fleet apply progress", () => {
-  test("names each step as it starts, before the step's own work ends, and stays quiet for a step that already holds", async () => {
+  test("names each step before its work is done, and stays quiet for a step that already holds", async () => {
     const home = temp.make("home-");
     const engine = engineWithTools();
     const profile = profileDir(["tools"]);
-    const lines: string[] = [];
-    const namedBeforeItsWork: Record<string, boolean> = {};
-    const print = (line: string) => void lines.push(line);
-    const runStep = async (command: string[], env: Record<string, string> = {}) => {
-      const step = command.join(" ").match(/touch "\$HOME\/(\w+)\.txt"/)?.[1];
-      if (step) namedBeforeItsWork[step] = lines.includes(`  … tools: ${step}`);
-      return Bun.spawn(command, { stdout: "ignore", stderr: "ignore", env: { ...Bun.env, HOME: home, ...env } }).exited;
+    const progress: string[] = [];
+    const doneWhenNamed: Record<string, boolean> = {};
+    const print = (line: string) => {
+      const step = line.match(/^  … tools: (\w+)$/)?.[1];
+      if (!step) return;
+      progress.push(step);
+      doneWhenNamed[step] = existsSync(join(home, `${step}.txt`));
     };
-    expect(await main(["apply", "--profile", profile], { home, engineRoot: engine, platform: "linux", env: {}, print, run: runStep })).toBe(0);
-    expect(lines.filter((line) => line.startsWith("  … "))).toEqual(["  … tools: box", "  … tools: codex"]);
-    expect(namedBeforeItsWork).toEqual({ box: true, codex: true });
-    lines.length = 0;
-    expect(await main(["apply"], { home, engineRoot: engine, platform: "linux", env: {}, print, run: runStep })).toBe(0);
-    expect(lines.filter((line) => line.startsWith("  … "))).toEqual([]);
+    const apply = (args: string[]) => main(args, { home, engineRoot: engine, platform: "linux", env: {}, print });
+    expect(await apply(["apply", "--profile", profile])).toBe(0);
+    expect(progress).toEqual(["box", "codex"]);
+    expect(doneWhenNamed).toEqual({ box: false, codex: false });
+    expect([existsSync(join(home, "box.txt")), existsSync(join(home, "codex.txt"))]).toEqual([true, true]);
+    progress.length = 0;
+    expect(await apply(["apply"])).toBe(0);
+    expect(progress).toEqual([]);
   });
 });
