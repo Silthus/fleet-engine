@@ -18,8 +18,8 @@
   {
     "id": "everything",
     "name": "Everything",
-    "blurb": "You get every pack that a Mac can run: Everyday, coding integrations, shared memory, guards, Slack, and incident.io paging. With a hub and a node, you also get the Hub, MCP gateway, and Recovery packs, Slack threads, and the nightly loops.",
-    "packs": ["pull-requests", "orchestration", "communication", "integrations", "memory", "guards", "slack", "incident-io"],
+    "blurb": "You get every pack that a Mac can run: Everyday, coding integrations, shared memory, a context library, guards, Slack, and incident.io paging. With a hub and a node, you also get the Hub, MCP gateway, and Recovery packs, Slack threads, and the nightly loops.",
+    "packs": ["pull-requests", "orchestration", "communication", "integrations", "memory", "context-library", "guards", "slack", "incident-io"],
     "hubPacks": ["hub", "mcp-gateway", "recovery"],
     "workflows": { "quality-loop": true, "signal-loop": true, "pr-digest": true, "shell-guards": true, "package-age": true }
   }

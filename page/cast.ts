@@ -13,6 +13,7 @@ export const packCast: Record<string, Role> = {
   communication: { art: hog("microphone-hog"), tone: "peach", line: "Agents write in your voice and share plans as links." },
   integrations: { art: hog("desk-hog"), tone: "blue", line: "Agents reach GitHub, current docs, and Convex." },
   memory: { art: hog("reading-hog"), tone: "mint", line: "Agents on every machine share what they learn." },
+  "context-library": { art: hog("detective-hog"), tone: "lilac", line: "Agents find your plans and decisions in your notes." },
   guards: { art: hog("police-hog"), tone: "lilac", line: "Hooks stop an agent's risky shell commands." },
   slack: { art: hog("phone-pair-hogs"), tone: "cream", line: "Your own Slack message starts a thread." },
   "incident-io": { art: hog("warning-hog"), tone: "red", line: "An agent pages you when a risky change goes wrong." },

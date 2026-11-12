@@ -2,6 +2,7 @@ export const packFlows: Record<string, string[]> = {
   "pull-requests": ["Your request", "Tests, then the fix", "Review by a second model", "Draft pull request"],
   orchestration: ["A large change", "Map of tickets", "Conductor thread", "One worker thread per ticket", "Draft pull requests"],
   memory: ["Agent on your Mac", "Your memory repo", "Agent on a devbox"],
+  "context-library": ["Your prompt", "Your notes repo", "Links to the notes it names"],
   guards: ["Agent's shell command", "Guard hook", "The command runs or stops"],
   slack: ["Your Slack message or reaction", "Your Slack app", "T3 thread", "Link in Slack"],
   "incident-io": ["Agent watching your change", "Tripwire fires", "Your incident.io alert route", "Your phone rings"],

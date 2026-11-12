@@ -49,6 +49,11 @@ packs, and your answers live in your own private profile repo.
   `fleet doctor` lists each sign-in the plugins still need.
 - **Memory** (off): agents on all your machines share what they learn through
   your own private memory repo.
+- **Context library** (off): a prompt about a topic of your private notes repo
+  gets links to its documents. `fleet context` searches the notes, saves a link
+  as a condensed note, and keeps a catalog and topic hubs. Every machine pulls
+  the repo every five minutes, keeps local changes, and fails the sync while
+  they block it.
 - **Hub** (off): one always-on devbox manages the others. It signs in to your
   MCP servers once, keeps your devboxes linked, and watches their disks. The
   nightly Dream task and own-account balancing are opt-in. Own-account

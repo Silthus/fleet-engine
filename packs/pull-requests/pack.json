@@ -155,6 +155,19 @@
       ],
       "sentence": "Say \"full send\" or \"stamp it\", and the agent takes a pull request to merged and rolled out.",
       "risk": "The agent merges without asking again once you say the words."
+    },
+    {
+      "id": "pr-owners",
+      "name": "PR owners",
+      "default": true,
+      "sentence": "A thread that still owns an open pull request cannot settle or archive itself until it hands the pull request over, and a box with such a thread is not released."
+    }
+  ],
+  "files": [
+    {
+      "path": "hooks/settle-guard.ts",
+      "target": ".config/fleet/hooks/PreToolUse/settle-guard.ts",
+      "workflow": "pr-owners"
     }
   ]
 }
