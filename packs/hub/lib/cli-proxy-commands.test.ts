@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { fleetMachine, runFleet } from "../../orchestration/lib/testing.ts";
@@ -52,4 +52,42 @@ test("through fleet, plan and install on a hub without the proxy binary yet name
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")), role: "hub" }));
   const plan = await runFleet(["cli-proxy", "plan"], { HOME: home });
   expect([plan.code, plan.stderr, plan.stdout]).toEqual([0, "", expect.stringContaining(`  Install CLIProxyAPI 8.0.46 at ${join(home, ".local/share/fleet-cli-proxy/cli-proxy-api")}.\n`)]);
+});
+
+function fakeProxy(dir: string) {
+  const log = join(dir, "proxy-calls.log");
+  const preload = join(dir, "fake-proxy.ts");
+  writeFileSync(preload, `import { appendFileSync } from "node:fs";
+const real = globalThis.fetch;
+const usage = { seven_day: { utilization: 20, resets_at: "2099-01-01T00:00:00Z" } };
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+  const url = new URL(String(input));
+  if (url.origin !== "http://127.0.0.1:8317") return real(input, init);
+  appendFileSync(${JSON.stringify(log)}, \`\${init?.method ?? "GET"} \${url.pathname}\\n\`);
+  const path = url.pathname.replace("/v0/management/", "");
+  if (path === "routing/strategy") return Response.json({ strategy: "fill-first" });
+  if (path === "auth-files") return Response.json({ files: [{ name: "a.json", provider: "claude", auth_index: "1", priority: 1 }] });
+  if (path === "api-call") return Response.json({ status_code: 200, body: JSON.stringify(usage) });
+  if (path === "quota-ledger/samples") return Response.json({ accepted: 1 });
+  return new Response("missing", { status: 404 });
+}) as typeof fetch;
+`);
+  return { env: { BUN_OPTIONS: `--preload ${preload}`, BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" }, calls: () => (existsSync(log) ? readFileSync(log, "utf8") : "") };
+}
+
+test("through fleet, cli-proxy-balance posts quota history to the ledger only while the Proxy panel workflow is on", async () => {
+  const home = await balancingDevbox();
+  writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")), role: "hub" }));
+  mkdirSync(join(home, ".local/share/fleet-cli-proxy"), { recursive: true });
+  writeFileSync(join(home, ".local/share/fleet-cli-proxy/management.env"), `MANAGEMENT_PASSWORD=${"d2".repeat(32)}\n`);
+  const profilePath = join(home, "profile/fleet.json");
+  const turn = (workflows: Record<string, boolean>) => writeFileSync(profilePath, JSON.stringify({ ...JSON.parse(readFileSync(profilePath, "utf8")), workflows }));
+  for (const [panel, posted] of [[false, false], [true, true]] as const) {
+    turn({ "own-account-balancing": true, ...(panel ? { "proxy-panel": true } : {}) });
+    const proxy = fakeProxy(temp.make("fleet-fake-proxy-"));
+    const run = await runFleet(["cli-proxy-balance"], { HOME: home, ...proxy.env });
+    expect([panel, run.code, run.stderr]).toEqual([panel, 0, ""]);
+    expect([panel, proxy.calls()]).toEqual([panel, expect.stringContaining("GET /v0/management/auth-files\n")]);
+    expect([panel, proxy.calls().includes("POST /v0/management/quota-ledger/samples\n")]).toEqual([panel, posted]);
+  }
 });

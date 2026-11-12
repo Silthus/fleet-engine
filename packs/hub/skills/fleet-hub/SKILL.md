@@ -135,8 +135,16 @@ the person's own subscriptions, never for someone else's.
   the hub. A reset button spends a banked reset, which does not come back:
   the first click arms it, and a second click within 5 seconds spends it.
   Fleet owns `config.yaml`, so a panel edit to it lasts until the next
-  `fleet apply`. Turning the workflow off removes the page and the plugin,
-  keeps the history file, and closes the panel; `fleet cli-proxy doctor`
-  fails while a closed panel still answers.
+  `fleet apply`. Turning the workflow off first restarts the proxy with the
+  panel closed, then removes the page and the pinned plugin and keeps the
+  history file. `fleet cli-proxy doctor` fails while a closed panel still
+  answers, when the page does not match its pin (CLIProxyAPI may have
+  fetched an unpinned one), and on any plugin Fleet did not install: with
+  plugins on, anyone with the management key can install others from
+  CLIProxyAPI's plugin store. Turning the panel off keeps those and names
+  them. Every tunnelled client reaches the proxy as 127.0.0.1, so 5 wrong
+  panel sign-ins from any devbox ban 127.0.0.1 from the management API for
+  30 minutes. That also stops the balancer and the doctor on the hub until
+  the ban ends.
 - **Stop on one machine.** `fleet cli-proxy disconnect` removes the settings
   and the key. Then run `claude` and enter `/login`.

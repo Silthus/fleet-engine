@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import { management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
 import { requireHubRole } from "./hub-job.ts";
@@ -122,18 +122,38 @@ async function ensureAsset(machine: ProxyMachine, release: Release, path: string
   if (restart) await writePrivateFile(restart, "\n");
   await download(machine, release, async (file) => {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await copyFile(file, path);
-    await chmod(path, 0o600);
+    const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+    try {
+      await copyFile(file, temp);
+      await chmod(temp, 0o600);
+      await rename(temp, path);
+    } finally {
+      await rm(temp, { force: true });
+    }
   });
 }
 
-async function ensurePanel(machine: ProxyMachine, paths: Layout): Promise<void> {
-  if (!machine.panel) {
-    for (const path of [paths.page, paths.plugin]) await rm(path, { force: true });
-    return;
+async function ensurePanel(machine: ProxyMachine, paths: Layout, panel: Panel): Promise<void> {
+  await ensureAsset(machine, panel.page, paths.page);
+  await ensureAsset(machine, panel.plugin, paths.plugin, paths.restart);
+}
+
+// Runs only after the proxy restarted with the control panel off: while the panel is on,
+// CLIProxyAPI downloads a missing management.html itself, unpinned and unchecked.
+async function closePanel(machine: ProxyMachine, paths: Layout): Promise<void> {
+  for (const path of [paths.page, paths.plugin]) await rm(path, { force: true });
+  const others = await foreignPlugins(paths);
+  if (others.length) machine.print(`Kept plugins Fleet did not install: ${others.join(", ")}. Remove them: fleet cli-proxy doctor fails while they are there.`);
+}
+
+async function foreignPlugins(paths: Layout): Promise<string[]> {
+  const names = await readdir(paths.plugins, { recursive: true }).catch(() => [] as string[]);
+  const found: string[] = [];
+  for (const name of names.map(String).sort()) {
+    const path = join(paths.plugins, name);
+    if (path !== paths.plugin && name.toLowerCase().endsWith(".so") && !(await lstat(path)).isDirectory()) found.push(path);
   }
-  await ensureAsset(machine, machine.panel.page, paths.page);
-  await ensureAsset(machine, machine.panel.plugin, paths.plugin, paths.restart);
+  return found;
 }
 
 async function refuseLinkedLayout(home: string, paths: Layout): Promise<void> {
@@ -153,7 +173,7 @@ async function install(machine: ProxyMachine, paths: Layout): Promise<void> {
   }
   if (changed.length || !savedManagement) await writePrivateFile(paths.restart, "\n");
   await ensureBinary(machine, paths);
-  await ensurePanel(machine, paths);
+  if (machine.panel) await ensurePanel(machine, paths, machine.panel);
   if (!savedClient) await writePrivateFile(paths.key, `${key}\n`);
   if (!savedManagement) await writePrivateFile(paths.management, `MANAGEMENT_PASSWORD=${managementKey}\n`);
   await writeFiles(changed);
@@ -163,6 +183,7 @@ async function install(machine: ProxyMachine, paths: Layout): Promise<void> {
   if ((await readIfThere(paths.restart)) !== undefined) await systemctl("restart", service);
   await rm(paths.restart, { force: true });
   await systemctl("enable", "--now", service);
+  if (!machine.panel) await closePanel(machine, paths);
 }
 
 async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
@@ -177,6 +198,8 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
   for (let attempt = 0; attempt < 50 && !(await listeners()).includes(address); attempt++) await machine.sleep(100);
   const bound = await listeners();
   if (!bound.includes(address) || bound.some((local) => local !== address)) throw new Error(`The CLI proxy must listen on loopback only, at ${address}.`);
+  const others = await foreignPlugins(paths);
+  if (others.length) throw new Error(`Remove the plugins Fleet did not install: ${others.join(", ")}. While the Proxy panel is on, anyone with the management key can install plugins from CLIProxyAPI's plugin store, and the proxy runs them on the hub.`);
   await panelDoctor(machine, paths, managementKey);
   const strategy = ((await management(machine.fetch, managementKey, "routing/strategy")) as { strategy?: string }).strategy;
   if (strategy !== "fill-first") throw new Error(`The proxy routes with ${strategy ?? "no strategy"}, not fill-first. Run fleet cli-proxy-balance to restore it.`);
@@ -202,8 +225,9 @@ async function panelDoctor(machine: ProxyMachine, paths: Layout, managementKey: 
     if (page?.ok) throw new Error(`The management panel answers at ${panelUrl}, but the Proxy panel workflow is off. Run fleet cli-proxy install.`);
     return;
   }
-  for (const [path, release] of [[paths.page, machine.panel.page], [paths.plugin, machine.panel.plugin]] as const) {
-    if (!(await assetReady(path, release))) throw new Error(`${path} is not version ${release.version}. Run fleet cli-proxy install.`);
+  for (const [path, release, name] of [[paths.page, machine.panel.page, "management panel"], [paths.plugin, machine.panel.plugin, "quota-ledger plugin"]] as const) {
+    if (!existsSync(path)) throw new Error(`${path} is missing. Run fleet cli-proxy install.`);
+    if (!(await assetReady(path, release))) throw new Error(`${path} does not match the pinned ${name} ${release.version}. It may have come from an unpinned source, such as CLIProxyAPI's own panel download. Run fleet cli-proxy install.`);
   }
   if (!page?.ok) throw new Error(`The management panel does not load at ${panelUrl}. Run fleet cli-proxy install.`);
   await management(machine.fetch, managementKey, `quota-ledger/samples?since=${machine.now()}`).catch(() => {

@@ -223,7 +223,7 @@
         "hub.proxyHistoryDays"
       ],
       "sentence": "The hub's proxy serves its management panel on loopback, with quota history, drain forecasts, and buttons that spend a subscription's banked weekly or Fable reset.",
-      "risk": "The panel can change the proxy's settings and subscriptions, and spend banked resets, which do not come back. It listens only on the hub's loopback port 8317, which the SSH tunnels also carry to your devboxes and boxes, and it asks for the management key, which stays on the hub. Fleet does not route it through the hub's HTTPS."
+      "risk": "The panel can change the proxy's settings and subscriptions, and spend banked resets, which do not come back. It also turns on CLIProxyAPI's plugins, so anyone with the management key can install and run other plugins from CLIProxyAPI's plugin store on the hub; fleet cli-proxy doctor fails on any plugin besides Fleet's pinned quota-ledger. It listens only on the hub's loopback port 8317, which the SSH tunnels also carry to your devboxes and boxes, and it asks for the management key, which stays on the hub. Every tunnelled client reaches the proxy as 127.0.0.1, so 5 wrong sign-ins from any machine ban 127.0.0.1 from the management API for 30 minutes. That also stops the hub's balancer and fleet cli-proxy doctor until the ban ends. Fleet does not route it through the hub's HTTPS."
     }
   ],
   "config": [

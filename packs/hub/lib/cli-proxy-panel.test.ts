@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
 import { cliProxy, panelUrl, proxyUrl, type Panel, type ProxyMachine } from "./cli-proxy.ts";
@@ -25,7 +25,11 @@ type Proxy = { page?: number; ledger?: number };
 
 function hub(fields: Partial<ProxyMachine> = {}, proxy: Proxy = {}, tampered?: string) {
   const home = fields.home ?? roleHome(temp.make("fleet-cli-proxy-panel-"), "hub");
+  const atRestart: Array<{ panelOff: boolean; page: boolean; plugin: boolean }> = [];
   const fake = fakeRun((command) => {
+    if (command.join(" ") === "systemctl --user restart fleet-cli-proxy.service") {
+      atRestart.push({ panelOff: readFileSync(files(home).config, "utf8").includes("disable-control-panel: true"), page: existsSync(files(home).page), plugin: existsSync(files(home).plugin) });
+    }
     if (command[0] === "curl") writeFileSync(command[command.indexOf("-o") + 1]!, command[2] === tampered ? "tampered" : bodies[command[2]!]!);
     if (command[0] === "install") writeFileSync(command.at(-1)!, "binary");
     const installed = existsSync(join(dataDir(home), "cli-proxy-api"));
@@ -53,7 +57,7 @@ function hub(fields: Partial<ProxyMachine> = {}, proxy: Proxy = {}, tampered?: s
     home, uid: 1000, user: "me", accounts: 2, devboxes: [], release, run: fake.run, fetch, now: () => 1_800_000_000_000, sleep: async () => {},
     readStdin: async () => "", randomKey: () => keys.shift()!, print: (line) => printed.push(line), ...fields,
   };
-  return { machine, home, calls: fake.calls, requests, printed };
+  return { machine, home, calls: fake.calls, requests, printed, atRestart };
 }
 
 const yaml = (home: string) => Bun.YAML.parse(readFileSync(files(home).config, "utf8")) as Record<string, unknown>;
@@ -132,8 +136,10 @@ test("with the panel on, the doctor wants the pinned files, a page that loads an
   await expect(cliProxy("doctor", hub({ home, panel }, { page: 404 }).machine)).rejects.toThrow(`The management panel does not load at ${panelUrl}.`);
   await expect(cliProxy("doctor", hub({ home, panel }, { page: 200, ledger: 404 }).machine)).rejects.toThrow("The quota-ledger plugin does not answer");
   await expect(cliProxy("doctor", hub({ home }, { page: 200 }).machine)).rejects.toThrow("differ from what install writes now");
-  writeFileSync(files(home).page, "changed");
-  await expect(cliProxy("doctor", hub({ home, panel }, { page: 200 }).machine)).rejects.toThrow(`${files(home).page} is not version 1.2.3-fleet.1.`);
+  writeFileSync(files(home).page, "a page CLIProxyAPI fetched itself");
+  await expect(cliProxy("doctor", hub({ home, panel }, { page: 200 }).machine)).rejects.toThrow(`${files(home).page} does not match the pinned management panel 1.2.3-fleet.1. It may have come from an unpinned source, such as CLIProxyAPI's own panel download. Run fleet cli-proxy install.`);
+  rmSync(files(home).page);
+  await expect(cliProxy("doctor", hub({ home, panel }, { page: 200 }).machine)).rejects.toThrow(`${files(home).page} is missing. Run fleet cli-proxy install.`);
 });
 
 test("turning the panel off again removes its page and plugin, keeps the quota history, disables the control panel, and restarts the proxy", async () => {
@@ -143,6 +149,7 @@ test("turning the panel off again removes its page and plugin, keeps the quota h
   writeFileSync(files(home).ledger, "{}\n");
   const off = hub({ home });
   expect(await cliProxy("install", off.machine)).toBe(0);
+  expect(off.atRestart).toEqual([{ panelOff: true, page: true, plugin: true }]);
   expect([existsSync(files(home).page), existsSync(files(home).plugin), readFileSync(files(home).ledger, "utf8")]).toEqual([false, false, "{}\n"]);
   expect(yaml(home)["remote-management"]).toEqual(expect.objectContaining({ "disable-control-panel": true }));
   expect(yaml(home).plugins).toBeUndefined();
@@ -155,4 +162,32 @@ test("a history length that is not a whole number of days stops install before i
     await expect(cliProxy("install", machine)).rejects.toThrow("hub.proxyHistoryDays must be a whole number of days, 1 or more");
     expect(existsSync(dataDir(home))).toBe(false);
   }
+});
+
+test("the doctor fails on any plugin in the plugins folder that Fleet did not pin, with the panel on or off", async () => {
+  const { machine, home } = hub({ panel });
+  await cliProxy("install", machine);
+  const plugins = join(dataDir(home), "plugins");
+  const store = join(plugins, "linux", process.arch === "arm64" ? "arm64" : "amd64", "other-1.0.0.so");
+  const loose = join(plugins, "Extra.SO");
+  mkdirSync(join(store, ".."), { recursive: true });
+  for (const path of [store, loose]) writeFileSync(path, "someone else's plugin");
+  await expect(cliProxy("doctor", hub({ home, panel }, { page: 200 }).machine)).rejects.toThrow(`Remove the plugins Fleet did not install: ${loose}, ${store}.`);
+  await expect(cliProxy("doctor", hub({ home, panel }, { page: 200 }).machine)).rejects.toThrow("anyone with the management key can install plugins from CLIProxyAPI's plugin store");
+  const off = hub({ home });
+  await cliProxy("install", off.machine);
+  await expect(cliProxy("doctor", hub({ home }).machine)).rejects.toThrow(`Remove the plugins Fleet did not install: ${loose}, ${store}.`);
+  for (const path of [store, loose]) rmSync(path);
+  expect(await cliProxy("doctor", hub({ home }).machine)).toBe(0);
+});
+
+test("turning the panel off removes only the pinned plugin and names the plugins Fleet did not install", async () => {
+  const { machine, home } = hub({ panel });
+  await cliProxy("install", machine);
+  const other = join(dataDir(home), "plugins/other.so");
+  writeFileSync(other, "someone else's plugin");
+  const off = hub({ home });
+  expect(await cliProxy("install", off.machine)).toBe(0);
+  expect([existsSync(files(home).plugin), readFileSync(other, "utf8")]).toEqual([false, "someone else's plugin"]);
+  expect(off.printed).toContain(`Kept plugins Fleet did not install: ${other}. Remove them: fleet cli-proxy doctor fails while they are there.`);
 });
