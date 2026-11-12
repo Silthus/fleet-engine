@@ -52,5 +52,9 @@ and the Slack app step below runs on the hub.
    with code 130 without saving either. Ask for that token again, and give
    both to setup again.
 
+   Without a secret prompt, run `fleet slack-trigger setup` in a Terminal
+   window instead, as `ssh -t coder.<hub>` with a hub. It gives the link and
+   asks for both tokens itself.
+
 [Start a thread from Slack](https://github.com/Silthus/fleet-engine/blob/main/docs/slack.md)
 explains the rest.

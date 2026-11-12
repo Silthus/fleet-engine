@@ -19,6 +19,9 @@ passing `fleet doctor` on this Mac.
   and never send a paste to a Terminal window. Say in one line what the
   secret is for and where to make it. Then give the file to the command as
   the step shows, on its standard input or in a variable, also over SSH.
+  Only when the host has no secret prompt, run the command in a Terminal
+  window (see "Terminal only for a terminal screen"), where it asks for the
+  secret itself.
 - **Say a word before you use it.** The first time you say a Fleet word to the
   person, such as workflow, pack, profile, hub, or node, explain it in one
   plain line.
