@@ -73,5 +73,35 @@
       },
       "workflow": "context-library"
     }
+  ],
+  "steps": [
+    {
+      "id": "context-upstream",
+      "run": [
+        "fleet",
+        "context",
+        "upstream",
+        "install"
+      ],
+      "check": [
+        "fleet",
+        "context",
+        "upstream",
+        "doctor"
+      ],
+      "undo": [
+        "fleet",
+        "context",
+        "upstream",
+        "remove"
+      ],
+      "roles": [
+        "hub"
+      ],
+      "on": [
+        "linux"
+      ],
+      "workflow": "context-library"
+    }
   ]
 }

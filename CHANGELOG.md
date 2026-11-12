@@ -53,12 +53,15 @@ packs, and your answers live in your own private profile repo.
   gets links to its documents. `fleet context` searches the notes, saves a link
   as a condensed note, and keeps a catalog and topic hubs. Every machine pulls
   the repo every five minutes, keeps local changes, and fails the sync while
-  they block it.
+  they block it. With the MCP gateway, the hub serves a read-only
+  `context_search` tool over the same notes.
 - **Hub** (off): one always-on devbox manages the others. It signs in to your
-  MCP servers once, keeps your devboxes linked, and watches their disks. The
-  nightly Dream task and own-account balancing are opt-in. Own-account
-  balancing routes Claude Code across several of your own subscriptions. It is
-  off by default, and the page shows the Anthropic terms it touches.
+  MCP servers once, keeps your devboxes linked, and watches their disks. A
+  pack can run its own small MCP server in the gateway, with folders mounted
+  read-only. The nightly Dream task and own-account balancing are opt-in.
+  Own-account balancing routes Claude Code across several of your own
+  subscriptions. It is off by default, and the page shows the Anthropic terms
+  it touches.
 - **Slack** (off): your own message, reaction, or mention in Slack starts a T3
   thread about it.
 - **incident.io** (off): an agent that watches a risky change pages you, and
