@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import type { AiPlan, ModelRow } from "../pack/types.ts";
+import { restartCommand } from "../adapters/t3/service.ts";
 import { canBeDevbox } from "../hub/names.ts";
 import { onHub, quote } from "../hub/ssh.ts";
 import { loadProfile, pullProfile, saveAnswers, validHost } from "../profile/profile.ts";
@@ -369,7 +370,7 @@ async function linkBothWays(host: string, box: Machine, context: DevboxContext) 
   };
   const boxAddress = await connectAddressWithin(box);
   const limit = boxAddress ? undefined : await tunnelLimitReached(box);
-  if (limit) throw new Error(`${host} has no T3 Connect tunnel: T3 Code there says ${limit}. Free one: run t3 connect logout on a machine that no longer needs T3 Connect, or unlink it in T3 Connect. Then run systemctl --user restart t3code.service on ${host}, and run fleet setup again.`);
+  if (limit) throw new Error(`${host} has no T3 Connect tunnel: T3 Code there says ${limit}. Free one: run t3 connect logout on a machine that no longer needs T3 Connect, or unlink it in T3 Connect. Then run ${restartCommand} on ${host}, and run fleet setup again.`);
   if (!boxAddress) throw new Error(`${host} has no T3 Connect address yet. Update T3 Code on ${host}, then run fleet setup again.`);
   await link(box, host, boxAddress, context.machine, here);
   const hereAddress = await connectAddress(context.machine);
