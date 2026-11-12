@@ -893,7 +893,7 @@ function pluginClis(installed: { claude?: string[]; codex?: string[] } = {}) {
 }
 
 describe("Codex plugins", () => {
-  const enabled = { provider: "codex" as const, key: "plugins.github@openai-curated-remote.enabled", value: true };
+  const enabled = { provider: "codex" as const, key: "plugins.github@openai-curated-remote", value: { enabled: true } };
 
   test("install once through codex plugin add, outside any CODEX_HOME, and leave when no pack enables them", async () => {
     const home = temp.make("home-");
@@ -921,6 +921,16 @@ describe("Codex plugins", () => {
     expect(cli.state.codex).toEqual(["github@openai-curated-remote"]);
   });
 
+  test("leave once their pack turns them off", async () => {
+    const home = temp.make("home-");
+    const cli = pluginClis();
+
+    await apply(plan([enabled]), { home, adapters: [cli.adapter] });
+    await apply(plan([{ ...enabled, value: { enabled: false } }]), { home, adapters: [cli.adapter] });
+
+    expect(cli.state.codex).toEqual([]);
+  });
+
   test("install nothing the user turned off in their config", async () => {
     const home = temp.make("home-");
     write(home, codex, '[plugins."github@openai-curated-remote"]\nenabled = false\n');
@@ -945,7 +955,7 @@ describe("plugins that the Fleet before the engine installed", () => {
   const installed = { claude: ["github@claude-plugins-official"], codex: ["github@openai-curated-remote", "slack@openai-curated-remote"] };
   const github = [
     { provider: "claude" as const, key: "enabledPlugins.github@claude-plugins-official", value: true },
-    { provider: "codex" as const, key: "plugins.github@openai-curated-remote.enabled", value: true },
+    { provider: "codex" as const, key: "plugins.github@openai-curated-remote", value: { enabled: true } },
   ];
 
   test("become the engine's once a pack enables them again, so they leave with the pack, and the rest stay", async () => {

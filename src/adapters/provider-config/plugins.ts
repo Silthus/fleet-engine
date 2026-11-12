@@ -16,9 +16,9 @@ const managers: Manager[] = ["claude", "codex"];
 const names: Record<Manager, string> = { claude: "Claude", codex: "Codex" };
 const officialMarketplaces: Sources = { "claude-plugins-official": "anthropics/claude-plugins-official" };
 
-const declared: Record<Manager, (path: string[]) => string | undefined> = {
-  claude: ([root, id, ...rest]) => (root === "enabledPlugins" && id && !rest.length ? id : undefined),
-  codex: ([root, id, field, ...rest]) => (root === "plugins" && id && field === "enabled" && !rest.length ? id : undefined),
+const declared: Record<Manager, (path: string[], value: unknown) => string | undefined> = {
+  claude: ([root, id, ...rest], value) => (root === "enabledPlugins" && id && !rest.length && value === true ? id : undefined),
+  codex: ([root, id, ...rest], value) => (root === "plugins" && id && !rest.length && (value as { enabled?: unknown } | null)?.enabled === true ? id : undefined),
 };
 
 const commands: Record<Manager, { list: string[]; install: (id: string) => string[]; remove: (id: string) => string[]; clearEnv: string[] }> = {
@@ -28,7 +28,7 @@ const commands: Record<Manager, { list: string[]; install: (id: string) => strin
 
 export function wantedPlugins(plan: Plan, manager: Manager = "claude") {
   return plan.config.flatMap((entry) => {
-    const id = entry.provider === manager && entry.value === true ? declared[manager](keyPath(entry.key)) : undefined;
+    const id = entry.provider === manager ? declared[manager](keyPath(entry.key), entry.value) : undefined;
     if (id === undefined) return [];
     if (!pluginId.test(id)) throw new Error(`${entry.pack} enables an invalid ${names[manager]} plugin id: ${id}`);
     return [id];

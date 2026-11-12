@@ -45,8 +45,10 @@
     },
     {
       "provider": "codex",
-      "key": "plugins.github@openai-curated-remote.enabled",
-      "value": true,
+      "key": "plugins.github@openai-curated-remote",
+      "value": {
+        "enabled": true
+      },
       "workflow": "github",
       "plans": [
         "codex",
@@ -87,8 +89,10 @@
     },
     {
       "provider": "codex",
-      "key": "plugins.convex@openai-curated-remote.enabled",
-      "value": true,
+      "key": "plugins.convex@openai-curated-remote",
+      "value": {
+        "enabled": true
+      },
       "workflow": "convex",
       "plans": [
         "codex",
