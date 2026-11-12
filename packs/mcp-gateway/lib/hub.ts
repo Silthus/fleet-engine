@@ -22,7 +22,8 @@ export type Hub = {
 };
 
 type BearerKey = { id: string; name?: string; token: string; enabled: boolean; accessType?: string; allowedGroups?: string[] };
-type McpHubSettings = { mcpServers: Record<string, { oauth?: { pendingAuthorization?: { authorizationUrl?: string } } }>; systemConfig: { install: { baseUrl: string } }; bearerKeys: BearerKey[] };
+type ServerSettings = { type?: string; command?: string; startOnDemand?: boolean; oauth?: { pendingAuthorization?: { authorizationUrl?: string } } };
+type McpHubSettings = { mcpServers: Record<string, ServerSettings>; systemConfig: { install: { baseUrl: string } }; bearerKeys: BearerKey[] };
 
 export type Container = { Config: { Labels?: Record<string, string>; Env?: string[] }; Image: string; State: { Running: boolean }; Mounts?: Array<{ Destination: string }> };
 
@@ -174,6 +175,9 @@ export async function issueKey(machine: string, hub: Hub) {
   return key.token;
 }
 
+const sleepsBetweenCalls = (config: ServerSettings | undefined) => config?.startOnDemand === true && (config.type === "stdio" || (!config.type && Boolean(config.command)));
+const shownStatus = (status: string, config: ServerSettings | undefined) => (status === "disconnected" && sleepsBetweenCalls(config) ? "idle (on demand)" : status);
+
 export async function doctor(hub: Hub): Promise<boolean> {
   const settings = await readSettings(hub.home);
   if (!settings) return hub.print("MCPHub is not installed. Run: fleet apply"), false;
@@ -186,7 +190,7 @@ export async function doctor(hub: Hub): Promise<boolean> {
   if (!ok) hub.print("MCPHub accepts calls without a key. Check routing.skipAuth in its settings.");
   hub.print(`MCPHub dashboard: ${settings.systemConfig.install.baseUrl}/`);
   const { servers, missing } = await groupGap(api(hub, settings));
-  for (const server of servers) hub.print(`${server.name}: ${server.status}, ${server.tools?.length ?? 0} tools`);
+  for (const server of servers) hub.print(`${server.name}: ${shownStatus(server.status, settings.mcpServers[server.name])}, ${server.tools?.length ?? 0} tools`);
   if (missing.length) ok = false, hub.print(`The ${gatewayGroup} group lacks ${missing.join(", ")}. Run: fleet apply`);
   return ok;
 }
