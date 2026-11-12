@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { appendFileSync, cpSync, mkdirSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AvailableSource, Plan } from "../../src/pack/types.ts";
 import { isolateGit, spawnGit, tempDirs } from "../../src/testing/git.ts";
@@ -91,6 +91,16 @@ describe("the Guards pack", () => {
     const hook = ".config/fleet/hooks/PreToolUse/guards.ts";
     expect(withGuards({}).files.map((file) => file.target)).not.toContain(hook);
     expect(withGuards().files.map((file) => file.target)).toContain(hook);
+  });
+
+  test("installs gh stack and its pinned install step only with the gh-stack workflow", () => {
+    const script = ".local/share/fleet/guards/install-gh-stack.sh";
+    const off = withGuards({ "shell-guards": true });
+    expect(off.files.map((file) => file.target)).not.toContain(script);
+    expect(off.steps.map((step) => step.id)).not.toContain("gh-stack");
+    const on = withGuards({ "shell-guards": true, "gh-stack": true });
+    expect(on.files.map((file) => file.target)).toContain(script);
+    expect(on.steps.find((step) => step.id === "gh-stack")).toMatchObject({ run: ["sh", "-c", `sh "$HOME/${script}"`], check: ["sh", "-c", `sh "$HOME/${script}" --check`] });
   });
 
   test("defaults the person a refusal names, and asks nobody at setup", () => {
@@ -521,6 +531,14 @@ describe("the gh guard", () => {
   });
 
   test.each([
+    "gh extension install github/gh-stack --pin v0.3.0",
+    "gh ext upgrade stack",
+    "gh extension install github/gh-stack",
+  ])("refuses every extension install, gh-stack too, and points at the gh-stack workflow: %s", (command) => {
+    expect(refusal(command)).toContain("ask Robin to turn on the gh-stack workflow");
+  });
+
+  test.each([
     ["gh api repos/elsewhere/tool/releases --jq '.[0].tag_name'", "elsewhere"],
     ["gh pr view https://github.com/someone/repo/pull/6", "someone"],
     ["cd /x && gh repo clone evil/payload", "evil"],
@@ -769,6 +787,91 @@ describe("the Git guard", () => {
     expect(denied.refusal).toContain("force-pushes 6 branches at once");
   });
 
+  const stackOf = (dir: string, branches: [string, boolean][]) => writeFileSync(join(dir, ".git/gh-stack"), JSON.stringify({
+    stacks: [{ branches: branches.map(([branch, merged]) => ({ branch, pullRequest: { merged } })) }, { branches: [{ branch: "elsewhere", pullRequest: { merged: false } }] }],
+  }));
+  const sixOpen: [string, boolean][] = [["feature", false], ["s2", false], ["s3", false], ["s4", false], ["s5", false], ["s6", false], ["s0", true]];
+
+  test.each([
+    "gh stack push",
+    "gh stack submit --draft",
+    "gh stack sync",
+    "gh stack push --remote=origin",
+    "gh stack push --remote origin",
+    "cd REPO && gh stack push",
+  ])("refuses a gh stack command that pushes a stack of more than five open branches: %s", async (command) => {
+    const dir = await repo("feature");
+    stackOf(dir, sixOpen);
+    const home = homeWith(withGuards(), { "guards.person": "Robin" });
+    const denied = await preToolUse(home, "claude", bash(command.replace("REPO", dir), command.includes("REPO") ? "/" : dir), { guardAsProcess: true });
+    expect(denied.refusal).toContain("force-pushes 6 branches at once");
+    expect(denied.refusal).toContain("ask Robin");
+  });
+
+  test.each([
+    ["gh extension exec", "gh extension exec stack push"],
+    ["gh ext exec", "gh ext exec stack submit"],
+    ["the extension binary itself", "~/.local/share/gh/extensions/gh-stack/gh-stack push"],
+    ["the alias wrapper gh stack alias makes", "gs sync"],
+    ["an alias wrapper with its own name", "gst push"],
+  ])("counts a stack push through %s", async (_, command) => {
+    const dir = await repo("feature");
+    stackOf(dir, sixOpen);
+    const home = homeWith(withGuards(), { "guards.person": "Robin" });
+    mkdirSync(join(home, ".local/bin"), { recursive: true });
+    for (const name of ["gs", "gst"]) writeFileSync(join(home, ".local/bin", name), '#!/bin/sh\nexec gh stack "$@"\n', { mode: 0o755 });
+    const denied = await preToolUse(home, "claude", bash(command, dir), { guardAsProcess: true });
+    expect(denied.refusal).toContain("force-pushes 6 branches at once");
+  });
+
+  test.each(["gh stack alias", "gh stack alias gst", "gh stack alias && gs push"])("refuses %s, a wrapper the guard cannot follow", async (command) => {
+    const denied = await preToolUse(homeWith(withGuards(), { "guards.person": "Robin" }), "claude", bash(command, await repo("feature")), { guardAsProcess: true });
+    expect(denied.refusal).toContain("gh stack alias");
+    expect(denied.refusal).toContain("ask Robin");
+  });
+
+  test("allows a program named gs that is not the gh stack wrapper", async () => {
+    const dir = await repo("feature");
+    stackOf(dir, sixOpen);
+    const home = homeWith(withGuards());
+    mkdirSync(join(home, ".local/bin"), { recursive: true });
+    writeFileSync(join(home, ".local/bin/gs"), "#!/bin/sh\nexec ghostscript \"$@\"\n", { mode: 0o755 });
+    expect(await preToolUse(home, "claude", bash("gs push", dir), { guardAsProcess: true })).toEqual({ code: 0, refusal: undefined });
+  });
+
+  test.each([
+    ["a stack of five open branches", sixOpen.slice(1), "gh stack push"],
+    ["a branch outside every stack", [["other", false]] as [string, boolean][], "gh stack push"],
+    ["gh stack commands that push nothing", sixOpen, "gh stack view && gh stack checkout s2"],
+    ["a link of a few branches and PR numbers", sixOpen, "gh stack link 12 13 a b"],
+  ])("allows %s", async (_, branches, command) => {
+    const dir = await repo("feature");
+    stackOf(dir, branches);
+    const home = homeWith(withGuards());
+    expect(await preToolUse(home, "claude", bash(command, dir), { guardAsProcess: true })).toEqual({ code: 0, refusal: undefined });
+  });
+
+  test("allows gh stack push in a repository whose stack catalog is unreadable", async () => {
+    const dir = await repo("feature");
+    writeFileSync(join(dir, ".git/gh-stack"), "{not json");
+    expect(await preToolUse(homeWith(withGuards()), "claude", bash("gh stack push", dir), { guardAsProcess: true })).toEqual({ code: 0, refusal: undefined });
+  });
+
+  test.each([
+    ["a gh stack link of six branches", "gh stack link --base main a b c d e f"],
+    ["a gh stack push where the guard cannot tell the directory", "cd \"$WHERE\" && gh stack push"],
+    ["a gh stack push outside a repository", "gh stack push"],
+  ])("refuses %s", async (_, command) => {
+    expect(await preToolUse(homeWith(withGuards()), "claude", bash(command, temp.make("plain-")), { guardAsProcess: true })).toMatchObject({ refusal: expect.stringContaining("force-pushes 6 branches at once") });
+  });
+
+  test("adds the branches of a gh stack push to a leased git push in the same command", async () => {
+    const dir = await repo("feature");
+    stackOf(dir, [["feature", false], ["s5", false], ["s6", false]]);
+    const denied = await preToolUse(homeWith(withGuards()), "claude", bash("gh stack push && git push --force-with-lease origin a b c", dir), { guardAsProcess: true });
+    expect(denied.refusal).toContain("force-pushes 6 branches at once");
+  });
+
   test("refuses a push when it cannot read the repository's Git config", async () => {
     const dir = await repo("main");
     const bin = temp.make("bin-");
@@ -790,5 +893,64 @@ describe("the Git guard", () => {
     const dir = await repo(branch, config, agents);
     const home = homeWith(withGuards(), settings);
     expect(await preToolUse(home, "claude", bash(command, dir), { guardAsProcess: true })).toEqual({ code: 0, refusal: undefined });
+  });
+});
+
+describe("the gh-stack install script", () => {
+  const script = join(import.meta.dir, "system/install-gh-stack.sh");
+  function machine({ gh = true } = {}) {
+    const root = temp.make("gh-stack-");
+    const bin = join(root, "bin");
+    const home = join(root, "home");
+    const data = join(root, "gh-data");
+    mkdirSync(bin);
+    mkdirSync(home);
+    for (const tool of ["sh", "uname", "sha256sum", "shasum", "cut", "mkdir", "dirname", "rm", "cat", "printf"]) {
+      const path = Bun.which(tool);
+      if (path) symlinkSync(path, join(bin, tool));
+    }
+    const log = join(root, "gh.log");
+    if (gh) writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\ncase "$*" in "extension install"*) mkdir -p "${data}/extensions/gh-stack" && printf 'not the release' > "${data}/extensions/gh-stack/gh-stack" ;; "extension remove"*) rm -rf "${data}/extensions/gh-stack" ;; esac\n`, { mode: 0o755 });
+    const run = (...args: string[]) => {
+      const result = Bun.spawnSync([join(bin, "sh"), script, ...args], { env: { PATH: bin, HOME: home, GH_DATA_DIR: data }, stdout: "pipe", stderr: "pipe" });
+      return { code: result.exitCode, out: `${result.stdout}${result.stderr}`.trim() };
+    };
+    const calls = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []);
+    return { home, data, run, calls, marker: join(home, ".config/fleet/gh-stack.version") };
+  }
+
+  test("skips a machine without gh", () => {
+    expect(machine({ gh: false }).run()).toEqual({ code: 0, out: "gh-stack: skipped, gh is not installed." });
+  });
+
+  test("installs the pinned tag, and removes it again when its digest does not match the release", () => {
+    const box = machine();
+    const result = box.run();
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("checksum mismatch for v0.3.0");
+    expect(box.calls()).toEqual(["extension install github/gh-stack --pin v0.3.0", "extension remove stack"]);
+    expect(existsSync(box.marker)).toBe(false);
+    expect(box.run("--check").code).toBe(1);
+  });
+
+  test("keeps a gh-stack that Fleet did not install", () => {
+    const box = machine();
+    mkdirSync(join(box.data, "extensions/gh-stack"), { recursive: true });
+    writeFileSync(join(box.data, "extensions/gh-stack/gh-stack"), "someone's own build");
+    const result = box.run();
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("kept the gh-stack that Fleet did not install");
+    expect(box.calls()).toEqual([]);
+  });
+
+  test("replaces an outdated gh-stack that Fleet installed", () => {
+    const box = machine();
+    mkdirSync(join(box.data, "extensions/gh-stack"), { recursive: true });
+    writeFileSync(join(box.data, "extensions/gh-stack/gh-stack"), "an older pin");
+    mkdirSync(dirname(box.marker), { recursive: true });
+    writeFileSync(box.marker, "v0.2.0\n");
+    box.run();
+    expect(box.calls()[0]).toBe("extension remove stack");
+    expect(box.calls()[1]).toBe("extension install github/gh-stack --pin v0.3.0");
   });
 });

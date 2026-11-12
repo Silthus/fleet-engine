@@ -3,7 +3,8 @@ import { commandsIn } from "./shell-words.ts";
 const keyReason = (person: string) => `Fleet blocked this command: it changes the SSH or GPG keys on ${person}'s GitHub account, which gives lasting access. If you need it, stop and ask ${person}.`;
 const tokenReason = (person: string) => "Fleet blocked this command: it signs in to GitHub, or prints or widens the GitHub token. "
   + `Use \`gh\` or \`gh auth git-credential\`, which use the token without showing it. If you need a new sign-in or scope, stop and ask ${person} to run it.`;
-const extensionReason = (person: string) => `Fleet blocked this command: a gh extension is code from a GitHub repository that runs with the GitHub token. If you need it, stop and ask ${person}.`;
+const extensionReason = (person: string) => "Fleet blocked this command: a gh extension is code from a GitHub repository that runs with the GitHub token. "
+  + `For gh stack, ask ${person} to turn on the gh-stack workflow, which installs a pinned version with a checked digest. For any other extension, stop and ask ${person}.`;
 const exposureReason = (person: string) => `Fleet blocked this command: it deletes a repository or makes code public. If you need it, stop and ask ${person}.`;
 const ownerReason = (owner: string, person: string) => `Fleet blocked this command: \`${owner}\` is not one of the GitHub owners agents may use on this machine. `
   + `Use a repository of an allowed owner, or stop and ask ${person} to add \`${owner}\` to guards.owners.`;

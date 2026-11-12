@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { t3StatePath, t3UserData } from "./server.ts";
 import type { T3Client, T3HttpClient } from "./session.ts";
 
-export type ShellPullRequest = { repository: string; number: number; url: string };
+export type ShellPullRequest = { repository: string; number: number; url: string; snapshot?: { state?: string } | null };
 
 export type ShellThread = {
   id: string; title: string; projectId: string; status: string;
