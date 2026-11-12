@@ -203,7 +203,7 @@
       "id": "source-refresh",
       "name": "Fresh skills",
       "default": true,
-      "sentence": "Every five minutes, Fleet fetches each pack source that follows a branch, such as your skills repository. When one moved, Fleet updates the skills, guides, and instructions it brings, and keeps your own edits as fleet apply does. Everything else waits for the nightly update."
+      "sentence": "Every five minutes, Fleet asks each pack source that follows a branch, such as your skills repository, whether it moved. When it moved forward, Fleet updates the skills, guides, and instructions it brings. A source you edited, such as a changed skill, and a rewritten branch wait for you. Everything else waits for the nightly update."
     },
     {
       "id": "linked-machines",

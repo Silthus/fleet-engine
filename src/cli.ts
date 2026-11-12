@@ -202,8 +202,8 @@ async function runRefresh(args: string[], options: CliOptions) {
   const machine = await loadMachine(options.home);
   if (!machine?.profileDir) throw new Error("no profile on this machine. Run get.sh, or fleet apply --profile <dir>.");
   const profile = await loadProfile(machine.profileDir);
-  const applyFiles = async (fetched: FetchedSource[]) => {
-    const { plan } = await loadPlan(options, machine.profileDir, { fetch: false, remember: false, fetched });
+  const applyFiles = async (moved: FetchedSource[]) => {
+    const { plan } = await loadPlan(options, machine.profileDir, { fetch: false, remember: false, fetched: moved });
     if (plan.unanswered.length) {
       for (const setting of plan.unanswered) options.print(`To do: ${setting.question} Answer it with fleet set ${setting.key}=<value>.`);
       return false;
@@ -212,7 +212,7 @@ async function runRefresh(args: string[], options: CliOptions) {
     printReport({ ok: !result.blocked, actions: result.actions, findings: result.findings, humanLeft: [] }, "apply", options.print);
     return !result.blocked;
   };
-  return refresh({ home: options.home, cache: sourceCache(options.home), sources: profile.sources, print: options.print, apply: applyFiles });
+  return refresh({ home: options.home, cache: sourceCache(options.home), sources: profile.sources, print: options.print, now: options.clock?.now ?? Date.now, apply: applyFiles });
 }
 
 async function runPackCommand(name: string, args: string[], options: CliOptions) {
@@ -435,7 +435,7 @@ async function loadPlan(options: CliOptions, profileFlag: string | undefined, mo
   const cache = sourceCache(options.home);
   const known = (ref: SourceRef) => mode.fetched?.find((source) => source.ref.name === ref.name && !("error" in source));
   const engine: AvailableSource = { ref: { name: "engine", repo: profile.engine.repo, ref: profile.engine.ref }, dir: options.engineRoot, packs: await loadPacks(options.engineRoot) };
-  const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => known(ref) ?? (mode.fetch ? fetchSource(ref, cache) : cachedSource(ref, cache)))))];
+  const sources = [engine, ...(await Promise.all(profile.sources.map((ref) => known(ref) ?? (mode.fetch ? fetchSource(ref, cache, undefined, options.clock) : cachedSource(ref, cache)))))];
   const plan = resolve(profile, machine, sources);
   const changed = saved?.profileDir !== profileDir || saved.role !== plan.machine.role || saved.coder !== plan.machine.coder || saved.name !== plan.machine.name;
   if (mode.remember && changed) await saveMachine(options.home, plan.machine);
