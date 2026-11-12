@@ -192,13 +192,15 @@ async function askSetting(context: QuestionContext, setting: PackSetting): Promi
   };
   if (flags.set[setting.key] !== undefined) return save(parseSettingValue(setting, flags.set[setting.key]!));
   const saved = draft.settings?.[setting.key];
+  const zoned = timeZoneDefault(setting, context.timeZone);
   if (flags.nonInteractive) {
+    if (saved === undefined && zoned !== undefined) return save(zoned);
     const fallback = saved ?? setting.default;
     if (fallback !== undefined) return terminal.print(`  ✓ ${label(setting, fallback)}`);
     if (setting.optional) return terminal.print(`  ✓ Skipped. Set it later with fleet set ${setting.key}=<value>.`);
     return "unanswered";
   }
-  const fallback = saved ?? timeZoneDefault(setting, context.timeZone) ?? setting.default;
+  const fallback = saved ?? zoned ?? setting.default;
   terminal.print(`? ${setting.question}`);
   if (setting.type === "choice" && setting.choices?.length) {
     const preferred = setting.choices.findIndex((choice) => choice.value === fallback);

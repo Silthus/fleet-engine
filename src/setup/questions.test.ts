@@ -1,7 +1,18 @@
-import { describe, expect, test } from "bun:test";
-import type { PackSetting } from "../pack/types.ts";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { main } from "../cli.ts";
+import { loadPacks } from "../pack/manifest.ts";
+import type { FetchedSource, PackSetting, SourceRef } from "../pack/types.ts";
+import { isolateGit, tempDirs } from "../testing/git.ts";
 import { parseSetupFlags } from "./flags.ts";
+import { profilePath } from "./profile.ts";
 import { packList, settingSteps, type Catalog, type Draft } from "./questions.ts";
+import { engineRoot, fakeMachine, pushedAnswers, scripted } from "./testing.ts";
+
+isolateGit();
+const temp = tempDirs();
+afterEach(() => temp.cleanup());
 
 const region: PackSetting = {
   key: "team.region",
@@ -15,6 +26,20 @@ const region: PackSetting = {
   defaultByTimeZone: { "Europe/": "eu", "America/": "us" },
   ask: "setup",
 };
+
+function teamSource(): (ref: SourceRef) => Promise<FetchedSource> {
+  const dir = temp.make("team-");
+  mkdirSync(join(dir, "packs/posthog"), { recursive: true });
+  writeFileSync(join(dir, "packs/posthog/pack.json"), JSON.stringify({ schema: 1, name: "posthog", summary: "Team rules.", settings: [{ ...region, key: "posthog.region" }] }));
+  return async (ref) => ({ ref, dir, packs: await loadPacks(dir) });
+}
+
+async function unattendedSetup(home: string, timeZone: string, args: string[] = []) {
+  const io = scripted([]);
+  const box = fakeMachine(home, {}, { org: true });
+  const code = await main(["setup", "--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip", ...args], { home, engineRoot, platform: "linux", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: box.machine, clock: box.clock, doctor: async () => 0, env: {}, timeZone, fetchSource: teamSource() } });
+  return { code, output: io.output() };
+}
 
 async function ask(timeZone: string | undefined, args: string[] = []) {
   const lines: string[] = [];
@@ -42,10 +67,19 @@ describe("a setting's time-zone default", () => {
     expect(result.settings).toEqual({ "team.region": "us" });
   });
 
-  test("only preselects for a person: without one, setup saves nothing, so an existing profile's answer stays", async () => {
-    const result = await ask("Europe/Berlin", ["--non-interactive"]);
-    expect(result.settings).toBeUndefined();
-    expect(result.output).toContain("✓ US");
+  test("--non-interactive saves the time-zone default to the pushed profile", async () => {
+    const home = temp.make("home-");
+    expect((await unattendedSetup(home, "Europe/Lisbon")).code).toBe(0);
+    expect((await pushedAnswers(home)).settings).toEqual({ "posthog.region": "eu" });
+  });
+
+  test("--non-interactive on another machine keeps the region the profile already has", async () => {
+    const home = temp.make("home-");
+    expect((await unattendedSetup(home, "America/New_York")).code).toBe(0);
+    rmSync(join(home, ".config/fleet"), { recursive: true });
+    rmSync(profilePath(home), { recursive: true });
+    expect((await unattendedSetup(home, "Europe/Lisbon")).code).toBe(0);
+    expect((await pushedAnswers(home)).settings).toEqual({ "posthog.region": "us" });
   });
 
   test("treats a machine without a time zone as one the map does not name", async () => {
