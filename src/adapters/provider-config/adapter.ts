@@ -16,7 +16,7 @@ export type { CommandRunner } from "../run.ts";
 type Target = { provider: Provider; path: string; format: Format; owns(path: string[]): boolean };
 export type FieldRecord = { [target: string]: Field[] };
 type Merged = { record: Field[]; kept: string[]; reason: string; after?: string; document: Document };
-type FilesResult = AdapterResult & { plugins?: string[]; marketplaces?: Record<string, string | null>; codexPlugins?: string[] };
+type FilesResult = AdapterResult & { plugins?: string[]; claudeEnabled?: Record<string, boolean>; marketplaces?: Record<string, string | null>; codexPlugins?: string[] };
 
 export const recordTarget = ".config/fleet/provider-fields.json";
 const claudeSettings = ".claude/settings.json";
@@ -38,8 +38,8 @@ export function providerConfigAdapter(options: { run?: CommandRunner } = {}): Ad
       const outage = sourceOutage(plan);
       const gated = gatedKeys(plan);
       const reconcile = async () => {
-        const { plugins, marketplaces, codexPlugins, ...result } = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage, gated);
-        result.findings.push(...(await reconcilePlugins(plan, context.home, context.dryRun, run, { outage, accepted: plugins, marketplaces, acceptedCodex: codexPlugins })));
+        const { plugins, claudeEnabled, marketplaces, codexPlugins, ...result } = await reconcileFiles(plan, context.home, context.dryRun, context.adopt, outage, gated);
+        result.findings.push(...(await reconcilePlugins(plan, context.home, context.dryRun, run, { outage, accepted: plugins, claudeEnabled, marketplaces, acceptedCodex: codexPlugins })));
         const servers = await reconcileServers(plan, context.home, { dryRun: context.dryRun, adopt: context.adopt.includes(claudeJson), outage, gated: gatedPath(gated, "claude"), run });
         result.actions.push(...servers.actions);
         result.findings.push(...servers.findings);
@@ -79,6 +79,7 @@ async function reconcileFiles(plan: Plan, home: string, dryRun: boolean, adopt: 
     if (merged.record.length) next[target.path] = merged.record;
     if (target.path === claudeSettings && !link) {
       result.plugins = acceptedPlugins(merged.document);
+      result.claudeEnabled = enabledState(merged.document);
       result.marketplaces = declaredMarketplaces(merged.document);
     }
     if (target.provider === "codex" && !link) result.codexPlugins = acceptedCodexPlugins(merged.document);
@@ -172,6 +173,11 @@ function merge(target: Target, text: string | undefined, previous: Field[], want
 function acceptedPlugins(document: Document) {
   const enabled = get(document, ["enabledPlugins"]);
   return enabled && typeof enabled === "object" ? Object.entries(enabled).flatMap(([id, on]) => (on === true ? [id] : [])) : [];
+}
+
+function enabledState(document: Document): Record<string, boolean> {
+  const enabled = get(document, ["enabledPlugins"]);
+  return enabled && typeof enabled === "object" ? Object.fromEntries(Object.entries(enabled).filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean")) : {};
 }
 
 function acceptedCodexPlugins(document: Document) {
