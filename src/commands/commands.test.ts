@@ -142,9 +142,9 @@ describe("fleet packs", () => {
 
   test("a change that does not apply here stays saved, and says how to finish", async () => {
     const { home, pushed } = await machineWithProfile();
-    const result = await fleet(home, ["packs", "--add", "memory"], 1);
+    const result = await fleet(home, ["packs", "--add", "communication"], 1);
     expect(result.code).toBe(1);
-    expect((await pushed()).packs).toEqual(["pull-requests", "memory"]);
+    expect((await pushed()).packs).toEqual(["pull-requests", "communication"]);
     expect(result.output).toEndWith("The change is saved. Fix what it says above, then run fleet apply.");
   });
 
@@ -183,7 +183,7 @@ describe("fleet settings and fleet set", () => {
     const plan = resolveEngine([engine, team], { packs: ["team"] });
     const lines: string[] = [];
     const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [team.ref], packs: ["team"], plan: "both", settings: {}, workflows: {} } satisfies ProfileFile;
-    const code = settingsCommand([], { profileDir: "/profile", profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line), apply: async () => 0 });
+    const code = settingsCommand([], { profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line) });
     expect(code).toBe(0);
     expect(lines.filter((line) => line.includes("identity.signer ="))).toEqual(["  identity.signer = 1password (default)"]);
     expect(lines).not.toContain("team:");
@@ -197,7 +197,7 @@ describe("fleet settings and fleet set", () => {
     expect(plan.settings["identity.signer"]).toBeUndefined();
     const lines: string[] = [];
     const profile = { schema: 1, engine: { repo: "Silthus/fleet-engine", ref: "main", channel: "track" }, sources: [team.ref], packs: ["team"], plan: "both", settings: {}, workflows: {} } satisfies ProfileFile;
-    settingsCommand([], { profileDir: "/profile", profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line), apply: async () => 0 });
+    settingsCommand([], { profile, plan, packs: [...engine.packs, ...team.packs], print: (line) => lines.push(line) });
     expect(lines.filter((line) => line.includes("identity.signer ="))).toEqual(["  identity.signer = not set"]);
   });
 
