@@ -72,7 +72,13 @@ cat "${replies}/$reply.json"
     env.FLEET_HANDLERS = JSON.stringify({ "review-bot": path });
   };
   const botArgs = () => JSON.parse(readFileSync(join(root, "bot-args.json"), "utf8"));
-  return { home, env, reply, run, call, refusal, calls, reviewBot, botArgs };
+  const packCommands = (exitCode: number) => {
+    const path = join(root, "pr-command.ts");
+    writeFileSync(path, `await Bun.write(${JSON.stringify(join(root, "pack-args.json"))}, JSON.stringify(Bun.argv.slice(2)));\nconsole.log("pack says hi");\nprocess.exit(${exitCode});\n`);
+    env.FLEET_HANDLERS = JSON.stringify({ ...JSON.parse(env.FLEET_HANDLERS || "{}"), "pr-command": path });
+  };
+  const packArgs = () => (existsSync(join(root, "pack-args.json")) ? JSON.parse(readFileSync(join(root, "pack-args.json"), "utf8")) : undefined);
+  return { home, env, reply, run, call, refusal, calls, reviewBot, botArgs, packCommands, packArgs };
 }
 
 const user = (login: string) => ({ __typename: "User", login });
@@ -261,6 +267,55 @@ test("forecast hands its parsed arguments to the review-bot handler and exits wi
   expect(result).toEqual({ code: 7, out: "bot says hi", err: "" });
   box.run("forecast", "--repo", "acme/widgets", "--pr", "12");
   expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--pr", "12"]);
+});
+
+test("forecast hands a branch or a planned path list to the review-bot handler for work that has no PR yet", () => {
+  const box = sandbox();
+  box.reviewBot(1);
+  expect(box.run("forecast", "--branch", "feat/x", "--repo", "acme/widgets")).toEqual({ code: 1, out: "bot says hi", err: "" });
+  expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--branch", "feat/x"]);
+  box.run("forecast", "--repo", "acme/widgets", "--paths", "plan.txt");
+  expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--paths", "plan.txt"]);
+});
+
+test("forecast takes exactly one of --pr, --branch and --paths, and --request only with --pr", async () => {
+  const box = sandbox();
+  box.reviewBot(0);
+  for (const args of [["forecast"], ["forecast", "--branch", "x", "--pr", "1"], ["forecast", "--branch", "x", "--paths", "p"], ["forecast", "--branch", "x", "--request"], ["forecast", "--paths", "p", "--request"], ["forecast", "--branch", "--pr"], ["review", "--branch", "x"], ["stamp", "--paths", "p"]]) {
+    const refused = await box.refusal(args[0]!, "--repo", "acme/widgets", ...args.slice(1));
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toContain("Usage: fleet pr");
+  }
+  expect(existsSync(join(box.home, "..", "bot-args.json"))).toBe(false);
+  box.env.FLEET_HANDLERS = "{}";
+  expect((await box.call("forecast", "--repo", "acme/widgets", "--branch", "feat/x")).code).toBe(2);
+});
+
+test("a subcommand the engine does not know goes to the pack's pr-command handler with every argument", () => {
+  const box = sandbox();
+  box.packCommands(3);
+  expect(box.run("queue-wait", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 3, out: "pack says hi", err: "" });
+  expect(box.packArgs()).toEqual(["queue-wait", "--repo", "acme/widgets", "--pr", "12"]);
+});
+
+test("the engine's own subcommands never reach the pr-command handler", async () => {
+  const box = sandbox();
+  box.packCommands(0);
+  box.reviewBot(4);
+  expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12").code).toBe(4);
+  const refused = await box.refusal("bot-threads", "--repo", "widgets");
+  expect((refused as Error).message).toStartWith("Usage: fleet pr ");
+  expect(box.packArgs()).toBeUndefined();
+});
+
+test("help lists the pack's subcommands after the engine's", () => {
+  const box = sandbox();
+  box.packCommands(0);
+  const result = box.run("--help");
+  expect(result.code).toBe(0);
+  expect(result.out).toStartWith("fleet pr: review threads");
+  expect(result.out).toEndWith("pack says hi");
+  expect(box.packArgs()).toEqual(["help"]);
 });
 
 test("forecast refuses review and stamp flags, and says there is nothing to forecast without a review bot", async () => {
