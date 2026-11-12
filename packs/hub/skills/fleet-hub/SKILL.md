@@ -121,5 +121,22 @@ the person's own subscriptions, never for someone else's.
   own sign-in, and the next apply changes nothing. `fleet apply` and
   `fleet doctor` name the failed check. The first apply after the proxy
   answers again sends the agent back to the proxy.
+- **The panel.** The Proxy panel workflow is off by default and needs
+  own-account balancing. With
+  `fleet packs --workflows proxy-panel=on`, `fleet cli-proxy install` adds
+  the pinned CLIProxyAPI management panel with quota history charts, drain
+  forecasts, and Reset weekly and Reset Fable buttons, and the quota-ledger
+  plugin that keeps `hub.proxyHistoryDays` of history (35 by default). Both
+  downloads must match their SHA-256. The balancer then records each
+  subscription's quota windows in the ledger on every run. The panel is at
+  `http://127.0.0.1:8317/management.html` on the hub, and on each devbox
+  through its tunnel; it is never behind the hub's HTTPS. Sign in with the
+  `MANAGEMENT_PASSWORD` in `~/.local/share/fleet-cli-proxy/management.env` on
+  the hub. A reset button spends a banked reset, which does not come back:
+  the first click arms it, and a second click within 5 seconds spends it.
+  Fleet owns `config.yaml`, so a panel edit to it lasts until the next
+  `fleet apply`. Turning the workflow off removes the page and the plugin,
+  keeps the history file, and closes the panel; `fleet cli-proxy doctor`
+  fails while a closed panel still answers.
 - **Stop on one machine.** `fleet cli-proxy disconnect` removes the settings
   and the key. Then run `claude` and enter `/login`.

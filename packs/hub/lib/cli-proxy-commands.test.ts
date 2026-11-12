@@ -34,6 +34,19 @@ test("through fleet, the hub-only modes and the balancer refuse on a devbox, and
   for (const args of [["check", "claude"], ["route"]]) expect((await runFleet(["cli-proxy", ...args], { HOME: home })).code).toBe(2);
 });
 
+test("through fleet, the hub's proxy keeps its panel off until the Proxy panel workflow is on, and that workflow needs Own-account balancing", async () => {
+  const home = await balancingDevbox();
+  writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")), role: "hub" }));
+  const profilePath = join(home, "profile/fleet.json");
+  const turn = (workflows: Record<string, boolean>) => writeFileSync(profilePath, JSON.stringify({ ...JSON.parse(readFileSync(profilePath, "utf8")), workflows }));
+  const plan = async () => (await runFleet(["cli-proxy", "plan"], { HOME: home })).stdout;
+  expect(await plan()).toContain("  Keep the management panel off. Turn on the Proxy panel workflow to serve it.\n");
+  turn({ "own-account-balancing": true, "proxy-panel": true });
+  expect(await plan()).toContain("  Serve the management panel 1.27.3-fleet.1 at http://127.0.0.1:8317/management.html, loopback only, with 35 days of quota history from the quota-ledger plugin 0.1.0.\n");
+  turn({ "proxy-panel": true });
+  expect(await plan()).not.toContain("Serve the management panel");
+});
+
 test("through fleet, plan and install on a hub without the proxy binary yet name the install instead of stopping at the missing file", async () => {
   const home = await balancingDevbox();
   writeFileSync(join(home, ".config/fleet/machine.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")), role: "hub" }));

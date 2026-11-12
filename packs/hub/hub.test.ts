@@ -308,7 +308,7 @@ describe("the Own-account balancing workflow", () => {
     const routeOnly = (result: Plan): Plan => ({ ...result, config: result.config.filter((entry) => entry.pack === "hub"), checks: result.checks.filter((check) => check.pack === "hub"), steps: [], jobs: [], human: [] });
     const realCheck = (home: string, models: string[] | "down") => {
       const fetch = async () => (models === "down" ? Promise.reject(new TypeError("connection refused")) : Response.json({ data: models.map((id) => ({ id })) }));
-      const machine: ProxyMachine = { home, uid: 1000, user: "me", devboxes: [], release: { version: "", url: "", sha256: "" }, run: async () => ({ code: 0, stdout: "", stderr: "" }), fetch, sleep: async () => {}, readStdin: async () => "", randomKey: () => key, print: () => {} };
+      const machine: ProxyMachine = { home, uid: 1000, user: "me", devboxes: [], release: { version: "", url: "", sha256: "" }, run: async () => ({ code: 0, stdout: "", stderr: "" }), fetch, now: () => 0, sleep: async () => {}, readStdin: async () => "", randomKey: () => key, print: () => {} };
       return async (command: string[]) => {
         const words = command.join(" ");
         if (words.endsWith("fleet cli-proxy check codex")) return cliProxy("check", machine, "codex");
