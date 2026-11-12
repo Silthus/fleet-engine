@@ -27,6 +27,16 @@ hub, and it starts with no servers.
 
    `fleet mcp-gateway doctor` on the hub says what does not work.
 
+   Some servers accept only a sign-in that returns to `127.0.0.1`, so the
+   gateway's own sign-in link fails for them. A pack marks such a server
+   with `"loopback": true`; the gateway then registers its own client for
+   it, and `sign-in` names a command for it instead of a link. Run that
+   command on the hub in a terminal, such as
+   `ssh -t coder.<hub> 'export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"; fleet mcp-gateway sign-in <name>'`. Open the address
+   it prints and sign in. The browser then fails to load a `127.0.0.1` page;
+   copy the full address from its address bar and paste it into the
+   terminal. The sign-in stays on the hub.
+
 5. The `gmail`, `google-calendar`, and `google-drive` workflows start off.
    They reach Google through the person's ChatGPT sign-in, so the app must
    be connected in ChatGPT first, which Fleet cannot do. In ChatGPT, open

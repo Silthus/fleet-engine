@@ -35,6 +35,11 @@ export async function packsCommand(args: string[], context: ChangeContext): Prom
       if (isOn && (!wasOn || flags.workflows[workflow.id] === true)) context.print(`Before you use ${workflow.name}: ${workflow.risk}`);
     }
   }
+  const after = context.preview({ packs, workflows }).workflows;
+  for (const [id, on] of Object.entries(flags.workflows)) {
+    const state = after.find((workflow) => workflow.id === id);
+    if (on && state && !state.active && state.reason) context.print(`${id} is on in your profile, but stays off: ${state.reason}.`);
+  }
   if (flags.add.includes("memory") && packs.includes("memory")) {
     const memory = await memoryRepo(context.machine, settings["memory.repo"] ?? context.profile.settings["memory.repo"]);
     await memory.make(context.print);
@@ -51,7 +56,7 @@ function listPacks(context: ChangeContext) {
     const mark = manifest.name === "base" || on.has(manifest.name) ? "✓" : "·";
     context.print(`  ${mark} ${manifest.name}  ${manifest.summary}`);
     const workflows = context.plan.workflows.filter((workflow) => workflow.pack === manifest.name);
-    if (on.has(manifest.name) && workflows.length) context.print(`      Workflows: ${workflows.map((workflow) => `${workflow.id} ${workflow.active ? "on" : "off"}`).join(", ")}`);
+    if (on.has(manifest.name) && workflows.length) context.print(`      Workflows: ${workflows.map((workflow) => `${workflow.id} ${workflow.active ? "on" : workflow.reason && workflow.reason !== "turned off" ? `off: ${workflow.reason}` : "off"}`).join(", ")}`);
     if (on.has(manifest.name)) for (const workflow of manifest.workflows ?? []) if (workflow.risk) context.print(`      Terms note for ${workflow.id}: ${workflow.risk}`);
   }
   for (const pack of missing) context.print(`  ! ${pack.name}  is in your profile, but ${pack.reason ?? "its source is not here"}`);
