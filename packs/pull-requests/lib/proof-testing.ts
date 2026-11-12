@@ -43,11 +43,12 @@ else
   case "$head" in "ref: "*) ref="${repository}/.git/\${head#ref: }"; if [ -f "$ref" ]; then read -r head < "$ref"; else head=$(git -C "${repository}" rev-parse HEAD); fi;; esac
 fi
 base=main; [ -f "${github}/base" ] && read -r base < "${github}/base"
+body='"Adds the greeting."'; [ -f "${github}/body" ] && body=$(cat "${github}/body")
 case "$*" in
   "api "*"/pulls/"[0-9]*)
     [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head"
     draft=false; [ -f "${github}/draft" ] && draft=true
-    printf '{"number":42,"title":"Greet new members","body":"Adds the greeting.","draft":%s,"head":{"sha":"%s"},"base":{"ref":"%s","repo":{"default_branch":"main"}}}\\n' "$draft" "$head" "$base"; exit 0;;
+    printf '{"number":42,"title":"Greet new members","body":%s,"draft":%s,"head":{"sha":"%s"},"base":{"ref":"%s","repo":{"default_branch":"main"}}}\\n' "$body" "$draft" "$head" "$base"; exit 0;;
   "api "*"/rules/branches/"*)
     all="$*"; branch=\${all##*/rules/branches/}; page=\${all##*page=}; branch=\${branch%%\\?*}
     [ -f "${github}/rules-error-$branch" ] && { cat "${github}/rules-error-$branch" >&2; exit 1; }
@@ -61,7 +62,7 @@ case "$*" in
     file="${github}/$kind-$sha"; [ -f "$file" ] || file="${github}/$kind-any"
     cat "$file" 2>/dev/null; exit 0;;
 esac
-printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRefName":"%s","headRefOid":"%s","title":"Greet new members","body":"Adds the greeting."}\\n' "$base" "$head"
+printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRefName":"%s","headRefOid":"%s","title":"Greet new members","body":%s}\\n' "$base" "$head" "$body"
 `, { mode: 0o755 });
   for (const model of ["claude", "codex"]) writeFileSync(join(bin, model), `#!/bin/sh\necho "the test ran the real ${model}" >&2\nexit 97\n`, { mode: 0o755 });
   const runs: Record<string, { status: string; conclusion: string | null }> = { pass: { status: "completed", conclusion: "success" }, fail: { status: "completed", conclusion: "failure" }, cancel: { status: "completed", conclusion: "cancelled" }, pending: { status: "in_progress", conclusion: null } };
@@ -73,7 +74,8 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     else writeFileSync(join(github, `rules-${branch}-${page}`), JSON.stringify([...Array.from({ length: others }, () => ({ type: "deletion" })), ...(rules.length ? [{ type: "required_status_checks", parameters: { required_status_checks: rules } }] : [])]));
     if (classic) writeFileSync(join(github, `branch-${branch}`), JSON.stringify({ protected: true, protection: { required_status_checks: { enforcement_level: "everyone", contexts: classic, checks: classic.map((context) => ({ context, app_id: null })) } } }));
   };
-  const pullRequestState = ({ draft, base }: { draft?: boolean; base?: string }) => {
+  const pullRequestState = ({ draft, base, body }: { draft?: boolean; base?: string; body?: string }) => {
+    if (body !== undefined) writeFileSync(join(github, "body"), JSON.stringify(body));
     if (draft !== undefined) { if (draft) writeFileSync(join(github, "draft"), ""); else rmSync(join(github, "draft"), { force: true }); }
     if (base !== undefined) writeFileSync(join(github, "base"), base);
   };
@@ -205,7 +207,7 @@ export const clean = "FINDINGS:\n(none)\nCOVERED: feature.txt\n";
 export type Question = { verdict: "pass" | "fail"; reason: string; citations: string[] };
 export type Quality = { reason: string; citations: string[]; findings: { rating: "high" | "medium" | "low"; problem: string; citation: string }[] };
 
-export function verdict(changes: { proof?: Question; owed?: Question; review?: Question; quality?: Quality } = {}) {
+export function verdict(changes: { proof?: Question; owed?: Question; review?: Question; risk?: Question; quality?: Quality } = {}) {
   const pass = (reason: string): Question => ({ verdict: "pass", reason, citations: [] });
   return JSON.stringify({
     proof: pass("The evidence shows HEAD working"), owed: pass("The owed kinds fit the diff"), review: pass("Every finding is answered"),
@@ -229,8 +231,11 @@ export async function reviewHead(pr: Checkout) {
   expect((await pr.fleet("review-start", "--scope", "full")).code).toBe(0);
   writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
   expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
+  markPanel(pr, "1");
   return pr.git("rev-parse", "HEAD");
 }
+
+export const markPanel = (pr: Checkout, round: string) => writeFileSync(join(pr.pullRequest, "reviews", round, "panel.json"), JSON.stringify({ lenses: [], changedFiles: [], cwd: pr.repository, readable: [] }));
 
 export const decideRule = "Until 2026-11-26, decide review rounds, judge gaps, and post-deploy-watch gaps yourself.";
 

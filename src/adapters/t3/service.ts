@@ -1,4 +1,4 @@
-import { chmodSync, lstatSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { checkParents } from "../../files/install.ts";
 import { writePrivateFile } from "../../files/private.ts";
@@ -76,9 +76,9 @@ async function owedRestart(pending: string): Promise<string | undefined> {
 
 const privateMode = (path: string, mode: number) => (lstatSync(path, { throwIfNoEntry: false })?.mode ?? 0) % 0o1000 === mode;
 
-async function realFolders(home: string) {
+async function realFolders(home: string, targets = [tokenFile, tokenDropIn]) {
   try {
-    for (const target of [tokenFile, tokenDropIn]) await checkParents(home, target);
+    for (const target of targets) await checkParents(home, target);
     return true;
   } catch {
     return false;
@@ -167,4 +167,75 @@ export async function reconcileService(run: CommandRunner, wait: Wait, user: str
   const installed = await run(["t3", "service", "install"]);
   if (installed.code !== 0) return void result.findings.push(finding("service", `t3 service install failed (exit ${installed.code}). Run it yourself to see why, then run fleet apply.`, "apply"));
   result.actions.push({ target: "t3 service", operation: "create" });
+}
+
+export const timeZoneSetting = "base.t3TimeZone";
+const timeZoneDropIn = ".config/systemd/user/t3code.service.d/fleet-timezone.conf";
+const timeZoneRecord = ".config/fleet/t3-timezone.conf";
+const timeZoneText = (zone: string) => `[Service]\nEnvironment=TZ=${zone}\n`;
+const zoneName = /^[A-Za-z0-9_+-]+(\/[A-Za-z0-9_+-]+)*$/;
+const timeZoneFinding = (say: string, repair?: Finding["repair"]) => ({ id: "t3:timezone", pack: "engine", say, ...(repair ? { repair } : {}) });
+
+/** Bun's list misses valid names such as Etc/UTC and GMT, so a name also counts when the system's zone files hold it with the exact case. */
+function knownZone(zone: string, zoneInfo: string) {
+  if (!zoneName.test(zone)) return false;
+  if (Intl.supportedValuesOf("timeZone").includes(zone)) return true;
+  let path = zoneInfo;
+  for (const part of zone.split("/")) {
+    try {
+      if (!readdirSync(path).includes(part)) return false;
+    } catch {
+      return false;
+    }
+    path = join(path, part);
+  }
+  return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
+}
+
+async function restore(path: string, text: string | undefined) {
+  if (text === undefined) rmSync(path, { force: true });
+  else await writePrivateFile(path, text);
+}
+
+/** Fleet changes or removes the drop-in only while it matches what Fleet recorded writing. Any other drop-in, such as one an older Fleet or you wrote, stays as it is. */
+export async function reconcileTimeZone(run: CommandRunner, home: string, zone: string, dryRun: boolean, result: AdapterResult, zoneInfo = "/usr/share/zoneinfo") {
+  if (zone && !knownZone(zone, zoneInfo)) return void result.findings.push(timeZoneFinding(`${timeZoneSetting} is ${zone}, which is not a time zone. Use an IANA name, such as Europe/Berlin, or leave it empty for the machine's zone.`, "human"));
+  const dropIn = join(home, timeZoneDropIn);
+  const record = join(home, timeZoneRecord);
+  let present: string | undefined;
+  let recorded: string | undefined;
+  try {
+    present = readIfThere(dropIn);
+    recorded = readIfThere(record);
+  } catch {
+    return void result.findings.push(timeZoneFinding(`Fleet cannot read ~/${timeZoneDropIn} or ~/${timeZoneRecord}, so it leaves T3 Code's time zone alone. Make the files readable, then run fleet apply.`, "human"));
+  }
+  const wanted = zone ? timeZoneText(zone) : undefined;
+  if (present !== undefined && present !== recorded) {
+    if (wanted && present !== wanted) result.findings.push(timeZoneFinding(`~/${timeZoneDropIn} is not Fleet's, so Fleet does not set T3 Code's time zone to ${zone}. Remove the file, then run fleet apply.`, "human"));
+    return;
+  }
+  if (present === wanted) {
+    if (!dryRun && present === undefined && recorded !== undefined) rmSync(record, { force: true });
+    return;
+  }
+  if (dryRun) return void result.findings.push(timeZoneFinding(zone ? `T3 Code's service needs to run in ${zone}.` : "T3 Code's service needs to return to the machine's time zone.", "apply"));
+  if (!(await realFolders(home, [timeZoneDropIn, timeZoneRecord]))) return void result.findings.push(timeZoneFinding(`Fleet did not set T3 Code's time zone, because a folder on the way to ~/${timeZoneDropIn} or ~/${timeZoneRecord} is a link or not a folder. Make them plain folders in your home, then run fleet apply.`, "human"));
+  if (wanted) {
+    mkdirSync(dirname(record), { recursive: true });
+    await writePrivateFile(record, wanted);
+    mkdirSync(dirname(dropIn), { recursive: true });
+    await writePrivateFile(dropIn, wanted);
+  } else {
+    rmSync(dropIn, { force: true });
+    rmSync(record, { force: true });
+  }
+  result.actions.push({ target: "t3 time zone", operation: wanted ? (present === undefined ? "create" : "replace") : "remove" });
+  if ((await run(["systemctl", "--user", "daemon-reload"])).code !== 0) {
+    await restore(dropIn, present);
+    await restore(record, recorded);
+    result.actions.pop();
+    return void result.findings.push(timeZoneFinding("systemd did not reload T3 Code's service, so Fleet left its time zone as it was. Run fleet apply again.", "apply"));
+  }
+  result.findings.push(timeZoneFinding(`T3 Code runs in ${zone || "the machine's time zone"} from its next restart, such as the nightly update. Fleet does not restart it now, because a restart ends running agent turns. To switch now, run: ${restartCommand}`));
 }

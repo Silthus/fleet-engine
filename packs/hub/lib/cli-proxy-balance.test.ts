@@ -117,7 +117,7 @@ test("a balanced pool with fill-first routing changes nothing and logs nothing",
 test("fleet cli-proxy-balance runs only on the hub, reads the management key from its private file, and refuses unknown options", async () => {
   const { fetch, calls } = managementApi({ strategy: "fill-first" });
   const lines: string[] = [];
-  const deps = (home: string) => ({ home, fetch, now: () => now, log: (line: string) => lines.push(line) });
+  const deps = (home: string) => ({ home, fetch, now: () => now, ledger: false, log: (line: string) => lines.push(line) });
   await expect(balanceCommand([], deps(roleHome(temp.make("fleet-balance-"), "devbox")))).rejects.toThrow("fleet cli-proxy-balance runs only on the hub");
   const home = roleHome(temp.make("fleet-balance-"), "hub");
   await expect(balanceCommand([], deps(home))).rejects.toThrow("Run fleet cli-proxy install");
@@ -220,4 +220,33 @@ test("balance reports each blocked credential of either provider on every run, a
   }
   expect(runs[0]!.join("\n")).not.toContain("token revoked");
   expect(runs[0]!.join("\n")).not.toContain("alice");
+});
+
+test("while the panel is on, each balance records every named window of each subscription in the quota ledger, and a dry run or an off panel records none", async () => {
+  const on = managementApi({ strategy: "fill-first" });
+  await balance({ fetch: on.fetch, managementKey, now, dryRun: false, ledger: true, log: () => {} });
+  const at = (days: number) => now + days * day;
+  expect(on.calls.filter((call) => call.path === "quota-ledger/samples")).toEqual([{ method: "POST", path: "quota-ledger/samples", auth: `Bearer ${managementKey}`, body: { samples: [
+    { at: now, auth: "a.json", provider: "claude", window: "five-hour", remaining: 95, resets_at: at(0.1) },
+    { at: now, auth: "a.json", provider: "claude", window: "seven-day", remaining: 80, resets_at: at(5) },
+    { at: now, auth: "b.json", provider: "claude", window: "seven-day", remaining: 30, resets_at: at(1) },
+    { at: now, auth: "b.json", provider: "claude", window: "seven-day-opus", remaining: 70, resets_at: at(1) },
+    { at: now, auth: "c.json", provider: "claude", window: "seven-day", remaining: 0, resets_at: at(2) },
+    { at: now, auth: "codex.json", provider: "codex", window: "five-hour", remaining: 70, resets_at: seconds(0.1) * 1000 },
+    { at: now, auth: "codex.json", provider: "codex", window: "weekly", remaining: 90, resets_at: seconds(3) * 1000 },
+  ] } }]);
+  for (const options of [{ dryRun: true, ledger: true }, { dryRun: false, ledger: false }]) {
+    const quiet = managementApi({ strategy: "fill-first" });
+    await balance({ fetch: quiet.fetch, managementKey, now, log: () => {}, ...options });
+    expect([options, quiet.calls.some((call) => call.path === "quota-ledger/samples")]).toEqual([options, false]);
+  }
+});
+
+test("a ledger that refuses its samples is logged, and the balance still finishes", async () => {
+  const { fetch, calls } = managementApi({ strategy: "fill-first" });
+  const refusing = async (input: string | URL | Request, init?: RequestInit) => (String(input).endsWith("quota-ledger/samples") ? (await fetch(input, init), new Response("missing", { status: 404 })) : fetch(input, init));
+  const lines: string[] = [];
+  await balance({ fetch: refusing, managementKey, now, dryRun: false, ledger: true, log: (line) => lines.push(line) });
+  expect(lines).toContain("quota history not recorded: The CLI proxy management API quota-ledger/samples returned 404.");
+  expect(calls.filter((call) => call.path === "reset-quota").map((call) => call.body)).toEqual([{ auth_index: "2" }]);
 });

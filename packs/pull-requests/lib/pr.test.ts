@@ -47,7 +47,7 @@ cat "${replies}/$reply.json"
     const warned: string[] = [];
     const print = spyOn(console, "log").mockImplementation((...line: unknown[]) => void printed.push(line.join(" ")));
     const warn = spyOn(console, "error").mockImplementation((...line: unknown[]) => void warned.push(line.join(" ")));
-    const saved = { FLEET_HANDLERS: process.env.FLEET_HANDLERS, FLEET_SETTINGS: process.env.FLEET_SETTINGS };
+    const saved = { FLEET_HANDLERS: process.env.FLEET_HANDLERS, FLEET_HANDLER_SUBCOMMANDS: process.env.FLEET_HANDLER_SUBCOMMANDS, FLEET_SETTINGS: process.env.FLEET_SETTINGS };
     Object.assign(process.env, env);
     try {
       return { code: await prCommand(args, home), out: printed.join("\n").trim(), err: warned.join("\n").trim() };
@@ -72,7 +72,14 @@ cat "${replies}/$reply.json"
     env.FLEET_HANDLERS = JSON.stringify({ "review-bot": path });
   };
   const botArgs = () => JSON.parse(readFileSync(join(root, "bot-args.json"), "utf8"));
-  return { home, env, reply, run, call, refusal, calls, reviewBot, botArgs };
+  const packCommands = (exitCode: number, subcommands = ["queue-wait"]) => {
+    const path = join(root, "pr-command.ts");
+    writeFileSync(path, `await Bun.write(${JSON.stringify(join(root, "pack-args.json"))}, JSON.stringify(Bun.argv.slice(2)));\nconsole.log("pack says hi");\nprocess.exit(${exitCode});\n`);
+    env.FLEET_HANDLERS = JSON.stringify({ ...JSON.parse(env.FLEET_HANDLERS || "{}"), "pr-command": path });
+    env.FLEET_HANDLER_SUBCOMMANDS = JSON.stringify({ "pr-command": subcommands });
+  };
+  const packArgs = () => (existsSync(join(root, "pack-args.json")) ? JSON.parse(readFileSync(join(root, "pack-args.json"), "utf8")) : undefined);
+  return { home, env, reply, run, call, refusal, calls, reviewBot, botArgs, packCommands, packArgs };
 }
 
 const user = (login: string) => ({ __typename: "User", login });
@@ -102,6 +109,7 @@ test("bot-threads sorts unresolved threads into bot and human, answered or not, 
     "human unanswered src/c.ts:9 https://example.test/3",
     "bot unanswered src/d.ts:1 https://example.test/4",
     "2 unanswered bot threads remain.",
+    "1 human thread waits on me: react 👍 to a fix, or draft the reply for me to post.",
   ].join("\n"));
   expect(result.code).toBe(1);
   expect(box.calls()).toHaveLength(1);
@@ -137,6 +145,75 @@ test("bot-threads --resolve never resolves a thread a person opened, even when o
   const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12", "--resolve");
   expect(result.out).toBe(["human answered src/f.ts:5 https://example.test/6", "bot unanswered src/g.ts:6 https://example.test/7", "1 unanswered bot thread remains."].join("\n"));
   expect(box.calls().filter((call) => call.includes("resolveReviewThread"))).toEqual([]);
+});
+
+const thumbs = (url: string, ...logins: (string | null)[]) => ({ ...comment(user("reviewer"), url), reactions: { nodes: logins.map((login) => ({ user: login === null ? null : { login } })) } });
+
+test("a 👍 from the viewer on the latest comment answers a thread, and human threads that still wait on the viewer are counted", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [
+    thread("H1", "src/a.ts", 1, [thumbs("https://example.test/h1", "someone", "me")]),
+    thread("H2", "src/b.ts", 2, [thumbs("https://example.test/h2", "someone", null)]),
+    thread("H3", "src/c.ts", 3, [thumbs("https://example.test/h3", "me"), comment(user("reviewer"), "https://example.test/h3b")]),
+    thread("B1", "src/d.ts", 4, [{ ...comment(bot("coderabbitai"), "https://example.test/b1"), reactions: { nodes: [{ user: { login: "me" } }] } }]),
+  ]));
+  box.reply("resolve", { data: {} });
+  const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12", "--resolve");
+  expect(result.out).toBe([
+    "human answered src/a.ts:1 https://example.test/h1",
+    "human unanswered src/b.ts:2 https://example.test/h2",
+    "human unanswered src/c.ts:3 https://example.test/h3",
+    "bot answered src/d.ts:4 https://example.test/b1",
+    "resolved src/d.ts:4 https://example.test/b1",
+    "2 human threads wait on me: react 👍 to a fix, or draft the reply for me to post.",
+  ].join("\n"));
+  expect(result.code).toBe(0);
+  expect(box.calls()[0]).toContain("reactions(content: THUMBS_UP");
+});
+
+test("one human thread that waits is named in the singular", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [thread("H4", "src/a.ts", 1, [comment(user("reviewer"), "https://example.test/h4")])]));
+  expect(box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12").out).toEndWith("\n1 human thread waits on me: react 👍 to a fix, or draft the reply for me to post.");
+});
+
+test("--fixed resolves each named bot thread once without a reply, and never a thread a person opened or one it cannot find", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [
+    thread("F1", "src/a.ts", 1, [comment(bot("coderabbitai"), "https://example.test/f1")]),
+    thread("F2", "src/b.ts", 2, [comment(bot("greptile-apps"), "https://example.test/f2")]),
+    thread("F3", "src/c.ts", 3, [comment(user("reviewer"), "https://example.test/f3")]),
+    thread("F4", "src/d.ts", 4, [comment(user("me"), "https://example.test/f4"), comment(bot("coderabbitai"), "https://example.test/f4b")]),
+  ]));
+  box.reply("resolve", { data: {} });
+  const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12",
+    "--fixed", "https://example.test/f1", "--fixed", "https://example.test/f3", "--fixed", "https://example.test/f4", "--fixed", "https://example.test/gone", "--fixed", "https://example.test/f1");
+  expect(result.out).toBe([
+    "bot unanswered src/a.ts:1 https://example.test/f1",
+    "bot unanswered src/b.ts:2 https://example.test/f2",
+    "human unanswered src/c.ts:3 https://example.test/f3",
+    "human unanswered src/d.ts:4 https://example.test/f4",
+    "resolved fixed src/a.ts:1 https://example.test/f1",
+    "skipped human thread, the person resolves it: https://example.test/f3",
+    "skipped human thread, the person resolves it: https://example.test/f4",
+    "not found among unresolved threads: https://example.test/gone",
+    "1 unanswered bot thread remains.",
+    "2 human threads wait on me: react 👍 to a fix, or draft the reply for me to post.",
+  ].join("\n"));
+  expect(result.code).toBe(1);
+  const resolves = box.calls().filter((call) => call.includes("resolveReviewThread"));
+  expect(resolves).toHaveLength(1);
+  expect(resolves[0]).toContain("id=F1");
+});
+
+test("--fixed that resolves the last waiting bot thread passes, and --resolve then leaves it alone", () => {
+  const box = sandbox();
+  box.reply("threads", threads("me", [thread("F5", "src/a.ts", 1, [comment(bot("coderabbitai"), "https://example.test/f5"), comment(user("me"), "https://example.test/f5r")]), thread("F6", "src/b.ts", 2, [comment(bot("coderabbitai"), "https://example.test/f6")])]));
+  box.reply("resolve", { data: {} });
+  const result = box.run("bot-threads", "--repo", "acme/widgets", "--pr", "12", "--resolve", "--fixed", "https://example.test/f6", "--fixed", "https://example.test/f5");
+  expect(result.out.split("\n").slice(2)).toEqual(["resolved fixed src/b.ts:2 https://example.test/f6", "resolved fixed src/a.ts:1 https://example.test/f5"]);
+  expect(result.code).toBe(0);
+  expect(box.calls().filter((call) => call.includes("resolveReviewThread")).map((call) => call.match(/id=(\w+)/)![1])).toEqual(["F6", "F5"]);
 });
 
 test("bot-threads reads every page of threads and of each thread's comments", () => {
@@ -263,6 +340,77 @@ test("forecast hands its parsed arguments to the review-bot handler and exits wi
   expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--pr", "12"]);
 });
 
+test("forecast hands a branch or a planned path list to the review-bot handler for work that has no PR yet", () => {
+  const box = sandbox();
+  box.reviewBot(1);
+  expect(box.run("forecast", "--branch", "feat/x", "--repo", "acme/widgets")).toEqual({ code: 1, out: "bot says hi", err: "" });
+  expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--branch", "feat/x"]);
+  box.run("forecast", "--repo", "acme/widgets", "--paths", "plan.txt");
+  expect(box.botArgs()).toEqual(["forecast", "--repo", "acme/widgets", "--paths", "plan.txt"]);
+});
+
+test("forecast takes exactly one of --pr, --branch and --paths, and --request only with --pr", async () => {
+  const box = sandbox();
+  box.reviewBot(0);
+  for (const args of [["forecast"], ["forecast", "--branch", "x", "--pr", "1"], ["forecast", "--branch", "x", "--paths", "p"], ["forecast", "--branch", "x", "--request"], ["forecast", "--paths", "p", "--request"], ["forecast", "--branch", "--pr"], ["review", "--branch", "x"], ["stamp", "--paths", "p"]]) {
+    const refused = await box.refusal(args[0]!, "--repo", "acme/widgets", ...args.slice(1));
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toContain("Usage: fleet pr");
+  }
+  expect(existsSync(join(box.home, "..", "bot-args.json"))).toBe(false);
+  box.env.FLEET_HANDLERS = "{}";
+  expect((await box.call("forecast", "--repo", "acme/widgets", "--branch", "feat/x")).code).toBe(2);
+});
+
+test("a subcommand the pack declares goes to its pr-command handler with every argument", () => {
+  const box = sandbox();
+  box.packCommands(3);
+  expect(box.run("queue-wait", "--repo", "acme/widgets", "--pr", "12")).toEqual({ code: 3, out: "pack says hi", err: "" });
+  expect(box.packArgs()).toEqual(["queue-wait", "--repo", "acme/widgets", "--pr", "12"]);
+});
+
+test("a typo or a bare fleet pr shows the engine's usage and never reaches the pack", () => {
+  const box = sandbox();
+  box.packCommands(0);
+  for (const args of [["queue-wiat", "--pr", "12"], [], ["--repo", "acme/widgets"]]) {
+    const result = box.run(...args);
+    expect(result.code).toBe(1);
+    expect(result.err).toStartWith("fleet pr: Usage: fleet pr <subcommand>");
+    expect(result.err).toContain("bot-threads, blockers, review, stamp, forecast, handover, queue-wait");
+  }
+  expect(box.packArgs()).toBeUndefined();
+});
+
+test("the engine's own subcommands never reach the pr-command handler, even when the pack declares them", async () => {
+  const box = sandbox();
+  box.reviewBot(4);
+  box.packCommands(0, ["forecast", "bot-threads", "queue-wait"]);
+  expect(box.run("forecast", "--repo", "acme/widgets", "--pr", "12").code).toBe(4);
+  const refused = await box.refusal("bot-threads", "--repo", "widgets");
+  expect((refused as Error).message).toStartWith("Usage: fleet pr ");
+  expect(box.packArgs()).toBeUndefined();
+});
+
+test("help lists the pack's subcommands after the engine's and exits 0 whatever the pack's help returns", () => {
+  const box = sandbox();
+  box.packCommands(5, ["queue-wait", "ownerless"]);
+  for (const word of ["--help", "help"]) {
+    const result = box.run(word);
+    expect(result.code).toBe(0);
+    expect(result.out).toStartWith("fleet pr: review threads");
+    expect(result.out).toContain("From packs: queue-wait, ownerless");
+    expect(result.out).toEndWith("pack says hi");
+    expect(box.packArgs()).toEqual(["help"]);
+  }
+});
+
+test("without a pack, a bare fleet pr shows the engine's usage", () => {
+  const box = sandbox();
+  const result = box.run();
+  expect(result.code).toBe(1);
+  expect(result.err).toBe("fleet pr: Usage: fleet pr <subcommand>, one of bot-threads, blockers, review, stamp, forecast, handover. Run fleet pr --help for each one's flags.");
+});
+
 test("forecast refuses review and stamp flags, and says there is nothing to forecast without a review bot", async () => {
   const box = sandbox();
   box.reviewBot(0);
@@ -321,7 +469,7 @@ test("stopping review stops the review-bot handler before review exits", async (
 
 test("wrong arguments print the usage and exit 1", async () => {
   const box = sandbox();
-  for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"], ["review", "--repo", "acme/widgets"], ["review", "--repo", "acme/widgets", "--pr", "1", "--minutes", "0"], ["stamp", "--repo", "acme/widgets", "--pr", "1", "--deep"]]) {
+  for (const args of [[], ["threads"], ["bot-threads", "--repo", "widgets", "--pr", "1"], ["blockers", "--repo", "acme/widgets"], ["blockers", "--repo", "acme/widgets", "--pr", "x"], ["review", "--repo", "acme/widgets"], ["review", "--repo", "acme/widgets", "--pr", "1", "--minutes", "0"], ["stamp", "--repo", "acme/widgets", "--pr", "1", "--deep"], ["bot-threads", "--repo", "acme/widgets", "--pr", "1", "--fixed", "example.test/1"], ["bot-threads", "--repo", "acme/widgets", "--pr", "1", "--fixed"]]) {
     const refused = await box.refusal(...args);
     expect(refused).toBeInstanceOf(Error);
     expect((refused as Error).message).toStartWith("Usage: fleet pr ");
@@ -336,7 +484,7 @@ test("help lists every subcommand", async () => {
   const box = sandbox();
   const result = await box.call("--help");
   expect(result.code).toBe(0);
-  expect(result.out).toContain("fleet pr bot-threads --repo <owner/repo> --pr <number> [--resolve]");
+  expect(result.out).toContain("fleet pr bot-threads --repo <owner/repo> --pr <number> [--resolve] [--fixed <thread URL>]...");
   expect(result.out).toContain("fleet pr blockers --repo <owner/repo> --pr <number> [--record]");
   expect(result.out).toContain("fleet pr review --repo <owner/repo> --pr <number> [--deep] [--minutes <n>]");
   expect(result.out).toContain("fleet pr stamp --repo <owner/repo> --pr <number> [--minutes <n>]");

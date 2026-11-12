@@ -13,6 +13,7 @@ the source and add its row here.
 | --- | --- | --- |
 | `builder-hog-03.png` | `frontend/public/hedgehog/builder-hog-03.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
 | `burning-money-hog.png` | `frontend/public/hedgehog/burning-money-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
+| `desk-hog.png` | `frontend/public/hedgehog/desk-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
 | `detective-hog.png` | `frontend/public/hedgehog/detective-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
 | `explorer-hog.png` | `frontend/public/hedgehog/explorer-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |
 | `heart-hog.png` | `frontend/public/hedgehog/heart-hog.png` | `63dad5f4e73ebe0f883beec55e9c5ec603f4a411` |

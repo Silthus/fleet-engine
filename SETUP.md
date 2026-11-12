@@ -292,7 +292,9 @@ all the notes together, in one call, before step 7.
 | `pull-requests` | Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged. | Always | None |
 | `orchestration` | Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread. | Always | `packs/orchestration/SETUP.md` |
 | `communication` | Agents write in your voice, give short updates, and share plans and previews as links. | Always | None |
+| `integrations` | Claude Code and Codex get the official GitHub, Context7, and Convex plugins, and Claude can hand work to Codex. | Always | None |
 | `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always | `packs/memory/SETUP.md` |
+| `context-library` | Agents find your plans, research, decisions and saved threads in a private notes repo, and you save new ones with one command. | Always | `packs/context-library/SETUP.md` |
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Step 9 | `packs/recovery/SETUP.md` |
 | `guards` | Hooks stop an agent's shell commands from running network code, using GitHub outside your owners, pushing past review, or polling in loops. | Always | `packs/guards/SETUP.md` |
 | `slack` | Your own message, reaction, or mention in Slack starts a T3 thread about it. | With Mac only, or in step 9 | `packs/slack/SETUP.md` |
