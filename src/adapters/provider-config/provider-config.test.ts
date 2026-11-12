@@ -612,6 +612,201 @@ describe("Claude MCP servers", () => {
   });
 });
 
+describe("Codex plugins", () => {
+  const github = "github@openai-curated-remote";
+  const wants = (id = github) => ({ provider: "codex" as const, key: `plugins.${id}.enabled`, value: true });
+  const pluginRecord = ".config/fleet/plugins.json";
+  type Entry = { version: string; enabled: boolean };
+
+  function codexCli(start: Record<string, Entry> = {}, faults: { addFails?: "before" | "after"; onAdd?: () => void } = {}) {
+    const installed = new Map(Object.entries(start));
+    const calls: string[][] = [];
+    const run: CommandRunner = async (command) => {
+      calls.push(command);
+      const words = command.join(" ");
+      if (words === "claude plugin list --json") return { code: 0, stdout: "[]" };
+      if (words === "codex plugin list --json") return { code: 0, stdout: JSON.stringify({ installed: [...installed].map(([pluginId, entry]) => ({ pluginId, ...entry })) }) };
+      if (command[0] === "codex" && command[2] === "add") {
+        faults.onAdd?.();
+        if (faults.addFails === "before") return { code: 1, stdout: "", stderr: "sign in to ChatGPT first\n" };
+        installed.set(command[3]!, { version: "1.0.0", enabled: true });
+        return { code: faults.addFails === "after" ? 1 : 0, stdout: "{}" };
+      }
+      if (command[0] === "codex" && command[2] === "remove") installed.delete(command[3]!);
+      return { code: 0, stdout: "{}" };
+    };
+    return { calls, installed, adapter: providerConfigAdapter({ run }), changes: () => calls.filter((call) => call[0] === "codex" && call[2] !== "list") };
+  }
+
+  test("installs an enabled plugin once, records Fleet's ownership, and removes it when no pack enables it", async () => {
+    const home = temp.make("home-");
+    const cli = codexCli();
+    await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    expect(parse(readFileSync(join(home, codex), "utf8"))).toEqual({ plugins: { [github]: { enabled: true } } });
+    expect(cli.changes()).toEqual([["codex", "plugin", "add", github, "--json"]]);
+    expect(read(home, pluginRecord)).toEqual({ claude: [], codex: [{ id: github, version: "1.0.0", enabled: true }] });
+
+    await apply(plan(), { home, adapters: [cli.adapter] });
+    expect(cli.changes().at(-1)).toEqual(["codex", "plugin", "remove", github, "--json"]);
+    expect([...cli.installed.keys()]).toEqual([]);
+    expect(read(home, pluginRecord)).toEqual({ claude: [] });
+  });
+
+  test("never adopts or removes a plugin the user installed, whether a pack enables it or not", async () => {
+    const home = temp.make("home-");
+    const cli = codexCli({ [github]: { version: "2.0.0", enabled: true }, "notes@team-market": { version: "1.0.0", enabled: true } });
+    await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    await apply(plan(), { home, adapters: [cli.adapter] });
+    expect(cli.changes()).toEqual([]);
+    expect([...cli.installed.keys()].sort()).toEqual([github, "notes@team-market"]);
+    expect(existsSync(join(home, pluginRecord))).toBe(false);
+  });
+
+  test("records an install as pending before Codex runs it, so an install cut off midway is finished or removed later", async () => {
+    const home = temp.make("home-");
+    const seen: unknown[] = [];
+    const cut = codexCli({}, { onAdd: () => { seen.push(read(home, pluginRecord)); throw new Error("the machine went down"); } });
+    await apply(plan([wants()]), { home, adapters: [cut.adapter] }).catch(() => {});
+    expect(seen).toEqual([{ claude: [], codex: [{ id: github, version: "", enabled: false, pending: true }] }]);
+    expect(read(home, pluginRecord).codex).toEqual([{ id: github, version: "", enabled: false, pending: true }]);
+
+    const finished = codexCli({ [github]: { version: "1.0.0", enabled: true } });
+    await apply(plan([wants()]), { home, adapters: [finished.adapter] });
+    expect(finished.changes()).toEqual([]);
+    expect(read(home, pluginRecord).codex).toEqual([{ id: github, version: "1.0.0", enabled: true }]);
+
+    const other = temp.make("home-");
+    await apply(plan([wants()]), { home: other, adapters: [codexCli({}, { onAdd: () => { throw new Error("the machine went down"); } }).adapter] }).catch(() => {});
+    const later = codexCli({ [github]: { version: "1.0.0", enabled: false } });
+    await apply(plan(), { home: other, adapters: [later.adapter] });
+    expect(later.changes()).toEqual([["codex", "plugin", "remove", github, "--json"]]);
+  });
+
+  test("owns a plugin that Codex installed even though its command failed, and says the command failed", async () => {
+    const home = temp.make("home-");
+    const cli = codexCli({}, { addFails: "after" });
+    const report = await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    expect(report.findings.map((finding) => finding.say)).toContainEqual(expect.stringContaining(`Could not install the Codex plugin ${github}`));
+    expect(read(home, pluginRecord).codex).toEqual([{ id: github, version: "1.0.0", enabled: true }]);
+  });
+
+  test("an install that Codex refused leaves no plugin, and a plugin the user installs later stays theirs", async () => {
+    const home = temp.make("home-");
+    const refused = codexCli({}, { addFails: "before" });
+    const report = await apply(plan([wants()]), { home, adapters: [refused.adapter] });
+    expect(report.findings.map((finding) => finding.say)).toContainEqual(`Could not install the Codex plugin ${github}: sign in to ChatGPT first. Fleet tries again at the next apply.`);
+    const user = codexCli({ [github]: { version: "1.0.0", enabled: false } });
+    await apply(plan([]), { home, adapters: [user.adapter] });
+    expect(user.changes()).toEqual([]);
+    expect([...user.installed.keys()]).toEqual([github]);
+  });
+
+  test("keeps a plugin whose enabled state changed outside Fleet, says so, and gives it to the user once no pack enables it", async () => {
+    const home = temp.make("home-");
+    const cli = codexCli();
+    await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    cli.installed.set(github, { version: "1.0.0", enabled: false });
+    const kept = await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    expect(kept.findings.map((finding) => finding.say)).toContainEqual(`Kept the Codex plugin ${github} as you left it: it is disabled now, and Fleet installed it enabled.`);
+    const released = await apply(plan(), { home, adapters: [cli.adapter] });
+    expect(released.findings.map((finding) => finding.say)).toContainEqual(expect.stringContaining("It is yours now"));
+    expect(cli.changes()).toEqual([["codex", "plugin", "add", github, "--json"]]);
+    expect([...cli.installed.keys()]).toEqual([github]);
+    await apply(plan(), { home, adapters: [cli.adapter] });
+    expect(cli.changes()).toHaveLength(1);
+  });
+
+  test("keeps the plugins Fleet installed while a pack source is out, and removes them once it is back", async () => {
+    const home = temp.make("home-");
+    const cli = codexCli();
+    await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    const outage = plan();
+    outage.packs = [{ name: "team", source: "team", ref: "main", available: false, reason: "not found; unreachable source team" }];
+    await apply(outage, { home, adapters: [cli.adapter] });
+    expect([...cli.installed.keys()]).toEqual([github]);
+    expect(read(home, pluginRecord).codex).toHaveLength(1);
+    await apply(plan(), { home, adapters: [cli.adapter] });
+    expect([...cli.installed.keys()]).toEqual([]);
+  });
+
+  test("follows a version the marketplace updated without installing again", async () => {
+    const home = temp.make("home-");
+    const cli = codexCli();
+    await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    cli.installed.set(github, { version: "1.1.0", enabled: true });
+    const report = await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    expect(report.findings.filter((finding) => finding.id.startsWith("plugin"))).toEqual([]);
+    expect(cli.changes()).toHaveLength(1);
+    expect(read(home, pluginRecord).codex).toEqual([{ id: github, version: "1.1.0", enabled: true }]);
+  });
+
+  test("installs nothing when a plugin of the same name from another marketplace is installed", async () => {
+    const home = temp.make("home-");
+    const cli = codexCli({ "github@team-market": { version: "3.0.0", enabled: true } });
+    const report = await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    expect(cli.changes()).toEqual([]);
+    expect(report.findings.map((finding) => finding.say)).toContainEqual(`Did not install the Codex plugin ${github}: github@team-market is already installed under the same name. Remove one of them.`);
+  });
+
+  test("installs nothing the user turned off in config.toml, and nothing while Codex is missing", async () => {
+    const home = temp.make("home-");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, codex), stringify({ plugins: { [github]: { enabled: false } } }));
+    const cli = codexCli();
+    await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    expect(cli.changes()).toEqual([]);
+    const missing = providerConfigAdapter({ run: async (command) => (command[0] === "codex" ? { code: 127, stdout: "" } : { code: 0, stdout: "[]" }) });
+    const report = await apply(plan([wants("cloudflare@openai-curated-remote")]), { home: temp.make("home-"), adapters: [missing] });
+    expect(report.findings).toContainEqual({ id: "plugins:codex", pack: "engine", say: "Codex is not installed yet, so its plugins wait: cloudflare@openai-curated-remote.", repair: "apply" });
+  });
+
+  test("a check reports the install it needs and changes nothing", async () => {
+    const home = temp.make("home-");
+    const cli = codexCli();
+    await apply(plan([wants()]), { home, adapters: [cli.adapter] });
+    const report = await check(plan([wants(), wants("posthog@openai-curated-remote")]), { home, adapters: [cli.adapter] });
+    expect(report.findings.map((finding) => finding.id)).toContain("plugin:codex:posthog@openai-curated-remote");
+    expect(cli.changes()).toHaveLength(1);
+    expect(read(home, pluginRecord).codex).toHaveLength(1);
+  });
+
+  test("keeps the ownership the earlier Fleet recorded: it removes the plugins that Fleet installed and keeps the user's", async () => {
+    const home = temp.make("home-");
+    write(home, pluginRecord, { version: 1, installed: [
+      { provider: "codex", id: github, version: "1.0.0", enabled: true },
+      { provider: "codex", id: "slack@openai-curated-remote", version: "", enabled: false, pending: true },
+      { provider: "claude", id: "context7@claude-plugins-official", version: "1.0.0", enabled: true },
+    ] });
+    const calls: string[][] = [];
+    const codexInstalled = [{ pluginId: github, version: "1.0.0", enabled: true }, { pluginId: "mine@team-market", version: "1.0.0", enabled: true }];
+    const claudeInstalled = ["context7@claude-plugins-official", "notes@team-market"];
+    const adapter = providerConfigAdapter({
+      run: async (command) => {
+        calls.push(command);
+        const words = command.join(" ");
+        if (words === "codex plugin list --json") return { code: 0, stdout: JSON.stringify({ installed: codexInstalled }) };
+        if (words === "claude plugin list --json") return { code: 0, stdout: JSON.stringify(claudeInstalled.map((id) => ({ id, scope: "user", version: "1.0.0", enabled: true }))) };
+        return { code: 0, stdout: "{}" };
+      },
+    });
+    await apply(plan(), { home, adapters: [adapter] });
+    expect(calls.filter((call) => !call.includes("list"))).toEqual([
+      ["claude", "plugin", "uninstall", "context7@claude-plugins-official", "--scope", "user", "--keep-data"],
+      ["codex", "plugin", "remove", github, "--json"],
+    ]);
+    expect(read(home, pluginRecord)).toEqual({ claude: [] });
+  });
+
+  test("refuses a plugin record it cannot read, and changes no plugin", async () => {
+    const home = temp.make("home-");
+    write(home, pluginRecord, { claude: [], codex: [{ id: github, version: 1, enabled: true }] });
+    const cli = codexCli({ [github]: { version: "1.0.0", enabled: true } });
+    await expect(apply(plan(), { home, adapters: [cli.adapter] })).rejects.toThrow("is not a plugin record");
+    expect(cli.changes()).toEqual([]);
+  });
+});
+
 describe("Claude plugins", () => {
   const enabled = { provider: "claude" as const, key: "enabledPlugins.context7@claude-plugins-official", value: true };
 
