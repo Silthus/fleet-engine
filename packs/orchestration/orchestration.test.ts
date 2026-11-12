@@ -51,6 +51,14 @@ describe("the Orchestration pack", () => {
     expect(withPack({ workflows: { "quality-loop": true }, settings }, devbox).jobs.map((job) => job.id)).toContain("quality-loop");
   });
 
+  test("runs each loop once per fleet: on the hub when the profile names one, else on the devbox", () => {
+    const fields = { workflows: { "pr-digest": true }, settings: { "orchestration.loopProject": "my-repo" } };
+    const digest = (hub: string | undefined, name: string) => withPack({ ...fields, ...(hub ? { hub } : {}), devboxes: ["box"] }, { ...devbox, name }).jobs.filter((job) => job.id === "pr-digest");
+    expect(digest("hub-box", "hub-box")).toHaveLength(1);
+    expect(digest("hub-box", "box")).toEqual([]);
+    expect(digest(undefined, "box")).toHaveLength(1);
+  });
+
   test("asks for the loop settings once, and passes the project to every turned-on loop's T3 task", () => {
     const workflows = { "quality-loop": true, "pr-digest": true };
     expect(withPack({ workflows }, devbox).unanswered.map((setting) => setting.key)).toEqual(["orchestration.loopProject", "orchestration.qualityArea", "orchestration.ledgerRepo"]);
