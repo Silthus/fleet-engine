@@ -272,14 +272,23 @@ describe("the workflow scope", () => {
 
   test("doctor names the command that adds it when the gh sign-in lacks it", async () => {
     expect(await workflowFindings(signedIn(["gist", "read:org", "repo"]))).toEqual([
-      { id: "identity:workflow", pack: "engine", say: "Your GitHub sign-in lacks the workflow scope, so GitHub can refuse a push to a large repo even when it changes no workflow file. Run gh auth refresh -h github.com -s workflow.", repair: "human" },
+      { id: "identity:workflow", pack: "engine", say: "Your GitHub sign-in lacks the workflow scope, so GitHub can refuse a push to a large repo even when it changes no workflow file. Run gh auth refresh -h github.com -s workflow." },
     ]);
   });
 
   test("doctor says to replace a token from the environment, which gh auth refresh cannot change", async () => {
     expect(await workflowFindings(signedIn(["read:org", "repo"], "GH_TOKEN"))).toEqual([
-      { id: "identity:workflow", pack: "engine", say: "The GH_TOKEN in your environment lacks the workflow scope, so GitHub can refuse a push to a large repo even when it changes no workflow file. Give that token the workflow scope.", repair: "human" },
+      { id: "identity:workflow", pack: "engine", say: "The GH_TOKEN in your environment lacks the workflow scope, so GitHub can refuse a push to a large repo even when it changes no workflow file. Give that token the workflow scope." },
     ]);
+  });
+
+  test("is a note, so doctor still passes on a machine that has everything else", async () => {
+    const home = temp.make("home-");
+    const gh = github(home, signedIn(["read:org", "repo"]));
+    expect((await apply(plan("linux"), { home, adapters: [gh.adapter] })).ok).toBe(true);
+    const report = await check(plan("linux"), { home, adapters: [gh.adapter] });
+    expect(report.findings.map((finding) => finding.id)).toEqual(["identity:workflow"]);
+    expect(report.ok).toBe(true);
   });
 
   test("doctor finds nothing when the sign-in has it, or when the token lists no scopes", async () => {

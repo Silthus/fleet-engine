@@ -52,7 +52,7 @@ async function reconcileIdentity(plan: Plan, signer: Signer, context: Context) {
   if ("error" in identity) return void result.findings.push(finding("github", `Your Git identity waits for the GitHub sign-in (${identity.error}). Run gh auth login, then fleet apply.`, "human"));
   const workflow = await workflowScopeMissing(run);
   const refused = "lacks the workflow scope, so GitHub can refuse a push to a large repo even when it changes no workflow file.";
-  if (workflow) result.findings.push(finding("workflow", workflow.fromEnvironment ? `The ${workflow.fromEnvironment} in your environment ${refused} Give that token the workflow scope.` : `Your GitHub sign-in ${refused} Run gh auth refresh -h github.com -s workflow.`, "human"));
+  if (workflow) result.findings.push({ id: "identity:workflow", pack: "engine", say: workflow.fromEnvironment ? `The ${workflow.fromEnvironment} in your environment ${refused} Give that token the workflow scope.` : `Your GitHub sign-in ${refused} Run gh auth refresh -h github.com -s workflow.` });
   const key = await signingKey(signer, context);
   if (key === null) return;
   const wanted: Write[] = [{ target: fleetGitconfig, after: gitconfig(home, identity, signer) }];
