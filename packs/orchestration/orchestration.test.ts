@@ -54,7 +54,7 @@ describe("the Orchestration pack", () => {
   test("runs each loop and the digest once per fleet: on the first node the profile lists, else on the hub", () => {
     const workflows = { "quality-loop": true, "signal-loop": true, "pr-digest": true };
     const settings = { "orchestration.loopProject": "my-repo", "orchestration.qualityArea": "src", "orchestration.ledgerRepo": "me/ledger" };
-    const jobsOn = (profile: { hub?: string; devboxes?: string[] }, name: string, role: "devbox" | "hub" = "devbox") =>
+    const jobsOn = (profile: { hub?: string; devboxes?: string[] }, name: string, role: "devbox" | "hub" | "linux" = "devbox") =>
       withPack({ workflows, settings, ...profile }, { ...devbox, role, name }).jobs.map((job) => job.id).filter((id) => id in workflows).sort();
     const all = ["pr-digest", "quality-loop", "signal-loop"];
     const fleet = { hub: "hub-box", devboxes: ["hub-box", "node-1", "node-2"] };
@@ -62,6 +62,7 @@ describe("the Orchestration pack", () => {
     expect([jobsOn({ devboxes: ["node-1", "node-2"] }, "node-1"), jobsOn({ devboxes: ["node-1", "node-2"] }, "node-2")]).toEqual([all, []]);
     expect([jobsOn({ hub: "hub-box", devboxes: ["hub-box"] }, "hub-box", "hub"), jobsOn({ hub: "hub-box", devboxes: ["hub-box"] }, "unlisted-box")]).toEqual([all, []]);
     expect(jobsOn({}, "box")).toEqual(all);
+    expect([jobsOn(fleet, "node-1", "linux"), jobsOn({}, "box", "linux")]).toEqual([all, []]);
   });
 
   test("asks for the loop settings once, and passes the project to every turned-on loop's T3 task", () => {
