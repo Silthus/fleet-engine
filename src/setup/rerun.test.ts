@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { main } from "../cli.ts";
 import { loadPacks } from "../pack/manifest.ts";
 import type { FetchedSource, SourceRef } from "../pack/types.ts";
 import { isolateGit, tempDirs } from "../testing/git.ts";
 import { profilePath } from "./profile.ts";
-import { engineRoot, fakeMachine, fleetSetup, machineFile, pushedAnswers, scripted } from "./testing.ts";
+import { engineRoot, fakeMachine, fleetSetup, githubRepo, machineFile, pushedAnswers, scripted } from "./testing.ts";
 
 isolateGit();
 const temp = tempDirs();
@@ -22,6 +22,40 @@ async function grownProfile() {
   expect(await packs(["--add", "communication", "--add", "hub", "--workflows", "pr-digest=on", "--set", "hub.alias=coder.fleet-hub"])).toBe(0);
   return home;
 }
+
+async function packsAfterSetup() {
+  const home = temp.make("home-");
+  expect((await onMac(home, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"])).code).toBe(0);
+  return {
+    home,
+    packs: async (args: string[]) => {
+      const io = scripted([]);
+      const code = await main(["packs", ...args], { home, engineRoot, platform: "darwin", print: io.terminal.print, terminal: io.terminal, apply: async () => 0, setup: { machine: fakeMachine(home).machine } });
+      return { code, output: io.output() };
+    },
+  };
+}
+
+describe("fleet packs --add memory", () => {
+  test("creates the private memory repo, as setup does, and points memory.repo at it", async () => {
+    const { home, packs } = await packsAfterSetup();
+    const added = await packs(["--add", "memory"]);
+    expect(added.code).toBe(0);
+    expect(added.output).toContain("✓ Created the private repo nora/fleet-memory");
+    expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(true);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "memory"], settings: { "memory.repo": "nora/fleet-memory" } });
+  });
+
+  test("reuses the memory repo the profile names when the pack comes back", async () => {
+    const { home, packs } = await packsAfterSetup();
+    expect((await packs(["--add", "memory", "--set", "memory.repo=nora/custom-notes"])).code).toBe(0);
+    expect((await packs(["--remove", "memory"])).code).toBe(0);
+    const back = await packs(["--add", "memory"]);
+    expect(back.output).toContain("✓ Reusing your repo nora/custom-notes");
+    expect(existsSync(githubRepo(home, "nora/fleet-memory"))).toBe(false);
+    expect(await pushedAnswers(home)).toMatchObject({ packs: ["pull-requests", "memory"], settings: { "memory.repo": "nora/custom-notes" } });
+  });
+});
 
 describe("a second fleet setup", () => {
   test("with no flags keeps the profile's packs, Hub pack, and workflows", async () => {

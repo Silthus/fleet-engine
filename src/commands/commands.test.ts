@@ -142,9 +142,9 @@ describe("fleet packs", () => {
 
   test("a change that does not apply here stays saved, and says how to finish", async () => {
     const { home, pushed } = await machineWithProfile();
-    const result = await fleet(home, ["packs", "--add", "memory"], 1);
+    const result = await fleet(home, ["packs", "--add", "communication"], 1);
     expect(result.code).toBe(1);
-    expect((await pushed()).packs).toEqual(["pull-requests", "memory"]);
+    expect((await pushed()).packs).toEqual(["pull-requests", "communication"]);
     expect(result.output).toEndWith("The change is saved. Fix what it says above, then run fleet apply.");
   });
 

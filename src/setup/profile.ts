@@ -29,19 +29,36 @@ export function profileStep(context: ProfileContext): Step {
   return { id: "profile", title: "Make your profile", minutes: 1, kind: "auto", run: () => makeProfile(context) };
 }
 
-async function lookUp(machine: Machine, home: string, packs: PackManifest[], picked: string[]) {
+function github(machine: Machine) {
   const gh = async (...args: string[]) => {
     const result = await machine.exec(["gh", ...args]);
     if (result.code !== 0) throw new Error(`gh ${args.slice(0, 2).join(" ")} failed: ${lastLine(result.output)}`);
     return result.output.trim();
   };
-  const login = await gh("api", "user", "--jq", ".login");
   const exists = async (repo: string) => {
     const view = await machine.exec(["gh", "repo", "view", repo, "--json", "name"]);
     if (view.code === 0) return true;
     if (view.output.includes("Could not resolve to a Repository")) return false;
     throw new Error(`could not look up ${repo}: ${lastLine(view.output)}`);
   };
+  return { gh, exists, login: () => gh("api", "user", "--jq", ".login") };
+}
+
+/** The Memory pack's private repo: the one named, or <login>/fleet-memory. make() creates it when it is missing, or says it is reused. */
+export async function memoryRepo(machine: Machine, named: unknown, login?: string) {
+  const { gh, exists, login: signedIn } = github(machine);
+  const repo = typeof named === "string" ? named : `${login ?? (await signedIn())}/${memoryRepoName}`;
+  const missing = !(await exists(repo));
+  const make = async (print: (line: string) => void) => {
+    if (missing) await gh("repo", "create", repo, "--private", "--description", "My agents' shared memory");
+    print(missing ? `✓ Created the private repo ${repo}` : `✓ Reusing your repo ${repo}`);
+  };
+  return { repo, missing, make };
+}
+
+async function lookUp(machine: Machine, home: string, packs: PackManifest[], picked: string[]) {
+  const { gh, exists, login: signedIn } = github(machine);
+  const login = await signedIn();
   const personal = `${login}/${profileRepoName}`;
   const org = profileOrg(packs, picked);
   const team = org && `${org}/${profileRepoName}-${login}`;
@@ -67,9 +84,8 @@ async function makeProfile(context: ProfileContext) {
   let profileRepo = found ?? team ?? personal;
   const saved = found ? savedSettings(dir) : {};
   const namedMemory = draft.settings?.["memory.repo"] ?? saved["memory.repo"];
-  const memoryRepo = draft.packs?.includes("memory") ? (typeof namedMemory === "string" ? namedMemory : `${login}/${memoryRepoName}`) : undefined;
-  const memoryMissing = memoryRepo !== undefined && !(await exists(memoryRepo));
-  await confirm(context, [...(found ? [] : [profileRepo]), ...(memoryMissing ? [memoryRepo] : [])], org && !found ? org : undefined);
+  const memory = draft.packs?.includes("memory") ? await memoryRepo(machine, namedMemory, login) : undefined;
+  await confirm(context, [...(found ? [] : [profileRepo]), ...(memory?.missing ? [memory.repo] : [])], org && !found ? org : undefined);
   if (!found) {
     const made = await create(profileRepo, "My Fleet profile");
     if (made.code !== 0 && same(profileRepo, team) && !(await exists(profileRepo))) {
@@ -80,10 +96,7 @@ async function makeProfile(context: ProfileContext) {
     if (same(profileRepo, team)) await requirePrivate(machine, profileRepo);
     terminal.print(`  ✓ Created the private repo ${profileRepo}${same(profileRepo, team) ? ` in the ${org} org` : ""}`);
   } else terminal.print(`  ✓ Reusing your repo ${found}`);
-  if (memoryRepo && memoryMissing) {
-    await gh("repo", "create", memoryRepo, "--private", "--description", "My agents' shared memory");
-    terminal.print(`  ✓ Created the private repo ${memoryRepo}`);
-  } else if (memoryRepo) terminal.print(`  ✓ Reusing your repo ${memoryRepo}`);
+  await memory?.make((line) => terminal.print(`  ${line}`));
   if (team && same(found, personal)) {
     terminal.print(`  · Your team keeps profiles in the ${org} org. To move yours there, run:`);
     terminal.print(`      gh api -X POST repos/${personal}/transfer -f new_owner=${org} -f new_name=${profileRepoName}-${login}`);
@@ -98,7 +111,7 @@ async function makeProfile(context: ProfileContext) {
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, plan: "both", settings: {}, workflows: {} }),
     ...draft,
-    ...(memoryRepo && namedMemory === undefined ? { settings: { ...draft.settings, "memory.repo": memoryRepo } } : {}),
+    ...(memory && namedMemory === undefined ? { settings: { ...draft.settings, "memory.repo": memory.repo } } : {}),
   };
   if (started.length) {
     await git(machine, dir, "add", "--", ...started);

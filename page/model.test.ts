@@ -6,7 +6,7 @@ import { loadPacks } from "../src/pack/manifest.ts";
 import { parseSetupFlags } from "../src/setup/flags.ts";
 import { picksFrom } from "../src/setup/questions.ts";
 import { loadCatalog } from "../src/setup/setup.ts";
-import { engineRoot, fakeMachine, fleetSetup, pushedAnswers, scripted } from "../src/setup/testing.ts";
+import { engineRoot, fakeMachine, fleetSetup, githubRepo, pushedAnswers, scripted } from "../src/setup/testing.ts";
 import { isolateGit, tempDirs } from "../src/testing/git.ts";
 import { pageData } from "../scripts/build-page.ts";
 import { firstStart, installPrompt, promptData, setupSplit, startPrompt, toggleSelected, toggleStart, type PageData, type Start } from "./model.ts";
@@ -175,12 +175,13 @@ describe("the install prompt", () => {
     expect(named.toSorted()).toEqual(held.map((pack) => `packs/${pack}/SETUP.md`).toSorted());
   });
 
-  test("Memory's note gives a Fleet that already runs the flag that names the new memory repo, and the command of the prompt takes it", async () => {
+  test("Memory's note leaves the memory repo to the command, and the command of the prompt makes it on a Fleet that already runs", async () => {
     const note = readFileSync(join(root, "packs/memory/SETUP.md"), "utf8").replace(/\s+/g, " ");
-    const flag = note.match(/On a Fleet that already runs, `fleet packs` creates no repo\. First run `gh repo create <their GitHub login>\/fleet-memory --private`, then add `(--set memory\.repo=<their GitHub login>\/fleet-memory)`/)![1]!;
+    expect(note).toContain("`fleet setup` and `fleet packs --add memory` create it when it is missing. Add nothing to the command.");
     const mac = await macWithFleet();
     const command = installPrompt(data, select("memory")).match(/^ {3}fleet (packs .*)$/m)![1]!;
-    expect(await mac.fleet([...command.split(" "), ...flag.replace("<their GitHub login>", "nora").split(" ")])).toBe(0);
+    expect(await mac.fleet(command.split(" "))).toBe(0);
+    expect(existsSync(githubRepo(mac.home, "nora/fleet-memory"))).toBe(true);
     expect(await pushedAnswers(mac.home)).toMatchObject({ packs: expect.arrayContaining(["memory"]), settings: { "memory.repo": "nora/fleet-memory" } });
   });
 

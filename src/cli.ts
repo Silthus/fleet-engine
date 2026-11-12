@@ -166,6 +166,7 @@ async function change(command: keyof typeof changes | "hub", args: string[], opt
     profile: await loadProfile(profileDir),
     plan,
     packs: sources.flatMap((source) => ("error" in source ? [] : source.packs)),
+    machine: { ...realMachine, ...options.setup?.machine },
     print: options.print,
     apply: () => applyProfile(profileDir, options),
   };
