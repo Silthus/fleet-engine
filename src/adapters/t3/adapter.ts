@@ -7,7 +7,7 @@ import { sourceOutage } from "../provider-config/adapter.ts";
 import { withLock } from "../provider-config/store.ts";
 import { skipOtherHome, spawnRunner, type CommandRunner } from "../run.ts";
 import type { T3Rpc, T3Server } from "./port.ts";
-import { reconcileClaudeToken, reconcileService, type Environment, type Wait } from "./service.ts";
+import { reconcileClaudeToken, reconcileService, reconcileTimeZone, timeZoneSetting, type Environment, type Wait } from "./service.ts";
 import { reconcileScripts, settingProblems, waitingScripts } from "./scripts.ts";
 import { localT3Server } from "./session.ts";
 import { desktopTarget, reconcileSettings, settingsFields, settingsTarget } from "./settings.ts";
@@ -42,6 +42,7 @@ export function t3Adapter(options: T3Options = {}): T3Adapter {
         if (seeded) merge(result, await reconcileSettings(plan, home, settings));
         if (plan.os === "linux") await reconcileService(run, wait, user, dryRun, result);
         if (plan.os === "linux") await reconcileClaudeToken(run, home, options.env ?? process.env, dryRun, result);
+        if (plan.os === "linux") await reconcileTimeZone(run, home, String(plan.settings[timeZoneSetting] ?? "").trim(), dryRun, result);
         result.findings.push(...settingProblems(plan));
         if (!(await server.answering(home))) {
           if (!seeded) merge(result, await reconcileSettings(plan, home, settings));

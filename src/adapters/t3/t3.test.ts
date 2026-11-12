@@ -849,6 +849,78 @@ describe("T3 on Linux", () => {
     expect(report.actions.map((action) => action.target)).toContain("t3 linger");
   });
 
+  describe("base.t3TimeZone", () => {
+    const dropInFile = ".config/systemd/user/t3code.service.d/fleet-timezone.conf";
+    const zoned = (zone: string, os: "darwin" | "linux" = "linux"): Plan => ({ ...plan(os, []), settings: { "base.t3TimeZone": zone } });
+    const zoneFindings = (report: { findings: { id: string; say: string; repair?: string }[] }) => report.findings.filter((item) => item.id === "t3:timezone");
+
+    test("runs T3 Code's service in the zone it names from the next restart, and an empty value returns it to the machine's zone", async () => {
+      const home = temp.make("home-");
+      const { commands, adapter } = setup();
+      const doctor = await check(zoned("Europe/Berlin"), { home, adapters: [adapter], run: async () => 0 });
+      expect(zoneFindings(doctor)).toEqual([expect.objectContaining({ say: "T3 Code's service needs to run in Europe/Berlin.", repair: "apply" })]);
+      expect(existsSync(join(home, dropInFile))).toBe(false);
+
+      const report = await apply(zoned("Europe/Berlin"), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe("[Service]\nEnvironment=TZ=Europe/Berlin\n");
+      expect(report.actions).toContainEqual({ target: "t3 time zone", operation: "create" });
+      expect(zoneFindings(report)[0]!.say).toStartWith("T3 Code runs in Europe/Berlin from its next restart");
+      expect(commands.calls).toContain("systemctl --user daemon-reload");
+      expect(commands.calls.filter((line) => line.includes("restart"))).toEqual([]);
+
+      const again = await apply(zoned("Europe/Berlin"), { home, adapters: [adapter] });
+      expect(again.actions).toEqual([]);
+      expect(zoneFindings(again)).toEqual([]);
+
+      const moved = await apply(zoned("America/New_York"), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe("[Service]\nEnvironment=TZ=America/New_York\n");
+      expect(moved.actions).toContainEqual({ target: "t3 time zone", operation: "replace" });
+
+      const back = await apply(zoned(""), { home, adapters: [adapter] });
+      expect(existsSync(join(home, dropInFile))).toBe(false);
+      expect(back.actions).toContainEqual({ target: "t3 time zone", operation: "remove" });
+    });
+
+    test("without the setting, or on a Mac, writes no drop-in and reloads nothing", async () => {
+      for (const target of [plan("linux", []), zoned("Europe/Berlin", "darwin")]) {
+        const home = temp.make("home-");
+        const { commands, adapter } = setup();
+        const report = await apply(target, { home, adapters: [adapter] });
+        expect(existsSync(join(home, dropInFile))).toBe(false);
+        expect(commands.calls).not.toContain("systemctl --user daemon-reload");
+        expect(zoneFindings(report)).toEqual([]);
+      }
+    });
+
+    test("refuses a value that is not a time zone and keeps a drop-in it did not write", async () => {
+      const home = temp.make("home-");
+      const { adapter } = setup();
+      for (const zone of ["Mars/Olympus_Mons", "europe/berlin", "Europe/Berlin\nExecStartPre=/bin/false"]) {
+        const report = await apply(zoned(zone), { home, adapters: [adapter] });
+        expect(zoneFindings(report)).toEqual([expect.objectContaining({ repair: "human", say: expect.stringContaining("is not a time zone") })]);
+        expect(existsSync(join(home, dropInFile))).toBe(false);
+      }
+      mkdirSync(join(home, ".config/systemd/user/t3code.service.d"), { recursive: true });
+      writeFileSync(join(home, dropInFile), "[Service]\nEnvironment=TZ=Asia/Tokyo\nNice=5\n");
+      const report = await apply(zoned("Europe/Berlin"), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe("[Service]\nEnvironment=TZ=Asia/Tokyo\nNice=5\n");
+      expect(zoneFindings(report)).toEqual([expect.objectContaining({ repair: "human", say: expect.stringContaining("is not Fleet's") })]);
+      await apply(zoned(""), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe("[Service]\nEnvironment=TZ=Asia/Tokyo\nNice=5\n");
+    });
+
+    test("leaves the zone as it was when systemd does not reload, so the next apply tries again", async () => {
+      const home = temp.make("home-");
+      const { adapter } = setup({}, { reloadFailures: 1 });
+      const failed = await apply(zoned("Europe/Berlin"), { home, adapters: [adapter] });
+      expect(existsSync(join(home, dropInFile))).toBe(false);
+      expect(failed.actions.filter((action) => action.target === "t3 time zone")).toEqual([]);
+      expect(zoneFindings(failed)).toEqual([expect.objectContaining({ repair: "apply" })]);
+      await apply(zoned("Europe/Berlin"), { home, adapters: [adapter] });
+      expect(readFileSync(join(home, dropInFile), "utf8")).toBe("[Service]\nEnvironment=TZ=Europe/Berlin\n");
+    });
+  });
+
   describe("the session's Claude token", () => {
     const tokenFile = ".config/claude-env/oauth.env";
     const dropInFile = ".config/systemd/user/t3code.service.d/claude-token.conf";

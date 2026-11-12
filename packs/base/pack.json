@@ -178,6 +178,13 @@
       ],
       "default": "ssh",
       "ask": "never"
+    },
+    {
+      "key": "base.t3TimeZone",
+      "question": "Which time zone should T3 Code's service on Linux run in, so a scheduled task set to 03:00 runs at 03:00 there? Use an IANA name, such as Europe/Berlin. Leave it empty to keep the machine's zone.",
+      "type": "string",
+      "default": "",
+      "ask": "never"
     }
   ],
   "workflows": [
