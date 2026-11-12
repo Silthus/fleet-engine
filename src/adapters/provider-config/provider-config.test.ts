@@ -710,4 +710,98 @@ describe("Claude plugins", () => {
 
     expect(report.findings).toContainEqual({ id: "plugins:claude", pack: "engine", say: "Claude Code is not installed yet, so its plugins wait: context7@claude-plugins-official.", repair: "apply" });
   });
+
+  describe("on a fresh machine, where Claude Code has fetched no marketplace", () => {
+    const official = { provider: "claude" as const, key: "enabledPlugins.posthog@claude-plugins-official", value: true };
+    const team = { provider: "claude" as const, key: "enabledPlugins.tool@team-market", value: true };
+    const teamDeclared = { extraKnownMarketplaces: { "team-market": { source: { source: "github", repo: "team/market" } } } };
+
+    function freshClaude(published: Record<string, { name: string; plugins: string[] }>) {
+      const fetched = new Map<string, string[]>();
+      const installed: string[] = [];
+      const run: CommandRunner = async (command) => {
+        const [, , verb, ...rest] = command;
+        const missing = (name: string) => ({ code: 1, stdout: "", stderr: `✘ Failed to update marketplace(s): Marketplace '${name}' not found.\n` });
+        if (verb === "list") return { code: 0, stdout: JSON.stringify(installed.map((id) => ({ id, scope: "user", version: "1.0.0", enabled: true }))) };
+        if (verb === "marketplace" && rest[0] === "list") return { code: 0, stdout: JSON.stringify([...fetched.keys()].map((name) => ({ name, source: "github" }))) };
+        if (verb === "marketplace" && rest[0] === "add") {
+          const marketplace = published[rest[1]!];
+          if (!marketplace) return { code: 1, stdout: "", stderr: "✘ Failed to add marketplace: Failed to clone marketplace repository: SSH authentication failed.\n\nOriginal error: denied\n" };
+          fetched.set(marketplace.name, [...marketplace.plugins]);
+          return { code: 0, stdout: "" };
+        }
+        if (verb === "marketplace" && rest[0] === "update") {
+          const marketplace = Object.values(published).find((item) => item.name === rest[1]);
+          if (!marketplace || !fetched.has(marketplace.name)) return missing(rest[1]!);
+          fetched.set(marketplace.name, [...marketplace.plugins]);
+          return { code: 0, stdout: "" };
+        }
+        if (verb === "install") {
+          const [plugin, marketplace] = rest[0]!.split("@") as [string, string];
+          if (!fetched.get(marketplace)?.includes(plugin)) return { code: 1, stdout: "", stderr: `✘ Failed to install plugin "${rest[0]}": Plugin "${plugin}" not found in marketplace "${marketplace}".\n` };
+          installed.push(rest[0]!);
+          return { code: 0, stdout: "" };
+        }
+        return { code: 0, stdout: "" };
+      };
+      return { installed, fetched, adapter: providerConfigAdapter({ run }) };
+    }
+
+    const officialMarketplace = { "anthropics/claude-plugins-official": { name: "claude-plugins-official", plugins: ["posthog", "slack"] } };
+
+    test("adds Claude Code's official marketplace before it installs a plugin from it", async () => {
+      const home = temp.make("home-");
+      const cli = freshClaude(officialMarketplace);
+
+      const report = await apply(plan([official]), { home, adapters: [cli.adapter] });
+
+      expect(cli.installed).toEqual(["posthog@claude-plugins-official"]);
+      expect(report.findings).toEqual([]);
+    });
+
+    test("adds the marketplace that Claude's settings declare before it installs a plugin from it", async () => {
+      const home = temp.make("home-");
+      write(home, claude, teamDeclared);
+      const cli = freshClaude({ "team/market": { name: "team-market", plugins: ["tool"] } });
+
+      const report = await apply(plan([team]), { home, adapters: [cli.adapter] });
+
+      expect(cli.installed).toEqual(["tool@team-market"]);
+      expect(report.findings).toEqual([]);
+    });
+
+    test("adds a marketplace that a pack declares in the same apply", async () => {
+      const home = temp.make("home-");
+      const cli = freshClaude({ "team/market": { name: "team-market", plugins: ["tool"] } });
+      const declared = { provider: "claude" as const, key: "extraKnownMarketplaces.team-market", value: teamDeclared.extraKnownMarketplaces["team-market"] };
+
+      await apply(plan([declared, team]), { home, adapters: [cli.adapter] });
+
+      expect(cli.installed).toEqual(["tool@team-market"]);
+    });
+
+    test("refreshes a marketplace whose local copy predates the plugin", async () => {
+      const home = temp.make("home-");
+      const published = { "anthropics/claude-plugins-official": { name: "claude-plugins-official", plugins: [] as string[] } };
+      const cli = freshClaude(published);
+      cli.fetched.set("claude-plugins-official", []);
+      published["anthropics/claude-plugins-official"].plugins.push("posthog");
+
+      await apply(plan([official]), { home, adapters: [cli.adapter] });
+
+      expect(cli.installed).toEqual(["posthog@claude-plugins-official"]);
+    });
+
+    test("says which marketplace could not be added and which plugins wait for it", async () => {
+      const home = temp.make("home-");
+      write(home, claude, teamDeclared);
+      const cli = freshClaude({});
+
+      const report = await apply(plan([team]), { home, adapters: [cli.adapter] });
+
+      expect(report.findings).toEqual([
+        { id: "plugin-marketplace:team-market", pack: "engine", say: "Could not add the Claude plugin marketplace team-market from team/market: Failed to add marketplace: Failed to clone marketplace repository: SSH authentication failed. Its plugins wait: tool@team-market.", repair: "apply" },
+      ]);
+    });
+  });
 });
