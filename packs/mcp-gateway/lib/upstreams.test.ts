@@ -108,12 +108,22 @@ test("a local upstream runs its script, bundled for node, in the gateway with ea
   expect(await upstreamsRegistered(hub)).toBe(true);
 });
 
-test("a local upstream whose folder is missing on the hub stops before the gateway changes", async () => {
+test("a local upstream whose folder is missing on the hub waits with a warning while the rest of the gateway installs, then joins once the folder is there", async () => {
   const outside = temp.make("local-upstream-");
   writeFileSync(join(outside, "server.ts"), "export {};\n");
-  const { api, hub } = hubWith({ "notes-search.json": { ...notesServer, script: join(outside, "server.ts"), mounts: [{ source: join(outside, "gone"), target: "/fleet-notes" }] } });
-  await expect(registerUpstreams(hub)).rejects.toThrow(`Notes search mounts ${join(outside, "gone")}, which is missing on the hub.`);
+  const missing = join(outside, "not-cloned-yet");
+  const { api, hub, ran } = hubWith({ "mail.json": mail, "notes-search.json": { ...notesServer, script: join(outside, "server.ts"), mounts: [{ source: missing, target: "/fleet-notes" }] } });
+  await registerUpstreams(hub);
+  expect(api.configs.mail).toBeDefined();
   expect(api.configs["notes-search"]).toBeUndefined();
+  expect(hub.printed).toContain(`Notes search waits for ${missing}, which is missing on the hub. The rest of the MCP gateway works; the next repair adds Notes search once that folder is there.`);
+  expect(ran.calls.filter((call) => call.command[1] === "run").map((call) => call.command.join(" ")).join("\n")).not.toContain(missing);
+  expect(await upstreamsRegistered(hub)).toBe(false);
+  mkdirSync(missing);
+  await registerUpstreams(hub);
+  expect(api.configs["notes-search"]).toMatchObject({ command: "node", args: ["/fleet-local/notes-search.mjs"] });
+  expect(ran.calls.filter((call) => call.command[1] === "run").at(-1)!.command.join(" ")).toContain(`-v ${missing}:/fleet-notes:ro`);
+  expect(await upstreamsRegistered(hub)).toBe(true);
 });
 
 test("keeps a server of the same name that Fleet did not add", async () => {

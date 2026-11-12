@@ -11,6 +11,7 @@ type Result = { isError?: true; content: Array<{ type: "text"; text: string }>; 
 const versions = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const toolName = "context_search";
 const allowed = ["query", "all", "limit"];
+const maxBytes = 1024 * 1024;
 
 export const tool = {
   name: toolName,
@@ -48,13 +49,19 @@ function searchLibrary(server: Server, args: Record<string, unknown>): { result:
   if (!validArguments(args)) return { result: failure("Use query (2 to 500 characters), optional all (boolean), and optional limit (integer, 1 to 10). No paths or commands are accepted.") };
   try {
     if (!statSync(server.library).isDirectory()) throw new Error("not a folder");
-    const read = (path: string) => readFileSync(join(server.library, path), "utf8");
+    const skipped: string[] = [];
+    const read = (path: string) => {
+      const file = join(server.library, path);
+      if (statSync(file).size <= maxBytes) return redactSecrets(readFileSync(file, "utf8"));
+      skipped.push(path);
+      return "";
+    };
     const hits = search(readLibrary(server.library), args.query as string, read, { all: args.all as boolean | undefined, limit: (args.limit as number | undefined) ?? 5 });
     const results = hits.map(({ doc, line }) => ({
       path: doc.path, url: linkOf(server, doc.path), title: doc.title.slice(0, 300), type: doc.type.slice(0, 80), date: doc.date?.slice(0, 10), status: doc.status,
       topics: doc.topics.slice(0, 20).map((topic) => topic.slice(0, 80)), source: doc.source?.slice(0, 2000), excerpt: line,
     }));
-    const text = redactSecrets(JSON.stringify({ results }));
+    const text = redactSecrets(JSON.stringify({ results, ...(skipped.length ? { skipped: { reason: "larger than 1 MB, so their text was not searched", paths: skipped } } : {}) }));
     return { result: { content: [{ type: "text", text }], structuredContent: JSON.parse(text) }, results: hits.length };
   } catch {
     return { result: failure("Context search failed. Ask the hub's owner to check the library checkout; no file contents or error details were returned.") };

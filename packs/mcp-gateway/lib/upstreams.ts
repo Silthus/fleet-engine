@@ -4,7 +4,7 @@ import { builtInApps, type CodexApp, type Upstream } from "./apps.ts";
 import { declaredUpstreams } from "./declared.ts";
 import { browserGatewayUrl } from "./client.ts";
 import { dataDir, managementApi, syncGatewayGroup, type Api, type Hub } from "./hub.ts";
-import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile, localEntry } from "./install.ts";
+import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile, localEntry, missingMount, waitingNote } from "./install.ts";
 
 const account = (app: CodexApp) => `${app.account ?? app.name}-codex`;
 export const appHome = (home: string, app: CodexApp) => join(dataDir(home), "data", account(app));
@@ -64,6 +64,8 @@ export const appSignedIn = (hub: Pick<Hub, "home">, app: CodexApp) => exists(joi
 export async function registerUpstream(hub: Hub, upstream: Upstream) {
   const codexMissing = `${upstream.title} runs through Codex, and this hub has no Codex from Fleet. Run: fleet install-codex`;
   if (upstream.kind === "codex-app" && !(await exists(hubCodex(hub.home)))) throw new Error(codexMissing);
+  const waitsFor = upstream.kind === "local" ? await missingMount(upstream) : undefined;
+  if (upstream.kind === "local" && waitsFor) return hub.print(waitingNote(upstream, waitsFor));
   const call = await managementApi(hub);
   refuseTheirs(await current(call, upstream.name), upstream);
   if (upstream.kind !== "oauth") await install(hub);

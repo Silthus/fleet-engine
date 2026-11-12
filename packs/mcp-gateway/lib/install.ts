@@ -23,6 +23,22 @@ export const localEntry = (upstream: Pick<LocalUpstream, "name">) => `${localMou
 type Mount = { Source?: string; Destination: string };
 type Bundle = { path: string; bytes: Buffer };
 
+async function resolveMounts(upstream: LocalUpstream): Promise<{ mounts: Mount[]; missing?: string }> {
+  const mounts: Mount[] = [];
+  for (const mount of upstream.mounts ?? []) {
+    const source = await realpath(mount.source).catch(() => undefined);
+    if (!source) return { mounts, missing: mount.source };
+    mounts.push({ Source: source, Destination: mount.target });
+  }
+  return { mounts };
+}
+
+/** The first folder of a local upstream that is missing on the hub, such as a checkout not cloned yet. */
+export const missingMount = async (upstream: LocalUpstream) => (await resolveMounts(upstream)).missing;
+
+export const waitingNote = (upstream: LocalUpstream, folder: string) =>
+  `${upstream.title} waits for ${folder}, which is missing on the hub. The rest of the MCP gateway works; the next repair adds ${upstream.title} once that folder is there.`;
+
 const localUpstreams = async (home: string) => (await declaredUpstreams(home)).filter((upstream): upstream is LocalUpstream => upstream.kind === "local");
 
 async function localBundles(home: string): Promise<Bundle[]> {
@@ -38,12 +54,7 @@ async function localBundles(home: string): Promise<Bundle[]> {
 async function localMounts(home: string): Promise<Mount[]> {
   const upstreams = await localUpstreams(home);
   const mounts: Mount[] = upstreams.length ? [{ Source: localDir(home), Destination: localMount }] : [];
-  for (const upstream of upstreams) {
-    for (const mount of upstream.mounts ?? []) {
-      const source = await realpath(mount.source).catch(() => { throw new Error(`${upstream.title} mounts ${mount.source}, which is missing on the hub.`); });
-      mounts.push({ Source: source, Destination: mount.target });
-    }
-  }
+  for (const upstream of upstreams) mounts.push(...(await resolveMounts(upstream)).mounts);
   return mounts;
 }
 
