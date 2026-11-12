@@ -17,6 +17,7 @@ const topLevel: IsTopLevel = async (threadId) => threadId === "top";
 const claudePrompt = (text: string) => ({ type: "user", message: { role: "user", content: text } });
 const claudeSays = (text: string) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
 const claudeAsks = { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "AskUserQuestion", input: {} }] } };
+const claudeSaysThenAsks = (text: string) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }, { type: "tool_use", id: "t3", name: "AskUserQuestion", input: {} }] } });
 const toolResult = { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } };
 const codexPrompt = (text: string) => ({ type: "event_msg", payload: { type: "user_message", message: text } });
 const codexSays = (text: string) => ({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } });
@@ -92,11 +93,32 @@ describe("the ask guard", () => {
   });
 
   test.each([
-    ["the turn asked with Claude's question tool", [claudePrompt("Fix it"), claudeAsks, toolResult, claudeSays("Asked above. Should I wait?")]],
-    ["the turn asked with Codex's question tool", [codexPrompt("Fix it"), codexAsks, codexSays("Which one do you want?")]],
-    ["the last message asks nothing", [claudePrompt("Fix it"), claudeSays("Should I fix it? Yes, the spec says so."), claudeSays("Fixed and pushed.")]],
-  ])("lets the stop through when %s", async (_, lines) => {
+    ["Claude's question tool", [claudePrompt("Fix it"), claudeSays("Which one do you want?"), claudeAsks]],
+    ["Claude's question tool in the same message", [claudePrompt("Fix it"), claudeSaysThenAsks("Which one do you want?")]],
+    ["an MCP question tool", [claudePrompt("Fix it"), claudeSays("Which one do you want?"), { ...claudeAsks, message: { ...claudeAsks.message, content: [{ type: "tool_use", id: "t2", name: "mcp__t3__AskUserQuestion", input: {} }] } }]],
+    ["Codex's question tool", [codexPrompt("Fix it"), codexSays("Which one do you want?"), codexAsks]],
+  ])("lets the stop through when %s asks after the prose question", async (_, lines) => {
     expect(await stop({ transcript_path: transcript(...lines) })).toBeUndefined();
+  });
+
+  test("lets the stop through when the last message asks nothing", async () => {
+    const path = transcript(claudePrompt("Fix it"), claudeSays("Should I fix it? Yes, the spec says so."), claudeSays("Fixed and pushed."));
+    expect(await stop({ transcript_path: path })).toBeUndefined();
+  });
+
+  test.each([
+    ["an earlier Claude question tool call", [claudePrompt("Fix it"), claudeAsks, toolResult, claudeSays("Asked above. Should I wait?")]],
+    ["an earlier Codex question tool call", [codexPrompt("Fix it"), codexAsks, codexSays("Which one do you want?")]],
+    ["a message that only names the tool", [claudePrompt("Fix it"), claudeSays('I will call request_user_input(options). "name": "AskUserQuestion". Should I merge?')]],
+    ["a tool result that names the tool", [claudePrompt("Fix it"), { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t9", content: '"name": "AskUserQuestion"' }] } }, claudeSays("Should I merge?")]],
+    ["a Codex call to another tool", [codexPrompt("Fix it"), codexSays("Which one do you want?"), { type: "response_item", payload: { type: "function_call", name: "shell", arguments: '{"cmd":"echo request_user_input("}' } }]],
+  ])("blocks a prose question that only %s precedes or names", async (_, lines) => {
+    expect(await stop({ transcript_path: transcript(...lines) })).toMatchObject({ decision: "block" });
+  });
+
+  test("blocks a final message the event names even when the turn asked with the tool earlier", async () => {
+    const path = transcript(claudePrompt("Fix it"), claudeAsks, toolResult);
+    expect(await stop({ transcript_path: path, last_assistant_message: "Done. Should I also open the follow-up?" })).toMatchObject({ decision: "block" });
   });
 
   test("counts only the current turn's question tool calls", async () => {

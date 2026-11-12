@@ -809,6 +809,37 @@ describe("the Git guard", () => {
   });
 
   test.each([
+    ["gh extension exec", "gh extension exec stack push"],
+    ["gh ext exec", "gh ext exec stack submit"],
+    ["the extension binary itself", "~/.local/share/gh/extensions/gh-stack/gh-stack push"],
+    ["the alias wrapper gh stack alias makes", "gs sync"],
+    ["an alias wrapper with its own name", "gst push"],
+  ])("counts a stack push through %s", async (_, command) => {
+    const dir = await repo("feature");
+    stackOf(dir, sixOpen);
+    const home = homeWith(withGuards(), { "guards.person": "Robin" });
+    mkdirSync(join(home, ".local/bin"), { recursive: true });
+    for (const name of ["gs", "gst"]) writeFileSync(join(home, ".local/bin", name), '#!/bin/sh\nexec gh stack "$@"\n', { mode: 0o755 });
+    const denied = await preToolUse(home, "claude", bash(command, dir), { guardAsProcess: true });
+    expect(denied.refusal).toContain("force-pushes 6 branches at once");
+  });
+
+  test.each(["gh stack alias", "gh stack alias gst", "gh stack alias && gs push"])("refuses %s, a wrapper the guard cannot follow", async (command) => {
+    const denied = await preToolUse(homeWith(withGuards(), { "guards.person": "Robin" }), "claude", bash(command, await repo("feature")), { guardAsProcess: true });
+    expect(denied.refusal).toContain("gh stack alias");
+    expect(denied.refusal).toContain("ask Robin");
+  });
+
+  test("allows a program named gs that is not the gh stack wrapper", async () => {
+    const dir = await repo("feature");
+    stackOf(dir, sixOpen);
+    const home = homeWith(withGuards());
+    mkdirSync(join(home, ".local/bin"), { recursive: true });
+    writeFileSync(join(home, ".local/bin/gs"), "#!/bin/sh\nexec ghostscript \"$@\"\n", { mode: 0o755 });
+    expect(await preToolUse(home, "claude", bash("gs push", dir), { guardAsProcess: true })).toEqual({ code: 0, refusal: undefined });
+  });
+
+  test.each([
     ["a stack of five open branches", sixOpen.slice(1), "gh stack push"],
     ["a branch outside every stack", [["other", false]] as [string, boolean][], "gh stack push"],
     ["gh stack commands that push nothing", sixOpen, "gh stack view && gh stack checkout s2"],
