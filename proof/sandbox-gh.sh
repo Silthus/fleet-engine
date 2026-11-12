@@ -10,7 +10,7 @@ state=__STATE__
 engine_git=__ENGINE_GIT__
 login=fleet-proof
 email=fleet-proof@users.noreply.github.com
-scopes="'repo', 'read:org', 'admin:public_key', 'admin:ssh_signing_key'"
+scopes="'repo', 'read:org', 'admin:public_key', 'admin:ssh_signing_key', 'workflow'"
 
 printf '%s: gh %s\n' "$(id -un)" "$*" >>"$state/calls.log"
 

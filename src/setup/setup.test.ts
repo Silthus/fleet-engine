@@ -130,7 +130,7 @@ describe("fleet setup questions", () => {
     const github = temp.make("home-");
     const signedOut = await fleetSetup(github, ["--non-interactive", "--preset", "starter", "--plan", "claude", "--devbox", "skip"], [], fakeMachine(github, { github: 1 }));
     expect(signedOut.code).toBe(2);
-    expect(signedOut.output).toContain("  Needs you: Sign in to GitHub\n  Run: gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,admin:public_key,admin:ssh_signing_key, and open https://github.com/login/device");
+    expect(signedOut.output).toContain("  Needs you: Sign in to GitHub\n  Run: gh auth login --hostname github.com --git-protocol https --web --scopes repo,read:org,admin:public_key,admin:ssh_signing_key,workflow, and open https://github.com/login/device");
     expect(signedOut.output).toContain("  Sign in to GitHub: do it once in a terminal, then run fleet setup again");
 
     const claude = temp.make("home-");

@@ -53,3 +53,21 @@ export async function registerKey(run: CommandRunner, file: string, type: KeyTyp
   const result = await run(["gh", "ssh-key", "add", file, "--type", type, "--title", title]);
   return result.code === 0 ? undefined : failure(result);
 }
+
+export function tokenScopes(status: string) {
+  const line = status.split("\n").find((text) => text.includes("Token scopes:"));
+  return line === undefined ? undefined : [...line.matchAll(/'([^']+)'/g)].map((match) => match[1]!);
+}
+
+export async function workflowScopeMissing(run: CommandRunner) {
+  const status = await run(["gh", "auth", "status", "--active", "--hostname", "github.com"]);
+  if (status.code !== 0) return undefined;
+  const text = `${status.stdout}\n${status.stderr ?? ""}`;
+  const scopes = tokenScopes(text);
+  if (!scopes?.length || scopes.includes("workflow")) return undefined;
+  return { fromEnvironment: environmentToken(text) };
+}
+
+export function environmentToken(status: string) {
+  return /\((GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN)\)/.exec(status)?.[1];
+}
