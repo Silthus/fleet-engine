@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { withDirectories } from "./directories.ts";
 import { shortCluster } from "./kill.ts";
@@ -29,6 +30,9 @@ const forceReason = (person: string) => "Fleet blocked this command: it force-pu
 const burstReason = (count: number, person: string) => `Fleet blocked this command: it force-pushes ${count} branches at once, `
   + "and bursts like that make GitHub fail many CI runs at startup. "
   + `Push in batches of at most ${largestForcePush} branches, about a minute apart. If that does not fit, stop and ask ${person}.`;
+
+const aliasReason = (person: string) => "Fleet blocked this command: `gh stack alias` makes a wrapper command that hides gh stack pushes from this guard. "
+  + `Run \`gh stack\` itself. If you need the alias, stop and ask ${person}.`;
 
 export const githubSlug = (url: string) => url.match(/github\.com[:/]+([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i)?.slice(1, 3).join("/");
 
@@ -95,9 +99,34 @@ export function stackSize(catalog: string, branch: string): number | undefined {
 const stackPushActions = new Set(["push", "submit", "sync"]);
 const stackValued = new Set(["--base", "--remote", "-b", "-r", "-R", "--repo"]);
 
+const operandsOf = (args: string[]) => args.filter((arg, index) => !arg.startsWith("-") && !stackValued.has(args[index - 1] ?? ""));
+const extensionGroups = new Set(["extension", "extensions", "ext"]);
+const stackActions = new Set([...stackPushActions, "link", "alias"]);
+const largestWrapper = 4096;
+
+function stackWrapper(name: string): boolean {
+  const path = join(homedir(), ".local/bin", name);
+  try {
+    return statSync(path).size <= largestWrapper && /\bgh\s+stack\b/.test(readFileSync(path, "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+function stackArgs(name: string, args: string[]): string[] | undefined {
+  if (name === "gh") {
+    const [group, action, extension] = operandsOf(args);
+    if (extensionGroups.has(group ?? "") && action === "exec" && extension === "stack") return args.slice(args.indexOf("exec") + 1);
+    return group === "stack" ? args : undefined;
+  }
+  if (!stackActions.has(operandsOf(args)[0] ?? "")) return undefined;
+  return name === "gh-stack" || stackWrapper(name) ? ["stack", ...args] : undefined;
+}
+
+const makesAlias = (args: string[]) => operandsOf(args)[1] === "alias" && !args.includes("--remove");
+
 function stackPushes(args: string[], repo: () => Repo | undefined): number {
-  const operands = args.filter((arg, index) => !arg.startsWith("-") && !stackValued.has(args[index - 1] ?? ""));
-  const [group, action, ...rest] = operands;
+  const [group, action, ...rest] = operandsOf(args);
   if (group !== "stack") return 0;
   if (stackPushActions.has(action ?? "")) {
     const found = repo();
@@ -279,7 +308,9 @@ export function gitRisk(command: string, cwd: string, person: string, mainPushRe
   };
   let forced = 0;
   for (const [call, directory] of withDirectories(commandsIn(command), cwd)) {
-    if (call.name === "gh") forced += stackPushes(call.args, () => repoAt(directory, []));
+    const stack = stackArgs(call.name, call.args);
+    if (stack && makesAlias(stack)) return aliasReason(person);
+    if (stack) forced += stackPushes(stack, () => repoAt(directory, []));
     if (call.name !== "git") continue;
     const { dir, selectors, settings, sub, args } = gitCall(call.args, directory, call.env);
     if (sub !== "commit" && sub !== "push" && sub !== "merge") continue;

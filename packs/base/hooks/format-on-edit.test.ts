@@ -1,8 +1,8 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AvailableSource } from "../../../src/pack/types.ts";
-import { tempDirs } from "../../../src/testing/git.ts";
+import { spawnGit, tempDirs } from "../../../src/testing/git.ts";
 import { devbox, engineSource, resolveEngine, skillSources } from "../../../src/testing/packs.ts";
 import { formatCommands, formatEditedFile, type RunCommand } from "../lib/format-commands.ts";
 import { formatAfterEdit, hook } from "./format-on-edit.ts";
@@ -14,75 +14,81 @@ beforeAll(async () => (engine = await engineSource()));
 
 const root = "/repo";
 const config = {
-  "*.{md,mdx}": "bin/tool format:markdown",
-  "web/**/*.{ts,tsx}": "bin/tool format:js",
-  "*.py": ["bin/tool lint:python:fix", "bin/tool format:python", "uv run --no-sync ty check"],
-  "packages/agent/**/*.ts": "pnpm --dir packages/agent exec biome check --write",
-  "!(generated/*)*.rs": "cargo fmt --write",
+  "*.{md,mdx}": "prettier --write",
+  "web/**/*.{ts,tsx}": ["biome check --write", "eslint --fix"],
+  "*.py": ["ruff check --fix", "ruff format", "black", "uv run --no-sync ty check"],
+  "!(generated/*)*.rs": "rustfmt",
   "scripts/*.sh": "git add --chmod=+x",
-  "web/**/manifest.tsx": ["bin/tool format:js", "sh -c 'pnpm build && git add web/index.tsx'"],
-  "*.json": ["prettier --write", "bin/tool fix:json $(pwd)", "bin/tool format:json | tee log", "bin/tool format:json > log", "/usr/bin/git hook run --fix"],
+  "web/**/manifest.tsx": ["prettier --write", "sh -c 'pnpm build && git add web/index.tsx'"],
+  "*.json": ["prettier --write", "prettier --write $(pwd)", "prettier --write | tee log", "biome format --write > log"],
+  "*.go": ["gofmt -w", "/tmp/elsewhere/gofmt -w", "./gofmt -w"],
+  "*.toml": ["bunx evil-pkg --fix", "npx prettier --write", "pnpm dlx evil --write", "yarn dlx evil --write", "uvx ruff format", "pipx run black"],
+  "*.js": ["node scripts/format.js", "rm -rf format /x", "sh -c format", "bash -c format", "python3 -m black", "bin/tool format:js", "pnpm format", "bun run format"],
   "*.css": 7,
 };
-const commandsFor = (path: string) => formatCommands(config, root, `${root}/${path}`);
+const installed = async (name: string) => `/bin/${name}`;
+const commandsFor = (path: string) => formatCommands(config, root, `${root}/${path}`, installed);
+const commandsAt = async (path: string) => (await commandsFor(path)).map((command) => command.slice(0, -1).join(" "));
 
 describe("the lint-staged commands for an edited file", () => {
-  test("are the repository's commands that rewrite the file, matched as lint-staged matches, with the file last", () => {
-    expect(commandsFor("docs/guide.md")).toEqual([["bin/tool", "format:markdown", "/repo/docs/guide.md"]]);
-    expect(commandsFor("backend/models.py")).toEqual([
-      ["bin/tool", "lint:python:fix", "/repo/backend/models.py"],
-      ["bin/tool", "format:python", "/repo/backend/models.py"],
-    ]);
-    expect(commandsFor("packages/agent/src/run.ts")).toEqual([
-      ["pnpm", "--dir", "packages/agent", "exec", "biome", "check", "--write", "/repo/packages/agent/src/run.ts"],
-    ]);
-    expect(commandsFor("web/app/manifest.tsx")).toEqual([["bin/tool", "format:js", "/repo/web/app/manifest.tsx"]]);
+  test("are the repository's formatter commands, matched as lint-staged matches, resolved to the installed formatter, with the file last", async () => {
+    expect(await commandsFor("docs/guide.md")).toEqual([["/bin/prettier", "--write", "/repo/docs/guide.md"]]);
+    expect(await commandsAt("backend/models.py")).toEqual(["/bin/ruff check --fix", "/bin/ruff format", "/bin/black"]);
+    expect(await commandsAt("web/app/run.ts")).toEqual(["/bin/biome check --write", "/bin/eslint --fix"]);
+    expect(await commandsAt("web/app/manifest.tsx")).toEqual(["/bin/biome check --write", "/bin/eslint --fix", "/bin/prettier --write"]);
+    expect(await commandsAt("src/main.go")).toEqual(["/bin/gofmt -w"]);
   });
 
   test.each([
-    ["a shell snippet", "web/app/manifest.tsx", ["bin/tool format:js"]],
+    ["a shell snippet", "web/app/manifest.tsx", ["/bin/biome check --write", "/bin/eslint --fix", "/bin/prettier --write"]],
     ["a Git command", "scripts/setup.sh", []],
-    ["a pipe, a redirect, a substitution or a Git path", "data.json", ["prettier --write"]],
+    ["a pipe, a redirect or a substitution", "data.json", ["/bin/prettier --write"]],
+    ["a formatter named by a path", "src/main.go", ["/bin/gofmt -w"]],
+    ["a package runner", "Cargo.toml", []],
+    ["an interpreter, a shell, a script or any other program", "app.js", []],
     ["a negated pattern", "src/main.rs", []],
     ["a value that is no command", "site.css", []],
-    ["a file no pattern names", "web/app.go", []],
-  ])("leave out %s", (_, path, kept) => {
-    expect(commandsFor(path).map((command) => command.slice(0, -1).join(" "))).toEqual(kept);
+    ["a file no pattern names", "web/app.rb", []],
+  ])("leave out %s", async (_, path, kept) => {
+    expect(await commandsAt(path)).toEqual(kept);
+  });
+
+  test("leave out a formatter that is not installed", async () => {
+    expect(await formatCommands({ "*.md": "prettier --write" }, root, `${root}/a.md`, async () => undefined)).toEqual([]);
   });
 
   test("run in order, stop when the time budget is spent, and keep each failure", async () => {
-    const repo = repository({ "lint-staged": { "*.ts": ["bin/a --fix", "bin/b --write", "bin/c --write"] } });
+    const repo = await repository({ "lint-staged": { "*.ts": ["prettier --write", "eslint --fix", "biome check --write"] } });
     let clock = 0;
     const ran: string[] = [];
     const run: RunCommand = async (command, _cwd, timeoutMs) => {
       ran.push(`${command[0]} ${timeoutMs}`);
       clock += 40;
-      return command[0] === "bin/a" ? "a failed" : undefined;
+      return command[0] === "/bin/prettier" ? "prettier failed" : undefined;
     };
-    expect(await formatEditedFile(join(repo, "src/x.ts"), run, 70, () => clock)).toEqual(["a failed"]);
-    expect(ran).toEqual(["bin/a 70", "bin/b 30"]);
+    expect(await formatEditedFile(join(repo, "src/x.ts"), run, 70, () => clock, installed)).toEqual(["prettier failed"]);
+    expect(ran).toEqual(["/bin/prettier 70", "/bin/eslint 30"]);
   });
 });
 
-function repository(packageJson?: object, rc?: object) {
+async function repository(packageJson?: object, rc?: object) {
   const repo = temp.make("repo-");
-  mkdirSync(join(repo, ".git"));
+  await spawnGit(repo, "init", "-q");
   mkdirSync(join(repo, "src"));
   if (packageJson) writeFileSync(join(repo, "package.json"), JSON.stringify(packageJson));
   if (rc) writeFileSync(join(repo, ".lintstagedrc.json"), JSON.stringify(rc));
   return repo;
 }
 
-function tool(name: string, script: string) {
-  const path = join(temp.make("bin-"), name);
-  writeFileSync(path, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
-  return path;
+function tool(repo: string, name: string, script: string) {
+  mkdirSync(join(repo, "node_modules/.bin"), { recursive: true });
+  writeFileSync(join(repo, "node_modules/.bin", name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
 }
 
 describe("the format-on-edit hook", () => {
   test("lets the repository's formatter rewrite the file Claude edited, and stays quiet", async () => {
-    const formatter = tool("fmt", 'printf "formatted\\n" > "$2"');
-    const repo = repository(undefined, { "*.ts": `${formatter} --write` });
+    const repo = await repository(undefined, { "*.ts": "prettier --write" });
+    tool(repo, "prettier", 'printf "formatted\\n" > "$2"');
     const file = join(repo, "src/x.ts");
     writeFileSync(file, "messy");
     expect(await hook("claude", async () => JSON.stringify({ tool_name: "Edit", tool_input: { file_path: file } }), repo)).toEqual({ code: 0, stdout: "", stderr: "" });
@@ -90,8 +96,8 @@ describe("the format-on-edit hook", () => {
   });
 
   test("hands Claude what a fixer could not fix, from a repo config in package.json", async () => {
-    const fixer = tool("lint", 'echo "x.ts:1 unused variable" >&2; exit 1');
-    const repo = repository({ "lint-staged": { "*.ts": `${fixer} --fix` } });
+    const repo = await repository({ "lint-staged": { "*.ts": "eslint --fix" } });
+    tool(repo, "eslint", 'echo "x.ts:1 unused variable" >&2; exit 1');
     const file = join(repo, "src/x.ts");
     writeFileSync(file, "let a");
     const result = await hook("claude", async () => JSON.stringify({ tool_name: "Write", tool_input: { file_path: file } }), repo);
@@ -100,15 +106,33 @@ describe("the format-on-edit hook", () => {
     expect(result.stderr).toContain("x.ts:1 unused variable");
   });
 
-  test.each([
-    ["a tool that is not installed", "/nowhere/fmt --write"],
-    ["a tool whose shell says it is not found", `${"TOOL"} --write`],
-  ])("ignores %s", async (_, command) => {
-    const missing = tool("fmt", 'echo "fmt: npx: command not found" >&2; exit 1');
-    const repo = repository(undefined, { "*.ts": command.replace("TOOL", missing) });
+  test("ignores a formatter whose shell says a tool it needs is not found", async () => {
+    const repo = await repository(undefined, { "*.ts": "prettier --write" });
+    tool(repo, "prettier", 'echo "prettier: node: command not found" >&2; exit 1');
     const file = join(repo, "src/x.ts");
     writeFileSync(file, "x");
     expect(await formatAfterEdit({ tool_name: "Edit", tool_input: { file_path: file } })).toBeUndefined();
+  });
+
+  test("never runs a package runner or a program that is no formatter, even one the repository ships", async () => {
+    const repo = await repository(undefined, { "*.ts": ["bunx evil-pkg --fix", "node_modules/.bin/evil --fix", "evil --fix"] });
+    tool(repo, "bunx", "touch \"$0.ran\"");
+    tool(repo, "evil", "touch \"$0.ran\"");
+    const file = join(repo, "src/x.ts");
+    writeFileSync(file, "x");
+    expect(await hook("claude", async () => JSON.stringify({ tool_name: "Edit", tool_input: { file_path: file } }), repo)).toEqual({ code: 0, stdout: "", stderr: "" });
+    expect(existsSync(join(repo, "node_modules/.bin/bunx.ran"))).toBe(false);
+    expect(existsSync(join(repo, "node_modules/.bin/evil.ran"))).toBe(false);
+  });
+
+  test("never runs a formatter binary the repository commits to Git", async () => {
+    const repo = await repository(undefined, { "*.ts": "prettier --write" });
+    tool(repo, "prettier", "touch \"$0.ran\"");
+    await spawnGit(repo, "add", "-f", "node_modules/.bin/prettier");
+    const file = join(repo, "src/x.ts");
+    writeFileSync(file, "x");
+    expect(await formatAfterEdit({ tool_name: "Edit", tool_input: { file_path: file } })).toBeUndefined();
+    expect(existsSync(join(repo, "node_modules/.bin/prettier.ran"))).toBe(false);
   });
 
   test.each([

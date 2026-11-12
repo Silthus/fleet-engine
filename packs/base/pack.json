@@ -228,7 +228,7 @@
       "name": "Format on edit",
       "default": false,
       "sentence": "After Claude edits a file, the repository's own lint-staged formatters and fixers rewrite it, and Claude sees what they could not fix.",
-      "risk": "It runs the commands the repository names in its lint-staged config, as its commit hook would. It skips shell snippets, Git commands, and tools that are not installed."
+      "risk": "It runs after every edit in every repository, before you review the change, not only at commit. It runs only known formatters (Prettier, Biome, ESLint, Ruff, Black, gofmt, rustfmt and a few more) that the repository's lint-staged config names, from the repository's node_modules/.bin or your PATH. It never runs package runners such as bunx or npx, interpreters, shells, scripts, or Git. A formatter still loads the repository's own config, and some configs, such as eslint.config.js, are code."
     }
   ],
   "config": [
