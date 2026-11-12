@@ -2,11 +2,14 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isKeptForBoxes } from "../../../src/hub/names.ts";
 import { LockBusy, lockBox, tryLockBox, userWaitMs, withBoxLock, type HeldLock, type LockOptions } from "./box-lock.ts";
 import { assertBox, boxMarkerPath, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForward, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
 import type { Box } from "./coder.ts";
 import { quote, remoteFleet, type Machine } from "./machine.ts";
 import { writePrivateFile } from "../../mcp-gateway/lib/client.ts";
+import { readT3Threads, threadsOwningPrs } from "../../pull-requests/lib/pr-owners.ts";
+import type { ShellThread } from "../../base/lib/t3/index.ts";
 import * as registry from "./pool.ts";
 
 export type BoxHooks = { stopping?(box: string): void | Promise<void> };
@@ -359,7 +362,7 @@ async function unfinishedWorkOn(coder: BoxCoder, box: Workspace): Promise<string
   const answer = await coder.ssh(box.name, remoteFleet("box threads"));
   if (answer.code !== 0) return `it did not list its threads (exit ${answer.code}: ${(answer.stderr || answer.stdout).trim()})`;
   const unfinished = answer.stdout.trim();
-  if (unfinished) return `these threads still run or wait for an answer:\n${unfinished.split("\n").map((thread) => `  ${thread}`).join("\n")}\nFinish or stop them first`;
+  if (unfinished) return `these threads still run, wait for an answer, or own an open PR:\n${unfinished.split("\n").map((thread) => `  ${thread}`).join("\n")}\nFinish or stop them, and hand over their PRs, first`;
   return undefined;
 }
 
@@ -631,9 +634,11 @@ export function unfinishedThreads(state: Database, now: number): string[] {
   return rows.map((row) => row.thread);
 }
 
-export function threads(here: Machine): number {
+export async function threads(here: Machine, readThreads: (home: string) => Promise<ShellThread[] | undefined> = readT3Threads): Promise<number> {
   assertBox(here.workspace);
   for (const thread of readT3State(here.home, (state) => unfinishedThreads(state, here.now()), [] as string[])) here.print(thread);
+  const open = await readThreads(here.home);
+  for (const line of open ? threadsOwningPrs(open) : ["T3 did not answer, so which threads own open PRs is unknown"]) here.print(line);
   return 0;
 }
 
@@ -651,18 +656,26 @@ export async function idle(here: Machine): Promise<number> {
 }
 
 export type NightlyStep = { name: string; run(): number | Promise<number> };
-export type NightlyParts = { session(): Promise<number>; reap(): Promise<number>; grant(devbox: string): Promise<number>; refresh(): Promise<number> };
+export type NightlyParts = { session(): Promise<number>; reap(): Promise<number>; refresh(): Promise<number> };
+export type GrantParts = { session(): Promise<number>; grant(devbox: string): Promise<number> };
 
-export function nightlySteps(here: Machine, parts: NightlyParts): NightlyStep[] {
+export function nightlySteps(parts: NightlyParts): NightlyStep[] {
   return [
     { name: "check the Coder session", run: parts.session },
     { name: "reap", run: parts.reap },
-    ...here.devboxes.map((devbox) => ({ name: `grant ${devbox}`, run: () => parts.grant(devbox) })),
     { name: "refresh the pool", run: parts.refresh },
   ];
 }
 
-export async function nightly(steps: NightlyStep[], here: Machine): Promise<number> {
+export function grantSteps(devboxes: string[], hub: { alias: string; self: string }, parts: GrantParts): NightlyStep[] {
+  const targets = devboxes.filter((devbox) => devbox !== hub.alias && devbox !== hub.self && !isKeptForBoxes(devbox));
+  return [
+    { name: "check the Coder session", run: parts.session },
+    ...targets.map((devbox) => ({ name: `grant ${devbox}`, run: () => parts.grant(devbox) })),
+  ];
+}
+
+export async function nightly(steps: NightlyStep[], here: Pick<Machine, "now" | "say">): Promise<number> {
   let status = 0;
   for (const step of steps) {
     here.say(`${new Date(here.now()).toISOString()} ${step.name}`);

@@ -72,6 +72,16 @@ describe("loadPacks", () => {
     expect(loadPacks(sourceWith({ base: { ...base, workflows } }))).rejects.toThrow("workflow heavy has unknown need laptop");
   });
 
+  test("rejects a yield to a workflow the pack does not declare, to itself, in a cycle, or to a workflow that requires it", async () => {
+    const flow = (id: string, fields: { requires?: string[]; yields?: string[] } = {}) => ({ id, name: id, sentence: `${id}.`, default: true, ...fields });
+    const load = (...workflows: unknown[]) => loadPacks(sourceWith({ base: { ...base, workflows: [...base.workflows, ...workflows] } }));
+    expect(load(flow("direct", { yields: ["missing"] }))).rejects.toThrow("workflow direct yields to unknown workflow missing");
+    expect(load(flow("direct", { yields: ["direct"] }))).rejects.toThrow("workflow direct yields to itself");
+    expect(load(flow("a", { yields: ["b"] }), flow("b", { yields: ["c"] }), flow("c", { yields: ["a"] }))).rejects.toThrow("workflows yield in a cycle: a, b, c, a");
+    expect(load(flow("direct", { yields: ["routed"] }), flow("routed", { requires: ["step"] }), flow("step", { requires: ["direct"] }))).rejects.toThrow("workflow direct yields to routed, which needs direct");
+    expect((await load(flow("a", { yields: ["b"] }), flow("b", { yields: ["c"] }), flow("c", { requires: ["heavy"] })))[0]?.manifest.workflows?.map((workflow) => workflow.id)).toEqual(["heavy", "a", "b", "c"]);
+  });
+
   test("rejects an item tied to a workflow the pack does not declare", async () => {
     const jobs = [{ ...base.jobs[0], workflow: "missing" }];
     expect(loadPacks(sourceWith({ base: { ...base, jobs } }))).rejects.toThrow("jobs prune names unknown workflow missing");

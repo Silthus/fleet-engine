@@ -29,6 +29,8 @@ export type Workflow = {
   needs?: Need[];
   /** Workflows that must be on for this one to be on. */
   requires?: string[];
+  /** Workflows of the same pack that this one gives way to: it stays off while one of them is on. */
+  yields?: string[];
   default: boolean;
   settings?: string[];
   risk?: string;

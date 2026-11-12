@@ -279,16 +279,39 @@ function workflowStates(profile: Profile, machine: MachineFile, order: Candidate
     const reason = !chosen ? "turned off" : unmet.length ? `needs ${unmet.join(", ")}` : undefined;
     return { id: workflow.id, pack, active: !reason, ...(reason ? { reason } : {}) };
   });
-  let states: Plan["workflows"] = own;
-  for (;;) {
+  const settle = (start: Plan["workflows"]) => {
+    let states = start;
+    for (;;) {
+      const on = activeIds(states);
+      const next = states.map((state, index) => {
+        const missing = state.active ? (workflows[index]!.workflow.requires ?? []).filter((id) => !on.has(id)) : [];
+        return missing.length ? { id: state.id, pack: state.pack, active: false, reason: `needs workflow ${missing.join(", ")}` } : state;
+      });
+      if (next.every((state, index) => state === states[index])) return states;
+      states = next;
+    }
+  };
+  // A workflow yields only after every workflow it yields to has settled, so a chain resolves from its end.
+  const ranks = new Map<string, number>();
+  const rank = (id: string): number => {
+    const known = ranks.get(id);
+    if (known !== undefined) return known;
+    const yields = workflows.find(({ workflow }) => workflow.id === id)?.workflow.yields ?? [];
+    const value = 1 + Math.max(-1, ...yields.map(rank));
+    ranks.set(id, value);
+    return value;
+  };
+  let states = settle(own);
+  const top = Math.max(0, ...workflows.map(({ workflow }) => rank(workflow.id)));
+  for (let level = 1; level <= top; level++) {
     const on = activeIds(states);
-    const next = states.map((state, index) => {
-      const missing = state.active ? (workflows[index]!.workflow.requires ?? []).filter((id) => !on.has(id)) : [];
-      return missing.length ? { id: state.id, pack: state.pack, active: false, reason: `needs workflow ${missing.join(", ")}` } : state;
-    });
-    if (next.every((state, index) => state === states[index])) return states;
-    states = next;
+    states = settle(states.map((state, index) => {
+      const { workflow } = workflows[index]!;
+      const winners = state.active && rank(workflow.id) === level ? (workflow.yields ?? []).filter((id) => on.has(id)) : [];
+      return winners.length ? { id: state.id, pack: state.pack, active: false, reason: `yields to workflow ${winners.join(", ")}` } : state;
+    }));
   }
+  return states;
 }
 
 function activeSettings(order: Candidate[], active: Set<string>): Array<PackSetting & { pack: string }> {

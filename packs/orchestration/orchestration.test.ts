@@ -34,7 +34,7 @@ describe("the Orchestration pack", () => {
   test("keeps maps and side threads on, the loops off, and asks nothing by default", () => {
     const result = withPack({}, devbox);
     const orchestration = result.workflows.filter((workflow) => workflow.pack === "orchestration");
-    expect(orchestration.filter((workflow) => workflow.active).map((workflow) => workflow.id)).toEqual(["maps", "side-threads"]);
+    expect(orchestration.filter((workflow) => workflow.active).map((workflow) => workflow.id)).toEqual(["maps", "side-threads", "question-guard"]);
     expect(orchestration.filter((workflow) => loops.includes(workflow.id)).map((workflow) => workflow.reason)).toEqual(["turned off", "turned off", "turned off"]);
     expect(result.jobs.filter((job) => job.pack === "orchestration")).toEqual([]);
     expect(result.unanswered).toEqual([]);

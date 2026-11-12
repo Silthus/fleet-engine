@@ -230,8 +230,14 @@ async function admin(args: string[], ctx: Context) {
   const apps = await upstreams();
   if (mode === "slack-bridge") return bridgeSignIn ? apps.signInApp(hub, await slackApp()) : ((await apps.registerUpstream(hub, await slackApp())), 0);
   if (mode === "sign-in" && name !== undefined) {
+    const byHand = (await (await import("./lib/declared.ts")).declaredUpstreams(hub.home)).flatMap((item) => (item.kind === "oauth" && item.loopback ? [item] : []));
+    const server = byHand.find((item) => item.name === name);
+    if (server) {
+      const { firstLine, signInLoopback } = await import("./lib/loopback.ts");
+      return signInLoopback(hub, server, () => firstLine(ctx.stdin()));
+    }
     const app = (await apps.codexApps(hub.home)).find((item) => item.name === name);
-    if (!app) return ctx.print(`Name an app that signs in through ChatGPT: ${(await apps.codexApps(hub.home)).map((item) => item.name).join(", ")}.`), 2;
+    if (!app) return ctx.print(`Name an upstream that signs in on its own: ${[...(await apps.codexApps(hub.home)), ...byHand].map((item) => item.name).join(", ")}.`), 2;
     return apps.signInApp(hub, app);
   }
   const gateway = await import("./lib/hub.ts");
