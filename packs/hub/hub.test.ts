@@ -141,7 +141,7 @@ describe("the Hub pack", () => {
     const rejecting = (async () => Response.json({ message: "API key expired." }, { status: 401 })) as unknown as typeof fetch;
     const { machine } = fakeMachine(home, { self: "my-hub", isHub: true });
     const coder = new Coder({ home, env: {}, coderUrl: "https://coder.example.com", template: "linux", fetch: rejecting });
-    const run = async (command: string[]) => (command.join(" ").endsWith("fleet box session") ? boxCommand(["session"], { machine: () => { throw new Error("Boxes is off."); }, coder: () => coder, tokens: () => ({ here: machine, coder }), readStdin: async () => "", hooks: {} }) : 0);
+    const run = async (command: string[]) => (command.join(" ").endsWith("fleet box session") ? boxCommand(["session"], { machine: () => { throw new Error("Boxes is off."); }, coder: () => coder, tokens: () => ({ here: machine, hub: "my-hub", coder }), print: machine.print, readStdin: async () => "", hooks: {} }) : 0);
     const report = await check(resolveEngine([...sources, coderTeam()], { settings: answers, packs: ["hub", "posthog"], workflows: { "linked-hub": false } }, hub), { home, adapters: [], run });
     const finding = report.findings.find((item) => item.id === "check:coder-session");
     expect(report.ok).toBe(false);

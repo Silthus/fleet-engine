@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isKeptForBoxes } from "../../../src/hub/names.ts";
 import { LockBusy, lockBox, tryLockBox, userWaitMs, withBoxLock, type HeldLock, type LockOptions } from "./box-lock.ts";
 import { assertBox, boxMarkerPath, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForward, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
 import type { Box } from "./coder.ts";
@@ -662,10 +663,11 @@ export function nightlySteps(parts: NightlyParts): NightlyStep[] {
   ];
 }
 
-export function grantSteps(devboxes: string[], parts: GrantParts): NightlyStep[] {
+export function grantSteps(devboxes: string[], hub: { alias: string; self: string }, parts: GrantParts): NightlyStep[] {
+  const targets = devboxes.filter((devbox) => devbox !== hub.alias && devbox !== hub.self && !isKeptForBoxes(devbox));
   return [
     { name: "check the Coder session", run: parts.session },
-    ...devboxes.map((devbox) => ({ name: `grant ${devbox}`, run: () => parts.grant(devbox) })),
+    ...targets.map((devbox) => ({ name: `grant ${devbox}`, run: () => parts.grant(devbox) })),
   ];
 }
 

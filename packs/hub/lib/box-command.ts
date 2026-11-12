@@ -8,7 +8,8 @@ import * as registry from "./pool.ts";
 
 export type CommandCoder = BoxCoder & Pick<Coder, "env" | "token" | "sessionFrom" | "sessionKey">;
 export type TokenCoder = Pick<Coder, "env" | "token" | "sessionFrom" | "sessionKey">;
-export type BoxDeps = { machine(): Machine; coder(here: Machine): CommandCoder; tokens(): { here: PeerMachine; coder: TokenCoder }; readStdin(): Promise<string>; hooks: BoxHooks };
+export type TokenDeps = { here: PeerMachine; hub: string; coder: TokenCoder };
+export type BoxDeps = { machine(): Machine; coder(here: Machine): CommandCoder; tokens(): TokenDeps; print(line: string): void; readStdin(): Promise<string>; hooks: BoxHooks };
 
 const usage = `Usage: fleet box spawn [<name>] [--new]
                                    Claim a stopped box from the pool, or create box-<name>; set it up like a devbox,
@@ -82,11 +83,11 @@ function valid(args: string[]): boolean {
 
 export async function boxCommand(args: string[], deps: BoxDeps): Promise<number> {
   const [command] = args;
-  if (command === "help" || command === "--help" || command === "-h") return deps.machine().print(usage), 0;
+  if (command === "help" || command === "--help" || command === "-h") return deps.print(usage), 0;
   const { plain, devbox, valid: validCaller } = caller(args);
-  if (validCaller && valid(plain) && tokenCommands.includes(command!)) return tokenCommand(plain, deps.tokens());
+  if (!validCaller || !valid(plain)) return deps.print(usage), 2;
+  if (tokenCommands.includes(command!)) return tokenCommand(plain, deps.tokens());
   const here = deps.machine();
-  if (!validCaller || !valid(plain)) return here.print(usage), 2;
   const [, name, ...rest] = plain;
   if (onHub.includes(command!) && !here.isHub) return here.toHub(["box", ...plain, "--for", devbox ?? here.self]);
   if (hubOnly.includes(command!)) requireHub(here.home, command!);
@@ -129,11 +130,11 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
   }
 }
 
-async function tokenCommand([command, name, ...rest]: string[], { here, coder }: { here: PeerMachine; coder: TokenCoder }): Promise<number> {
+async function tokenCommand([command, name, ...rest]: string[], { here, hub, coder }: TokenDeps): Promise<number> {
   requireHub(here.home, command!);
   const session = () => checkSession(coder, { now: here.now(), print: here.print });
   const grantTo = (devbox: string, ifExpiring: boolean) => grant(coder, devbox, { ifExpiring, now: here.now(), onDevbox: here.onPeer, print: here.print });
   if (command === "session") return session();
   if (command === "grant") return grantTo(name!, rest.includes("--if-expiring"));
-  return nightly(grantSteps(here.devboxes, { session, grant: (devbox) => grantTo(devbox, true) }), here);
+  return nightly(grantSteps(here.devboxes, { alias: hub, self: here.self }, { session, grant: (devbox) => grantTo(devbox, true) }), here);
 }

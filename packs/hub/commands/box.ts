@@ -11,7 +11,8 @@ const coderOf = (here: Machine) => new Coder({ home: homedir(), env: Bun.env, co
 await runCommand(() => boxCommand(Bun.argv.slice(2), {
   machine: () => thisMachine(),
   coder: coderOf,
-  tokens: () => ({ here: peerMachine(), coder: new Coder({ home: homedir(), env: Bun.env, coderUrl: stringSetting("hub.coderUrl"), template: optionalStringSetting("hub.boxTemplate") ?? "" }) }),
+  tokens: () => ({ here: peerMachine(), hub: stringSetting("hub.alias"), coder: new Coder({ home: homedir(), env: Bun.env, coderUrl: stringSetting("hub.coderUrl"), template: optionalStringSetting("hub.boxTemplate") ?? "" }) }),
+  print: (line) => console.log(line),
   readStdin: () => Bun.stdin.text(),
   hooks: dreamHooks(Bun.env, homedir(), () => coderOf(thisMachine())),
 }), "fleet box");

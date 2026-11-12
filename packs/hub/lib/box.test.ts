@@ -27,7 +27,7 @@ function hubHome() {
 
 const onHub = (home: string, fields: Partial<Machine> = {}) => fakeMachine(home, { self: "my-hub", isHub: true, peers: ["devbox-1", "devbox-2"], ...fields });
 const answers = (claim: () => string, threads = () => "") => async (_box: string, command: string) => ({ ...ok, stdout: command.startsWith("cut ") ? `${claim()}\n` : command.includes("box threads") ? threads() : command.includes("t3 pair") ? "pair-code\n" : "" });
-const depsFor = (machine: Machine, coder: BoxDeps["coder"]): BoxDeps => ({ machine: () => machine, coder, tokens: () => ({ here: machine, coder: coder(machine) }), readStdin: async () => "", hooks: {} });
+const depsFor = (machine: Machine, coder: BoxDeps["coder"]): BoxDeps => ({ machine: () => machine, coder, tokens: () => ({ here: machine, hub: "my-hub", coder: coder(machine) }), print: machine.print, readStdin: async () => "", hooks: {} });
 
 test("release refuses a workspace that is not a box and deletes nothing", async () => {
   const { machine } = fakeMachine(temp.make("fleet-box-"));
@@ -318,7 +318,7 @@ describe("fleet box grants, while Boxes is off", () => {
   const now = start;
   const day = 86_400_000;
   const boxesOff = () => { throw new Error("Boxes is off."); };
-  function grantsOn(fields: { session?: "valid" | "rejected"; failWriteOn?: string } = {}) {
+  function grantsOn(fields: { session?: "valid" | "rejected"; failWriteOn?: string; devboxes?: string[] } = {}) {
     const home = hubHome();
     const created: string[] = [];
     const tokens = [
@@ -331,13 +331,33 @@ describe("fleet box grants, while Boxes is off", () => {
       sessionKey: async () => (fields.session === "rejected" ? { rejected: true as const } : { rejected: false as const, expiresAt: now + 30 * day, lifetimeMs: 90 * day }),
       token: async (args: string[]) => (args[0] === "list" ? JSON.stringify(tokens) : args[0] === "create" ? (created.push(args[2]!), "new-secret\n") : ""),
     };
+    const reached: string[] = [];
     const { machine, lines } = fakeMachine(home, {
-      self: "my-hub", isHub: true, devboxes: ["devbox-1", "devbox-2"],
-      onPeer: async (alias, command) => ({ ...ok, code: alias === fields.failWriteOn && command.startsWith("umask") ? 255 : 0, stdout: command.startsWith("cut ") ? `${alias === "devbox-1" ? "k1" : "k2"}\n` : "" }),
+      self: "my-hub", isHub: true, devboxes: fields.devboxes ?? ["devbox-1", "devbox-2"],
+      onPeer: async (alias, command) => (reached.push(alias), { ...ok, code: alias === fields.failWriteOn && command.startsWith("umask") ? 255 : 0, stdout: command.startsWith("cut ") ? `${alias === "devbox-1" ? "k1" : "k2"}\n` : "" }),
     });
-    const deps: BoxDeps = { machine: boxesOff, coder: boxesOff, tokens: () => ({ here: machine, coder }), readStdin: async () => "", hooks: {} };
-    return { deps, created, lines };
+    const deps: BoxDeps = { machine: boxesOff, coder: boxesOff, tokens: () => ({ here: machine, hub: "hub", coder }), print: (line) => lines.push(line), readStdin: async () => "", hooks: {} };
+    return { deps, created, lines, reached };
   }
+
+  test("grants no token to the hub, under its alias or its own name, nor to a box, when the profile lists them as devboxes", async () => {
+    const { deps, created, lines, reached } = grantsOn({ devboxes: ["devbox-1", "hub", "my-hub", "box-lane", "devbox-2"] });
+    expect(await boxCommand(["grants"], deps)).toBe(0);
+    expect(lines.filter((line) => line.includes(" grant "))).toEqual([expect.stringMatching(/ grant devbox-1$/), expect.stringMatching(/ grant devbox-2$/)]);
+    expect([...new Set(reached)]).toEqual(["devbox-1", "devbox-2"]);
+    expect(created).toEqual([expect.stringMatching(/^fleet-devbox-1-/)]);
+  });
+
+  test("help and a mistyped token command print the usage, not that Boxes is off", async () => {
+    const { deps, lines } = grantsOn();
+    expect(await boxCommand(["help"], deps)).toBe(0);
+    expect(lines.at(-1)).toStartWith("Usage: fleet box");
+    for (const args of [["grant"], ["grant", "--if-expiring"], ["grants", "devbox-1"], ["session", "now"]]) {
+      lines.length = 0;
+      expect([args.join(" "), await boxCommand(args, deps)]).toEqual([args.join(" "), 2]);
+      expect(lines).toEqual([expect.stringMatching(/^Usage: fleet box/)]);
+    }
+  });
 
   test("renews only the devbox token that expires within a week, after it checks the hub's Coder session", async () => {
     const { deps, created, lines } = grantsOn();
@@ -362,6 +382,28 @@ describe("fleet box grants, while Boxes is off", () => {
     expect(await boxCommand(["grant", "devbox-2"], deps)).toBe(0);
     expect(created).toEqual([expect.stringMatching(/^fleet-devbox-2-/)]);
   });
+});
+
+test("fleet box grants runs on a hub with Boxes off and only the Coder address set, and grants each devbox but the hub and boxes", async () => {
+  const home = temp.make("fleet-hub-");
+  writeHome(home, { ".config/fleet/machine.json": JSON.stringify({ schema: 1, role: "hub", name: "my-hub" }) });
+  const profile = temp.make("fleet-profile-");
+  writeHome(profile, { "fleet.json": JSON.stringify({ schema: 1, packs: ["hub"], workflows: {}, hub: "hub", devboxes: ["devbox-1", "hub", "my-hub", "box-lane"] }) });
+  const bin = temp.make("fleet-bin-");
+  const peers = temp.make("fleet-peers-");
+  writeHome(bin, {
+    coder: `#!/bin/sh\ncase "$2" in list) echo '[]' ;; create) echo new-secret ;; esac\n`,
+    ssh: `#!/bin/sh\nmkdir -p "${peers}/$7" && HOME="${peers}/$7" exec sh -c "$8"\n`,
+  });
+  for (const name of ["coder", "ssh"]) chmodSync(join(bin, name), 0o755);
+  const { CODER_SESSION_TOKEN: _token, CODER_URL: _url, ...outer } = Bun.env;
+  const env = { ...outer, HOME: home, PATH: `${bin}:${Bun.env.PATH}`, FLEET_PROFILE_DIR: profile, FLEET_SETTINGS: JSON.stringify({ "hub.alias": "hub", "hub.coderUrl": "https://coder.example.com" }) };
+  const ran = await spawnAsync(["bun", join(import.meta.dir, "../commands/box.ts"), "grants"], { env });
+  expect([ran.exitCode, `${ran.stdout}${ran.stderr}`]).toEqual([0, expect.not.stringContaining("Boxes is off")]);
+  expect(readdirSync(peers)).toEqual(["devbox-1"]);
+  expect(readFileSync(join(peers, "devbox-1/.config/fleet/coder-session"), "utf8")).toBe("new-secret\n");
+  expect(readFileSync(join(peers, "devbox-1/.config/fleet/coder-url"), "utf8")).toBe("https://coder.example.com\n");
+  expect(existsSync(join(home, ".config/fleet/coder-session"))).toBe(false);
 });
 
 test("fleet box token saves the pasted token with mode 0600, and refuses an empty paste", async () => {
