@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "name": "integrations",
+  "title": "Integrations",
+  "summary": "Claude Code and Codex get the official GitHub, Context7, and Convex plugins, and Claude can hand work to Codex.",
+  "day": "Agents read and change your GitHub issues and pull requests, look up current library docs before they write code, and inspect your Convex deployments. With both AI plans, Claude hands a task or a review to Codex.",
+  "cost": "Each plugin signs in once on each machine, and fleet doctor says how: a GitHub token for Claude, Context7 through its own sign-in or an API key, and Convex through its CLI. Codex's GitHub and Convex plugins use your ChatGPT sign-in. Convex starts off.",
+  "risk": "The plugins act with the accounts you sign in with. Fleet removes only plugins that it installed, and keeps a plugin you turn off in your settings off.",
+  "workflows": [
+    {
+      "id": "github",
+      "name": "GitHub",
+      "default": true,
+      "sentence": "Agents read and change issues and pull requests through GitHub's official plugin."
+    },
+    {
+      "id": "context7",
+      "name": "Context7",
+      "default": true,
+      "sentence": "Agents look up current library documentation through Context7."
+    },
+    {
+      "id": "convex",
+      "name": "Convex",
+      "default": false,
+      "sentence": "Agents get Convex guidance and inspect the deployment of the project they work in."
+    },
+    {
+      "id": "codex-bridge",
+      "name": "Codex from Claude",
+      "default": true,
+      "sentence": "Claude Code hands a task, a diagnosis, or a review to Codex through OpenAI's Codex plugin."
+    }
+  ],
+  "config": [
+    {
+      "provider": "claude",
+      "key": "enabledPlugins.github@claude-plugins-official",
+      "value": true,
+      "workflow": "github",
+      "plans": [
+        "claude",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "plugins.\"github@openai-curated-remote\".enabled",
+      "value": true,
+      "workflow": "github",
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "claude",
+      "key": "enabledPlugins.context7@claude-plugins-official",
+      "value": true,
+      "workflow": "context7",
+      "plans": [
+        "claude",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "mcp_servers.context7",
+      "value": {
+        "url": "https://mcp.context7.com/mcp",
+        "env_http_headers": {
+          "CONTEXT7_API_KEY": "CONTEXT7_API_KEY"
+        }
+      },
+      "workflow": "context7",
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "claude",
+      "key": "enabledPlugins.convex@claude-plugins-official",
+      "value": true,
+      "workflow": "convex",
+      "plans": [
+        "claude",
+        "both"
+      ]
+    },
+    {
+      "provider": "codex",
+      "key": "plugins.\"convex@openai-curated-remote\".enabled",
+      "value": true,
+      "workflow": "convex",
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "provider": "claude",
+      "key": "extraKnownMarketplaces.openai-codex",
+      "value": {
+        "source": {
+          "source": "github",
+          "repo": "openai/codex-plugin-cc"
+        }
+      },
+      "workflow": "codex-bridge",
+      "plans": [
+        "both"
+      ]
+    },
+    {
+      "provider": "claude",
+      "key": "enabledPlugins.codex@openai-codex",
+      "value": true,
+      "workflow": "codex-bridge",
+      "plans": [
+        "both"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "github-token",
+      "run": [
+        "sh",
+        "-c",
+        "claude mcp get plugin:github:github 2>/dev/null | grep -q 'Status: .*Connected'"
+      ],
+      "say": "Claude's GitHub plugin cannot reach GitHub. It reads a token from GITHUB_PERSONAL_ACCESS_TOKEN in the environment that starts Claude Code. Create a fine-grained, read-only token on GitHub for the repositories you work in, export it in your shell profile, and start a new shell. You can export \"$(gh auth token)\" instead, but that puts your broad gh token into the environment of every agent you start. This check runs in fleet doctor's shell; an app that starts Claude Code with its own environment, such as T3 Code, needs the token there too. Fleet never stores the token.",
+      "workflow": "github",
+      "plans": [
+        "claude",
+        "both"
+      ]
+    },
+    {
+      "id": "context7-claude",
+      "run": [
+        "sh",
+        "-c",
+        "claude mcp get plugin:context7:context7 2>/dev/null | grep -q 'Status: .*Connected'"
+      ],
+      "say": "Claude's Context7 plugin is not signed in. In Claude Code, run /mcp, choose plugin:context7:context7, and authenticate.",
+      "workflow": "context7",
+      "plans": [
+        "claude",
+        "both"
+      ]
+    },
+    {
+      "id": "context7-codex",
+      "run": [
+        "sh",
+        "-c",
+        "[ -n \"$CONTEXT7_API_KEY\" ] || codex mcp list 2>/dev/null | awk '$1 == \"context7\" { print $NF }' | grep -qx OAuth"
+      ],
+      "say": "Codex cannot reach Context7. Run codex mcp login context7, or export CONTEXT7_API_KEY in your shell profile: Codex sends it to Context7 as a header and Fleet never writes it into config.toml.",
+      "workflow": "context7",
+      "plans": [
+        "codex",
+        "both"
+      ]
+    },
+    {
+      "id": "convex-login",
+      "run": [
+        "sh",
+        "-c",
+        "test -s \"$HOME/.convex/config.json\""
+      ],
+      "say": "Convex is not signed in on this machine. In a Convex project, run npx convex login. Each project then picks its own deployment, and agents should never point at a production deployment by default.",
+      "workflow": "convex"
+    }
+  ]
+}

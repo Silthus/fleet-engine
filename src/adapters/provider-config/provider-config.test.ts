@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import type { ConfigEntry, Plan } from "../../pack/types.ts";
 import { apply, check, filesAdapter } from "../../reconciler/apply.ts";
 import { tempDirs } from "../../testing/git.ts";
+import { spawnRunner } from "../run.ts";
 import { providerConfigAdapter, type CommandRunner } from "./adapter.ts";
 
 const temp = tempDirs();
@@ -638,7 +639,7 @@ describe("Codex plugins", () => {
       if (command[0] === "codex" && command[2] === "remove") installed.delete(command[3]!);
       return { code: 0, stdout: "{}" };
     };
-    return { calls, installed, adapter: providerConfigAdapter({ run }), changes: () => calls.filter((call) => call[0] === "codex" && call[2] !== "list") };
+    return { calls, installed, run, adapter: providerConfigAdapter({ run }), changes: () => calls.filter((call) => call[0] === "codex" && call[2] !== "list") };
   }
 
   test("installs an enabled plugin once, records Fleet's ownership, and removes it when no pack enables it", async () => {
@@ -791,46 +792,74 @@ describe("Codex plugins", () => {
     expect(read(home, pluginRecord).codex).toHaveLength(1);
   });
 
-  test("keeps the ownership the earlier Fleet recorded, and leaves the earlier Fleet's record as it was: it removes the plugins that Fleet installed and keeps the user's", async () => {
+  test("leaves the plugins the earlier Fleet installed alone until a pack enables one again, then owns that one, and never writes the earlier Fleet's record", async () => {
     const home = temp.make("home-");
+    const slack = "slack@openai-curated-remote";
+    const context7 = "context7@claude-plugins-official";
     write(home, earlierRecord, { version: 1, installed: [
       { provider: "codex", id: github, version: "1.0.0", enabled: true },
-      { provider: "codex", id: "slack@openai-curated-remote", version: "", enabled: false, pending: true },
-      { provider: "claude", id: "context7@claude-plugins-official", version: "1.0.0", enabled: true },
+      { provider: "codex", id: slack, version: "1.0.0", enabled: true },
+      { provider: "claude", id: context7, version: "1.0.0", enabled: true },
     ] });
-    const calls: string[][] = [];
-    const codexInstalled = [{ pluginId: github, version: "1.0.0", enabled: true }, { pluginId: "mine@team-market", version: "1.0.0", enabled: true }];
-    const claudeInstalled = ["context7@claude-plugins-official", "notes@team-market"];
-    const adapter = providerConfigAdapter({
-      run: async (command) => {
-        calls.push(command);
-        const words = command.join(" ");
-        if (words === "codex plugin list --json") return { code: 0, stdout: JSON.stringify({ installed: codexInstalled }) };
-        if (words === "claude plugin list --json") return { code: 0, stdout: JSON.stringify(claudeInstalled.map((id) => ({ id, scope: "user", version: "1.0.0", enabled: true }))) };
-        return { code: 0, stdout: "{}" };
-      },
-    });
     const earlier = readFileSync(join(home, earlierRecord));
+    const cli = codexCli({ [github]: { version: "1.0.0", enabled: true }, [slack]: { version: "1.0.0", enabled: true } });
+    const claudeInstalled = [context7];
+    const run: CommandRunner = async (command, options) => {
+      if (command[0] !== "claude") return cli.run(command, options);
+      cli.calls.push(command);
+      return command[2] === "list" ? { code: 0, stdout: JSON.stringify(claudeInstalled.map((id) => ({ id, scope: "user", version: "1.0.0", enabled: true }))) } : { code: 0, stdout: "" };
+    };
+    const adapter = providerConfigAdapter({ run });
+    const changes = () => cli.calls.filter((call) => call[2] !== "list");
+
+    await apply(plan([wants()]), { home, adapters: [adapter] });
+    expect(changes()).toEqual([]);
+    expect([...cli.installed.keys()].sort()).toEqual([github, slack]);
+
     await apply(plan(), { home, adapters: [adapter] });
-    expect(calls.filter((call) => !call.includes("list"))).toEqual([
-      ["claude", "plugin", "uninstall", "context7@claude-plugins-official", "--scope", "user", "--keep-data"],
-      ["codex", "plugin", "remove", github, "--json"],
-    ]);
-    expect(read(home, pluginRecord)).toEqual({ claude: [] });
+    expect(changes()).toEqual([["codex", "plugin", "remove", github, "--json"]]);
+    expect([...cli.installed.keys()]).toEqual([slack]);
+    expect(claudeInstalled).toEqual([context7]);
     expect(readFileSync(join(home, earlierRecord)).equals(earlier)).toBe(true);
-    calls.length = 0;
-    await apply(plan(), { home, adapters: [adapter] });
-    expect(calls.filter((call) => !call.includes("list"))).toEqual([]);
   });
 
   test("keeps a Claude plugin the earlier Fleet installed when its enabled state changed outside Fleet", async () => {
     const home = temp.make("home-");
-    write(home, earlierRecord, { version: 1, installed: [{ provider: "claude", id: "context7@claude-plugins-official", version: "1.0.0", enabled: true }] });
-    write(home, claude, { enabledPlugins: { "context7@claude-plugins-official": false } });
-    const cli = claudeCli(["context7@claude-plugins-official"]);
+    const context7 = "context7@claude-plugins-official";
+    write(home, earlierRecord, { version: 1, installed: [{ provider: "claude", id: context7, version: "1.0.0", enabled: true }] });
+    write(home, claude, { enabledPlugins: { [context7]: false } });
+    const cli = claudeCli([context7]);
+    await apply(plan([{ provider: "claude", key: `enabledPlugins.${context7}`, value: true }]), { home, adapters: [cli.adapter] });
     const report = await apply(plan(), { home, adapters: [cli.adapter] });
     expect(cli.calls.some((call) => call[2] === "uninstall")).toBe(false);
-    expect(report.findings.map((finding) => finding.say)).toContainEqual("Kept the Claude plugin context7@claude-plugins-official, which no pack enables any more, because it changed outside Fleet. It is yours now.");
+    expect(report.findings.map((finding) => finding.say)).toContainEqual(`Kept the Claude plugin ${context7}, which no pack enables any more, because it changed outside Fleet. It is yours now.`);
+  });
+
+  test("runs Codex outside any CODEX_HOME, so its plugins land in the home Fleet applies to", async () => {
+    const home = temp.make("home-");
+    const elsewhere = temp.make("codex-home-");
+    const bin = temp.make("bin-");
+    write(bin, "codex", `#!/bin/sh
+dir="\${CODEX_HOME:-$HOME/.codex}/plugins"
+case "$2" in
+  list) printf '{"installed":['; sep=; for f in "$dir"/*; do [ -e "$f" ] || continue; printf '%s{"pluginId":"%s","version":"1.0.0","enabled":true}' "$sep" "\${f##*/}"; sep=,; done; echo ']}' ;;
+  add) mkdir -p "$dir" && : >"$dir/$3" && echo '{}' ;;
+  remove) rm -f "$dir/$3" && echo '{}' ;;
+  *) exit 2 ;;
+esac
+`);
+    chmodSync(join(bin, "codex"), 0o755);
+    const run: CommandRunner = (command, options) => spawnRunner(command[0] === "codex" ? [join(bin, "codex"), ...command.slice(1)] : ["false"], options);
+    const before = Bun.env.CODEX_HOME;
+    Bun.env.CODEX_HOME = elsewhere;
+    try {
+      await apply(plan([wants()]), { home, adapters: [providerConfigAdapter({ run })] });
+    } finally {
+      if (before === undefined) delete Bun.env.CODEX_HOME;
+      else Bun.env.CODEX_HOME = before;
+    }
+    expect(readdirSync(join(home, ".codex/plugins"))).toEqual([github]);
+    expect(existsSync(join(elsewhere, "plugins"))).toBe(false);
   });
 
   test("refuses a plugin record it cannot read, and changes no plugin", async () => {
