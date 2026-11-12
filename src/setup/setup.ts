@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { loadPacks } from "../pack/manifest.ts";
 import { cachedSource, fetchSource } from "../pack/sources.ts";
 import type { AvailableSource, FetchedSource, MachineFile, Preset, Profile, SourceRef } from "../pack/types.ts";
-import { loadMachine, loadProfile, ProfileError, pullProfile, saveAnswers, saveMachine, thisMachine } from "../profile/profile.ts";
+import { loadMachine, loadProfile, saveAnswers, saveMachine, thisMachine } from "../profile/profile.ts";
 import { resolve } from "../reconciler/resolve.ts";
 import { defaultSources, engineRepo, makesOwnDevbox } from "./defaults.ts";
 import { FlagError, hasPicks, parseSetupFlags, type SetupFlags } from "./flags.ts";
@@ -50,7 +50,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
   let flags: SetupFlags;
   const machine: MachineFile = thisMachine(await loadMachine(options.home), options.platform, options.env ?? process.env);
   const unfinished = Boolean(machine.setup?.done.length) && !checked(machine.setup?.done);
-  const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await latestProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
+  const progress = { done: machine.setup?.done ?? [], draft: machine.profileDir ? profileDraft(await loadProfile(machine.profileDir)) : ({ ...machine.setup?.draft } as Draft) };
   const catalog = await loadCatalog(options.engineRoot, teamRefs(progress.draft), options.home);
   const remember = () => saveMachine(options.home, { ...machine, setup: machine.profileDir ? { done: progress.done } : { done: progress.done, draft: progress.draft } });
   const box: Machine = { ...realMachine, ...options.machine };
@@ -91,6 +91,7 @@ export async function setup(args: string[], options: SetupOptions): Promise<numb
     catalog,
     draft: progress.draft,
     timeZone: options.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+    draftMayBeBehind: Boolean(machine.profileDir),
     async answer(fields) {
       Object.assign(progress.draft, fields);
       await remember();
@@ -283,15 +284,6 @@ function setupSteps(context: QuestionContext, machine: MachineFile, options: Set
 }
 
 const later = (step: Step): Step => ({ ...step, later: true });
-
-async function latestProfile(dir: string) {
-  try {
-    await pullProfile(dir);
-  } catch (error) {
-    if (!(error instanceof ProfileError)) throw error;
-  }
-  return loadProfile(dir);
-}
 
 function profileDraft(profile: Profile): Draft {
   return { packs: profile.packs, plan: profile.plan, settings: profile.settings, workflows: profile.workflows, sources: profile.sources };
