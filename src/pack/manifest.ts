@@ -1,7 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { recordPack } from "./register.ts";
-import { handlerSeams, needValues, type LoadedPack, type ModelRow, type PackManifest } from "./types.ts";
+import { handlerSeams, needValues, type LoadedPack, type ModelRow, type PackManifest, type Workflow } from "./types.ts";
 
 export class PackError extends Error {}
 
@@ -158,6 +158,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     need(typeof item.name === "string" && typeof item.sentence === "string", `${label}: needs a name and a sentence`);
     need(item.needs === undefined || isStrings(item.needs), `${label}: needs must list needs`);
     need(item.requires === undefined || isStrings(item.requires), `${label}: requires must list workflow ids`);
+    need(item.yields === undefined || isStrings(item.yields), `${label}: yields must list workflow ids`);
     need(item.settings === undefined || isStrings(item.settings), `${label}: settings must list keys`);
   });
   each("jobs", (item, label) => {
@@ -216,6 +217,11 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("handlers", (item, label) => {
     need((handlerSeams as readonly unknown[]).includes(item.seam), `${label}: seam must be one of ${handlerSeams.join(", ")}`);
     need(filled(item.path), `${label}: needs a path`);
+    if (item.seam !== "pr-command") need(item.subcommands === undefined, `${label}: only a pr-command handler takes subcommands`);
+    else {
+      need(isStrings(item.subcommands) && item.subcommands.length > 0, `${label}: needs subcommands, the fleet pr words it runs`);
+      need((item.subcommands as string[]).every((word) => packName.test(word)), `${label}: each subcommand must be lowercase words joined by dashes`);
+    }
     filters(item, label);
   });
   each("checks", (item, label) => {
@@ -261,6 +267,7 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
       if (!(needValues as readonly string[]).includes(need)) fail(`workflow ${workflow.id} has unknown need ${need}`);
     }
   }
+  checkYields(manifest.workflows ?? [], fail);
   const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, t3ProjectScripts: manifest.t3ProjectScripts, handlers: manifest.handlers, served: manifest.served };
   for (const [field, items] of Object.entries(tied)) {
     for (const item of items ?? []) {
@@ -274,6 +281,36 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
   const seams = manifest.handlers?.map((handler) => handler.seam) ?? [];
   const twice = seams.find((seam, index) => seams.indexOf(seam) !== index);
   if (twice) fail(`handlers ${twice} is declared twice`);
+}
+
+/** A workflow yields only to a workflow of its own pack, so the engine can order yields before it resolves them. A cycle, or a yield to a workflow that needs the yielder, would turn both off. */
+function checkYields(workflows: Workflow[], fail: (message: string) => never) {
+  const ids = new Set(workflows.map((workflow) => workflow.id));
+  const requires = new Map(workflows.map((workflow) => [workflow.id, workflow.requires ?? []]));
+  const yields = new Map(workflows.map((workflow) => [workflow.id, workflow.yields ?? []]));
+  for (const workflow of workflows) {
+    for (const id of workflow.yields ?? []) {
+      if (id === workflow.id) fail(`workflow ${workflow.id} yields to itself`);
+      if (!ids.has(id)) fail(`workflow ${workflow.id} yields to unknown workflow ${id}`);
+      if (pathFrom(requires, id, workflow.id)) fail(`workflow ${workflow.id} yields to ${id}, which needs ${workflow.id}`);
+    }
+  }
+  for (const workflow of workflows) {
+    const cycle = pathFrom(yields, workflow.id, workflow.id);
+    if (cycle) fail(`workflows yield in a cycle: ${cycle.join(", ")}`);
+  }
+}
+
+/** The ids from one workflow to another along the edges, or undefined when there is no path. */
+function pathFrom(edges: Map<string, string[]>, from: string, to: string, path: string[] = [from], seen = new Set<string>()): string[] | undefined {
+  for (const next of edges.get(from) ?? []) {
+    if (next === to) return [...path, next];
+    if (seen.has(next)) continue;
+    seen.add(next);
+    const found = pathFrom(edges, next, to, [...path, next], seen);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

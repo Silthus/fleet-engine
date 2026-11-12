@@ -357,7 +357,10 @@ install step), the client check, and the `config` MCP entries that start
 reconnect, and restart. Its sign-in prints each upstream authorization URL
 directly, not a page that only Caddy serves, and tells the person to run
 `coder port-forward <hub> --tcp 3317` on the Mac. So the browser reaches
-the gateway at loopback without private HTTPS. Apply tests the checks that
+the gateway at loopback without private HTTPS. An upstream that a pack
+marks `loopback` accepts only loopback callbacks: the gateway registers its
+own public client for it, and `fleet mcp-gateway sign-in <name>` signs it in
+by hand with PKCE, from an address the person pastes. Apply tests the checks that
 served services wait for first and issues their credentials, so the client
 check's repair writes today's client file from the new key in the same
 apply. A node pulls its key from the hub at every apply, and the client
@@ -596,7 +599,8 @@ what the port changes. The Hub pack is gone after step 4.
 | Memory | `memory` | Config, sync job, memory-cap hook: nodes. Dream job and skill: hub. | Dream moves in. Placement was the only reason that it lived in the Hub pack. |
 | Hub: MCP gateway | `mcp-gateway` | Served service under Docker's restart policy, install check with a Fleet repair: hub. Client check, MCP config entries with the bridge: nodes. | Each node pulls its key during apply. `fleet mcphub grant` by hand goes. The sign-in command prints the authorization URL, not a page that Caddy serves. |
 | Hub: own-account balancing | `cli-proxy` | Service with `serve`, balance job: hub. Route check, two gated config keys: Linux nodes. | A Linux node that is not a devbox also gets the route. The route step goes (D15). |
-| Hub: boxes | `boxes` | `fleet box`, sweep and nightly jobs, a token check: hub. Restore job: `os: "linux"`. | `fleet box` on a node runs on the hub over `ssh`. A plain Linux node also gets the restore job. A Mac never does. |
+| Hub: boxes | `boxes` | `fleet box`, sweep and nightly jobs, and a Claude token step: hub. Restore job: `os: "linux"`. | `fleet box` on a node runs on the hub over `ssh`. A plain Linux node also gets the restore job. A Mac never does. |
+| Hub: devbox Coder tokens | `devbox-tokens` | The nightly `fleet box grants` job and the Coder session check: hub. It grants each devbox in the profile and on this machine, but never the hub or a box. | Devbox token grants leave the boxes nightly job, so they run while Boxes is off. |
 | Hub: SSH tunnels to devboxes | The engine's forwards, and `peers` | Step 3: each devbox dials the hub with one engine `ssh -L` unit that carries the catalog's ports. `tunnelUnit` keeps the rest (D13). | A devbox has its own forward to the hub, and the hub's `ssh -R` unit no longer carries the gateway port. |
 | Hub: T3 links between nodes, the box forward, the Mac's hub tunnel, private HTTPS | `peers`, schema 1 | `peers.ts`, `links.ts`, `hub-tunnel.ts`, `https.ts`, unchanged in v1 | None |
 | Slack | `slack` | Section 5.3. Check and service: hub. Command: no placement. | The service waits for the tokens. `ctx.threads.start` replaces only `launchHere`. With `hub.boxTemplate` set, the pack's own `launchOnBox` still launches on a box, unchanged until `boxes` ports in step 4, and the `launch` subcommand still runs on that box. |

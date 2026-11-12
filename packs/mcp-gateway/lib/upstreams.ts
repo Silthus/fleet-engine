@@ -4,7 +4,8 @@ import { builtInApps, type CodexApp, type Upstream } from "./apps.ts";
 import { declaredUpstreams } from "./declared.ts";
 import { browserGatewayUrl } from "./client.ts";
 import { dataDir, managementApi, syncGatewayGroup, type Api, type Hub } from "./hub.ts";
-import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile } from "./install.ts";
+import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile, localEntry, missingMount, waitingNote } from "./install.ts";
+import { handCallback, loopbackClientOf, registerLoopbackClient } from "./loopback.ts";
 
 const account = (app: CodexApp) => `${app.account ?? app.name}-codex`;
 export const appHome = (home: string, app: CodexApp) => join(dataDir(home), "data", account(app));
@@ -17,7 +18,11 @@ const holds = (have: unknown, want: unknown, key = ""): boolean =>
   plain(want) && key !== "env" ? plain(have) && Object.entries(want).every(([name, value]) => holds(have[name], value, name)) : Bun.deepEquals(have, want);
 
 function wanted(upstream: Upstream, hub: Hub): Config {
-  if (upstream.kind === "oauth") return { type: "streamable-http", url: upstream.url, description: marker, startOnDemand: true, oauth: { redirectUri: `${browserGatewayUrl(hub.gateway)}/oauth/callback` } };
+  if (upstream.kind === "oauth") {
+    const oauth = upstream.loopback ? { redirectUri: handCallback, ...(upstream.scopes && { scopes: upstream.scopes }) } : { redirectUri: `${browserGatewayUrl(hub.gateway)}/oauth/callback` };
+    return { type: "streamable-http", url: upstream.url, description: marker, startOnDemand: true, oauth };
+  }
+  if (upstream.kind === "local") return { type: "stdio", command: "node", args: [localEntry(upstream)], description: marker, env: upstream.env ?? {}, startOnDemand: true };
   const home = `/app/data/${account(upstream)}`;
   return {
     type: "stdio",
@@ -51,6 +56,7 @@ export async function upstreamRegistered(hub: Hub, upstream: Upstream) {
   const call = await managementApi(hub);
   const config = await current(call, upstream.name);
   if (!config || !holds(config, wanted(upstream, hub)) || config.enabled === false || !(await groupServes(call, upstream))) return false;
+  if (upstream.kind === "oauth" && upstream.loopback && !loopbackClientOf(config)) return false;
   return upstream.kind === "oauth" || gatewayCurrent(hub);
 }
 
@@ -63,9 +69,11 @@ export const appSignedIn = (hub: Pick<Hub, "home">, app: CodexApp) => exists(joi
 export async function registerUpstream(hub: Hub, upstream: Upstream) {
   const codexMissing = `${upstream.title} runs through Codex, and this hub has no Codex from Fleet. Run: fleet install-codex`;
   if (upstream.kind === "codex-app" && !(await exists(hubCodex(hub.home)))) throw new Error(codexMissing);
+  const waitsFor = upstream.kind === "local" ? await missingMount(upstream) : undefined;
+  if (upstream.kind === "local" && waitsFor) return hub.print(waitingNote(upstream, waitsFor));
   const call = await managementApi(hub);
   refuseTheirs(await current(call, upstream.name), upstream);
-  if (upstream.kind === "codex-app") await install(hub);
+  if (upstream.kind !== "oauth") await install(hub);
   const config = await current(call, upstream.name);
   refuseTheirs(config, upstream);
   if (upstream.kind === "codex-app") {
@@ -74,14 +82,21 @@ export async function registerUpstream(hub: Hub, upstream: Upstream) {
   }
   const want = wanted(upstream, hub);
   const path = `servers/${encodeURIComponent(upstream.name)}`;
+  const newClient = upstream.kind === "oauth" && upstream.loopback && !loopbackClientOf(config);
+  if (newClient) want.oauth = { ...(want.oauth as Config), clientId: await registerLoopbackClient(hub.fetch, upstream) };
   if (!config) await call("servers", "POST", { name: upstream.name, config: want });
+  else if (newClient) await call(path, "PUT", { config: { ...config, ...want } });
   else if (!holds(config, want)) await call(path, "PUT", { config: { ...config, ...want, ...(plain(config.oauth) && { oauth: { ...config.oauth, ...(want.oauth as Config) } }) } });
   if (config?.enabled === false) await call(`${path}/toggle`, "POST", { enabled: true });
   await syncGatewayGroup(call, hub.home);
   const kept = (await current(call, upstream.name)) ?? {};
   if (!holds(kept, want) || !(await groupServes(call, upstream))) throw new Error(`The MCP gateway did not keep the settings of ${upstream.title}. Run: fleet mcp-gateway doctor`);
-  if (upstream.kind === "oauth") return hub.print(`${upstream.title} is in the MCP gateway.${config ? "" : " To sign in to it, on the hub, run: fleet mcp-gateway sign-in"}`);
+  if (upstream.kind === "oauth") {
+    const signIn = upstream.loopback ? (newClient ? `fleet mcp-gateway sign-in ${upstream.name}` : undefined) : config ? undefined : "fleet mcp-gateway sign-in";
+    return hub.print(`${upstream.title} is in the MCP gateway.${signIn ? ` To sign in to it, on the hub, run: ${signIn}` : ""}`);
+  }
   hub.print(`${upstream.title} is in the MCP gateway.`);
+  if (upstream.kind === "local") return;
   if (!(await appSignedIn(hub, upstream))) hub.print(`Sign ${upstream.title} in to ChatGPT, with the account whose ${upstream.title} app it should use. On the hub, run: fleet mcp-gateway sign-in ${upstream.name}`);
 }
 

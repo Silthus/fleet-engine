@@ -7,6 +7,8 @@ export type ChangeContext = {
   profileDir: string;
   profile: ProfileFile;
   plan: Plan;
+  /** The plan this machine would get from the profile with these answers. */
+  preview(answers: Partial<ProfileFile>): Plan;
   packs: LoadedPack[];
   machine: Machine;
   print(line: string): void;

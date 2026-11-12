@@ -13,10 +13,11 @@ export function checkPath(path: string[], label: string) {
   return path;
 }
 
-/** A dotted key as a path. A plugin id after enabledPlugins, or a server name after mcpServers, stays one key, dots included. */
+/** A dotted key as a path. A plugin id after enabledPlugins, or a server name after mcpServers, stays one key, dots included, as does a plugin id between plugins and enabled, quoted as in TOML or not. */
 export function keyPath(key: string) {
   const named = key.match(/^(enabledPlugins|mcpServers)\.(.+)$/);
-  return checkPath(named ? [named[1]!, named[2]!] : key.split("."), key);
+  const codexPlugin = key.match(/^plugins\.(?:"([^"]+@[^"]+)"|(.+@.+))\.enabled$/);
+  return checkPath(named ? [named[1]!, named[2]!] : codexPlugin ? ["plugins", (codexPlugin[1] ?? codexPlugin[2])!, "enabled"] : key.split("."), key);
 }
 
 export const same = (left: unknown, right: unknown) => left === right || (left !== undefined && right !== undefined && sortedJson(left) === sortedJson(right));

@@ -1,13 +1,15 @@
 import { canBeDevbox, isBoxName } from "../../../src/hub/names.ts";
 import { checkSession, grant, reap, type Coder } from "./coder.ts";
 import { assertBox, link, restoreForwards, unlink, type BoxCoder } from "./links.ts";
-import { quote, requireHub, type Machine } from "./machine.ts";
+import { quote, requireHub, type Machine, type PeerMachine } from "./machine.ts";
 import { LockBusy, userWaitMs, withBoxLock } from "./box-lock.ts";
-import { idle, list, lockWait, nightly, nightlySteps, ownership, refreshPool, release, saveToken, spawn, startBox, sweep, threads, type BoxHooks } from "./box.ts";
+import { grantSteps, idle, list, lockWait, nightly, nightlySteps, ownership, refreshPool, release, saveToken, spawn, startBox, sweep, threads, type BoxHooks } from "./box.ts";
 import * as registry from "./pool.ts";
 
 export type CommandCoder = BoxCoder & Pick<Coder, "env" | "token" | "sessionFrom" | "sessionKey">;
-export type BoxDeps = { machine(): Machine; coder(here: Machine): CommandCoder; readStdin(): Promise<string>; hooks: BoxHooks };
+export type TokenCoder = Pick<Coder, "env" | "token" | "sessionFrom" | "sessionKey">;
+export type TokenDeps = { here: PeerMachine; hub: string; coder: TokenCoder };
+export type BoxDeps = { machine(): Machine; coder(here: Machine): CommandCoder; tokens(): TokenDeps; print(line: string): void; readStdin(): Promise<string>; hooks: BoxHooks };
 
 const usage = `Usage: fleet box spawn [<name>] [--new]
                                    Claim a stopped box from the pool, or create box-<name>; set it up like a devbox,
@@ -17,13 +19,13 @@ const usage = `Usage: fleet box spawn [<name>] [--new]
        fleet box release <box> [--force] [--delete]
                                    Return a box to the pool and stop it, or, when the pool is full or with
                                    --delete, unlink it everywhere and delete it; refuses while its threads
-                                   still run or wait for an answer, unless forced
+                                   still run, wait for an answer, or own an open PR, unless forced
        fleet box list              List the boxes
        fleet box run <box> -- <command>
                                    Run a command in a login shell on the box with Fleet's Coder session
        fleet box start <box>       Start a stopped box and reconnect its forwards everywhere
        fleet box idle              On a box: exit 0 when it is idle, 1 when it is at work
-       fleet box threads           On a box: list the threads that still run or wait for an answer
+       fleet box threads           On a box: list the threads that still run, wait for an answer, or own an open PR
        fleet box restore           Start the T3 forwards of recorded box links again
        fleet box token             Save a Claude token from standard input for new boxes (claude setup-token makes one)
        fleet box sweep             Stop idle boxes, keep busy ones up, and finish what a crashed operation left (hub, every 15 minutes)
@@ -34,14 +36,16 @@ const usage = `Usage: fleet box spawn [<name>] [--new]
                                    each free box (hub)
        fleet box grant <devbox> [--if-expiring]
                                    Mint a Coder token on the hub and give it to a devbox (hub)
+       fleet box grants            Check the Coder session, then grant each devbox a token when its token expires soon
+                                   (hub, nightly, also while Boxes is off)
        fleet box session           Check that the hub's Coder session does not expire soon, and name the fix when it does (hub)
-       fleet box nightly           Check the Coder session, reap, grant each devbox a token that expires soon, and refresh
-                                   the pool (hub, nightly)
+       fleet box nightly           Check the Coder session, reap, and refresh the pool (hub, nightly)
 
 spawn, start and release change boxes only on the hub. On a devbox they run there over SSH, with --for <this devbox>
 so the hub links the box to it.`;
 
-const hubOnly = ["sweep", "reap", "pool", "grant", "nightly", "session"];
+const hubOnly = ["sweep", "reap", "pool", "grant", "grants", "nightly", "session"];
+const tokenCommands = ["grant", "grants", "session"];
 const onHub = ["spawn", "start", "release"];
 const option = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined);
 
@@ -56,7 +60,7 @@ function caller(args: string[]): { plain: string[]; devbox?: string; valid: bool
 function valid(args: string[]): boolean {
   const [command, name, ...rest] = args;
   switch (command) {
-    case "list": case "idle": case "threads": case "restore": case "token": case "sweep": case "nightly": case "session":
+    case "list": case "idle": case "threads": case "restore": case "token": case "sweep": case "nightly": case "session": case "grants":
       return args.length === 1;
     case "link": case "unlink": case "start":
       return !!name && !rest.length;
@@ -79,17 +83,17 @@ function valid(args: string[]): boolean {
 
 export async function boxCommand(args: string[], deps: BoxDeps): Promise<number> {
   const [command] = args;
-  if (command === "help" || command === "--help" || command === "-h") return deps.machine().print(usage), 0;
-  const here = deps.machine();
+  if (command === "help" || command === "--help" || command === "-h") return deps.print(usage), 0;
   const { plain, devbox, valid: validCaller } = caller(args);
-  if (!validCaller || !valid(plain)) return here.print(usage), 2;
+  if (!validCaller || !valid(plain)) return deps.print(usage), 2;
+  if (tokenCommands.includes(command!)) return tokenCommand(plain, deps.tokens());
+  const here = deps.machine();
   const [, name, ...rest] = plain;
   if (onHub.includes(command!) && !here.isHub) return here.toHub(["box", ...plain, "--for", devbox ?? here.self]);
   if (hubOnly.includes(command!)) requireHub(here.home, command!);
   const coder = () => deps.coder(here);
   const by = devbox ? { devbox } : {};
   const holding = <T>(box: string, step: () => Promise<T>) => (assertBox(box), withBoxLock(here.home, box, lockWait(here, box, userWaitMs), step));
-  const grantTo = (devbox: string, ifExpiring: boolean) => grant(coder(), devbox, { ifExpiring, now: here.now(), onDevbox: here.onPeer, print: here.print });
   const reapNow = async (days: number, dryRun: boolean) => {
     const pooled = new Set(registry.pooled(registry.poolFile(here.home)));
     for (const box of ownership(await coder().boxes(), here).skipped) here.print(`${box.name}: skipped, not a box this pool made`);
@@ -104,9 +108,7 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
       }
     });
   };
-  const session = () => checkSession(coder(), { now: here.now(), print: here.print });
   switch (command) {
-    case "session": return session();
     case "token": return await saveToken(here.home, await deps.readStdin()), here.say("saved the Claude token for new boxes"), 0;
     case "idle": return idle(here);
     case "threads": return threads(here);
@@ -118,13 +120,21 @@ export async function boxCommand(args: string[], deps: BoxDeps): Promise<number>
       if (name === "refresh") return refreshPool(coder(), here);
       for (const box of registry.pooled(registry.poolFile(here.home))) here.print(box);
       return 0;
-    case "grant": return grantTo(name!, rest.includes("--if-expiring"));
     case "reap": return reapNow(Number(option(plain, "--days") ?? here.settings.reapDays), plain.includes("--dry-run"));
-    case "nightly": return nightly(nightlySteps(here, { session, reap: () => reapNow(here.settings.reapDays, false), grant: (devbox) => grantTo(devbox, true), refresh: () => refreshPool(coder(), here) }), here);
+    case "nightly": return nightly(nightlySteps({ session: () => checkSession(coder(), { now: here.now(), print: here.print }), reap: () => reapNow(here.settings.reapDays, false), refresh: () => refreshPool(coder(), here) }), here);
     case "run": return coder().run(name!, `bash -lc ${quote(rest.slice(1).join(" "))}`);
     case "link": return await holding(name!, () => link(coder(), here, name!)), 0;
     case "start": return startBox(coder(), here, name!, by);
     case "spawn": return spawn(coder(), here, name === "--new" ? undefined : name, { reuse: !plain.includes("--new"), ...by });
     default: return release(coder(), here, name!, { force: rest.includes("--force"), recycle: !rest.includes("--delete"), hooks: deps.hooks, ...by });
   }
+}
+
+async function tokenCommand([command, name, ...rest]: string[], { here, hub, coder }: TokenDeps): Promise<number> {
+  requireHub(here.home, command!);
+  const session = () => checkSession(coder, { now: here.now(), print: here.print });
+  const grantTo = (devbox: string, ifExpiring: boolean) => grant(coder, devbox, { ifExpiring, now: here.now(), onDevbox: here.onPeer, print: here.print });
+  if (command === "session") return session();
+  if (command === "grant") return grantTo(name!, rest.includes("--if-expiring"));
+  return nightly(grantSteps(here.devboxes, { alias: hub, self: here.self }, { session, grant: (devbox) => grantTo(devbox, true) }), here);
 }

@@ -159,7 +159,7 @@ export default {
       default: false,
       requires: ["slack-bridge"],
       settings: [reviewSearch, reviewAsks],
-      sentence: "When a ready pull request of yours waits 4 hours on a review nobody gave, the T3 thread that links it wakes up, and again at 24 hours.",
+      sentence: "When a ready pull request of yours waits 4 hours on a review nobody gave, the T3 thread that links it wakes up, and again at 24 hours. A thread that has waited 30 minutes on a decision it put to you in prose, while a watch keeps it under Working, is told once to ask with the question tool.",
       risk: "Reads your pull requests on GitHub and your own Slack messages from the last 12 hours. It messages your threads and changes nothing on GitHub or Slack.",
     });
     const reviewWaitOf = async (ctx: Context) => {
@@ -167,7 +167,7 @@ export default {
       return {
         gh: runGh, qualifiers: ctx.get(reviewSearch), threads: ctx.threads, session: {}, host: hostname(),
         slack: { gateway: await ctx.use(service), filter: ctx.get(reviewAsks), fetch: (input: string | URL | Request, init?: RequestInit) => fetch(input, init) },
-        statePath: join(ctx.stateDir, "review-wait.json"), now: ctx.now, log: ctx.log,
+        statePath: join(ctx.stateDir, "review-wait.json"), parkedPath: join(ctx.stateDir, "parked-questions.json"), now: ctx.now, sleep: ctx.sleep, log: ctx.log,
       };
     };
     fleet.service({
@@ -175,11 +175,11 @@ export default {
       os: "linux",
       when: reviews,
       id: "review-wait",
-      run: async (ctx) => (await import("./lib/review-wait.ts")).watchReviews(await reviewWaitOf(ctx), ctx.sleep),
+      run: async (ctx) => (await import("./lib/review-wait.ts")).watchReviews(await reviewWaitOf(ctx)),
     });
     fleet.command("review-wait", {
       on: "hub",
-      summary: "Say which threads the next review wait check would wake for pull requests that wait on a review, and change nothing",
+      summary: "Say which threads the next review wait check would wake for pull requests that wait on a review or for prose questions, and change nothing",
       run: async (args, ctx) => {
         if (args.length) return ctx.print("usage: fleet review-wait"), 2;
         return (await import("./lib/review-wait.ts")).checkReviews({ ...(await reviewWaitOf(ctx)), log: ctx.print }, true).then((ok) => (ok ? 0 : 1));
@@ -231,8 +231,14 @@ async function admin(args: string[], ctx: Context) {
   const apps = await upstreams();
   if (mode === "slack-bridge") return bridgeSignIn ? apps.signInApp(hub, await slackApp()) : ((await apps.registerUpstream(hub, await slackApp())), 0);
   if (mode === "sign-in" && name !== undefined) {
+    const byHand = (await (await import("./lib/declared.ts")).declaredUpstreams(hub.home)).flatMap((item) => (item.kind === "oauth" && item.loopback ? [item] : []));
+    const server = byHand.find((item) => item.name === name);
+    if (server) {
+      const { firstLine, signInLoopback } = await import("./lib/loopback.ts");
+      return signInLoopback(hub, server, () => firstLine(ctx.stdin()));
+    }
     const app = (await apps.codexApps(hub.home)).find((item) => item.name === name);
-    if (!app) return ctx.print(`Name an app that signs in through ChatGPT: ${(await apps.codexApps(hub.home)).map((item) => item.name).join(", ")}.`), 2;
+    if (!app) return ctx.print(`Name an upstream that signs in on its own: ${[...(await apps.codexApps(hub.home)), ...byHand].map((item) => item.name).join(", ")}.`), 2;
     return apps.signInApp(hub, app);
   }
   const gateway = await import("./lib/hub.ts");

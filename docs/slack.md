@@ -31,6 +31,20 @@ and `fleet slack-trigger check` say why.
 `fleet set` applies the change, and the running trigger starts again with the
 new emoji. The hub takes the change at its next `fleet update`.
 
+## Choose the nodes
+
+By default the trigger starts threads where it runs, on the hub. To start them
+on your nodes instead, the devboxes that stay on, name them by their SSH names:
+
+```sh
+fleet set slack.nodes="devbox-1 devbox-2"
+```
+
+The trigger takes them in turn. Each node needs the Slack pack, which every
+machine of your profile has, and the hub must reach it over SSH. Leave out a
+node that you are about to retire. A name that is not an SSH name, or that
+names a box, stops the trigger, and its log says which.
+
 ## How it works
 
 The trigger runs all the time as a Fleet service, `fleet run
@@ -49,8 +63,10 @@ sends each event within a second, and no address is public.
    only your own.
 2. It reads the whole Slack thread with your user token and starts a thread
    with the model of the `implementation` row of your model table:
-   - with the Boxes workflow of the Hub pack on, on the next box from the pool
-     (`fleet box spawn`);
+   - with `slack.nodes` set, on those nodes in turn, over SSH with
+     `fleet slack-trigger launch`, in a scratch folder on the node's T3 Code;
+   - otherwise, with the Boxes workflow of the Hub pack on, on the next box
+     from the pool (`fleet box spawn`);
    - otherwise, in a scratch folder on this machine's T3 Code.
 
    The prompt quotes the Slack thread as data. Only your message is the task,
@@ -59,11 +75,16 @@ sends each event within a second, and no address is public.
    see, with the thread's link on `app.t3.codes`.
 4. A failed launch retries every minute for a day, with the same command ID,
    so T3 starts one thread even when an answer got lost. On a box, the retries
-   go to the same box, and Fleet releases that box when it gives up. You get
-   one ephemeral reply about it.
+   go to the same box, and Fleet releases that box when it gives up. On nodes,
+   a launch retries on the next node only when SSH could not connect, or the
+   node's disk was below the start floor. Any other failure, such as a dropped
+   connection or a launch that ran past its 300 s limit, retries on the same
+   node, because T3 there may have the thread already. You get one ephemeral
+   reply about it.
 
 `~/.local/state/fleet/slack/slack-trigger.json` keeps the handled messages for 31
-days, so each message starts one thread. The log is
+days, so each message starts one thread, and the next node in turn, so a
+restart does not start over with the first node. The log is
 `~/.local/state/fleet/jobs/slack-trigger.log`.
 
 ## Set up the Slack app
