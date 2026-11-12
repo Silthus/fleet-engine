@@ -71,12 +71,13 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
   const active = activateWorkflows(profile, machine, order, names, plan);
   const solo = !profile.hub && machine.role !== "devbox" && !names.has("hub") && !profile.devboxes?.length && !machine.devboxes?.length;
   const hubless = !profile.hub && Boolean(profile.devboxes?.length);
+  const onceRunner = profile.devboxes?.find((name) => name !== profile.hub) ?? profile.hub;
   if (machine.role === "hub" || solo) plan.onHub = true;
   const fits = (pack: string, item: Scope, label: string) => {
     const reason =
       item.on && !item.on.includes(os) ? `not on ${os}`
       : item.roles && !item.roles.includes(machine.role) && !(solo && item.roles.includes("solo")) ? (hubless && item.roles.includes("hub") ? hublessReason : `not on a ${machine.role}`)
-      : item.oncePerFleet && profile.hub && machine.role !== "hub" ? `runs once per fleet, on the hub ${profile.hub}`
+      : item.oncePerFleet && onceRunner && machine.name !== onceRunner ? `runs once per fleet, on ${onceRunner}`
       : item.plans && !item.plans.includes(profile.plan) ? `not for plan ${profile.plan}`
       : item.workflow && !active.has(item.workflow) ? `workflow ${item.workflow} is off`
       : undefined;
