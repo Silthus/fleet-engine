@@ -59,7 +59,7 @@ function hubMachine(fields: Partial<ProxyMachine> = {}, proxy: Proxy = {}, optio
   const printed: string[] = [];
   const keys = [clientKey, otherKey];
   const machine: ProxyMachine = {
-    home, uid: 1000, user: "me", accounts: 2, devboxes: ["devbox-1", "box-lane"], release, run: fake.run, fetch, sleep: async () => {},
+    home, uid: 1000, user: "me", accounts: 2, devboxes: ["devbox-1", "box-lane"], release, run: fake.run, fetch, now: () => 1_800_000_000_000, sleep: async () => {},
     readStdin: async () => `${clientKey}\n`, randomKey: () => keys.shift()!, print: (line) => printed.push(line), ...fields,
   };
   return { machine, home, calls: fake.calls, inputs: fake.inputs, requests, printed };

@@ -1,16 +1,17 @@
 import { closeSync, existsSync, openSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordStanding, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, saveProof, standingFor, startReview, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
 import { ciOf, pushedHeadOf, readPullRequest } from "./pr-ci.ts";
-import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
+import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRiskRubric, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge } from "./proof-judge.ts";
-import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO } from "./proof-panel.ts";
+import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO, type Plan } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { reviewedDiff, reviewPrompt } from "./proof-review.ts";
+import { leftOutNote, reviewRange } from "./proof-range.ts";
 import { quietCommitIn } from "./proof-delta.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
@@ -209,7 +210,8 @@ question tool. --accept takes their choice of "Accept the gap" there, with their
 refusal, an answer to another question, a quote of the user's instructions, or an answer already used does not count.
 A gap recorded again, such as with another reason, needs a new answer. A standing rule (fleet proof standing) covers
 a kind without asking. Their acceptance settles the kind: the gate then ignores that kind's evidence, and the judge
-does not see it. Kind ci records that CI cannot run on HEAD, such as on a fork PR.
+does not see it. Kind ci records that CI cannot run on HEAD, such as on a fork PR. Kind panel records that the PR
+runs no qa-swarm panel under an exception in the user's rules; once accepted, any finished review at HEAD covers it.
 ${answerHelp}`,
     examples: ["fleet proof gap --kind prod-shape --reason 'No production read access'", `fleet proof gap --kind prod-shape --accept '2026-10-25 "Accept the gap"' --thread mcp:1a2b`],
     options: ["--kind", "--reason", "--accept", "--thread"],
@@ -238,7 +240,9 @@ required. A stacked PR whose base requires nothing is held to the default branch
 requires any, every check counts. On a draft, a required check named "<workflow> / <job>" that never reported counts
 as withheld from drafts when its workflow reported other checks on the commit and all of them passed. CI is unknown
 when GitHub does not answer for the rulesets or branch protection. A clean merge of the PR's base carries the review and the evidence of
-its other parent forward. The review also carries across quiet commits: single-parent commits that only change or add
+its other parent forward. The review needs a finished --lens panel round on the PR, and HEAD read by a panel round or
+by a review that finished after one, such as a final read; single-reviewer rounds alone never count. An accepted
+panel gap (gap --kind panel) stands in for the panel. The review also carries across quiet commits: single-parent commits that only change or add
 test files, named *.test.*, *.spec.*, *_test.go, *_test.py or test_*.py, or snapshots in __snapshots__, as regular
 files with an unchanged mode. A deleted test, a mode change, a symlink, a comment, a file in a test folder, or a test
 file whose name other code holds, such as an import of limits.test.ts, needs a review. The gate then prints "final read carried from <sha>: test-only delta", and the receipt in
@@ -246,7 +250,11 @@ carried/<HEAD>.json names the quiet commits and the reason. Evidence does not ca
 When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
 picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's
 findings and responses, and the coding standards in ~/.agents/guides/coding-standards.md. It answers four questions:
-does the evidence prove HEAD, do the owed kinds fit the diff, does the review hold, and how good is the code. A failed
+does the evidence prove HEAD, do the owed kinds fit the diff, does the review hold, and how good is the code. A finding
+holds when it is fixed, rejected for a sound reason, or parked with a reach read for a problem the diff did not
+introduce. When the merge-risk skill is installed at ~/.agents/skills/merge-risk/SKILL.md, the judge also gets the PR
+body and that skill, and answers a fifth question: does the merge-risk callout's grade and door follow from what the
+diff measurably changes. A body without a callout passes it. A failed
 question or a high quality finding fails the gate; medium and low findings are listed. The verdict is cached per set
 of inputs. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
 --kind judge) lets the gate pass once their standing rule covers it, or once they choose "Accept the gap" in your
@@ -370,11 +378,11 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
     : await reserveFleetReview(options, head, context);
   const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
-  const rules = reviewRules(changedFilesOf(from, head.commit, run), baseTip(head, run), run);
-  const diff = diffOf(from, head.commit, run);
+  const { files, leftOut, diff } = reviewRange(run, from, head.commit, mergeBase(head, run));
+  const rules = reviewRules(files, baseTip(head, run), run);
   const diffFile = join(reserved.directory, "diff.patch");
   await writeFile(diffFile, diff, { mode: 0o600 });
-  const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, diffFile, crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules });
+  const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, diffFile, note: leftOutNote(leftOut), crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules });
   const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory] }, env, limit);
   const label = reserved.round === "final" ? "The final read" : `Round ${reserved.round}`;
   if (!answer.ok && isQuotaExhausted(answer.cause)) {
@@ -434,7 +442,7 @@ async function runPanel({ options, lists }: Parsed, head: ProofIdentity, context
   const knowledge = await knowledgeOf(lists.get("--knowledge") ?? [], context.cwd);
   const lenses = lists.get("--lens")!.map((argument) => resolveLens(guide, argument, author, knowledge, env));
   const pending = await unfinishedFleetReview(home, head);
-  const directory = pending ? await rerunPanel(pending.directory, lenses, context) : await reservePanel(options, head, lenses, guide, context);
+  const directory = pending ? await rerunPanel(pending, head, lenses, guide, context) : await reservePanel(options, head, lenses, guide, context);
   const round = (await readJson<{ round: number | "final" }>(join(directory, "round.json"), { round: 0 })).round;
   print(JSON.stringify({ round, directory, lenses: lenses.map(({ name, family }) => ({ name, family })) }));
   print("The lenses run in the background. Run fleet proof review --wait for the findings, and fleet proof show to see each lens.");
@@ -444,39 +452,51 @@ async function runPanel({ options, lists }: Parsed, head: ProofIdentity, context
 const castOf = ({ family, row }: Lens, env: Record<string, string | undefined>) => ({ family, row, model: modelLabel("reviewer", row, env) });
 
 async function reservePanel(options: Map<string, string>, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
-  const { home, cwd, env, run } = context;
-  const rubric = await readRubric(home);
+  const rubric = await readRubric(context.home);
   const reserved = await reserveFleetReview(options, head, context);
-  const from = reserved.from!;
-  const pr = pullRequestDetails(head, run);
-  const owed = await readOwed(home, head);
-  const settled = (await reviewRecords(home, head)).filter((review) => review.responses).map((review) => `${review.label}:\n${review.responses!.trim()}`).join("\n\n");
-  const diff = diffOf(from, head.commit, run);
-  const diffFile = join(reserved.directory, "diff.patch");
-  await writeFile(diffFile, diff, { mode: 0o600 });
-  const input = {
-    title: pr.title, body: pr.body, base: pr.baseRefName, from, commit: head.commit, diff, diffFile, settled,
-    owed: owed?.none ? `none (${owed.none.reason})` : owed?.kinds.join(", ") || "none recorded", rubric,
-  };
-  const changedFiles = changedFilesOf(from, head.commit, run);
-  const rules = reviewRules(changedFiles, baseTip(head, run), run);
-  const briefed = lenses.map((lens) => ({ ...lens, knowledge: [rules, lens.knowledge].filter(Boolean).join("\n\n") }));
-  const plan = {
-    lenses: lenses.map((lens) => ({ name: lens.name, title: lens.title, ...castOf(lens, env) })),
-    changedFiles, from, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory],
-  };
-  await planPanel(reserved.directory, plan, new Map(briefed.map((lens) => [lens.name, lensBrief(guide, lens, input)])));
+  try {
+    const { plan, briefs } = await panelBriefs(reserved, head, lenses, guide, rubric, context);
+    await planPanel(reserved.directory, plan, briefs);
+  } catch (error) {
+    await rm(reserved.directory, { recursive: true, force: true });
+    throw error;
+  }
   for (const lens of lenses) await startLens(reserved.directory, lens.name, context);
   return reserved.directory;
 }
 
-async function rerunPanel(directory: string, lenses: Lens[], context: CommandContext) {
+async function panelBriefs(reserved: { directory: string; from?: string }, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, rubric: string, context: CommandContext) {
+  const { home, cwd, env, run } = context;
+  const from = reserved.from!;
+  const pr = pullRequestDetails(head, run);
+  const owed = await readOwed(home, head);
+  const settled = (await reviewRecords(home, head)).filter((review) => review.responses).map((review) => `${review.label}:\n${review.responses!.trim()}`).join("\n\n");
+  const { files: changedFiles, leftOut, diff } = reviewRange(run, from, head.commit, mergeBase(head, run));
+  const diffFile = join(reserved.directory, "diff.patch");
+  await writeFile(diffFile, diff, { mode: 0o600 });
+  const input = {
+    title: pr.title, body: pr.body, base: pr.baseRefName, from, commit: head.commit, diff, diffFile, note: leftOutNote(leftOut), settled,
+    owed: owed?.none ? `none (${owed.none.reason})` : owed?.kinds.join(", ") || "none recorded", rubric,
+  };
+  const rules = reviewRules(changedFiles, baseTip(head, run), run);
+  const briefed = lenses.map((lens) => ({ ...lens, knowledge: [rules, lens.knowledge].filter(Boolean).join("\n\n") }));
+  const plan: Plan = {
+    lenses: lenses.map((lens) => ({ name: lens.name, title: lens.title, ...castOf(lens, env) })),
+    changedFiles, from, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory],
+  };
+  return { plan, briefs: new Map(briefed.map((lens) => [lens.name, lensBrief(guide, lens, input)])) };
+}
+
+async function rerunPanel(pending: { directory: string; reservation: { scope: string; base?: string; from?: string } }, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
+  const { directory, reservation } = pending;
   const plan = await readPlan(directory);
   if (!plan) throw new Error(`${directory} is reserved for one reviewer. Run fleet proof review without --lens to retry it`);
   const planned = plan.lenses.map((lens) => lens.name);
   if (lenses.map((lens) => lens.name).sort().join() !== [...planned].sort().join()) throw new Error(`The unfinished round runs the lenses ${planned.join(", ")}. Pass the same --lens set to rerun its failed lenses`);
   const casts = new Map(lenses.map((lens) => [lens.name, castOf(lens, context.env)]));
-  for (const name of await requeueFailed(directory, casts)) await startLens(directory, name, context);
+  const from = reservation.from ?? rangeStart(reservation.scope, reservation.base, head, context.run);
+  const fresh = await panelBriefs({ directory, from }, head, lenses, guide, await readRubric(context.home), context);
+  for (const name of await requeueFailed(directory, casts, fresh)) await startLens(directory, name, context);
   return directory;
 }
 
@@ -564,7 +584,9 @@ async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContex
   const row = reviewerRow(author, env);
   const limit = reviewLimit(env);
   const from = mergeBase(head, run);
+  const riskRubric = await readRiskRubric(home);
   const input = {
+    risk: riskRubric === undefined ? undefined : { rubric: riskRubric, body: pullRequestDetails(head, run).body },
     cwd: topLevel(run) ?? cwd, from, commit: head.commit, diff: diffOf(from, head.commit, run), crossFamily: familyOf(row) !== author, ci: gate.ci, owed: gate.owed!, ledger: gate.lines,
     evidence: gate.evidence, reviews: await reviewRecords(home, head), rubric: await readRubric(home), references: skillReferences(home),
   };
@@ -573,6 +595,7 @@ async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContex
     ask: (request) => askModel("judge", row, request, env, limit), model: modelLabel("judge", row, env), arbiter: arbiterOf(context),
     directory: judgeDirectory(home, head), commit: head.commit, now: today,
   });
+  if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
   if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}` };
   const gap = await judgeGap(home, head, today);
   if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}` };
@@ -627,7 +650,7 @@ function resolveAuthor(requested: string | undefined, env: Record<string, string
 
 const identityHelp = `Every command works on the PR of the current branch and its HEAD. Pass --repo owner/name, --pr number,
 or --commit to choose others. --commit and --base take any commit Git resolves here, such as a short SHA.`;
-const kindsHelp = "Kinds: live-run, ui-walk, prod-shape, cross-version, shadow-diff, post-deploy-watch. A gap also takes ci and judge, and a standing rule also takes review.";
+const kindsHelp = "Kinds: live-run, ui-walk, prod-shape, cross-version, shadow-diff, post-deploy-watch. A gap also takes ci, judge, and panel, and a standing rule also takes review.";
 
 function overview() {
   const lines = Object.values(subcommands).filter((command) => !command.hidden).map((command) => `  fleet proof ${command.usage}`);
@@ -712,10 +735,6 @@ function baseTip(identity: ProofIdentity, run: Run) {
     if (result.code === 0) return result.stdout.trim();
   }
   throw new Error(`Cannot find the base branch of ${identity.repository}#${identity.pr} here. Fetch it from a remote of ${identity.repository}`);
-}
-
-function changedFilesOf(from: string, to: string, run: Run) {
-  return run(["git", "diff", "--name-only", "--no-relative", from, to]).stdout.split("\n").filter(Boolean);
 }
 
 function diffOf(from: string, to: string, run: Run) {

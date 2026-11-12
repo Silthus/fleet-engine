@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
 import { loginExpired, management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
 import { requireHubRole } from "./hub-job.ts";
@@ -16,14 +16,16 @@ import { must, proxyPort } from "./run.ts";
 export { proxyPort, proxyUrl };
 export type ProxyMode = "plan" | "install" | "doctor" | "connect" | "disconnect" | "check" | "remove" | "left";
 export type Release = { version: string; url: string; sha256: string };
+export type Panel = { page: Release; plugin: Release; historyDays: number };
 export type AiPlan = "claude" | "codex" | "both";
 export type ProxyMachine = {
-  home: string; uid: number; user: string; plan?: AiPlan; accounts?: number; devboxes: string[]; release: Release; run: Run; fetch: Fetch;
-  sleep(ms: number): Promise<void>; readStdin(): Promise<string>; randomKey(): string; print(line: string): void;
+  home: string; uid: number; user: string; plan?: AiPlan; accounts?: number; panel?: Panel; devboxes: string[]; release: Release; run: Run; fetch: Fetch;
+  now(): number; sleep(ms: number): Promise<void>; readStdin(): Promise<string>; randomKey(): string; print(line: string): void;
 };
 
 export const keyPath = (home: string) => join(home, ".config/fleet/cli-proxy.key");
 export const keyHelper = 'cat "$HOME/.config/fleet/cli-proxy.key"';
+export const panelUrl = `${proxyUrl}/management.html`;
 const marker = "# Managed by Fleet CLI proxy.";
 const what = "CLI proxy";
 const service = "fleet-cli-proxy.service";
@@ -34,7 +36,8 @@ const claudeCodeVersion = "2.1.322";
 
 function layout(home: string) {
   const dir = proxyDir(home);
-  return { dir, binary: join(dir, "cli-proxy-api"), config: join(dir, "config.yaml"), auth: join(dir, "auth"), management: managementFile(home), unit: join(home, ".config/systemd/user", service), key: keyPath(home), restart: join(dir, "restart-pending") };
+  return { dir, binary: join(dir, "cli-proxy-api"), config: join(dir, "config.yaml"), auth: join(dir, "auth"), management: managementFile(home), unit: join(home, ".config/systemd/user", service), key: keyPath(home), restart: join(dir, "restart-pending"),
+    page: join(dir, "static/management.html"), plugins: join(dir, "plugins"), plugin: join(dir, "plugins/quota-ledger.so"), ledger: join(dir, "quota-ledger/samples.jsonl") };
 }
 type Layout = ReturnType<typeof layout>;
 const loginCommand = (paths: Layout, agent: Agent) => `${paths.binary} -config ${paths.config} -${agent}-login -no-browser`;
@@ -42,17 +45,28 @@ const pooled = (plan: AiPlan | undefined): Agent => (plan === "codex" ? "codex" 
 const subscription = { claude: "Claude", codex: "Codex" };
 const subscriptions = (count: number, agent: Agent) => `${count} ${subscription[agent]} subscription${count === 1 ? "" : "s"}`;
 
-function wanted(paths: Layout, key: string): Managed[] {
+function panelLines(paths: Layout, panel: Panel | undefined) {
+  if (!panel) return { control: ["  disable-control-panel: true"], plugins: [], unit: [] };
+  if (!Number.isInteger(panel.historyDays) || panel.historyDays < 1) throw new Error(`hub.proxyHistoryDays must be a whole number of days, 1 or more: ${panel.historyDays}`);
+  return {
+    control: ["  disable-control-panel: false", "  disable-auto-update-panel: true"],
+    plugins: ["plugins:", "  enabled: true", `  dir: "${paths.plugins}"`, "  configs:", "    quota-ledger:", "      enabled: true", `      path: "${paths.ledger}"`, `      retention-days: ${panel.historyDays}`],
+    unit: [`Environment=MANAGEMENT_STATIC_PATH=${paths.page}`],
+  };
+}
+
+function wanted(paths: Layout, key: string, panel: Panel | undefined): Managed[] {
   if (/["%\s\\]/.test(paths.dir)) throw new Error(`Move your home to a path without spaces, quotes, % or backslashes: ${paths.dir}`);
+  const shown = panelLines(paths, panel);
   const config = [
-    marker, `host: "127.0.0.1"`, `port: ${proxyPort}`, "tls:", "  enable: false", "remote-management:", "  allow-remote: false", `  secret-key: ""`, "  disable-control-panel: true",
+    marker, `host: "127.0.0.1"`, `port: ${proxyPort}`, "tls:", "  enable: false", "remote-management:", "  allow-remote: false", `  secret-key: ""`, ...shown.control,
     `auth-dir: "${paths.auth}"`, "api-keys:", `  - "${key}"`, "debug: false", "commercial-mode: true", "logging-to-file: false", "usage-statistics-enabled: true", "request-retry: 3",
     "quota-exceeded:", "  switch-project: true", "  switch-preview-model: true", "routing:", `  strategy: "fill-first"`, "  session-affinity: true", `  session-affinity-ttl: "1h"`,
-    "claude-header-defaults:", `  user-agent: "claude-cli/${claudeCodeVersion} (external, cli)"`, "",
+    "claude-header-defaults:", `  user-agent: "claude-cli/${claudeCodeVersion} (external, cli)"`, ...shown.plugins, "",
   ].join("\n");
   const unit = [
     marker, "[Unit]", "Description=Fleet CLI proxy for your own subscriptions", "After=network-online.target", "Wants=network-online.target", "", "[Service]",
-    `EnvironmentFile=${paths.management}`, `ExecStart=${paths.binary} -config ${paths.config}`, `WorkingDirectory=${paths.dir}`, "UMask=0077", "Restart=on-failure", "RestartSec=5", "NoNewPrivileges=true",
+    `EnvironmentFile=${paths.management}`, ...shown.unit, `ExecStart=${paths.binary} -config ${paths.config}`, `WorkingDirectory=${paths.dir}`, "UMask=0077", "Restart=on-failure", "RestartSec=5", "NoNewPrivileges=true",
     "", "[Install]", "WantedBy=default.target", "",
   ].join("\n");
   return [{ path: paths.config, content: config }, { path: paths.unit, content: unit }];
@@ -73,27 +87,77 @@ async function savedKey(home: string): Promise<string | undefined> {
 }
 
 async function binaryReady(machine: ProxyMachine, paths: Layout): Promise<boolean> {
+  if (!existsSync(paths.binary)) return false;
   const help = await machine.run([paths.binary, "--help"]);
   return `${help.stdout}${help.stderr}`.includes(`CLIProxyAPI Version: ${machine.release.version}`);
 }
 
-async function ensureBinary(machine: ProxyMachine, paths: Layout): Promise<void> {
-  if (await binaryReady(machine, paths)) return;
-  await writePrivateFile(paths.restart, "\n");
+const sha256 = async (path: string) => new Bun.CryptoHasher("sha256").update(await readFile(path)).digest("hex");
+
+async function download(machine: ProxyMachine, release: Release, place: (file: string, folder: string) => Promise<void>): Promise<void> {
   const folder = await mkdtemp(join(tmpdir(), "fleet-cli-proxy-"));
   try {
-    const archive = join(folder, "release.tar.gz");
-    await must(machine.run, ["curl", "-fsSL", machine.release.url, "-o", archive]);
-    if (new Bun.CryptoHasher("sha256").update(await readFile(archive)).digest("hex") !== machine.release.sha256) throw new Error(`Checksum mismatch for ${machine.release.url}.`);
-    await must(machine.run, ["tar", "-xzf", archive, "-C", folder]);
-    await must(machine.run, ["install", "-m", "0755", join(folder, "cli-proxy-api"), paths.binary]);
+    const file = join(folder, "download");
+    await must(machine.run, ["curl", "-fsSL", release.url, "-o", file]);
+    if ((await sha256(file)) !== release.sha256) throw new Error(`Checksum mismatch for ${release.url}.`);
+    await place(file, folder);
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
 }
 
+async function ensureBinary(machine: ProxyMachine, paths: Layout): Promise<void> {
+  if (await binaryReady(machine, paths)) return;
+  await writePrivateFile(paths.restart, "\n");
+  await download(machine, machine.release, async (archive, folder) => {
+    await must(machine.run, ["tar", "-xzf", archive, "-C", folder]);
+    await must(machine.run, ["install", "-m", "0755", join(folder, "cli-proxy-api"), paths.binary]);
+  });
+}
+
+const assetReady = async (path: string, release: Release) => existsSync(path) && (await sha256(path)) === release.sha256;
+
+async function ensureAsset(machine: ProxyMachine, release: Release, path: string, restart?: string): Promise<void> {
+  if (await assetReady(path, release)) return;
+  if (restart) await writePrivateFile(restart, "\n");
+  await download(machine, release, async (file) => {
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+    const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+    try {
+      await copyFile(file, temp);
+      await chmod(temp, 0o600);
+      await rename(temp, path);
+    } finally {
+      await rm(temp, { force: true });
+    }
+  });
+}
+
+async function ensurePanel(machine: ProxyMachine, paths: Layout, panel: Panel): Promise<void> {
+  await ensureAsset(machine, panel.page, paths.page);
+  await ensureAsset(machine, panel.plugin, paths.plugin, paths.restart);
+}
+
+// Runs only after the proxy restarted with the control panel off: while the panel is on,
+// CLIProxyAPI downloads a missing management.html itself, unpinned and unchecked.
+async function closePanel(machine: ProxyMachine, paths: Layout): Promise<void> {
+  for (const path of [paths.page, paths.plugin]) await rm(path, { force: true });
+  const others = await foreignPlugins(paths);
+  if (others.length) machine.print(`Kept plugins Fleet did not install: ${others.join(", ")}. Remove them: fleet cli-proxy doctor fails while they are there.`);
+}
+
+async function foreignPlugins(paths: Layout): Promise<string[]> {
+  const names = await readdir(paths.plugins, { recursive: true }).catch(() => [] as string[]);
+  const found: string[] = [];
+  for (const name of names.map(String).sort()) {
+    const path = join(paths.plugins, name);
+    if (path !== paths.plugin && name.toLowerCase().endsWith(".so") && !(await lstat(path)).isDirectory()) found.push(path);
+  }
+  return found;
+}
+
 async function refuseLinkedLayout(home: string, paths: Layout): Promise<void> {
-  for (const path of [paths.auth, paths.binary, paths.config, paths.management, paths.restart, paths.unit, paths.key]) await refuseLinks(home, path, `${what} path`);
+  for (const path of [paths.auth, paths.binary, paths.config, paths.management, paths.restart, paths.unit, paths.key, paths.page, paths.plugin, paths.ledger]) await refuseLinks(home, path, `${what} path`);
 }
 
 async function install(machine: ProxyMachine, paths: Layout): Promise<void> {
@@ -102,13 +166,14 @@ async function install(machine: ProxyMachine, paths: Layout): Promise<void> {
   const savedManagement = await readSecret(machine.home, paths.management, managementPattern);
   const key = savedClient ?? machine.randomKey();
   const managementKey = savedManagement ?? machine.randomKey();
-  const changed = await changedFiles(machine.home, wanted(paths, key), marker, what);
+  const changed = await changedFiles(machine.home, wanted(paths, key, machine.panel), marker, what);
   for (const dir of [paths.dir, paths.auth, dirname(paths.key)]) {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await chmod(dir, 0o700);
   }
   if (changed.length || !savedManagement) await writePrivateFile(paths.restart, "\n");
   await ensureBinary(machine, paths);
+  if (machine.panel) await ensurePanel(machine, paths, machine.panel);
   if (!savedClient) await writePrivateFile(paths.key, `${key}\n`);
   if (!savedManagement) await writePrivateFile(paths.management, `MANAGEMENT_PASSWORD=${managementKey}\n`);
   await writeFiles(changed);
@@ -118,6 +183,7 @@ async function install(machine: ProxyMachine, paths: Layout): Promise<void> {
   if ((await readIfThere(paths.restart)) !== undefined) await systemctl("restart", service);
   await rm(paths.restart, { force: true });
   await systemctl("enable", "--now", service);
+  if (!machine.panel) await closePanel(machine, paths);
 }
 
 async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
@@ -125,13 +191,16 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
   const key = await readSecret(machine.home, paths.key, keyPattern);
   if (!key) throw new Error(`${paths.key} holds no proxy key. Run fleet cli-proxy install.`);
   const managementKey = await readManagementKey(machine.home);
-  await requireInstalled(machine.home, wanted(paths, key), marker, what, "fleet cli-proxy install");
+  await requireInstalled(machine.home, wanted(paths, key, machine.panel), marker, what, "fleet cli-proxy install");
   if (!(await binaryReady(machine, paths))) throw new Error(`CLIProxyAPI ${machine.release.version} is not installed. Run fleet cli-proxy install.`);
   for (const check of ["is-enabled", "is-active"]) await must(machine.run, ["systemctl", "--user", check, "--quiet", service]);
   const listeners = async () => (await must(machine.run, ["ss", "-H", "-ltn", `sport = :${proxyPort}`])).trim().split("\n").filter(Boolean).map((line) => line.split(/\s+/)[3]);
   for (let attempt = 0; attempt < 50 && !(await listeners()).includes(address); attempt++) await machine.sleep(100);
   const bound = await listeners();
   if (!bound.includes(address) || bound.some((local) => local !== address)) throw new Error(`The CLI proxy must listen on loopback only, at ${address}.`);
+  const others = await foreignPlugins(paths);
+  if (others.length) throw new Error(`Remove the plugins Fleet did not install: ${others.join(", ")}. While the Proxy panel is on, anyone with the management key can install plugins from CLIProxyAPI's plugin store, and the proxy runs them on the hub.`);
+  await panelDoctor(machine, paths, managementKey);
   const strategy = ((await management(machine.fetch, managementKey, "routing/strategy")) as { strategy?: string }).strategy;
   if (strategy !== "fill-first") throw new Error(`The proxy routes with ${strategy ?? "no strategy"}, not fill-first. Run fleet cli-proxy-balance to restore it.`);
   const { files } = (await management(machine.fetch, managementKey, "auth-files")) as { files: AuthFile[] };
@@ -151,7 +220,25 @@ async function doctor(machine: ProxyMachine, paths: Layout): Promise<void> {
     const provider = file.provider as Agent;
     machine.print(`CLI proxy: Warning: the ${subscription[provider]} subscription ${shortId(file)} cannot refresh its login, so the proxy cannot use it and the balancer cannot read its usage. Sign it in again with: ${loginCommand(paths, provider)}. Or disable it in the management panel.`);
   }
+  if (machine.panel) machine.print(`Open the management panel at ${panelUrl} on the hub, or on a devbox through its tunnel, and sign in with the MANAGEMENT_PASSWORD in ${paths.management}.`);
   for (const devbox of machine.devboxes.filter((name) => !isKeptForBoxes(name))) machine.print(`Connect ${devbox}: ssh ${devbox} ${quote(remoteFleet("cli-proxy connect"))} < ~/.config/fleet/cli-proxy.key`);
+}
+
+async function panelDoctor(machine: ProxyMachine, paths: Layout, managementKey: string): Promise<void> {
+  const page = await machine.fetch(panelUrl, { signal: AbortSignal.timeout(5000) }).catch(() => undefined);
+  await page?.body?.cancel();
+  if (!machine.panel) {
+    if (page?.ok) throw new Error(`The management panel answers at ${panelUrl}, but the Proxy panel workflow is off. Run fleet cli-proxy install.`);
+    return;
+  }
+  for (const [path, release, name] of [[paths.page, machine.panel.page, "management panel"], [paths.plugin, machine.panel.plugin, "quota-ledger plugin"]] as const) {
+    if (!existsSync(path)) throw new Error(`${path} is missing. Run fleet cli-proxy install.`);
+    if (!(await assetReady(path, release))) throw new Error(`${path} does not match the pinned ${name} ${release.version}. It may have come from an unpinned source, such as CLIProxyAPI's own panel download. Run fleet cli-proxy install.`);
+  }
+  if (!page?.ok) throw new Error(`The management panel does not load at ${panelUrl}. Run fleet cli-proxy install.`);
+  await management(machine.fetch, managementKey, `quota-ledger/samples?since=${machine.now()}`).catch(() => {
+    throw new Error("The quota-ledger plugin does not answer, so the panel has no quota history. Run fleet cli-proxy install.");
+  });
 }
 
 type AuthFile = { name?: string; auth_index?: string; provider?: string; disabled?: boolean; unavailable?: boolean; status?: string; status_message?: string };
@@ -355,6 +442,9 @@ async function plan(machine: ProxyMachine, paths: Layout): Promise<void> {
   if (!(await binaryReady(machine, paths))) machine.print(`  Install CLIProxyAPI ${machine.release.version} at ${paths.binary}.`);
   machine.print(`  Run it at ${proxyUrl}, loopback only, with fill-first routing and session affinity, as ${service}.`);
   machine.print(`  Keep the client key in ${paths.key} and the management key in ${paths.management}, both mode 600.`);
+  machine.print(machine.panel
+    ? `  Serve the management panel ${machine.panel.page.version} at ${panelUrl}, loopback only, with ${machine.panel.historyDays} days of quota history from the quota-ledger plugin ${machine.panel.plugin.version}.`
+    : "  Keep the management panel off. Turn on the Proxy panel workflow to serve it.");
   const agent = pooled(machine.plan);
   machine.print(agent === "claude" ? "  Every 5 minutes, fleet cli-proxy-balance puts the subscription whose weekly quota resets first on top." : "  Every 5 minutes, fleet cli-proxy-balance frees each subscription whose quota cooldown its live usage disproves.");
   machine.print(`  Add at least ${machine.accounts ?? 2} of your own ${subscription[agent]} subscriptions with: ${loginCommand(paths, agent)}`);

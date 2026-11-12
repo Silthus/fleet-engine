@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { standingFor } from "./proof.ts";
 
-import { cleanFixtures, fixture, settings, lookup, checkout, reviewHead, decideRule, withDecideRule, finishRound, recordingModel } from "./proof-testing.ts";
+import { cleanFixtures, fixture, settings, lookup, checkout, reviewHead, decideRule, withDecideRule, finishRound, recordingModel, markPanel } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -550,6 +550,7 @@ test("stray entries in reviews/ are ignored, and findings already in the round f
   writeFileSync(findings, "No findings.\n");
 
   expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", findings)).code).toBe(0);
+  markPanel(pr, "1");
   await pr.fleet("require", "--none", "--reason", "docs only");
   expect((await pr.fleet("gate")).code).toBe(0);
 
@@ -572,6 +573,7 @@ test("the gate fails while a finding has no answer, and respond refuses answers 
   await pr.fleet("review-start", "--scope", "full");
   writeFileSync(join(pr.repository, "findings.md"), "- high, feature.txt:1, the greeting is wrong | anchor: new\n- low, feature.txt:1, a nit | anchor: new\n");
   await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md");
+  markPanel(pr, "1");
   await pr.commit("feature.txt", "fixed\n");
   await pr.fleet("review-start", "--scope", "fixes", "--base", head);
   await finishRound(pr, "2");

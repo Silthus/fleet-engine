@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isKeptForBoxes } from "../../../src/hub/names.ts";
 import { LockBusy, lockBox, tryLockBox, userWaitMs, withBoxLock, type HeldLock, type LockOptions } from "./box-lock.ts";
 import { assertBox, boxMarkerPath, boxNameFor, claudeTokenPath, handOver, hubForward, link, linkFile, recordedEnvironment, restoreForward, startUnit, stopUnit, t3Port, unitOf, unlink, type BoxCoder } from "./links.ts";
 import type { Box } from "./coder.ts";
@@ -651,18 +652,26 @@ export async function idle(here: Machine): Promise<number> {
 }
 
 export type NightlyStep = { name: string; run(): number | Promise<number> };
-export type NightlyParts = { session(): Promise<number>; reap(): Promise<number>; grant(devbox: string): Promise<number>; refresh(): Promise<number> };
+export type NightlyParts = { session(): Promise<number>; reap(): Promise<number>; refresh(): Promise<number> };
+export type GrantParts = { session(): Promise<number>; grant(devbox: string): Promise<number> };
 
-export function nightlySteps(here: Machine, parts: NightlyParts): NightlyStep[] {
+export function nightlySteps(parts: NightlyParts): NightlyStep[] {
   return [
     { name: "check the Coder session", run: parts.session },
     { name: "reap", run: parts.reap },
-    ...here.devboxes.map((devbox) => ({ name: `grant ${devbox}`, run: () => parts.grant(devbox) })),
     { name: "refresh the pool", run: parts.refresh },
   ];
 }
 
-export async function nightly(steps: NightlyStep[], here: Machine): Promise<number> {
+export function grantSteps(devboxes: string[], hub: { alias: string; self: string }, parts: GrantParts): NightlyStep[] {
+  const targets = devboxes.filter((devbox) => devbox !== hub.alias && devbox !== hub.self && !isKeptForBoxes(devbox));
+  return [
+    { name: "check the Coder session", run: parts.session },
+    ...targets.map((devbox) => ({ name: `grant ${devbox}`, run: () => parts.grant(devbox) })),
+  ];
+}
+
+export async function nightly(steps: NightlyStep[], here: Pick<Machine, "now" | "say">): Promise<number> {
   let status = 0;
   for (const step of steps) {
     here.say(`${new Date(here.now()).toISOString()} ${step.name}`);

@@ -81,7 +81,7 @@ test("a box handed over on the Codex plan sends Codex through the proxy without 
   writeHome(hub.machine.home, { ".config/fleet/cli-proxy.key": `${clientKey}\n` });
   const boxHome = roleHome(temp.make("fleet-box-"), "devbox");
   const fetch = async () => Response.json({ data: [{ id: "gpt-6.1-sol" }] });
-  const box = (stdin: string): ProxyMachine => ({ home: boxHome, uid: 1000, user: "me", plan: "codex", devboxes: [], release: { version: "", url: "", sha256: "" }, run: async () => ok, fetch, sleep: async () => {}, readStdin: async () => stdin, randomKey: () => clientKey, print: () => {} });
+  const box = (stdin: string): ProxyMachine => ({ home: boxHome, uid: 1000, user: "me", plan: "codex", devboxes: [], release: { version: "", url: "", sha256: "" }, run: async () => ok, fetch, now: () => 0, sleep: async () => {}, readStdin: async () => stdin, randomKey: () => clientKey, print: () => {} });
   const { coder } = fakeCoder({ ssh: async (_name, command, stdin) => (command.includes("cli-proxy connect") ? { ...ok, code: await cliProxy("connect", box(stdin ?? "")) } : ok) });
   await handOver(coder, hub.machine, "box-lane");
   expect(parse(readFileSync(join(boxHome, ".codex/config.toml"), "utf8")).model_provider).toBe("fleet-proxy");
