@@ -39,7 +39,7 @@ const tokenDropIn = ".config/systemd/user/t3code.service.d/claude-token.conf";
 const dropInText = `[Service]\nEnvironmentFile=%h/${tokenFile}\n`;
 const tokenShape = /^[A-Za-z0-9._~+/=-]+$/;
 const needsReload = "reload";
-const restartCommand = "systemctl --user restart t3code.service";
+export const restartCommand = "systemctl --user restart t3code.service";
 
 const tokenFinding = (say: string, repair: Finding["repair"] = "human") => finding("claude-token", say, repair);
 
