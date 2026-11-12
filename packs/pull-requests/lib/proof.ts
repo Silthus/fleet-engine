@@ -439,7 +439,7 @@ function unanswered(findings: string, responses: string) {
 
 export const proofKinds = ["live-run", "ui-walk", "prod-shape", "cross-version", "shadow-diff", "post-deploy-watch"] as const;
 export type ProofKind = (typeof proofKinds)[number];
-const gapKinds = [...proofKinds, "ci", "judge"] as const;
+const gapKinds = [...proofKinds, "ci", "judge", "panel"] as const;
 type GapKind = (typeof gapKinds)[number];
 
 export function proofKind(value: string): ProofKind {
@@ -672,7 +672,7 @@ async function kindStatus(home: string, identity: ProofIdentity, kind: ProofKind
   return { problem: "missing", line: `${kind}: missing at HEAD; the newest evidence is at ${short(newest)}. Save new evidence, or run fleet proof save --kind ${kind} --reuse-from ${short(newest)} --reason <why it still proves HEAD>` };
 }
 
-type FinishedReview = { name: string; commit: string; reviewer?: string; finishedAt: bigint };
+type FinishedReview = { name: string; commit: string; reviewer?: string; finishedAt: bigint; panel: boolean };
 
 async function finishedReviews(home: string, identity: ProofIdentity) {
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
@@ -680,7 +680,8 @@ async function finishedReviews(home: string, identity: ProofIdentity) {
   for (const name of await reviewNames(reviews)) {
     const reservation = await readJson<(ProofIdentity & { reviewer?: string }) | undefined>(join(reviews, name, "round.json"), undefined);
     const findings = await stat(join(reviews, name, "findings.md"), { bigint: true }).catch(() => undefined);
-    if (reservation && findings) finished.push({ name, commit: reservation.commit, reviewer: reservation.reviewer, finishedAt: findings.mtimeNs });
+    const panel = await access(join(reviews, name, "panel.json")).then(() => true, () => false);
+    if (reservation && findings) finished.push({ name, commit: reservation.commit, reviewer: reservation.reviewer, finishedAt: findings.mtimeNs, panel });
   }
   return finished.sort((a, b) => (a.finishedAt < b.finishedAt ? -1 : a.finishedAt > b.finishedAt ? 1 : 0));
 }
@@ -726,8 +727,22 @@ async function carryForward(home: string, identity: ProofIdentity, reviewed: Set
   return carried;
 }
 
-async function reviewStatus(home: string, identity: ProofIdentity, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit): Promise<Status> {
-  const finished = await finishedReviews(home, identity);
+const panelHint = "Run the qa-swarm panel with fleet proof review --lens <lens> --lens <lens> ..., or, for a PR that the user's rules exempt from the swarm, record fleet proof gap --kind panel --reason <the exception>";
+
+async function reviewStatus(home: string, identity: ProofIdentity, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, now: Date): Promise<Status> {
+  const all = await finishedReviews(home, identity);
+  const firstPanel = all.find((review) => review.panel);
+  if (firstPanel) return headReview(home, identity, all.filter((review) => review.finishedAt >= firstPanel.finishedAt), cleanBaseMerge, quietCommit);
+  const gap = await readJson<Gap | undefined>(gapPath(home, identity, "panel"), undefined);
+  if (!gap) return { problem: "missing", line: `review: no finished panel round on the PR${all.length ? `; ${all.length} single-reviewer review(s) do not count` : ""}. ${panelHint}` };
+  const acceptance = await gapAcceptance(home, gap, "panel", now);
+  const line = `panel gap from ${short(gap.commit)}, ${acceptance?.line ?? "not accepted"}: ${gap.reason}`;
+  const head = await headReview(home, identity, all, cleanBaseMerge, quietCommit);
+  if (!acceptance) return { problem: head.problem ?? "gap", line: `${head.line}; ${line}` };
+  return { ...head, line: `${head.line}; ${line}`, covered: head.covered && `${head.covered}, ${line}` };
+}
+
+async function headReview(home: string, identity: ProofIdentity, finished: FinishedReview[], cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit): Promise<Status> {
   const head = finished.filter((review) => review.commit === identity.commit).at(-1);
   if (head) {
     const covered = `${reviewLabel(head.name)}${head.reviewer ? ` by ${head.reviewer}` : ""}`;
@@ -784,7 +799,7 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   if (!owed) statuses.push({ problem: "missing", line: "owed proofs: not recorded; run fleet proof require --kinds <kind,kind> or fleet proof require --none --reason <why>" });
   else if (!owed.kinds.length) statuses.push({ problem: undefined, line: `owed proofs: none (${owed.none?.reason ?? "no reason recorded"})` });
   const kinds = await Promise.all((owed?.kinds ?? []).map(async (kind) => ({ kind, ...await kindStatus(home, identity, kind, landed, cleanBaseMerge, now) })));
-  const review = await reviewStatus(home, identity, cleanBaseMerge, quietCommit);
+  const review = await reviewStatus(home, identity, cleanBaseMerge, quietCommit, now);
   const responses = await responseStatuses(home, identity);
   const before = pushedHead();
   const ciResult = ci();
