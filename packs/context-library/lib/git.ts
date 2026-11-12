@@ -2,7 +2,7 @@ export type Run = { code: number; stdout: string; stderr: string };
 export type Git = (args: string[], cwd: string) => Promise<Run>;
 
 export const runGit: Git = async (args, cwd) => {
-  const child = Bun.spawn(["git", "-c", "core.quotePath=false", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(["git", "-c", "core.quotePath=false", ...args], { cwd, env: process.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, stdout, stderr };
 };
