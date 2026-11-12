@@ -28,6 +28,15 @@ describe("get.sh", () => {
     expect(readFileSync(box.log, "utf8")).toContain("brew installer stdin=tty");
   });
 
+  onLinuxHost("on macOS puts Homebrew's folders, /opt/homebrew/bin and /usr/local/bin, first on PATH", () => {
+    const box = sandbox("Darwin");
+    const seen = join(box.root, "seen-path");
+    box.stub("xcode-select", `echo "$PATH" > "${seen}"; kill -TERM $PPID`);
+    const { FLEET_HOMEBREW_BINS: _, ...env } = box.env;
+    Bun.spawnSync(["sh", join(repoRoot, "get.sh"), "--ref", "v0.1.0", "--install-only"], { env, stdin: "ignore" });
+    expect(readFileSync(seen, "utf8")).toStartWith("/opt/homebrew/bin:/usr/local/bin:");
+  });
+
   onLinuxHost("on macOS installs the Command Line Tools first and waits until they are there", () => {
     const box = sandbox("Darwin");
     const count = join(box.root, "xcode-checks");

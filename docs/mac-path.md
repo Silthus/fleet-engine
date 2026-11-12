@@ -24,6 +24,7 @@ No agent can run a real Mac. Agents work on Linux devboxes. So this document, pl
 - `src/get-macos.test.ts › get.sh › on macOS without the T3 Code app, installs Homebrew and the app, then applies the profile`
 - `src/get-macos.test.ts › get.sh › under curl | sh, gives the Homebrew installer the terminal so it can ask for the password`
 - `src/get-macos.test.ts › get.sh › on macOS with the T3 Code app, needs no Homebrew and nothing from the person`
+- `src/get-macos.test.ts › get.sh › on macOS puts Homebrew's folders, /opt/homebrew/bin and /usr/local/bin, first on PATH` (new)
 - `src/get.test.ts › get.sh › on macOS stops when the Homebrew installer leaves no brew on PATH` (new)
 - `src/get.test.ts › get.sh › passes sh -n`
 
@@ -229,5 +230,5 @@ Each step is for a person on a clean macOS user account.
 - **No test:** finding the T3 server on the Mac through `ps` and the `.app` bundle (`serverCli` in `src/adapters/t3/session.ts`).
 - **No test:** `open` in place of `xdg-open` on the Mac (`realMachine.openUrl` in `src/setup/commands.ts`). It reads the platform from `node:os`, so a test cannot choose it.
 - **No test with the real files:** the pinned gh and Bun zips. The tests serve a wrong file and check the refusal. An agent ran `get.sh` as a fake arm64 Mac on Linux with the real downloads: both checksums matched, and both binaries are Mach-O.
-- **No test:** the skip for an existing `/Applications/T3 Code.app` (the tests stub `open -Ra`). It uses an absolute path that a test cannot make. The tests prove that `get.sh` puts the Homebrew folders from `FLEET_HOMEBREW_BINS` on `PATH`, but not its default, `/opt/homebrew/bin:/usr/local/bin`.
+- **No test:** the skip for an existing `/Applications/T3 Code.app` (the tests stub `open -Ra`). It uses an absolute path that a test cannot make.
 - **Shell.** The tests run `get.sh` with Linux's `sh`. macOS runs it with its own `/bin/sh`. `sh -n` and the POSIX-only script lower this risk, but only a Mac run proves it.
