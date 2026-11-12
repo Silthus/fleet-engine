@@ -200,6 +200,7 @@ test("balance tells an expired login apart from usage it could not read, ranks t
     { name: "a.json", provider: "claude", auth_index: "1", priority: 1 },
     { name: "expired.json", provider: "claude", auth_index: "2", priority: 0, status: "error", status_message: '{"error":"invalid_grant","error_description":"refresh token for alice expired"}' },
     { name: "odd.json", provider: "claude", auth_index: "3", priority: 0, status: "error", status_message: "upstream hiccup for alice" },
+    { name: "back.json", provider: "claude", auth_index: "4", priority: 0, status: "active", status_message: '{"error":"invalid_grant"}' },
   ];
   const { fetch } = managementApi({ strategy: "fill-first", files, usage: { "1": { seven_day: { utilization: 20, resets_at: new Date(now + day).toISOString() } } } });
   const lines: string[] = [];
@@ -210,6 +211,7 @@ test("balance tells an expired login apart from usage it could not read, ranks t
   expect(lines.filter((line) => !line.startsWith("a.json"))).toEqual([
     "expired.json: priority 0, usage unreadable: its login expired. Sign it in again on the hub; fleet cli-proxy doctor names the command",
     "odd.json: priority 0, usage unreadable",
+    "back.json: priority 0, usage unreadable",
   ]);
   expect(lines.join("\n")).not.toContain("alice");
 });

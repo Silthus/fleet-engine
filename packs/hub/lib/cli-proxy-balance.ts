@@ -10,7 +10,7 @@ export type Credential = { name: string; authIndex: string; provider: Provider; 
 export type Balance = { fetch: Fetch; managementKey: string; now: number; dryRun: boolean; log(line: string): void };
 export type BalanceDeps = { home: string; fetch: Fetch; now(): number; log(line: string): void };
 
-type AuthFile = { name: string; provider?: string; disabled?: boolean; priority?: number; auth_index?: string; unavailable?: boolean; status_message?: string; cooldowns?: { reason?: string }[]; id_token?: { chatgpt_account_id?: unknown } };
+type AuthFile = { name: string; provider?: string; disabled?: boolean; priority?: number; auth_index?: string; unavailable?: boolean; status?: string; status_message?: string; cooldowns?: { reason?: string }[]; id_token?: { chatgpt_account_id?: unknown } };
 type RawWindow = { utilization?: number | null; resets_at?: string | null } | null | undefined;
 type CodexWindow = { used_percent?: number; reset_at?: number; limit_window_seconds?: number } | null | undefined;
 type CodexLimit = { allowed?: boolean; limit_reached?: boolean; primary_window?: CodexWindow; secondary_window?: CodexWindow } | undefined;
@@ -86,8 +86,9 @@ export async function balance(options: Balance): Promise<void> {
   }
 }
 
-export function loginExpired(file: { status_message?: string }): boolean {
-  return /invalid[_ ]grant/i.test(file.status_message ?? "");
+/** The proxy keeps the last error message after a login works again, so only a subscription that is also failing counts as expired. */
+export function loginExpired(file: { status?: string; unavailable?: boolean; status_message?: string }): boolean {
+  return (file.status === "error" || file.unavailable === true) && /invalid[_ ]grant/i.test(file.status_message ?? "");
 }
 
 function quotaCooldown(file: AuthFile): boolean {

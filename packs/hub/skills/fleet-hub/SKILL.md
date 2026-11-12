@@ -103,10 +103,12 @@ the person's own subscriptions, never for someone else's.
   0. It keeps fill-first routing, and session affinity keeps each session on
   one subscription. `fleet cli-proxy-balance --dry-run` prints the ranking and
   changes nothing. Unreadable usage does not fail the run. When the proxy says
-  a subscription's login expired (`invalid_grant`), the balancer's log line
-  says so, and `fleet cli-proxy doctor` passes with a warning that names the
-  subscription and its sign-in command. Usage that is unreadable for another
-  reason has no such warning: it clears on a later run.
+  a subscription's login expired (`invalid_grant`) while that subscription
+  fails, the balancer's log line says so, and `fleet cli-proxy doctor` warns
+  with the subscription's short id, never its file name, which holds the
+  account's email, and its sign-in command. The doctor counts only working
+  subscriptions toward the minimum and fails when too few work. Usage that is
+  unreadable for another reason has no such warning: it clears on a later run.
 - **Claude Code.** On the `claude` and `both` plans, on the hub and on each
   devbox, Fleet sets `env.ANTHROPIC_BASE_URL` to the proxy and `apiKeyHelper`
   to a command that reads the client key file. The key is never in the
