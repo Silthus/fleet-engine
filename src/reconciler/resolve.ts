@@ -76,6 +76,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
     const reason =
       item.on && !item.on.includes(os) ? `not on ${os}`
       : item.roles && !item.roles.includes(machine.role) && !(solo && item.roles.includes("solo")) ? (hubless && item.roles.includes("hub") ? hublessReason : `not on a ${machine.role}`)
+      : item.oncePerFleet && profile.hub && machine.role !== "hub" ? `runs once per fleet, on the hub ${profile.hub}`
       : item.plans && !item.plans.includes(profile.plan) ? `not for plan ${profile.plan}`
       : item.workflow && !active.has(item.workflow) ? `workflow ${item.workflow} is off`
       : undefined;
