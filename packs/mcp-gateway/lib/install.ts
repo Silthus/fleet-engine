@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { LocalUpstream } from "./apps.ts";
 import { browserGatewayUrl } from "./client.ts";
+import { declaredUpstreams } from "./declared.ts";
 import { container, dataDir, must, ownedContainer, prepareMcpHub, syncWhenReady, type Hub } from "./hub.ts";
 
 export const mcphubImage = "samanhappy/mcphub@sha256:68228dabac98e22ce3d82e83b6f4f45d1b2b2c2d76342c61dc809b44329b2a58";
@@ -14,6 +16,51 @@ export const codexMount = "/opt/fleet-codex";
 export const bridgeFile = "/app/fleet-app-bridge.mjs";
 export const legacyBridgeFile = "/app/fleet-slack-bridge.mjs";
 export const codexPackage = (home: string) => join(home, ".local/share/fleet/codex");
+export const localMount = "/fleet-local";
+export const localDir = (home: string) => join(dataDir(home), "local");
+export const localEntry = (upstream: Pick<LocalUpstream, "name">) => `${localMount}/${upstream.name}.mjs`;
+
+type Mount = { Source?: string; Destination: string };
+type Bundle = { path: string; bytes: Buffer };
+
+const localUpstreams = async (home: string) => (await declaredUpstreams(home)).filter((upstream): upstream is LocalUpstream => upstream.kind === "local");
+
+async function localBundles(home: string): Promise<Bundle[]> {
+  const bundles: Bundle[] = [];
+  for (const upstream of await localUpstreams(home)) {
+    const build = await Bun.build({ entrypoints: [upstream.script], target: "node", format: "esm" }).catch((error: Error) => ({ success: false as const, logs: [error.message], outputs: [] }));
+    if (!build.success) throw new Error(`${upstream.title} did not build from ${upstream.script}: ${build.logs.join("; ")}`);
+    bundles.push({ path: join(localDir(home), `${upstream.name}.mjs`), bytes: Buffer.from(await build.outputs[0]!.arrayBuffer()) });
+  }
+  return bundles;
+}
+
+async function localMounts(home: string): Promise<Mount[]> {
+  const upstreams = await localUpstreams(home);
+  const mounts: Mount[] = upstreams.length ? [{ Source: localDir(home), Destination: localMount }] : [];
+  for (const upstream of upstreams) {
+    for (const mount of upstream.mounts ?? []) {
+      const source = await realpath(mount.source).catch(() => { throw new Error(`${upstream.title} mounts ${mount.source}, which is missing on the hub.`); });
+      mounts.push({ Source: source, Destination: mount.target });
+    }
+  }
+  return mounts;
+}
+
+const mountKey = (mount: Mount) => `${mount.Source}:${mount.Destination}`;
+const fleetMounts = (mounts: Mount[] = []) => mounts.filter((mount) => mount.Destination.startsWith("/fleet-")).map(mountKey).sort();
+const mountsCurrent = (current: Mount[] | undefined, wanted: Mount[]) => Bun.deepEquals(fleetMounts(current), wanted.map(mountKey).sort());
+
+async function bundlesCurrent(bundles: Bundle[]) {
+  for (const bundle of bundles) if (!(await readFile(bundle.path).then((bytes) => bytes.equals(bundle.bytes), () => false))) return false;
+  return true;
+}
+
+async function writeBundles(home: string, bundles: Bundle[]) {
+  if (!bundles.length) return;
+  await mkdir(localDir(home), { recursive: true, mode: 0o700 });
+  for (const bundle of bundles) await writeFile(bundle.path, bundle.bytes, { mode: 0o600 });
+}
 const sdkPackages = ["client", "core", "node", "server", "server-legacy"];
 const compiledFiles = ["clients/legacyMcpClient.js", "services/mcpService.js"];
 
@@ -26,7 +73,9 @@ export async function install(hub: Hub) {
   const wanted = (JSON.parse(await must(hub, ["docker", "image", "inspect", image])) as Array<{ Id: string }>)[0]!.Id;
   const environment = (await readFile(paths.environment, "utf8")).split("\n").filter(Boolean);
   const mounted = current?.Mounts?.some((mount) => mount.Destination === codexMount);
-  if (current && (current.Image !== wanted || !mounted || !environment.every((line) => current!.Config.Env?.includes(line)))) {
+  await writeBundles(hub.home, await localBundles(hub.home));
+  const locals = await localMounts(hub.home);
+  if (current && (current.Image !== wanted || !mounted || !mountsCurrent(current.Mounts, locals) || !environment.every((line) => current!.Config.Env?.includes(line)))) {
     await must(hub, ["docker", "stop", container]);
     await must(hub, ["docker", "rm", container]);
     current = undefined;
@@ -37,7 +86,7 @@ export async function install(hub: Hub) {
     await must(hub, ["docker", "run", "-d", "--name", container, "--label", "org.fleet.service=mcphub", "--restart", "unless-stopped",
       "--user", `${hub.uid}:${hub.gid}`, "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--env-file", paths.environment,
       "-p", "127.0.0.1:3317:3000", "-v", `${directory}/data:/app/data`, "-v", `${directory}/logs:/app/logs`,
-      "-v", `${codexPackage(hub.home)}:${codexMount}:ro`, "--entrypoint", "node", image, "dist/index.js"]);
+      "-v", `${codexPackage(hub.home)}:${codexMount}:ro`, ...locals.flatMap((mount) => ["-v", `${mount.Source}:${mount.Destination}:ro`]), "--entrypoint", "node", image, "dist/index.js"]);
   } else if (!current.State.Running) await must(hub, ["docker", "start", container]);
   await syncWhenReady(hub);
   hub.print(`MCPHub installed: ${baseUrl}/`);
@@ -57,13 +106,15 @@ async function imageParts(root: string) {
   return { patchPath, sdkManifest, sdkLock, bridge, image };
 }
 
-/** Whether the running gateway container is Fleet's, of the image this engine builds, with Fleet's Codex mounted. */
+/** Whether the running gateway container is Fleet's, of the image this engine builds, with Fleet's Codex and each local upstream's current bundle and folders mounted. */
 export async function gatewayCurrent(hub: Hub) {
   const { image } = await imageParts(hub.root);
   const built = await hub.run(["docker", "image", "inspect", image]);
   const running = await ownedContainer(hub).catch(() => undefined);
   if (built.code || !running?.State.Running) return false;
-  return running.Image === (JSON.parse(built.stdout) as Array<{ Id: string }>)[0]!.Id && Boolean(running.Mounts?.some((mount) => mount.Destination === codexMount));
+  if (running.Image !== (JSON.parse(built.stdout) as Array<{ Id: string }>)[0]!.Id || !running.Mounts?.some((mount) => mount.Destination === codexMount)) return false;
+  const locals = await localMounts(hub.home).catch(() => undefined);
+  return Boolean(locals && mountsCurrent(running.Mounts, locals) && (await bundlesCurrent(await localBundles(hub.home))));
 }
 
 export async function buildImage(hub: Hub, source = mcphubSource) {

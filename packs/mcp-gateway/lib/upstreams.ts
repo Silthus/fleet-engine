@@ -4,7 +4,7 @@ import { builtInApps, type CodexApp, type Upstream } from "./apps.ts";
 import { declaredUpstreams } from "./declared.ts";
 import { browserGatewayUrl } from "./client.ts";
 import { dataDir, managementApi, syncGatewayGroup, type Api, type Hub } from "./hub.ts";
-import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile } from "./install.ts";
+import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile, localEntry } from "./install.ts";
 
 const account = (app: CodexApp) => `${app.account ?? app.name}-codex`;
 export const appHome = (home: string, app: CodexApp) => join(dataDir(home), "data", account(app));
@@ -18,6 +18,7 @@ const holds = (have: unknown, want: unknown, key = ""): boolean =>
 
 function wanted(upstream: Upstream, hub: Hub): Config {
   if (upstream.kind === "oauth") return { type: "streamable-http", url: upstream.url, description: marker, startOnDemand: true, oauth: { redirectUri: `${browserGatewayUrl(hub.gateway)}/oauth/callback` } };
+  if (upstream.kind === "local") return { type: "stdio", command: "node", args: [localEntry(upstream)], description: marker, env: upstream.env ?? {}, startOnDemand: true };
   const home = `/app/data/${account(upstream)}`;
   return {
     type: "stdio",
@@ -65,7 +66,7 @@ export async function registerUpstream(hub: Hub, upstream: Upstream) {
   if (upstream.kind === "codex-app" && !(await exists(hubCodex(hub.home)))) throw new Error(codexMissing);
   const call = await managementApi(hub);
   refuseTheirs(await current(call, upstream.name), upstream);
-  if (upstream.kind === "codex-app") await install(hub);
+  if (upstream.kind !== "oauth") await install(hub);
   const config = await current(call, upstream.name);
   refuseTheirs(config, upstream);
   if (upstream.kind === "codex-app") {
@@ -82,6 +83,7 @@ export async function registerUpstream(hub: Hub, upstream: Upstream) {
   if (!holds(kept, want) || !(await groupServes(call, upstream))) throw new Error(`The MCP gateway did not keep the settings of ${upstream.title}. Run: fleet mcp-gateway doctor`);
   if (upstream.kind === "oauth") return hub.print(`${upstream.title} is in the MCP gateway.${config ? "" : " To sign in to it, on the hub, run: fleet mcp-gateway sign-in"}`);
   hub.print(`${upstream.title} is in the MCP gateway.`);
+  if (upstream.kind === "local") return;
   if (!(await appSignedIn(hub, upstream))) hub.print(`Sign ${upstream.title} in to ChatGPT, with the account whose ${upstream.title} app it should use. On the hub, run: fleet mcp-gateway sign-in ${upstream.name}`);
 }
 

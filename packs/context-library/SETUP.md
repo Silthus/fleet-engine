@@ -11,3 +11,8 @@ keeps a checkout of it. Ask with your question tool:
 - **New repo**: create a private repo first, such as
   `gh repo create <their login>/context-library --private --add-readme`, then
   add `--set context-library.repo=<their login>/context-library`.
+
+With the MCP gateway on, the hub also serves the library's search as the
+`context_search` tool. It mounts the hub's checkout read-only and logs only
+the time and the number of results of each search, never the words or the
+results.

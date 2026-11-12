@@ -131,9 +131,9 @@ export function fakeHub(home: string, fields: Partial<Hub> = {}): Hub & { printe
 }
 
 export const environmentOf = (home: string) => readFileSync(join(home, ".local/share/fleet-mcphub/runtime.env"), "utf8").split("\n").filter(Boolean);
-const mounts = (command: string[]) => command.flatMap((arg, index) => (command[index - 1] === "-v" ? [{ Destination: arg.split(":")[1]! }] : []));
+const mounts = (command: string[]) => command.flatMap((arg, index) => (command[index - 1] === "-v" ? [{ Source: arg.split(":")[0]!, Destination: arg.split(":")[1]! }] : []));
 
-export type FakeContainer = { Config: { Labels: Record<string, string>; Env: string[] }; Image: string; State: { Running: boolean }; Mounts: Array<{ Destination: string }> };
+export type FakeContainer = { Config: { Labels: Record<string, string>; Env: string[] }; Image: string; State: { Running: boolean }; Mounts: Array<{ Source?: string; Destination: string }> };
 
 export function dockerHost(home: string, start?: FakeContainer) {
   let container = start;
