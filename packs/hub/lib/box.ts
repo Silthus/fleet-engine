@@ -8,6 +8,8 @@ import { assertBox, boxMarkerPath, boxNameFor, claudeTokenPath, handOver, hubFor
 import type { Box } from "./coder.ts";
 import { quote, remoteFleet, type Machine } from "./machine.ts";
 import { writePrivateFile } from "../../mcp-gateway/lib/client.ts";
+import { readT3Threads, threadsOwningPrs } from "../../pull-requests/lib/pr-owners.ts";
+import type { ShellThread } from "../../base/lib/t3/index.ts";
 import * as registry from "./pool.ts";
 
 export type BoxHooks = { stopping?(box: string): void | Promise<void> };
@@ -360,7 +362,7 @@ async function unfinishedWorkOn(coder: BoxCoder, box: Workspace): Promise<string
   const answer = await coder.ssh(box.name, remoteFleet("box threads"));
   if (answer.code !== 0) return `it did not list its threads (exit ${answer.code}: ${(answer.stderr || answer.stdout).trim()})`;
   const unfinished = answer.stdout.trim();
-  if (unfinished) return `these threads still run or wait for an answer:\n${unfinished.split("\n").map((thread) => `  ${thread}`).join("\n")}\nFinish or stop them first`;
+  if (unfinished) return `these threads still run, wait for an answer, or own an open PR:\n${unfinished.split("\n").map((thread) => `  ${thread}`).join("\n")}\nFinish or stop them, and hand over their PRs, first`;
   return undefined;
 }
 
@@ -632,9 +634,11 @@ export function unfinishedThreads(state: Database, now: number): string[] {
   return rows.map((row) => row.thread);
 }
 
-export function threads(here: Machine): number {
+export async function threads(here: Machine, readThreads: (home: string) => Promise<ShellThread[] | undefined> = readT3Threads): Promise<number> {
   assertBox(here.workspace);
   for (const thread of readT3State(here.home, (state) => unfinishedThreads(state, here.now()), [] as string[])) here.print(thread);
+  const open = await readThreads(here.home);
+  for (const line of open ? threadsOwningPrs(open) : ["T3 did not answer, so which threads own open PRs is unknown"]) here.print(line);
   return 0;
 }
 

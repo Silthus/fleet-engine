@@ -19,13 +19,13 @@ const usage = `Usage: fleet box spawn [<name>] [--new]
        fleet box release <box> [--force] [--delete]
                                    Return a box to the pool and stop it, or, when the pool is full or with
                                    --delete, unlink it everywhere and delete it; refuses while its threads
-                                   still run or wait for an answer, unless forced
+                                   still run, wait for an answer, or own an open PR, unless forced
        fleet box list              List the boxes
        fleet box run <box> -- <command>
                                    Run a command in a login shell on the box with Fleet's Coder session
        fleet box start <box>       Start a stopped box and reconnect its forwards everywhere
        fleet box idle              On a box: exit 0 when it is idle, 1 when it is at work
-       fleet box threads           On a box: list the threads that still run or wait for an answer
+       fleet box threads           On a box: list the threads that still run, wait for an answer, or own an open PR
        fleet box restore           Start the T3 forwards of recorded box links again
        fleet box token             Save a Claude token from standard input for new boxes (claude setup-token makes one)
        fleet box sweep             Stop idle boxes, keep busy ones up, and finish what a crashed operation left (hub, every 15 minutes)
