@@ -344,7 +344,8 @@ installs. Ask:
   Fleet's state and every file or linked folder it replaces to
   `~/.local/state/fleet/backups/`. A linked folder moves whole, with
   everything in it, so say which ones move. The other Fleet's files that
-  this profile does not write stay where they are.
+  this profile does not write stay where they are, except those inside a
+  linked folder that moves.
 - **Stop here**: nothing changes, and setup cannot finish while the other
   Fleet keeps the files.
 
