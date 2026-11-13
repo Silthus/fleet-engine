@@ -356,6 +356,37 @@ test("a review-start whose decision the hub drops keeps its round, and the same 
   expect(listed).toEqual([expect.stringContaining(`[${decision}]`)]);
 });
 
+test("a review-start with another scope refuses the round whose decision is not recorded yet and names it, and the same command still takes it", async () => {
+  const pr = await checkout();
+  const reviewed = await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow("Not recorded");
+  const decision = roundDecision(pr);
+  hub.state.hub = "up";
+
+  const round = join(pr.pullRequest, "reviews/1");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--agent", "one last read")).rejects.toThrow(`Review round 1 at this HEAD is reserved with --scope full, and its decision is not recorded yet. Run its command again with --scope full to record it, or remove ${round} to drop it`);
+  expect(roundDecision(pr)).toBe(decision);
+  expect((await pr.fleet(...overrideStart)).code).toBe(0);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${decision}]`)]);
+});
+
+test("a review-start for a final read in another phase refuses the final read whose decision is not recorded yet", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewed = await reviewHead(pr);
+  await pr.commit("feature.txt", "newer\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--override", `2026-10-25 "Run one more round"`)).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--phase", "babysit", "--agent", "babysit read")).rejects.toThrow("Review round final-1 at this HEAD is reserved with --scope final --base");
+});
+
 test("review-finish saves a round whose decision is recorded while the hub is down", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "new\n");

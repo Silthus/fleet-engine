@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, requireReservation, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, markRecorded, readReservation, roundDirectories, unrecordedElsewhere, type Arbiter, type CapturedBy, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
+import { askGap, authorOf, finishReview, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, requireReservation, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, markRecorded, readReservation, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
 import { AnswerTaken, appendOnce, decideAlone, hearUser, ledgerHolds, ledgerOf } from "./decision-cli.ts";
 import { HubUnreachable, refText, type Decision, type Ssh } from "./decision-ledger.ts";
 import { ciOf, pushedHeadOf, readPullRequest, runIn } from "./pr-ci.ts";
@@ -379,7 +379,7 @@ ${overrideHelp}`,
     options: ["--scope", "--base", "--phase", "--override", "--thread", "--agent", "--standing"],
     run: async ({ options }, identity, context) => {
       const head = identity();
-      const { round, id, directory } = await unrecordedRound(head, context) ?? await reserveRound(options, head, context, "author");
+      const { round, id, directory } = await unrecordedRound(options, head, context) ?? await reserveRound(options, head, context, "author");
       await roundStep(directory, context, () => recordRound(directory, context));
       context.print(JSON.stringify({ round, id, directory }));
       return 0;
@@ -416,11 +416,11 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const { home, run } = context;
   const author = await authorOf(home, head);
   const pending = await unfinishedReview(home, head, "fleet");
-  if (pending && (await readPlan(pending.directory) || await stagedPlan(pending.directory))) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
   const reserved: SingleRound = pending
     ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
     : await reserveFleetReview(options, head, context);
   return roundStep(reserved.directory, context, async () => {
+    if (await readPlan(reserved.directory) || await stagedPlan(reserved.directory)) throw new Error(`${reserved.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
     await recordRound(reserved.directory, context);
     if (existsSync(join(reserved.directory, "findings.md"))) return printSavedReview(reserved, context);
     return askReviewer(reserved, head, author, context);
@@ -480,10 +480,23 @@ async function reserveRound(options: Map<string, string>, head: ProofIdentity, c
   return { ...reserved, scope, from };
 }
 
-async function unrecordedRound(head: ProofIdentity, context: CommandContext) {
+async function unrecordedRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
   const pending = await unfinishedReview(context.home, head, "author");
   if (!pending?.reservation.decision || pending.reservation.recorded) return undefined;
-  return { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory };
+  const { reservation, directory } = pending;
+  const id = basename(directory);
+  const reserved = reservedOptions(reservation);
+  if (reserved !== requestedOptions(options, reservation, context.run)) throw new Error(`Review round ${id} at this HEAD is reserved with ${reserved}, and its decision is not recorded yet. Run its command again with ${reserved} to record it, or remove ${directory} to drop it`);
+  return { round: reservation.round, id, directory };
+}
+
+const reservedOptions = ({ scope, base, phase }: Reservation & { phase?: string }) =>
+  [`--scope ${scope}`, base && `--base ${base}`, scope === "final" && `--phase ${phase ?? "review"}`].filter(Boolean).join(" ");
+
+function requestedOptions(options: Map<string, string>, reservation: Reservation, run: Run) {
+  const scope = options.get("--scope") ?? "full";
+  const base = options.has("--base") ? resolveCommit(options.get("--base")!, run) : undefined;
+  return reservedOptions({ ...reservation, scope, base, phase: options.get("--phase") });
 }
 
 async function settleStrandedRounds(head: ProofIdentity, context: CommandContext) {
