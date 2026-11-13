@@ -67,3 +67,25 @@ _Avoid_: Worker box
 **Hub**:
 The one machine that the profile's `hub` names, with `fleet hub here`. It runs the items placed on the hub and manages the other machines.
 _Avoid_: Controller, master box
+
+## Decisions
+
+**Decision ledger**:
+The append-only log of every decision about a pull request's proof and process, at `~/.local/state/fleet/decisions.jsonl` on the hub. Other machines read and append it over SSH. `fleet decision` records, lists, and voids its decisions, and `fleet proof gate` reads it.
+_Avoid_: Claim file, answer log
+
+**Ask class**:
+The kind of question a decision answers, such as a review round, a proof gap, or a status ask. Each decision names one.
+_Avoid_: Decision type, category
+
+**Tier**:
+The `Tier:` line of a pull request's merge-risk callout at HEAD: critical or non-critical. A pull request without it is ungraded. The tier limits what an agent may decide alone.
+_Avoid_: Risk level, grade
+
+**Acceptance**:
+A decision that lets the gate pass over a proof gap. The user's acceptance always counts; an agent's acceptance counts only while nothing lapses it.
+_Avoid_: Waiver, override
+
+**Lapse**:
+The gate no longer counts an agent's acceptance, because the tier changed, CI ran on HEAD, the user keeps the gap owed, or the gap is a panel gap. The gate prints each lapsed decision.
+_Avoid_: Expiry, revoke
