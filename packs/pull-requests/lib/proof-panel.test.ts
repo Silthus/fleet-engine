@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, hubAt, exitedPid, type Checkout } from "./proof-testing.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, hubAt, exitedPid, reviewHead, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
 
@@ -156,7 +156,7 @@ test("a lens reads the whole diff from the round directory and REVIEW.md from th
 
 
 function slotIO(slotCount: number): PanelIO {
-  return { env: {}, pause: () => new Promise((done) => setImmediate(done)), now: () => new Date(), slots: fixture("fleet-panel-slots-"), slotCount, pid: process.pid, limit: 60_000 };
+  return { env: {}, pause: () => new Promise((done) => setImmediate(done)), now: () => new Date(), startTime: async () => "Sun Oct 25 11:00:00 2026", slots: fixture("fleet-panel-slots-"), slotCount, pid: process.pid, limit: 60_000 };
 }
 
 test("claimants that find a dead worker's slot at once reclaim it once, so the panel never runs more lenses than its slots", async () => {
@@ -169,7 +169,7 @@ const [slots, running] = process.argv.slice(2);
 const tick = () => new Promise((done) => setImmediate(done));
 writeFileSync(running + "/ready-" + process.pid, "");
 while (readdirSync(running).filter((name) => name.startsWith("ready-")).length < 4) await tick();
-await withSlot({ env: {}, pause: tick, now: () => new Date(), slots, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {
+await withSlot({ env: {}, pause: tick, now: () => new Date(), startTime: async () => "Sun Oct 25 11:00:00 2026", slots, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {
   writeFileSync(running + "/" + process.pid, "");
   writeFileSync(running + "/most-" + process.pid, String(readdirSync(running).filter((name) => /^\\d+$/.test(name)).length));
   for (let count = 0; count < 2000; count++) await tick();
@@ -519,7 +519,7 @@ test("a panel whose plan fails to publish after its decision reached the ledger 
   await expectCountedPanel(pr);
 });
 
-test("two --wait commands at once on a staged panel start each lens once", async () => {
+test("two --wait commands at once on a staged panel start each lens once, and both print the findings", async () => {
   const { pr, reviewer } = await overridePanel();
   const hub = hubAt(pr, "stalls after it lands an append");
   void pr.fleetAs(await exitedPid(), ...overrideReview);
@@ -528,16 +528,63 @@ test("two --wait commands at once on a staged panel start each lens once", async
   let starts = 0;
   let open = () => {};
   const opened = new Promise<void>((resolve) => { open = resolve; });
-  pr.panel.beforeWorker = async () => { starts++; if (starts === 1) await opened; else open(); };
+  pr.panel.beforeWorker = async () => { starts++; await opened; };
 
   const waits = [pr.fleet("review", "--wait"), pr.fleet("review", "--wait")];
-  await Promise.race(waits.map((wait) => wait.catch(() => undefined)));
-  open();
-  const ends = (await Promise.allSettled(waits)).map((end) => end.status === "fulfilled" ? end.value.code : (end.reason as Error).message);
+  pr.panel.onPause = async () => { open(); await Promise.race(waits); };
+  const ends = await Promise.all(waits);
   expect(starts).toBe(1);
   expect(reviewer.prompts()).toHaveLength(1);
-  expect(ends).toEqual(expect.arrayContaining([0, expect.stringContaining(`Process ${process.pid}, another fleet proof command, works on`)]));
+  expect(ends.map(({ code }) => code)).toEqual([0, 0]);
+  for (const { output } of ends) expect(output).toContain("FINDINGS:\n(none)");
   await expectCountedPanel(pr);
+});
+
+test("--wait on a panel whose command still holds the round keeps polling until it ends, then runs the panel and prints its findings", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls on appends");
+  const first = pr.fleet(...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+  let pauses = 0;
+  pr.panel.onPause = async () => { pauses++; hub.releaseAppends(); await first.catch(() => undefined); };
+
+  const waited = await pr.fleet("review", "--wait");
+  expect(waited.code).toBe(0);
+  expect(pauses).toBeGreaterThan(0);
+  expect(waited.output).toContain("FINDINGS:\n(none)");
+  expect(reviewer.prompts()).toHaveLength(1);
+  await expectCountedPanel(pr);
+});
+
+test("a review at a newer commit leaves alone the panel round that a command at an older commit still prepares and records", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewed = await reviewHead(pr);
+  const older = await pr.commit("feature.txt", "greet the member\n");
+  const reviewer = fakeModel(pr, "REVIEWER", clean);
+  const hub = hubAt(pr, "stalls after it lands an append");
+  pr.choose("Run one more round");
+  const first = pr.fleet("review", "--scope", "final", "--base", reviewed, "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+  const newer = await pr.commit("feature.txt", "greet the new member\n");
+
+  const review = await pr.fleet("review", "--scope", "fixes", "--base", reviewed);
+  expect(review.code).toBe(0);
+  expect(JSON.parse(review.output.split("\n")[0]!)).toMatchObject({ round: 2, id: "2" });
+  hub.releaseAppends();
+  expect((await first).code).toBe(0);
+  expect((await pr.fleet("review", "--wait", "--round", "final")).code).toBe(0);
+
+  const round = (id: string) => JSON.parse(readFileSync(join(pr.pullRequest, "reviews", id, "round.json"), "utf8"));
+  expect(round("final-1")).toMatchObject({ commit: older, recorded: true });
+  expect(round("2")).toMatchObject({ commit: newer });
+  const [single, panel] = reviewer.prompts();
+  expect(panel).toContain("+greet the member");
+  expect(panel).not.toContain("+greet the new member");
+  expect(single).toContain("+greet the new member");
 });
 
 test("a late single-reviewer command, after a retry finished its round, prints the saved findings and runs no second reviewer", async () => {

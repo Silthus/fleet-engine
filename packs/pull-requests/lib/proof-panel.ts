@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { anchorCheck } from "./finding-anchors.ts";
 import { readJson, roundId, storeCapturedFindings, writeJson, type ProofIdentity } from "./proof.ts";
@@ -14,7 +14,9 @@ export type BriefInput = { title: string; body: string; base: string; from: stri
 export type Cast = { family: Family; model: string; row: ModelRow };
 export type Plan = { lenses: ({ name: string; title: string } & Cast)[]; changedFiles: string[]; from?: string; cwd: string; readable: string[] };
 type LensStatus = { state: "queued" | "running" | "done" | "failed"; attempts: number; startedAt?: string; finishedAt?: string; cause?: string };
-export type PanelIO = { env: Record<string, string | undefined>; pause: () => Promise<void>; now: () => Date; slots: string; slotCount: number; pid: number; limit: number };
+export type StartTime = (pid: number) => Promise<string | undefined>;
+export type LockOwner = { pid: number; now: () => Date; startTime: StartTime };
+export type PanelIO = LockOwner & { env: Record<string, string | undefined>; pause: () => Promise<void>; slots: string; slotCount: number; limit: number };
 export type Restart = (name: string) => Promise<void>;
 
 const attemptsPerLens = 2;
@@ -238,11 +240,21 @@ function laneProblem(answer: string, changedFiles: string[]) {
   return missed.length ? `COVERED misses ${missed.join(", ")}` : undefined;
 }
 
-type Holder = { pid: number; token?: string; reviewer?: number };
+type Holder = { pid: number; token?: string; started?: string; reviewer?: number };
 export type Slot = { recordReviewer: (pid: number) => Promise<void> };
+export type RoundLock = { owner: LockOwner; holder: Holder };
+export class RoundBusy extends Error {}
+
+export async function processStart(pid: number) {
+  const ps = Bun.spawn(["ps", "-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" }, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+  const [text, code] = await Promise.all([new Response(ps.stdout).text(), ps.exited]);
+  return code === 0 ? text.trim() || undefined : undefined;
+}
+
+const holderFor = async (owner: LockOwner): Promise<Holder> => ({ pid: owner.pid, token: crypto.randomUUID(), started: await owner.startTime(owner.pid) });
 
 export async function withSlot<T>(io: PanelIO, work: (slot: Slot) => Promise<T>) {
-  const holder: Holder = { pid: io.pid, token: crypto.randomUUID() };
+  const holder = await holderFor(io);
   const slot = await takeSlot(io, holder);
   const owned = () => holds(slot, holder);
   const recordReviewer = async (reviewer: number) => {
@@ -256,28 +268,47 @@ export async function withSlot<T>(io: PanelIO, work: (slot: Slot) => Promise<T>)
 }
 
 const lockAttempts = 100;
+const lockGrace = 60_000;
+const lockPath = (directory: string) => join(directory, "round.lock");
 
-export async function withRoundLock<T>(directory: string, pid: number, step: () => Promise<T>) {
-  const lock = join(directory, "round.lock");
-  const holder: Holder = { pid, token: crypto.randomUUID() };
-  await takeLock(lock, holder);
-  try { return await step(); }
-  finally { await release(lock, holder); }
+export const roundLock = async (owner: LockOwner): Promise<RoundLock> => ({ owner, holder: await holderFor(owner) });
+
+export async function lockNewRound(directory: string, lock: RoundLock) {
+  await claim(lockPath(directory), lock.holder);
 }
 
-async function takeLock(lock: string, holder: Holder) {
+export async function withRoundLock<T>(directory: string, lock: RoundLock, step: () => Promise<T>) {
+  await takeLock(directory, lock);
+  try { return await step(); }
+  finally { await release(lockPath(directory), lock.holder); }
+}
+
+async function takeLock(directory: string, { owner, holder }: RoundLock) {
+  const path = lockPath(directory);
   for (let attempt = 0; attempt < lockAttempts; attempt++) {
-    if (await claim(lock, holder)) return;
-    const current = holderOf(await readSlot(lock));
-    if (current?.pid && isAlive(current.pid)) throw new Error(`Process ${current.pid}, another fleet proof command, works on ${dirname(lock)}. Wait for it to end, or run fleet proof review --wait`);
-    await reclaim(lock);
+    if (await claim(path, holder)) return;
+    const text = await readSlot(path);
+    if (text === undefined) continue;
+    const current = holderOf(text);
+    if (current?.token === holder.token) return;
+    if (!await stale(path, text, owner)) throw await busy(directory, current);
+    await reclaim(path, text);
   }
-  throw new Error(`Cannot lock ${dirname(lock)}: its lock file ${lock} holds no process`);
+  throw new Error(`Cannot take the lock ${path}: other commands keep taking it over. Run the command again`);
+}
+
+async function busy(directory: string, holder: Holder | undefined) {
+  const who = holder?.pid ? `Process ${holder.pid}, another fleet proof command,` : "Another fleet proof command";
+  const panel = await readPlan(directory) ?? await stagedPlan(directory);
+  return new RoundBusy(`${who} works on ${directory} and holds its lock ${lockPath(directory)}. Wait for it to end${panel ? ", or run fleet proof review --wait" : ", then run this command again"}`);
 }
 
 async function claim(path: string, holder: Holder) {
-  try { await writeFile(path, JSON.stringify(holder), { flag: "wx", mode: 0o600 }); return true; }
+  const temporary = `${path}.claim-${holder.token}`;
+  await writeFile(temporary, JSON.stringify(holder), { mode: 0o600 });
+  try { await link(temporary, path); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
+  finally { await rm(temporary, { force: true }); }
 }
 
 const holds = async (path: string, holder: Holder) => holderOf(await readSlot(path))?.token === holder.token;
@@ -293,7 +324,7 @@ async function takeSlot(io: PanelIO, holder: Holder) {
     for (let index = 0; index < slots; index++) {
       const slot = join(io.slots, String(index));
       if (await claim(slot, holder)) return slot;
-      if (await reclaim(slot)) index--;
+      if (await reclaimStale(slot, io)) index--;
     }
     await io.pause();
   }
@@ -301,27 +332,44 @@ async function takeSlot(io: PanelIO, holder: Holder) {
 
 export async function reclaimSlots(io: PanelIO) {
   const names = await readdir(io.slots).catch(() => []);
-  for (const name of names.filter((entry) => /^\d+$/.test(entry))) await reclaim(join(io.slots, name));
+  for (const name of names.filter((entry) => /^\d+$/.test(entry))) await reclaimStale(join(io.slots, name), io);
 }
 
-async function reclaim(slot: string) {
-  const text = await readSlot(slot);
+async function reclaimStale(path: string, owner: LockOwner) {
+  const text = await readSlot(path);
+  return text !== undefined && await stale(path, text, owner) && await reclaim(path, text);
+}
+
+async function stale(path: string, text: string, owner: LockOwner) {
   const holder = holderOf(text);
-  if (!holder?.pid || isAlive(holder.pid)) return false;
-  const lock = `${slot}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
+  if (!holder?.pid) return olderThanGrace(path, owner.now());
+  if (!isAlive(holder.pid)) return true;
+  if (!holder.started) return false;
+  const started = await owner.startTime(holder.pid);
+  return started !== undefined && started !== holder.started;
+}
+
+async function olderThanGrace(path: string, now: Date) {
+  const written = await stat(path).then((info) => info.mtimeMs, () => undefined);
+  return written !== undefined && now.getTime() - written > lockGrace;
+}
+
+async function reclaim(path: string, text: string) {
+  const lock = `${path}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
   try { await mkdir(lock, { mode: 0o700 }); }
   catch { return false; }
   try {
-    if (await readSlot(slot) !== text) return false;
-    stopGroup(holder.reviewer);
-    await rm(slot, { force: true });
+    if (await readSlot(path) !== text) return false;
+    stopGroup(holderOf(text)?.reviewer);
+    await rm(path, { force: true });
     return true;
   } finally { await rm(lock, { recursive: true, force: true }); }
 }
 
-const readSlot = (slot: string) => readFile(slot, "utf8").catch(() => "");
+const readSlot = (slot: string) => readFile(slot, "utf8").catch(() => undefined);
 
-function holderOf(text: string): Holder | undefined {
+function holderOf(text: string | undefined): Holder | undefined {
+  if (text === undefined) return undefined;
   try {
     const value = JSON.parse(text) as Holder | number;
     return typeof value === "number" ? { pid: value } : value;
