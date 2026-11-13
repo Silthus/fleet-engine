@@ -226,3 +226,47 @@ test("the user's keep-owed outranks an agent's acceptance, and a voided decision
   await expect(pr.decide("void", kept, "--reason", "again")).rejects.toThrow(`Decision ${kept} is already voided`);
   expect((await pr.decide("list", "--live")).output).not.toContain(kept);
 });
+
+test("gate --json prints the proof summary: each owed kind's state with its accepting decision, the tier, and the lapsed and voided ids; the gate prints its lines from it", async () => {
+  const pr = await checkout();
+  const earlier = await pr.commit("feature.txt", "first\n");
+  writeFileSync(join(pr.repository, "diff.log"), "old and new output match on 200 rows");
+  await pr.fleet("save", "--kind", "shadow-diff", "diff.log");
+  const head = await pr.commit("feature.txt", "second\n");
+  await pr.fleet("save", "--kind", "shadow-diff", "--reuse-from", earlier.slice(0, 8), "--reason", "The later commit only renames a variable");
+  await pr.fleet("require", "--kinds", "live-run,ui-walk,prod-shape,cross-version,shadow-diff,post-deploy-watch");
+  writeFileSync(join(pr.repository, "run.log"), "sent 1 email, delivered");
+  await pr.fleet("save", "--kind", "live-run", "run.log");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
+  await pr.fleet("gap", "--kind", "cross-version", "--reason", "No older client to run");
+  await reviewHead(pr);
+  pr.chooseGap("prod-shape", "No production read access");
+  const users = idIn((await acceptGap(pr, "prod-shape")).output);
+  pr.pullRequestState({ body: graded("non-critical") });
+  const lapsed = idIn((await agent(pr, "cross-version")).output);
+  const voided = idIn((await agent(pr, "ui-walk")).output);
+  await pr.decide("void", voided, "--reason", "HEAD now changes the UI");
+  pr.pullRequestState({ body: graded("critical") });
+
+  const json = await pr.fleet("gate", "--json");
+  expect(json.code).toBe(1);
+  const summary = JSON.parse(json.output);
+  expect(summary).toMatchObject({ repository: "example/product", pr: 42, commit: head, tier: "critical", code: 1, lapsed: [lapsed], voided: [voided] });
+  expect(summary.kinds.map(({ line: _, ...kind }: { line: string }) => kind)).toEqual([
+    { kind: "live-run", state: "ran", commit: head, directory: expect.stringContaining("live-run") },
+    { kind: "ui-walk", state: "missing" },
+    { kind: "prod-shape", state: "gap", accepted: true, gap: { commit: head, reason: "No production read access", accepted: { by: "the user", mark: "👤", id: users }, text: `accepted by 👤 decision ${users} (2026-10-25 "Accept the gap")` } },
+    { kind: "cross-version", state: "gap", accepted: false, gap: { commit: head, reason: "No older client to run", lapsed, text: `not accepted (🤖 decision ${lapsed} lapsed: critical head)` } },
+    { kind: "shadow-diff", state: "reused", from: earlier, reason: "The later commit only renames a variable", directory: expect.stringContaining("shadow-diff") },
+    { kind: "post-deploy-watch", state: "pending" },
+  ]);
+  expect(summary.review).toMatchObject({ state: "covered", unanswered: [] });
+  expect(summary.head).toMatchObject({ state: "pushed" });
+  expect(summary.ci).toMatchObject({ state: "green" });
+
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(1);
+  const lines = [summary.owed.line, ...summary.kinds.map((kind: { line: string }) => kind.line), summary.review.line, summary.head.line, summary.ci.line, summary.lapsedLine].filter(Boolean);
+  expect(gate.output.split("\n")).toEqual([...lines, "gate: fail (exit 1)"]);
+  expect(lineOf(gate.output, "cross-version:")).toBe(`cross-version: gap from ${head.slice(0, 7)}, not accepted (🤖 decision ${lapsed} lapsed: critical head): No older client to run`);
+});

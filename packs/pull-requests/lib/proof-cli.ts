@@ -246,7 +246,7 @@ HEAD.`,
     },
   },
   gate: {
-    usage: "gate [--landed]",
+    usage: "gate [--landed] [--json]",
     summary: `Check the owed proofs, the review and the answers to its findings, and the CI of the commit on GitHub, then let
 the judge weigh them. Exit 0 only on a pass: 1 means the owed proofs are not recorded, a proof is missing, the commit
 is not reviewed, a finding has no answer, the commit is not the PR's head on GitHub, its checks are red or pending,
@@ -283,14 +283,20 @@ pull-requests.criticalPathFiles gives it the repository's critical-path list. Th
 the hub and the tier from the merge-risk callout at HEAD; with the hub unreachable, no ledger decision counts and the
 gate fails closed. It prints each 🤖 acceptance that lapsed. The setting
 pull-requests.reviewTimeoutMinutes limits the judge, and spent quota stops it early, as for fleet proof review.
-FLEET_PROOF_JUDGE replaces its command, and FLEET_PROOF_JUDGE_MODEL its model.`,
-    examples: ["fleet proof gate", "fleet proof gate --landed"], flags: ["--landed"],
+FLEET_PROOF_JUDGE replaces its command, and FLEET_PROOF_JUDGE_MODEL its model.
+--json prints the proof summary instead of the lines, with the exit code and the judge's verdict at HEAD: each owed
+kind as pending, ran, reused, carried, gap (with the decision that accepts it, or the 🤖 decision that lapsed), or
+missing; the review and its unanswered findings; the head; CI; the tier; the lapsed and voided decision ids; and the
+receipt link once one is recorded. The gate's lines come from the same summary.`,
+    examples: ["fleet proof gate", "fleet proof gate --landed", "fleet proof gate --json"], flags: ["--landed", "--json"],
     run: async ({ flags }, identity, context) => {
-      const { print, home, run, now } = context;
+      const { print } = context;
       const head = identity();
-      const gate = await proofGate(home, head, { landed: flags.has("--landed"), cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), ledger: ledgerOf(context), now: now?.() });
-      for (const line of gate.lines) print(line);
-      const judged = gate.code === 0 ? await judgeHead(head, gate, context) : { code: gate.code, lines: [], covered: "" };
+      const gate = await gateAt(head, context, flags.has("--landed"));
+      const json = flags.has("--json");
+      if (!json) for (const line of gate.lines) print(line);
+      const judged = gate.code === 0 ? await judgeHead(head, gate, context) : { code: gate.code, lines: [], covered: "", judge: undefined };
+      if (json) { print(JSON.stringify({ ...gate.proofSummary, code: judged.code, ...judged.judge ? { judge: judged.judge } : {} })); return judged.code; }
       for (const line of judged.lines) print(line);
       print(judged.code === 0 ? `gate: pass (${gate.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`);
       return judged.code;
@@ -601,6 +607,11 @@ function positive(value: string, option: string, name: string) {
 
 type Gate = Awaited<ReturnType<typeof proofGate>>;
 
+function gateAt(head: ProofIdentity, context: CommandContext, landed = false) {
+  const { home, run, now } = context;
+  return proofGate(home, head, { landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), ledger: ledgerOf(context), now: now?.() });
+}
+
 async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContext) {
   const { home, cwd, env, run, now } = context;
   const author = await authorOf(home, head);
@@ -621,14 +632,16 @@ async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContex
     directory: judgeDirectory(home, head), commit: head.commit, now: today,
   });
   if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
-  if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}` };
+  const verdict = { state: outcome.state, model: outcome.model, lines: outcome.lines };
+  if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}`, judge: verdict };
   const gap = weighedGap && await judgeGap(home, head, today, gate.decisions, gate.tier, outcome.lines);
-  if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}` };
-  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${askGap(head, "judge", gap.reason)}`], covered: "" };
+  const judged = gap && { ...verdict, gap: { commit: head.commit, reason: gap.reason, ...gap.acceptance ? { accepted: { by: gap.acceptance.by, ...gap.acceptance.mark ? { mark: gap.acceptance.mark } : {}, ...gap.acceptance.id ? { id: gap.acceptance.id } : {} } } : {}, text: gap.line } };
+  if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}`, judge: judged };
+  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${askGap(head, "judge", gap.reason)}`], covered: "", judge: judged };
   const hint = gate.tier === "ungraded"
     ? "judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and ask the user; an agent never decides on an ungraded PR"
     : `judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and decide it with fleet decision record --mark 🤖 --class proof-gap --kind judge --pr ${refText(head)} --question <q> --answer <a> --rejected <option> --reason <why>, or ask the user`;
-  return { code: 1, lines: [...outcome.lines, hint], covered: "" };
+  return { code: 1, lines: [...outcome.lines, hint], covered: "", judge: verdict };
 }
 
 async function roundLines(directory: string, { now }: CommandContext) {
