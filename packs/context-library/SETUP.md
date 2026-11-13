@@ -23,4 +23,7 @@ without the tool, and its upstream check says what it waits for.
 
 With the Slack pack's trigger on, their own `:brain:` reaction on a Slack
 message saves its thread as a note. The reaction shows `:eyes:` while it runs
-and goes away once the note is saved. A second `:brain:` updates the note.
+and goes away once the note is saved. After that, the note updates by itself
+when the thread gets new replies and then stays quiet for 30 minutes. A
+thread with no reply for a month stops updating; a second `:brain:` updates the
+note at once and follows the thread again.
