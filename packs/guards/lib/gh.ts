@@ -153,9 +153,9 @@ const plainName = /^[A-Za-z0-9._-]+$/;
 const plainOwner = /^[A-Za-z0-9-]+$/;
 
 function endpointOwner(endpoint: string): string {
-  const [first = "", owner = ""] = endpoint.split(/[?#]/)[0].split("/").filter(Boolean);
+  const [first = "", owner = ""] = endpoint.replace(/\?[^/]*=.*$|#.*$/s, "").split("/").filter(Boolean);
   if (/^(?:repos|orgs)$/i.test(first)) return owner;
-  return /[$`]/.test(first) ? first : "";
+  return /[$`*?[]/.test(first) ? first : "";
 }
 
 function owners(gh: Gh, repoVariable: string | undefined): string[] {

@@ -544,12 +544,22 @@ describe("the gh guard", () => {
     'echo "$(cat <<A\nfoo\\\nA\n(\nA\n)"; gh auth token',
     "echo \"$(case x in x) gh auth token;; esac)\"",
     'echo "$(cat <<A <<B\n$(gh auth token)\nA\nhello\nB\n)"',
+    "((1 << 2))\ngh auth token",
+    'echo "$(case y in x) echo esac;; y) gh auth token;; esac)"',
+    "echo \"${x:-'}'}\"; gh auth token",
+    "echo \"${x:-'}\"; gh auth token; echo \"'}\"",
+    'echo "$(if true; then case x in x) gh auth token;; esac; fi)"',
   ])("refuses a command whose quoting it might misread, instead of missing a later part: %s", (command) => {
     expect(refusal(command)).toMatch(/the GitHub token|could not check it/);
   });
 
   test.each([
-    "export GH_REPO=acme/app; (export GH_REPO=other/app); gh pr list",
+    'echo "$(echo case)" "$(rg esac file)"',
+    'echo "$(cat <<< hello\n)"',
+    "echo \"$(cat <<$'EOF'\nhi\nEOF\n)\"",
+    'echo "$(echo ${x:-"}"})"',
+    "echo ${x:-'}'} ${x:-\"}\"} \"${x:-\"}\"}\"",
+    "gh api 'repos/acme/app/contents/a.ts?ref=main'",
     'echo "$(case x in x) echo hi;; esac)"',
     "x=$(\n  echo $((1 << 2))\n)",
     "echo $((16#ff)) $# ${#x} a#b",
@@ -615,6 +625,9 @@ describe("the gh guard", () => {
     "bash -c 'gh api repos/$ORG/app'",
     "(gh api repos/$ORG/app)",
     'gh api "re${KIND}s/other/app"',
+    "gh api re?os/other/app",
+    "gh api repos/acme?/app",
+    "gh api 'repos/[o]ther/app'",
   ])("refuses a repository owner that is not spelled out: %s", (command) => {
     expect(refusal(command)).toContain("is not spelled out");
   });
@@ -632,6 +645,8 @@ describe("the gh guard", () => {
     ["echo \"$(printf '(')\"; gh api repos/other/app", "other"],
     ["gh api $'repos/other/app'", "other"],
     ["declare -x GH_REPO=other/app; gh pr list", "other"],
+    ["(export GH_REPO=other/app; case x in x) :;; esac; gh pr list)", "other"],
+    ["gh api 'repos/other/app/contents/a.ts?ref=main'", "other"],
   ])("refuses an outside owner however the command spells it: %s", (command, owner) => {
     expect(refusal(command)).toContain(`\`${owner}\` is not one of the GitHub owners`);
   });
