@@ -4,6 +4,7 @@
 
 With the `fleet` CLI, every decision about a pull request's proof and process goes to the decision ledger: `fleet decision record`. Run `fleet decision list --pr <owner/repo#n>` before you ask me.
 
+- For a proof gap, record it with `fleet proof gap --kind <kind> --reason <why>` first: it prints the question to ask. A judge gap counts only answers I give after it is recorded.
 - Ask me with your question tool, and name each pull request and each gap kind in the question. After I answer, record it with `fleet decision record --mark 👤 --class <class> --pr <owner/repo#n>`, or `--mark 👍` when I chose your recommended option. One answer records one decision, and it covers each pull request its question names.
 - To accept a proof gap, my choice starts with "Accept", or it is "Yes" to a question that starts with "Accept the <kind> gap?". When I keep a gap owed, record it with `--keep-owed`. It outranks any decision of yours, and you cannot void it: only my acceptance lifts it.
 - Decide alone with `--mark 🤖` and your question, answer, rejected option, and reason, only where the `Tier:` line of the merge-risk callout at HEAD lets you: never on an ungraded pull request, and on a critical one only process (review rounds, status asks, judge and post-deploy-watch gaps). A panel gap is always mine to accept.

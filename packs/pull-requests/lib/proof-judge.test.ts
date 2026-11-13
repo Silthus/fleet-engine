@@ -95,7 +95,7 @@ test("a judge that keeps failing goes to the arbiter, and only the user's accept
 
   await pr.fleet("gap", "--kind", "judge", "--reason", "The judge reads feature.txt as code");
   expect((await pr.fleet("gate")).code).toBe(3);
-  expect((await pr.fleet("gate")).output).toContain("record fleet proof gap --kind judge --reason <why> and their answer with fleet decision record --mark 👤 --class proof-gap --kind judge --pr <owner/repo#n>");
+  expect((await pr.fleet("gate")).output).toContain("First record fleet proof gap --kind judge --reason <why>, then ask them the question it prints with the question tool. When they accept, record their answer with fleet decision record --mark 👤 --class proof-gap --kind judge --pr <owner/repo#n>");
   pr.chooseGap("judge", "The judge reads feature.txt as code");
   await acceptGap(pr, "judge");
   const accepted = await pr.fleet("gate");
@@ -314,6 +314,34 @@ const gateAfterResponse = async (pr: Checkout, response: string) => {
   await pr.fleet("respond", "--round", "1", "responses.md");
   return pr.fleet("gate");
 };
+
+test("an agent that follows the judge's escalation steps in order gets the judge gap accepted by one answer", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: ["feature.txt"] } }));
+  pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo 'ESCALATE: The judge failed the owed kinds three times.'";
+  for (const response of ["First answer.\n", "Second answer.\n"]) await gateAfterResponse(pr, response);
+  const escalation = (await gateAfterResponse(pr, "Third answer.\n")).output.split("\n").find((line) => line.startsWith("judge: escalate to the user:"))!;
+  const reason = "The judge reads feature.txt as code";
+  const steps = {
+    gap: () => pr.fleet("gap", "--kind", "judge", "--reason", reason),
+    ask: async () => pr.chooseGap("judge", reason),
+    record: () => acceptGap(pr, "judge"),
+  };
+  const markers = { gap: "fleet proof gap", ask: /\bask\b/i, record: "fleet decision record" };
+  const order = (Object.keys(markers) as (keyof typeof markers)[]).sort((a, b) => escalation.search(markers[a]) - escalation.search(markers[b]));
+  for (const step of order) {
+    expect(escalation.search(markers[step])).toBeGreaterThanOrEqual(0);
+    pr.clock.now = new Date(pr.clock.now.getTime() + 60_000);
+    await steps[step]();
+  }
+
+  const gate = await pr.fleet("gate");
+  expect(gate.output.split("\n").at(-1)).toContain("judge: fail accepted by the user");
+  expect(gate.code).toBe(0);
+});
 
 test("with the merge-risk skill installed, the judge grades the callout against the diff, and a wrong grade fails the gate", async () => {
   const pr = await checkout();

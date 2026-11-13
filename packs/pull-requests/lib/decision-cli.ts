@@ -28,7 +28,8 @@ question tool in the T3 app count; a typed message does not. Each --pr must be n
 repo#n, owner/repo#n, or its URL), so one answer covers every PR its question named and no other. One answer
 records one decision. With --class proof-gap and --kind, the decision accepts those gaps of each PR, and the user's
 choice must start with "Accept", or be "Yes" to a question that starts with "Accept the <kind> gap?"; with --keep-owed, it
-keeps them owed whatever an agent decides. A decision of the user's takes the time they answered. --condition names
+keeps them owed whatever an agent decides. A decision of the user's takes the time they answered: record a gap with
+fleet proof gap before you ask, since a judge gap counts only answers given after it was recorded. --condition names
 what must stay true at HEAD; the judge checks it. Classes: ${askClasses.join(", ")}.
 record with 🤖 records the agent's own decision with the option it rejected. Fleet reads each PR's Tier line in its
 merge-risk callout at HEAD: it refuses an ungraded PR, and on a critical PR anything but process (review and status
