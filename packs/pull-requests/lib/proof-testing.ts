@@ -7,7 +7,7 @@ import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
 import { decisionCommand } from "./decision-cli.ts";
-import type { Ssh } from "./decision-ledger.ts";
+import type { Ssh, SshResult } from "./decision-ledger.ts";
 
 const fixtures: string[] = [];
 export const cleanFixtures = () => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true }));
@@ -141,10 +141,11 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const hub: { ssh?: Ssh } = {};
   const pendingCards = new Set<string>();
   const panel: { lostWorkers: boolean; onPause?: () => Promise<void> } = { lostWorkers: false };
+  const writer: { pid?: number } = {};
   const fleetIn = async (cwd: string, ...args: string[]) => {
     const lines: string[] = [];
     const context: ProofContext = {
-      home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh,
+      home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh, pid: writer.pid,
       detach: async (worker) => {
         if (panel.lostWorkers) return (await spawnAsync(["true"])).pid;
         await proofCommand([...worker], { ...context, print: () => {} });
@@ -166,7 +167,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, decide };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, writer, decide };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;
@@ -264,28 +265,35 @@ export const ledgerDecisions = (pr: Checkout) => {
   return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line).decision).filter(Boolean) : [];
 };
 
-type Hub = "up" | "down" | "drops appends" | "loses the acknowledgement of appends" | "stalls on appends";
+type Hub = "up" | "down" | "drops appends" | "loses the acknowledgement of appends" | "stalls on appends" | "stalls after it lands an append";
 const refused = { code: 255, stdout: "", stderr: "ssh: connect to host fleet-hub port 22: Connection refused\n" };
 
 export function hubAt(pr: Checkout, hub: Hub | boolean = "up") {
   const remote = join(pr.home, "hub-home");
   const hosts: string[] = [];
-  const state = { hub: hub === true ? "up" : hub === false ? "down" : hub };
+  const state: { hub: Hub; afterAppend?: () => void } = { hub: hub === true ? "up" : hub === false ? "down" : hub };
   let stalled = () => {};
   const appendStalled = new Promise<void>((resolve) => { stalled = resolve; });
+  const stalls: ((result: SshResult) => void)[] = [];
+  const stall = () => { stalled(); return new Promise<SshResult>((resolve) => stalls.push(resolve)); };
+  const releaseAppends = () => stalls.splice(0).forEach((resolve) => resolve(refused));
   pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "hub.alias": "fleet-hub" });
   pr.hub.ssh = async (host, command, stdin) => {
     hosts.push(host);
     if (state.hub === "down") return refused;
     if (state.hub === "drops appends" && stdin !== undefined) return { code: 0, stdout: "", stderr: "" };
-    if (state.hub === "stalls on appends" && stdin !== undefined) { stalled(); return new Promise(() => {}); }
+    if (state.hub === "stalls on appends" && stdin !== undefined) return stall();
     const child = Bun.spawn(["bash", "-c", command], { env: { HOME: remote, PATH: process.env.PATH }, stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (stdin !== undefined) state.afterAppend?.();
+    if (state.hub === "stalls after it lands an append" && stdin !== undefined) return stall();
     if (state.hub === "loses the acknowledgement of appends" && stdin !== undefined) return refused;
     return { code, stdout, stderr };
   };
-  return { remote, hosts, state, appendStalled };
+  return { remote, hosts, state, appendStalled, releaseAppends };
 }
+
+export const exitedPid = async () => (await spawnAsync(["true"])).pid;
 
 export const acceptGap = (pr: Checkout, kind: string, ...more: string[]) => pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", kind, "--pr", "example/product#42", ...more);
 
