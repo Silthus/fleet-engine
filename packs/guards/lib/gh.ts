@@ -18,7 +18,7 @@ type Gh = { group: string; action: string; operands: string[]; flags: Map<string
 
 const valuedFlags: Record<string, string> = {
   other: "-b --body -t --title -B --base -H --head -F --body-file -l --label -a --assignee -m --milestone -r --reviewer --json -q --jq --template -L --limit "
-    + "-s --state -A --author -e --env --app -n --notes --notes-file --target -p --pattern -D --dir -O --output --search -S --branch -h --hostname --visibility -o --org --owner",
+    + "-s --state -A --author -e --env --app -n --notes --notes-file --target -p --pattern -D --dir -O --output --search -S --branch -h --hostname --visibility -o --org --owner --repo-owner --source-owner --target-owner",
   "pr create": "-a --assignee -B --base -b --body -F --body-file -H --head -l --label -m --milestone -p --project -r --reviewer -T --template -t --title --recover",
   "pr merge": "-b --body -F --body-file -t --subject --match-head-commit -A --author-email",
   "pr review": "-b --body -F --body-file",
@@ -53,13 +53,13 @@ const valuedFlags: Record<string, string> = {
   "gist create": "-d --desc -f --filename",
 };
 const repoFlags = "-R --repo";
-const aliases: Record<string, string> = { new: "create", ls: "list", rm: "delete", ext: "extension", extensions: "extension" };
+const aliases: Record<string, string> = { new: "create", ls: "list", rm: "delete", ext: "extension", extensions: "extension", rs: "ruleset", at: "attestation", cs: "codespace" };
 const accountEndpoints = /^(?:user\/(?:keys|ssh_signing_keys|gpg_keys)|authorizations)\b/;
 const repositoryEndpoint = /^repos\/[^/]+\/[^/]+\/?$/;
 const repositoryCreation = /^(?:user\/repos|orgs\/[^/]+\/repos|repos\/[^/]+\/[^/]+\/generate)\/?$/;
 const githubUrl = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)/;
 const repoTargets = new Set(["clone", "view", "fork", "edit", "delete", "sync", "archive", "unarchive", "create", "set-default", "garden"]);
-const orgShortFlag = new Set(["secret", "variable", "ruleset", "attestation"]);
+const orgShortFlag = new Set(["secret", "variable", "ruleset", "attestation", "codespace", "status"]);
 
 function parseFlags(args: string[], table: string) {
   const valued = new Set(`${repoFlags} ${table}`.split(" "));
@@ -151,13 +151,16 @@ function exposure(gh: Gh, person: string): string | undefined {
   return undefined;
 }
 
+const destinationFields = new Set(["owner", "new_owner", "organization", "org"]);
 const placeholders = new Set(["{owner}", ":owner"]);
 const plainName = /^[A-Za-z0-9._-]+$/;
 const plainOwner = /^[A-Za-z0-9-]+$/;
 
 function endpointOwner(endpoint: string): string {
-  const [first = "", owner = ""] = endpoint.replace(/\?[^/]*=.*$|#.*$/s, "").split("/").filter(Boolean);
-  if (/^(?:repos|orgs)$/i.test(first) || (/^users$/i.test(first) && /^\/?users\/[^/]+\/repos\b/i.test(endpoint))) return owner;
+  const [first = "", second = "", third = "", fourth] = endpoint.replace(/\?[^/]*=.*$|#.*$/s, "").split("/").filter(Boolean);
+  if (/^(?:repos|orgs|networks|enterprises)$/i.test(first)) return second;
+  if (/^users$/i.test(first) && third) return second;
+  if (/^user$/i.test(first) && /^(?:starred|subscriptions)$/i.test(second) && fourth !== undefined) return third;
   return /[$`*?[]/.test(first) ? first : "";
 }
 
@@ -186,7 +189,7 @@ function owners(gh: Gh, repoVariable: string | undefined): string[] {
   const listed = (...names: string[]) => values(gh, ...names).flatMap((value) => value.split(","));
   const repos = listed("-R", "--repo");
   const found = [...repos, ...(repos.length === 0 && repoVariable ? [repoVariable] : []), ...listed("--branch-repo")].map(repoOwner);
-  found.push(...listed("--org", "--owner", ...(orgShortFlag.has(gh.group) ? ["-o"] : [])));
+  found.push(...listed("--org", "--owner", "--repo-owner", "--source-owner", "--target-owner", ...(orgShortFlag.has(gh.group) ? ["-o"] : [])));
   const operands = gh.group === "api" ? [] : [gh.action, ...gh.operands];
   for (const operand of operands) found.push(operand.match(githubUrl)?.[1] ?? "");
   const [target] = gh.operands;
@@ -196,8 +199,10 @@ function owners(gh: Gh, repoVariable: string | undefined): string[] {
   if (gh.group === "repo" && gh.action === "create") found.push(...values(gh, "-p", "--template").map(repoOwner));
   if (gh.group === "issue" && gh.action === "transfer" && gh.operands[1]) found.push(repoOwner(gh.operands[1]));
   if (gh.group === "label" && gh.action === "clone" && target) found.push(repoOwner(target));
+  if (gh.group === "skill" && target && !githubUrl.test(target)) found.push(repoOwner(target));
   if (gh.group === "api") found.push(endpointOwner(endpointOf(gh)));
   if (gh.group === "api" && /^search\//i.test(endpointOf(gh))) found.push(...restSearchOwners(gh, endpointOf(gh)));
+  if (gh.group === "api" && endpointOf(gh) !== "graphql") found.push(...apiFields(gh).filter(([key]) => destinationFields.has(fieldName(key))).map(([, value]) => value));
   if (gh.group === "api" && endpointOf(gh) === "graphql") found.push(...graphqlOwners(gh));
   if (gh.group === "search") found.push(...qualifiedOwners(gh.operands.join(" ")));
   return found.filter((owner) => owner && !placeholders.has(owner));
@@ -211,7 +216,8 @@ function ownerRisk(owner: string, allowed: ReadonlySet<string>, person: string):
 
 const brace = /\{[^{}]*(?:,|\.\.)[^{}]*\}/;
 const pattern = new RegExp(`[*?[]|${brace.source}`);
-const ghGroups = new Set(["agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "config", "extension", "ext", "gist", "gpg-key", "issue", "label", "org", "pr", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "workflow"]);
+const singleCommands = new Set(["api", "browse", "status"]);
+const ghGroups = new Set(["agent-task", "alias", "api", "at", "attestation", "auth", "browse", "cache", "co", "codespace", "config", "cs", "extension", "ext", "gist", "gpg-key", "issue", "label", "org", "pr", "project", "release", "repo", "rs", "ruleset", "run", "search", "secret", "skill", "ssh-key", "status", "variable", "workflow"]);
 
 /** Parses guards.owners, a list of GitHub owners separated by commas or spaces. No list means no owner rule. */
 export function ownerList(value: unknown): Set<string> | null {
@@ -229,7 +235,7 @@ export function ghRisk(command: string, allowed: ReadonlySet<string> | null, per
     const braced = bare.slice(1).find((word) => brace.test(word));
     if (braced) return commandReason(braced);
     const gh = parseGh(ghArgs);
-    const hidden = [gh.group, ...(gh.group === "api" ? [] : [gh.action])].find((word) => /[$`*?[{]/.test(word));
+    const hidden = [gh.group, ...(singleCommands.has(gh.group) || !ghGroups.has(gh.group) ? [] : [gh.action])].find((word) => /[$`*?[{]/.test(word));
     if (hidden) return commandReason(hidden);
     if (values(gh, "--help").some((value) => !/^(?:0|f|false)$/i.test(value))) continue;
     const risk = exposure(gh, person);
