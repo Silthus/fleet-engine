@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, type Checkout } from "./proof-testing.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
 
@@ -315,7 +315,7 @@ test("a panel gap holds the gate until the user accepts it, and still needs a re
   expect(unaccepted.output).toMatch(new RegExp(`review: HEAD reviewed in round 1 by gpt-6\\.1-sol; panel gap from \\w{7}, not accepted: ${reason}`));
 
   pr.chooseGap("panel", reason);
-  await pr.fleet("gap", "--kind", "panel", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
+  await acceptGap(pr, "panel");
   expect((await pr.fleet("gate")).code).toBe(0);
 });
 

@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { standingFor } from "./proof.ts";
 
-import { cleanFixtures, fixture, settings, lookup, checkout, reviewHead, decideRule, withDecideRule, finishRound, recordingModel, markPanel } from "./proof-testing.ts";
+import { cleanFixtures, fixture, settings, lookup, checkout, reviewHead, finishRound, recordingModel, markPanel, graded, acceptGap, ledgerDecisions } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -69,8 +69,7 @@ test("a clean merge of the base carries the review of the PR forward and records
 
 test("commits that change only test files carry the final read, and a final read of them needs a decision", async () => {
   const pr = await checkout();
-  withDecideRule(pr);
-  await pr.fleet("standing", "--kind", "review", "--until", "2026-11-26", "--rule", decideRule);
+  pr.pullRequestState({ body: graded("non-critical") });
   await pr.commit("feature.ts", "export const greet = (name: string) => `hi ${name}`;\n");
   const reviewed = await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "fixture");
@@ -195,36 +194,33 @@ test("an override and a gap acceptance need the user's words from the T3 thread 
   const answer = `2026-10-24 "Run one more round"`;
   const question = "Run one more review round? example/product#42: round 7 found two new bugs.";
 
-  await expect(pr.fleet("review-start", "--commit", head.slice(0, 8), "--override", `2026-10-24 the user said to ship everything autonomously`, "--thread", "thread-1")).rejects.toThrow("dated quote");
+  await expect(pr.fleet("review-start", "--commit", head.slice(0, 8), "--override", `2026-10-24 the user said to ship everything autonomously`, "--thread", "thread-1")).rejects.toThrow("with the date they gave it");
+  pr.env.T3CODE_THREAD_ID = undefined;
   await expect(pr.fleet("review-start", "--override", answer)).rejects.toThrow("--thread");
-  await expect(pr.fleet("review-start", "--override", answer, "--thread", "thread-1")).rejects.toThrow("not in a message of the user's in thread thread-1");
+  pr.env.T3CODE_THREAD_ID = "thread-1";
+  await expect(pr.fleet("review-start", "--override", answer)).rejects.toThrow("not in a message of the user's in thread thread-1");
 
   pr.choose("Run one more round (Recommended)", question);
   await expect(pr.fleet("review-start", "--override", answer, "--thread", "thread-1")).rejects.toThrow("not in a message of the user's in thread thread-1");
   expect((await pr.fleet("review-start", "--commit", head.slice(0, 8), "--override", `2026-10-24 "Run one more round (Recommended)"`, "--thread", "thread-1")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"))).toMatchObject({
-    commit: head, override: `2026-10-24 "Run one more round (Recommended)"`,
-    answer: { thread: "mcp:thread-1", message: "request-1:0", words: "Run one more round (Recommended)", answered: question },
-  });
+  const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"));
+  expect(round).toMatchObject({ commit: head, decision: { mark: "👤" } });
+  expect(ledgerDecisions(pr)).toMatchObject([{ id: round.decision.id, class: "review", question, answer: `2026-10-25 "Run one more round (Recommended)"`, where: { thread: "mcp:thread-1", message: "request-1:0" } }]);
 
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
   pr.chooseGap("prod-shape", "No production read access", "Accept the gap (Recommended)");
-  await pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap (Recommended)" for prod-shape on #42`, "--thread", "thread-1");
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), "utf8")).acceptance).toMatchObject({ answer: { message: "request-2:0", answered: "Accept the prod-shape gap? example/product#42: No production read access" } });
+  expect((await acceptGap(pr, "prod-shape", "--words", `2026-10-25 "Accept the gap (Recommended)" for prod-shape on #42`, "--thread", "thread-1")).code).toBe(0);
+  expect(ledgerDecisions(pr).at(-1)).toMatchObject({ class: "proof-gap", effect: "accept", question: "Accept the prod-shape gap? example/product#42: No production read access", where: { message: "request-2:0" } });
 });
 
-test("a gap acceptance needs a recorded gap and the user's words from the T3 thread it names", async () => {
+test("fleet proof gap no longer takes --accept, and points at fleet decision record", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "new\n");
-  const accept = `2026-10-25 "Accept the gap (Recommended)" for prod-shape on #42`;
-  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", accept, "--thread", "thread-1")).rejects.toThrow("No prod-shape gap is recorded");
-
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
-  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", accept)).rejects.toThrow("--thread");
-  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", accept, "--thread", "thread-1")).rejects.toThrow("not in a message of the user's in thread thread-1");
-  pr.chooseGap("prod-shape", "No production read access", "Accept the gap (Recommended)");
-  expect((await pr.fleet("gap", "--kind", "prod-shape", "--accept", accept, "--thread", "thread-1")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), "utf8"))).toMatchObject({ reason: "No production read access", acceptance: { instruction: accept } });
+  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1")).rejects.toThrow("--accept is gone. Record the user's answer with fleet decision record --mark 👤 --class proof-gap --kind prod-shape --pr example/product#42");
+  expect((await pr.fleet("gap", "--help")).output).toContain("fleet decision record --mark 👤 --class proof-gap --kind <kind> --pr <owner/repo#n>");
+  pr.env.T3CODE_THREAD_ID = undefined;
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow("--thread");
 });
 
 test("the gate fails until the owed proofs are recorded, and a recorded none prints its reason", async () => {
@@ -297,10 +293,10 @@ test("a standing rule from the user's guides accepts its kind's gaps until its d
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
 
   await expect(pr.fleet("standing", "--kind", "prod-shape", "--until", "2026-11-02", "--rule", "The user accepts every gap of every kind forever")).rejects.toThrow("word for word");
-  await expect(pr.fleet("standing", "--kind", "prod-shape,review,judge", "--until", "2026-11-02", "--rule", rule)).rejects.toThrow("word for word");
+  await expect(pr.fleet("standing", "--kind", "prod-shape,review,judge", "--until", "2026-11-02", "--rule", rule)).rejects.toThrow("A standing rule no longer takes review. Decide a review round with --agent");
   await expect(pr.fleet("standing", "--kind", "prod-shape", "--until", "2099-01-01", "--rule", rule)).rejects.toThrow("word for word");
-  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", `The guide says: ${rule}`)).rejects.toThrow("quotes the user's instructions");
-  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", "Per my skill settings, sandbox: it has no test user yet, so record its walk as a gap")).rejects.toThrow("quotes the user's instructions");
+  await expect(acceptGap(pr, "prod-shape", "--words", `2026-10-25 The guide says: "${rule}"`)).rejects.toThrow("quotes the user's instructions");
+  await expect(acceptGap(pr, "prod-shape", "--words", `2026-10-25 "Per my skill settings, sandbox: it has no test user yet, so record its walk as a gap"`)).rejects.toThrow("quotes the user's instructions");
   await pr.fleet("standing", "--kind", "prod-shape", "--until", "2026-11-02", "--rule", rule);
   expect((await pr.fleet("standing")).output.split("\n").map((line) => JSON.parse(line))).toMatchObject([{ kind: "prod-shape", until: "2026-11-02", rule }]);
 
@@ -316,9 +312,8 @@ test("a standing rule from the user's guides accepts its kind's gaps until its d
   expect(await standingFor(pr.home, "prod-shape", new Date("2026-11-01T23:00:00Z"))).toBeUndefined();
 });
 
-test("under the user's standing review rule, an agent answers an arbiter escalation itself, and the round keeps the escalation and the agent's reason", async () => {
+test("an agent answers an arbiter escalation itself with --agent on a graded PR, and the round keeps the escalation and its 🤖 decision", async () => {
   const pr = await checkout();
-  withDecideRule(pr);
   const head = await pr.commit("feature.txt", "new\n");
   for (const round of ["1", "2"]) {
     await pr.fleet("review-start", ...(round === "1" ? ["--scope", "full"] : ["--scope", "fixes", "--base", head]));
@@ -328,31 +323,28 @@ test("under the user's standing review rule, an agent answers an arbiter escalat
   const third = ["review-start", "--scope", "fixes", "--base", head];
   const reason = "Round 1 asked for the rename as a nit; keep the reverted name and review the fix.";
 
-  await expect(pr.fleet(...third, "--standing", reason)).rejects.toThrow("No standing rule lets agents decide review rounds");
-  await pr.fleet("standing", "--kind", "review,judge,post-deploy-watch", "--until", "2026-11-26", "--rule", decideRule);
-  expect((await pr.fleet("standing")).output.split("\n").map((line) => JSON.parse(line).kind)).toEqual(["review", "judge", "post-deploy-watch"]);
+  await expect(pr.fleet(...third, "--agent", reason)).rejects.toThrow("example/product#42 is ungraded: its merge-risk callout has no Tier line at HEAD");
+  await expect(pr.fleet("standing", "--kind", "review", "--until", "2026-11-26", "--rule", "Decide review rounds yourself until the date.")).rejects.toThrow("A standing rule no longer takes review");
   await expect(pr.fleet(...third)).rejects.toThrow("The arbiter escalates: Round 2 undoes the rename round 1 asked for. Ask the user with your question tool");
-  await expect(pr.fleet(...third)).rejects.toThrow("or decide yourself under their standing rule with --standing");
+  await expect(pr.fleet(...third)).rejects.toThrow("Or decide the round yourself with --agent '<your reason>'");
+  expect(existsSync(join(pr.pullRequest, "reviews/3"))).toBe(false);
+  expect(ledgerDecisions(pr)).toEqual([]);
 
-  expect((await pr.fleet(...third, "--standing", reason)).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8"))).toMatchObject({
-    arbiter: { verdict: "escalate", reason: "Round 2 undoes the rename round 1 asked for" },
-    standing: { reason, rule: decideRule, until: "2026-11-26" },
-  });
+  pr.pullRequestState({ body: graded("critical") });
+  expect((await pr.fleet(...third, "--agent", reason)).code).toBe(0);
+  const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8"));
+  expect(round).toMatchObject({ arbiter: { verdict: "escalate", reason: "Round 2 undoes the rename round 1 asked for" }, decision: { mark: "🤖" } });
+  expect((await pr.decide("list", "--class", "review")).output).toBe(`- 🤖 **Run another review round of example/product#42 at ${head.slice(0, 7)}?** Run it: ${reason} Rejected: Ask the user. (agent, review, thread thread-1) [${round.decision.id}]`);
   await finishRound(pr, "3");
-  expect((await pr.fleet("show", "--round", "3")).output).toContain(`accepted by the standing rule until 2026-11-26: ${reason}`);
-
-  pr.clock.now = new Date("2026-11-26T00:00:00Z");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--standing", reason)).rejects.toThrow("No standing rule lets agents decide review rounds");
+  expect((await pr.fleet("show", "--round", "3")).output).toContain(`decided by 🤖 decision ${round.decision.id}`);
 });
 
-test("under the user's standing review rule, an agent runs a final read past the ceiling itself", async () => {
+test("an agent runs a final read past the ceiling itself with --agent on a graded PR", async () => {
   const pr = await checkout();
-  withDecideRule(pr);
+  pr.pullRequestState({ body: graded("non-critical") });
   const reviewed = await pr.commit("feature.txt", "new\n");
   await pr.fleet("review-start", "--scope", "full");
   await finishRound(pr, "1");
-  await pr.fleet("standing", "--kind", "review", "--until", "2026-11-26", "--rule", decideRule);
   pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
   let base = reviewed;
   for (let read = 1; read <= 6; read++) {
@@ -365,10 +357,10 @@ test("under the user's standing review rule, an agent runs a final read past the
   const seventh = ["review-start", "--scope", "final", "--base", base];
 
   await expect(pr.fleet(...seventh)).rejects.toThrow("6 final reads done in the review phase. Ask the user with your question tool");
-  await expect(pr.fleet(...seventh)).rejects.toThrow("or decide yourself under their standing rule with --standing");
-  expect((await pr.fleet(...seventh, "--standing", "Read 6 found one real bug in new code; one more read checks its fix.")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/final-7/round.json"), "utf8"))).toMatchObject({ arbiter: { verdict: "continue" }, standing: { until: "2026-11-26" } });
-  await expect(pr.fleet(...seventh, "--standing", "anything", "--override", `2026-10-29 "Run it."`, "--thread", "thread-1")).rejects.toThrow("--override or --standing");
+  await expect(pr.fleet(...seventh)).rejects.toThrow("Or decide the round yourself with --agent");
+  expect((await pr.fleet(...seventh, "--agent", "Read 6 found one real bug in new code; one more read checks its fix.")).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/final-7/round.json"), "utf8"))).toMatchObject({ arbiter: { verdict: "continue" }, decision: { mark: "🤖" } });
+  await expect(pr.fleet(...seventh, "--standing", "anything", "--override", `2026-10-29 "Run it."`, "--thread", "thread-1")).rejects.toThrow("--agent with your reason, not both");
 });
 
 test("the review settings set how many reviews run free and where the loop stops", async () => {
@@ -417,18 +409,17 @@ test("an answer recorded on one round or PR cannot be reused on another", async 
   writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
   await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md");
   await pr.commit("feature.txt", "fixed\n");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", answer, "--thread", "thread-1")).rejects.toThrow("already used on example/product#42. One answer counts once. Ask the user again");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", `2026-10-25 "Run one more round" for round 2`, "--thread", "thread-1")).rejects.toThrow("already used on example/product#42. One answer counts once. Ask the user again");
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", answer, "--thread", "thread-1")).rejects.toThrow("already recorded as decision");
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head, "--override", `2026-10-25 "Run one more round" for round 2`, "--thread", "thread-1")).rejects.toThrow("Ask the user again");
 
   const accept = `2026-10-25 "Accept the gap"`;
   for (const kind of ["prod-shape", "cross-version"]) {
     await pr.fleet("gap", "--kind", kind, "--reason", "No sandbox");
     pr.chooseGap(kind, "No sandbox");
-    expect((await pr.fleet("gap", "--kind", kind, "--accept", accept, "--thread", "thread-1")).code).toBe(0);
+    expect((await acceptGap(pr, kind, "--words", accept)).code).toBe(0);
   }
-  const otherPr = ["--repo", "example/product", "--pr", "43"];
-  await pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--reason", "No sandbox");
-  await expect(pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--accept", accept, "--thread", "thread-1")).rejects.toThrow("answers another question");
+  await expect(acceptGap(pr, "prod-shape", "--words", accept)).rejects.toThrow("already recorded as decision");
+  await expect(pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#43", "--words", accept)).rejects.toThrow("does not name example/product#43");
 });
 
 test("evidence counts at HEAD, across a clean base merge, or reused with a reason, and older evidence alone is missing", async () => {
@@ -475,7 +466,7 @@ test("the gate reads CI on HEAD, and a ci gap stands in where CI cannot run", as
   await pr.fleet("gap", "--kind", "ci", "--reason", "Fork CI cannot create its GitHub App token");
   expect((await pr.fleet("gate")).code).toBe(3);
   pr.chooseGap("ci", "Fork CI cannot create its GitHub App token");
-  await pr.fleet("gap", "--kind", "ci", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
+  await acceptGap(pr, "ci");
   const accepted = await pr.fleet("gate");
   expect(accepted.code).toBe(0);
   expect(accepted.output.split("\n").at(-1)).toBe("gate: pass (kinds: none; review: round 1 by gpt-6.1-sol; CI: gap accepted; judge: pass by judge-under-test)");
@@ -500,10 +491,8 @@ test("one answer accepts the gap of the kind and PR its question names, however 
   await pr.commit("feature.txt", "new\n");
   pr.chooseGap("prod-shape", "No sandbox");
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
-  expect((await pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap" for PR 42`, "--thread", "thread-1")).code).toBe(0);
-  const otherPr = ["--repo", "example/product", "--pr", "43"];
-  await pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--reason", "No sandbox");
-  await expect(pr.fleet("gap", ...otherPr, "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap" for PR 43`, "--thread", "thread-1")).rejects.toThrow("answers another question");
+  expect((await acceptGap(pr, "prod-shape", "--words", `2026-10-25 "Accept the gap" for PR 42`)).code).toBe(0);
+  await expect(pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#43", "--words", `2026-10-25 "Accept the gap" for PR 43`)).rejects.toThrow("does not name example/product#43");
 });
 
 test("a refusal never reads as an acceptance: the quote must be the user's whole message", async () => {
@@ -511,19 +500,20 @@ test("a refusal never reads as an acceptance: the quote must be the user's whole
   await pr.commit("feature.txt", "new\n");
   pr.chooseGap("prod-shape", "No sandbox", "Do not accept the gap.");
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
-  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "accept the gap."`, "--thread", "thread-1")).rejects.toThrow("Quote their whole message");
+  await expect(acceptGap(pr, "prod-shape", "--words", `2026-10-25 "accept the gap."`)).rejects.toThrow("Quote their whole answer");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow(`The user chose "Do not accept the gap.", which does not accept the gap`);
 });
 
 test("a standing rule the user narrows keeps only the kinds and the date its current command names", async () => {
   const pr = await checkout();
   const rule = "I accept each owed Prod shape gap and decide nothing else.";
   const guide = (kinds: string, until: string) => writeFileSync(join(pr.home, ".agents/guides/standing-rules.md"), `- ${rule} \`fleet proof standing --kind ${kinds} --until ${until}\n  --rule "${rule}"\`\n`);
-  guide("prod-shape,review", "2026-11-26");
-  expect((await pr.fleet("standing", "--kind", "prod-shape,review", "--until", "2026-11-26", "--rule", rule)).code).toBe(0);
-  expect(await standingFor(pr.home, "review", new Date("2026-11-10T12:00:00Z"))).toMatchObject({ until: "2026-11-26" });
+  guide("prod-shape,cross-version", "2026-11-26");
+  expect((await pr.fleet("standing", "--kind", "prod-shape,cross-version", "--until", "2026-11-26", "--rule", rule)).code).toBe(0);
+  expect(await standingFor(pr.home, "cross-version", new Date("2026-11-10T12:00:00Z"))).toMatchObject({ until: "2026-11-26" });
 
   guide("prod-shape", "2026-11-05");
-  expect(await standingFor(pr.home, "review", new Date("2026-11-04T12:00:00Z"))).toBeUndefined();
+  expect(await standingFor(pr.home, "cross-version", new Date("2026-11-04T12:00:00Z"))).toBeUndefined();
   expect(await standingFor(pr.home, "prod-shape", new Date("2026-11-04T12:00:00Z"))).toMatchObject({ kind: "prod-shape" });
   expect(await standingFor(pr.home, "prod-shape", new Date("2026-11-10T12:00:00Z"))).toBeUndefined();
 });
@@ -600,7 +590,7 @@ test("an accepted ci gap never waives a commit that is not the PR's head on GitH
   pr.ci("none");
   await pr.fleet("gap", "--kind", "ci", "--reason", "Fork CI cannot create its GitHub App token");
   pr.chooseGap("ci", "Fork CI cannot create its GitHub App token");
-  await pr.fleet("gap", "--kind", "ci", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
+  await acceptGap(pr, "ci");
   expect((await pr.fleet("gate")).code).toBe(0);
 
   pr.githubHead("b".repeat(40));

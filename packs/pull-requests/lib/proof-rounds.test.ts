@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startT3Stub } from "../../base/lib/t3/testing.ts";
-import { cleanFixtures, settings, lookup, checkout, fakeModel, reviewHead, finishRound, recordingModel, stalledOnQuota, blanks, type Checkout } from "./proof-testing.ts";
+import { cleanFixtures, settings, lookup, checkout, fakeModel, reviewHead, finishRound, recordingModel, stalledOnQuota, blanks, ledgerDecisions, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -37,7 +37,7 @@ test("an override counts only when the user chose Run one more round in the ques
   const question = "Run one more review round? example/product#42: The arbiter escalates: Round 2 undoes the rename round 1 asked for.";
   const stop = await pr.fleet(...third).catch((error: Error) => error.message);
   expect(stop).toContain(`Question: "${question}" Options: "Run one more round", "Stop here".`);
-  expect(stop).toContain(`--override '<date> "Run one more round"' --thread <your T3 thread id>`);
+  expect(stop).toContain(`--override '<date> "Run one more round"'. Or decide the round yourself with --agent '<your reason>'`);
   const override = (words: string) => pr.fleet(...third, "--override", `2026-10-25 "${words}"`, "--thread", "thread-1");
 
   pr.choose("Stop here", question);
@@ -50,7 +50,9 @@ test("an override counts only when the user chose Run one more round in the ques
 
   pr.choose("Run one more round", question);
   expect((await override("Run one more round")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8"))).toMatchObject({ answer: { message: "request-4:0", answered: question } });
+  const decision = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8")).decision;
+  expect(decision.mark).toBe("👤");
+  expect((await pr.decide("list", "--pr", "example/product#42")).output).toBe(`- 👤 **${question}** 2026-10-25 "Run one more round" (the user, review, thread mcp:thread-1) [${decision.id}]`);
 });
 
 test("one answer starts one round, counts only on the PR its question names, and a start that fails releases it", async () => {
@@ -62,8 +64,11 @@ test("one answer starts one round, counts only on the PR its question names, and
   await expect(start("43")).rejects.toThrow("answers another question");
   const results = await Promise.allSettled([start("42"), start("42")]);
   expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
-  expect(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason)).toContain("Ask the user again");
   expect(existsSync(join(pr.pullRequest, "reviews/1"))).toBe(true);
+  expect(existsSync(join(pr.pullRequest, "reviews/2"))).toBe(false);
+  expect((await pr.decide("list")).output.split("\n")).toHaveLength(1);
+  await finishRound(pr, "1");
+  await expect(start("42")).rejects.toThrow("already recorded as decision");
   expect(existsSync(join(pr.pullRequest, "reviews/2"))).toBe(false);
 });
 
@@ -84,7 +89,7 @@ test("only an override round may review the whole PR diff again, so a reviewed H
   const prompt = reviewer.prompts().at(-1)!;
   expect(prompt).toContain(`${await pr.git("rev-parse", "origin/main")}..${reviewed} (scope: full)`);
   expect(prompt).toContain("+new");
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/2/round.json"), "utf8"))).toMatchObject({ round: 2, commit: reviewed, scope: "full", override: answer });
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/2/round.json"), "utf8"))).toMatchObject({ round: 2, commit: reviewed, scope: "full", decision: { mark: "👤" } });
 });
 
 async function quotaCheckout() {
@@ -325,17 +330,16 @@ test("--thread reads the user's words from the T3 thread through the local T3 se
     mkdirSync(join(pr.home, ".t3/userdata"), { recursive: true });
     for (const file of ["server-runtime.json", "statev2.sqlite"]) writeFileSync(join(pr.home, ".t3/userdata", file), readFileSync(join(t3.home, ".t3/userdata", file)));
     pr.reader.words = undefined;
-    const accept = (words: string, thread = "thread-9") => pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-24 "${words}"`, "--thread", thread);
+    const accept = (words: string, thread = "thread-9") => pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#42", "--words", `2026-10-24 "${words}"`, "--thread", thread);
 
     await expect(pr.fleet("review-start", "--scope", "full", "--override", `2026-10-24 "Run one more round"`, "--thread", "thread-9")).rejects.toThrow("is a message the user typed");
     await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
     await expect(accept("Accept the gap")).rejects.toThrow("is not in a message of the user's in thread thread-9");
-    await expect(accept("Keep the gap open")).rejects.toThrow(`The user chose "Keep the gap open", not "Accept the gap"`);
+    await expect(accept("Keep the gap open")).rejects.toThrow(`The user chose "Keep the gap open", which does not accept the gap`);
     items.push(answer("user-acceptance", "Accept the gap (Recommended)"));
     expect((await accept("Accept the gap (Recommended)")).code).toBe(0);
-    expect(JSON.parse(readFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), "utf8"))).toMatchObject({
-      commit: head, acceptance: { answer: { thread: "mcp:thread-9", message: "user-acceptance:0", answered: question, source: "question" } },
-    });
+    expect(ledgerDecisions(pr)).toMatchObject([{ question: question, answer: `2026-10-24 "Accept the gap (Recommended)"`, scope: { prs: ["example/product#42"], kinds: ["prod-shape"] }, where: { thread: "mcp:thread-9", message: "user-acceptance:0" } }]);
+    expect(JSON.parse(readFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), "utf8"))).toMatchObject({ commit: head, reason: "No sandbox" });
     await expect(accept("Accept the gap", "thread-404")).rejects.toThrow("Cannot read T3 thread thread-404");
   } finally { await t3.stop(); }
 });
@@ -368,7 +372,8 @@ test("one answer cannot start two rounds of one PR at once, nor one round after 
   const override = (thread: string) => ["--override", `2026-10-25 "Run one more round"`, "--thread", thread];
   const results = await Promise.allSettled([pr.fleet(...third, ...override("thread-1")), pr.fleet("review-start", "--scope", "final", "--base", reviewed, ...override("thread-1"))]);
   expect(results.map((result) => result.status).sort()).toEqual(["fulfilled", "rejected"]);
-  expect(String((results.find((result) => result.status === "rejected") as PromiseRejectedResult).reason)).toContain("Ask the user again");
+  expect((await pr.decide("list")).output.split("\n")).toHaveLength(1);
+  expect([existsSync(join(pr.pullRequest, "reviews/3")), existsSync(join(pr.pullRequest, "reviews/final-1"))].filter(Boolean)).toHaveLength(1);
 
   const pr2 = await checkout();
   const later = await twoRounds(pr2);
@@ -395,19 +400,20 @@ test("a gap counts as accepted only when the user chose Accept the gap in the qu
   await reviewHead(pr);
   await pr.fleet("require", "--kinds", "prod-shape");
   const recorded = await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
-  expect(recorded.output).toContain(`Question: "Accept the prod-shape gap? example/product#42: No sandbox" Options: "Accept the gap", "Keep the gap open".`);
-  const accept = (words: string) => pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "${words}"`, "--thread", "thread-1");
+  expect(recorded.output).toContain(`Question: "Accept the prod-shape gap? example/product#42: No sandbox" Options: "Accept the gap", "Keep the gap open". When they choose "Accept the gap", run fleet decision record --mark 👤 --class proof-gap --kind prod-shape --pr example/product#42`);
+  const accept = (...words: string[]) => pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#42", ...words);
 
   pr.say("Accept the gap", "Accept the prod-shape gap? example/product#42: No sandbox");
-  await expect(accept("Accept the gap")).rejects.toThrow("is a message the user typed");
+  await expect(accept()).rejects.toThrow("No answer of the user's to a question tool in thread thread-1 names example/product#42");
+  await expect(accept("--words", `2026-10-25 "Accept the gap"`)).rejects.toThrow("is a message the user typed");
   pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
-  await expect(accept("Keep the gap open")).rejects.toThrow(`The user chose "Keep the gap open", not "Accept the gap"`);
+  await expect(accept()).rejects.toThrow(`The user chose "Keep the gap open", which does not accept the gap`);
   pr.chooseGap("cross-version", "No sandbox");
-  await expect(accept("Accept the gap")).rejects.toThrow("answers another question");
+  await expect(accept()).rejects.toThrow("does not name the prod-shape gap");
   expect((await pr.fleet("gate")).code).toBe(3);
 
   pr.chooseGap("prod-shape", "No sandbox");
-  expect((await accept("Accept the gap")).code).toBe(0);
+  expect((await accept()).code).toBe(0);
   expect((await pr.fleet("gate")).code).toBe(0);
 });
 
@@ -422,19 +428,6 @@ test("a finding that quotes the anchor heading hides no later finding from the r
   expect((await pr.fleet("gate")).output).toContain("unanswered findings 1, 2");
 });
 
-test("an answer accepts one gap once: a gap recorded again with another reason needs a new answer", async () => {
-  const pr = await checkout();
-  await pr.commit("feature.txt", "new\n");
-  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
-  pr.chooseGap("prod-shape", "No sandbox");
-  const accept = () => pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
-  expect((await accept()).code).toBe(0);
-  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "The sandbox has no production data");
-  await expect(accept()).rejects.toThrow("Ask the user again");
-  pr.chooseGap("prod-shape", "The sandbox has no production data");
-  expect((await accept()).code).toBe(0);
-});
-
 test("a later identical choice for another PR does not hide the user's unused answer for this PR", async () => {
   const pr = await checkout();
   const third = await twoRounds(pr);
@@ -442,7 +435,7 @@ test("a later identical choice for another PR does not hide the user's unused an
   pr.choose("Run one more round", "Run one more review round? example/product#42: The arbiter escalates.");
   pr.choose("Run one more round", "Run one more review round? example/product#43: The arbiter escalates.");
   expect((await pr.fleet(...third, "--override", `2026-10-25 "Run one more round"`, "--thread", "thread-1")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8")).answer).toMatchObject({ message: "request-1:0" });
+  expect(ledgerDecisions(pr)).toMatchObject([{ class: "review", mark: "👤", where: { message: "request-1:0" } }]);
 });
 
 test("a claim that another start is still writing counts as used", async () => {

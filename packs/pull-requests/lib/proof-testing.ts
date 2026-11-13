@@ -1,11 +1,12 @@
 import { expect } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitEnv, template } from "../../../src/testing/git.ts";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
+import { decisionCommand, type Ssh } from "./decision-ledger.ts";
 
 const fixtures: string[] = [];
 export const cleanFixtures = () => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true }));
@@ -94,7 +95,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const env: Record<string, string | undefined> = {
     ...gitEnv, PATH: `${bin}:${process.env.PATH}`,
     CLAUDE_CODE_SESSION_ID: "session-under-test", CODEX_THREAD_ID: undefined, FLEET_SETTINGS: JSON.stringify(settings), FLEET_MODELS: JSON.stringify(models),
-    FLEET_PROOF_JUDGE: `cat >/dev/null; echo '${verdict()}'`, FLEET_PROOF_JUDGE_MODEL: "judge-under-test",
+    FLEET_PROOF_JUDGE: `cat >/dev/null; echo '${verdict()}'`, FLEET_PROOF_JUDGE_MODEL: "judge-under-test", T3CODE_THREAD_ID: "thread-1",
   };
   const git = async (...args: string[]) => {
     const result = await spawnAsync(["git", ...args], { cwd: repository, env });
@@ -123,11 +124,12 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     return words;
   };
   const reader: { words?: ThreadWords } = { words: threadWords };
+  const hub: { ssh?: Ssh } = {};
   const panel: { lostWorkers: boolean; onPause?: () => Promise<void> } = { lostWorkers: false };
   const fleetIn = async (cwd: string, ...args: string[]) => {
     const lines: string[] = [];
     const context: ProofContext = {
-      home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words,
+      home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh,
       detach: async (worker) => {
         if (panel.lostWorkers) return (await spawnAsync(["true"])).pid;
         await proofCommand([...worker], { ...context, print: () => {} });
@@ -142,9 +144,14 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     return { code, output: lines.join("\n") };
   };
   const fleet = (...args: string[]) => fleetIn(repository, ...args);
+  const decide = async (...args: string[]) => {
+    const lines: string[] = [];
+    const code = await decisionCommand(args, { home, cwd: repository, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh });
+    return { code, output: lines.join("\n") };
+  };
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel, hub, decide };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;
@@ -236,6 +243,15 @@ export async function reviewHead(pr: Checkout) {
 }
 
 export const markPanel = (pr: Checkout, round: string) => writeFileSync(join(pr.pullRequest, "reviews", round, "panel.json"), JSON.stringify({ lenses: [], changedFiles: [], cwd: pr.repository, readable: [] }));
+
+export const ledgerDecisions = (pr: Checkout) => {
+  const path = join(pr.home, ".local/state/fleet/decisions.jsonl");
+  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line).decision).filter(Boolean) : [];
+};
+
+export const acceptGap = (pr: Checkout, kind: string, ...more: string[]) => pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", kind, "--pr", "example/product#42", ...more);
+
+export const graded = (tier: string) => `## Merge risk\n\n<!-- merge-risk -->\n> [!NOTE]\n> 🔵 **Merge risk: low** · two-way door\n> - **Tier:** ${tier}\n<!-- /merge-risk -->\n`;
 
 export const decideRule = "Until 2026-11-26, decide review rounds, judge gaps, and post-deploy-watch gaps yourself.";
 
