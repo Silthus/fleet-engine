@@ -26,7 +26,7 @@ test("removes an idle, clean worktree whose commits landed", () => {
 });
 
 test("keeps work that is active, dirty, unmerged, or held only by the worktree", () => {
-  const thread = { status: "stopped", archived: false, deleted: false, settled: false, pending: false, activeAt: 0 };
+  const thread = { status: "stopped", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, openLead: false };
   const cases: Array<[Partial<Facts>, string]> = [
     [{ kind: "main" }, "primary checkout"],
     [{ inUse: true }, "a process runs inside it"],
@@ -43,8 +43,17 @@ test("keeps work that is active, dirty, unmerged, or held only by the worktree",
   for (const [change, reason] of cases) expect(decide({ ...idle, ...change }, limits)).toEqual({ path: idle.path, remove: false, reason });
 });
 
+test("keeps a landed or merged worktree while an open thread that is not a subagent uses it, and removes it otherwise", () => {
+  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, openLead: true };
+  const reason = "its T3 thread is open";
+  expect(decide({ ...idle, branch: null, thread: open }, limits)).toEqual({ path: idle.path, remove: false, reason });
+  expect(decide({ ...idle, landed: false, prMerged: true, thread: open }, limits)).toEqual({ path: idle.path, remove: false, reason });
+  expect(decide({ ...idle, thread: { ...open, openLead: false } }, limits)).toMatchObject({ remove: true, reason: "all commits are on origin/main" });
+  expect(decide({ ...idle, thread: { ...open, settled: true, openLead: false } }, limits)).toMatchObject({ remove: true, reason: "all commits are on origin/main" });
+});
+
 test("removes a worktree of a closed thread whose only changes are ones tools make, and keeps it while the thread is open", () => {
-  const settled = { status: "completed", archived: false, deleted: false, settled: true, pending: false, activeAt: 0 };
+  const settled = { status: "completed", archived: false, deleted: false, settled: true, pending: false, activeAt: 0, openLead: false };
   const touched = { ...idle, landed: false, dirty: true, disposable: true };
   expect(decide({ ...touched, thread: settled }, limits)).toMatchObject({ remove: true, reason: "T3 thread is settled; commits stay on feature; drops lockfile and tool output changes" });
   expect(decide({ ...touched, thread: { ...settled, settled: false } }, limits).reason).toBe("uncommitted changes");
@@ -126,7 +135,7 @@ test("removes an idle agent worktree with unmerged commits on a branch, and keep
 });
 
 test("under disk pressure, evicts a clean worktree whose commits a ref keeps, even with an open thread or unreadable state", () => {
-  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0 };
+  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, openLead: true };
   const pressure = { ...limits, minIdleHours: 1 };
   const unmerged = { ...idle, landed: false, thread: open };
   expect(evictable(unmerged, pressure)).toBe(true);
@@ -144,7 +153,7 @@ test("under disk pressure, keeps a worktree that no thread or agent owns for the
   expect(evictable(detached, pressure)).toBe(false);
   expect(decide({ ...detached, landed: true }, pressure).reason).toBe("no T3 thread or agent owns it; active 3.0h ago");
   expect(evictable({ ...detached, lastActivity: now - 7 * 3600_000 }, pressure)).toBe(true);
-  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0 };
+  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, openLead: true };
   expect(evictable({ ...detached, thread: open }, pressure)).toBe(true);
 });
 
@@ -238,6 +247,10 @@ test("reads the live orchestration v2 state of a nightly T3 and ignores its froz
   thread("busy", {});
   thread("asking", {});
   thread("archived", {}, "2026-09-23T00:00:00Z");
+  thread("review", { lineage: { parentThreadId: "busy", relationshipToParent: "subagent" } });
+  db.run("insert into orchestration_v2_projection_threads values ('lead', '2026-09-20T00:00:00Z', null, null, ?)", [JSON.stringify({ worktreePath: "/w/review", lineage: { parentThreadId: null } })]);
+  thread("solo-child", { lineage: { parentThreadId: "busy", relationshipToParent: "subagent" } });
+  thread("fork", { lineage: { parentThreadId: "busy", relationshipToParent: "fork" } });
   db.run("insert into orchestration_v2_projection_runs values ('d1', 'done', 1, 'completed', '2026-09-21T00:00:00Z', '2026-09-22T00:00:00Z')");
   db.run("insert into orchestration_v2_projection_runs values ('b1', 'busy', 1, 'completed', '2026-09-21T00:00:00Z', '2026-09-21T01:00:00Z')");
   db.run("insert into orchestration_v2_projection_runs values ('b2', 'busy', 2, 'running', '2026-09-25T10:00:00Z', null)");
@@ -253,6 +266,11 @@ test("reads the live orchestration v2 state of a nightly T3 and ignores its froz
   expect(threads.get("/w/busy")).toMatchObject({ status: "running", settled: false, activeAt: Date.parse("2026-09-25T10:00:00Z") });
   expect(threads.get("/w/asking")).toMatchObject({ pending: true, activeAt: Date.parse("2026-09-23T00:00:00Z") });
   expect(threads.get("/w/archived")).toMatchObject({ archived: true });
+  expect(threads.get("/w/busy")).toMatchObject({ openLead: true });
+  expect(threads.get("/w/solo-child")).toMatchObject({ openLead: false });
+  expect(threads.get("/w/fork")).toMatchObject({ openLead: true });
+  expect(threads.get("/w/review")).toMatchObject({ openLead: true });
+  expect(threads.get("/w/archived")).toMatchObject({ openLead: false });
   expect(decide({ ...idle, path: "/w/busy", thread: threads.get("/w/busy")! }, limits).reason).toBe("T3 session is running");
   expect(threads.get("/w/waiting")).toMatchObject({ status: "running" });
   const queued = { ...threads.get("/w/busy")!, status: "queued" };
