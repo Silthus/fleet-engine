@@ -409,7 +409,7 @@ test("a reversal on a GitHub comment counts only when the user wrote it and it h
   await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`)).rejects.toThrow("Pass --thread with the T3 thread where the user reversed it, or --comment");
   expect((await pr.fleet("gate")).code).toBe(0);
 
-  pr.githubComment(123, "The-User", "Please **reverse that one**, it needs the proof.");
+  pr.githubComment(123, "The-User", "Please **reverse that one**, it needs the proof.", "2026-10-25T13:00:00Z");
   expect((await reverse()).output).toStartWith(`- 👤 **Accept the prod-shape gap?** 2026-10-25 "Reverse that one" (reversed 2026-10-25 from ~~🤖 Accept it`);
   expect((await pr.fleet("gate")).code).toBe(3);
 });
@@ -423,6 +423,7 @@ test("two reversals in one ask class within 28 days brake it until the user lift
   const lift = (day: string, words: string) => pr.decide("lift", "--class", "proof-gap", "--words", `${day} "${words}"`, "--thread", "thread-1");
   const liftQuestion = "Lift the brake on proof-gap decisions of example/product#42?";
   const ids: string[] = [];
+  on("2026-09-25");
   for (let i = 0; i < 3; i++) ids.push(idIn((await agent(pr, "prod-shape")).output));
   const firstDesign = idIn((await design("Where does the parser go?")).output);
   const secondDesign = idIn((await design("Where does the printer go?")).output);
@@ -440,21 +441,21 @@ test("two reversals in one ask class within 28 days brake it until the user lift
   on("2026-11-05");
   pr.say("Lift it, decide gaps again");
   await expect(lift("2026-11-05", "Lift it, decide gaps again")).rejects.toThrow(`"Lift it, decide gaps again" is a message the user typed. Only their answer to your question tool lifts a brake`);
-  pr.choose("Lift it, decide gaps again", liftQuestion);
-  const lifted = await lift("2026-11-05", "Lift it, decide gaps again");
-  expect(lifted.output).toBe(`Lifted the brake on proof-gap (reversals of ${ids[0]} and ${ids[1]}): the agent decides its asks alone again. (the user, 2026-11-05 "Lift it, decide gaps again", thread thread-1)`);
+  pr.choose("Lift it", liftQuestion);
+  const lifted = await lift("2026-11-05", "Lift it");
+  expect(lifted.output).toBe(`Lifted the brake on proof-gap (reversals of ${ids[0]} and ${ids[1]}): the agent decides its asks alone again. (the user, 2026-11-05 "Lift it", thread thread-1)`);
   const fourth = idIn((await agent(pr, "prod-shape")).output);
 
-  await reverseOn("2026-11-01", ids[2]!, "Wrong again");
-  await reverseOn("2026-11-01", fourth, "And again");
+  await reverseOn("2026-11-06", ids[2]!, "Wrong again");
+  await reverseOn("2026-11-07", fourth, "And again");
   await expect(agent(pr, "prod-shape")).rejects.toThrow(`braked: the user reversed decisions ${ids[2]} and ${fourth}`);
-  await expect(lift("2026-11-05", "Lift it, decide gaps again")).rejects.toThrow("That message already lifted the proof-gap brake on 2026-11-05. One message lifts one brake");
-  on("2026-10-31");
-  pr.choose("Decide gaps alone", liftQuestion);
-  await expect(lift("2026-10-31", "Decide gaps alone")).rejects.toThrow(`The user wrote that before the brake, which the reversal of ${fourth} set on 2026-11-01. Only an answer after it lifts it`);
+  await expect(lift("2026-11-05", "Lift it")).rejects.toThrow("That message already lifted the proof-gap brake on 2026-11-05. One message lifts one brake");
   on("2026-11-06");
+  pr.choose("Lift it now", liftQuestion);
+  await expect(lift("2026-11-06", "Lift it now")).rejects.toThrow(`The user wrote that before the brake, which the reversal of ${fourth} set on 2026-11-07. Only an answer after it lifts it`);
+  on("2026-11-08");
   pr.choose("Lift it once more", liftQuestion);
-  expect((await lift("2026-11-06", "Lift it once more")).code).toBe(0);
+  expect((await lift("2026-11-08", "Lift it once more")).code).toBe(0);
   expect((await agent(pr, "prod-shape")).code).toBe(0);
 });
 
@@ -591,6 +592,7 @@ test("a reversal and a lift take the time the user wrote their words, not the ti
   pr.pullRequestState({ body: graded("non-critical") });
   const design = (question: string) => pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", question, "--answer", "Keep one module", "--rejected", "Split it", "--reason", "Small change");
   const on = (day: string) => { pr.clock.now = new Date(`${day}T10:00:00Z`); };
+  on("2026-08-25");
   const first = idIn((await design("Where does the parser go?")).output);
   const second = idIn((await design("Where does the printer go?")).output);
   const third = idIn((await design("Where does the report go?")).output);

@@ -91,11 +91,11 @@ The gate no longer counts an agent's acceptance, because the tier changed, CI ra
 _Avoid_: Expiry, revoke
 
 **Reversal**:
-The user's own words, in a T3 thread or on a GitHub comment they wrote, that replace a decision's answer. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more. A reversal takes the time the user wrote their words. A gap the user keeps owed takes no reversal: only their acceptance lifts it.
+The user's own words, in a T3 thread or on a GitHub comment they wrote, that replace a decision's answer. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more. A reversal takes the time the user wrote their words, and those words must be newer than the decision. A comment that Fleet writes, such as a decision line, a proof receipt or an end-of-run report, is never a reversal. A gap the user keeps owed and a voided decision take no reversal.
 _Avoid_: Undo, override
 
 **Brake**:
-Two reversals in one ask class within 28 days. While it holds, an agent decides nothing alone in that class. Only the user's answer, given after the brake, lifts it.
+Two reversals of the agent's decisions in one ask class within 28 days. The brake holds from the later reversal. While it holds, an agent decides nothing alone in that class. Only the user's answer to a question that asks to lift that class's brake lifts it: the answer starts with "Lift" or "Yes", comes after the brake, and is no decision's answer. One answer lifts one brake.
 _Avoid_: Lock, freeze
 
 **Proof summary**:
