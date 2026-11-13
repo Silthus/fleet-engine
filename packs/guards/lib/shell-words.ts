@@ -47,12 +47,25 @@ const wrappers: Record<string, { valued: string[]; operands?: number; chdir?: st
 
 function parenEnd(text: string, open: number): number {
   let depth = 0;
+  const pending: Heredoc[] = [];
   for (let index = open; index < text.length; index++) {
     const char = text[index];
     if (char === "\\") index++;
     else if (char === "'") index = quoteEnd(text, index + 1, "'");
     else if (char === '"') index = doubleQuoted(text, index + 1, true).end;
     else if (char === "`") index = quoteEnd(text, index + 1, "`");
+    else if (char === "$" && text[index + 1] === "'") index = ansiQuoteEnd(text, index + 2);
+    else if (char === "$" && text[index + 1] === "{") index = braceEnd(text, index + 2);
+    else if (char === "#" && /[\s;&|()]/.test(text[index - 1] ?? "")) {
+      const newline = text.indexOf("\n", index);
+      index = (newline < 0 ? text.length : newline) - 1;
+    }
+    else if (text.startsWith("<<", index) && text[index + 2] !== "<") {
+      const stripTabs = text[index + 2] === "-";
+      const { delimiter, literal, end } = readDelimiter(text, index + (stripTabs ? 3 : 2));
+      pending.push({ delimiter, literal, stripTabs, body: "", substitutions: [] });
+      index = end - 1;
+    } else if (char === "\n" && pending.length > 0) index = readBodies(text, index + 1, pending) - 1;
     else if (char === "(") depth++;
     else if (char === ")" && --depth === 0) return index;
   }
@@ -63,6 +76,14 @@ function quoteEnd(text: string, start: number, quote: string): number {
   for (let index = start; index < text.length; index++) {
     if (text[index] === "\\" && quote !== "'") index++;
     else if (text[index] === quote) return index;
+  }
+  return text.length;
+}
+
+function ansiQuoteEnd(text: string, start: number): number {
+  for (let index = start; index < text.length; index++) {
+    if (text[index] === "\\") index++;
+    else if (text[index] === "'") return index;
   }
   return text.length;
 }
@@ -190,7 +211,7 @@ function tokenize(text: string): Token[] {
       append(text.slice(index + 1, end), text.slice(index, end + 1));
       index = end + 1;
     } else if (char === "$" && next === "'") {
-      const end = quoteEnd(text, index + 2, "'");
+      const end = ansiQuoteEnd(text, index + 2);
       append(text.slice(index + 2, end).replace(/\\(.)/g, "$1"), text.slice(index, end + 1));
       index = end + 1;
     } else if (char === '"') {

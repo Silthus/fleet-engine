@@ -526,6 +526,12 @@ describe("the gh guard", () => {
     ["gh api user/repos -f name=x -f visibility=private", "makes code public"],
     ["gh api repos/acme/template/generate -f owner=acme -f name=x -f visibility=private", "makes code public"],
     ["gh api orgs/acme/repos -f name=x -f visibility=private -F private=false", "makes code public"],
+    ['echo "$(echo ${x:-(})"; gh auth token', "the GitHub token"],
+    ["x=$(echo hi # (\n); gh auth token", "the GitHub token"],
+    ["echo $(echo $'it\\'s ('); gh auth token", "the GitHub token"],
+    ["echo $'it\\'s'; gh auth token", "the GitHub token"],
+    ['echo "$(cat <<\\EOF\n(\nEOF\n)"; gh auth token', "the GitHub token"],
+    ["echo \"$(cat <<'EOF'\nit's (\nEOF\n)\"; gh auth token", "the GitHub token"],
   ])("refuses account, token, extension and exposure commands: %s", (command, why) => {
     expect(refusal(command)).toContain(why);
   });
@@ -602,6 +608,7 @@ describe("the gh guard", () => {
     ["gh repo sync --source other/app acme/copy", "other"],
     ["gh repo create --template other/app acme/new --private", "other"],
     ["echo \"$(printf '(')\"; gh api repos/other/app", "other"],
+    ["gh api $'repos/other/app'", "other"],
   ])("refuses an outside owner however the command spells it: %s", (command, owner) => {
     expect(refusal(command)).toContain(`\`${owner}\` is not one of the GitHub owners`);
   });
@@ -621,6 +628,8 @@ describe("the gh guard", () => {
     'gh repo edit --default-branch "$BRANCH" acme/app',
     'gh repo rename "$NEW_NAME" --repo acme/app',
     "(gh repo view site)",
+    "gh api $'repos/acme/app'",
+    "gh pr create -t title --body \"$(cat <<'EOF'\nIt's done (mostly).\nEOF\n)\"",
   ])("allows spelled-out allowed owners and gh placeholders: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
   });
