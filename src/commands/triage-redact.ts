@@ -23,8 +23,38 @@ const rules: Rule[] = [
   [/(?<![A-Za-z0-9-]|[A-Za-z0-9-]\.)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:internal|local|lan|corp|home\.arpa|coder|ts\.net|tailscale\.net)\b/g, "<host>"],
   [/(\/Users|\/home)\/(?:[^/\n"'`:]{1,64}?(?=\/)|[^/\s"'`:]+)/g, "$1/<user>"],
   [/\b([A-Za-z]:(?:\\\\|\\|\/)Users(?:\\\\|\\|\/))(?:[^\\/\n"'`:]{1,64}?(?=[\\/])|[^\\/\s"'`:]+)/gi, "$1<user>"],
-  [/[A-Za-z0-9+/_-]{32,}={0,2}/g, (text) => (/^[0-9a-f]+$/.test(text) || !/[A-Z]/.test(text) || !/[a-z]/.test(text) || !/[0-9]/.test(text) ? text : "<secret>")],
+  [/[A-Za-z0-9+/_-]{32,}={0,2}/g, (text) => (looksRandom(text) ? "<secret>" : text)],
 ];
+
+const tokenLetters = 32;
+const windowLetters = 128;
+
+type Tally = { letters: number; upper: number };
+
+function looksRandom(text: string) {
+  if (!/[A-Z]/.test(text) || !/[a-z]/.test(text)) return false;
+  if (/[0-9]/.test(text)) return true;
+  const parts: Tally[] = text
+    .replace(/=+$/, "")
+    .split(/[+/_-]/)
+    .filter((part) => /[A-Z]/.test(part) && /[a-z]/.test(part))
+    .map((part) => ({ letters: part.length, upper: part.match(/[A-Z]/g)!.length }));
+  if (evenCases(parts.reduce(add, { letters: 0, upper: 0 }))) return true;
+  for (let start = 0; start < parts.length; start++) {
+    let window: Tally = { letters: 0, upper: 0 };
+    for (let end = start; end < parts.length && window.letters - parts[start]!.letters < windowLetters; end++) {
+      window = add(window, parts[end]!);
+      if (evenCases(window)) return true;
+    }
+  }
+  return false;
+}
+
+const add = (a: Tally, b: Tally): Tally => ({ letters: a.letters + b.letters, upper: a.upper + b.upper });
+
+function evenCases({ letters, upper }: Tally) {
+  return letters >= tokenLetters && Math.min(upper, letters - upper) * 4 >= letters;
+}
 
 /**
  * Removes what must not leave the machine in a report: keys, tokens, private
