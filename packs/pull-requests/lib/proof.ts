@@ -152,14 +152,15 @@ function askUser(identity: ProofIdentity, stop: string) {
 export type CapturedBy = "fleet" | "author";
 export type ReviewDecision = { mark: Mark; id: string; record: () => Promise<unknown> };
 export type ReviewRequest = { scope: string; base?: string; from?: string; decision?: ReviewDecision; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; capturedBy?: CapturedBy };
-type Reserved = { round: number | "final"; id: string; directory: string };
+export type Reserved = { round: number | "final"; id: string; directory: string };
 type Permit = { arbiter: Arbiter; limits: ReviewLimits };
 
-async function reserveDecided(reviews: string, name: string, record: object, decision: ReviewDecision | undefined) {
-  if (!await reserve(reviews, name, { ...record, ...decision ? { decision: { mark: decision.mark, id: decision.id } } : {} })) return false;
+const reserveDecided = (reviews: string, name: string, record: object, decision: ReviewDecision | undefined) =>
+  reserve(reviews, name, { ...record, ...decision ? { decision: { mark: decision.mark, id: decision.id } } : {} });
+
+export async function recordReviewDecision(reserved: Reserved, decision: ReviewDecision | undefined) {
   try { await decision?.record(); }
-  catch (error) { await rm(join(reviews, name), { recursive: true, force: true }); throw error; }
-  return true;
+  catch (error) { await rm(reserved.directory, { recursive: true, force: true }); throw error; }
 }
 
 async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: ReviewDecision | undefined, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {

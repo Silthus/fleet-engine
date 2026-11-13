@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity, type ReviewDecision } from "./proof.ts";
+import { askGap, authorOf, finishReview, recordReviewDecision, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity, type ReviewDecision } from "./proof.ts";
 import { appendDecision, decideAlone, hearUser, ledgerOf } from "./decision-cli.ts";
 import { refText, type Ssh } from "./decision-ledger.ts";
 import { ciOf, pushedHeadOf, readPullRequest, runIn } from "./pr-ci.ts";
@@ -367,7 +367,10 @@ ${overrideHelp}`,
       const head = identity();
       const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
       const scope = options.get("--scope") ?? "full";
-      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...await decisionOf(options, head, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) })));
+      const decided = await decisionOf(options, head, context);
+      const reserved = await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decided, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) });
+      await recordReviewDecision(reserved, decided.decision);
+      context.print(JSON.stringify(reserved));
       return 0;
     },
   },
@@ -399,7 +402,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   if (pending && await readPlan(pending.directory)) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
   const reserved = pending
     ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
-    : await reserveFleetReview(options, head, context);
+    : await reserveFleetReview(options, head, context).then(async (fresh) => { await recordReviewDecision(fresh, fresh.decision); return fresh; });
   const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const { files, leftOut, diff } = reviewRange(run, from, head.commit, mergeBase(head, run));
@@ -428,8 +431,9 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
   const from = rangeStart(scope, base, head, context.run);
-  const reserved = await startReview(context.home, head, { scope, base, from, ...await decisionOf(options, head, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
-  return { ...reserved, scope, from };
+  const decided = await decisionOf(options, head, context);
+  const reserved = await startReview(context.home, head, { scope, base, from, ...decided, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
+  return { ...reserved, scope, from, decision: decided.decision };
 }
 
 const rangeStart = (scope: string, base: string | undefined, head: ProofIdentity, run: Run) => scope === "full" ? mergeBase(head, run) : base;
@@ -481,6 +485,7 @@ async function reservePanel(options: Map<string, string>, head: ProofIdentity, l
   try {
     const { plan, briefs } = await panelBriefs(reserved, head, lenses, guide, rubric, context);
     await planPanel(reserved.directory, plan, briefs);
+    await recordReviewDecision(reserved, reserved.decision);
   } catch (error) {
     await rm(reserved.directory, { recursive: true, force: true });
     throw error;
@@ -657,7 +662,7 @@ const arbiterOf = ({ env, cwd }: CommandContext): Arbiter => async (prompt) => {
   return answer.ok ? parseVerdict(answer.text, answer.model) : { verdict: "unavailable", reason: answer.cause, model: answer.model };
 };
 
-async function decisionOf(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+async function decisionOf(options: Map<string, string>, head: ProofIdentity, context: CommandContext): Promise<{ arbiter: Arbiter; limits: { free: number; ceiling: number }; decision?: ReviewDecision }> {
   const rest = { arbiter: arbiterOf(context), limits: { free: numberSetting("pull-requests.freeReviews", context.env), ceiling: numberSetting("pull-requests.reviewCeiling", context.env) } };
   const words = options.get("--override");
   const reason = options.get("--agent") ?? options.get("--standing");
