@@ -29,9 +29,13 @@ const rules: Rule[] = [
 function looksRandom(text: string) {
   if (!/[A-Z]/.test(text) || !/[a-z]/.test(text)) return false;
   if (/[0-9]/.test(text)) return true;
-  const mixed = text.split(/[+/_-]/).filter((part) => /[A-Z]/.test(part) && /[a-z]/.test(part)).join("");
-  const upper = mixed.match(/[A-Z]/g)?.length ?? 0;
-  return mixed.length >= 32 && Math.min(upper, mixed.length - upper) * 4 >= mixed.length;
+  const mixed = text.split(/[+/_-]/).filter((part) => /[A-Z]/.test(part) && /[a-z]/.test(part));
+  return [...mixed, mixed.join("")].some((letters) => letters.length >= 32 && evenCases(letters));
+}
+
+function evenCases(letters: string) {
+  const upper = letters.match(/[A-Z]/g)?.length ?? 0;
+  return Math.min(upper, letters.length - upper) * 4 >= letters.length;
 }
 
 /**
