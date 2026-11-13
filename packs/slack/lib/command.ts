@@ -6,7 +6,7 @@ import type { Secrets, Threads } from "../../../src/sdk/index.ts";
 import { launchHere, launchOnBox, launchOnNodes, spawnRun, type Launch, type LaunchRequest, type Run } from "./launch.ts";
 import { manifest, manifestLink, serve, slackApi, slackApiBase, slackApp, type Sleep } from "./slack.ts";
 import { Interrupted, secretReader, type ReadSecret } from "./secret.ts";
-import { handleTrigger, retryPending, takeTurn, triggerOf, type Capture, type Owner, type TriggerDeps } from "./trigger.ts";
+import { followMinutes, handleTrigger, retryPending, syncFollowed, takeTurn, triggerOf, type Capture, type Owner, type TriggerDeps } from "./trigger.ts";
 
 type Env = Record<string, string | undefined>;
 export type Every = (work: () => void, ms: number) => () => void;
@@ -126,12 +126,14 @@ export async function listen(deps: SlackCommandDeps): Promise<void> {
     const tracked = work.catch(failed).finally(() => active.delete(tracked));
     active.add(tracked);
   };
+  let minutes = 0;
   const minute = async () => {
     if (stop.aborted) return;
     if ((await deps.secrets.read(appSecret)) !== saved) {
       log("the Slack app changed: stopping, so the service starts again with it");
       return replaced.abort();
     }
+    if (++minutes % followMinutes === 0) track(syncFollowed(trigger), (error) => log(`saved thread sync failed: ${error}`));
     await retryPending(trigger);
   };
   const stopMinutes = deps.every(() => track(minute(), (error) => log(`retry failed: ${error}`)), 60_000);

@@ -8,6 +8,9 @@ const ackEmoji = "eyes";
 const day = 86_400_000;
 const retryFor = day;
 const keepFor = 31 * day;
+const quietFor = 30 * 60_000;
+const followFailures = 3;
+export const followMinutes = 10;
 
 export type Owner = { name: string; slackUserId: string; emoji: string; captureEmoji?: string };
 export type Trigger = { kind: "message" | "reaction" | "capture"; channel: string; ts: string };
@@ -15,7 +18,8 @@ type Message = { user?: string; text?: string; ts: string; thread_ts?: string; f
 export type Captured = { path: string; title: string; url: string; updated: boolean };
 export type Capture = (input: { source: string; material: string }) => Promise<Captured>;
 type Pending = { trigger: Trigger; since: number; commandId: string; told?: true; claim?: Claim; reachedT3?: true };
-type State = { handled: Record<string, number>; pending: Record<string, Pending>; next?: number };
+type Followed = { channel: string; threadTs: string; latestTs: string; failures: number };
+type State = { handled: Record<string, number>; pending: Record<string, Pending>; followed: Record<string, Followed>; next?: number };
 export type Started = { threadId: string; url?: string; where: string };
 export type TriggerDeps = {
   owner: Owner;
@@ -148,9 +152,24 @@ async function saveToContext(trigger: Trigger, key: string, capture: Capture, de
     const first = (await deps.slack("conversations.replies", { channel: trigger.channel, ts: trigger.ts, limit: "1" })).messages?.[0] as Message | undefined;
     if (!first) throw new Error("the message is gone");
     thread = first.thread_ts;
-    const threadTs = first.thread_ts ?? first.ts;
-    const messages = await readMessages(deps.slack, trigger.channel, threadTs);
-    const permalink = String((await deps.slack("chat.getPermalink", { channel: trigger.channel, message_ts: threadTs })).permalink);
+    const saved = await captureThread(trigger.channel, first.thread_ts ?? first.ts, capture, deps);
+    await react("reactions.remove", ackEmoji);
+    await react("reactions.remove", emoji);
+    return { thread, text: `:${emoji}: ${saved.updated ? "Updated" : "Added"} <${saved.url}|${slackText(saved.title)}> in your context library (\`${slackText(saved.path)}\`). It updates as the thread gets replies.` };
+  } catch (error) {
+    deps.log(`${key}: capture failed: ${(error as Error).message}`);
+    await react("reactions.remove", ackEmoji);
+    return { thread, text: `:${emoji}: Could not save this to your context library: ${slackText((error as Error).message)}. React again to retry.` };
+  }
+}
+
+async function captureThread(channel: string, threadTs: string, capture: Capture, deps: TriggerDeps): Promise<Captured> {
+  const key = `${channel}:${threadTs}`;
+  if (inFlight.has(`note:${key}`)) throw new Error("its note is already updating");
+  inFlight.add(`note:${key}`);
+  try {
+    const messages = await readMessages(deps.slack, channel, threadTs);
+    const permalink = String((await deps.slack("chat.getPermalink", { channel, message_ts: threadTs })).permalink);
     const files = messages.flatMap((message) => message.files ?? []).filter((file) => file.id);
     const material = [
       await formatThread(deps.slack, messages),
@@ -158,13 +177,54 @@ async function saveToContext(trigger: Trigger, key: string, capture: Capture, de
     ].join("\n");
     const saved = await capture({ source: permalink, material });
     deps.log(`${key}: ${saved.updated ? "updated" : "saved"} ${saved.path}`);
-    await react("reactions.remove", ackEmoji);
-    await react("reactions.remove", emoji);
-    return { thread, text: `:${emoji}: ${saved.updated ? "Updated" : "Added"} <${saved.url}|${slackText(saved.title)}> in your context library (\`${slackText(saved.path)}\`).` };
-  } catch (error) {
-    deps.log(`${key}: capture failed: ${(error as Error).message}`);
-    await react("reactions.remove", ackEmoji);
-    return { thread, text: `:${emoji}: Could not save this to your context library: ${slackText((error as Error).message)}. React again to retry.` };
+    const latestTs = messages.reduce((latest, message) => (Number(message.ts) > Number(latest) ? message.ts : latest), threadTs);
+    updateState(deps.statePath, (state) => void (state.followed[key] = { channel, threadTs, latestTs, failures: 0 }));
+    return saved;
+  } finally {
+    inFlight.delete(`note:${key}`);
+  }
+}
+
+let syncing = false;
+
+export async function syncFollowed(deps: TriggerDeps): Promise<void> {
+  const capture = deps.capture;
+  if (!capture || syncing) return;
+  syncing = true;
+  try {
+    for (const [key, { channel, threadTs, latestTs }] of Object.entries(readState(deps.statePath).followed)) {
+      if (inFlight.has(`note:${key}`)) continue;
+      const page: Record<string, any> | undefined = await deps.slack("conversations.replies", { channel, ts: threadTs, oldest: latestTs, limit: "200" }).catch((error: Error) => {
+        deps.log(`${key}: could not read the saved thread: ${error.message}`);
+        return /thread_not_found|channel_not_found|not_in_channel|is_archived/.test(error.message) ? { gone: true, messages: [] } : undefined;
+      });
+      if (!page) continue;
+      const newest = Math.max(Number(latestTs), ...((page.messages ?? []) as Message[]).map((message) => Number(message.ts)));
+      if (page.gone || deps.now() - newest * 1000 > keepFor) {
+        updateState(deps.statePath, (state) => void delete state.followed[key]);
+        deps.log(`${key}: stopped following the saved thread`);
+        continue;
+      }
+      if (newest <= Number(latestTs) || deps.now() - newest * 1000 < quietFor) continue;
+      try {
+        await captureThread(channel, threadTs, capture, deps);
+      } catch (error) {
+        deps.log(`${key}: note update failed: ${(error as Error).message}`);
+        const failures = updateState(deps.statePath, (state) => {
+          const entry = state.followed[key];
+          if (!entry) return 0;
+          if (++entry.failures >= followFailures) delete state.followed[key];
+          return entry.failures;
+        });
+        if (failures >= followFailures) {
+          const emoji = deps.owner.captureEmoji!;
+          await deps.slack("chat.postEphemeral", { channel, user: deps.owner.slackUserId, thread_ts: threadTs, text: `:${emoji}: The note of this thread failed to update ${followFailures} times, so it no longer follows the thread: ${slackText((error as Error).message)}. React again to save it and follow it again.` })
+            .catch((failure) => deps.log(`${key}: ephemeral reply failed: ${failure}`));
+        }
+      }
+    }
+  } finally {
+    syncing = false;
   }
 }
 
@@ -246,8 +306,8 @@ function updateState<T>(path: string, change: (state: State) => T): T {
 function readState(path: string): State {
   try {
     const state = JSON.parse(readFileSync(path, "utf8")) as Partial<State>;
-    return { handled: state.handled ?? {}, pending: state.pending ?? {}, ...(typeof state.next === "number" ? { next: state.next } : {}) };
+    return { handled: state.handled ?? {}, pending: state.pending ?? {}, followed: state.followed ?? {}, ...(typeof state.next === "number" ? { next: state.next } : {}) };
   } catch {
-    return { handled: {}, pending: {} };
+    return { handled: {}, pending: {}, followed: {} };
   }
 }
