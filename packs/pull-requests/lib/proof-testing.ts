@@ -45,6 +45,7 @@ else
   case "$head" in "ref: "*) ref="${repository}/.git/\${head#ref: }"; if [ -f "$ref" ]; then read -r head < "$ref"; else head=$(git -C "${repository}" rev-parse HEAD); fi;; esac
 fi
 base=main; [ -f "${github}/base" ] && read -r base < "${github}/base"
+if [ -f "${github}/base-sha" ]; then read -r basesha < "${github}/base-sha"; else basesha=$(git -C "${repository}" rev-parse refs/remotes/origin/main 2>/dev/null); fi
 body='"Adds the greeting."'; [ -f "${github}/body" ] && body=$(cat "${github}/body")
 case "$*" in
   "api "*"/pulls/"[0-9]*)
@@ -52,9 +53,10 @@ case "$*" in
     [ -f "${github}/while-reading" ] && { mv "${github}/while-reading" "${github}/while-reading.sh"; sh "${github}/while-reading.sh"; }
     draft=false; [ -f "${github}/draft" ] && draft=true
     all="$*"; n=\${all##*/pulls/}; n=\${n%%[!0-9]*}
+    [ -f "${github}/pull-error-$n" ] && { cat "${github}/pull-error-$n" >&2; exit 1; }
     [ -f "${github}/body-$n" ] && body=$(cat "${github}/body-$n")
     state=open; merged=null; [ -f "${github}/merged-$n" ] && { state=closed; merged='"2026-10-25T09:00:00Z"'; }
-    printf '{"number":%s,"title":"Greet new members","body":%s,"draft":%s,"state":"%s","merged_at":%s,"head":{"sha":"%s"},"base":{"ref":"%s","repo":{"default_branch":"main"}}}\\n' "$n" "$body" "$draft" "$state" "$merged" "$head" "$base"; exit 0;;
+    printf '{"number":%s,"title":"Greet new members","body":%s,"draft":%s,"state":"%s","merged_at":%s,"head":{"sha":"%s"},"base":{"ref":"%s","sha":"%s","repo":{"default_branch":"main"}}}\\n' "$n" "$body" "$draft" "$state" "$merged" "$head" "$base" "$basesha"; exit 0;;
   "api "*"/rules/branches/"*)
     all="$*"; branch=\${all##*/rules/branches/}; page=\${all##*page=}; branch=\${branch%%\\?*}
     [ -f "${github}/rules-error-$branch" ] && { cat "${github}/rules-error-$branch" >&2; exit 1; }
@@ -86,7 +88,8 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     else writeFileSync(join(github, `rules-${branch}-${page}`), JSON.stringify([...Array.from({ length: others }, () => ({ type: "deletion" })), ...(rules.length ? [{ type: "required_status_checks", parameters: { required_status_checks: rules } }] : [])]));
     if (classic) writeFileSync(join(github, `branch-${branch}`), JSON.stringify({ protected: true, protection: { required_status_checks: { enforcement_level: "everyone", contexts: classic, checks: classic.map((context) => ({ context, app_id: null })) } } }));
   };
-  const pullRequestState = ({ draft, base, body, number, merged }: { draft?: boolean; base?: string; body?: string; number?: number; merged?: boolean }) => {
+  const pullRequestState = ({ draft, base, body, number, merged, unreadable }: { draft?: boolean; base?: string; body?: string; number?: number; merged?: boolean; unreadable?: string }) => {
+    if (unreadable !== undefined) writeFileSync(join(github, `pull-error-${number ?? 42}`), unreadable);
     if (body !== undefined) writeFileSync(join(github, number === undefined ? "body" : `body-${number}`), JSON.stringify(body));
     if (merged) writeFileSync(join(github, `merged-${number ?? 42}`), "");
     if (draft !== undefined) { if (draft) writeFileSync(join(github, "draft"), ""); else rmSync(join(github, "draft"), { force: true }); }
@@ -98,7 +101,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     if (next) writeFileSync(join(github, "next-head"), next);
   };
   const whileGithubReadsPull = (script: string) => writeFileSync(join(github, "while-reading"), script);
-  const githubComment = (id: number, author: string, body: string, createdAt = "2026-10-25T11:00:00Z") => writeFileSync(join(github, `comment-${id}`), JSON.stringify({ user: { login: author }, body, created_at: createdAt }));
+  const githubComment = (id: number, author: string, body: string, createdAt = "2026-10-25T11:00:00Z", on = 42) => writeFileSync(join(github, `comment-${id}`), JSON.stringify({ user: { login: author }, body, created_at: createdAt, issue_url: `https://api.github.com/repos/example/product/issues/${on}` }));
   const githubCalls = () => readFileSync(join(github, "calls"), "utf8").trim().split("\n");
   ci([{ name: "test", bucket: "pass" }]);
   mkdirSync(join(home, ".agents/guides"), { recursive: true });

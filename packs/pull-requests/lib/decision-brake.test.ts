@@ -150,8 +150,7 @@ test("a reversal on a GitHub comment needs one written after the decision, and n
   pr.githubComment(9, "the-user", "## End-of-run report: example/product#42\n\nReverse that one", "2026-10-25T13:00:00Z");
   await expect(reverseOn(9)).rejects.toThrow("is one Fleet writes");
   pr.githubComment(11, "the-user", "Proofs at HEAD: live-run passed. Reverse that one if it looks wrong.", "2026-10-25T13:00:00Z");
-  mkdirSync(join(pr.home, ".local/state/fleet/proof/example/product/42"), { recursive: true });
-  writeFileSync(join(pr.home, ".local/state/fleet/proof/example/product/42/receipt.json"), JSON.stringify({ url: url(11) }));
+  expect((await pr.fleet("receipt", "--comment", url(11))).code).toBe(0);
   await expect(reverseOn(11)).rejects.toThrow(`The comment ${url(11)} is one Fleet writes`);
   expect((await pr.decide("list", "--live")).output).toContain(id);
 
@@ -238,9 +237,20 @@ test("a reversal refuses the PR's receipt comment by its id, in either URL form"
   pr.pullRequestState({ body: graded("non-critical") });
   const id = idIn((await decideAlone(pr, "design", "Parser?")).output);
   pr.githubComment(11, "the-user", "Proofs at HEAD: live-run passed. Reverse that one if it looks wrong.", "2026-10-25T13:00:00Z");
-  mkdirSync(pr.pullRequest, { recursive: true });
-  writeFileSync(join(pr.pullRequest, "receipt.json"), JSON.stringify({ url: "https://github.com/example/product/pull/42#issuecomment-11" }));
+  pr.githubComment(12, "the-user", "Proofs at HEAD: live-run passed. Reverse that one if it looks wrong.", "2026-10-25T13:00:00Z", 43);
+  await expect(pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/43#issuecomment-12")).rejects.toThrow("The comment https://github.com/example/product/pull/43#issuecomment-12 is on example/product#43, not on example/product#42");
+  expect((await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/42#issuecomment-11")).output).toBe("receipt: https://github.com/example/product/pull/42#issuecomment-11");
 
   await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/issues/42#issuecomment-11")).rejects.toThrow("is one Fleet writes");
+  expect((await pr.decide("list", "--live")).output).toContain(id);
+});
+
+test("a reversal refuses a comment under the URL of a PR it is not on", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  const id = idIn((await decideAlone(pr, "design", "Parser?")).output);
+  pr.githubComment(11, "the-user", "Please reverse that one.", "2026-10-25T13:00:00Z");
+
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/pull/43#issuecomment-11")).rejects.toThrow("The comment https://github.com/example/product/pull/43#issuecomment-11 is on example/product#42, not on example/product#43");
   expect((await pr.decide("list", "--live")).output).toContain(id);
 });

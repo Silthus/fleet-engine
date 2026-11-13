@@ -2,10 +2,10 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, markRecorded, readReservation, roundDirectories, unrecordedElsewhere, type Arbiter, type CapturedBy, type ProofIdentity } from "./proof.ts";
+import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type CapturedBy, type ProofIdentity } from "./proof.ts";
 import { AnswerTaken, appendOnce, decideAlone, hearUser, inLedger, ledgerOf } from "./decision-cli.ts";
 import { refText, type Decision, type Ssh } from "./decision-ledger.ts";
-import { runIn } from "./pr-ci.ts";
+import { readComment, runIn } from "./pr-ci.ts";
 import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { runProof, type RunIO } from "./proof-run.ts";
 import { lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withRoundLock, withSlot, type Lens, type PanelGuide, type PanelIO, type Plan } from "./proof-panel.ts";
@@ -121,6 +121,22 @@ again after you change the repository's access.`,
       requireFiles(files, "publish");
       const assets = required(options, "--asset-repo", "publish");
       for (const file of files) print(await publishProof(home, identity(), resolve(cwd, file), assets, github ?? githubRequest, flags.has("--recheck")));
+      return 0;
+    },
+  },
+  receipt: {
+    usage: "receipt --comment <url>",
+    summary: `Record the PR's proof receipt: the comment you posted on the PR with the gate's result. GitHub must show the
+comment on this PR. fleet decision reverse never takes the receipt as the user's words, in either URL form, and fleet
+proof gate --json and fleet decision report link it.`,
+    examples: ["fleet proof receipt --comment https://github.com/owner/name/pull/7#issuecomment-1"], options: ["--comment"],
+    run: async ({ options }, identity, { home, print, run }) => {
+      const url = required(options, "--comment", "receipt");
+      const comment = readComment(url, run);
+      const { repository, pr } = identity();
+      if (`${comment.repository}#${comment.pr}`.toLowerCase() !== refText({ repository, pr }).toLowerCase()) throw new Error(`The comment ${url} is on ${comment.repository}#${comment.pr}, not on ${refText({ repository, pr })}`);
+      await recordReceipt(home, { repository, pr }, url);
+      print(`receipt: ${url}`);
       return 0;
     },
   },
@@ -286,8 +302,10 @@ holds when it is fixed, rejected for a sound reason, or parked with a reach read
 introduce. When the merge-risk skill is installed at ~/.agents/skills/merge-risk/SKILL.md, the judge also gets the PR
 body and that skill, and answers a fifth question: does the merge-risk callout's grade and door follow from what the
 diff measurably changes. A body without a callout passes it. A failed question or a high quality finding fails the
-gate; medium and low findings are listed. The verdict is cached per set of inputs. Each run saves the judge's outcome
-at HEAD for fleet decision report, an unavailable judge included, and the next run asks an unavailable judge again. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
+gate; medium and low findings are listed. The verdict is cached per set of inputs, and a later run asks an unavailable
+judge again. Each run saves its proof summary for its commit, with the PR's head, base and base SHA on GitHub, the tier,
+--landed, and a fingerprint of the PR's proof files, the standing rules and the ledger decisions that cover the PR.
+fleet decision report prints that summary only while all of them still match. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
 --kind judge) lets the gate pass once a decision in the ledger accepts it: the user's answer, recorded with fleet
 decision record --mark 👤, or your own 🤖 decision when the PR's tier lets you. A refusal or a typed message never
 accepts it. The judge reads the condition of each accepted gap and fails one that HEAD breaks; the setting
@@ -305,7 +323,7 @@ receipt link once one is recorded. The gate's lines and fleet decision report co
     run: async ({ flags }, identity, context) => {
       const { print } = context;
       const head = identity();
-      const gate = await finalGate(head, context, { landed: flags.has("--landed"), judge: "run" });
+      const gate = await finalGate(head, context, { landed: flags.has("--landed") });
       if (flags.has("--json")) print(JSON.stringify(gate.summary));
       else for (const line of [...gate.lines, gate.verdict]) print(line);
       return gate.code;

@@ -686,7 +686,8 @@ test("the end-of-run report prints its five sections in order: still yours, narr
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access", "--repo", "example/product", "--pr", "41");
   pr.chooseGap("prod-shape", "No production read access", "Accept the gap", 41);
   const users = idIn((await pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#41")).output);
-  writeFileSync(join(pr.home, ".local/state/fleet/proof/example/product/41/receipt.json"), JSON.stringify({ url: "https://github.com/example/product/pull/41#issuecomment-9" }));
+  pr.githubComment(9, "the-user", "Proofs at HEAD: live-run passed.", "2026-10-25T12:00:00Z", 41);
+  await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/41#issuecomment-9", "--repo", "example/product", "--pr", "41");
   pr.pullRequestState({ number: 41, merged: true });
 
   await pr.fleet("require", "--kinds", "prod-shape,cross-version");
@@ -707,6 +708,8 @@ test("the end-of-run report prints its five sections in order: still yours, narr
 
   await pr.fleet("require", "--none", "--reason", "docs only", "--repo", "example/product", "--pr", "43");
   expect((await pr.fleet("gate", "--repo", "example/product", "--pr", "43")).code).toBe(0);
+  expect((await pr.fleet("gate", "--landed", "--repo", "example/product", "--pr", "41")).code).toBe(3);
+  expect((await pr.fleet("gate", "--repo", "example/product", "--pr", "42")).code).toBe(3);
   pr.pendingCards.add("thread-1");
   writeFileSync(rollouts, [
     { at: "2026-10-25T09:00:00Z", repo: "example/product", pr: 41, stage: "merged", state: "done", note: "standing merge: narrow grant, card" },

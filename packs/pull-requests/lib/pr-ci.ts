@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { CiResult, ProofIdentity, PushedHead } from "./proof.ts";
+import type { CiResult, ProofIdentity } from "./proof.ts";
 
 export type Run = (command: string[]) => { code: number; stdout: string; stderr: string };
 
@@ -12,7 +12,7 @@ export const runIn = (cwd: string, env: Record<string, string | undefined>): Run
     return { code: 127, stdout: "", stderr: `${command[0]}: ${(error as Error).message}` };
   }
 };
-export type PullRequest = { title: string; body: string; draft: boolean; state: "open" | "closed" | "merged"; head: string; base: string; defaultBranch?: string };
+export type PullRequest = { title: string; body: string; draft: boolean; state: "open" | "closed" | "merged"; head: string; base: string; baseSha: string; defaultBranch?: string };
 
 type CheckRun = { id: number; name: string; status: string; conclusion: string | null; app?: number | null };
 type CommitStatus = { context: string; state: string };
@@ -33,18 +33,33 @@ export function restJson<T>(path: string, run: Run): T {
 }
 
 export function readPullRequest(identity: ProofIdentity, run: Run): PullRequest {
-  type Raw = { title?: string; body?: string | null; draft?: boolean; state?: string; merged_at?: string | null; head?: { sha?: string }; base?: { ref?: string; repo?: { default_branch?: string } } };
+  type Raw = { title?: string; body?: string | null; draft?: boolean; state?: string; merged_at?: string | null; head?: { sha?: string }; base?: { ref?: string; sha?: string; repo?: { default_branch?: string } } };
   const raw = restJson<Raw>(`repos/${identity.repository}/pulls/${identity.pr}`, run);
   const state = raw.merged_at ? "merged" : raw.state === "closed" ? "closed" : "open";
-  return { title: raw.title ?? "", body: raw.body ?? "", draft: raw.draft === true, state, head: raw.head?.sha ?? "", base: raw.base?.ref ?? "", defaultBranch: raw.base?.repo?.default_branch };
+  return { title: raw.title ?? "", body: raw.body ?? "", draft: raw.draft === true, state, head: raw.head?.sha ?? "", base: raw.base?.ref ?? "", baseSha: raw.base?.sha ?? "", defaultBranch: raw.base?.repo?.default_branch };
 }
 
-export function pushedHeadOf(identity: ProofIdentity, run: Run): PushedHead {
-  try {
-    const pullRequest = readPullRequest(identity, run);
-    return { commit: pullRequest.head, body: pullRequest.body };
-  }
-  catch (error) { return { error: (error as Error).message }; }
+const commentPattern = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:issues|pull)\/([1-9]\d*)#issuecomment-(\d+)$/;
+
+export type CommentUrl = { repository: string; pr: number; id: string };
+export type PrComment = CommentUrl & { author: string; body: string; createdAt?: string };
+
+export function commentUrl(url: string): CommentUrl {
+  const [, repository, pr, id] = commentPattern.exec(url) ?? [];
+  if (!repository || !pr || !id) throw new Error(`--comment takes the URL of a GitHub issue or PR comment, such as https://github.com/owner/repo/issues/1#issuecomment-2, not ${url}`);
+  return { repository, pr: Number(pr), id };
+}
+
+export const sameComment = (a: string | undefined, b: string) => a !== undefined && commentPattern.exec(a)?.[3] === commentPattern.exec(b)?.[3];
+
+export function readComment(url: string, run: Run): PrComment {
+  const named = commentUrl(url);
+  type Raw = { user?: { login?: string }; body?: string; created_at?: string; issue_url?: string };
+  const raw = restJson<Raw>(`repos/${named.repository}/issues/comments/${named.id}`, run);
+  const [, repository = "", pr = ""] = /\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(raw.issue_url ?? "") ?? [];
+  const on = repository ? `${repository}#${pr}` : "no PR GitHub names";
+  if (on.toLowerCase() !== `${named.repository}#${named.pr}`.toLowerCase()) throw new Error(`The comment ${url} is on ${on}, not on ${named.repository}#${named.pr}`);
+  return { ...named, author: raw.user?.login ?? "", body: raw.body ?? "", ...raw.created_at ? { createdAt: raw.created_at } : {} };
 }
 
 function readRequired(repository: string, branch: string, run: Run): RequiredCheck[] {

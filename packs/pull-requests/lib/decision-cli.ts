@@ -1,8 +1,7 @@
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
 import { renderReport } from "./decision-report.ts";
-import { readPullRequest, restJson, runIn } from "./pr-ci.ts";
-import { join } from "node:path";
-import { gapKind, ledgerRoot, readJson, refuseInstructionQuote, usedAnswer } from "./proof.ts";
+import { commentUrl, readComment, readPullRequest, restJson, runIn, sameComment } from "./pr-ci.ts";
+import { gapKind, receiptOf, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
   agentRefusal, answerUse, askClasses, brakeDays, brakeOf, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, liftCounted, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
   type AnswerUse, type AskClass, type Decision, type DecisionState, type Env, type Ledger, type LedgerEvent, type Lift, type PrRef, type Reversal, type Ssh, type UsersMark,
@@ -47,7 +46,8 @@ It refuses the user's keep-owed: only their acceptance lifts it.
 reverse records the user's reversal of a decision: their dated, quoted words in a message of theirs in the T3 thread,
 or on a GitHub comment written by the account gh is signed in as, which must hold each quoted part. The message must
 say the words on the quoted date; when two messages on that date do, --message picks one by its id. A comment must
-not be one Fleet writes: a decision line, the PR's proof receipt (matched by its comment id), or an end-of-run report. The user's words must be
+be on the PR its URL names, and not one Fleet writes: a decision line, the PR's proof receipt that fleet proof receipt
+recorded (matched by its comment id), or an end-of-run report. The user's words must be
 newer than the decision, and the reversal takes the time they wrote them. The decision then prints as 👤 with their
 words, the replaced answer struck through, and counts no more at the gate or in list --live; decide or ask again. It
 refuses the user's keep-owed, as void does, and a voided decision. Two reversals of 🤖 decisions in one class within
@@ -59,15 +59,15 @@ lifts one brake or records one decision, never both: record refuses an answer a 
 used, and each reads the ledger back and fails when the other used it first. A 🤖 decision that lands while its class is braked counts nowhere.
 record --mark 🤖 --class scope takes --link with the T3 thread a side fix started in.
 report prints the lane's end-of-run report in Markdown, in five sections: still yours (unaccepted gaps on critical
-heads first, judge gaps too, a question card that waits in --thread, open PRs whose judge has not run at HEAD with
-their current proofs, then open PRs whose full gate passes, judge included, and wait on the user's merge word), PRs
-merged under the narrow grant (merged lines of the rollout log that orchestration.rolloutLog names, whose note names
-the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs row per PR from the gate's proof summary at its
-HEAD on GitHub with its judge and receipt link, and the side fixes the lane started. The report never runs the judge
-and needs no checkout: it reads the outcome fleet proof gate saved at HEAD, an unavailable judge included, while the
-judge's input but the diff is the same, and says the judge has not run when it is not. A PR whose proofs it cannot
-read prints as not known here, and the other PRs still print. A merged PR counts as
-landed, so its post-deploy-watch is weighed. --thread defaults to this T3 thread.
+heads first, judge gaps too, a question card that waits in --thread, PRs whose proofs it cannot read, PRs that no
+gate has judged at their HEAD with their current proofs, then open PRs whose full gate passed, judge included, and
+wait on the user's merge word), PRs merged under the narrow grant (merged lines of the rollout log that
+orchestration.rolloutLog names, whose note names the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs
+row per PR from the proof summary the gate saved at its HEAD on GitHub, with its receipt link, and the side fixes the
+lane started. The report never runs the gate or the judge and needs no checkout: it prints the summary fleet proof
+gate saved only while the PR's head, base and base SHA on GitHub, its tier, --landed for a merged PR, and the PR's
+proof files, standing rules and ledger decisions are the same. Otherwise it says the gate has not run at HEAD with
+these proofs; a decision recorded after the gate counts as a change. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
@@ -294,12 +294,9 @@ const refuseKeptOwed = (decision: DecisionState) => {
   if (isUsers(decision) && decision.effect === "keep-owed") throw new Error(`Decision ${decision.id} keeps the gap owed, and only the user lifts it: ask them with your question tool, and record their acceptance with --mark 👤`);
 };
 
-const commentPattern = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:issues|pull)\/([1-9]\d*)#issuecomment-(\d+)$/;
 const quoteWithDate = () => new Error(`Quote the user's words with the date they wrote them, such as '2026-10-24 "Reverse that."'`);
 const quotedDate = (words: string) => /\b\d{4}-\d{2}-\d{2}\b/.exec(words)![0];
 const fleetText = (body: string) => /\[d-[0-9a-f]{8}\]/.test(body) || /^#+ End-of-run report\b/m.test(body);
-const receiptOf = async (home: string, repository: string, pr: string) => (await readJson<{ url?: string } | undefined>(join(ledgerRoot(home), repository, String(pr), "receipt.json"), undefined))?.url;
-const commentId = (url: string | undefined) => url === undefined ? undefined : commentPattern.exec(url)?.[3];
 
 async function heardInThread(thread: string, words: string, message: string | undefined, context: DecisionContext) {
   if (!isDatedQuote(words)) throw quoteWithDate();
@@ -321,19 +318,17 @@ async function heardInThread(thread: string, words: string, message: string | un
 }
 
 async function heardOnComment(url: string, words: string, context: DecisionContext) {
-  const [, repository, pr, id] = commentPattern.exec(url) ?? [];
-  if (!repository || !pr || !id) throw new Error(`--comment takes the URL of a GitHub issue or PR comment, such as https://github.com/owner/repo/issues/1#issuecomment-2, not ${url}`);
+  commentUrl(url);
   if (!isDatedQuote(words)) throw quoteWithDate();
   const run = runIn(context.cwd, context.env);
   const login = restJson<{ login: string }>("user", run).login;
-  const comment = restJson<{ user?: { login?: string }; body?: string; created_at?: string }>(`repos/${repository}/issues/comments/${id}`, run);
-  const author = comment.user?.login ?? "";
-  if (author.toLowerCase() !== login.toLowerCase()) throw new Error(`The comment is by ${author || "nobody"}, not the user (${login}). Only the user's own words reverse a decision`);
-  if (fleetText(comment.body ?? "") || commentId(await receiptOf(context.home, repository, pr)) === id) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
-  const body = normalized(comment.body ?? "");
+  const comment = readComment(url, run);
+  if (comment.author.toLowerCase() !== login.toLowerCase()) throw new Error(`The comment is by ${comment.author || "nobody"}, not the user (${login}). Only the user's own words reverse a decision`);
+  if (fleetText(comment.body) || sameComment(await receiptOf(context.home, comment), url)) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
+  const body = normalized(comment.body);
   const missing = quotes(words).find((quote) => !body.includes(quote));
   if (missing) throw new Error(`"${missing}" is not in the comment ${url}. Quote the user's words as they wrote them`);
-  const time = Date.parse(comment.created_at ?? "");
+  const time = Date.parse(comment.createdAt ?? "");
   if (Number.isNaN(time)) throw new Error(`GitHub gives no time for the comment ${url}. Run the same command again`);
   return { comment: url, at: new Date(time).toISOString() };
 }

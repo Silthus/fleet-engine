@@ -1,20 +1,23 @@
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { readdir, readFile } from "node:fs/promises";
+import { join, relative, sep } from "node:path";
 import { modelFor, type ModelRow } from "../../base/lib/models.ts";
 import { numberSetting } from "../../base/lib/settings.ts";
-import { hubLedger, refText, type Env, type Ssh } from "./decision-ledger.ts";
-import { ciOf, pushedHeadOf, type Run } from "./pr-ci.ts";
-import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, parseVerdict, proofGate, pullRequestDirectory, readJson, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type JudgeSummary, type ProofIdentity, type ProofSummary } from "./proof.ts";
+import { covers, hubLedger, refText, tierOf, type Env, type Ledger, type PrRef, type Ssh } from "./decision-ledger.ts";
+import { ciOf, readPullRequest, type PullRequest, type Run } from "./pr-ci.ts";
+import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
 import { cleanBaseMerge, diffOf, mergeBase, pullRequestDetails, topLevel } from "./proof-checkout.ts";
 import { quietCommitIn } from "./proof-delta.ts";
-import { judge, judgeFingerprint, readCriticalPaths, type JudgeInput, type JudgeOutcome } from "./proof-judge.ts";
+import { judge, readCriticalPaths, type JudgeInput } from "./proof-judge.ts";
 import { askModel, familyOf, modelLabel, readRiskRubric, readRubric, reviewerRow, skillReferences } from "./proof-models.ts";
 
 export type GateContext = { home: string; cwd: string; env: Env; run: Run; now?: () => Date; ssh?: Ssh };
-export type JudgeMode = "run" | "cached";
 export type FinalGate = { code: number; lines: string[]; verdict: string; summary: ProofSummary };
 
 type Checked = Awaited<ReturnType<typeof proofGate>>;
 type Judged = { code: number; lines: string[]; covered: string; judge: JudgeSummary };
+type GateKey = { head: string; base: string; baseSha: string; tier: string; landed: boolean; fingerprint: string };
+type SavedGate = { key: GateKey; gate: FinalGate };
 
 export const reviewLimit = (env: Env) => numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
 
@@ -25,25 +28,64 @@ export const arbiterOf = ({ env, cwd }: Pick<GateContext, "env" | "cwd">): Arbit
   return answer.ok ? parseVerdict(answer.text, answer.model) : { verdict: "unavailable", reason: answer.cause, model: answer.model };
 };
 
-export async function finalGate(head: ProofIdentity, context: GateContext, { landed = false, judge: mode }: { landed?: boolean; judge: JudgeMode }): Promise<FinalGate> {
+const savedPath = (home: string, ref: PrRef, commit: string) => join(pullRequestDirectory(home, { ...ref, commit }), "gate-outcome", `${commit}.json`);
+const unhashed = new Set(["gate-outcome", "judge", "carried", "receipt.json"]);
+
+async function proofFiles(home: string, ref: PrRef) {
+  const root = prDirectory(home, ref);
+  const entries = await readdir(root, { recursive: true, withFileTypes: true }).catch(() => []);
+  const files = entries.filter((entry) => entry.isFile()).map((entry) => relative(root, join(entry.parentPath, entry.name)))
+    .filter((path) => !unhashed.has(path.split(sep)[0]!)).sort();
+  const hash = createHash("sha256");
+  for (const path of files) hash.update(`${path}\0`).update(await readFile(join(root, path))).update("\0");
+  return hash.digest("hex");
+}
+
+async function fingerprintOf(home: string, ref: PrRef, files: string, decisions: Decisions) {
+  const covering = Array.isArray(decisions) ? decisions.filter((decision) => covers(decision, ref)) : "unreachable";
+  return createHash("sha256").update(JSON.stringify({ files, covering, standing: await listStanding(home) })).digest("hex");
+}
+
+const keyOf = (pull: PullRequest, landed: boolean, fingerprint: string): GateKey =>
+  ({ head: pull.head, base: pull.base, baseSha: pull.baseSha, tier: tierOf(pull.body), landed, fingerprint });
+
+export async function finalGate(head: ProofIdentity, context: GateContext, { landed = false }: { landed?: boolean } = {}): Promise<FinalGate> {
   const { home, env, run, now, ssh } = context;
+  let pull: PullRequest | undefined;
+  const pushedHead = (): PushedHead => {
+    try {
+      const read = readPullRequest(head, run);
+      pull ??= read;
+      return { commit: read.head, body: read.body };
+    } catch (error) { return { error: (error as Error).message }; }
+  };
+  const files = await proofFiles(home, head);
   const checked = await proofGate(home, head, {
     landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()),
-    pushedHead: () => pushedHeadOf(head, run), ledger: hubLedger(home, env, ssh), now: now?.(),
+    pushedHead, ledger: hubLedger(home, env, ssh), now: now?.(),
   });
-  const judged: Judged = checked.code === 0 ? await judgeHead(head, checked, context, mode) : { code: checked.code, lines: [], covered: "", judge: { state: "skipped", lines: [] } };
-  return {
+  const judged: Judged = checked.code === 0 ? await judgeHead(head, checked, context) : { code: checked.code, lines: [], covered: "", judge: { state: "skipped", lines: [] } };
+  const gate = {
     code: judged.code,
     lines: [...checked.lines, ...judged.lines],
     verdict: judged.code === 0 ? `gate: pass (${checked.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`,
     summary: { ...checked.proofSummary, code: judged.code, judge: judged.judge },
   };
+  if (pull) await writeJson(savedPath(home, head, head.commit), { key: keyOf(pull, landed, await fingerprintOf(home, head, files, checked.decisions)), gate } satisfies SavedGate);
+  return gate;
 }
 
-type SavedOutcome = { commit: string; fingerprint: string; outcome: JudgeOutcome };
+export async function savedSummary(home: string, ref: PrRef, pull: PullRequest, ledger: Ledger): Promise<ProofSummary | undefined> {
+  const saved = await readJson<SavedGate | undefined>(savedPath(home, ref, pull.head), undefined);
+  if (!saved) return undefined;
+  const key = keyOf(pull, pull.state === "merged", await fingerprintOf(home, ref, await proofFiles(home, ref), await readDecisions(ledger)));
+  if (JSON.stringify(saved.key) !== JSON.stringify(key)) return undefined;
+  const receipt = await receiptOf(home, ref);
+  return { ...saved.gate.summary, ...receipt ? { receipt } : {} };
+}
 
-async function judgeHead(head: ProofIdentity, checked: Checked, context: GateContext, mode: JudgeMode): Promise<Judged> {
-  const { home, cwd, env, run, now } = context;
+async function judgeHead(head: ProofIdentity, checked: Checked, context: GateContext): Promise<Judged> {
+  const { home, env, run, now } = context;
   const author = await authorOf(home, head);
   const row = reviewerRow(author, env);
   const riskRubric = await readRiskRubric(home);
@@ -55,14 +97,8 @@ async function judgeHead(head: ProofIdentity, checked: Checked, context: GateCon
     evidence: checked.evidence, reviews: await reviewRecords(home, head), rubric: await readRubric(home), references: skillReferences(home),
     conditions: [...checked.conditions, ...weighedGap?.condition ? [weighedGap.condition] : []], criticalPaths: await readCriticalPaths(home, head.repository, env),
   };
-  const model = modelLabel("judge", row, env);
-  const fingerprint = await judgeFingerprint({ ...known, cwd, from: "", diff: "" }, model);
-  const saved = join(pullRequestDirectory(home, head), "judge-outcome.json");
-  const outcome = mode === "cached"
-    ? await readJson<SavedOutcome | undefined>(saved, undefined).then((record) => record?.commit === head.commit && record.fingerprint === fingerprint ? record.outcome : notRun(model))
-    : await judgeAndSave(head, known, row, fingerprint, saved, context);
+  const outcome = await judgeDiff(head, known, row, context);
   const verdict = (lines: string[], gap?: JudgeSummary["gap"]): JudgeSummary => ({ state: outcome.state, model: outcome.model, ...gap ? { gap } : {}, lines });
-  if (outcome.state === "not run") return { code: 1, lines: outcome.lines, covered: "", judge: verdict(outcome.lines) };
   if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
   if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}`, judge: verdict(outcome.lines) };
   const gap = weighedGap && withBrokenConditions(weighedGap, outcome.broken);
@@ -81,17 +117,13 @@ async function judgeHead(head: ProofIdentity, checked: Checked, context: GateCon
   return { code: 1, lines, covered: "", judge: verdict(lines) };
 }
 
-async function judgeAndSave(head: ProofIdentity, known: Omit<JudgeInput, "cwd" | "from" | "diff">, row: ModelRow, fingerprint: string, saved: string, context: GateContext) {
+async function judgeDiff(head: ProofIdentity, known: Omit<JudgeInput, "cwd" | "from" | "diff">, row: ModelRow, context: GateContext) {
   const { home, cwd, env, run, now } = context;
   const from = mergeBase(head, run);
-  const outcome = await judge({ ...known, cwd: topLevel(run) ?? cwd, from, diff: diffOf(from, known.commit, run) }, {
+  return judge({ ...known, cwd: topLevel(run) ?? cwd, from, diff: diffOf(from, known.commit, run) }, {
     ask: (request) => askModel("judge", row, request, env, reviewLimit(env)), model: modelLabel("judge", row, env), arbiter: arbiterOf(context),
     directory: judgeDirectory(home, head), commit: known.commit, now: now?.() ?? new Date(),
   });
-  await writeJson(saved, { commit: known.commit, fingerprint, outcome } satisfies SavedOutcome);
-  return outcome;
 }
-
-const notRun = (model: string): JudgeOutcome => ({ state: "not run", lines: ["judge: not run at HEAD with these proofs; run fleet proof gate"], model, broken: [] });
 
 const voidBroken = (ids: string[]) => `End ${ids.map((id) => `decision ${id}`).join(" and ")} with fleet decision void <id> --reason <why its condition no longer holds>, then decide or ask again`;

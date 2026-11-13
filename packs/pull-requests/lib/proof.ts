@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { normalized, type HeardAnswer } from "./proof-answers.ts";
-import { agentRefusal, agentsAcceptance, covers, fold, keptOwed, panelRefusal, tierOf, usersAcceptance, type Decision, type DecisionState, type Ledger, type Mark, type Tier } from "./decision-ledger.ts";
+import { agentRefusal, agentsAcceptance, covers, fold, keptOwed, panelRefusal, tierOf, usersAcceptance, type Decision, type DecisionState, type Ledger, type Mark, type PrRef, type Tier } from "./decision-ledger.ts";
 import type { Family } from "./proof-models.ts";
 import { quietReason, type DeltaKind, type QuietStep } from "./proof-delta.ts";
 
@@ -10,10 +10,16 @@ export type ProofIdentity = { repository: string; pr: number; commit: string };
 const sha = /^[0-9a-f]{40}$/;
 export const ledgerRoot = (home: string) => join(home, ".local/state/fleet/proof");
 
+export function prDirectory(home: string, { repository, pr }: PrRef) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || repository.split("/").some((part) => part === "." || part === "..")) throw new Error(`Invalid repository ${repository || "(none)"}. Use owner/name`);
+  if (!Number.isSafeInteger(pr) || pr < 1) throw new Error("Use a positive PR number and a full commit SHA");
+  return join(ledgerRoot(home), repository, String(pr));
+}
+
 export function pullRequestDirectory(home: string, identity: ProofIdentity) {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(identity.repository) || identity.repository.split("/").some((part) => part === "." || part === "..")) throw new Error(`Invalid repository ${identity.repository || "(none)"}. Use owner/name`);
-  if (!Number.isSafeInteger(identity.pr) || identity.pr < 1 || !sha.test(identity.commit)) throw new Error("Use a positive PR number and a full commit SHA");
-  return join(ledgerRoot(home), identity.repository, String(identity.pr));
+  const directory = prDirectory(home, identity);
+  if (!sha.test(identity.commit)) throw new Error("Use a positive PR number and a full commit SHA");
+  return directory;
 }
 
 export function proofDirectory(home: string, identity: ProofIdentity) {
@@ -862,7 +868,7 @@ export type ProofSummary = {
   lapsed: string[]; lapsedLine?: string; voided: string[]; receipt?: string;
 };
 
-export type JudgeSummary = { state: "pass" | "fail" | "unavailable" | "not run" | "skipped"; model?: string; gap?: GapProof; lines: string[] };
+export type JudgeSummary = { state: "pass" | "fail" | "unavailable" | "skipped"; model?: string; gap?: GapProof; lines: string[] };
 export type CheckedSummary = Omit<ProofSummary, "judge">;
 
 export const summaryLines = (summary: CheckedSummary) => [
@@ -895,7 +901,7 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const conditions = weighed.flatMap((status) => status.condition ? [status.condition] : []);
   const code = problems.includes("missing") ? 1 : problems.includes("gap") ? 3 : 0;
   const voided = (Array.isArray(decisions) ? decisions : []).filter((decision) => decision.voided && covers(decision, identity)).map((decision) => decision.id);
-  const receipt = (await readJson<{ url?: string } | undefined>(join(pullRequestDirectory(home, identity), "receipt.json"), undefined))?.url;
+  const receipt = await receiptOf(home, identity);
   const proofSummary: CheckedSummary = {
     repository: identity.repository, pr: identity.pr, commit: identity.commit, tier, code, owed: owedPart(owed), kinds: kinds.map((kind) => kind.proof),
     review: { state: review.problem ?? "covered", ...review.covered ? { covered: review.covered } : {}, ...review.panelGap ? { panelGap: review.panelGap } : {}, unanswered: responses.map((response) => response.line), line: review.line },
@@ -907,6 +913,10 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const evidence = kinds.map(({ proof, evidence }) => ({ kind: proof.kind, line: proof.line, directory: evidence }));
   return { code, lines: summaryLines(proofSummary), summary, owed, evidence, ci: ciResult, decisions, tier, conditions, voided, proofSummary };
 }
+
+const receiptPath = (home: string, ref: PrRef) => join(prDirectory(home, ref), "receipt.json");
+export const receiptOf = async (home: string, ref: PrRef) => (await readJson<{ url?: string } | undefined>(receiptPath(home, ref), undefined))?.url;
+export const recordReceipt = (home: string, ref: PrRef, url: string) => writeJson(receiptPath(home, ref), { url });
 
 export async function reviewRecords(home: string, identity: ProofIdentity) {
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
