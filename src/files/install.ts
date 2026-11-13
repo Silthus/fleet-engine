@@ -7,7 +7,8 @@ export type DesiredFile = { target: string; conflict?: string } & ({ source: str
 type RecordEntry = { kind: "link"; source: string } | { kind: "file"; hash: string };
 type State = { version: 1; groups: Record<string, Record<string, RecordEntry>> };
 export type Action = { target: string; operation: "create" | "keep" | "replace" | "remove" | "conflict"; reason?: string; owner?: string };
-export type Choices = { adopt?: string[]; skip?: string[]; hold?: string[]; release?: string[] };
+/** retire: targets that a setup taken over with release wrote, and that this Fleet replaced. Fleet removes each one that is still what that setup wrote. */
+export type Choices = { adopt?: string[]; skip?: string[]; hold?: string[]; release?: string[]; retire?: string[] };
 const statePath = ".local/state/fleet/state.json";
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -83,7 +84,7 @@ function record(file: DesiredFile): RecordEntry {
 
 // Skipped targets leave the group: Fleet neither writes nor tracks them.
 // Held targets stay in the group as they are: Fleet neither writes nor forgets them.
-export async function plan(home: string, files: DesiredFile[], group = "core", { adopt = [], skip = [], hold = [], release = [] }: Choices = {}): Promise<Action[]> {
+export async function plan(home: string, files: DesiredFile[], group = "core", { adopt = [], skip = [], hold = [], release = [], retire = [] }: Choices = {}): Promise<Action[]> {
   const state = await readState(home);
   for (const name of release) {
     if (name === group) throw new Error(`nothing to adopt from ${name}: that is the name of this Fleet`);
@@ -138,6 +139,15 @@ export async function plan(home: string, files: DesiredFile[], group = "core", {
     actions.push(await matches(inside(home, target), entry)
       ? { target, operation: "remove" }
       : { target, operation: "conflict", reason: "Removed item changed locally; preserve it" });
+  }
+  for (const target of retire) {
+    const name = release.find((released) => Object.hasOwn(state.groups[released]!, target));
+    if (!name || targets.has(target) || hold.includes(target) || Object.hasOwn(previous, target)) continue;
+    await checkParents(home, target);
+    if (!(await stat(inside(home, target)))) continue;
+    actions.push(await matches(inside(home, target), state.groups[name]![target]!)
+      ? { target, operation: "remove" }
+      : { target, operation: "keep", reason: `it changed after the ${name} setup wrote it, and Fleet no longer writes it` });
   }
   for (const target of adopt) if (!targets.has(target) && !hold.includes(target)) throw new Error(`Adoption target is not in this plan: ${target}`);
   return actions;

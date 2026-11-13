@@ -27,6 +27,7 @@ export default {
     });
     fleet.command("page", {
       summary: "Page yourself through incident.io, or withdraw the page",
+      subcommands: ["setup"],
       on: "hub",
       when: paging,
       run: async (args, ctx) => (await import("./lib/page.ts")).page(args, ctx),

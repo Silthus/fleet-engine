@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { requireHubRole } from "./hub-job.ts";
@@ -6,12 +7,12 @@ import type { Fetch } from "../../mcp-gateway/lib/client.ts";
 export type UsageWindow = { id?: string; utilization: number; resetsAt?: number };
 export type Usage = { fiveHour?: UsageWindow; sevenDay?: UsageWindow; scoped: UsageWindow[] };
 export type Provider = "claude" | "codex";
-export type Credential = { name: string; authIndex: string; provider: Provider; priority: number; usage?: Usage; quotaCooldown: boolean; blocked: string | false };
+export type Credential = { name: string; authIndex: string; provider: Provider; priority: number; usage?: Usage; quotaCooldown: boolean; blocked: string | false; loginExpired?: true };
 export type Balance = { fetch: Fetch; managementKey: string; now: number; dryRun: boolean; ledger?: boolean; log(line: string): void };
 export type LedgerSample = { at: number; auth: string; provider: Provider; window: string; remaining: number; resets_at?: number };
 export type BalanceDeps = { home: string; fetch: Fetch; now(): number; ledger: boolean; log(line: string): void };
 
-type AuthFile = { name: string; provider?: string; disabled?: boolean; priority?: number; auth_index?: string; unavailable?: boolean; status_message?: string; cooldowns?: { reason?: string }[]; id_token?: { chatgpt_account_id?: unknown } };
+type AuthFile = { name: string; provider?: string; disabled?: boolean; priority?: number; auth_index?: string; unavailable?: boolean; status?: string; status_message?: string; cooldowns?: { reason?: string }[]; id_token?: { chatgpt_account_id?: unknown } };
 type RawWindow = { utilization?: number | null; resets_at?: string | null } | null | undefined;
 type CodexWindow = { used_percent?: number; reset_at?: number; limit_window_seconds?: number } | null | undefined;
 type CodexLimit = { allowed?: boolean; limit_reached?: boolean; primary_window?: CodexWindow; secondary_window?: CodexWindow } | undefined;
@@ -44,6 +45,12 @@ export function quotaStatus({ usage, provider }: Credential): "available" | "exh
   return windows.some((window) => window.utilization >= 100) ? "exhausted" : "available";
 }
 
+export function shortId(file: { name?: string; auth_index?: string }): string {
+  const index = typeof file.auth_index === "string" && /^[A-Za-z0-9_-]+$/.test(file.auth_index) ? file.auth_index : createHash("sha256").update(file.name ?? "").digest("hex");
+  return index.slice(0, 8);
+}
+
+const label = ({ name, authIndex, provider }: Credential) => `${providerNames[provider]} subscription ${shortId({ name, auth_index: authIndex })}`;
 const hasCapacity = (credential: Credential) => quotaStatus(credential) === "available";
 const weeklyReset = ({ usage }: Credential) => usage?.sevenDay?.resetsAt ?? Number.POSITIVE_INFINITY;
 
@@ -67,7 +74,7 @@ export async function balance(options: Balance): Promise<void> {
   const credentials = await Promise.all(enabled.map(async (file): Promise<Credential> => {
     const provider = file.provider as Provider;
     const usage = provider === "codex" ? await readCodexUsage(call, file.auth_index!, codexAccount(file)) : await readUsage(call, file.auth_index!);
-    return { name: file.name, authIndex: file.auth_index!, provider, priority: file.priority ?? 0, quotaCooldown: quotaCooldown(file), blocked: blocked(file), usage };
+    return { name: file.name, authIndex: file.auth_index!, provider, priority: file.priority ?? 0, quotaCooldown: quotaCooldown(file), blocked: blocked(file), usage, ...(loginExpired(file) ? { loginExpired: true as const } : {}) };
   }));
   const claude = credentials.filter((credential) => credential.provider === "claude");
   if (!credentials.length) options.log("The proxy holds no enabled Claude or Codex subscription.");
@@ -77,13 +84,13 @@ export async function balance(options: Balance): Promise<void> {
     for (const credential of credentials) options.log(describe(credential, planned.get(credential.name)!, options.now));
   }
   for (const credential of credentials) {
-    if (credential.blocked) options.log(`${credential.name}: blocked (${credential.blocked}). The proxy skips this ${providerNames[credential.provider]} subscription ${until(credential.blocked)}.`);
+    if (credential.blocked) options.log(`${label(credential)}: blocked (${credential.blocked}). The proxy skips it ${until(credential.blocked)}.`);
   }
   if (options.dryRun) return;
   for (const credential of changed) await call("auth-files/fields", { method: "PATCH", body: JSON.stringify({ name: credential.name, priority: planned.get(credential.name) }) });
   for (const credential of credentials.filter((item) => item.quotaCooldown && hasCapacity(item))) {
     await call("reset-quota", { method: "POST", body: JSON.stringify({ auth_index: credential.authIndex }) });
-    options.log(`${credential.name}: cleared quota cooldown after live usage confirmed capacity`);
+    options.log(`${label(credential)}: cleared quota cooldown after live usage confirmed capacity`);
   }
   const samples = options.ledger ? ledgerSamples(credentials, options.now) : [];
   if (samples.length) await call("quota-ledger/samples", { method: "POST", body: JSON.stringify({ samples }) }).catch((error: Error) => options.log(`quota history not recorded: ${error.message}`));
@@ -100,6 +107,11 @@ function codexWindowId(seconds: number | undefined): string | undefined {
   if (seconds === 604_800) return "weekly";
   if (seconds !== undefined && seconds >= 28 * 86_400 && seconds <= 31 * 86_400) return "monthly";
   return undefined;
+}
+
+/** The proxy keeps the last error message after a login works again, so only a subscription that is also failing counts as expired. */
+export function loginExpired(file: { status?: string; unavailable?: boolean; status_message?: string }): boolean {
+  return (file.status === "error" || file.unavailable === true) && /invalid[_ ]grant/i.test(file.status_message ?? "");
 }
 
 function quotaCooldown(file: AuthFile): boolean {
@@ -189,9 +201,9 @@ function usageWindow(raw: RawWindow): UsageWindow | undefined {
 
 function describe(credential: Credential, priority: number, now: number): string {
   const change = credential.priority === priority ? `priority ${priority}` : `priority ${credential.priority} -> ${priority}`;
-  if (!credential.usage) return `${credential.name}: ${change}, usage unreadable`;
-  const window = (label: string, value?: UsageWindow) => (value ? `${label} ${value.utilization}% resets in ${value.resetsAt === undefined ? "unknown" : duration(value.resetsAt - now)}` : `${label} unknown`);
-  return `${credential.name}: ${change}, ${window("7d", credential.usage.sevenDay)}, ${window("5h", credential.usage.fiveHour)}`;
+  if (!credential.usage) return `${label(credential)}: ${change}, usage unreadable${credential.loginExpired ? ": its login expired. Sign it in again on the hub; fleet cli-proxy doctor names the command" : ""}`;
+  const window = (span: string, value?: UsageWindow) => (value ? `${span} ${value.utilization}% resets in ${value.resetsAt === undefined ? "unknown" : duration(value.resetsAt - now)}` : `${span} unknown`);
+  return `${label(credential)}: ${change}, ${window("7d", credential.usage.sevenDay)}, ${window("5h", credential.usage.fiveHour)}`;
 }
 
 function duration(milliseconds: number): string {

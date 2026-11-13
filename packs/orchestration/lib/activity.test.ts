@@ -130,7 +130,11 @@ test("a host reads one machine: a linked environment by label or id, or this one
   expect(local.map((report: { host: string; threads: { id: string }[] }) => [report.host, report.threads.map((thread) => thread.id)])).toEqual([["this-box", ["mcp:local-busy", "mcp:local-idle"]]]);
 
   await expect(activity(t3, "nowhere")).rejects.toThrow("No linked environment nowhere. Linked: devbox-2.");
-  await expect(activity(t3, "env-linked", "--thread", "mcp:linked-done", "--words")).rejects.toThrow("--words reads threads on this machine only");
+  const words = JSON.parse((await activity(t3, "env-linked", "--thread", "mcp:linked-done", "--words")).output);
+  expect(words).toEqual([{ host: "devbox-2", words: [
+    { thread: "mcp:linked-done", id: expect.any(String), text: "Old ask", answered: "", at: minutesAgo(200), source: "typed" },
+    { thread: "mcp:linked-done", id: expect.any(String), text: "Ship it", answered: "Done.", at: minutesAgo(80), source: "typed" },
+  ] }]);
 });
 
 test("a linked environment that cannot answer is named with its reason, and the command exits 1", async () => {

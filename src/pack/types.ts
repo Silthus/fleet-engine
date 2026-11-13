@@ -20,6 +20,8 @@ export type PackSetting = {
   optional?: true;
   ask?: "setup" | "never";
   secret?: false;
+  /** The value when the profile sets context.repo and not this setting: {repo} is context.repo and {path} is context.path. It stays off while the profile sets unlessSet. */
+  fromContext?: { value: string; unlessSet?: string };
 };
 
 export type Workflow = {
@@ -52,7 +54,8 @@ export type T3Task = {
 };
 
 /** Limits an item to some machines, plans, or one workflow. An item without a field fits every value. The role solo fits the only machine: it is not a devbox, the Hub pack is off, and the profile lists no devboxes. oncePerFleet keeps the item on one machine: the first node the profile lists, else the hub. */
-export type Scope = { on?: Os[]; roles?: Array<MachineRole | "solo">; oncePerFleet?: boolean; plans?: AiPlan[]; workflow?: string };
+/** unless: workflows of any pack that the item gives way to: it stays out of the plan while one of them is on. */
+export type Scope = { on?: Os[]; roles?: Array<MachineRole | "solo">; oncePerFleet?: boolean; plans?: AiPlan[]; workflow?: string; unless?: string[] };
 
 export type TimerSchedule = { every: "5m" | "15m" | "1h" | "1d"; at?: string };
 
@@ -119,6 +122,9 @@ export type CatalogEntry = { pack: string; id: string; port: number; health: str
 /** A file from the pack, linked at target under the home directory. */
 export type PackFile = Scope & { path: string; target: string };
 
+/** A Codex rules file of the pack. Fleet joins the ones that fit the machine and writes them as one plain file, .codex/rules/fleet-<pack>.rules, for a Codex plan only. */
+export type CodexRules = Scope & { path: string };
+
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** One row of the model table: the model and effort agents use for one kind of work. */
@@ -147,20 +153,23 @@ export type PackManifest = {
   steps?: PackStep[];
   checks?: PackCheck[];
   files?: PackFile[];
+  codexRules?: CodexRules[];
   t3ProjectScripts?: T3ProjectScript[];
   handlers?: PackHandler[];
   served?: ServedService[];
   models?: Partial<Record<AiPlan, ModelRow[]>>;
   profileOrg?: string;
+  /** The words each command of this pack takes first, such as list or start. Usage events name only these, never a free first argument such as a host. */
+  subcommands?: Record<string, string[]>;
 };
 
 export type PackCheck = Scope & { id: string; run: string[]; say: string };
 
-export const handlerSeams = ["review-bot", "heavy-route"] as const;
+export const handlerSeams = ["review-bot", "heavy-route", "pr-command", "slack-capture"] as const;
 export type HandlerSeam = (typeof handlerSeams)[number];
 
-/** A script of the pack that a command of another pack hands its work to, such as the review bot behind fleet pr review, or the heavy-route handler that decides where a fleet heavy command runs. */
-export type PackHandler = Scope & { seam: HandlerSeam; path: string };
+/** A script of the pack that a command of another pack hands its work to, such as the review bot behind fleet pr review, the heavy-route handler that decides where a fleet heavy command runs, the pr-command handler that runs the fleet pr subcommands a pack adds, or the slack-capture handler that saves a Slack thread the owner reacts to. */
+export type PackHandler = Scope & { seam: HandlerSeam; path: string; /** The fleet pr words a pr-command handler runs; fleet pr routes only these to it. */ subcommands?: string[] };
 
 export type SourceRef = { name: string; repo: string; ref: string };
 
@@ -168,7 +177,7 @@ export type PackCode = {
   settingKey(handle: unknown): string;
   serviceId(handle: unknown): string;
   repairs: Record<string, (ctx: Context) => Promise<void>>;
-  commands: Record<string, { run(args: string[], ctx: Context): Promise<number>; on?: "hub"; workflow?: string }>;
+  commands: Record<string, { run(args: string[], ctx: Context): Promise<number>; on?: "hub"; workflow?: string; subcommands?: string[] }>;
   services: Record<string, (ctx: Context) => Promise<void>>;
   credentials: Record<string, (ctx: Context, node: string) => Promise<string>>;
   checks: Record<string, (ctx: Context) => Promise<boolean>>;
@@ -237,8 +246,8 @@ export type Plan = {
   /** Every served service of the profile, on every node, with its port. */
   catalog?: CatalogEntry[];
   t3ProjectScripts?: Array<Owned<T3ProjectScript>>;
-  commands: Record<string, { pack: string; path: string; on?: "hub"; workflow?: string }>;
-  handlers: Partial<Record<HandlerSeam, { pack: string; path: string }>>;
+  commands: Record<string, { pack: string; path: string; on?: "hub"; workflow?: string; subcommands?: string[] }>;
+  handlers: Partial<Record<HandlerSeam, { pack: string; path: string; subcommands?: string[] }>>;
   models: ModelRow[];
   settings: Record<string, SettingValue>;
   unanswered: PackSetting[];

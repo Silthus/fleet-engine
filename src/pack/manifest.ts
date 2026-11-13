@@ -9,7 +9,7 @@ const settingTypes = ["string", "number", "boolean", "choice"];
 export const packName = /^[a-z][a-z0-9-]*$/;
 
 /** Settings the engine reads, which any pack may declare to set their default. */
-export const engineSettings = ["identity.signer"];
+export const engineSettings = ["identity.signer", "context.repo", "context.path"];
 
 export async function loadPacks(sourceDir: string): Promise<LoadedPack[]> {
   const root = join(sourceDir, "packs");
@@ -58,7 +58,7 @@ export function parseManifest(raw: unknown, where: string): PackManifest {
   if (typeof raw.name !== "string" || !packName.test(raw.name)) return fail("name must be lowercase words joined by dashes");
   if (raw.title !== undefined && !filled(raw.title)) return fail("title must be the name people read");
   if (typeof raw.summary !== "string" || raw.summary === "") return fail("summary must be one plain sentence");
-  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "t3ProjectScripts", "handlers", "served"]) {
+  for (const field of ["requires", "guides", "skills", "config", "settings", "workflows", "jobs", "human", "steps", "checks", "files", "codexRules", "t3ProjectScripts", "handlers", "served"]) {
     if (raw[field] !== undefined && !Array.isArray(raw[field])) fail(`${field} must be a list`);
   }
   checkShapes(raw, fail);
@@ -82,6 +82,7 @@ function scopeProblem(item: Record<string, unknown>) {
   if (item.oncePerFleet !== undefined && typeof item.oncePerFleet !== "boolean") return "oncePerFleet must be true or false";
   if (item.plans !== undefined && !isListOf(item.plans, plans)) return "plans must list claude, codex, or both";
   if (item.workflow !== undefined && typeof item.workflow !== "string") return "workflow must be an id";
+  if (item.unless !== undefined && !isStrings(item.unless)) return "unless must list workflow ids";
   return undefined;
 }
 
@@ -126,6 +127,7 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     if (problem) fail(`${label}: ${problem}`);
   };
   for (const field of ["requires", "skills"]) need(raw[field] === undefined || isStrings(raw[field]), `${field} must list names`);
+  need(raw.subcommands === undefined || (isRecord(raw.subcommands) && Object.values(raw.subcommands).every((words) => isStrings(words) && words.every((word) => /^[a-z][a-z-]{0,23}$/.test(word)))), "subcommands must map each command to its lowercase first words");
   need(raw.instructions === undefined || typeof raw.instructions === "string", "instructions must be a path");
   need(raw.profileOrg === undefined || (typeof raw.profileOrg === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(raw.profileOrg)), "profileOrg must be a GitHub org name");
   each("guides", (item, label) => {
@@ -152,6 +154,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     const zones = item.defaultByTimeZone;
     need(zones === undefined || (isRecord(zones) && Object.values(zones).every(fits)), `${label}: defaultByTimeZone must map time-zone prefixes to values that fit type ${String(item.type)}`);
     need(zones === undefined || item.ask === "setup", `${label}: defaultByTimeZone needs ask setup, because only setup reads it`);
+    const context = item.fromContext;
+    need(context === undefined || (item.type === "string" && isRecord(context) && typeof context.value === "string" && (context.unlessSet === undefined || filled(context.unlessSet))), `${label}: fromContext needs type string, a value, and an optional unlessSet key`);
   });
   each("workflows", (item, label) => {
     need(typeof item.name === "string" && typeof item.sentence === "string", `${label}: needs a name and a sentence`);
@@ -179,6 +183,10 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   });
   each("files", (item, label) => {
     need(typeof item.path === "string" && typeof item.target === "string", `${label}: needs a path and a target`);
+    filters(item, label);
+  });
+  each("codexRules", (item, label) => {
+    need(typeof item.path === "string", `${label}: needs a path`);
     filters(item, label);
   });
   checkModels(raw.models, fail);
@@ -216,6 +224,11 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
   each("handlers", (item, label) => {
     need((handlerSeams as readonly unknown[]).includes(item.seam), `${label}: seam must be one of ${handlerSeams.join(", ")}`);
     need(filled(item.path), `${label}: needs a path`);
+    if (item.seam !== "pr-command") need(item.subcommands === undefined, `${label}: only a pr-command handler takes subcommands`);
+    else {
+      need(isStrings(item.subcommands) && item.subcommands.length > 0, `${label}: needs subcommands, the fleet pr words it runs`);
+      need((item.subcommands as string[]).every((word) => packName.test(word)), `${label}: each subcommand must be lowercase words joined by dashes`);
+    }
     filters(item, label);
   });
   each("checks", (item, label) => {
@@ -262,10 +275,10 @@ function checkWorkflows(manifest: PackManifest, fail: (message: string) => never
     }
   }
   checkYields(manifest.workflows ?? [], fail);
-  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, t3ProjectScripts: manifest.t3ProjectScripts, handlers: manifest.handlers, served: manifest.served };
+  const tied = { jobs: manifest.jobs, human: manifest.human, steps: manifest.steps, checks: manifest.checks, config: manifest.config, files: manifest.files, codexRules: manifest.codexRules, t3ProjectScripts: manifest.t3ProjectScripts, handlers: manifest.handlers, served: manifest.served };
   for (const [field, items] of Object.entries(tied)) {
     for (const item of items ?? []) {
-      const label = "id" in item ? item.id : "key" in item ? item.key : "seam" in item ? item.seam : item.target;
+      const label = "id" in item ? item.id : "key" in item ? item.key : "seam" in item ? item.seam : "target" in item ? item.target : item.path;
       if (item.workflow !== undefined && !ids.has(item.workflow)) fail(`${field} ${label} names unknown workflow ${item.workflow}`);
     }
   }

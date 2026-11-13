@@ -9,6 +9,7 @@ import { cacheFile, librarySettings, writePointer } from "../lib/config.ts";
 import { runGit, type Git } from "../lib/git.ts";
 import { catalogName, readLibrary, related, renderCatalog, search, topicReport } from "../lib/library.ts";
 import { syncLibrary } from "../lib/sync.ts";
+import { upstreamCommand } from "../lib/upstream.ts";
 
 type Env = Record<string, string | undefined>;
 export type ContextDeps = { env: Env; home: string; print: (line: string) => void; git: Git; agent: () => Agent; today: () => string };
@@ -19,7 +20,8 @@ export const usage = `usage:
   fleet context related <prompt>            Show what the prompt hook would show for this prompt
   fleet context catalog                     Rewrite CATALOG.md in the library checkout
   fleet context topics                      List topics with three or more documents and whether their hub is stale
-  fleet context sync                        Clone the library, or fast-forward it; fails while local changes block that`;
+  fleet context sync                        Clone the library, or fast-forward it; fails while local changes block that
+  fleet context upstream install|doctor|remove  Declare the library's search to the hub's MCP gateway`;
 
 export async function contextCommand(args: string[], deps: ContextDeps): Promise<number> {
   const [mode, ...rest] = args;
@@ -28,6 +30,10 @@ export async function contextCommand(args: string[], deps: ContextDeps): Promise
   const root = library.path;
   const docs = () => readLibrary(root, cacheFile(deps.home));
   if (mode === "sync" && !rest.length) return syncLibrary(library, deps.git, deps.print);
+  if (mode === "upstream" && rest.length === 1) {
+    const code = upstreamCommand(rest[0], library, deps.home, deps.print);
+    if (code !== 2) return code;
+  }
   if (mode === "search" && rest.length) {
     const all = rest.includes("--all");
     const hits = search(docs(), rest.filter((word) => word !== "--all").join(" "), (path) => redactSecrets(readFileSync(join(root, path), "utf8")), { all });

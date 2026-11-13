@@ -1,4 +1,4 @@
-export type Message = { user: string; ts: string; text: string };
+export type Message = { user: string; ts: string; text: string; files?: Array<{ id: string; title?: string; filetype?: string; permalink?: string }> };
 type Envelope = Record<string, unknown>;
 
 export function startSlackStub(thread: Message[], ownerId: string, appTokens?: Set<string>) {

@@ -1,10 +1,10 @@
 import { homedir } from "node:os";
 import type { Context, Pack, Setting } from "../../src/sdk/index.ts";
 
-async function commandDeps(ctx: Context, userId: Setting<string>, emoji: Setting<string>) {
+async function commandDeps(ctx: Context, userId: Setting<string>, emoji: Setting<string>, captureEmoji?: Setting<string>) {
   const { everyOn } = await import("./lib/command.ts");
   return {
-    env: process.env, home: homedir(), slackUserId: () => ctx.get(userId), slackEmoji: () => ctx.get(emoji), secrets: ctx.secrets, stateDir: ctx.stateDir, threads: ctx.threads,
+    env: process.env, home: homedir(), slackUserId: () => ctx.get(userId), slackEmoji: () => ctx.get(emoji), ...(captureEmoji ? { slackCaptureEmoji: () => ctx.get(captureEmoji) } : {}), secrets: ctx.secrets, stateDir: ctx.stateDir, threads: ctx.threads,
     print: ctx.print, now: ctx.now, sleep: ctx.sleep, every: everyOn(ctx.sleep), readStdin: () => Bun.stdin.text(),
   };
 }
@@ -29,12 +29,26 @@ export default {
       default: "t3code",
       question: "Which Slack emoji starts a thread? Give its name, such as eye or +1.",
     });
+    const captureEmoji = fleet.setting({
+      key: "slack.captureEmoji",
+      type: "string",
+      default: "brain",
+      ask: "never",
+      question: "Which Slack emoji saves a message and its thread to your context library? Give its name, such as brain. It works while the Context library pack is on.",
+    });
+    const nodes = fleet.setting({
+      key: "slack.nodes",
+      type: "string",
+      optional: true,
+      ask: "never",
+      question: "Which nodes start the threads that Slack asks for, as SSH names separated by spaces, such as devbox-1 devbox-2? Fleet takes them in turn. Leave it empty to start them on the hub, or on a box while Boxes is on.",
+    });
     const threads = fleet.workflow({
       id: "slack-thread",
       name: "Start a thread from Slack",
       default: false,
-      settings: [userId, emoji],
-      sentence: "Your own Slack message or reaction with your trigger emoji (default :t3code:), or a mention of your Slack app starts a T3 thread, and Slack shows you its link.",
+      settings: [userId, emoji, captureEmoji, nodes],
+      sentence: "Your own Slack message or reaction with your trigger emoji (default :t3code:), or a mention of your Slack app starts a T3 thread, and Slack shows you its link. With the Context library pack on, your :brain: reaction saves the thread to your notes.",
       risk: "Your Slack messages and the threads they belong to become agent prompts. Only your own messages, reactions, and mentions start a thread.",
     });
     const hub = { on: "hub", when: threads } as const;
@@ -55,13 +69,14 @@ export default {
     });
     fleet.command("slack-trigger", {
       summary: "Set up or check your Slack app",
+      subcommands: ["manifest", "setup", "check", "launch"],
       run: async (args, ctx) => (await import("./lib/command.ts")).slackTrigger(args, await commandDeps(ctx, userId, emoji)),
     });
     fleet.service({
       ...hub,
       after: app,
       id: "slack-trigger",
-      run: async (ctx) => (await import("./lib/command.ts")).listen(await commandDeps(ctx, userId, emoji)),
+      run: async (ctx) => (await import("./lib/command.ts")).listen(await commandDeps(ctx, userId, emoji, captureEmoji)),
     });
   },
 } satisfies Pack;

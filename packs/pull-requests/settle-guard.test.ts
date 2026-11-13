@@ -133,7 +133,7 @@ describe("the settle guard", () => {
     const log = console.log;
     console.log = () => {};
     try {
-      return await prCommand(["handover", "--pr", pr, "--to", to], home, new Date("2026-11-12T10:00:00Z"));
+      return await prCommand(["handover", "--pr", pr, "--to", to], home, Bun.env, new Date("2026-11-12T10:00:00Z"));
     } finally {
       console.log = log;
       if (saved === undefined) delete process.env.T3CODE_THREAD_ID; else process.env.T3CODE_THREAD_ID = saved;

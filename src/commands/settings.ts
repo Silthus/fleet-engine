@@ -1,4 +1,5 @@
 import type { PackManifest, PackSetting, SettingValue } from "../pack/types.ts";
+import { contextValue } from "../reconciler/resolve.ts";
 import { FlagError, parseSettingValue } from "../setup/flags.ts";
 import { activePacks, type ChangeContext, manifests, saveAndApply } from "./change.ts";
 
@@ -31,6 +32,7 @@ function shown(setting: PackSetting, context: Pick<ChangeContext, "plan" | "pack
   const value = context.plan.settings[setting.key];
   if (value === undefined) return context.plan.unanswered.some((item) => item.key === setting.key) ? "not set yet, Fleet needs it" : "not set";
   if (setting.key in context.profile.settings) return String(value);
+  if (contextValue(setting, context.profile.settings, context.plan.settings["context.path"]) !== undefined) return `${String(value)} (from context.repo)`;
   return `${String(value)} (default)`;
 }
 

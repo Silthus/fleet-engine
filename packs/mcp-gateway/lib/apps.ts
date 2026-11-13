@@ -21,7 +21,13 @@ export type CodexApp = {
   skinTones?: boolean;
 };
 
-export type Upstream = OauthUpstream | CodexApp;
+/**
+ * A stdio MCP server that the gateway runs from a script on the hub. The gateway bundles the script for Node, and
+ * mounts each folder of mounts read-only at its target, so the server reads only what its pack names.
+ */
+export type LocalUpstream = { kind: "local"; name: string; title: string; script: string; mounts?: Array<{ source: string; target: string }>; env?: Record<string, string> };
+
+export type Upstream = OauthUpstream | CodexApp | LocalUpstream;
 
 export const slack: CodexApp = {
   kind: "codex-app",
@@ -102,7 +108,7 @@ const text = (value: unknown) => typeof value === "string" && value.trim() !== "
 const strings = (value: unknown) => Array.isArray(value) && value.every(text);
 
 function problem(value: Field): string | undefined {
-  if (value.kind !== "oauth" && value.kind !== "codex-app") return "kind must be oauth or codex-app";
+  if (value.kind !== "oauth" && value.kind !== "codex-app" && value.kind !== "local") return "kind must be oauth, codex-app or local";
   if (typeof value.name !== "string" || !slug.test(value.name)) return "name must be lowercase letters, digits and dashes";
   if (!text(value.title)) return "title must name the upstream";
   if (value.kind === "oauth") {
@@ -112,6 +118,7 @@ function problem(value: Field): string | undefined {
     if (value.scopes !== undefined && (!strings(value.scopes) || !(value.scopes as string[]).every((scope) => /^[\x21\x23-\x5b\x5d-\x7e]+$/.test(scope)))) return "scopes must list OAuth scope names";
     return;
   }
+  if (value.kind === "local") return localProblem(value);
   if (typeof value.app !== "string" || !/^[A-Za-z0-9_]+$/.test(value.app)) return "app must be a ChatGPT app id: letters, digits and underscores";
   if (typeof value.plugin !== "string" || !/^[a-z0-9][a-z0-9-]*@[a-z0-9][a-z0-9-]*$/.test(value.plugin)) return "plugin must be a Codex plugin name such as name@marketplace";
   if (typeof value.prefix !== "string" || !/^[a-z0-9_]+\.$/.test(value.prefix)) return "prefix must be the app's tool prefix: lowercase letters, digits and underscores, then a dot";
@@ -127,4 +134,18 @@ export function parseUpstream(value: unknown): Upstream {
   const found = problem(value as Field);
   if (found) throw new Error(found);
   return value as Upstream;
+}
+
+export const localTarget = /^\/fleet-[a-z0-9][a-z0-9-]*$/;
+const reservedTargets = ["/fleet-local"];
+
+function localProblem(value: Field): string | undefined {
+  if (typeof value.script !== "string" || !value.script.startsWith("/") || !/\.[cm]?[jt]s$/.test(value.script)) return "script must be the absolute path of a TypeScript or JavaScript file";
+  const mounts = value.mounts ?? [];
+  if (!Array.isArray(mounts) || !mounts.every((mount: Field) => typeof mount?.source === "string" && mount.source.startsWith("/") && typeof mount.target === "string" && localTarget.test(mount.target) && !reservedTargets.includes(mount.target))) {
+    return "mounts must give each folder an absolute source and a target such as /fleet-notes";
+  }
+  if (new Set(mounts.map((mount: Field) => mount.target)).size !== mounts.length) return "mounts must not share a target";
+  const env = value.env ?? {};
+  if (typeof env !== "object" || env === null || Array.isArray(env) || !Object.entries(env).every(([key, item]) => /^FLEET_[A-Z0-9_]+$/.test(key) && typeof item === "string")) return "env must map FLEET_ names to text";
 }

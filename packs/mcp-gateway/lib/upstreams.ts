@@ -4,7 +4,7 @@ import { builtInApps, type CodexApp, type Upstream } from "./apps.ts";
 import { declaredUpstreams } from "./declared.ts";
 import { browserGatewayUrl } from "./client.ts";
 import { dataDir, managementApi, syncGatewayGroup, type Api, type Hub } from "./hub.ts";
-import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile } from "./install.ts";
+import { bridgeFile, codexMount, codexPackage, gatewayCurrent, install, legacyBridgeFile, localEntry, missingMount, waitingNote } from "./install.ts";
 import { handCallback, loopbackClientOf, registerLoopbackClient } from "./loopback.ts";
 
 const account = (app: CodexApp) => `${app.account ?? app.name}-codex`;
@@ -22,6 +22,7 @@ function wanted(upstream: Upstream, hub: Hub): Config {
     const oauth = upstream.loopback ? { redirectUri: handCallback, ...(upstream.scopes && { scopes: upstream.scopes }) } : { redirectUri: `${browserGatewayUrl(hub.gateway)}/oauth/callback` };
     return { type: "streamable-http", url: upstream.url, description: marker, startOnDemand: true, oauth };
   }
+  if (upstream.kind === "local") return { type: "stdio", command: "node", args: [localEntry(upstream)], description: marker, env: upstream.env ?? {}, startOnDemand: true };
   const home = `/app/data/${account(upstream)}`;
   return {
     type: "stdio",
@@ -68,9 +69,11 @@ export const appSignedIn = (hub: Pick<Hub, "home">, app: CodexApp) => exists(joi
 export async function registerUpstream(hub: Hub, upstream: Upstream) {
   const codexMissing = `${upstream.title} runs through Codex, and this hub has no Codex from Fleet. Run: fleet install-codex`;
   if (upstream.kind === "codex-app" && !(await exists(hubCodex(hub.home)))) throw new Error(codexMissing);
+  const waitsFor = upstream.kind === "local" ? await missingMount(upstream) : undefined;
+  if (upstream.kind === "local" && waitsFor) return hub.print(waitingNote(upstream, waitsFor));
   const call = await managementApi(hub);
   refuseTheirs(await current(call, upstream.name), upstream);
-  if (upstream.kind === "codex-app") await install(hub);
+  if (upstream.kind !== "oauth") await install(hub);
   const config = await current(call, upstream.name);
   refuseTheirs(config, upstream);
   if (upstream.kind === "codex-app") {
@@ -93,6 +96,7 @@ export async function registerUpstream(hub: Hub, upstream: Upstream) {
     return hub.print(`${upstream.title} is in the MCP gateway.${signIn ? ` To sign in to it, on the hub, run: ${signIn}` : ""}`);
   }
   hub.print(`${upstream.title} is in the MCP gateway.`);
+  if (upstream.kind === "local") return;
   if (!(await appSignedIn(hub, upstream))) hub.print(`Sign ${upstream.title} in to ChatGPT, with the account whose ${upstream.title} app it should use. On the hub, run: fleet mcp-gateway sign-in ${upstream.name}`);
 }
 

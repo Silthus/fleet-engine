@@ -1,6 +1,6 @@
 # Memory
 
-Shared memory is `~/.agents/memory` on every machine with the Memory pack. It holds the private repo in `memory.repo`. Every five minutes, each machine commits and pushes its memory changes and pulls the others'. Claude Code uses the directory as its auto memory and loads `MEMORY.md` by itself.
+Shared memory is `~/.agents/memory` on every machine with the Memory pack. It holds the private repo in `memory.repo`, or the `memory` folder of the context repo in `context.repo` when only that is set. Every five minutes, each machine commits and pushes its memory changes and pulls the others'. Claude Code uses the directory as its auto memory and loads `MEMORY.md` by itself.
 
 ## Layout
 

@@ -24,6 +24,10 @@ _Avoid_: Registry, marketplace, tap
 One person's private repo of answers and files: `fleet.json`, an optional `about-me.md`, and `overrides/`. It is also their dotfiles repo.
 _Avoid_: Personal layer, config, dotfiles
 
+**Context repo**:
+One person's repo of what their agents learn and record: memory, dreams, notes, to-dos, ideas, research, maps, and logs such as the lessons log and the rollout log. It is meant to be shared with their team, so it may live in the team's GitHub org, but it is never public. The profile holds private answers and is read by Fleet; the context repo holds shared knowledge and is read and written by agents. `context.repo` names it, and the memory, library, map, and log settings take it as their default.
+_Avoid_: Personal repo, notes repo, knowledge base
+
 **Workflow**:
 One way of working a pack offers, described in one plain sentence. It is on when its pack is on, the profile does not turn it off, and everything it needs holds.
 _Avoid_: Feature, capability

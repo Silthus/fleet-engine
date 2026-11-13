@@ -8,10 +8,10 @@ import { t3CliRunner, t3Threads } from "../../src/integrations/t3/index.ts";
 import { startT3Stub, type T3Stub } from "../../src/integrations/t3/testing.ts";
 import type { ModelRow } from "../../src/pack/types.ts";
 import { secretStore } from "../../src/runner/context.ts";
-import { listen, ownerOf, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
-import { launchHere, launchOnBox, type Run } from "./lib/launch.ts";
+import { launcher, listen, ownerOf, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
+import { launchHere, launchOnBox, launchOnNodes, spawnRunner, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
-import { handleTrigger, retryPending, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
+import { handleTrigger, retryPending, takeTurn, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
 import { startSlackStub, type Message } from "./testing.ts";
 
 const temp = tempDirs();
@@ -39,9 +39,9 @@ const saveApp = (home: string, tokens: Record<string, string>) => secretStore(ho
 const statePath = (home: string) => join(home, ".local/state/fleet/slack/slack-trigger.json");
 
 function processes(answers: (argv: string[], input?: string) => { code: number; stdout: string; stderr?: string } | undefined = () => undefined) {
-  const calls: Array<{ argv: string[]; input?: string }> = [];
-  const run: Run = async (argv, input) => {
-    calls.push({ argv, input });
+  const calls: Array<{ argv: string[]; input?: string; timeoutMs?: number }> = [];
+  const run: Run = async (argv, input, options) => {
+    calls.push({ argv, input, ...(options?.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }) });
     if (argv.join(" ") === "git config --get user.name") return { code: 0, stdout: "Nora Example\n", stderr: "" };
     const answer = answers(argv, input);
     return answer ? { stderr: "", ...answer } : { code: 127, stdout: "", stderr: `${argv[0]}: not found` };
@@ -165,6 +165,42 @@ describe("fleet slack-trigger run", () => {
     expect(slack.method("chat.postEphemeral")[0]!.args.text).toBe("Started <https://app.t3.codes/threads/env-box-7/thread-on-box|Slack: deploy check> on box-7.");
   });
 
+  test("with slack.nodes set, threads start on those nodes in turn over SSH, even while Boxes is on, and no box is spawned", async () => {
+    const slack = slackStub([{ user: ownerId, ts: "210.1", text: "first :t3code:" }, { user: ownerId, ts: "210.2", text: "second :t3code:" }, { user: ownerId, ts: "210.3", text: "third :t3code:" }]);
+    const home = await homeWithTokens();
+    const stop = new AbortController();
+    let started = 0;
+    const fleet = processes((argv) => (argv[0] === "ssh" ? { code: 0, stdout: `${JSON.stringify({ threadId: `t-${++started}`, url: `https://app.t3.codes/threads/env-${argv.at(-2)}/t-${started}` })}\n` } : undefined));
+    const deps = commandDeps(home, { slackBase: slack.base, stop: stop.signal, run: fleet.run, env: { FLEET_SETTINGS: settings({ "slack.nodes": "devbox-1 devbox-2", "hub.boxTemplate": "devbox" }), FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
+    const running = listen(deps);
+    await slack.connected();
+    for (const ts of ["210.1", "210.2", "210.3"]) {
+      slack.send({ type: "message", user: ownerId, channel: "C1", ts, text: "go :t3code:" });
+      await slack.until(() => slack.method("chat.postEphemeral").length === Number(ts.slice(-1)));
+    }
+    stop.abort();
+    await running;
+
+    const ssh = fleet.calls.filter((call) => call.argv[0] === "ssh");
+    expect(ssh.map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-2", "devbox-1"]);
+    expect(ssh[0]!.argv.at(-1)).toEndWith('/.local/share/fleet/engine/fleet" slack-trigger launch');
+    expect(ssh[0]!.argv).toContain("BatchMode=yes");
+    expect(JSON.parse(ssh[0]!.input!)).toMatchObject({ title: "Slack: first", commandId: expect.any(String) });
+    expect(fleet.calls.some((call) => call.argv.includes("box"))).toBe(false);
+    expect(slack.method("chat.postEphemeral").map((call) => call.args.text)).toEqual([
+      "Started <https://app.t3.codes/threads/env-devbox-1/t-1|Slack: first> on devbox-1.",
+      "Started <https://app.t3.codes/threads/env-devbox-2/t-2|Slack: second> on devbox-2.",
+      "Started <https://app.t3.codes/threads/env-devbox-1/t-3|Slack: third> on devbox-1.",
+    ]);
+  });
+
+  test("refuses a slack.nodes entry that is not a node's SSH name, or that names a box", async () => {
+    const home = await homeWithTokens();
+    for (const nodes of ["devbox-1 -oProxyCommand=x", "box-lane", "Devbox_1"]) {
+      await expect(listen(commandDeps(home, { run: processes().run, slackBase: "http://127.0.0.1:9", stop: AbortSignal.abort(), env: { FLEET_SETTINGS: settings({ "slack.nodes": nodes }) } }))).rejects.toThrow("slack.nodes names");
+    }
+  });
+
   test("starts no thread on a disk below the start floor, logs why, and names the devbox with the most room", async () => {
     const t3 = await t3Server();
     const slack = slackStub([{ user: ownerId, ts: "300.1", text: "full disk :t3code:" }]);
@@ -251,6 +287,94 @@ describe("fleet slack-trigger run", () => {
     await expect(listen(deps)).rejects.toThrow("no Slack app is saved. Run fleet slack-trigger setup");
   });
 
+});
+
+describe("saving to the context library", () => {
+  const thread: Message[] = [
+    { user: "U0OTHER", ts: "200.1", text: "Sprint planning notes in the canvas" , files: [{ id: "F0CANVAS", title: "Sprint plan", filetype: "canvas" }] },
+    { user: ownerId, ts: "200.2", text: "load test first" },
+  ];
+  const handlers = JSON.stringify({ "slack-capture": "/opt/context/slack-capture.ts" });
+  const captured = { path: "notes/sprint-planning-2026-11-11.md", title: "Sprint <planning>", url: "https://notes.example.com/blob/main/notes/sprint-planning-2026-11-11.md", updated: false };
+
+  async function listening(answer: (input: string) => { code: number; stdout: string }, extra: Partial<SlackCommandDeps> = {}) {
+    const slack = slackStub(thread);
+    const home = await homeWithTokens();
+    const stop = new AbortController();
+    const ran = processes((argv, input) => (argv.join(" ") === "bun /opt/context/slack-capture.ts" ? answer(input ?? "") : undefined));
+    const deps = commandDeps(home, { env: { FLEET_SETTINGS: settings(), FLEET_HANDLERS: handlers }, slackBase: slack.base, stop: stop.signal, run: ran.run, ...extra });
+    const running = listen(deps);
+    await slack.connected();
+    const end = async () => (stop.abort(), await running);
+    return { slack, ran, deps, end };
+  }
+  const captures = (ran: ReturnType<typeof processes>) => ran.calls.filter((call) => call.argv[0] === "bun").map((call) => JSON.parse(call.input!));
+  const reactionCalls = (slack: ReturnType<typeof slackStub>) => slack.calls.filter((call) => call.method.startsWith("reactions.")).map((call) => `${call.method} ${call.args.timestamp} ${call.args.name}`);
+
+  test("the owner's :brain: hands the whole thread and its canvases to the context library, shows :eyes: while it runs, then clears both and says where the note went", async () => {
+    const { slack, ran, end } = await listening(() => ({ code: 0, stdout: `${JSON.stringify(captured)}\n` }));
+    slack.send({ type: "reaction_added", user: "U0OTHER", reaction: "brain", item: { type: "message", channel: "C1", ts: "200.2" } });
+    slack.send({ type: "reaction_added", user: ownerId, reaction: "brain::skin-tone-3", item: { type: "message", channel: "C1", ts: "200.2" } });
+    await slack.until(() => slack.method("chat.postEphemeral").length === 1);
+    await end();
+    expect(captures(ran)).toEqual([{
+      source: "https://example.slack.com/archives/C1/p200.1",
+      material: "Sam (200.1): Sprint planning notes in the canvas\nNora (200.2): load test first\n\nFiles in the thread (read each canvas with slack_read_canvas and its id):\n- F0CANVAS canvas Sprint plan",
+    }]);
+    expect(reactionCalls(slack)).toEqual(["reactions.add 200.2 eyes", "reactions.remove 200.2 eyes", "reactions.remove 200.2 brain"]);
+    const told = slack.method("chat.postEphemeral")[0]!.args;
+    expect(told).toMatchObject({ channel: "C1", user: ownerId, thread_ts: "200.1" });
+    expect(told.text).toBe(`:brain: Added <${captured.url}|Sprint &lt;planning&gt;> in your context library (\`${captured.path}\`).`);
+  });
+
+  test("a failed capture keeps the :brain:, says why, and a second :brain: tries again and updates the note", async () => {
+    let calls = 0;
+    const { slack, ran, end } = await listening(() => (++calls === 1 ? { code: 1, stdout: `${JSON.stringify({ failed: "the push to main kept failing; nothing was saved" })}\n` } : { code: 0, stdout: JSON.stringify({ ...captured, updated: true }) }));
+    slack.send({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "200.1" } });
+    await slack.until(() => slack.method("chat.postEphemeral").length === 1);
+    slack.send({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "200.1" } });
+    await slack.until(() => slack.method("chat.postEphemeral").length === 2);
+    await end();
+    expect(captures(ran)).toHaveLength(2);
+    expect(slack.method("chat.postEphemeral").map((call) => call.args.text)).toEqual([
+      ":brain: Could not save this to your context library: the push to main kept failing; nothing was saved. React again to retry.",
+      `:brain: Updated <${captured.url}|Sprint &lt;planning&gt;> in your context library (\`${captured.path}\`).`,
+    ]);
+    expect(reactionCalls(slack)).toEqual(["reactions.add 200.1 eyes", "reactions.remove 200.1 eyes", "reactions.add 200.1 eyes", "reactions.remove 200.1 eyes", "reactions.remove 200.1 brain"]);
+    expect(ran.calls.some((call) => call.argv[0] !== "bun" && call.argv[0] !== "git")).toBe(false);
+  });
+
+  test("a second :brain: while the first capture runs starts no second capture", async () => {
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => (finish = resolve));
+    const capture = async () => (await finished, captured);
+    const deps: TriggerDeps = { owner: { ...owner, captureEmoji: "brain" }, statePath: statePath(temp.make("home-")), now: () => 0, log: () => {}, slack: async (method) => (method === "conversations.replies" ? { messages: [{ ts: "1.1" }] } : method === "chat.getPermalink" ? { permalink: "https://example.slack.com/archives/C1/p11" } : {}), launch: async () => ({ failed: "no" }), capture: async (input) => (calls.push(input.source), capture()) };
+    const calls: string[] = [];
+    const trigger = { kind: "capture" as const, channel: "C1", ts: "1.1" };
+    const first = handleTrigger(trigger, deps);
+    await handleTrigger(trigger, deps);
+    finish();
+    await first;
+    await handleTrigger(trigger, deps);
+    expect(calls).toEqual(["https://example.slack.com/archives/C1/p11", "https://example.slack.com/archives/C1/p11"]);
+  });
+
+  test("without the Context library pack, :brain: does nothing, and slack.captureEmoji picks another emoji", async () => {
+    expect(triggerOf({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "1.1" } }, owner)).toBeUndefined();
+    const { slack, ran, end } = await listening(() => ({ code: 0, stdout: JSON.stringify(captured) }), { env: { FLEET_SETTINGS: settings() } });
+    slack.send({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "200.2" } });
+    await slack.until(() => slack.acked.length === 1);
+    await end();
+    expect(captures(ran)).toEqual([]);
+    expect(reactionCalls(slack)).toEqual([]);
+    const chosen = await listening(() => ({ code: 0, stdout: JSON.stringify(captured) }), { slackCaptureEmoji: () => ":books:" });
+    chosen.slack.send({ type: "reaction_added", user: ownerId, reaction: "brain", item: { type: "message", channel: "C1", ts: "200.2" } });
+    chosen.slack.send({ type: "reaction_added", user: ownerId, reaction: "books", item: { type: "message", channel: "C1", ts: "200.2" } });
+    await chosen.slack.until(() => chosen.slack.method("chat.postEphemeral").length === 1);
+    await chosen.end();
+    expect(captures(chosen.ran)).toHaveLength(1);
+    expect(chosen.slack.method("chat.postEphemeral")[0]!.args.text).toStartWith(":books: Added");
+  });
 });
 
 describe("a launch that fails", () => {
@@ -340,6 +464,96 @@ describe("a launch that fails", () => {
     const sent = fleet.calls.filter((call) => call.argv[2] === "run").map((call) => JSON.parse(call.input!));
     expect(sent.map((request) => request.replay)).toEqual([undefined, true]);
     expect(replies.at(-1)).toBe("Started <https://app.t3.codes/threads/env-box-8/thread-on-box|Slack: why?> on box-8.");
+  });
+
+  test("on nodes, a launch that failed before it reached T3 retries on the next node, and a lost T3 answer replays on the same node", async () => {
+    const answers = [
+      { code: 255, stdout: "", stderr: "ssh: connect to host devbox-1 port 22: Connection timed out\n" },
+      { code: 1, stdout: `${JSON.stringify({ failed: "T3 did not answer", reachedT3: true })}\n` },
+      { code: 0, stdout: `${JSON.stringify({ threadId: "thread-on-node", url: "https://app.t3.codes/threads/env-2/thread-on-node" })}\n` },
+    ];
+    const fleet = processes((argv) => (argv[0] === "ssh" ? answers.shift() : undefined));
+    const { deps, replies, later } = rig([]);
+    deps.launch = launchOnNodes(["devbox-1", "devbox-2", "devbox-3"], fleet.run, () => takeTurn(deps.statePath));
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    later(60_000);
+    await retryPending(deps);
+    later(60_000);
+    await retryPending(deps);
+    const ssh = fleet.calls.filter((call) => call.argv[0] === "ssh");
+    expect(ssh.map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-2", "devbox-2"]);
+    const sent = ssh.map((call) => JSON.parse(call.input!));
+    expect(new Set(sent.map((request) => request.commandId)).size).toBe(1);
+    expect(sent.map((request) => request.replay)).toEqual([undefined, undefined, true]);
+    expect(sent.every((request) => !("claim" in request))).toBe(true);
+    expect(replies).toEqual(["Could not start a T3 thread. Fleet retries every minute for a day.", "Started <https://app.t3.codes/threads/env-2/thread-on-node|Slack: why?> on devbox-2."]);
+  });
+
+  test("a node launch has nothing to release when the trigger gives up", () => {
+    expect(launchOnNodes(["devbox-1"], processes().run, () => 0).release).toBeUndefined();
+  });
+
+  test("on nodes, a launch whose answer is lost after it reached the node, such as a dropped SSH or a timeout, replays on that node only", async () => {
+    for (const lost of [
+      { code: 255, stdout: "", stderr: "Connection to devbox-1 closed by remote host.\n" },
+      { code: 124, stdout: "", stderr: "timed out after 300 s\n" },
+    ]) {
+      const answers = [lost, { code: 255, stdout: "", stderr: "ssh: connect to host devbox-1 port 22: Connection refused\n" }, { code: 0, stdout: `${JSON.stringify({ threadId: "thread-1" })}\n` }];
+      const fleet = processes((argv) => (argv[0] === "ssh" ? answers.shift() : undefined));
+      const { deps, later } = rig([]);
+      deps.launch = launchOnNodes(["devbox-1", "devbox-2"], fleet.run, () => takeTurn(deps.statePath));
+      await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+      for (const _ of [1, 2]) {
+        later(60_000);
+        await retryPending(deps);
+      }
+      const ssh = fleet.calls.filter((call) => call.argv[0] === "ssh");
+      expect(ssh.map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-1", "devbox-1"]);
+      expect(ssh.map((call) => JSON.parse(call.input!).replay)).toEqual([undefined, true, true]);
+    }
+  });
+
+  test("on nodes, a node with no room to start passes the launch to the next node", async () => {
+    const answers = [{ code: 1, stdout: `${JSON.stringify({ failed: "Free disk is below the start floor.", noRoom: true })}\n` }, { code: 0, stdout: `${JSON.stringify({ threadId: "thread-2" })}\n` }];
+    const fleet = processes((argv) => (argv[0] === "ssh" ? answers.shift() : undefined));
+    const { deps, later } = rig([]);
+    deps.launch = launchOnNodes(["devbox-1", "devbox-2"], fleet.run, () => takeTurn(deps.statePath));
+    await handleTrigger({ kind: "message", channel: "C1", ts: "1.1" }, deps);
+    later(60_000);
+    await retryPending(deps);
+    expect(fleet.calls.filter((call) => call.argv[0] === "ssh").map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-2"]);
+  });
+
+  test("on nodes, a claim left from box mode or from a node no longer listed does not hold", async () => {
+    for (const box of ["box-7", "devbox-9"]) {
+      const fleet = processes((argv) => (argv[0] === "ssh" ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-3" })}\n` } : undefined));
+      const launch = launchOnNodes(["devbox-1", "devbox-2"], fleet.run, () => 0);
+      expect(await launch({ title: "Slack: hi", prompt: "Do it.", commandId: "c1", claim: { box }, replay: true })).toMatchObject({ threadId: "thread-3", where: "devbox-1" });
+      expect(JSON.parse(fleet.calls[0]!.input!).replay).toBeUndefined();
+      expect(fleet.calls.some((call) => call.argv.includes(box))).toBe(false);
+    }
+  });
+
+  test("a node launch runs ssh with keepalives and a 300 s limit, and the limit kills a launch that hangs", async () => {
+    const fleet = processes((argv) => (argv[0] === "ssh" ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-4" })}\n` } : undefined));
+    await launchOnNodes(["devbox-1"], fleet.run, () => 0)({ title: "Slack: hi", prompt: "Do it.", commandId: "c1" });
+    expect(fleet.calls[0]!.timeoutMs).toBe(300_000);
+    expect(fleet.calls[0]!.argv.join(" ")).toContain("-o ServerAliveInterval=30 -o ServerAliveCountMax=3 devbox-1");
+
+    const limits: number[] = [];
+    const run = spawnRunner((fire, ms) => (limits.push(ms), queueMicrotask(fire), { cancel: () => {} }));
+    const hung = await run(["sh", "-c", "exec sleep 30"], undefined, { timeoutMs: 300_000 });
+    expect(limits).toEqual([300_000]);
+    expect(hung).toMatchObject({ code: 124, stderr: "timed out after 300 s\n" });
+    expect(await spawnRunner((fire) => (queueMicrotask(fire), { cancel: () => {} }))(["sh", "-c", "echo done"])).toEqual({ code: 0, stdout: "done\n", stderr: "" });
+  });
+
+  test("the turn among the nodes goes on where it stopped after the trigger restarts", async () => {
+    const home = await homeWithTokens();
+    const fleet = processes((argv) => (argv[0] === "ssh" ? { code: 0, stdout: `${JSON.stringify({ threadId: "thread-5" })}\n` } : undefined));
+    const deps = commandDeps(home, { env: { FLEET_SETTINGS: settings({ "slack.nodes": "devbox-1 devbox-2" }), FLEET_ENGINE_DIR: "/opt/fleet-engine" } });
+    for (const commandId of ["c1", "c2", "c3"]) await launcher(deps, fleet.run)({ title: "Slack: hi", prompt: "Do it.", commandId });
+    expect(fleet.calls.map((call) => call.argv.at(-2))).toEqual(["devbox-1", "devbox-2", "devbox-1"]);
   });
 
   test("keeps a trigger whose Slack thread could not be read, and starts it on the next retry", async () => {
@@ -498,7 +712,7 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
     const t3 = await t3Server();
     const deps = commandDeps(temp.make("home-"), { threads: t3Threads(models, { home: t3.home }), readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }) });
     expect(await slackTrigger(["launch"], deps)).toBe(0);
-    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1" });
+    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1", url: "https://app.t3.codes/threads/env-here/thread-1" });
     expect(t3.rpcCalls.find((call) => call.tag === "orchestration.launchThread")?.payload).toMatchObject({ commandId: "command-1", title: "Slack: hi", initialMessage: { text: "Do it." } });
   });
 
@@ -526,7 +740,7 @@ describe("fleet slack-trigger manifest, check, and launch", () => {
       readStdin: async () => JSON.stringify({ title: "Slack: hi", prompt: "Do it.", commandId: "command-1" }),
     });
     expect(await slackTrigger(["launch"], deps)).toBe(0);
-    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1" });
+    expect(JSON.parse(deps.printed.at(-1)!)).toEqual({ threadId: "thread-1", url: "https://app.t3.codes/threads/env-here/thread-1" });
   });
 });
 
@@ -558,6 +772,13 @@ describe("where the trigger runs", () => {
   test("runs nowhere without a hub when the profile has devboxes", () => {
     expect(runsHere(resolve({ packs: ["slack"], devboxes: ["box-1"] }, mac))).toBe(false);
     expect(runsHere(resolve({ packs: ["slack"], devboxes: ["box-1"] }, devbox))).toBe(false);
+  });
+
+  test("passes slack.nodes to the trigger only when it is set, and never asks for it", () => {
+    expect(resolve({ packs: ["slack"], settings: { "slack.userId": ownerId, "slack.nodes": "devbox-1 devbox-2" } }).settings["slack.nodes"]).toBe("devbox-1 devbox-2");
+    const unset = resolve({ packs: ["slack"] });
+    expect(unset.settings["slack.nodes"]).toBeUndefined();
+    expect(unset.unanswered).toEqual([]);
   });
 
   test("is off by default", () => {

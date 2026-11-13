@@ -54,7 +54,7 @@ test("on a running gateway that an older Fleet installed, the gateway first move
   const { docker, hub } = hubWith();
   await registerSlackBridge(hub);
   expect(docker.container()).toMatchObject({ Image: expect.stringMatching(/^sha256:fleet-mcphub:1\.1\.0-[0-9a-f]{12}$/), State: { Running: true } });
-  expect(docker.container()!.Mounts).toContainEqual({ Destination: "/opt/fleet-codex" });
+  expect(docker.container()!.Mounts).toContainEqual(expect.objectContaining({ Destination: "/opt/fleet-codex" }));
 });
 
 test("a second run changes nothing, and a run after someone edited the bridge puts it back", async () => {
@@ -147,7 +147,7 @@ test("a bridge already in the gateway still counts as missing while the gateway 
   const { api, docker, hub } = hubWith({ servers: ["tickets", "calendar", "slack"], configs: { slack: stored } });
   expect(await slackBridgeRegistered(hub)).toBe(false);
   await registerSlackBridge(hub);
-  expect(docker.container()!.Mounts).toContainEqual({ Destination: "/opt/fleet-codex" });
+  expect(docker.container()!.Mounts).toContainEqual(expect.objectContaining({ Destination: "/opt/fleet-codex" }));
   expect(await slackBridgeRegistered(hub)).toBe(true);
   expect(writes(api)).toEqual([]);
 });

@@ -29,31 +29,43 @@
   "settings": [
     {
       "key": "orchestration.tracker",
-      "question": "Which repo's issues hold your maps? Leave it empty to use your Fleet profile repo.",
+      "question": "Which repo's issues hold your maps? Leave it empty to use your context repo, or your Fleet profile repo when you have none.",
       "type": "string",
       "optional": true,
-      "ask": "never"
+      "ask": "never",
+      "fromContext": {
+        "value": "{repo}"
+      }
     },
     {
       "key": "orchestration.lessonsLog",
       "question": "Which file holds the lessons log that maps read and write, such as a path in a private repo?",
       "type": "string",
       "optional": true,
-      "ask": "never"
+      "ask": "never",
+      "fromContext": {
+        "value": "{path}/lessons.md"
+      }
     },
     {
       "key": "orchestration.rolloutLog",
       "question": "Which file logs your rollouts, one JSON line per stage, so fleet lessons can name holds and rollbacks? ~/ is allowed.",
       "type": "string",
       "default": "",
-      "ask": "never"
+      "ask": "never",
+      "fromContext": {
+        "value": "{path}/rollouts.jsonl"
+      }
     },
     {
       "key": "orchestration.goals",
       "question": "Where do your team's goals live, so a map can name the metric its work moves?",
       "type": "string",
       "optional": true,
-      "ask": "never"
+      "ask": "never",
+      "fromContext": {
+        "value": "{path}/goals.md"
+      }
     },
     {
       "key": "orchestration.analyticsProject",
@@ -237,5 +249,12 @@
       ],
       "oncePerFleet": true
     }
-  ]
+  ],
+  "subcommands": {
+    "thread": [
+      "list",
+      "read",
+      "send"
+    ]
+  }
 }

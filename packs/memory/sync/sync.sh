@@ -6,6 +6,8 @@
 # MEMORY.md and every INDEX.md merge by union. When two machines change the same lines of another file, this
 # machine's version wins and the other goes to .conflicts/ in the memory folder.
 # A conflict marker, a secret, or a change outside the subtree in any outgoing commit stops the push.
+# Commits are signed when the user's Git config signs commits, so a repo that requires signatures takes them.
+# A checkout of another repo than memory.repo moves aside, and this machine's unsynced notes carry over.
 # Every state that stops the sync exits 1, so the job log and fleet doctor see it.
 set -eu
 
@@ -55,16 +57,34 @@ done
 echo $$ > "$lock/pid"
 trap 'if [ "$(cat "$lock/pid" 2>/dev/null)" = "$$" ]; then rm -rf "$lock"; fi' EXIT
 
+aside=
+if [ -e "$checkout/.git" ]; then
+  origin=$(g remote get-url origin 2>/dev/null || true)
+  if [ "$(repo_name "$origin")" != "$(repo_name "$url")" ]; then
+    aside="$checkout.old-$(date -u +%Y%m%dT%H%M%SZ)"
+    carry="$(g rev-parse --absolute-git-dir)/fleet-carry"
+    { g diff --name-only HEAD -- "$scope" 2>/dev/null || true
+      g ls-files --others --exclude-standard -- "$scope"
+      g diff --name-only origin/main...HEAD -- "$scope" 2>/dev/null || true
+    } | sort -u > "$carry"
+    mv "$checkout" "$aside"
+  fi
+fi
 if [ ! -e "$checkout/.git" ]; then
   mkdir -p "$checkout"
   g init --quiet
   g symbolic-ref HEAD refs/heads/main
   g remote add origin "$url"
-  g config commit.gpgsign false
   echo "Memory: set up $checkout for $url."
 fi
-origin=$(g remote get-url origin 2>/dev/null || true)
-[ "$(repo_name "$origin")" = "$(repo_name "$url")" ] || fail "$checkout syncs with ${origin:-no repo}, but memory.repo is $url. Move that folder aside; the next sync sets up a fresh one."
+if [ -n "$aside" ]; then
+  while IFS= read -r path; do
+    [ -n "$path" ] && [ -f "$aside/$path" ] || continue
+    mkdir -p "$(dirname "$checkout/$path")"
+    cp -p "$aside/$path" "$checkout/$path"
+  done < "$aside/.git/fleet-carry"
+  echo "Memory: $checkout synced with $origin, but memory.repo is $url. Moved it to $aside and carried this machine's unsynced notes over."
+fi
 
 gitdir=$(g rev-parse --absolute-git-dir)
 for index in MEMORY.md INDEX.md; do
@@ -148,7 +168,7 @@ if [ -n "$(g status --porcelain --untracked-files=all -- "$scope")" ]; then
     fail "a memory file holds conflict markers. Fix it; until then nothing syncs."
   fi
   changes=$(g diff --cached --name-status -- "$scope")
-  g -c commit.gpgsign=false commit --quiet --no-verify -m "memory: $machine" -m "$changes" -- "$scope"
+  g commit --quiet --no-verify -m "memory: $machine" -m "$changes" -- "$scope"
   echo "Memory: committed on $machine:"
   printf '%s\n' "$changes" | sed 's/^/  /'
 fi
@@ -156,7 +176,7 @@ fi
 
 rebase() {
   : > "$marker"
-  if g -c commit.gpgsign=false rebase --quiet -X theirs origin/main >/dev/null 2>&1; then rm -f "$marker"; return 0; fi
+  if g rebase --quiet -X theirs origin/main >/dev/null 2>&1; then rm -f "$marker"; return 0; fi
   rebasing || { rm -f "$marker"; return 1; }
   rounds=0
   while rebasing; do
@@ -167,7 +187,7 @@ rebase() {
     printf '%s\n' "$unresolved" | while IFS= read -r path; do
       if g checkout --theirs -- "$path" 2>/dev/null; then g add -- "$path"; else g rm --quiet -- "$path"; fi
     done
-    GIT_EDITOR=true g -c commit.gpgsign=false rebase --continue >/dev/null 2>&1 || true
+    GIT_EDITOR=true g rebase --continue >/dev/null 2>&1 || true
   done
   if rebasing; then g rebase --abort; rm -f "$marker"; return 1; fi
   rm -f "$marker"
@@ -210,7 +230,7 @@ keep_lost() {
   rm -f "$list"
   if [ -n "$(g status --porcelain --untracked-files=all -- "$conflicts")" ]; then
     g add -- "$conflicts"
-    g -c commit.gpgsign=false commit --quiet --no-verify -m "memory: $machine kept a sync conflict" -- "$conflicts"
+    g commit --quiet --no-verify -m "memory: $machine kept a sync conflict" -- "$conflicts"
   fi
 }
 

@@ -1,13 +1,12 @@
 import { join } from "node:path";
 import type { Context, Pack } from "../../src/sdk/index.ts";
-import { googleApps } from "./lib/apps.ts";
+import { googleApps, slack as slackApp } from "./lib/apps.ts";
 import { defaultQuery } from "./lib/mail-watch.ts";
 import { gateway as host, gatewayKey } from "./lib/host.ts";
 
 const connect = ["-c", 'exec sh "${FLEET_ENGINE_DIR:-$HOME/.local/share/fleet/engine}/fleet" mcp-connect'];
 const usage = "usage: fleet mcp-gateway [doctor|sign-in|restart], fleet mcp-gateway sign-in <app>, fleet mcp-gateway reconnect <server>, or fleet mcp-gateway slack-bridge [sign-in]";
 const upstreams = () => import("./lib/upstreams.ts");
-const slackApp = async () => (await import("./lib/apps.ts")).slack;
 
 export default {
   sdk: 1,
@@ -55,7 +54,7 @@ export default {
       name: "Slack bridge",
       default: false,
       sentence: "Agents read Slack as you through the MCP gateway, and leave only unsent drafts and canvases.",
-      risk: "The bridge acts as your Slack account. It reads what you can read, and writes only drafts you send yourself and canvases.",
+      risk: "The bridge acts as your Slack account. It reads what you can read, and writes only drafts you send yourself and canvases. Native Codex turns its Slack app off on every machine, so agents reach Slack only through the bridge.",
     });
     fleet.check({
       on: "hub",
@@ -63,8 +62,8 @@ export default {
       when: slack,
       id: "slack-bridge",
       say: "The MCP gateway has no Slack bridge, or not Fleet's. Run fleet mcp-gateway slack-bridge on the hub to see why.",
-      test: async (ctx) => (await upstreams()).upstreamRegistered(await host(ctx), await slackApp()).catch(() => false),
-      repair: { ask: "Put the Slack bridge into the MCP gateway.", run: async (ctx) => (await upstreams()).registerUpstream(await host(ctx), await slackApp()) },
+      test: async (ctx) => (await upstreams()).upstreamRegistered(await host(ctx), slackApp).catch(() => false),
+      repair: { ask: "Put the Slack bridge into the MCP gateway.", run: async (ctx) => (await upstreams()).registerUpstream(await host(ctx), slackApp) },
     });
     fleet.check({
       on: "hub",
@@ -72,9 +71,10 @@ export default {
       when: slack,
       id: "slack-bridge-sign-in",
       say: "The Slack bridge has no ChatGPT sign-in, or the gateway finds no Slack tools for it. Connect Slack in ChatGPT, Settings, Apps, then sign in with that ChatGPT account.",
-      test: async (ctx) => (await upstreams()).appReady(await host(ctx), await slackApp()),
+      test: async (ctx) => (await upstreams()).appReady(await host(ctx), slackApp),
       repair: { ask: "Sign the Slack bridge in to ChatGPT.", command: "fleet mcp-gateway slack-bridge sign-in", interactive: true },
     });
+    fleet.config({ provider: "codex", plans: ["codex", "both"], when: slack, key: `apps.${slackApp.app}.enabled`, value: false });
     const sentences = {
       gmail: "Agents read your mail and leave replies as unsent drafts, through the MCP gateway.",
       "google-calendar": "Agents read your calendar through the MCP gateway, and change nothing.",
@@ -159,7 +159,7 @@ export default {
       default: false,
       requires: ["slack-bridge"],
       settings: [reviewSearch, reviewAsks],
-      sentence: "When a ready pull request of yours waits 4 hours on a review nobody gave, the T3 thread that links it wakes up, and again at 24 hours.",
+      sentence: "When a ready pull request of yours waits 4 hours on a review nobody gave, the T3 thread that links it wakes up, and again at 24 hours. A thread that has waited 30 minutes on a decision it put to you in prose, while a watch keeps it under Working, is told once to ask with the question tool.",
       risk: "Reads your pull requests on GitHub and your own Slack messages from the last 12 hours. It messages your threads and changes nothing on GitHub or Slack.",
     });
     const reviewWaitOf = async (ctx: Context) => {
@@ -167,7 +167,7 @@ export default {
       return {
         gh: runGh, qualifiers: ctx.get(reviewSearch), threads: ctx.threads, session: {}, host: hostname(),
         slack: { gateway: await ctx.use(service), filter: ctx.get(reviewAsks), fetch: (input: string | URL | Request, init?: RequestInit) => fetch(input, init) },
-        statePath: join(ctx.stateDir, "review-wait.json"), now: ctx.now, log: ctx.log,
+        statePath: join(ctx.stateDir, "review-wait.json"), parkedPath: join(ctx.stateDir, "parked-questions.json"), now: ctx.now, sleep: ctx.sleep, log: ctx.log,
       };
     };
     fleet.service({
@@ -175,11 +175,11 @@ export default {
       os: "linux",
       when: reviews,
       id: "review-wait",
-      run: async (ctx) => (await import("./lib/review-wait.ts")).watchReviews(await reviewWaitOf(ctx), ctx.sleep),
+      run: async (ctx) => (await import("./lib/review-wait.ts")).watchReviews(await reviewWaitOf(ctx)),
     });
     fleet.command("review-wait", {
       on: "hub",
-      summary: "Say which threads the next review wait check would wake for pull requests that wait on a review, and change nothing",
+      summary: "Say which threads the next review wait check would wake for pull requests that wait on a review or for prose questions, and change nothing",
       run: async (args, ctx) => {
         if (args.length) return ctx.print("usage: fleet review-wait"), 2;
         return (await import("./lib/review-wait.ts")).checkReviews({ ...(await reviewWaitOf(ctx)), log: ctx.print }, true).then((ok) => (ok ? 0 : 1));
@@ -215,6 +215,7 @@ export default {
     fleet.command("mcp-gateway", {
       on: "hub",
       summary: "Check, sign in, reconnect, or restart the MCP gateway on the hub",
+      subcommands: ["doctor", "sign-in", "restart", "reconnect", "slack-bridge"],
       run: async (args, ctx) => admin(args, ctx),
     });
   },
@@ -228,7 +229,7 @@ async function admin(args: string[], ctx: Context) {
   if (!plain && !named && !bridgeSignIn) return ctx.print(usage), 2;
   const hub = await host(ctx);
   const apps = await upstreams();
-  if (mode === "slack-bridge") return bridgeSignIn ? apps.signInApp(hub, await slackApp()) : ((await apps.registerUpstream(hub, await slackApp())), 0);
+  if (mode === "slack-bridge") return bridgeSignIn ? apps.signInApp(hub, slackApp) : ((await apps.registerUpstream(hub, slackApp)), 0);
   if (mode === "sign-in" && name !== undefined) {
     const byHand = (await (await import("./lib/declared.ts")).declaredUpstreams(hub.home)).flatMap((item) => (item.kind === "oauth" && item.loopback ? [item] : []));
     const server = byHand.find((item) => item.name === name);

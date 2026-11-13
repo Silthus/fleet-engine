@@ -45,27 +45,37 @@ function github(machine: Machine) {
   return { gh, exists, visibility, login: () => gh("api", "user", "--jq", ".login") };
 }
 
-export async function memoryRepo(machine: Machine, named: unknown, login?: string) {
-  const onGitHub = typeof named === "string" ? githubSlug(named) : undefined;
-  if (typeof named === "string" && !onGitHub) return { repo: named, missing: false, make: async (print: (line: string) => void) => print(`✓ Using your memory repo ${named}`) };
+const kinds = {
+  memory: { key: "memory.repo", noun: "memory repo", description: "My agents' shared memory" },
+  context: { key: "context.repo", noun: "context repo", description: "What my agents learn and record" },
+};
+
+export function namedMemory(settings: Record<string, unknown>) {
+  return settings["memory.repo"] !== undefined ? { named: settings["memory.repo"], kind: "memory" as const } : { named: settings["context.repo"], kind: "context" as const };
+}
+
+export async function memoryRepo(machine: Machine, named: unknown, login?: string, kind: keyof typeof kinds = "memory") {
+  const { key, noun, description } = kinds[named === undefined ? "memory" : kind];
+  const onGitHub = typeof named === "string" ? githubSlug(named, key) : undefined;
+  if (typeof named === "string" && !onGitHub) return { repo: named, missing: false, make: async (print: (line: string) => void) => print(`✓ Using your ${noun} ${named}`) };
   const { gh, visibility, login: signedIn } = github(machine);
   const slug = onGitHub ?? `${login ?? (await signedIn())}/${memoryRepoName}`;
   const seen = await visibility(slug);
   const missing = seen === undefined;
-  if (!missing && !isPrivate(seen)) throw new Error(`${slug} is not private, and agents write notes about you there. Make it private, or name a private repo with --set memory.repo=<owner/name>.`);
+  if (!missing && !isPrivate(seen)) throw new Error(`${slug} is not private, and agents write notes about you there. Make it private, or name a private repo with --set ${key}=<owner/name>.`);
   const make = async (print: (line: string) => void) => {
-    if (missing) await gh("repo", "create", slug, "--private", "--description", "My agents' shared memory");
+    if (missing) await gh("repo", "create", slug, "--private", "--description", description);
     print(missing ? `✓ Created the private repo ${slug}` : `✓ Reusing your repo ${slug}`);
   };
   return { repo: typeof named === "string" && /:\/\/|@/.test(named) ? named : slug, missing, make };
 }
 
-function githubSlug(named: string) {
+function githubSlug(named: string, key: string) {
   if (/^[\w.-]+\/[\w.-]+$/.test(named)) return named;
   const [, host, path] = /^[a-z][\w+.-]*:\/\/(?:[^@/]*@)?([^/:?#]+)(?::\d*)?(\/[^?#]*)?/i.exec(named) ?? /^(?:[^@/:]+@)?([^/:]+):(?!\/\/)(.*)$/.exec(named) ?? [];
   if (!host || !/^(?:www\.)?github\.com\.?$/i.test(host)) return undefined;
   const slug = /^\/?([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(path ?? "")?.[1];
-  if (!slug) throw new Error(`${named} is on GitHub, but Fleet cannot read its owner/name. Set memory.repo=<owner/name>.`);
+  if (!slug) throw new Error(`${named} is on GitHub, but Fleet cannot read its owner/name. Set ${key}=<owner/name>.`);
   return slug;
 }
 
@@ -96,8 +106,9 @@ async function makeProfile(context: ProfileContext) {
   const create = (repo: string, description: string) => machine.exec(["gh", "repo", "create", repo, "--private", "--description", description]);
   let profileRepo = found ?? team ?? personal;
   const saved = found ? savedSettings(dir) : {};
-  const namedMemory = draft.settings?.["memory.repo"] ?? saved["memory.repo"];
-  const memory = draft.packs?.includes("memory") ? await memoryRepo(machine, namedMemory, login) : undefined;
+  const chosen = namedMemory({ ...saved, ...draft.settings });
+  const shared = draft.packs?.includes("memory") ? chosen : chosen.kind === "context" && chosen.named !== undefined && draft.packs?.includes("context-library") ? chosen : undefined;
+  const memory = shared && (await memoryRepo(machine, shared.named, login, shared.kind));
   await confirm(context, [...(found ? [] : [profileRepo]), ...(memory?.missing ? [memory.repo] : [])], org && !found ? org : undefined);
   if (!found) {
     const made = await create(profileRepo, "My Fleet profile");
@@ -127,7 +138,7 @@ async function makeProfile(context: ProfileContext) {
   const answers: Partial<ProfileFile> = {
     ...(existsSync(join(dir, "fleet.json")) ? {} : { schema: 1, engine: await enginePin(context), sources: defaultSources, plan: "both", settings: {}, workflows: {} }),
     ...picked,
-    ...(memory && memory.repo !== namedMemory ? { settings: { ...draft.settings, "memory.repo": memory.repo } } : {}),
+    ...(memory && memory.repo !== shared?.named ? { settings: { ...draft.settings, "memory.repo": memory.repo } } : {}),
   };
   if (started.length) {
     await git(machine, dir, "add", "--", ...started);

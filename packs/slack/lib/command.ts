@@ -1,11 +1,12 @@
 import { join } from "node:path";
 import { freeBytes, startRoom } from "../../base/lib/disk.ts";
 import { optionalStringSetting } from "../../base/lib/settings.ts";
+import { isKeptForBoxes, isNodeName } from "../../../src/hub/names.ts";
 import type { Secrets, Threads } from "../../../src/sdk/index.ts";
-import { launchHere, launchOnBox, spawnRun, type Launch, type LaunchRequest, type Run } from "./launch.ts";
+import { launchHere, launchOnBox, launchOnNodes, spawnRun, type Launch, type LaunchRequest, type Run } from "./launch.ts";
 import { manifest, manifestLink, serve, slackApi, slackApiBase, slackApp, type Sleep } from "./slack.ts";
 import { Interrupted, secretReader, type ReadSecret } from "./secret.ts";
-import { handleTrigger, retryPending, triggerOf, type Owner, type TriggerDeps } from "./trigger.ts";
+import { handleTrigger, retryPending, takeTurn, triggerOf, type Capture, type Owner, type TriggerDeps } from "./trigger.ts";
 
 type Env = Record<string, string | undefined>;
 export type Every = (work: () => void, ms: number) => () => void;
@@ -16,6 +17,7 @@ export type SlackCommandDeps = {
   freeBytes?: (path: string) => number;
   slackUserId: () => string;
   slackEmoji: () => string;
+  slackCaptureEmoji?: () => string;
   secrets: Secrets;
   stateDir: string;
   threads: Threads;
@@ -57,15 +59,26 @@ export async function ownerOf(deps: Pick<SlackCommandDeps, "slackUserId" | "slac
   return { name, slackUserId, emoji: emojiName(deps.slackEmoji()) };
 }
 
-function emojiName(value: string): string {
+function emojiName(value: string, key = "slack.emoji"): string {
   const name = value.trim().replace(/^:(.*):$/, "$1");
-  if (!emojiNamePattern.test(name)) throw new Error(`slack.emoji is ${JSON.stringify(value)}, not a Slack emoji name such as eye or +1. Set it with fleet set slack.emoji=<name>.`);
+  if (!emojiNamePattern.test(name)) throw new Error(`${key} is ${JSON.stringify(value)}, not a Slack emoji name such as eye or +1. Set it with fleet set ${key}=<name>.`);
   return name;
 }
 
 const roomHere = (deps: SlackCommandDeps) => startRoom(deps.home, deps.env, deps.freeBytes ?? freeBytes);
 
+export function nodesOf(env: Env): string[] {
+  const nodes = (optionalStringSetting("slack.nodes", env) ?? "").split(/[\s,]+/).filter(Boolean);
+  const bad = nodes.filter((node) => !isNodeName(node) || isKeptForBoxes(node));
+  if (bad.length) throw new Error(`slack.nodes names ${bad.map((node) => JSON.stringify(node)).join(", ")}, not the SSH name of a node such as devbox-1. Set it with fleet set slack.nodes="devbox-1 devbox-2".`);
+  return [...new Set(nodes)];
+}
+
+const triggerState = (deps: SlackCommandDeps) => join(deps.stateDir, "slack-trigger.json");
+
 export function launcher(deps: SlackCommandDeps, run: Run): Launch {
+  const nodes = nodesOf(deps.env);
+  if (nodes.length) return launchOnNodes(nodes, run, () => takeTurn(triggerState(deps)));
   if (optionalStringSetting("hub.boxTemplate", deps.env) !== undefined) return launchOnBox(join(deps.env.FLEET_ENGINE_DIR ?? "", "fleet"), run);
   return launchHere(deps.threads, roomHere(deps));
 }
@@ -84,16 +97,30 @@ export async function slackTrigger(args: string[], deps: SlackCommandDeps): Prom
   return setUpApp(owner, deps);
 }
 
+export function captureHandler(env: Env, run: Run): Capture | undefined {
+  const handler = (JSON.parse(env.FLEET_HANDLERS || "{}") as Record<string, string>)["slack-capture"];
+  if (!handler) return undefined;
+  return async (input) => {
+    const answer = await run(["bun", handler], JSON.stringify(input));
+    const last = answer.stdout.trim().split("\n").at(-1) ?? "";
+    let parsed: Record<string, unknown> = {};
+    try { parsed = JSON.parse(last) as Record<string, unknown>; } catch {}
+    if (typeof parsed.path !== "string") throw new Error(typeof parsed.failed === "string" ? parsed.failed : `the context library's capture ended with code ${answer.code}`);
+    return parsed as Awaited<ReturnType<Capture>>;
+  };
+}
+
 export async function listen(deps: SlackCommandDeps): Promise<void> {
   const run = deps.run ?? spawnRun;
-  const owner = await ownerOf(deps, run);
+  const capture = captureHandler(deps.env, run);
+  const owner = { ...(await ownerOf(deps, run)), ...(capture ? { captureEmoji: emojiName(deps.slackCaptureEmoji?.() ?? "brain", "slack.captureEmoji") } : {}) };
   const now = deps.now ?? Date.now;
   const log = (line: string) => deps.print(`${new Date(now()).toISOString()} ${line}`);
   const saved = await deps.secrets.read(appSecret);
   const { appToken, userToken } = slackApp(saved);
   const replaced = new AbortController();
   const stop = deps.stop ? AbortSignal.any([deps.stop, replaced.signal]) : replaced.signal;
-  const trigger: TriggerDeps = { owner, now, log, slack: slackApi(userToken, deps.slackBase, deps.sleep), launch: launcher(deps, run), statePath: join(deps.stateDir, "slack-trigger.json") };
+  const trigger: TriggerDeps = { owner, now, log, slack: slackApi(userToken, deps.slackBase, deps.sleep), launch: launcher(deps, run), capture, statePath: triggerState(deps) };
   const active = new Set<Promise<void>>();
   const track = (work: Promise<void>, failed: (error: unknown) => void) => {
     const tracked = work.catch(failed).finally(() => active.delete(tracked));
@@ -198,7 +225,7 @@ async function launchFromStdin(deps: SlackCommandDeps): Promise<number> {
   const request = JSON.parse(await deps.readStdin()) as Partial<LaunchRequest>;
   if (typeof request.title !== "string" || typeof request.prompt !== "string" || typeof request.commandId !== "string") throw new Error("fleet slack-trigger launch reads {\"title\", \"prompt\", \"commandId\"} as JSON on standard input");
   const launched = await launchHere(deps.threads, roomHere(deps))({ title: request.title, prompt: request.prompt, commandId: request.commandId, replay: request.replay === true });
-  if ("failed" in launched) return deps.print(JSON.stringify({ failed: launched.failed, ...(launched.reachedT3 ? { reachedT3: true } : {}) })), 1;
-  deps.print(JSON.stringify({ threadId: launched.threadId }));
+  if ("failed" in launched) return deps.print(JSON.stringify({ failed: launched.failed, ...(launched.reachedT3 ? { reachedT3: true } : {}), ...(launched.noRoom ? { noRoom: true } : {}) })), 1;
+  deps.print(JSON.stringify({ threadId: launched.threadId, ...(launched.url ? { url: launched.url } : {}) }));
   return 0;
 }

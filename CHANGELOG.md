@@ -34,7 +34,16 @@ packs, and your answers live in your own private profile repo.
 
 - **Base** (always on): safety rules, the model table, T3 Code defaults written
   before its first start, linked machines, worktree cleanup, a disk guard, and
-  nightly updates.
+  nightly updates. With Codex, a rules file lets Codex run these commands
+  outside its sandbox without asking: Git fetches, pulls, and pushes; `gh`
+  commands that read pull requests, runs, issues, and repos, and
+  `gh pr create`, `edit`, and `ready`, which change pull requests; `bun` and
+  `pnpm` installs, which run package scripts; `fleet heavy` and `fleet proof`,
+  which run any command they are given; and `fleet doctor`,
+  `fleet apply --dry-run`, and other `fleet` commands that read. A pack ships
+  its own Codex rules with `codexRules`;
+  Fleet writes them as `~/.codex/rules/fleet-<pack>.rules` and keeps a rules
+  file you changed.
 - **Pull requests** (on): every fix or feature ends as a proven, reviewed draft
   pull request. Ship words take it to merged.
 - **Orchestration** (on): big work becomes a map of tickets that a conductor
@@ -42,20 +51,30 @@ packs, and your answers live in your own private profile repo.
   the signal loop, and the PR digest are opt-in.
 - **Communication** (on): agents write in your voice, give short updates, and
   share plans and previews as links.
+- **Integrations** (off): Claude Code and Codex get the official GitHub,
+  Context7, and Convex plugins, and with both AI plans Claude hands work to
+  Codex through OpenAI's Codex plugin. Convex is opt-in. Fleet installs and
+  removes only the plugins it installed, through each provider's own CLI, and
+  `fleet doctor` lists each sign-in the plugins still need.
 - **Memory** (off): agents on all your machines share what they learn through
   your own private memory repo.
 - **Context library** (off): a prompt about a topic of your private notes repo
   gets links to its documents. `fleet context` searches the notes, saves a link
   as a condensed note, and keeps a catalog and topic hubs. Every machine pulls
   the repo every five minutes, keeps local changes, and fails the sync while
-  they block it.
+  they block it. With the MCP gateway, the hub serves a read-only
+  `context_search` tool over the same notes.
 - **Hub** (off): one always-on devbox manages the others. It signs in to your
   MCP servers once, keeps your devboxes linked, and watches their disks. The
-  nightly Dream task and own-account balancing are opt-in. Own-account
-  balancing routes Claude Code across several of your own subscriptions. It is
-  off by default, and the page shows the Anthropic terms it touches.
+  Slack bridge and the Google apps turn off the native Codex app they replace. A
+  pack can run its own small MCP server in the gateway, with folders mounted
+  read-only. The nightly Dream task and own-account balancing are opt-in.
+  Own-account balancing routes Claude Code across several of your own
+  subscriptions. It is off by default, and the page shows the Anthropic terms
+  it touches.
 - **Slack** (off): your own message, reaction, or mention in Slack starts a T3
-  thread about it.
+  thread about it. With the Context library on, your `:brain:` reaction saves
+  the thread and its canvases to your notes.
 - **incident.io** (off): an agent that watches a risky change pages you, and
   only you, through your own incident.io alert source with `fleet page`. With
   a hub, the token lives on the hub and every other machine pages through it.

@@ -26,7 +26,7 @@ type BearerKey = { id: string; name?: string; token: string; enabled: boolean; a
 type ServerSettings = { type?: string; command?: string; startOnDemand?: boolean; oauth?: { pendingAuthorization?: { authorizationUrl?: string } } };
 type McpHubSettings = { mcpServers: Record<string, ServerSettings>; systemConfig: { install: { baseUrl: string } }; bearerKeys: BearerKey[] };
 
-export type Container = { Config: { Labels?: Record<string, string>; Env?: string[] }; Image: string; State: { Running: boolean }; Mounts?: Array<{ Destination: string }> };
+export type Container = { Config: { Labels?: Record<string, string>; Env?: string[] }; Image: string; State: { Running: boolean }; Mounts?: Array<{ Source?: string; Destination: string }> };
 
 export const container = "fleet-mcphub";
 const loopback = "http://127.0.0.1:3317";

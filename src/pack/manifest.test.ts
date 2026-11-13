@@ -67,6 +67,12 @@ describe("loadPacks", () => {
     expect((await loadPacks(sourceWith({ base: { ...base, settings: sound } })))[0]?.manifest.settings?.[0]?.defaultByTimeZone).toEqual({ "Europe/": 3 });
   });
 
+  test("rejects Codex rules without a path or tied to a workflow the pack lacks, and an unless that is not a list of workflow ids", async () => {
+    expect(loadPacks(sourceWith({ base: { ...base, codexRules: [{}] } }))).rejects.toThrow("codexRules [0]: needs a path");
+    expect(loadPacks(sourceWith({ base: { ...base, codexRules: [{ path: "codex.rules", workflow: "missing" }] } }))).rejects.toThrow("codexRules codex.rules names unknown workflow missing");
+    expect(loadPacks(sourceWith({ base: { ...base, config: [{ provider: "claude", key: "a", value: 1, unless: "bridge" }] } }))).rejects.toThrow("config a: unless must list workflow ids");
+  });
+
   test("rejects a workflow need outside the closed set", async () => {
     const workflows = [{ ...base.workflows[0], needs: ["laptop"] }];
     expect(loadPacks(sourceWith({ base: { ...base, workflows } }))).rejects.toThrow("workflow heavy has unknown need laptop");
@@ -144,10 +150,19 @@ describe("loadPacks", () => {
   test("accepts a handler only for a seam the engine knows, with a path", async () => {
     const handler = { seam: "review-bot", path: "lib/review-bot.ts" };
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler] } }))).resolves.toHaveLength(1);
-    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, seam: "deploy-bot" }] } }))).rejects.toThrow("handlers deploy-bot: seam must be one of review-bot, heavy-route");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, seam: "deploy-bot" }] } }))).rejects.toThrow("handlers deploy-bot: seam must be one of review-bot, heavy-route, pr-command");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, path: "" }] } }))).rejects.toThrow("handlers review-bot: needs a path");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, workflow: "nope" }] } }))).rejects.toThrow("handlers review-bot names unknown workflow nope");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler, handler] } }))).rejects.toThrow("handlers review-bot is declared twice");
+  });
+
+  test("takes the fleet pr words a pr-command handler runs, and subcommands on no other seam", async () => {
+    const pr = { seam: "pr-command", path: "lib/pr.ts" };
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: ["queue-wait", "ownerless"] }] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [pr] } }))).rejects.toThrow("handlers pr-command: needs subcommands, the fleet pr words it runs");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: [] }] } }))).rejects.toThrow("handlers pr-command: needs subcommands, the fleet pr words it runs");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...pr, subcommands: ["Queue wait"] }] } }))).rejects.toThrow("handlers pr-command: each subcommand must be lowercase words joined by dashes");
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ seam: "review-bot", path: "lib/bot.ts", subcommands: ["x"] }] } }))).rejects.toThrow("handlers review-bot: only a pr-command handler takes subcommands");
   });
 
   test("accepts a job that runs always only without a time, a T3 runner, or a task", async () => {

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tempDirs } from "../../../src/testing/git.ts";
@@ -19,6 +19,8 @@ const mail = {
   tools: ["read_*", "create_draft"], refusal: "Fleet's Mail route only reads mail and writes drafts.", account: "work",
 };
 
+const notesServer = { kind: "local", name: "notes-search", title: "Notes search", script: "/srv/server.ts", mounts: [{ source: "/srv/notes", target: "/fleet-notes" }], env: { FLEET_NOTES: "/fleet-notes" } };
+
 function hubWith(declared: Record<string, unknown>, fields: Partial<FakeMcpHub> = {}) {
   const home = temp.make("upstreams-");
   writeMcpHubSettings(home);
@@ -27,7 +29,8 @@ function hubWith(declared: Record<string, unknown>, fields: Partial<FakeMcpHub> 
   mkdirSync(dir, { recursive: true });
   for (const [file, value] of Object.entries(declared)) writeFileSync(join(dir, file), typeof value === "string" ? value : JSON.stringify(value));
   const api = fakeMcpHub({ groups: [{ id: "g", name: "fleet", servers: ["tickets", "calendar"] }], ...fields });
-  return { api, home, hub: fakeHub(home, { fetch: mcphubFetch(api), run: fakeRun(dockerHost(home, olderGateway)).run }) };
+  const ran = fakeRun(dockerHost(home, olderGateway));
+  return { api, home, ran, hub: fakeHub(home, { fetch: mcphubFetch(api), run: ran.run }) };
 }
 
 const writes = (api: FakeMcpHub) => api.calls.filter((call) => call.method !== "GET").map((call) => `${call.method} ${call.path}`);
@@ -76,6 +79,53 @@ test("a Codex app upstream that a pack declares runs Fleet's app bridge with its
   expect(await upstreamsRegistered(hub)).toBe(true);
 });
 
+test("a local upstream runs its script, bundled for node, in the gateway with each folder mounted read-only, and a moved folder or a changed script restarts the gateway", async () => {
+  const outside = temp.make("local-upstream-");
+  const script = join(outside, "server.ts");
+  writeFileSync(script, 'process.stdout.write("v1");\n');
+  mkdirSync(join(outside, "notes")), symlinkSync(join(outside, "notes"), join(outside, "notes-link"));
+  const declared = { ...notesServer, script, mounts: [{ source: join(outside, "notes-link"), target: "/fleet-notes" }] };
+  const { api, home, hub, ran } = hubWith({ "notes-search.json": declared });
+  const local = join(home, ".local/share/fleet-mcphub/local");
+  await registerUpstreams(hub);
+  expect(api.configs["notes-search"]).toEqual({ type: "stdio", command: "node", args: ["/fleet-local/notes-search.mjs"], description: "Added by Fleet", env: { FLEET_NOTES: "/fleet-notes" }, startOnDemand: true });
+  expect(api.groups[0]!.servers).toEqual(["tickets", "calendar", "notes-search"]);
+  const started = ran.calls.filter((call) => call.command[1] === "run").at(-1)!.command;
+  expect(started.join(" ")).toContain(`-v ${local}:/fleet-local:ro -v ${join(outside, "notes")}:/fleet-notes:ro --entrypoint`);
+  expect(readFileSync(join(local, "notes-search.mjs"), "utf8")).toContain('process.stdout.write("v1")');
+  expect(statSync(local).mode & 0o777).toBe(0o700);
+  expect(hub.printed.at(-1)).toBe("Notes search is in the MCP gateway.");
+  expect(await upstreamsRegistered(hub)).toBe(true);
+  writeFileSync(script, 'process.stdout.write("v2");\n');
+  expect(await upstreamsRegistered(hub)).toBe(false);
+  await registerUpstreams(hub);
+  expect(readFileSync(join(local, "notes-search.mjs"), "utf8")).toContain('process.stdout.write("v2")');
+  expect(await upstreamsRegistered(hub)).toBe(true);
+  mkdirSync(join(outside, "moved")), rmSync(join(outside, "notes-link")), symlinkSync(join(outside, "moved"), join(outside, "notes-link"));
+  expect(await upstreamsRegistered(hub)).toBe(false);
+  await registerUpstreams(hub);
+  expect(ran.calls.filter((call) => call.command[1] === "run").at(-1)!.command.join(" ")).toContain(`-v ${join(outside, "moved")}:/fleet-notes:ro`);
+  expect(await upstreamsRegistered(hub)).toBe(true);
+});
+
+test("a local upstream whose folder is missing on the hub waits with a warning while the rest of the gateway installs, then joins once the folder is there", async () => {
+  const outside = temp.make("local-upstream-");
+  writeFileSync(join(outside, "server.ts"), "export {};\n");
+  const missing = join(outside, "not-cloned-yet");
+  const { api, hub, ran } = hubWith({ "mail.json": mail, "notes-search.json": { ...notesServer, script: join(outside, "server.ts"), mounts: [{ source: missing, target: "/fleet-notes" }] } });
+  await registerUpstreams(hub);
+  expect(api.configs.mail).toBeDefined();
+  expect(api.configs["notes-search"]).toBeUndefined();
+  expect(hub.printed).toContain(`Notes search waits for ${missing}, which is missing on the hub. The rest of the MCP gateway works; the next repair adds Notes search once that folder is there.`);
+  expect(ran.calls.filter((call) => call.command[1] === "run").map((call) => call.command.join(" ")).join("\n")).not.toContain(missing);
+  expect(await upstreamsRegistered(hub)).toBe(false);
+  mkdirSync(missing);
+  await registerUpstreams(hub);
+  expect(api.configs["notes-search"]).toMatchObject({ command: "node", args: ["/fleet-local/notes-search.mjs"] });
+  expect(ran.calls.filter((call) => call.command[1] === "run").at(-1)!.command.join(" ")).toContain(`-v ${missing}:/fleet-notes:ro`);
+  expect(await upstreamsRegistered(hub)).toBe(true);
+});
+
 test("keeps a server of the same name that Fleet did not add", async () => {
   const theirs = { type: "streamable-http", url: "https://other.example.com/mcp" };
   const { api, hub } = hubWith({ "notes.json": notes }, { servers: ["tickets", "calendar", "notes"], configs: { notes: theirs } });
@@ -87,7 +137,16 @@ test("keeps a server of the same name that Fleet did not add", async () => {
 test("a declared file that is not an upstream names its path and what is wrong", async () => {
   const cases: Array<[unknown, string]> = [
     ["{", "is not JSON"],
-    [{ ...notes, kind: "socket" }, "kind must be oauth or codex-app"],
+    [{ ...notes, kind: "socket" }, "kind must be oauth, codex-app or local"],
+    [{ ...notesServer, script: "server.ts" }, "script must be the absolute path of a TypeScript or JavaScript file"],
+    [{ ...notesServer, script: "/srv/server.sh" }, "script must be the absolute path of a TypeScript or JavaScript file"],
+    [{ ...notesServer, mounts: [{ source: "notes", target: "/fleet-notes" }] }, "mounts must give each folder an absolute source and a target such as /fleet-notes"],
+    [{ ...notesServer, mounts: [{ source: "/srv/notes", target: "/app/data" }] }, "mounts must give each folder an absolute source and a target such as /fleet-notes"],
+    [{ ...notesServer, mounts: [{ source: "/srv/notes", target: "/fleet-local" }] }, "mounts must give each folder an absolute source and a target such as /fleet-notes"],
+    [{ ...notesServer, mounts: [{ source: "/a", target: "/fleet-notes" }, { source: "/b", target: "/fleet-notes" }] }, "mounts must not share a target"],
+    [{ ...notesServer, env: { NODE_OPTIONS: "--require /x.js" } }, "env must map FLEET_ names to text"],
+    [{ ...notesServer, env: { FLEET_LIMIT: 3 } }, "env must map FLEET_ names to text"],
+    [{ ...notesServer, mounts: undefined, env: undefined }, ""],
     [{ ...notes, name: "Notes!" }, "name must be lowercase letters, digits and dashes"],
     [{ ...notes, url: "http://notes.example.com/mcp" }, "url must be an https address"],
     [{ ...notes, tools: ["read_*"] }, "tools of an oauth upstream must be exact tool names"],

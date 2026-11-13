@@ -1,6 +1,6 @@
 import {
-  lastActivityAt, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedThread, readSnapshots, readThread, readThreadWords, readTurnItems, withT3Session,
-  type LinkedThread, type LinkedTimelineItem, type ShellPullRequest, type ShellSnapshot, type T3Client, type T3HttpClient, type T3SessionOptions, type ThreadWord,
+  lastActivityAt, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedMessages, readLinkedThread, readLinkedThreadWords, readSnapshots, readThread, readThreadWords, readTurnItems, withT3Session,
+  type LinkedThread, type ShellPullRequest, type ShellSnapshot, type ShellThread, type T3Client, type T3HttpClient, type T3SessionOptions, type ThreadWord,
 } from "../../base/lib/t3/index.ts";
 import { liveStatuses, pickMachine, readEachMachine, readMachines, type MachineReport } from "./machines.ts";
 
@@ -13,6 +13,16 @@ export type Activity = {
   id: string; title: string; project: string; status: string; busy: boolean; updatedAt: string;
   archived: boolean; worktree: string | null; model: string | null; error: string | null; latestMessage: string | null;
 };
+export type ParkedThread = { id: string; title: string; snoozedUntil: string | null; message: { text: string; at: string } };
+export type ParkedThreads = { threads: ParkedThread[]; unread: string[] };
+
+async function eachThread<T extends { id: string }>(threads: T[], read: (thread: T) => Promise<ParkedThread[]>): Promise<ParkedThreads> {
+  const results = await Promise.allSettled(threads.map(read));
+  return {
+    threads: results.flatMap((result) => (result.status === "fulfilled" ? result.value : [])),
+    unread: threads.filter((_, index) => results[index]!.status === "rejected").map((thread) => thread.id),
+  };
+}
 export type ActivityReport = MachineReport<{ threads?: Activity[]; thread?: unknown; words?: ThreadWord[]; work?: Work[] }>;
 export type ActivityIo = { home: string; host: string; print(line: string): void; session?: T3SessionOptions };
 
@@ -75,6 +85,37 @@ export async function readOpenWork(client: T3Client): Promise<OpenWork[]> {
   }));
 }
 
+const parkedTail = 20;
+const parkedTextCap = 4000;
+
+function parkedOnWatch(thread: ShellThread): boolean {
+  return !thread.activeRunId && !thread.pendingRuntimeRequest && (thread.pendingBackgroundTasks ?? []).some((task) => task.kind !== "command");
+}
+
+export async function readParkedThreads(client: T3HttpClient): Promise<ParkedThreads> {
+  const shell = await client.getShell<ShellSnapshot>();
+  const parked = shell.threads.filter((thread) => !thread.deletedAt && !thread.archivedAt && !thread.settledAt && !thread.lineage?.parentThreadId && parkedOnWatch(thread));
+  return eachThread(parked, async (thread): Promise<ParkedThread[]> => {
+    const items = (await readTurnItems(client, thread.id, () => false)).map(({ item }) => item);
+    const last = items.filter((item) => item.type === "user_message" || (item.type === "assistant_message" && item.text)).at(-1);
+    if (last?.type !== "assistant_message" || !last.text) return [];
+    return [{ id: thread.id, title: thread.title, snoozedUntil: thread.snoozedUntil ?? null, message: { text: last.text.slice(-parkedTextCap), at: last.startedAt } }];
+  });
+}
+
+export async function readLinkedParkedThreads(client: T3HttpClient, environmentId: string): Promise<ParkedThreads> {
+  const threads = await listLinkedThreads(client, environmentId, { allProjects: true, settled: false });
+  const running = threads.filter((thread) => !thread.parentThreadId && thread.status === "running").map((thread) => ({ ...thread, id: thread.threadId }));
+  return eachThread(running, async (thread): Promise<ParkedThread[]> => {
+    const afterPosition = thread.itemCount - parkedTail - 1;
+    const tail = await readLinkedThread(client, environmentId, { threadId: thread.threadId, view: "activity", ...(afterPosition >= 0 ? { afterPosition } : {}), limit: parkedTail, maxCharsPerItem: parkedTextCap });
+    const last = tail.items.at(-1);
+    if (tail.thread.pendingRequestCount > 0 || last?.type !== "assistant_message" || !last.text) return [];
+    const text = (await readLinkedItemText(client, environmentId, thread.threadId, last)) ?? "";
+    return [{ id: thread.threadId, title: thread.title, snoozedUntil: thread.snoozedUntil, message: { text: text.slice(-parkedTextCap), at: last.updatedAt } }];
+  });
+}
+
 export async function readLinkedActivity(client: T3HttpClient, environmentId: string, limit: number): Promise<Activity[]> {
   const [threads, projects] = await Promise.all([listLinkedThreads(client, environmentId, { allProjects: true, includeSubagents: true }), projectTitles(client, environmentId)]);
   return busyAndRecent(threads.map((thread) => ({
@@ -104,7 +145,7 @@ export async function readLinkedWorkSince(client: T3HttpClient, environmentId: s
   const from = since.toISOString();
   const [threads, projects] = await Promise.all([listLinkedThreads(client, environmentId, { allProjects: true }), projectTitles(client, environmentId)]);
   const work = await Promise.all(threads.filter((thread) => !thread.parentThreadId && thread.updatedAt >= from).map(async (thread) => {
-    const { branch, items } = await readLinkedMessages(client, environmentId, thread.threadId);
+    const { thread: { branch }, items } = await readLinkedMessages(client, environmentId, thread.threadId);
     return {
       id: thread.threadId, title: thread.title, project: projects.get(thread.projectId) ?? thread.projectId, status: thread.status, branch,
       pullRequests: pullRequestKeys(thread.pullRequests ?? []),
@@ -113,17 +154,6 @@ export async function readLinkedWorkSince(client: T3HttpClient, environmentId: s
     };
   }));
   return work.filter((thread) => thread.messages.length);
-}
-
-async function readLinkedMessages(client: T3HttpClient, environmentId: string, threadId: string): Promise<{ branch: string | null; items: LinkedTimelineItem[] }> {
-  const items: LinkedTimelineItem[] = [];
-  let afterPosition: number | undefined;
-  for (;;) {
-    const page = await readLinkedThread(client, environmentId, { threadId, view: "messages", ...(afterPosition === undefined ? {} : { afterPosition }), limit: 100, maxCharsPerItem: 50_000 });
-    items.push(...page.items);
-    if (!page.hasMore || page.nextPosition === null) return { branch: page.thread.branch, items };
-    afterPosition = page.nextPosition;
-  }
 }
 
 async function projectTitles(client: T3HttpClient, environmentId: string): Promise<Map<string, string>> {
@@ -204,7 +234,9 @@ async function readLocal(client: T3HttpClient, query: Query) {
 async function readLinked(client: T3HttpClient, environmentId: string, query: Query) {
   if (query.kind === "open") return { work: await readLinkedOpenWork(client, environmentId) };
   if (query.kind === "since") return { work: await readLinkedWorkSince(client, environmentId, query.since) };
-  if (query.kind === "thread") return { thread: await readLinkedThread(client, environmentId, { threadId: query.threadId }) };
+  if (query.kind === "thread") {
+    return query.words ? { words: await readLinkedThreadWords(client, environmentId, query.threadId) } : { thread: await readLinkedThread(client, environmentId, { threadId: query.threadId }) };
+  }
   return { threads: await readLinkedActivity(client, environmentId, query.limit) };
 }
 
@@ -213,9 +245,6 @@ export async function runActivity(args: string[], io: ActivityIo): Promise<numbe
   const reports = await withT3Session(async (client) => {
     const machines = local ? [{ host: io.host }] : await readMachines(client, io.host);
     const chosen = host ? [pickMachine(machines, host)] : machines;
-    if (query.kind === "thread" && query.words && chosen[0]?.environment) {
-      throw new Error("--words reads threads on this machine only, because only its T3 event store tells who answered. Run it there with --local.");
-    }
     return readEachMachine<{ threads?: Activity[]; thread?: unknown; words?: ThreadWord[]; work?: Work[] }>(
       chosen, () => readLocal(client, query), (environmentId) => readLinked(client, environmentId, query),
     );

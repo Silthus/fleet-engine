@@ -4,7 +4,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSy
 import { hostname } from "node:os";
 import { join, relative } from "node:path";
 import { cliFixtures, repoRoot } from "./testing/cli.ts";
-import { tempDirs } from "./testing/git.ts";
+import { spawnGit, tempDirs } from "./testing/git.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -210,6 +210,36 @@ describe("fleet apply", () => {
       expect((await fleet(["apply"], home)).output).toContain("Applied 0 changes.");
     });
 
+    describe("with the old Codex rules file, which the base pack's rules replace", () => {
+      const oldRules = ".codex/rules/fleet.rules";
+      const withOldRules = (shipped: string, onDisk: string) => {
+        const { home, state } = anotherFleet();
+        mkdirSync(join(home, ".codex/rules"), { recursive: true });
+        writeFileSync(join(home, oldRules), onDisk);
+        const groups = { core: { ...state.groups.core, [oldRules]: { kind: "file", hash: createHash("sha256").update(shipped).digest("hex") } } };
+        writeFileSync(join(home, ".local/state/fleet/state.json"), JSON.stringify({ ...state, groups }));
+        return home;
+      };
+
+      test("--adopt-from removes it while it is what the other Fleet wrote, and keeps a backup", async () => {
+        const home = withOldRules("old codex rules\n", "old codex rules\n");
+        const result = await fleet(["apply", "--profile", profileDir(), "--adopt-from", "core"], home);
+        expect(result.code).toBe(0);
+        expect(existsSync(join(home, oldRules))).toBe(false);
+        expect(existsSync(join(home, ".codex/rules/fleet-base.rules"))).toBe(true);
+        const backups = join(home, ".local/state/fleet/backups");
+        expect(readFileSync(join(backups, readdirSync(backups)[0] ?? "", oldRules), "utf8")).toBe("old codex rules\n");
+      });
+
+      test("--adopt-from keeps it once someone changed it, and says so", async () => {
+        const home = withOldRules("old codex rules\n", "my codex rules\n");
+        const result = await fleet(["apply", "--profile", profileDir(), "--adopt-from", "core"], home);
+        expect(result.code).toBe(0);
+        expect(readFileSync(join(home, oldRules), "utf8")).toBe("my codex rules\n");
+        expect(result.output).toContain(`Kept your ${oldRules}: it changed after the core setup wrote it, and Fleet no longer writes it. Remove it once you no longer need it.`);
+      });
+    });
+
     test("--adopt-from refuses a name the state does not hold, and this Fleet's own name", async () => {
       const { home } = anotherFleet();
       const profile = profileDir();
@@ -245,7 +275,7 @@ describe("fleet apply", () => {
   test("--dry-run previews without writing machine state", async () => {
     const home = temp.make("home-");
     const result = await fleet(["apply", "--dry-run", "--profile", profileDir()], home);
-    expect(result.output).toContain("Preview: 12 changes to apply. Nothing was written.");
+    expect(result.output).toContain("Preview: 13 changes to apply. Nothing was written.");
     expect(readdirSync(home)).toEqual([]);
   });
 
@@ -273,5 +303,40 @@ describe("fleet doctor", () => {
     expect(after.output).toContain("Kept your .agents/AGENTS.md");
     expect(after.output).toContain("Fix: .codex/AGENTS.md needs to be updated.");
     expect(snapshot(home)).toEqual(drifted);
+  });
+});
+
+describe("a profile source that would run code it does not ship", () => {
+  const withSource = (home: string, source: Record<string, string>) => {
+    const profile = profileDir();
+    const file = join(profile, "fleet.json");
+    writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), sources: [source] }));
+    return profile;
+  };
+
+  for (const args of [["apply", "--dry-run"], ["doctor"]]) {
+    test(`fleet ${args.join(" ")} refuses a source name that leaves the source cache, and never runs the pack it points at`, async () => {
+      const home = temp.make("home-");
+      const marker = join(home, "pack-ran");
+      mkdirSync(join(home, "evil/.git"), { recursive: true });
+      mkdirSync(join(home, "evil/packs/evil"), { recursive: true });
+      writeFileSync(join(home, "evil/packs/evil/pack.ts"), `await Bun.write(${JSON.stringify(marker)}, "ran");\nexport default { sdk: 1, name: "evil", summary: "Evil.", register() {} };\n`);
+      const result = await fleet([...args, "--profile", withSource(home, { name: "../../../../evil", repo: "someone/evil", ref: "main" })], home);
+      expect(existsSync(marker)).toBe(false);
+      expect(result.code).toBe(1);
+      expect(result.output).toContain('source name "../../../../evil" must be lowercase words joined by dashes');
+    });
+  }
+
+  test("fleet apply refuses a source ref that git would read as an option, and git runs no command from it", async () => {
+    const home = temp.make("home-");
+    const repo = temp.make("source-");
+    await spawnGit(repo, "init", "-q", "-b", "main");
+    await spawnGit(repo, "commit", "-q", "--allow-empty", "-m", "Start");
+    const marker = join(home, "upload-pack-ran");
+    const result = await fleet(["apply", "--profile", withSource(home, { name: "team", repo, ref: `--upload-pack=touch ${marker}; git-upload-pack` })], home);
+    expect(existsSync(marker)).toBe(false);
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("source team: repo and ref must not start with -");
   });
 });

@@ -11,6 +11,7 @@ export const packCast: Record<string, Role> = {
   "pull-requests": { art: hog("builder-hog-03"), tone: "yellow", line: "Every fix ends as a reviewed draft pull request." },
   orchestration: { art: hog("professor-hog"), tone: "sky", line: "A conductor thread splits big work into tickets." },
   communication: { art: hog("microphone-hog"), tone: "peach", line: "Agents write in your voice and share plans as links." },
+  integrations: { art: hog("desk-hog"), tone: "blue", line: "Agents reach GitHub, current docs, and Convex." },
   memory: { art: hog("reading-hog"), tone: "mint", line: "Agents on every machine share what they learn." },
   "context-library": { art: hog("detective-hog"), tone: "lilac", line: "Agents find your plans and decisions in your notes." },
   guards: { art: hog("police-hog"), tone: "lilac", line: "Hooks stop an agent's risky shell commands." },

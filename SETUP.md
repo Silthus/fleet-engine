@@ -292,6 +292,7 @@ all the notes together, in one call, before step 7.
 | `pull-requests` | Every fix or feature ends as a proven, reviewed draft pull request, and ship words take it to merged. | Always | None |
 | `orchestration` | Big work becomes a map of tickets that a conductor thread works through, and side work gets its own thread. | Always | `packs/orchestration/SETUP.md` |
 | `communication` | Agents write in your voice, give short updates, and share plans and previews as links. | Always | None |
+| `integrations` | Claude Code and Codex get the official GitHub, Context7, and Convex plugins, and Claude can hand work to Codex. | Always | None |
 | `memory` | Agents on all your machines share what they learn through your own private memory repo. | Always | `packs/memory/SETUP.md` |
 | `context-library` | Agents find your plans, research, decisions and saved threads in a private notes repo, and you save new ones with one command. | Always | `packs/context-library/SETUP.md` |
 | `recovery` | Threads that stop on a usage limit or a provider outage continue once the provider answers again, and fleet providers says which provider has capacity. | Step 9 | `packs/recovery/SETUP.md` |
@@ -357,7 +358,9 @@ installs. Ask:
   `~/.local/state/fleet/backups/`. A linked folder moves whole, with
   everything in it, so say which ones move. The other Fleet's files that
   this profile does not write stay where they are, except those inside a
-  linked folder that moves.
+  linked folder that moves, and the old Codex rules file
+  `~/.codex/rules/fleet.rules`. Fleet removes that file while it is unchanged,
+  because the base pack's rules replace it, and keeps it when it changed.
 - **Stop here**: nothing changes, and setup cannot finish while the other
   Fleet keeps the files.
 
