@@ -26,21 +26,34 @@ const rules: Rule[] = [
   [/[A-Za-z0-9+/_-]{32,}={0,2}/g, (text) => (looksRandom(text) ? "<secret>" : text)],
 ];
 
+const tokenLetters = 32;
+const windowLetters = 128;
+
+type Tally = { letters: number; upper: number };
+
 function looksRandom(text: string) {
   if (!/[A-Z]/.test(text) || !/[a-z]/.test(text)) return false;
   if (/[0-9]/.test(text)) return true;
-  const parts = text.replace(/=+$/, "").split(/[+/_-]/).filter((part) => /[A-Z]/.test(part) && /[a-z]/.test(part));
-  const capitals = parts.map((part) => part.match(/[A-Z]/g)!.length);
+  const parts: Tally[] = text
+    .replace(/=+$/, "")
+    .split(/[+/_-]/)
+    .filter((part) => /[A-Z]/.test(part) && /[a-z]/.test(part))
+    .map((part) => ({ letters: part.length, upper: part.match(/[A-Z]/g)!.length }));
+  if (evenCases(parts.reduce(add, { letters: 0, upper: 0 }))) return true;
   for (let start = 0; start < parts.length; start++) {
-    let letters = 0;
-    let upper = 0;
-    for (let end = start; end < parts.length && letters < 128; end++) {
-      letters += parts[end]!.length;
-      upper += capitals[end]!;
-      if (letters >= 32 && Math.min(upper, letters - upper) * 4 >= letters) return true;
+    let window: Tally = { letters: 0, upper: 0 };
+    for (let end = start; end < parts.length && window.letters < windowLetters; end++) {
+      window = add(window, parts[end]!);
+      if (evenCases(window)) return true;
     }
   }
   return false;
+}
+
+const add = (a: Tally, b: Tally): Tally => ({ letters: a.letters + b.letters, upper: a.upper + b.upper });
+
+function evenCases({ letters, upper }: Tally) {
+  return letters >= tokenLetters && Math.min(upper, letters - upper) * 4 >= letters;
 }
 
 /**
