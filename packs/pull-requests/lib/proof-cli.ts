@@ -6,6 +6,7 @@ import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, l
 import { ciOf, pushedHeadOf, readPullRequest } from "./pr-ci.ts";
 import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRiskRubric, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge } from "./proof-judge.ts";
+import { runProof, type RunIO } from "./proof-run.ts";
 import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO, type Plan } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
@@ -21,16 +22,18 @@ import { numberSetting } from "../../base/lib/settings.ts";
 import { t3StatePath } from "../../base/lib/prune.ts";
 import { readThreadWords, t3UserData, withT3Session } from "../../base/lib/t3/index.ts";
 
+export type { RunIO };
+
 export type ProofContext = {
   home: string; cwd: string; env: Record<string, string | undefined>; print: (text: string) => void; now?: () => Date; threadWords?: ThreadWords;
-  detach?: (args: string[], log: string) => Promise<number>; pause?: () => Promise<void>; github?: GitHub;
+  detach?: (args: string[], log: string) => Promise<number>; pause?: () => Promise<void>; github?: GitHub; runIO?: RunIO;
 };
 type Result = { code: number; stdout: string; stderr: string };
 type Run = (command: string[]) => Result;
-type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; files: string[] };
+type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; files: string[]; command?: string[] };
 type CommandContext = ProofContext & { run: Run };
 type Subcommand = {
-  usage: string; summary: string; examples: string[]; options?: string[]; repeatable?: string[]; flags?: string[]; hidden?: boolean;
+  usage: string; summary: string; examples: string[]; options?: string[]; repeatable?: string[]; flags?: string[]; hidden?: boolean; takesCommand?: boolean;
   run: (parsed: Parsed, identity: () => ProofIdentity, context: CommandContext) => Promise<number>;
 };
 
@@ -76,6 +79,28 @@ that with --reuse-from and the reason; the gate prints it.`,
       requireFiles(files, "save");
       for (const file of files) print(await saveProof(home, identity(), resolve(cwd, file), options.get("--kind")));
       return 0;
+    },
+  },
+  run: {
+    usage: "run --kind <kind> -- <command> [argument...]",
+    summary: `Run a proof command on a clean commit and save its output as evidence of the kind. Everything after the first
+-- is the command, unchanged, run without a shell and with stdin closed; run a pipeline as sh -c '<pipeline>'. The
+output passes through to the terminal, and stdout and stderr go together into one private spool. fleet reads HEAD
+and the status before and after the run: a tree with modified or untracked files refuses with exit 2, so commit
+first. Only a run that exits 0 with text output, with HEAD unchanged and the tree clean at both checks, saves: the
+output, with known secrets redacted, as <kind> evidence of the HEAD read before the run, and a run record of the
+redacted command in runs/<commit>/<kind>/. Every other run saves nothing, says why, and exits with the command's
+status: 128 + n when signal n stopped it, 127 when it cannot start, and 1 when it printed nothing, printed a null
+byte, or HEAD or the tree changed. The judge marks runner files as captured by the Fleet runner. --commit is not
+taken; ui-walk takes screenshots, so save them with fleet proof save.`,
+    examples: ["fleet proof run --kind live-run -- bun test src/send.test.ts", "fleet proof run --kind live-run -- sh -c 'curl -s localhost:8000/health | jq .status'"],
+    options: ["--kind"], takesCommand: true,
+    run: async ({ options, command }, _, context) => {
+      if (options.has("--commit")) throw usageError("run", "--commit is not taken: the runner reads HEAD from Git. After --, --commit belongs to the command");
+      if (!command?.length) throw usageError("run", "Pass the command after --");
+      const kind = required(options, "--kind", "run");
+      const pr = resolvePullRequest(options.get("--repo"), options.get("--pr"), context.run);
+      return runProof({ home: context.home, pr, kind, command, cwd: context.cwd, env: context.env, print: context.print, io: context.runIO });
     },
   },
   publish: {
@@ -659,8 +684,9 @@ function overview() {
 }
 
 function help(name: string, command: Subcommand) {
-  return [`Usage: fleet proof ${command.usage} [--repo owner/name] [--pr number] [--commit sha]`, "", command.summary, "", identityHelp,
-    ...(["save", "require", "gap", "standing"].includes(name) ? [kindsHelp] : []), "", "Examples:", ...command.examples.map((example) => `  ${example}`)].join("\n");
+  const identity = command.takesCommand ? "[--repo owner/name] [--pr number]" : "[--repo owner/name] [--pr number] [--commit sha]";
+  return [`Usage: fleet proof ${command.usage} ${identity}`, "", command.summary, "", identityHelp,
+    ...(["save", "run", "require", "gap", "standing"].includes(name) ? [kindsHelp] : []), "", "Examples:", ...command.examples.map((example) => `  ${example}`)].join("\n");
 }
 
 const usageError = (name: string, problem: string) => new Error(`${problem}. Run fleet proof ${name} --help.`);
@@ -795,9 +821,12 @@ export async function proofCommand(args: string[], context: ProofContext): Promi
   }
   const command = subcommands[name];
   if (!command) throw new Error(`Unknown command ${name}. Run fleet proof --help`);
-  if (args.includes("--help") || args.includes("-h")) { context.print(help(name, command)); return 0; }
+  const split = args.indexOf("--");
+  const own = split < 0 ? args : args.slice(0, split);
+  if (own.includes("--help") || own.includes("-h")) { context.print(help(name, command)); return 0; }
+  if (split >= 0 && !command.takesCommand) throw usageError(name, "Unknown option --");
   const run = runIn(context.cwd, context.env);
-  const parsed = parse(name, command, args);
+  const parsed = { ...parse(name, command, own), ...split >= 0 ? { command: args.slice(split + 1) } : {} };
   let identity: ProofIdentity | undefined;
   return command.run(parsed, () => identity ??= resolveIdentity(parsed.options, run), { ...context, run });
 }

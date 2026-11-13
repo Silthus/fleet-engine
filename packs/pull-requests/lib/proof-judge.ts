@@ -4,6 +4,7 @@ import { basename, dirname, extname, join } from "node:path";
 import type { Arbiter, CiResult, Owed } from "./proof.ts";
 import type { ModelAnswer, ModelRequest } from "./proof-models.ts";
 import { capped, diffCap } from "./proof-review.ts";
+import { runRecordOf } from "./proof-run.ts";
 
 export type JudgeInput = {
   cwd: string; from: string; commit: string; diff: string; crossFamily: boolean; ci: CiResult; owed: Owed; ledger: string[];
@@ -75,10 +76,18 @@ async function evidenceSection(evidence: JudgeInput["evidence"]) {
       if (imageExtensions.has(extension)) { images.push(path); parts.push(`Image: ${path} (attached)`); continue; }
       if (videoExtensions.has(extension)) { parts.push(`Video: ${path} (not shown; judge it by the other evidence)`); continue; }
       const bytes = await readFile(path);
+      parts.push(...await runnerMark(directory, path, kind));
       parts.push(bytes.includes(0) ? `Binary file: ${path}` : untrusted(`${kind} evidence ${basename(path)}`, capped(bytes.toString(), evidenceCap)));
     }
   }
   return { images, readable, text: parts.join("\n\n") };
+}
+
+async function runnerMark(directory: string, path: string, kind: string) {
+  const command = await runRecordOf(path);
+  if (!command) return [];
+  const commit = basename(dirname(directory));
+  return [`captured by the Fleet runner, exit 0, at \`${commit.slice(0, 7)}\`, clean at both checks`, untrusted(`command of ${kind} evidence ${basename(path)}`, JSON.stringify(command))];
 }
 
 function reviewSection(reviews: JudgeInput["reviews"]) {
