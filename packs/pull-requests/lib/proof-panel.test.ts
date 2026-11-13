@@ -259,6 +259,24 @@ test("a claimant that judged a holder stale after another claimant took the slot
   expect(readdirSync(io.slots).filter((name) => !name.startsWith("."))).toEqual([]);
 });
 
+test("a claimant that crashed while it reclaimed a slot holds that slot only for a short grace", async () => {
+  const slots = fixture("fleet-panel-slots-");
+  const crashing = join(fixture("fleet-panel-crash-"), "crash.ts");
+  const reviewer = await exitedPid();
+  writeFileSync(crashing, `import { withSlot } from ${JSON.stringify(join(import.meta.dir, "proof-panel.ts"))};
+const startTime = async (pid: number) => { if (pid === ${reviewer}) process.kill(process.pid, "SIGKILL"); return "Sun Oct 25 11:00:00 2026"; };
+await withSlot({ env: {}, pause: async () => {}, now: () => new Date(), startTime, slots: ${JSON.stringify(slots)}, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {});
+`);
+  writeFileSync(join(slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer, reviewerStarted: "Sun Oct 25 10:00:00 2026" }));
+  const crashed = Bun.spawn(["bun", crashing], { stdout: "ignore", stderr: "ignore" });
+  await crashed.exited;
+  expect(crashed.signalCode).toBe("SIGKILL");
+
+  const io = { ...slotIO(1), slots, now: () => new Date(Date.now() + 120_000) };
+  expect(await withSlot(io, async () => "ran")).toBe("ran");
+  expect(readdirSync(slots).filter((name) => /^\d+$/.test(name))).toEqual([]);
+});
+
 test("a process's start time stays the same while it runs and is unknown once it exits", async () => {
   const running = Bun.spawn(["sleep", "30"]);
   try {
