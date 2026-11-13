@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -366,18 +367,27 @@ async function olderThanGrace(path: string, now: Date) {
   return written !== undefined && now.getTime() - written > lockGrace;
 }
 
-async function reclaim(path: string, text: string, owner: LockOwner) {
-  const moved = `${path}.reclaim-${crypto.randomUUID()}`;
-  try { await rename(path, moved); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
-  if (await readSlot(moved) !== text) {
-    await link(moved, path).catch(() => undefined);
-    await rm(moved, { force: true });
-    return false;
+const guardGenerations = 10;
+
+async function guard(path: string, text: string, now: Date) {
+  const first = `${path}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
+  for (let generation = 1; generation <= guardGenerations; generation++) {
+    const lock = generation === 1 ? first : `${first}.${generation}`;
+    try { await mkdir(lock, { mode: 0o700 }); return lock; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !await olderThanGrace(lock, now)) return undefined; }
   }
-  await stopReviewer(holderOf(text), owner);
-  await rm(moved, { force: true });
-  return true;
+  return undefined;
+}
+
+async function reclaim(path: string, text: string, owner: LockOwner) {
+  const lock = await guard(path, text, owner.now());
+  if (!lock) return false;
+  try {
+    if (await readSlot(path) !== text) return false;
+    await stopReviewer(holderOf(text), owner);
+    await rm(path, { force: true });
+    return true;
+  } finally { await rm(lock, { recursive: true, force: true }); }
 }
 
 const readSlot = (slot: string) => readFile(slot, "utf8").catch(() => undefined);
