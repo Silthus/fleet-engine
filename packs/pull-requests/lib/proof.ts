@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { normalized, type HeardAnswer } from "./proof-answers.ts";
-import { agentsAcceptance, covers, fold, keptOwed, panelRefusal, processGapKinds, tierOf, usersAcceptance, type DecisionState, type Ledger, type Mark, type Tier } from "./decision-ledger.ts";
+import { agentRefusal, agentsAcceptance, covers, fold, keptOwed, panelRefusal, tierOf, usersAcceptance, type DecisionState, type Ledger, type Mark, type Tier } from "./decision-ledger.ts";
 import type { Family } from "./proof-models.ts";
 import { quietReason, type DeltaKind, type QuietStep } from "./proof-delta.ts";
 
@@ -584,12 +584,10 @@ async function gapAcceptance(weigh: Weigh, gap: Gap | undefined, kind: GapKind):
   if (users) return accepted(users, "the user");
   const kept = keptOwed(ledger, identity, kind);
   const agent = agentsAcceptance(ledger, identity, kind);
-  const lapse = agent && (kind === "panel" ? panelRefusal
+  const refusal = agentRefusal(tier, "proof-gap", [kind]);
+  const lapse = agent && (refusal === "panel" ? panelRefusal
     : kept ? `the user keeps it owed, decision ${kept.id}`
-    : tier === "ungraded" ? "ungraded"
-    : tier === "critical" && !processGapKinds.includes(kind) ? "critical head"
-    : kind === "ci" && ci?.state !== "none" ? `CI on HEAD is ${ci?.state ?? "unknown"}`
-    : undefined);
+    : refusal ?? (kind === "ci" && ci?.state !== "none" ? `CI on HEAD is ${ci?.state ?? "unknown"}` : undefined));
   if (agent && !lapse) return accepted(agent, "agent");
   if (agent && !weigh.lapsed.includes(agent.id)) weigh.lapsed.push(agent.id);
   const lapsed = agent ? `🤖 decision ${agent.id} lapsed: ${lapse}` : undefined;

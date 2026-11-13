@@ -6,7 +6,8 @@ import { gitEnv, template } from "../../../src/testing/git.ts";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
-import { decisionCommand, type Ssh } from "./decision-ledger.ts";
+import { decisionCommand } from "./decision-cli.ts";
+import type { Ssh } from "./decision-ledger.ts";
 
 const fixtures: string[] = [];
 export const cleanFixtures = () => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true }));

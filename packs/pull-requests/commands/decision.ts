@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { decisionCommand } from "../lib/decision-ledger.ts";
+import { decisionCommand } from "../lib/decision-cli.ts";
 
 try {
   process.exitCode = await decisionCommand(Bun.argv.slice(2), { home: Bun.env.HOME ?? homedir(), cwd: process.cwd(), env: Bun.env, print: (text) => console.log(text) });
