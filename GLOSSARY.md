@@ -73,3 +73,41 @@ _Avoid_: Controller, master box
 **Question card**:
 A question a thread asks the person with the question tool: `AskUserQuestion` in Claude, `request_user_input` in Codex. T3 shows it as a card, and the thread's turn waits until the person answers. A message sent to the thread in a mode other than `queue` cancels the card.
 _Avoid_: Prompt, popup, dialog
+
+## Decisions
+
+**Decision ledger**:
+The append-only log of every decision about a pull request's proof and process, at `~/.local/state/fleet/decisions.jsonl` on the hub. Other machines read and append it over SSH. `fleet decision` records, lists, and voids its decisions, and `fleet proof gate` reads it.
+_Avoid_: Claim file, answer log
+
+**Ask class**:
+The kind of question a decision answers, such as a review round, a proof gap, or a status ask. Each decision names one.
+_Avoid_: Decision type, category
+
+**Tier**:
+The `Tier:` line of a pull request's merge-risk callout at HEAD: critical or non-critical. A pull request without it is ungraded. The tier limits what an agent may decide alone.
+_Avoid_: Risk level, grade
+
+**Acceptance**:
+A decision that lets the gate pass over a proof gap. The user's acceptance always counts; an agent's acceptance counts only while nothing lapses it.
+_Avoid_: Waiver, override
+
+**Lapse**:
+The gate no longer counts an agent's acceptance, because the tier changed, CI ran on HEAD, the user keeps the gap owed, or the gap is a panel gap. The gate prints each lapsed decision of a kind that stays open.
+_Avoid_: Expiry, revoke
+
+**Reversal**:
+The user's own words, in a T3 thread or on a GitHub comment they wrote, that replace a decision's answer. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more. A reversal takes the time the user wrote their words. A gap the user keeps owed takes no reversal: only their acceptance lifts it.
+_Avoid_: Undo, override
+
+**Brake**:
+Two reversals in one ask class within 28 days. While it holds, an agent decides nothing alone in that class. Only the user's answer, given after the brake, lifts it.
+_Avoid_: Lock, freeze
+
+**Proof summary**:
+The proof state of a pull request at HEAD that the gate builds: each owed kind, the review, the head, CI, the tier, and the lapsed and voided decisions. The gate prints its lines from it, `fleet proof gate --json` prints it, and the end-of-run report reads it.
+_Avoid_: Proof status, gate result
+
+**End-of-run report**:
+The Markdown that `fleet decision report` prints when a lane ends: what is still the user's, merges under the narrow grant, the lane's decisions, one proofs row per pull request, and the side fixes it started.
+_Avoid_: Summary, wrap-up

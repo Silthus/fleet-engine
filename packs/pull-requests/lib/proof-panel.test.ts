@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, type Checkout } from "./proof-testing.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
 
@@ -315,7 +315,7 @@ test("a panel gap holds the gate until the user accepts it, and still needs a re
   expect(unaccepted.output).toMatch(new RegExp(`review: HEAD reviewed in round 1 by gpt-6\\.1-sol; panel gap from \\w{7}, not accepted: ${reason}`));
 
   pr.chooseGap("panel", reason);
-  await pr.fleet("gap", "--kind", "panel", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
+  await acceptGap(pr, "panel");
   expect((await pr.fleet("gate")).code).toBe(0);
 });
 
@@ -384,6 +384,22 @@ test("a panel that fails to plan gives its round back, so the same command plans
   const started = await pr.fleet("review", "--lens", "correctness");
   expect(JSON.parse(started.output.split("\n")[0]!)).toMatchObject({ round: 1 });
   expect((await pr.fleet("review", "--wait")).code).toBe(0);
+});
+
+test("a panel the user's override starts but that fails to plan keeps the answer for the same command", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", clean);
+  const guide = join(pr.home, ".agents/skills/qa-swarm/PANEL.md");
+  writeFileSync(guide, panelGuide.replace("Goal: <goal>", "Goal: the title"));
+  pr.choose("Run one more round");
+  const review = () => pr.fleet("review", "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`);
+  await expect(review()).rejects.toThrow("has no <goal>");
+
+  writeFileSync(guide, panelGuide);
+  const started = await review();
+  expect(JSON.parse(started.output.split("\n")[0]!)).toMatchObject({ round: 1 });
 });
 
 test("rerunning a failed lens rebuilds its brief and runs it in the checkout of now", async () => {

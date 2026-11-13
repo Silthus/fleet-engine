@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type Hook, printing, runHook } from "../../base/lib/hook.ts";
-import { findThread, matchThread, type ShellThread, t3CliRunner, t3UserData, type T3Deadline, withT3Session } from "../../base/lib/t3/index.ts";
+import { findThread, matchThread, questionCard, type ShellThread, t3CliRunner, t3UserData, type T3Deadline, withT3Session } from "../../base/lib/t3/index.ts";
 import { asksForDecision, personName } from "../lib/prose-question.ts";
 
 export type StopEvent = { transcript_path?: string; stop_hook_active?: boolean; last_assistant_message?: string };
@@ -100,11 +100,7 @@ export const killSwitch = ".config/fleet/ask-guard.off";
 
 const isThreadSend = (name = "") => /^mcp__t3[-_]code__t3_thread_send$/.test(name);
 
-function waitingCardKey(thread: ShellThread | undefined): string | undefined {
-  const card = thread?.pendingRuntimeRequest as { id?: unknown; kind?: unknown } | null | undefined;
-  if (card?.kind !== "user_input" || !thread?.activeRunId) return undefined;
-  return typeof card.id === "string" ? card.id : thread.id;
-}
+const waitingCardKey = (thread: ShellThread | undefined) => thread?.activeRunId ? questionCard(thread) : undefined;
 
 async function isThisMachine(environmentId: unknown, home: string): Promise<boolean> {
   if (environmentId === undefined || environmentId === null || environmentId === "") return true;

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { proofCommand, type RunIO } from "./proof-cli.ts";
 import { judgePrompt, type JudgeInput } from "./proof-judge.ts";
 import { proofGate, requireProofs, reuseProof, saveProof } from "./proof.ts";
+import { localLedger } from "./decision-ledger.ts";
 
 const fixtures: string[] = [];
 afterEach(() => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })));
@@ -309,7 +310,7 @@ test("evidence reused from a commit with runner files keeps that commit's mark",
   const identity = { ...pr, commit: second };
   await requireProofs(run.home, identity, ["live-run"], "claude");
   await reuseProof(run.home, identity, "live-run", first, "only a comment changed");
-  const gate = await proofGate(run.home, identity, { ci: () => ({ state: "green", detail: "all pass" }), pushedHead: () => ({ commit: second }) });
+  const gate = await proofGate(run.home, identity, { ci: () => ({ state: "green", detail: "all pass" }), pushedHead: () => ({ commit: second }), ledger: localLedger(run.home) });
   const { prompt } = await judgePrompt(judgeInput(run.repo, gate.evidence));
   expect(prompt).toContain(mark(first));
   expect(prompt).not.toContain(mark(second));
