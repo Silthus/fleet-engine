@@ -4,9 +4,11 @@ import {
 } from "./wayfinder.ts";
 
 const usage = "Usage: fleet decisions <map URL | owner/repo#number | number>";
-const whoByMark: Record<string, string> = { "👤": "👤 Human", "👍": "👍 Accepted default", "🤖": "🤖 Agent" };
+const whoByMark: Record<string, string> = {
+  "👤": "👤 Human", "👍": "👍 Accepted default", "🤖": "🤖 Agent", "✅": "✅ Unmarked (before 2026-11-13)",
+};
 const whoOrder = Object.values(whoByMark);
-const decisionLine = /^\s*[-*]\s*(👤|👍|🤖)️?[\u{1F3FB}-\u{1F3FF}]?\s+\*\*(.+?)\*\*\s*(.+?)\s*$/u;
+const decisionLine = /^\s*[-*]\s*(👤|👍|🤖|✅)️?[\u{1F3FB}-\u{1F3FF}]?\s+\*\*(.+?)\*\*\s*(.+?)\s*$/u;
 
 type Decision = { question: string; answer: string; who: string; where: string; at: string };
 type Resolution = { type?: string; rounds: number; decisions: Decision[] };

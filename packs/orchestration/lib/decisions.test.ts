@@ -127,6 +127,24 @@ test("fleet decisions counts answers in the map's comments next to its body and 
   ].join("\n"));
 });
 
+test("fleet decisions shows old ✅ lines as their own group after the three marks", async () => {
+  const body = ["- ✅ **Old question?** Old answer", "- 🤖 **Agent question?** Took A", "- 👤 **Human question?** His answer"].join("\n");
+  const lines: string[] = [];
+
+  await runDecisions(["acme/maps#1"], { ...fixtureFetchers({ issues: [issueNode(repository, 1)], discussions: { "acme/maps#1": { body, comments: [] } } }), tracker: () => "", print: (line) => lines.push(line) });
+
+  const where = `[map #1](https://github.com/${repository}/issues/1)`;
+  expect(lines.join("\n")).toBe([
+    "| Question | Answer | Who | Where |",
+    "| --- | --- | --- | --- |",
+    `| Human question? | His answer | 👤 Human | ${where} |`,
+    `| Agent question? | Took A | 🤖 Agent | ${where} |`,
+    `| Old question? | Old answer | ✅ Unmarked (before 2026-11-13) | ${where} |`,
+    "",
+    "Involvement: no human-in-the-loop tickets.",
+  ].join("\n"));
+});
+
 test("fleet decisions ignores an example decision inside a longer fence", async () => {
   const body = ["- 👤 **Which store?** Postgres", "````md", "Write answers like this:", "```", "- 🤖 **Which store?** An example", "```", "````"].join("\n");
   const lines: string[] = [];
