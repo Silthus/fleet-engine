@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import { constants, tmpdir } from "node:os";
 import { mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { proofKind, pullRequestDirectory, saveProof, uiWalkRule, writeJson } from "./proof.ts";
 import { redactSecrets } from "../../base/hooks/secret-guard.ts";
 
 export type SpoolFile = { write: (bytes: Uint8Array, offset: number, length: number) => Promise<{ bytesWritten: number }>; close: () => Promise<void> };
 type SignalListener = (signal: NodeJS.Signals) => void;
+export type GitRead = (args: string[], cwd: string) => Promise<{ ok: boolean; text: string }>;
 export type RunIO = {
-  stdout?: (chunk: Uint8Array) => void; stderr?: (chunk: Uint8Array) => void; spool?: (path: string) => Promise<SpoolFile>;
+  stdout?: (chunk: Uint8Array) => void; stderr?: (chunk: Uint8Array) => void; spool?: (path: string) => Promise<SpoolFile>; git?: GitRead;
   signals?: { on: (signal: NodeJS.Signals, listener: SignalListener) => void; off: (signal: NodeJS.Signals, listener: SignalListener) => void };
 };
 export type ProofRun = {
@@ -25,8 +26,9 @@ export async function runProof({ home, pr, kind, command, cwd, env, print, io = 
   const owed = proofKind(kind);
   if (owed === "ui-walk") throw new Error(uiWalkRule);
   const refuse = (problem: string, code: number) => { print(redactSecrets(`fleet proof run: ${problem}; nothing saved`)); return code; };
-  const root = await gitRead(["rev-parse", "--show-toplevel"], cwd, env);
-  const before = root.ok ? await treeState(root.text, env) : undefined;
+  const git: GitRead = io.git ?? ((args, at) => gitRead(args, at, env));
+  const root = await git(["rev-parse", "--show-toplevel"], cwd);
+  const before = root.ok ? await treeState(root.text, git) : undefined;
   if (!root.ok || !before) return refuse("cannot read HEAD and the status of this checkout with Git", 1);
   if (before.status) return refuse(`the worktree is not clean:\n${before.status}\ncommit them, or remove them; a run proves a commit`, 2);
 
@@ -46,18 +48,25 @@ export async function runProof({ home, pr, kind, command, cwd, env, print, io = 
     if (outcome.code !== 0) return refuse(`the command ended with exit ${outcome.code}`, outcome.code);
     if (!outcome.bytes.length) return refuse("no output to save", 1);
     if (outcome.bytes.includes(0)) return refuse("binary output: save the file with `fleet proof save`", 1);
-    const after = await treeState(root.text, env);
+    const after = await treeState(root.text, git);
     if (!after) return refuse("cannot read HEAD and the status of this checkout with Git after the run", 1);
     if (after.head !== before.head) return refuse(`HEAD moved from ${before.head.slice(0, 7)} to ${after.head.slice(0, 7)} during the run`, 1);
     if (after.status) return refuse(`the tree changed during the run:\n${after.status}`, 1);
+    if (cancel.signal) return refuse(`the run was stopped by ${cancel.signal}`, signalExit(cancel.signal));
 
     const text = Buffer.from(redactSecrets(new TextDecoder().decode(outcome.bytes)));
     const digest = createHash("sha256").update(text).digest("hex");
     const identity = { ...pr, commit: before.head };
-    await writeJson(recordPath(pullRequestDirectory(home, identity), before.head, owed, digest), { command: command.map(redactSecrets) });
-    const output = join(spool, "output.log");
-    await writeFile(output, text, { flag: "wx", mode: 0o600 });
-    print(await saveProof(home, identity, output, owed));
+    const record = recordPath(pullRequestDirectory(home, identity), before.head, owed, digest);
+    await writeJson(record, { command: command.map(redactSecrets) });
+    try {
+      const output = join(spool, "output.log");
+      await writeFile(output, text, { flag: "wx", mode: 0o600 });
+      print(redactSecrets(await saveProof(home, identity, output, owed)));
+    } catch (error) {
+      await rm(record, { force: true });
+      throw error;
+    }
     return 0;
   } catch (error) {
     return refuse(`the run failed: ${(error as Error).message}`, 1);
@@ -109,9 +118,9 @@ async function capture(command: string[], cwd: string, env: Record<string, strin
   }
 }
 
-async function treeState(root: string, env: Record<string, string | undefined>) {
-  const head = await gitRead(["rev-parse", "--verify", "HEAD"], root, env);
-  const status = await gitRead(["status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=none"], root, env);
+async function treeState(root: string, git: GitRead) {
+  const head = await git(["rev-parse", "--verify", "HEAD"], root);
+  const status = await git(["status", "--porcelain=v1", "--untracked-files=normal", "--ignore-submodules=none"], root);
   if (!head.ok || !sha.test(head.text) || !status.ok) return undefined;
   return { head: head.text, status: status.text };
 }
@@ -126,7 +135,7 @@ async function gitRead(args: string[], cwd: string, env: Record<string, string |
 
 function inside(root: string, path: string) {
   const offset = relative(root, path);
-  return offset === "" || (!offset.startsWith("..") && !isAbsolute(offset));
+  return offset === "" || (offset !== ".." && !offset.startsWith(`..${sep}`) && !isAbsolute(offset));
 }
 
 export async function runRecordOf(evidence: string): Promise<string[] | undefined> {

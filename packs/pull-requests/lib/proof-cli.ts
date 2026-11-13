@@ -675,6 +675,8 @@ function resolveAuthor(requested: string | undefined, env: Record<string, string
 
 const identityHelp = `Every command works on the PR of the current branch and its HEAD. Pass --repo owner/name, --pr number,
 or --commit to choose others. --commit and --base take any commit Git resolves here, such as a short SHA.`;
+const runIdentityHelp = `run works on the PR of the current branch. Pass --repo owner/name and --pr number to choose another. It
+reads HEAD from Git and takes no --commit.`;
 const kindsHelp = "Kinds: live-run, ui-walk, prod-shape, cross-version, shadow-diff, post-deploy-watch. A gap also takes ci, judge, and panel, and a standing rule also takes review.";
 
 function overview() {
@@ -685,7 +687,7 @@ function overview() {
 
 function help(name: string, command: Subcommand) {
   const identity = command.takesCommand ? "[--repo owner/name] [--pr number]" : "[--repo owner/name] [--pr number] [--commit sha]";
-  return [`Usage: fleet proof ${command.usage} ${identity}`, "", command.summary, "", identityHelp,
+  return [`Usage: fleet proof ${command.usage} ${identity}`, "", command.summary, "", command.takesCommand ? runIdentityHelp : identityHelp,
     ...(["save", "run", "require", "gap", "standing"].includes(name) ? [kindsHelp] : []), "", "Examples:", ...command.examples.map((example) => `  ${example}`)].join("\n");
 }
 
