@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fold, type LedgerEvent } from "./decision-ledger.ts";
-import { acceptGap, checkout, cleanFixtures, exitedPid, fakeModel, graded, hubAt, ledgerDecisions, reviewHead, settings, type Checkout } from "./proof-testing.ts";
+import { acceptGap, checkout, clean, cleanFixtures, exitedPid, fakeModel, graded, hubAt, ledgerDecisions, reviewHead, settings, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -788,10 +788,10 @@ test("an agent decision that lands while another machine brakes its class counts
 });
 
 async function reviewPr(pr: Checkout, n: number) {
-  await pr.fleet("review-start", "--scope", "full", "--repo", "example/product", "--pr", String(n));
-  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
-  await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md", "--repo", "example/product", "--pr", String(n));
-  writeFileSync(join(pr.home, `.local/state/fleet/proof/example/product/${n}/reviews/1/panel.json`), JSON.stringify({ lenses: [], changedFiles: [], cwd: pr.repository, readable: [] }));
+  fakeModel(pr, "REVIEWER", clean);
+  const target = ["--repo", "example/product", "--pr", String(n)];
+  await pr.fleet("review", "--lens", "correctness", ...target);
+  expect((await pr.fleet("review", "--wait", ...target)).code).toBe(0);
 }
 
 test("the end-of-run report prints its five sections in order: still yours, narrow-grant merges, decisions, proofs, side fixes", async () => {
@@ -800,9 +800,9 @@ test("the end-of-run report prints its five sections in order: still yours, narr
   const rollouts = join(pr.home, "rollouts.jsonl");
   pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "orchestration.rolloutLog": rollouts });
   for (const n of [5, 41, 42, 43]) pr.pullRequestState({ number: n, body: graded("non-critical") });
-  for (const n of [41, 42, 43]) await reviewPr(pr, n);
 
   await pr.fleet("require", "--kinds", "live-run,prod-shape,shadow-diff", "--repo", "example/product", "--pr", "41");
+  await reviewPr(pr, 41);
   await pr.fleet("gap", "--kind", "shadow-diff", "--reason", "No old output to diff", "--repo", "example/product", "--pr", "41");
   writeFileSync(join(pr.repository, "run.log"), "sent 1 email, delivered");
   await pr.fleet("save", "--kind", "live-run", "run.log", "--repo", "example/product", "--pr", "41");
@@ -814,6 +814,7 @@ test("the end-of-run report prints its five sections in order: still yours, narr
   pr.pullRequestState({ number: 41, merged: true });
 
   await pr.fleet("require", "--kinds", "prod-shape,cross-version");
+  await reviewPr(pr, 42);
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
   await pr.fleet("gap", "--kind", "cross-version", "--reason", "No older client to run");
   const lapsed = idIn((await agent(pr, "cross-version")).output);
@@ -830,6 +831,7 @@ test("the end-of-run report prints its five sections in order: still yours, narr
   pr.pullRequestState({ number: 42, body: graded("critical (a migration)") });
 
   await pr.fleet("require", "--none", "--reason", "docs only", "--repo", "example/product", "--pr", "43");
+  await reviewPr(pr, 43);
   expect((await pr.fleet("gate", "--repo", "example/product", "--pr", "43")).code).toBe(0);
   expect((await pr.fleet("gate", "--landed", "--repo", "example/product", "--pr", "41")).code).toBe(3);
   expect((await pr.fleet("gate", "--repo", "example/product", "--pr", "42")).code).toBe(3);
