@@ -369,18 +369,23 @@ async function olderThanGrace(path: string, now: Date) {
 
 const guardGenerations = 10;
 
-async function guard(path: string, text: string, now: Date) {
+async function guard(path: string, text: string, owner: LockOwner) {
   const first = `${path}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
   for (let generation = 1; generation <= guardGenerations; generation++) {
     const lock = generation === 1 ? first : `${first}.${generation}`;
-    try { await mkdir(lock, { mode: 0o700 }); return lock; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !await olderThanGrace(lock, now)) return undefined; }
+    try {
+      await mkdir(lock, { mode: 0o700 });
+      await writeFile(join(lock, "holder"), JSON.stringify(await holderFor(owner)), { mode: 0o600 });
+      return lock;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !await stale(lock, await readSlot(join(lock, "holder")) ?? "", owner)) return undefined;
+    }
   }
   return undefined;
 }
 
 async function reclaim(path: string, text: string, owner: LockOwner) {
-  const lock = await guard(path, text, owner.now());
+  const lock = await guard(path, text, owner);
   if (!lock) return false;
   try {
     if (await readSlot(path) !== text) return false;
