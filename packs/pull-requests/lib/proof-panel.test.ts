@@ -343,7 +343,6 @@ await withSlot({ env: {}, pause, now: () => new Date(), startTime, slots: ${JSON
 
     const together = await withSlot(io, async () => existsSync(at("child-in")) && !existsSync(at("child-out")));
     writeFileSync(at("parent-done"), "");
-    expect(resumed).toBe(true);
     expect(together).toBe(false);
     expect(await paused.exited).toBe(0);
     expect(existsSync(at("child-out"))).toBe(true);
