@@ -27,10 +27,14 @@ const rules: Rule[] = [
 ];
 
 function looksRandom(text: string) {
+  if (!/[A-Z]/.test(text) || !/[a-z]/.test(text)) return false;
+  return /[0-9]/.test(text) || text.split(/[+/_-]/).some((part) => part.length >= 32 && mixesCases(part));
+}
+
+function mixesCases(text: string) {
   const upper = text.match(/[A-Z]/g)?.length ?? 0;
   const lower = text.match(/[a-z]/g)?.length ?? 0;
-  if (!upper || !lower) return false;
-  return /[0-9]/.test(text) || Math.min(upper, lower) * 4 >= upper + lower;
+  return Math.min(upper, lower) * 4 >= upper + lower;
 }
 
 /**
