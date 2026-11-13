@@ -11,13 +11,14 @@ export type Command = {
   argSubstitutions: string[][];
   stdin?: { body: string; substitutions: string[] };
   outputs: string[];
+  bare: string[];
   inLoop: boolean;
   scope: Scope;
   chdir?: string;
 };
 
 type Context = { env: ReadonlyMap<string, string>; inLoop: boolean; scope?: Scope };
-type Word = { text: string; raw: string; substitutions: string[] };
+type Word = { text: string; raw: string; bare: string; substitutions: string[] };
 type Heredoc = { delimiter: string; literal: boolean; stripTabs: boolean; body: string; substitutions: string[] };
 type Token = { word: Word } | { operator: string } | { heredoc: Heredoc } | { herestring: true };
 
@@ -120,6 +121,17 @@ function quoteEnd(text: string, start: number, quote: string): number {
   throw unclosed(`a ${quote} quote`);
 }
 
+const ansiEscapes: Record<string, string> = { a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", "\\": "\\", "'": "'", '"': '"', "?": "?" };
+
+const ansiDecoded = (body: string) =>
+  body.replace(/\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(.)|(.))/gs, (escape, octal, hex, short, long, control, other) => {
+    if (octal) return String.fromCharCode(parseInt(octal, 8) & 255);
+    if (hex) return String.fromCharCode(parseInt(hex, 16));
+    if (short || long) return String.fromCodePoint(parseInt(short ?? long, 16));
+    if (control) return String.fromCharCode(control.charCodeAt(0) & 31);
+    return ansiEscapes[other] ?? escape;
+  });
+
 function ansiQuoteEnd(text: string, start: number): number {
   for (let index = start; index < text.length; index++) {
     if (text[index] === "\\") index++;
@@ -197,7 +209,7 @@ function readDelimiter(text: string, start: number) {
     const char = text[index];
     if (char === "$" && text[index + 1] === "'") {
       const end = ansiQuoteEnd(text, index + 2);
-      delimiter += text.slice(index + 2, end).replace(/\\(.)/g, "$1");
+      delimiter += ansiDecoded(text.slice(index + 2, end));
       literal = true;
       index = end;
     } else if (char === "'" || char === '"') {
@@ -235,10 +247,11 @@ function tokenize(text: string): Token[] {
   const tokens: Token[] = [];
   const pending: Heredoc[] = [];
   let word: Word | undefined;
-  const append = (value: string, raw: string, substitutions: string[] = []) => {
-    word ??= { text: "", raw: "", substitutions: [] };
+  const append = (value: string, raw: string, substitutions: string[] = [], bare = "_") => {
+    word ??= { text: "", raw: "", bare: "", substitutions: [] };
     word.text += value;
     word.raw += raw;
+    word.bare += bare;
     word.substitutions.push(...substitutions);
   };
   const endWord = () => {
@@ -263,7 +276,7 @@ function tokenize(text: string): Token[] {
       index = end + 1;
     } else if (char === "$" && next === "'") {
       const end = ansiQuoteEnd(text, index + 2);
-      append(text.slice(index + 2, end).replace(/\\(.)/g, "$1"), text.slice(index, end + 1));
+      append(ansiDecoded(text.slice(index + 2, end)), text.slice(index, end + 1));
       index = end + 1;
     } else if (char === '"') {
       const quoted = doubleQuoted(text, index + 1, true);
@@ -295,7 +308,7 @@ function tokenize(text: string): Token[] {
       index++;
     } else if (char === "(" && next === "(" && !word) {
       const end = arithmeticEnd(text, index);
-      append(text.slice(index, end + 1), text.slice(index, end + 1));
+      append(text.slice(index, end + 1), text.slice(index, end + 1), programsInside(text.slice(index + 2, end - 1)));
       index = end + 1;
     } else if (/[;&|()]/.test(char)) {
       endWord();
@@ -306,7 +319,7 @@ function tokenize(text: string): Token[] {
       if ((char === "<" || char === ">") && word && !/^\d+$|[<>&]$/.test(word.raw)) endWord();
       const found = expansion(text, index, false);
       const end = found?.end ?? index;
-      append(text.slice(index, end + 1), text.slice(index, end + 1), found?.programs);
+      append(text.slice(index, end + 1), text.slice(index, end + 1), found?.programs, found ? "_" : char);
       index = end + 1;
     }
   }
@@ -417,7 +430,8 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
     const substitutions = [...words.flatMap((word) => word.substitutions), ...(stdin?.substitutions ?? [])];
     const leadingSubstitutions = kept.slice(0, index + 1).flatMap((word) => word.substitutions);
     const argSubstitutions = kept.slice(index + 1).map((word) => word.substitutions);
-    pipeline.push({ name, args, env: commandEnv, substitutions, leadingSubstitutions, argSubstitutions, stdin, outputs, inLoop, scope, chdir });
+    const bare = kept.slice(index).map((word) => word.bare);
+    pipeline.push({ name, args, env: commandEnv, substitutions, leadingSubstitutions, argSubstitutions, stdin, outputs, bare, inLoop, scope, chdir });
     words = [];
     stdin = undefined;
   };

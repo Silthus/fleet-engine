@@ -11,6 +11,9 @@ const ownerReason = (owner: string, person: string) => `Fleet blocked this comma
 const spellOutReason = (owner: string) => `Fleet blocked this command: the repository owner \`${owner}\` is not spelled out, so the owner check cannot read it. `
   + "A shell variable, substitution, or pattern can name any owner. Write the owner as plain text, such as `gh api repos/<owner>/<repo>/...` or `--repo <owner>/<repo>`.";
 
+const commandReason = (word: string) => `Fleet blocked this command: the gh command word \`${word}\` is not spelled out, so the guard cannot tell what it runs. `
+  + "A shell variable, substitution, or pattern can stand for any command. Write gh, its command group, and its action as plain text.";
+
 type Gh = { group: string; action: string; operands: string[]; flags: Map<string, string[]> };
 
 const valuedFlags: Record<string, string> = {
@@ -158,6 +161,20 @@ function endpointOwner(endpoint: string): string {
   return /[$`*?[]/.test(first) ? first : "";
 }
 
+const searchQualifier = /(?:^|\s)"?(repo|org|user):"?([^\s"]+)/gi;
+const graphqlOwner = /\b(?:owner|login)\s*:\s*(?:"([^"]*)"|\$(\w+))/gi;
+
+const qualifiedOwners = (text: string) =>
+  [...text.matchAll(searchQualifier)].map(([, kind, value]) => (kind.toLowerCase() === "repo" ? repoOwner(value) : value));
+
+function graphqlOwners(gh: Gh): string[] {
+  const fields = new Map(apiFields(gh).map(([key, value]) => [fieldName(key), value]));
+  const query = fields.get("query") ?? "";
+  const found = ["owner", "login", "org", "organization"].flatMap((name) => fields.get(name) ?? []);
+  for (const [, literal, variable] of query.matchAll(graphqlOwner)) found.push(literal ?? fields.get(variable.toLowerCase()) ?? "");
+  return [...found, ...qualifiedOwners(query)];
+}
+
 function owners(gh: Gh, repoVariable: string | undefined): string[] {
   const repos = values(gh, "-R", "--repo");
   const found = [...repos, ...(repos.length === 0 && repoVariable ? [repoVariable] : [])].map(repoOwner);
@@ -170,13 +187,20 @@ function owners(gh: Gh, repoVariable: string | undefined): string[] {
   if (gh.group === "repo" && gh.action === "sync") found.push(...values(gh, "-s", "--source").map(repoOwner));
   if (gh.group === "repo" && gh.action === "create") found.push(...values(gh, "-p", "--template").map(repoOwner));
   if (gh.group === "api") found.push(endpointOwner(endpointOf(gh)));
+  if (gh.group === "api" && endpointOf(gh) === "graphql") found.push(...graphqlOwners(gh));
+  if (gh.group === "search") found.push(...qualifiedOwners(gh.operands.join(" ")));
   return found.filter((owner) => owner && !placeholders.has(owner));
 }
+
 
 function ownerRisk(owner: string, allowed: ReadonlySet<string>, person: string): string | undefined {
   if (!plainOwner.test(owner)) return spellOutReason(owner);
   return allowed.has(owner.toLowerCase()) ? undefined : ownerReason(owner, person);
 }
+
+const brace = /\{[^{}]*(?:,|\.\.)[^{}]*\}/;
+const pattern = new RegExp(`[*?[]|${brace.source}`);
+const ghGroups = new Set(["agent-task", "alias", "api", "attestation", "auth", "browse", "cache", "co", "codespace", "config", "extension", "ext", "gist", "gpg-key", "issue", "label", "org", "pr", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "status", "variable", "workflow"]);
 
 /** Parses guards.owners, a list of GitHub owners separated by commas or spaces. No list means no owner rule. */
 export function ownerList(value: unknown): Set<string> | null {
@@ -187,11 +211,16 @@ export function ownerList(value: unknown): Set<string> | null {
 /** Refuses gh commands that sign in, show or widen the token, change account keys, run extensions, delete or publish
  * code, or name a repository whose owner is not allowed. `inheritedRepo` is the GH_REPO the agent's shell inherits. */
 export function ghRisk(command: string, allowed: ReadonlySet<string> | null, person: string, inheritedRepo?: string): string | undefined {
-  for (const { name, args, env } of commandsIn(command)) {
+  for (const { name, args, env, bare } of commandsIn(command)) {
+    if ((/[$`]/.test(name) || pattern.test(bare[0] ?? "")) && ghGroups.has(parseGh(args).group)) return commandReason(name);
     const ghArgs = name === "gh" ? args : name === "xargs" && args.includes("gh") ? args.slice(args.indexOf("gh") + 1) : undefined;
     if (!ghArgs) continue;
+    const braced = bare.slice(1).find((word) => brace.test(word));
+    if (braced) return commandReason(braced);
     const gh = parseGh(ghArgs);
-    if (gh.flags.has("--help")) continue;
+    const hidden = [gh.group, ...(gh.group === "api" ? [] : [gh.action])].find((word) => /[$`*?[{]/.test(word));
+    if (hidden) return commandReason(hidden);
+    if (values(gh, "--help").some((value) => !/^(?:0|f|false)$/i.test(value))) continue;
     const risk = exposure(gh, person);
     if (risk) return risk;
     if (!allowed) continue;

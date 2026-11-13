@@ -547,6 +547,10 @@ describe("the gh guard", () => {
     "((1 << 2))\ngh auth token",
     'echo "$(case y in x) echo esac;; y) gh auth token;; esac)"',
     "echo \"${x:-'}'}\"; gh auth token",
+    "(( $(gh auth token) ))",
+    "gh $'\\x61uth' token",
+    "cat <<$'\\x45OF'\nEOF\ngh auth token",
+    "gh auth token --help=false",
     "echo \"${x:-'}\"; gh auth token; echo \"'}\"",
     'echo "$(if true; then case x in x) gh auth token;; esac; fi)"',
   ])("refuses a command whose quoting it might misread, instead of missing a later part: %s", (command) => {
@@ -560,6 +564,14 @@ describe("the gh guard", () => {
     'echo "$(echo ${x:-"}"})"',
     "echo ${x:-'}'} ${x:-\"}\"} \"${x:-\"}\"}\"",
     "gh api 'repos/acme/app/contents/a.ts?ref=main'",
+    "gh search issues -repo:other/app bug --owner acme",
+    'gh search issues "bug -repo:other/app" --owner acme',
+    "gh api graphql -f query='query { repository(owner: \"acme\", name: \"app\") { name } }'",
+    "mkdir -p src/{a,b} && gh pr list",
+    "gh pr view 1 --help",
+    "gh browse src/main.ts",
+    'gh pr list --search "is:open author:@me"',
+    "$PYTHON api.py",
     'echo "$(case x in x) echo hi;; esac)"',
     "x=$(\n  echo $((1 << 2))\n)",
     "echo $((16#ff)) $# ${#x} a#b",
@@ -628,6 +640,7 @@ describe("the gh guard", () => {
     "gh api re?os/other/app",
     "gh api repos/acme?/app",
     "gh api 'repos/[o]ther/app'",
+    "gh api r{e..e}pos/other/app",
   ])("refuses a repository owner that is not spelled out: %s", (command) => {
     expect(refusal(command)).toContain("is not spelled out");
   });
@@ -647,8 +660,25 @@ describe("the gh guard", () => {
     ["declare -x GH_REPO=other/app; gh pr list", "other"],
     ["(export GH_REPO=other/app; case x in x) :;; esac; gh pr list)", "other"],
     ["gh api 'repos/other/app/contents/a.ts?ref=main'", "other"],
+    ["gh api graphql -f query='query { repository(owner: \"other\", name: \"app\") { name } }'", "other"],
+    ["gh api graphql -F o=other -f query='query($o: String!) { repository(owner: $o, name: \"x\") { id } }'", "other"],
+    ["gh api graphql -f query='{ search(query: \"repo:other/app bug\", type: ISSUE, first: 1) { issueCount } }'", "other"],
+    ["gh search code repo:other/app", "other"],
+    ['gh search issues "bug org:other"', "other"],
   ])("refuses an outside owner however the command spells it: %s", (command, owner) => {
     expect(refusal(command)).toContain(`\`${owner}\` is not one of the GitHub owners`);
+  });
+
+  test.each([
+    'group=api; gh "$group" repos/other/app',
+    "gh pr $(echo view) 1",
+    "g=gh; $g auth token",
+    "/usr/bin/g? auth token",
+    "{gh,} auth token",
+    "gh {auth,} token",
+    "gh -{R,}other/app pr list",
+  ])("refuses a gh command, group, or action that is not spelled out: %s", (command) => {
+    expect(refusal(command)).toContain("is not spelled out");
   });
 
   test.each([
