@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fold, type LedgerEvent } from "./decision-ledger.ts";
-import { acceptGap, checkout, cleanFixtures, exitedPid, graded, hubAt, ledgerDecisions, reviewHead, settings, type Checkout } from "./proof-testing.ts";
+import { acceptGap, checkout, cleanFixtures, exitedPid, fakeModel, graded, hubAt, ledgerDecisions, reviewHead, settings, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -357,6 +357,37 @@ test("a review-start whose decision the hub drops keeps its round, and the same 
   expect(listed).toEqual([expect.stringContaining(`[${decision}]`)]);
 });
 
+test("a review-start with another scope refuses the round whose decision is not recorded yet and names it, and the same command still takes it", async () => {
+  const pr = await checkout();
+  const reviewed = await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow("Not recorded");
+  const decision = roundDecision(pr);
+  hub.state.hub = "up";
+
+  const round = join(pr.pullRequest, "reviews/1");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--agent", "one last read")).rejects.toThrow(`Review round 1 at this HEAD is reserved with --scope full, and its decision is not recorded yet. Run its command again with --scope full to record it, or remove ${round} to drop it`);
+  expect(roundDecision(pr)).toBe(decision);
+  expect((await pr.fleet(...overrideStart)).code).toBe(0);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${decision}]`)]);
+});
+
+test("a review-start for a final read in another phase refuses the final read whose decision is not recorded yet", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewed = await reviewHead(pr);
+  await pr.commit("feature.txt", "newer\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--override", `2026-10-25 "Run one more round"`)).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--phase", "babysit", "--agent", "babysit read")).rejects.toThrow("Review round final-1 at this HEAD is reserved with --scope final --base");
+});
+
 test("review-finish saves a round whose decision is recorded while the hub is down", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "new\n");
@@ -396,7 +427,8 @@ test("a second command on a round that a running command works on stops and name
   await hub.appendStalled;
   hub.state.hub = "up";
 
-  await expect(pr.fleet(...overrideStart)).rejects.toThrow(`Process ${process.pid}, another fleet proof command, works on ${join(pr.pullRequest, "reviews/1")}. Wait for it to end, or run fleet proof review --wait`);
+  const round = join(pr.pullRequest, "reviews/1");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow(`Process ${process.pid}, another fleet proof command, works on ${round} and holds its lock ${join(round, "round.lock")}. Wait for it to end, then run this command again`);
   await expect(finishRound(pr)).rejects.toThrow(`Process ${process.pid}`);
   hub.releaseAppends();
   await expect(first).rejects.toThrow("Not recorded");
@@ -420,6 +452,74 @@ test("a round whose command died is taken over: the same command records its dec
   expect(JSON.parse(started.output)).toMatchObject({ round: 1, id: "1" });
   expect((await finishRound(pr)).code).toBe(0);
   expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("a lock file that a crashed command left empty holds the round only for a short grace, then the same command takes it over", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+  const round = join(pr.pullRequest, "reviews/1");
+  const lock = join(round, "round.lock");
+  writeFileSync(lock, "");
+  utimesSync(lock, pr.clock.now, pr.clock.now);
+
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow(`Another fleet proof command works on ${round} and holds its lock ${lock}. Wait for it to end, then run this command again`);
+  const crashed = new Date(pr.clock.now.getTime() - 120_000);
+  utimesSync(lock, crashed, crashed);
+  expect((await pr.fleet(...overrideStart)).code).toBe(0);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("a round whose holder's process id now names a process that started later is taken over", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  const first = pr.fleet(...overrideStart);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  pr.startTimes.set(process.pid, "Mon Nov  2 08:00:00 2026");
+  const started = await pr.fleet(...overrideStart);
+  expect(started.code).toBe(0);
+  expect(JSON.parse(started.output)).toMatchObject({ round: 1, id: "1" });
+  hub.releaseAppends();
+  await first.catch(() => undefined);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("review-finish and --wait on a round that is not reserved say so", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  await expect(pr.fleet("review-finish", "--round", "3", "--reviewer", "gpt-6.1-sol", "findings.md")).rejects.toThrow("Review round 3 is not reserved. Reserve it with review-start first");
+  await expect(pr.fleet("review", "--wait", "--round", "3")).rejects.toThrow("Review round 3 is not reserved. Reserve it with review-start first");
+});
+
+test("while the hub is down, a round at an older commit whose decision is not recorded keeps its reservation, and a review that records no decision still runs", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewed = await reviewHead(pr);
+  await pr.commit("feature.txt", "newer\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--override", `2026-10-25 "Run one more round"`)).rejects.toThrow("Not recorded");
+  const stranded = readFileSync(join(pr.pullRequest, "reviews/final-1/round.json"), "utf8");
+  const head = await pr.commit("feature.txt", "newest\n");
+  hub.state.hub = "down";
+  fakeModel(pr, "REVIEWER", "No findings.");
+
+  const review = await pr.fleet("review", "--scope", "fixes", "--base", reviewed);
+  expect(review.code).toBe(0);
+  expect(JSON.parse(review.output.split("\n")[0]!)).toMatchObject({ round: 2, id: "2" });
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/2/round.json"), "utf8"))).toMatchObject({ commit: head });
+  expect(readFileSync(join(pr.pullRequest, "reviews/final-1/round.json"), "utf8")).toBe(stranded);
 });
 
 test("a rerun whose decision is already in the ledger appends it no second time", async () => {

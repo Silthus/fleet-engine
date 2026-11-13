@@ -222,7 +222,8 @@ async function appendHeard(ledger: Ledger, ...events: LedgerEvent[]) {
   throw new Error("Not recorded: the event is not in the decision ledger when Fleet reads it back. Run the same command again");
 }
 
-export const inLedger = async (ledger: Ledger, id: string) => fold(await reachHub(() => ledger.read())).some((recorded) => recorded.id === id);
+export const ledgerHolds = async (ledger: Ledger, id: string) => fold(await ledger.read()).some((recorded) => recorded.id === id);
+export const inLedger = (ledger: Ledger, id: string) => reachHub(() => ledgerHolds(ledger, id));
 
 export async function appendOnce(ledger: Ledger, decision: Decision) {
   if (await inLedger(ledger, decision.id)) return decision.id;

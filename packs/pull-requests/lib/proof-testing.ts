@@ -144,10 +144,12 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const hub: { ssh?: Ssh } = {};
   const pendingCards = new Set<string>();
   const panel: { lostWorkers: boolean; onPause?: () => Promise<void>; beforeWorker?: () => Promise<void> } = { lostWorkers: false };
+  const startTimes = new Map<number, string>();
   const fleetAt = async (cwd: string, pid: number, args: string[]) => {
     const lines: string[] = [];
     const context: ProofContext = {
       home, cwd, env, pid, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh,
+      startTime: async (holder) => startTimes.get(holder) ?? "Sun Oct 25 11:00:00 2026",
       detach: async (worker) => {
         if (panel.lostWorkers) return exitedPid();
         await panel.beforeWorker?.();
@@ -173,7 +175,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const decide = (...args: string[]) => decideIn(repository, ...args);
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, fleetAs, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, decide, decideIn };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, fleetAs, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, decide, decideIn, startTimes };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;
