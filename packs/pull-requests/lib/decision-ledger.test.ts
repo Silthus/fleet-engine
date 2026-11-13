@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { acceptGap, checkout, cleanFixtures, graded, ledgerDecisions, reviewHead, settings, type Checkout } from "./proof-testing.ts";
+import { acceptGap, checkout, cleanFixtures, graded, hubAt, ledgerDecisions, reviewHead, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -14,26 +14,6 @@ async function owing(pr: Checkout, kind: string, reason = "No sandbox") {
   await reviewHead(pr);
   await pr.fleet("require", ...(kind === "ci" ? ["--none", "--reason", "docs only"] : ["--kinds", kind]));
   await pr.fleet("gap", "--kind", kind, "--reason", reason);
-}
-
-type Hub = "up" | "down" | "drops appends" | "loses the acknowledgement of appends";
-const refused = { code: 255, stdout: "", stderr: "ssh: connect to host fleet-hub port 22: Connection refused\n" };
-
-function hubAt(pr: Checkout, hub: Hub | boolean = "up") {
-  const remote = join(pr.home, "hub-home");
-  const hosts: string[] = [];
-  const state = { hub: hub === true ? "up" : hub === false ? "down" : hub };
-  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "hub.alias": "fleet-hub" });
-  pr.hub.ssh = async (host, command, stdin) => {
-    hosts.push(host);
-    if (state.hub === "down") return refused;
-    if (state.hub === "drops appends" && stdin !== undefined) return { code: 0, stdout: "", stderr: "" };
-    const child = Bun.spawn(["bash", "-c", command], { env: { HOME: remote, PATH: process.env.PATH }, stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    if (state.hub === "loses the acknowledgement of appends" && stdin !== undefined) return refused;
-    return { code, stdout, stderr };
-  };
-  return { remote, hosts, state };
 }
 
 test("a gap reason recorded again after the user's acceptance leaves the gap accepted (2026-11-12)", async () => {

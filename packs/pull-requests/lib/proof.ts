@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { normalized, type HeardAnswer } from "./proof-answers.ts";
-import { agentRefusal, agentsAcceptance, covers, fold, keptOwed, panelRefusal, tierOf, usersAcceptance, type DecisionState, type Ledger, type Mark, type Tier } from "./decision-ledger.ts";
+import { agentRefusal, agentsAcceptance, covers, fold, keptOwed, panelRefusal, tierOf, usersAcceptance, type Decision, type DecisionState, type Ledger, type Tier } from "./decision-ledger.ts";
 import type { Family } from "./proof-models.ts";
 import { quietReason, type DeltaKind, type QuietStep } from "./proof-delta.ts";
 
@@ -132,7 +132,7 @@ export function parseVerdict(output: string, model: string): ArbiterVerdict {
 
 export type ReviewLimits = { free: number; ceiling: number };
 
-async function permitReview(home: string, identity: ProofIdentity, due: boolean, ceiling: string | undefined, decision: ReviewDecision | undefined, { arbiter }: Permit) {
+async function permitReview(home: string, identity: ProofIdentity, due: boolean, ceiling: string | undefined, decision: DecisionMark | undefined, { arbiter }: Permit) {
   if (decision?.mark === "👤") return undefined;
   if (ceiling && !decision) throw new Error(askUser(identity, ceiling));
   if (!due) return undefined;
@@ -150,20 +150,15 @@ function askUser(identity: ProofIdentity, stop: string) {
 }
 
 export type CapturedBy = "fleet" | "author";
-export type ReviewDecision = { mark: Mark; id: string; record: () => Promise<unknown> };
-export type ReviewRequest = { scope: string; base?: string; from?: string; decision?: ReviewDecision; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; capturedBy?: CapturedBy };
+export type DecisionMark = Pick<Decision, "mark" | "id">;
+export type ReviewRequest = { scope: string; base?: string; from?: string; decision?: DecisionMark; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; capturedBy?: CapturedBy };
 export type Reserved = { round: number | "final"; id: string; directory: string };
 type Permit = { arbiter: Arbiter; limits: ReviewLimits };
 
-const reserveDecided = (reviews: string, name: string, record: object, decision: ReviewDecision | undefined) =>
+const reserveDecided = (reviews: string, name: string, record: object, decision: DecisionMark | undefined) =>
   reserve(reviews, name, { ...record, ...decision ? { decision: { mark: decision.mark, id: decision.id } } : {} });
 
-export async function recordReviewDecision(reserved: Reserved, decision: ReviewDecision | undefined) {
-  try { await decision?.record(); }
-  catch (error) { await rm(reserved.directory, { recursive: true, force: true }); throw error; }
-}
-
-async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: ReviewDecision | undefined, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {
+async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: DecisionMark | undefined, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {
   if (base === undefined) throw new Error("A final read needs --base with the latest reviewed commit");
   if (base === identity.commit) throw new Error("HEAD is already reviewed. Skip the final read.");
   const quiet = decision ? undefined : reviewedThrough(identity.commit, new Set([base]), cleanBaseMerge, quietCommit);
@@ -204,7 +199,7 @@ export async function startReview(home: string, identity: ProofIdentity, request
   return startRound(home, identity, reviews, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy });
 }
 
-type RoundStart = { scope: string; base?: string; from?: string; decision: ReviewDecision | undefined; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
+type RoundStart = { scope: string; base?: string; from?: string; decision: DecisionMark | undefined; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
 
 async function startRound(home: string, identity: ProofIdentity, reviews: string, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy }: RoundStart): Promise<Reserved> {
   for (let round = 1; round <= 100; round++) {
@@ -224,7 +219,7 @@ async function startRound(home: string, identity: ProofIdentity, reviews: string
 type Claim = { repository: string; pr: number };
 const claimPath = (home: string, answer: HeardAnswer) => join(ledgerRoot(home), "claims", `${createHash("sha256").update(`${answer.thread}/${answer.message}`).digest("hex")}.json`);
 
-async function checkLaterRound(reviews: string, round: number, scope: string, base: string | undefined, decision: ReviewDecision | undefined, cleanBaseMerge: CleanBaseMerge) {
+async function checkLaterRound(reviews: string, round: number, scope: string, base: string | undefined, decision: DecisionMark | undefined, cleanBaseMerge: CleanBaseMerge) {
   try { await access(join(reviews, String(round - 1), "findings.md")); }
   catch { throw new Error("Previous review round is unfinished. Reuse its reservation before starting another panel."); }
   if (scope === "full" && decision) return;
@@ -266,7 +261,7 @@ export function requireChoice(answer: HeardAnswer, lead: string, [accept, declin
   if (![accept, `${accept} (Recommended)`].map(normalized).includes(normalized(answer.words))) throw new Error(`The user chose "${answer.words}", not "${accept}". ${refused}`);
 }
 
-type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; from?: string; capturedBy?: CapturedBy; reviewer?: string };
+type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; from?: string; capturedBy?: CapturedBy; reviewer?: string; decision?: DecisionMark };
 
 export type RoundId = number | `final-${number}`;
 
