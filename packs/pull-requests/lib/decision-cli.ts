@@ -110,8 +110,9 @@ async function reachHub<T>(step: () => Promise<T>) {
 
 const newId = () => `d-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
 const at = (context: DecisionContext) => (context.now?.() ?? new Date()).toISOString();
-const alreadyRecorded = (id: string) => new Error(`That answer is already recorded as decision ${id}. One answer records one decision; it covers the PRs its question named. Ask the user again`);
-const alreadyLifted = (lifted: Lift) => new Error(`That answer already lifted the ${lifted.class} brake on ${lifted.at.slice(0, 10)}. One answer lifts one brake or records one decision; ask the user again`);
+export class AnswerTaken extends Error {}
+const alreadyRecorded = (id: string) => new AnswerTaken(`That answer is already recorded as decision ${id}. One answer records one decision; it covers the PRs its question named. Ask the user again`);
+const alreadyLifted = (lifted: Lift) => new AnswerTaken(`That answer already lifted the ${lifted.class} brake on ${lifted.at.slice(0, 10)}. One answer lifts one brake or records one decision; ask the user again`);
 const alreadyUsed = (use: AnswerUse) => "decision" in use ? alreadyRecorded(use.decision) : alreadyLifted(use.lift);
 
 export type Scope = { class: AskClass; prs: PrRef[]; kinds?: string[]; condition?: string };
@@ -219,6 +220,13 @@ async function appendHeard(ledger: Ledger, ...events: LedgerEvent[]) {
   if (events.every((event) => recorded.has(JSON.stringify(event)))) return read;
   if (unacknowledged) notRecorded(unacknowledged);
   throw new Error("Not recorded: the event is not in the decision ledger when Fleet reads it back. Run the same command again");
+}
+
+export const inLedger = async (ledger: Ledger, id: string) => fold(await reachHub(() => ledger.read())).some((recorded) => recorded.id === id);
+
+export async function appendOnce(ledger: Ledger, decision: Decision) {
+  if (await inLedger(ledger, decision.id)) return decision.id;
+  return appendDecision(ledger, decision);
 }
 
 const unreachableOnly = (error: unknown) => { if (error instanceof HubUnreachable) return error; throw error; };
