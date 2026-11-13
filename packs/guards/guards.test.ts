@@ -586,6 +586,7 @@ describe("the gh guard", () => {
     "echo other | xargs -I{} gh api repos/{}/app",
     "bash -c 'gh api repos/$ORG/app'",
     "(gh api repos/$ORG/app)",
+    'gh api "re${KIND}s/other/app"',
   ])("refuses a repository owner that is not spelled out: %s", (command) => {
     expect(refusal(command)).toContain("is not spelled out");
   });
@@ -597,6 +598,10 @@ describe("the gh guard", () => {
     ["gh api -H 'Accept: application/vnd.github.raw' repos/other/app/contents/README.md", "other"],
     ["body=$(gh api repos/other/app/contents/a.ts)", "other"],
     ["gh repo view other/app --json name", "other"],
+    ["gh api \\repos/other/app", "other"],
+    ["gh repo sync --source other/app acme/copy", "other"],
+    ["gh repo create --template other/app acme/new --private", "other"],
+    ["echo \"$(printf '(')\"; gh api repos/other/app", "other"],
   ])("refuses an outside owner however the command spells it: %s", (command, owner) => {
     expect(refusal(command)).toContain(`\`${owner}\` is not one of the GitHub owners`);
   });
@@ -611,6 +616,11 @@ describe("the gh guard", () => {
     "GH_REPO=acme/app gh pr list",
     "gh repo view site",
     'title=$(gh pr view "$PR" --json title -q .title)',
+    "rg 'GH_REPO=' src",
+    'gh repo create -s "$PWD" acme/new --private',
+    'gh repo edit --default-branch "$BRANCH" acme/app',
+    'gh repo rename "$NEW_NAME" --repo acme/app',
+    "(gh repo view site)",
   ])("allows spelled-out allowed owners and gh placeholders: %s", (command) => {
     expect(refusal(command)).toBeUndefined();
   });

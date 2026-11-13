@@ -167,6 +167,8 @@ function owners(gh: Gh, repoVariable: string | undefined): string[] {
   const [target] = gh.operands;
   if (gh.group === "repo" && repoTargets.has(gh.action) && target && !githubUrl.test(target) && (target.includes("/") || !plainName.test(target))) found.push(repoOwner(target));
   if (gh.group === "repo" && gh.action === "list" && target) found.push(target);
+  if (gh.group === "repo" && gh.action === "sync") found.push(...values(gh, "-s", "--source").map(repoOwner));
+  if (gh.group === "repo" && gh.action === "create") found.push(...values(gh, "-p", "--template").map(repoOwner));
   if (gh.group === "api") found.push(endpointOwner(endpointOf(gh)));
   return found.filter((owner) => owner && !placeholders.has(owner));
 }
