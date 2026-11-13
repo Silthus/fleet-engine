@@ -123,10 +123,12 @@ const briefDrift = (placeholder: string) => new Error(`The Brief of PANEL.md has
 
 const lensFile = (directory: string, name: string, suffix: string) => join(directory, "lenses", `${name}${suffix}`);
 const planPath = (directory: string) => join(directory, "panel.json");
+const stagedPath = (directory: string) => join(directory, "panel.staged.json");
 export const lensLog = (directory: string, name: string) => lensFile(directory, name, ".log");
 const pidFile = (directory: string, name: string) => lensFile(directory, name, ".pid");
 
 export const readPlan = (directory: string) => readJson<Plan | undefined>(planPath(directory), undefined);
+export const stagedPlan = (directory: string) => readJson<Plan | undefined>(stagedPath(directory), undefined);
 
 async function requirePlan(directory: string) {
   const plan = await readPlan(directory);
@@ -143,9 +145,10 @@ export async function stagePanel(directory: string, plan: Plan, briefs: Map<stri
     await writeFile(lensFile(directory, lens.name, ".prompt.md"), briefs.get(lens.name)!, { mode: 0o600 });
     await writeStatus(directory, lens.name, { state: "queued", attempts: 0 });
   }
+  await writeJson(stagedPath(directory), plan);
 }
 
-export const publishPanel = (directory: string, plan: Plan) => writeJson(planPath(directory), plan);
+export const publishPanel = (directory: string) => rename(stagedPath(directory), planPath(directory));
 
 export async function requeueFailed(directory: string, casts: Map<string, Cast>, fresh: { plan: Plan; briefs: Map<string, string> }) {
   const plan = await requirePlan(directory);
@@ -296,7 +299,7 @@ function stopGroup(group: number | undefined) {
   try { process.kill(-group, "SIGKILL"); } catch {}
 }
 
-function isAlive(pid: number) {
+export function isAlive(pid: number) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }

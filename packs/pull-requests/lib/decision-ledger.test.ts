@@ -299,6 +299,21 @@ test("a review override the hub wrote, but whose acknowledgement SSH lost, keeps
   expect(hub).toEqual([round.decision.id]);
 });
 
+test("a review-start that dies before its decision reaches the ledger records that decision before review-finish saves the round", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  void pr.fleet("review-start", "--scope", "full", "--override", `2026-10-25 "Run one more round"`);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
+  const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"));
+  expect((await pr.decide("list", "--pr", "example/product#42")).output).toContain(`[${round.decision.id}]`);
+});
+
 test("a plain yes accepts a gap only when its question asks to accept that gap", async () => {
   const pr = await checkout();
   await owing(pr, "prod-shape");

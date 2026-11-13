@@ -2,14 +2,14 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
+import { askGap, authorOf, finishReview, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type DecisionMark, type Owner, type ProofIdentity, type Reservation } from "./proof.ts";
 import { appendDecision, decideAlone, hearUser, ledgerOf } from "./decision-cli.ts";
 import { fold, refText, type Decision, type Ssh } from "./decision-ledger.ts";
 import { ciOf, pushedHeadOf, readPullRequest, runIn } from "./pr-ci.ts";
 import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRiskRubric, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge, readCriticalPaths } from "./proof-judge.ts";
 import { runProof, type RunIO } from "./proof-run.ts";
-import { lensBrief, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagePanel, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO, type Plan } from "./proof-panel.ts";
+import { isAlive, lensBrief, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO, type Plan } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
@@ -27,7 +27,7 @@ export type { RunIO };
 export type ProofContext = {
   home: string; cwd: string; env: Record<string, string | undefined>; print: (text: string) => void; now?: () => Date; threadWords?: ThreadWords;
   detach?: (args: string[], log: string) => Promise<number>; pause?: () => Promise<void>; github?: GitHub; runIO?: RunIO;
-  ssh?: Ssh;
+  ssh?: Ssh; pid?: number;
 };
 type Result = { code: number; stdout: string; stderr: string };
 type Run = (command: string[]) => Result;
@@ -47,7 +47,11 @@ not answer a round. The question names the PR, and an answer to the question of 
 answer lands in the decision ledger as a 👤 review decision; one answer records one decision and starts one round.
 --agent takes your own reason for a round that the arbiter escalates or the ceiling refuses. It lands in the ledger
 as a 🤖 review decision, refused on a PR whose merge-risk callout has no Tier line at HEAD. --standing is its old
-name. The round keeps the decision id and the arbiter's verdict. List decisions with fleet decision list.
+name. The round keeps the decision and the arbiter's verdict. List decisions with fleet decision list.
+A round starts only once its decision is in the ledger. While another command still writes it, a rerun stops with
+"still starting"; once that command has ended, the rerun takes the round back. A panel whose decision is in the ledger
+but whose lenses never started starts them on the same command or on --wait, and asks for no new answer.
+review-finish records a round's decision first when its review-start ended before it did.
 The settings pull-requests.freeReviews and pull-requests.reviewCeiling set how many rounds, and how many final reads
 per phase, run before the arbiter weighs one more and where the loop stops. The arbiter is the lookup model of your
 AI plan; FLEET_REVIEW_ARBITER replaces its command.`;
@@ -368,8 +372,9 @@ ${overrideHelp}`,
       const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
       const scope = options.get("--scope") ?? "full";
       const { decision, ...permit } = await decisionOf(options, head, context);
-      const reserved = await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...permit, decision: markOf(decision), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) });
-      await recordDecision(reserved.directory, decision, context);
+      const owner = ownerOf(context);
+      const reserved = await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...permit, decision, owner, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) });
+      await recordDecision({ ...reserved, decision, owner }, context);
       context.print(JSON.stringify(reserved));
       return 0;
     },
@@ -381,12 +386,14 @@ printed. --reviewer names the model that wrote them; the gate prints it. The fin
 "No findings." when the reviewer found none.`,
     examples: ["fleet proof review-finish --round 1 --reviewer gpt-6.1-sol findings.md", "fleet proof review-finish --round final-1 --reviewer claude-opus-5-5 findings.md"],
     options: ["--round", "--findings", "--reviewer"],
-    run: async ({ options, files }, identity, { print, home, cwd }) => {
+    run: async ({ options, files }, identity, context) => {
       const findings = options.has("--findings") ? [options.get("--findings")!, ...files] : files;
       if (findings.length !== 1) throw usageError("review-finish", "Pass one findings file");
       const round = roundId(required(options, "--round", "review-finish"));
       const reviewer = required(options, "--reviewer", "review-finish");
-      print(await finishReview(home, identity(), round, resolve(cwd, findings[0]!), reviewer));
+      const head = identity();
+      await recordReservedDecision(await reviewDirectory(context.home, head, round), context);
+      context.print(await finishReview(context.home, head, round, resolve(context.cwd, findings[0]!), reviewer));
       return 0;
     },
   },
@@ -399,10 +406,10 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const limit = numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
   const rubric = await readRubric(home);
   const pending = await pendingReview(head, context);
-  if (pending && await readPlan(pending.directory)) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
+  if (pending && (await readPlan(pending.directory) || await stagedPlan(pending.directory))) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
   const reserved = pending
     ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
-    : await reserveFleetReview(options, head, context).then(async (fresh) => { await recordDecision(fresh.directory, fresh.decision, context); return fresh; });
+    : await reserveFleetReview(options, head, context).then(async (fresh) => { await recordDecision(fresh, context); return fresh; });
   const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const { files, leftOut, diff } = reviewRange(run, from, head.commit, mergeBase(head, run));
@@ -432,23 +439,38 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
   const from = rangeStart(scope, base, head, context.run);
   const { decision, ...permit } = await decisionOf(options, head, context);
-  const reserved = await startReview(context.home, head, { scope, base, from, ...permit, decision: markOf(decision), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
-  return { ...reserved, scope, from, decision };
+  const owner = ownerOf(context);
+  const reserved = await startReview(context.home, head, { scope, base, from, ...permit, decision, owner, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
+  return { ...reserved, scope, from, decision, owner };
 }
 
-const markOf = (decision: Decision | undefined) => decision && { mark: decision.mark, id: decision.id };
+const ownerOf = (context: CommandContext): Owner => ({ token: crypto.randomUUID(), pid: context.pid ?? process.pid });
 
-async function recordDecision(directory: string, decision: Decision | undefined, context: CommandContext) {
+async function recordDecision({ directory, decision, owner }: { directory: string; decision?: Decision; owner: Owner }, context: CommandContext) {
   if (!decision) return;
   try { await appendDecision(ledgerOf(context), decision); }
-  catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
+  catch (error) { await releaseReservation(directory, owner); throw error; }
+}
+
+async function releaseReservation(directory: string, owner: Owner | undefined) {
+  const reservation = await readJson<Reservation | undefined>(join(directory, "round.json"), undefined);
+  if (reservation && reservation.owner?.token === owner?.token) await rm(directory, { recursive: true, force: true });
+}
+
+const decisionRecorded = async (decision: DecisionMark | undefined, context: CommandContext) =>
+  !decision || fold(await ledgerOf(context).read()).some((recorded) => recorded.id === decision.id);
+
+async function recordReservedDecision(directory: string, context: CommandContext) {
+  const decision = (await readJson<{ decision?: Decision } | undefined>(join(directory, "round.json"), undefined))?.decision;
+  if (decision?.where && !await decisionRecorded(decision, context)) await appendDecision(ledgerOf(context), decision);
 }
 
 async function pendingReview(head: ProofIdentity, context: CommandContext) {
   const pending = await unfinishedFleetReview(context.home, head);
-  const id = pending?.reservation.decision?.id;
-  if (!pending || !id || fold(await ledgerOf(context).read()).some((decision) => decision.id === id)) return pending;
-  await rm(pending.directory, { recursive: true, force: true });
+  if (!pending || await decisionRecorded(pending.reservation.decision, context)) return pending;
+  const { owner } = pending.reservation;
+  if (owner && isAlive(owner.pid)) throw new Error(`A review of this commit is still starting in ${pending.directory}: its decision is not in the ledger yet. Wait for it, or run the same command again`);
+  await releaseReservation(pending.directory, owner);
   return undefined;
 }
 
@@ -501,14 +523,18 @@ async function reservePanel(options: Map<string, string>, head: ProofIdentity, l
   try {
     const { plan, briefs } = await panelBriefs(reserved, head, lenses, guide, rubric, context);
     await stagePanel(reserved.directory, plan, briefs);
-    await recordDecision(reserved.directory, reserved.decision, context);
-    await publishPanel(reserved.directory, plan);
   } catch (error) {
-    await rm(reserved.directory, { recursive: true, force: true });
+    await releaseReservation(reserved.directory, reserved.owner);
     throw error;
   }
-  for (const lens of lenses) await startLens(reserved.directory, lens.name, context);
-  return reserved.directory;
+  await recordDecision(reserved, context);
+  return startPanel(reserved.directory, context);
+}
+
+async function startPanel(directory: string, context: CommandContext) {
+  await publishPanel(directory);
+  for (const lens of (await readPlan(directory))!.lenses) await startLens(directory, lens.name, context);
+  return directory;
 }
 
 async function panelBriefs(reserved: { directory: string; from?: string }, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, rubric: string, context: CommandContext) {
@@ -535,10 +561,12 @@ async function panelBriefs(reserved: { directory: string; from?: string }, head:
 
 async function rerunPanel(pending: { directory: string; reservation: { scope: string; base?: string; from?: string } }, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
   const { directory, reservation } = pending;
-  const plan = await readPlan(directory);
+  const published = await readPlan(directory);
+  const plan = published ?? await stagedPlan(directory);
   if (!plan) throw new Error(`${directory} is reserved for one reviewer. Run fleet proof review without --lens to retry it`);
   const planned = plan.lenses.map((lens) => lens.name);
   if (lenses.map((lens) => lens.name).sort().join() !== [...planned].sort().join()) throw new Error(`The unfinished round runs the lenses ${planned.join(", ")}. Pass the same --lens set to rerun its failed lenses`);
+  if (!published) return startPanel(directory, context);
   const casts = new Map(lenses.map((lens) => [lens.name, castOf(lens, context.env)]));
   const from = reservation.from ?? rangeStart(reservation.scope, reservation.base, head, context.run);
   const fresh = await panelBriefs({ directory, from }, head, lenses, guide, await readRubric(context.home), context);
@@ -558,7 +586,9 @@ async function knowledgeOf(values: string[], cwd: string) {
 }
 
 async function waitForReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
-  const directory = options.has("--round") ? await reviewDirectory(context.home, head, roundOption(options)) : (await unfinishedFleetReview(context.home, head))?.directory ?? await reviewDirectory(context.home, head);
+  const pending = options.has("--round") ? undefined : await unfinishedFleetReview(context.home, head);
+  const directory = pending?.directory ?? await reviewDirectory(context.home, head, roundOption(options));
+  if (pending && !await readPlan(directory) && await stagedPlan(directory) && await decisionRecorded(pending.reservation.decision, context)) await publishPanel(directory);
   const code = await waitForPanel(directory, panelIO(context), (name) => startLens(directory, name, context), waitPolls);
   for (const line of await roundLines(directory, context)) context.print(line);
   if (code === 0) context.print(await readFile(join(directory, "findings.md"), "utf8"));
