@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, writeJson, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
+import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, writeJson, markRecorded, readReservation, receiptMarker, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
 import { AnswerTaken, appendOnce, decideAlone, hearUser, ledgerHolds, ledgerOf } from "./decision-cli.ts";
 import { HubUnreachable, refText, type Decision, type Ssh } from "./decision-ledger.ts";
 import { readComment, runIn } from "./pr-ci.ts";
@@ -130,16 +130,17 @@ again after you change the repository's access.`,
   receipt: {
     usage: "receipt --comment <url>",
     summary: `Record the PR's proof receipt: the comment you posted on the PR with the gate's result. GitHub must show the
-comment on this PR. fleet decision reverse never takes a receipt recorded on this machine as the user's words, in any
-URL form, and fleet
-proof gate --json and fleet decision report link it.`,
+comment on this PR, and the comment must carry the receipt marker <!-- fleet-proof-receipt -->. fleet decision reverse
+never takes a comment with that marker as the user's words, on any machine. fleet proof gate --json and fleet decision
+report link the receipt.`,
     examples: ["fleet proof receipt --comment https://github.com/owner/name/pull/7#issuecomment-1"], options: ["--comment"],
     run: async ({ options }, identity, { home, print, run }) => {
       const url = required(options, "--comment", "receipt");
       const comment = readComment(url, run);
       const { repository, pr } = identity();
       if (`${comment.repository}#${comment.pr}`.toLowerCase() !== refText({ repository, pr }).toLowerCase()) throw new Error(`The comment ${url} is on ${comment.repository}#${comment.pr}, not on ${refText({ repository, pr })}`);
-      await recordReceipt(home, { repository, pr }, url, comment.id);
+      if (!comment.body.includes(receiptMarker)) throw new Error(`The comment ${url} does not carry the receipt marker ${receiptMarker}. Edit the comment to start with it, so every machine knows Fleet wrote it`);
+      await recordReceipt(home, { repository, pr }, url);
       print(`receipt: ${url}`);
       return 0;
     },

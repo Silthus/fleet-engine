@@ -17,7 +17,8 @@ export type FinalGate = { code: number; lines: string[]; verdict: string; summar
 type Checked = Awaited<ReturnType<typeof proofGate>>;
 type Judged = { code: number; lines: string[]; covered: string; judge: JudgeSummary };
 type GateKey = { head: string; base: string; baseSha: string; tier: string; landed: boolean; fingerprint: string };
-type SavedGate = { key: GateKey; gate: FinalGate };
+type Condition = Checked["conditions"][number];
+type SavedGate = { key: GateKey; gate: FinalGate; conditions: Condition[] };
 
 export const reviewLimit = (env: Env) => numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
 
@@ -52,13 +53,7 @@ const keyOf = (pull: PullRequest, landed: boolean, fingerprint: string): GateKey
 export async function finalGate(head: ProofIdentity, context: GateContext, { landed = false }: { landed?: boolean } = {}): Promise<FinalGate> {
   const { home, env, run, now, ssh } = context;
   let pull: PullRequest | undefined;
-  const pushedHead = (): PushedHead => {
-    try {
-      const read = readPullRequest(head, run);
-      pull ??= read;
-      return { commit: read.head, body: read.body };
-    } catch (error) { return { error: (error as Error).message }; }
-  };
+  const pushedHead = pushedHeadOf(head, run, (read) => { pull ??= read; });
   const files = await proofFiles(home, head);
   const checked = await proofGate(home, head, {
     landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()),
@@ -71,29 +66,37 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
     verdict: judged.code === 0 ? `gate: pass (${checked.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`,
     summary: { ...checked.proofSummary, code: judged.code, judge: judged.judge },
   };
-  if (pull) await writeJson(savedPath(home, head, head.commit), { key: keyOf(pull, landed, await fingerprintOf(home, head, files, checked.decisions)), gate } satisfies SavedGate);
+  if (pull) await writeJson(savedPath(home, head, head.commit), { key: keyOf(pull, landed, await fingerprintOf(home, head, files, checked.decisions)), gate, conditions: checked.conditions } satisfies SavedGate);
   return gate;
 }
 
+const pushedHeadOf = (head: ProofIdentity, run: Run, seen: (pull: PullRequest) => void = () => {}) => (): PushedHead => {
+  try {
+    const read = readPullRequest(head, run);
+    seen(read);
+    return { commit: read.head, body: read.body };
+  } catch (error) { return { error: (error as Error).message }; }
+};
+
 export async function currentSummary(ref: PrRef, pull: PullRequest, ledger: Ledger, context: GateContext): Promise<ProofSummary | undefined> {
-  const saved = await savedSummary(context.home, ref, pull, ledger);
+  const saved = await savedGate(context.home, ref, pull, ledger);
   if (!saved) return undefined;
   const { home, run, now } = context;
   const head = { ...ref, commit: pull.head };
   const live = await proofGate(home, head, {
     landed: pull.state === "merged", cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run),
-    ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => ({ commit: pull.head, body: pull.body }), ledger, now: now?.(),
+    ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: pushedHeadOf(head, run), ledger, now: now?.(),
   });
-  return { ...saved, ...live.proofSummary, code: live.code === 0 ? saved.code : live.code };
+  const judged = JSON.stringify(live.conditions) === JSON.stringify(saved.conditions);
+  const receipt = await receiptOf(home, ref);
+  return { ...saved.gate.summary, ...receipt ? { receipt } : {}, ...live.proofSummary, code: live.code !== 0 ? live.code : judged ? saved.gate.code : 1 };
 }
 
-async function savedSummary(home: string, ref: PrRef, pull: PullRequest, ledger: Ledger): Promise<ProofSummary | undefined> {
+async function savedGate(home: string, ref: PrRef, pull: PullRequest, ledger: Ledger): Promise<SavedGate | undefined> {
   const saved = await readJson<SavedGate | undefined>(savedPath(home, ref, pull.head), undefined);
   if (!saved) return undefined;
   const key = keyOf(pull, pull.state === "merged", await fingerprintOf(home, ref, await proofFiles(home, ref), await readDecisions(ledger)));
-  if (JSON.stringify(saved.key) !== JSON.stringify(key)) return undefined;
-  const receipt = await receiptOf(home, ref);
-  return { ...saved.gate.summary, ...receipt ? { receipt } : {} };
+  return JSON.stringify(saved.key) === JSON.stringify(key) ? saved : undefined;
 }
 
 async function judgeHead(head: ProofIdentity, checked: Checked, context: GateContext): Promise<Judged> {

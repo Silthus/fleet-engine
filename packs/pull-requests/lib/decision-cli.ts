@@ -1,7 +1,7 @@
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
 import { renderReport } from "./decision-report.ts";
 import { commentUrl, readComment, readPullRequest, restJson, runIn, sameComment } from "./pr-ci.ts";
-import { gapKind, isReceipt, receiptOf, refuseInstructionQuote, usedAnswer } from "./proof.ts";
+import { gapKind, receiptMarker, receiptOf, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
   agentRefusal, answerUse, askClasses, brakeDays, brakeOf, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, liftCounted, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
   type AnswerUse, type AskClass, type Decision, type DecisionState, type Env, type Ledger, type LedgerEvent, type Lift, type PrRef, type Reversal, type Ssh, type UsersMark,
@@ -46,8 +46,8 @@ It refuses the user's keep-owed: only their acceptance lifts it.
 reverse records the user's reversal of a decision: their dated, quoted words in a message of theirs in the T3 thread,
 or on a GitHub comment written by the account gh is signed in as, which must hold each quoted part. The message must
 say the words on the quoted date; when two messages on that date do, --message picks one by its id. A comment must
-be on the PR its URL names, and not one Fleet writes: a decision line, the PR's proof receipt that fleet proof receipt
-recorded (matched by its comment id), or an end-of-run report. The user's words must be
+be on the PR its URL names, and not one Fleet writes: a decision line, a proof receipt (it carries the marker
+<!-- fleet-proof-receipt -->), or an end-of-run report. The user's words must be
 newer than the decision, and the reversal takes the time they wrote them. The decision then prints as 👤 with their
 words, the replaced answer struck through, and counts no more at the gate or in list --live; decide or ask again. It
 refuses the user's keep-owed, as void does, and a voided decision. Two reversals of 🤖 decisions in one class within
@@ -68,8 +68,10 @@ lane started. The report never runs the judge. It builds each PR's proof summary
 rules, decisions and the tier are read as they are now, and takes the judge's verdict from the summary fleet proof gate
 saved, only while the PR's head, base and base SHA on GitHub, its tier, --landed for a merged PR, and the PR's proof
 files, standing rules and ledger decisions are the same. Otherwise it says the gate has not run at HEAD with these
-proofs; a decision recorded after the gate counts as a change. A summary that does not pass now offers no merge: run
-it in the PR's checkout, where a review carried across commits can be checked. --thread defaults to this T3 thread.
+proofs; a decision recorded after the gate counts as a change. A summary that does not pass now offers no merge,
+and nor does an accepted gap whose condition the saved judge did not weigh, or a head that moves while the report
+reads it: run the gate in the PR's checkout (with --landed for a merged PR), where a review carried across commits can
+be checked. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
@@ -299,7 +301,7 @@ const refuseKeptOwed = (decision: DecisionState) => {
 
 const quoteWithDate = () => new Error(`Quote the user's words with the date they wrote them, such as '2026-10-24 "Reverse that."'`);
 const quotedDate = (words: string) => /\b\d{4}-\d{2}-\d{2}\b/.exec(words)![0];
-const fleetText = (body: string) => /\[d-[0-9a-f]{8}\]/.test(body) || /^#+ End-of-run report\b/m.test(body);
+const fleetText = (body: string) => /\[d-[0-9a-f]{8}\]/.test(body) || /^#+ End-of-run report\b/m.test(body) || body.includes(receiptMarker);
 
 async function heardInThread(thread: string, words: string, message: string | undefined, context: DecisionContext) {
   if (!isDatedQuote(words)) throw quoteWithDate();
@@ -327,7 +329,7 @@ async function heardOnComment(url: string, words: string, context: DecisionConte
   const login = restJson<{ login: string }>("user", run).login;
   const comment = readComment(url, run);
   if (comment.author.toLowerCase() !== login.toLowerCase()) throw new Error(`The comment is by ${comment.author || "nobody"}, not the user (${login}). Only the user's own words reverse a decision`);
-  if (fleetText(comment.body) || await isReceipt(context.home, comment.id) || sameComment(await receiptOf(context.home, comment), url)) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
+  if (fleetText(comment.body) || sameComment(await receiptOf(context.home, comment), url)) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
   const body = normalized(comment.body);
   const missing = quotes(words).find((quote) => !body.includes(quote));
   if (missing) throw new Error(`"${missing}" is not in the comment ${url}. Quote the user's words as they wrote them`);

@@ -65,8 +65,8 @@ function stillYours(rows: Row[], card: string | undefined) {
   const ungated = rows.flatMap((pr) => "ungated" in pr && pr.state !== "closed"
     ? [`- ${refText(pr.ref)}: the gate has not run at HEAD ${short(pr.ungated)} with these proofs, so they are not known to pass. Run fleet proof gate${pr.state === "merged" ? " --landed" : ""}.`] : []);
   const blocked = new Set(lane.filter(({ summary }) => summary.tier === "critical" && gaps(summary).some(({ gap }) => !gap.accepted)).map(({ ref }) => refText(ref)));
-  const failing = lane.filter(({ ref, state, summary }) => state === "open" && summary.code !== 0 && !blocked.has(refText(ref)))
-    .map(({ ref, summary }) => `- ${refText(ref)}: its proofs are not shown to pass at HEAD ${short(summary.commit)} as read now (gate exit ${summary.code}). Run fleet proof gate in its checkout to see why.`);
+  const failing = lane.filter(({ ref, state, summary }) => state !== "closed" && summary.code !== 0 && !blocked.has(refText(ref)))
+    .map(({ ref, state, summary }) => `- ${refText(ref)}: its proofs are not shown to pass at HEAD ${short(summary.commit)} as read now (gate exit ${summary.code}). Run fleet proof gate${state === "merged" ? " --landed" : ""} in its checkout to see why.`);
   const merges = lane.filter(({ state, summary }) => state === "open" && summary.code === 0)
     .map(({ ref }) => `- Merge ${refText(ref)}: its proofs pass, and it waits on your merge word.`);
   return [...blockers, ...card ? [`- A question card waits for your answer in thread ${card}.`] : [], ...unknown, ...ungated, ...failing, ...merges];

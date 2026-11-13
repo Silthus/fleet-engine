@@ -809,7 +809,7 @@ test("the end-of-run report prints its five sections in order: still yours, narr
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access", "--repo", "example/product", "--pr", "41");
   pr.chooseGap("prod-shape", "No production read access", "Accept the gap", 41);
   const users = idIn((await pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#41")).output);
-  pr.githubComment(9, "the-user", "Proofs at HEAD: live-run passed.", "2026-10-25T12:00:00Z", 41);
+  pr.githubComment(9, "the-user", "<!-- fleet-proof-receipt -->\nProofs at HEAD: live-run passed.", "2026-10-25T12:00:00Z", 41);
   await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/41#issuecomment-9", "--repo", "example/product", "--pr", "41");
   pr.pullRequestState({ number: 41, merged: true });
 
@@ -853,6 +853,7 @@ test("the end-of-run report prints its five sections in order: still yours, narr
     "- **Blocker:** example/product#42 is critical at HEAD and its prod-shape gap is not accepted: No sandbox.",
     `- **Blocker:** example/product#42 is critical at HEAD and its cross-version gap is not accepted: No older client to run (🤖 decision ${lapsed} lapsed: critical head).`,
     "- A question card waits for your answer in thread thread-1.",
+    `- example/product#41: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 3). Run fleet proof gate --landed in its checkout to see why.`,
     "- Merge example/product#43: its proofs pass, and it waits on your merge word.",
   ]);
   expect(section("### Merged under the narrow grant")).toEqual(["- example/product#41 merged 2026-10-25 09:00 UTC (standing merge: narrow grant, card)", "- example/product#42 merged at an unknown time (standing merge: narrow grant)"]);

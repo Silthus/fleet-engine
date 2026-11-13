@@ -188,6 +188,50 @@ test("the report stops offering the merge once a check fails after a passing gat
   expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
 });
 
+test("the report stops offering the merge of a merged PR once a check fails after its landed gate", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical"), merged: true });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  expect((await pr.fleet("gate", "--landed")).code).toBe(0);
+  expect((await reportOf(pr)).stillYours).toEqual(["None."]);
+
+  pr.ci([{ name: "test", bucket: "fail" }]);
+  expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate --landed in its checkout to see why.`]);
+});
+
+test("the report never offers the merge when GitHub moves the PR to a new head while the report reads it", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  expect((await pr.fleet("gate")).code).toBe(0);
+  const pushed = await pr.commit("feature.txt", "greet all new members\n");
+  pr.githubHead(head);
+  expect((await reportOf(pr)).stillYours).toEqual(["- Merge example/product#42: its proofs pass, and it waits on your merge word."]);
+
+  pr.whileGithubReadsPull(`printf '%s' ${pushed} > "$(dirname "$0")/next-head"`);
+  expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
+});
+
+test("the report never offers the merge on an accepted gap whose condition the judge has not weighed", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  await pr.fleet("gap", "--kind", "ci", "--reason", "Fork CI cannot create its GitHub App token");
+  pr.chooseGap("ci", "Fork CI cannot create its GitHub App token");
+  await acceptGap(pr, "ci", "--condition", "No check at HEAD has failed");
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect((await reportOf(pr)).stillYours).toEqual(["- Merge example/product#42: its proofs pass, and it waits on your merge word."]);
+
+  pr.ci([{ name: "test", bucket: "fail" }]);
+  expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
+});
+
 test("the report keeps the gate of HEAD when a gate of an older commit finishes later", async () => {
   const pr = await checkout();
   const older = await pr.commit("feature.txt", "greet new members\n");
