@@ -192,8 +192,10 @@ export function tierOf(body: string): Tier {
 
 export const processGapKinds = ["judge", "post-deploy-watch"];
 const processClasses: AskClass[] = ["review", "status"];
+export const panelRefusal = "a panel gap is the user's to accept";
 
 export function agentRefusal(tier: Tier, decisionClass: AskClass, kinds: string[] = []) {
+  if (decisionClass === "proof-gap" && kinds.includes("panel")) return "panel";
   if (tier === "ungraded") return "ungraded";
   const process = processClasses.includes(decisionClass) || (decisionClass === "proof-gap" && kinds.length > 0 && kinds.every((kind) => processGapKinds.includes(kind)));
   return tier === "critical" && !process ? "critical head" : undefined;
@@ -224,7 +226,7 @@ choice must start with "Accept"; with --keep-owed, it keeps them owed whatever a
 what must stay true at HEAD; the judge checks it. Classes: ${askClasses.join(", ")}.
 record with 🤖 records the agent's own decision with the option it rejected. Fleet reads each PR's Tier line in its
 merge-risk callout at HEAD: it refuses an ungraded PR, and on a critical PR anything but process (review and status
-asks, judge and post-deploy-watch gaps). The gate never counts a 🤖 ci
+asks, judge and post-deploy-watch gaps). It never takes a panel gap: ${panelRefusal}. The gate never counts a 🤖 ci
 acceptance over CI that ran, nor one under the user's keep-owed, and prints each 🤖 acceptance that lapsed.
 list prints the decisions as decision lines with their ids. Run it before you ask.
 void ends a decision whose condition HEAD no longer meets, such as when the judge fails it; then decide or ask again.`;
@@ -360,6 +362,7 @@ export async function decideAlone(input: AgentDecision, context: DecisionContext
   }
   const thread = input.thread ?? context.env.T3CODE_THREAD_ID;
   if (!thread) throw new Error("An agent decision needs --thread with this lane's T3 thread id");
+  if (agentRefusal("non-critical", input.class, input.kinds) === "panel") throw new Error(`${input.prs.map(refText).join(", ")}: ${panelRefusal}. Ask them with your question tool and record their answer with --mark 👤`);
   const pullBody = pullBodyOf(context);
   for (const ref of input.prs) {
     const refusal = agentRefusal(tierOf(await pullBody(ref).catch(() => "")), input.class, input.kinds);
