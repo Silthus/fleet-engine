@@ -409,7 +409,7 @@ test("a gap counts as accepted only when the user chose Accept the gap in the qu
   pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
   await expect(accept()).rejects.toThrow(`The user chose "Keep the gap open", which does not accept the gap`);
   pr.chooseGap("cross-version", "No sandbox");
-  await expect(accept()).rejects.toThrow("does not name the prod-shape gap");
+  await expect(accept("--message", "request-3:0")).rejects.toThrow("does not name the prod-shape gap");
   expect((await pr.fleet("gate")).code).toBe(3);
 
   pr.chooseGap("prod-shape", "No sandbox");

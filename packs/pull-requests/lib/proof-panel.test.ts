@@ -386,6 +386,22 @@ test("a panel that fails to plan gives its round back, so the same command plans
   expect((await pr.fleet("review", "--wait")).code).toBe(0);
 });
 
+test("a panel the user's override starts but that fails to plan keeps the answer for the same command", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", clean);
+  const guide = join(pr.home, ".agents/skills/qa-swarm/PANEL.md");
+  writeFileSync(guide, panelGuide.replace("Goal: <goal>", "Goal: the title"));
+  pr.choose("Run one more round");
+  const review = () => pr.fleet("review", "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`);
+  await expect(review()).rejects.toThrow("has no <goal>");
+
+  writeFileSync(guide, panelGuide);
+  const started = await review();
+  expect(JSON.parse(started.output.split("\n")[0]!)).toMatchObject({ round: 1 });
+});
+
 test("rerunning a failed lens rebuilds its brief and runs it in the checkout of now", async () => {
   const pr = await checkout();
   const head = await pr.commit("feature.txt", "greet\n");

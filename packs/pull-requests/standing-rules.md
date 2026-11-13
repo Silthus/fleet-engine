@@ -5,11 +5,11 @@
 With the `fleet` CLI, every decision about a pull request's proof and process goes to the decision ledger: `fleet decision record`. Run `fleet decision list --pr <owner/repo#n>` before you ask me.
 
 - Ask me with your question tool, and name each pull request and each gap kind in the question. After I answer, record it with `fleet decision record --mark 👤 --class <class> --pr <owner/repo#n>`, or `--mark 👍` when I chose your recommended option. One answer records one decision, and it covers each pull request its question names.
-- To accept a proof gap, my choice starts with "Accept". When I keep a gap owed, record it with `--keep-owed`. It outranks any decision of yours.
+- To accept a proof gap, my choice starts with "Accept", or it is "Yes" to a question that starts with "Accept the <kind> gap?". When I keep a gap owed, record it with `--keep-owed`. It outranks any decision of yours, and you cannot void it: only my acceptance lifts it.
 - Decide alone with `--mark 🤖` and your question, answer, rejected option, and reason, only where the `Tier:` line of the merge-risk callout at HEAD lets you: never on an ungraded pull request, and on a critical one only process (review rounds, status asks, judge and post-deploy-watch gaps). A panel gap is always mine to accept.
-- `fleet proof gate` prints each 🤖 decision that lapsed and why. Ask me then, or decide again once the reason is gone.
-- `fleet decision void <id> --reason <why>` ends a decision whose condition no longer holds.
-- When I reverse a decision, record my words with `fleet decision reverse <id> --words '<date> "<my words>"' --thread <id>`, or `--comment <url>` when I wrote them on GitHub. Then decide or ask again.
+- `fleet proof gate` prints each 🤖 decision that lapsed on a kind that is still open, and why. Ask me then, or decide again once the reason is gone.
+- `fleet decision void <id> --reason <why>` ends a decision whose condition no longer holds. It refuses my keep-owed.
+- When I reverse a decision, record my words with `fleet decision reverse <id> --words '<date> "<my words>"' --thread <id>`, or `--comment <url>` when I wrote them on GitHub. Then decide or ask again. It refuses my keep-owed too: only my acceptance lifts it.
 - Two reversals in one class within 28 days brake the class: decide nothing alone in it. Ask me with your question tool whether to lift the brake, and record my answer with `fleet decision lift --class <class> --words '<date> "<my answer>"' --thread <id>`.
 - When you start a side fix alone, record it as a `scope` decision with `--link <the side fix's thread>`.
 - When the lane ends, send the output of `fleet decision report --pr <owner/repo#n>...` as your final message, and post it once on the lane's ticket or its bottom pull request.

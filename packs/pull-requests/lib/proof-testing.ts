@@ -6,7 +6,8 @@ import { gitEnv, template } from "../../../src/testing/git.ts";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
-import { decisionCommand, type Ssh } from "./decision-ledger.ts";
+import { decisionCommand } from "./decision-cli.ts";
+import type { Ssh } from "./decision-ledger.ts";
 
 const fixtures: string[] = [];
 export const cleanFixtures = () => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true }));
@@ -97,7 +98,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     if (next) writeFileSync(join(github, "next-head"), next);
   };
   const whileGithubReadsPull = (script: string) => writeFileSync(join(github, "while-reading"), script);
-  const githubComment = (id: number, author: string, body: string) => writeFileSync(join(github, `comment-${id}`), JSON.stringify({ user: { login: author }, body }));
+  const githubComment = (id: number, author: string, body: string, createdAt = "2026-10-25T11:00:00Z") => writeFileSync(join(github, `comment-${id}`), JSON.stringify({ user: { login: author }, body, created_at: createdAt }));
   const githubCalls = () => readFileSync(join(github, "calls"), "utf8").trim().split("\n");
   ci([{ name: "test", bucket: "pass" }]);
   mkdirSync(join(home, ".agents/guides"), { recursive: true });

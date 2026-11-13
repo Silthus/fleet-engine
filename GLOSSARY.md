@@ -87,11 +87,11 @@ A decision that lets the gate pass over a proof gap. The user's acceptance alway
 _Avoid_: Waiver, override
 
 **Lapse**:
-The gate no longer counts an agent's acceptance, because the tier changed, CI ran on HEAD, the user keeps the gap owed, or the gap is a panel gap. The gate prints each lapsed decision.
+The gate no longer counts an agent's acceptance, because the tier changed, CI ran on HEAD, the user keeps the gap owed, or the gap is a panel gap. The gate prints each lapsed decision of a kind that stays open.
 _Avoid_: Expiry, revoke
 
 **Reversal**:
-The user's own words, in a T3 thread or on a GitHub comment they wrote, that replace a decision's answer. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more.
+The user's own words, in a T3 thread or on a GitHub comment they wrote, that replace a decision's answer. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more. A reversal takes the time the user wrote their words. A gap the user keeps owed takes no reversal: only their acceptance lifts it.
 _Avoid_: Undo, override
 
 **Brake**:

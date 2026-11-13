@@ -213,16 +213,6 @@ test("an override and a gap acceptance need the user's words from the T3 thread 
   expect(ledgerDecisions(pr).at(-1)).toMatchObject({ class: "proof-gap", effect: "accept", question: "Accept the prod-shape gap? example/product#42: No production read access", where: { message: "request-2:0" } });
 });
 
-test("fleet proof gap no longer takes --accept, and points at fleet decision record", async () => {
-  const pr = await checkout();
-  await pr.commit("feature.txt", "new\n");
-  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
-  await expect(pr.fleet("gap", "--kind", "prod-shape", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1")).rejects.toThrow("--accept is gone. Record the user's answer with fleet decision record --mark 👤 --class proof-gap --kind prod-shape --pr example/product#42");
-  expect((await pr.fleet("gap", "--help")).output).toContain("fleet decision record --mark 👤 --class proof-gap --kind <kind> --pr <owner/repo#n>");
-  pr.env.T3CODE_THREAD_ID = undefined;
-  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow("--thread");
-});
-
 test("the gate fails until the owed proofs are recorded, and a recorded none prints its reason", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "new\n");

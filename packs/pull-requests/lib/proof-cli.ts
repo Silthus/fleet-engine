@@ -2,8 +2,9 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity, type ReviewDecision } from "./proof.ts";
-import { appendDecision, decideAlone, hearUser, ledgerOf, refText, type Ledger, type Ssh } from "./decision-ledger.ts";
+import { askGap, authorOf, finishReview, recordReviewDecision, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity, type ReviewDecision } from "./proof.ts";
+import { appendDecision, decideAlone, hearUser, ledgerOf } from "./decision-cli.ts";
+import { refText, type Ssh } from "./decision-ledger.ts";
 import { ciOf, pushedHeadOf, readPullRequest, runIn } from "./pr-ci.ts";
 import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRiskRubric, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge, readCriticalPaths } from "./proof-judge.ts";
@@ -26,7 +27,7 @@ export type { RunIO };
 export type ProofContext = {
   home: string; cwd: string; env: Record<string, string | undefined>; print: (text: string) => void; now?: () => Date; threadWords?: ThreadWords;
   detach?: (args: string[], log: string) => Promise<number>; pause?: () => Promise<void>; github?: GitHub; runIO?: RunIO;
-  ssh?: Ssh; ledger?: Ledger;
+  ssh?: Ssh;
 };
 type Result = { code: number; stdout: string; stderr: string };
 type Run = (command: string[]) => Result;
@@ -372,7 +373,10 @@ ${overrideHelp}`,
       const head = identity();
       const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
       const scope = options.get("--scope") ?? "full";
-      context.print(JSON.stringify(await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...await decisionOf(options, head, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) })));
+      const decided = await decisionOf(options, head, context);
+      const reserved = await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decided, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) });
+      await recordReviewDecision(reserved, decided.decision);
+      context.print(JSON.stringify(reserved));
       return 0;
     },
   },
@@ -404,7 +408,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   if (pending && await readPlan(pending.directory)) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
   const reserved = pending
     ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
-    : await reserveFleetReview(options, head, context);
+    : await reserveFleetReview(options, head, context).then(async (fresh) => { await recordReviewDecision(fresh, fresh.decision); return fresh; });
   const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const { files, leftOut, diff } = reviewRange(run, from, head.commit, mergeBase(head, run));
@@ -433,8 +437,9 @@ async function reserveFleetReview(options: Map<string, string>, head: ProofIdent
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
   const from = rangeStart(scope, base, head, context.run);
-  const reserved = await startReview(context.home, head, { scope, base, from, ...await decisionOf(options, head, context), phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
-  return { ...reserved, scope, from };
+  const decided = await decisionOf(options, head, context);
+  const reserved = await startReview(context.home, head, { scope, base, from, ...decided, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
+  return { ...reserved, scope, from, decision: decided.decision };
 }
 
 const rangeStart = (scope: string, base: string | undefined, head: ProofIdentity, run: Run) => scope === "full" ? mergeBase(head, run) : base;
@@ -486,6 +491,7 @@ async function reservePanel(options: Map<string, string>, head: ProofIdentity, l
   try {
     const { plan, briefs } = await panelBriefs(reserved, head, lenses, guide, rubric, context);
     await planPanel(reserved.directory, plan, briefs);
+    await recordReviewDecision(reserved, reserved.decision);
   } catch (error) {
     await rm(reserved.directory, { recursive: true, force: true });
     throw error;
@@ -638,15 +644,17 @@ async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContex
   if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
   const verdict = { state: outcome.state, model: outcome.model, lines: outcome.lines };
   if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}`, judge: verdict };
-  const gap = weighedGap && await judgeGap(home, head, today, gate.decisions, gate.tier, outcome.lines);
+  const gap = weighedGap && withBrokenConditions(weighedGap, outcome.broken);
   const judged = gap && { ...verdict, gap: { commit: head.commit, reason: gap.reason, ...gap.acceptance ? { accepted: { by: gap.acceptance.by, ...gap.acceptance.mark ? { mark: gap.acceptance.mark } : {}, ...gap.acceptance.id ? { id: gap.acceptance.id } : {} } } : {}, text: gap.line } };
   if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}`, judge: judged };
-  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${askGap(head, "judge", gap.reason)}`], covered: "", judge: judged };
+  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${gap.broken ? voidBroken(gap.broken) : askGap(head, "judge", gap.reason)}`], covered: "", judge: judged };
   const hint = gate.tier === "ungraded"
     ? "judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and ask the user; an agent never decides on an ungraded PR"
     : `judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and decide it with fleet decision record --mark 🤖 --class proof-gap --kind judge --pr ${refText(head)} --question <q> --answer <a> --rejected <option> --reason <why>, or ask the user`;
   return { code: 1, lines: [...outcome.lines, hint], covered: "", judge: verdict };
 }
+
+const voidBroken = (ids: string[]) => `End ${ids.map((id) => `decision ${id}`).join(" and ")} with fleet decision void <id> --reason <why its condition no longer holds>, then decide or ask again`;
 
 async function roundLines(directory: string, { now }: CommandContext) {
   const round = await readJson<{ round: number | "final"; commit: string; reviewer?: string; capturedBy?: string; standing?: { reason: string; until: string }; decision?: { mark: string; id: string } } | undefined>(join(directory, "round.json"), undefined);
@@ -671,7 +679,7 @@ const arbiterOf = ({ env, cwd }: CommandContext): Arbiter => async (prompt) => {
   return answer.ok ? parseVerdict(answer.text, answer.model) : { verdict: "unavailable", reason: answer.cause, model: answer.model };
 };
 
-async function decisionOf(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+async function decisionOf(options: Map<string, string>, head: ProofIdentity, context: CommandContext): Promise<{ arbiter: Arbiter; limits: { free: number; ceiling: number }; decision?: ReviewDecision }> {
   const rest = { arbiter: arbiterOf(context), limits: { free: numberSetting("pull-requests.freeReviews", context.env), ceiling: numberSetting("pull-requests.reviewCeiling", context.env) } };
   const words = options.get("--override");
   const reason = options.get("--agent") ?? options.get("--standing");
