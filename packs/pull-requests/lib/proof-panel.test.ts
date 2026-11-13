@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, hubAt, exitedPid, type Checkout } from "./proof-testing.ts";
+import { spawnAsync } from "../../../src/testing/spawn.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, hubAt, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
 
@@ -153,6 +154,8 @@ test("a lens reads the whole diff from the round directory and REVIEW.md from th
   await pr.fleet("respond", "--round", "1", "responses.md");
   expect((await pr.fleet("gate")).code).toBe(0);
 });
+
+const exitedPid = async () => (await spawnAsync(["true"])).pid;
 
 function slotIO(slotCount: number): PanelIO {
   return { env: {}, pause: () => new Promise((done) => setImmediate(done)), now: () => new Date(), slots: fixture("fleet-panel-slots-"), slotCount, pid: process.pid, limit: 60_000 };
@@ -399,29 +402,6 @@ test("a panel the user's override starts but that fails to plan keeps the answer
   expect(JSON.parse(started.output.split("\n")[0]!)).toMatchObject({ round: 1 });
 });
 
-test("a panel whose decision never reached the ledger starts no lens, and the same command records the answer and runs the round", async () => {
-  const pr = await checkout();
-  await pr.commit("feature.txt", "greet\n");
-  await pr.fleet("require", "--none", "--reason", "docs only");
-  const reviewer = fakeModel(pr, "REVIEWER", clean);
-  const hub = hubAt(pr, "stalls on appends");
-  pr.choose("Run one more round");
-  const review = ["review", "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`];
-  pr.writer.pid = await exitedPid();
-  void pr.fleet(...review);
-  await hub.appendStalled;
-  pr.writer.pid = undefined;
-
-  await pr.fleet("review", "--wait").catch(() => undefined);
-  expect(reviewer.prompts()).toEqual([]);
-
-  hub.state.hub = "up";
-  expect((await pr.fleet(...review)).code).toBe(0);
-  expect((await pr.fleet("review", "--wait")).code).toBe(0);
-  const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"));
-  expect((await pr.decide("list", "--pr", "example/product#42")).output).toContain(`[${round.decision.id}]`);
-});
-
 const overrideReview = ["review", "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`];
 
 async function overridePanel() {
@@ -443,42 +423,77 @@ async function expectCountedPanel(pr: Checkout) {
   expect(decisions).toEqual([expect.stringContaining(`[${round.decision.id}]`)]);
 }
 
-test("a retry while the first command's decision is on its way to the ledger is refused and deletes nothing, and once that process is gone a retry reclaims the round, which the first command's late cleanup keeps", async () => {
+test("a panel whose decision never reached the ledger starts no lens while the hub is down, and the same command records that decision and runs the round", async () => {
   const { pr, reviewer } = await overridePanel();
   const hub = hubAt(pr, "stalls on appends");
-  const first = Bun.spawn(["tail", "-f", "/dev/null"]);
-  try {
-    pr.writer.pid = first.pid;
-    const starting = pr.fleet(...overrideReview);
-    await hub.appendStalled;
-    pr.writer.pid = undefined;
-    hub.state.hub = "up";
-    const reservation = readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8");
+  void pr.fleet(...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "down";
 
-    await expect(pr.fleet(...overrideReview)).rejects.toThrow("A review of this commit is still starting");
-    expect(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8")).toBe(reservation);
-    expect(existsSync(join(pr.pullRequest, "reviews/1/lenses/correctness.prompt.md"))).toBe(true);
-    expect(reviewer.prompts()).toEqual([]);
+  await expect(pr.fleet("review", "--wait")).rejects.toThrow("Run the same command again once the hub is back");
+  await expect(pr.fleet(...overrideReview)).rejects.toThrow("Run the same command again once the hub is back");
+  expect(existsSync(join(pr.pullRequest, "reviews/1/lenses/correctness.prompt.md"))).toBe(true);
+  expect(reviewer.prompts()).toEqual([]);
 
-    first.kill();
-    await first.exited;
-    expect((await pr.fleet(...overrideReview)).code).toBe(0);
-    expect((await pr.fleet("review", "--wait")).code).toBe(0);
-    hub.releaseAppends();
-    await expect(starting).rejects.toThrow("already recorded");
-    expect(readFileSync(join(pr.pullRequest, "reviews/1/findings.md"), "utf8")).toContain("## Correctness lens");
-    await expectCountedPanel(pr);
-  } finally { first.kill(); }
+  hub.state.hub = "up";
+  expect((await pr.fleet(...overrideReview)).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await expectCountedPanel(pr);
 });
 
-for (const resume of [overrideReview, ["review", "--wait"]]) {
+test("a retry while the first command's decision is on its way to the ledger records that same decision and runs the round, and the first command then ends without a second panel", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls on appends");
+  const first = pr.fleet(...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  expect((await pr.fleet(...overrideReview)).code).toBe(0);
+  hub.releaseAppends();
+  expect((await first).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  expect(reviewer.prompts()).toHaveLength(1);
+  await expectCountedPanel(pr);
+});
+
+test("two retries at once while the first command's decision is on its way record one decision and run one panel", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls on appends");
+  const first = pr.fleet(...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  const retries = await Promise.all([pr.fleet(...overrideReview), pr.fleet(...overrideReview)]);
+  expect(retries.map(({ code }) => code)).toEqual([0, 0]);
+  hub.releaseAppends();
+  expect((await first).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  expect(reviewer.prompts()).toHaveLength(1);
+  await expectCountedPanel(pr);
+});
+
+test("when the first command publishes a panel that a retry already published, it ends without starting the lenses again", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls after it lands an append");
+  const first = pr.fleet(...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  expect((await pr.fleet(...overrideReview)).code).toBe(0);
+  hub.releaseAppends();
+  const late = await first;
+  expect(late.code).toBe(0);
+  expect(reviewer.prompts()).toHaveLength(1);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await expectCountedPanel(pr);
+});
+
+for (const resume of [overrideReview, ["review", "--wait"], ["review", "--wait", "--round", "1"]]) {
   test(`a panel whose process dies after its decision reached the ledger, before its plan exists, resumes with ${resume.join(" ")} and asks for no new answer`, async () => {
     const { pr, reviewer } = await overridePanel();
     const hub = hubAt(pr, "stalls after it lands an append");
-    pr.writer.pid = await exitedPid();
     void pr.fleet(...overrideReview);
     await hub.appendStalled;
-    pr.writer.pid = undefined;
     hub.state.hub = "up";
     expect(reviewer.prompts()).toEqual([]);
 

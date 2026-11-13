@@ -148,7 +148,10 @@ export async function stagePanel(directory: string, plan: Plan, briefs: Map<stri
   await writeJson(stagedPath(directory), plan);
 }
 
-export const publishPanel = (directory: string) => rename(stagedPath(directory), planPath(directory));
+export async function publishPanel(directory: string) {
+  try { await rename(stagedPath(directory), planPath(directory)); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT" && await readPlan(directory)) return false; throw error; }
+}
 
 export async function requeueFailed(directory: string, casts: Map<string, Cast>, fresh: { plan: Plan; briefs: Map<string, string> }) {
   const plan = await requirePlan(directory);
@@ -299,7 +302,7 @@ function stopGroup(group: number | undefined) {
   try { process.kill(-group, "SIGKILL"); } catch {}
 }
 
-export function isAlive(pid: number) {
+function isAlive(pid: number) {
   try { process.kill(pid, 0); return true; }
   catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }

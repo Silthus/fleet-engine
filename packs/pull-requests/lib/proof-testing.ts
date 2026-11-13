@@ -127,11 +127,10 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const reader: { words?: ThreadWords } = { words: threadWords };
   const hub: { ssh?: Ssh } = {};
   const panel: { lostWorkers: boolean; onPause?: () => Promise<void> } = { lostWorkers: false };
-  const writer: { pid?: number } = {};
   const fleetIn = async (cwd: string, ...args: string[]) => {
     const lines: string[] = [];
     const context: ProofContext = {
-      home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh, pid: writer.pid,
+      home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh,
       detach: async (worker) => {
         if (panel.lostWorkers) return (await spawnAsync(["true"])).pid;
         await proofCommand([...worker], { ...context, print: () => {} });
@@ -153,7 +152,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel, hub, writer, decide };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel, hub, decide };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;
@@ -278,8 +277,6 @@ export function hubAt(pr: Checkout, hub: Hub | boolean = "up") {
   };
   return { remote, hosts, state, appendStalled, releaseAppends };
 }
-
-export const exitedPid = async () => (await spawnAsync(["true"])).pid;
 
 export const acceptGap = (pr: Checkout, kind: string, ...more: string[]) => pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", kind, "--pr", "example/product#42", ...more);
 

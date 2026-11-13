@@ -80,7 +80,8 @@ async function reachHub<T>(step: () => Promise<T>) {
 
 const newId = () => `d-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
 const at = (context: DecisionContext) => (context.now?.() ?? new Date()).toISOString();
-const alreadyRecorded = (id: string) => new Error(`That answer is already recorded as decision ${id}. One answer records one decision; it covers the PRs its question named. Ask the user again`);
+export class AnswerTaken extends Error {}
+const alreadyRecorded = (id: string) => new AnswerTaken(`That answer is already recorded as decision ${id}. One answer records one decision; it covers the PRs its question named. Ask the user again`);
 const recordedFor = async (ledger: Ledger, where: Decision["where"]) => fold(await reachHub(() => ledger.read())).find((decision) => messageKey(decision.where) === messageKey(where));
 
 export type Scope = { class: AskClass; prs: PrRef[]; kinds?: string[]; condition?: string };
