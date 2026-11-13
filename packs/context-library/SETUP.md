@@ -5,6 +5,9 @@ Read this when the person picks the Context library pack.
 The library is one private GitHub repo of Markdown notes, and every machine
 keeps a checkout of it. Ask with your question tool:
 
+- **Their context repo**: when they have one, add
+  `--set context.repo=<owner/name>`. The checkout is then `context.path`,
+  `~/dev/context` unless they set it.
 - **A repo they already have**: add `--set context-library.repo=<owner/name>`.
   When the checkout should live somewhere other than `~/dev/context-library`,
   also add `--set context-library.path=<folder>`.

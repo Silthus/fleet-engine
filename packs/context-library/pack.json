@@ -12,14 +12,21 @@
       "key": "context-library.repo",
       "question": "Which private GitHub repo holds your context library, such as you/notes?",
       "type": "string",
-      "ask": "setup"
+      "ask": "setup",
+      "fromContext": {
+        "value": "{repo}"
+      }
     },
     {
       "key": "context-library.path",
       "question": "Which folder holds the checkout of your context library?",
       "type": "string",
       "default": "~/dev/context-library",
-      "ask": "never"
+      "ask": "never",
+      "fromContext": {
+        "value": "{path}",
+        "unlessSet": "context-library.repo"
+      }
     },
     {
       "key": "context-library.url",

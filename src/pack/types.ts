@@ -20,6 +20,8 @@ export type PackSetting = {
   optional?: true;
   ask?: "setup" | "never";
   secret?: false;
+  /** The value when the profile sets context.repo and not this setting: {repo} is context.repo and {path} is context.path. It stays off while the profile sets unlessSet. */
+  fromContext?: { value: string; unlessSet?: string };
 };
 
 export type Workflow = {

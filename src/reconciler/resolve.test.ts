@@ -151,6 +151,40 @@ describe("resolve", () => {
     expect(plan({ devboxes: ["my-box"], workflows: { "quality-loop": true } }).jobs.map((job) => job.id)).toContain("quality-loop");
   });
 
+  test("takes unset settings from the context repo, keeps every setting the profile sets, and never points a path at the context checkout for another repo", () => {
+    const context = withPack({
+      schema: 1,
+      name: "ctx",
+      summary: "Context.",
+      settings: [
+        { key: "context.repo", question: "Which context repo?", type: "string", optional: true, ask: "never" },
+        { key: "context.path", question: "Which folder?", type: "string", default: "~/dev/context", ask: "never" },
+        { key: "ctx.repo", question: "Which repo?", type: "string", ask: "setup", fromContext: { value: "{repo}" } },
+        { key: "ctx.path", question: "Which folder?", type: "string", default: "~/dev/ctx", ask: "never", fromContext: { value: "{path}", unlessSet: "ctx.repo" } },
+        { key: "ctx.log", question: "Which log?", type: "string", default: "", ask: "never", fromContext: { value: "{path}/log.md" } },
+      ],
+    });
+    const values = (settings: Record<string, string>) => {
+      const { "ctx.repo": repo, "ctx.path": path, "ctx.log": log } = plan({ packs: ["ctx"], settings }, mac, [engine, context]).settings;
+      return { repo, path, log } as Record<string, unknown>;
+    };
+    expect(values({})).toEqual({ repo: undefined, path: "~/dev/ctx", log: "" });
+    expect(values({ "context.repo": "acme/context" })).toEqual({ repo: "acme/context", path: "~/dev/context", log: "~/dev/context/log.md" });
+    expect(values({ "context.repo": "acme/context", "context.path": "~/notes/" })).toEqual({ repo: "acme/context", path: "~/notes", log: "~/notes/log.md" });
+    expect(values({ "context.repo": "acme/context", "ctx.repo": "me/other" })).toEqual({ repo: "me/other", path: "~/dev/ctx", log: "~/dev/context/log.md" });
+    expect(values({ "context.repo": "acme/context", "ctx.path": "~/mine", "ctx.log": "~/mine/log.md" })).toEqual({ repo: "acme/context", path: "~/mine", log: "~/mine/log.md" });
+  });
+
+  test("asks for the context repo once instead of two repo questions it answers", () => {
+    const repoSetting = (pack: string) => ({ key: `${pack}.repo`, question: "Which repo?", type: "string" as const, ask: "setup" as const, fromContext: { value: "{repo}" } });
+    const one = withPack({ schema: 1, name: "one", summary: "One.", settings: [{ key: "context.repo", question: "Which context repo?", type: "string", optional: true, ask: "never" }, repoSetting("one")] });
+    const two = withPack({ schema: 1, name: "two", summary: "Two.", settings: [repoSetting("two")] });
+    const asked = (packs: string[], settings: Record<string, string> = {}) => plan({ packs, settings }, mac, [engine, one, two]).ask.map((setting) => `${setting.key}${setting.optional ? "?" : ""}`);
+    expect(asked(["one", "two"])).toEqual(["context.repo"]);
+    expect(asked(["one"])).toEqual(["one.repo"]);
+    expect(asked(["one", "two"], { "two.repo": "me/two" })).toEqual(["one.repo", "two.repo"]);
+  });
+
   test("leaves the settings of an inactive workflow out", () => {
     expect(plan().unanswered.map((setting) => setting.key)).not.toContain("orchestration.loopProject");
     expect(plan({ workflows: { "quality-loop": true } }, devbox).unanswered.map((setting) => setting.key)).toEqual(["orchestration.loopProject"]);

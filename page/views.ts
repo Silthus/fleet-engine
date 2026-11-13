@@ -201,7 +201,7 @@ ${pageJson ? `<script id="fleet-data" type="application/json">${JSON.stringify(p
   };
 
   const settingItem = (setting: PagePack["settings"][number]) =>
-    `<li><code>${esc(setting.key)}</code><span>${fmt(setting.question)}</span>${setting.default === undefined || setting.default === "" ? "" : `<span class="muted">Default: <code>${esc(setting.default)}</code></span>`}</li>`;
+    `<li><code>${esc(setting.key)}</code><span>${fmt(setting.question)}</span>${setting.fromContext ? `<span class="muted">Default: from your context repo</span>` : setting.default === undefined || setting.default === "" ? "" : `<span class="muted">Default: <code>${esc(setting.default)}</code></span>`}</li>`;
 
   const packPage = (pack: PagePack) => {
     const root = "../../";
