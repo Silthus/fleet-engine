@@ -1,6 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { type Hook, printing, runHook } from "../../base/lib/hook.ts";
-import { findThread, withT3Session } from "../../base/lib/t3/index.ts";
+import { findThread, matchThread, type ShellThread, t3CliRunner, t3UserData, type T3Deadline, withT3Session } from "../../base/lib/t3/index.ts";
 import { asksForDecision, personName } from "../lib/prose-question.ts";
 
 export type StopEvent = { transcript_path?: string; stop_hook_active?: boolean; last_assistant_message?: string };
@@ -83,12 +86,89 @@ export async function guardStop(event: StopEvent, home: string, threadId = proce
   return { decision: "block", reason: questionToolReason(personName(home)) };
 }
 
-export const hook: Hook = async (_provider, readInput, home) => {
+export type SendEvent = { session_id?: string; agent_id?: string; tool_name?: string; tool_input?: Record<string, unknown> };
+export type SendDenial = { hookSpecificOutput: { hookEventName: "PreToolUse"; permissionDecision: "deny"; permissionDecisionReason: string } };
+export type ReadShell = () => Promise<{ threads: ShellThread[] }>;
+export type SendGuardOptions = { home: string; shell: ReadShell; deadline?: T3Deadline };
+
+export const pendingCardReason = (threadId: string, person: string) => `Fleet blocked this send: thread ${threadId} waits on a pending question card. `
+  + `A send in mode auto, steer or restart interrupts its turn, and T3 cancels the card, so its lane asks ${person} again or the card is lost. `
+  + `Send again with mode: "queue": the lane reads your message once ${person} answers. `
+  + "Only when your message changes what the card asks, send it once more unchanged to replace the card.";
+
+export const killSwitch = ".config/fleet/ask-guard.off";
+
+const isThreadSend = (name = "") => /^mcp__t3[-_]code__t3_thread_send$/.test(name);
+
+function waitingCardKey(thread: ShellThread | undefined): string | undefined {
+  const card = thread?.pendingRuntimeRequest as { id?: unknown; kind?: unknown } | null | undefined;
+  if (card?.kind !== "user_input" || !thread?.activeRunId) return undefined;
+  return typeof card.id === "string" ? card.id : thread.id;
+}
+
+async function isThisMachine(environmentId: unknown, home: string): Promise<boolean> {
+  if (environmentId === undefined || environmentId === null || environmentId === "") return true;
+  const here = await readFile(join(t3UserData(home), "environment-id"), "utf8").catch(() => "");
+  return here.trim() === environmentId;
+}
+
+export const shellDeadlineMs = 6_000;
+
+const timer: T3Deadline = (_what, ms, expire) => {
+  const handle = setTimeout(expire, ms);
+  return () => clearTimeout(handle);
+};
+
+async function readThreadsBefore(shell: ReadShell, deadline: T3Deadline): Promise<ShellThread[] | undefined> {
+  let clear = () => {};
+  const late = new Promise<undefined>((resolve) => (clear = deadline("the T3 shell snapshot", shellDeadlineMs, () => resolve(undefined))));
   try {
-    return printing(await guardStop(JSON.parse(await readInput()) as StopEvent, home));
+    return (await Promise.race([shell(), late]))?.threads;
+  } catch {
+    return undefined;
+  } finally {
+    clear();
+  }
+}
+
+async function firstDenial(home: string, event: SendEvent, card: string): Promise<boolean> {
+  const denials = join(home, ".local/state/fleet/ask-guard");
+  const key = createHash("sha256").update([event.session_id ?? "", event.agent_id ?? "", card].join("\n")).digest("hex").slice(0, 32);
+  try {
+    await mkdir(denials, { recursive: true });
+    await writeFile(join(denials, key), "", { flag: "wx" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function guardSend(event: SendEvent, options: SendGuardOptions): Promise<SendDenial | undefined> {
+  const { threadId, mode } = event.tool_input ?? {};
+  if (!isThreadSend(event.tool_name) || typeof threadId !== "string" || mode === "queue" || existsSync(join(options.home, killSwitch))) return undefined;
+  if (!(await isThisMachine(event.tool_input?.environmentId, options.home))) return undefined;
+  const threads = await readThreadsBefore(options.shell, options.deadline ?? timer);
+  if (!threads) return undefined;
+  const card = waitingCardKey(matchThread(threads, threadId, (thread) => thread.id));
+  if (!card || !(await firstDenial(options.home, event, card))) return undefined;
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: pendingCardReason(threadId, personName(options.home)) } };
+}
+
+const t3CallMs = 3_000;
+
+const liveShell = (home: string): ReadShell => () =>
+  withT3Session((client) => client.getShell<{ threads: ShellThread[] }>(), { home, ttl: "1m", timeoutMs: t3CallMs, runCli: t3CliRunner({ timeoutMs: t3CallMs }) });
+
+export const hookWith = (shell: (home: string) => ReadShell): Hook => async (_provider, readInput, home) => {
+  try {
+    const event = JSON.parse(await readInput()) as StopEvent & SendEvent;
+    if (event.tool_name !== undefined) return printing(await guardSend(event, { home, shell: shell(home) }));
+    return printing(await guardStop(event, home));
   } catch {
     return printing(undefined);
   }
 };
+
+export const hook = hookWith(liveShell);
 
 if (import.meta.main) await runHook(hook);

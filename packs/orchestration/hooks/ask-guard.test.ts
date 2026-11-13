@@ -6,7 +6,8 @@ import { tempDirs } from "../../../src/testing/git.ts";
 import { devbox, engineSource, resolveEngine, skillSources } from "../../../src/testing/packs.ts";
 import { dispatch } from "../../base/hooks/run.ts";
 import { asksForDecision } from "../lib/prose-question.ts";
-import { guardStop, hook, type IsTopLevel, type StopEvent } from "./ask-guard.ts";
+import type { ShellThread } from "../../base/lib/t3/index.ts";
+import { guardSend, guardStop, hook, hookWith, type IsTopLevel, type SendEvent, type SendGuardOptions, type StopEvent } from "./ask-guard.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -164,6 +165,14 @@ describe("the question guard workflow", () => {
     for (const entry of stops) expect(JSON.stringify(entry.value)).toContain(`run.sh\\" ${entry.provider} Stop`);
   });
 
+  test("installs the send guard as a PreToolUse hook, and the base pack routes PreToolUse to it for Claude and Codex", () => {
+    expect(plan().files.map((file) => file.target)).toContain(".config/fleet/hooks/PreToolUse/ask-guard.ts");
+    expect(plan({ "question-guard": false }).files.map((file) => file.target)).not.toContain(".config/fleet/hooks/PreToolUse/ask-guard.ts");
+    const preToolUse = plan().config.filter((entry) => entry.key === "hooks.PreToolUse");
+    expect(preToolUse.map((entry) => entry.provider).sort()).toEqual(["claude", "codex"]);
+    for (const entry of preToolUse) expect(JSON.stringify(entry.value)).toContain(`run.sh\\" ${entry.provider} PreToolUse`);
+  });
+
   test("the hook dispatcher hands the block to the agent as JSON", async () => {
     const where = home("Robin");
     const target = join(where, ".config/fleet/hooks/Stop/ask-guard.ts");
@@ -175,5 +184,103 @@ describe("the question guard workflow", () => {
       return { code: 0, stdout: `${JSON.stringify(await guardStop(JSON.parse(input), where, "top", topLevel))}\n`, stderr: provider === "claude" ? "" : "wrong provider" };
     });
     expect(JSON.parse(result.stdout)).toEqual({ decision: "block", reason: expect.stringContaining("asks Robin") });
+  });
+});
+
+describe("the send guard", () => {
+  const lane = "mcp:0aa3b648";
+  const card = { id: "card-7", kind: "user_input" };
+  const waiting: Partial<ShellThread> = { id: lane, activeRunId: "run-20", pendingRuntimeRequest: card };
+  const never: SendGuardOptions["deadline"] = () => () => {};
+  const t3 = (...threads: Partial<ShellThread>[]) => async () => ({ threads: threads as ShellThread[] });
+  const send = (input: Record<string, unknown>, session = "conductor-session"): SendEvent =>
+    ({ session_id: session, tool_name: "mcp__t3-code__t3_thread_send", tool_input: { threadId: "0aa3b648", message: "S1 pushed", ...input } });
+  const guard = (event: SendEvent, options: Partial<SendGuardOptions> = {}) => guardSend(event, { home: home("Robin"), shell: t3(waiting), deadline: never, ...options });
+
+  test("denies a steering send to a thread whose running turn waits on a question card, and says to queue it", async () => {
+    const answer = await guard(send({ mode: "steer" }));
+    expect(answer?.hookSpecificOutput).toMatchObject({ hookEventName: "PreToolUse", permissionDecision: "deny" });
+    expect(answer!.hookSpecificOutput.permissionDecisionReason).toContain('mode: "queue"');
+    expect(answer!.hookSpecificOutput.permissionDecisionReason).toContain("Robin");
+  });
+
+  test("lets the same send through when it comes again in the same session, and denies it once for another session", async () => {
+    const where = home("Robin");
+    expect(await guard(send({ mode: "steer" }), { home: where })).toBeDefined();
+    expect(await guard(send({ mode: "steer" }), { home: where })).toBeUndefined();
+    expect(await guard(send({ mode: "steer" }, "other-session"), { home: where })).toBeDefined();
+    expect(await guard({ ...send({ mode: "steer" }), agent_id: "subagent-1" }, { home: where })).toBeDefined();
+  });
+
+  test("lets every send through while the kill switch file exists", async () => {
+    const where = home("Robin");
+    mkdirSync(join(where, ".config/fleet"), { recursive: true });
+    writeFileSync(join(where, ".config/fleet/ask-guard.off"), "");
+    expect(await guard(send({ mode: "auto" }), { home: where })).toBeUndefined();
+  });
+
+  test("lets the send through when T3 cannot be read", async () => {
+    expect(await guard(send({ mode: "auto" }), { shell: async () => { throw new Error("T3 is down"); } })).toBeUndefined();
+  });
+
+  test("lets the send through when T3 does not answer before the deadline, and stops the deadline when it does", async () => {
+    let cleared = 0;
+    const expired: SendGuardOptions["deadline"] = (_what, _ms, expire) => (expire(), () => cleared++);
+    expect(await guard(send({ mode: "auto" }), { shell: () => new Promise(() => {}), deadline: expired })).toBeUndefined();
+    const pending: SendGuardOptions["deadline"] = () => () => cleared++;
+    expect(await guard(send({ mode: "auto" }), { deadline: pending })).toBeDefined();
+    expect(cleared).toBe(2);
+  });
+
+  test("lets a send to another machine through even when a local thread shares its id, and denies one that names this machine", async () => {
+    const where = home("Robin");
+    mkdirSync(join(where, ".t3/userdata"), { recursive: true });
+    writeFileSync(join(where, ".t3/userdata/environment-id"), "local-env\n");
+    expect(await guard(send({ mode: "auto", environmentId: "remote-env" }), { home: where })).toBeUndefined();
+    expect(await guard(send({ mode: "auto", environmentId: "local-env" }), { home: where })).toBeDefined();
+  });
+
+  test("lets a queued send through", async () => {
+    expect(await guard(send({ mode: "queue" }))).toBeUndefined();
+  });
+
+  test.each([
+    ["an idle thread with a card", { id: lane, activeRunId: null, pendingRuntimeRequest: card }],
+    ["a running thread with no card", { id: lane, activeRunId: "run-20", pendingRuntimeRequest: null }],
+    ["a running thread waiting on an approval", { id: lane, activeRunId: "run-20", pendingRuntimeRequest: { id: "approval-1", kind: "approval" } }],
+  ])("lets a send to %s through", async (_, thread) => {
+    expect(await guard(send({ mode: "auto" }), { shell: t3(thread) })).toBeUndefined();
+  });
+
+  test("lets the send through when the guard cannot write its state", async () => {
+    const where = home("Robin");
+    writeFileSync(join(where, ".local/state/fleet/ask-guard"), "");
+    expect(await guard(send({ mode: "auto" }), { home: where })).toBeUndefined();
+  });
+
+  test("the installed hook sends a thread send to the send guard and a stop to the prose guard", async () => {
+    const where = home("Robin");
+    const reads: string[] = [];
+    const routed = hookWith((at) => (reads.push(at), t3(waiting)));
+    const denied = await routed("codex", async () => JSON.stringify({ ...send({ mode: "auto" }), tool_name: "mcp__t3_code__t3_thread_send" }), where);
+    expect(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(reads).toEqual([where]);
+    expect(await routed("claude", async () => JSON.stringify({ ...send({ mode: "auto" }), tool_name: "Bash" }), where)).toEqual({ code: 0, stdout: "", stderr: "" });
+    const path = transcript(claudePrompt("Fix it"), claudeSays("Should I merge?"));
+    expect(await routed("claude", async () => JSON.stringify({ transcript_path: path }), where)).toEqual({ code: 0, stdout: "", stderr: "" });
+  });
+
+  test("outside T3, the installed hook lets a send through", async () => {
+    expect(await hook("claude", async () => JSON.stringify(send({ mode: "auto" })), home())).toEqual({ code: 0, stdout: "", stderr: "" });
+  });
+
+  test("the PreToolUse dispatcher hands the denial to the agent", async () => {
+    const where = home("Robin");
+    const target = join(where, ".config/fleet/hooks/PreToolUse/ask-guard.ts");
+    mkdirSync(dirname(target), { recursive: true });
+    symlinkSync(join(import.meta.dir, "ask-guard.ts"), target);
+    const routed = hookWith(() => t3(waiting));
+    const result = await dispatch(dirname(target), "codex", JSON.stringify(send({ mode: "steer" })), async (_path, provider, input) => routed(provider, async () => input, where));
+    expect(JSON.parse(result.stdout).hookSpecificOutput).toMatchObject({ permissionDecision: "deny", permissionDecisionReason: expect.stringContaining('mode: "queue"') });
   });
 });
