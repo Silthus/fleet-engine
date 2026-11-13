@@ -367,10 +367,18 @@ async function olderThanGrace(path: string, now: Date) {
   return written !== undefined && now.getTime() - written > lockGrace;
 }
 
+async function guard(lock: string, now: Date) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try { await mkdir(lock, { mode: 0o700 }); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !await olderThanGrace(lock, now)) return false; }
+    await rm(lock, { recursive: true, force: true });
+  }
+  return false;
+}
+
 async function reclaim(path: string, text: string, owner: LockOwner) {
   const lock = `${path}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
-  try { await mkdir(lock, { mode: 0o700 }); }
-  catch { return false; }
+  if (!await guard(lock, owner.now())) return false;
   try {
     if (await readSlot(path) !== text) return false;
     await stopReviewer(holderOf(text), owner);
@@ -391,8 +399,7 @@ function holderOf(text: string | undefined): Holder | undefined {
 
 async function stopReviewer(holder: Holder | undefined, owner: LockOwner) {
   if (!holder?.reviewer) return;
-  const started = holder.reviewerStarted && await owner.startTime(holder.reviewer);
-  if (started && started !== holder.reviewerStarted) return;
+  if (!holder.reviewerStarted || await owner.startTime(holder.reviewer) !== holder.reviewerStarted) return;
   try { process.kill(-holder.reviewer, "SIGKILL"); } catch {}
 }
 

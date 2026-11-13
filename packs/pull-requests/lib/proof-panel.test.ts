@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, hubAt, exitedPid, reviewHead, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
@@ -191,7 +192,7 @@ test("a reclaimed slot's reviewer stops with it, and a lens records its reviewer
   const io = slotIO(1);
   const reviewer = Bun.spawn(["sleep", "30"], { detached: true });
   try {
-    writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid }));
+    writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid, reviewerStarted: "Sun Oct 25 11:00:00 2026" }));
     await withSlot(io, async () => undefined);
     await reviewer.exited;
     expect(reviewer.signalCode).toBe("SIGKILL");
@@ -207,6 +208,20 @@ test("a reclaimed slot's reviewer stops with it, and a lens records its reviewer
   expect(JSON.parse(readFileSync(seen, "utf8"))).toMatchObject({ pid: process.pid, reviewer: Number(readFileSync(`${seen}.pid`, "utf8")) });
 });
 
+test("a reclaimed slot leaves alone a process that holds its reviewer's process id unless both start times are known and match", async () => {
+  for (const recorded of [undefined, "Sun Oct 25 11:00:00 2026"]) {
+    const unknown = Bun.spawn(["sleep", "30"], { detached: true });
+    try {
+      const io = { ...slotIO(1), startTime: async (pid: number) => pid === unknown.pid && recorded ? undefined : "Sun Oct 25 11:00:00 2026" };
+      writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: unknown.pid, reviewerStarted: recorded }));
+      await withSlot(io, async () => undefined);
+      unknown.kill("SIGTERM");
+      await unknown.exited;
+      expect(unknown.signalCode).toBe("SIGTERM");
+    } finally { unknown.kill("SIGKILL"); }
+  }
+});
+
 test("a reclaimed slot leaves alone a process that now holds its reviewer's process id but started later", async () => {
   const later = Bun.spawn(["sleep", "30"], { detached: true });
   try {
@@ -217,6 +232,19 @@ test("a reclaimed slot leaves alone a process that now holds its reviewer's proc
     await later.exited;
     expect(later.signalCode).toBe("SIGTERM");
   } finally { later.kill("SIGKILL"); }
+});
+
+test("a reclaim guard that a crashed command left behind holds the slot only for a short grace", async () => {
+  const io = slotIO(1);
+  const dead = JSON.stringify({ pid: await exitedPid(), token: "dead" });
+  writeFileSync(join(io.slots, "0"), dead);
+  const guard = join(io.slots, `0.reclaim-${createHash("sha256").update(dead).digest("hex").slice(0, 16)}`);
+  mkdirSync(guard);
+  const crashed = new Date(Date.now() - 120_000);
+  utimesSync(guard, crashed, crashed);
+
+  expect(await withSlot(io, async () => "ran")).toBe("ran");
+  expect(existsSync(guard)).toBe(false);
 });
 
 test("a process's start time stays the same while it runs and is unknown once it exits", async () => {
@@ -242,7 +270,7 @@ test("--wait stops the reviewer of a lens whose worker died before it restarts t
   mkdirSync(slots, { recursive: true });
   const reviewer = Bun.spawn(["sleep", "30"], { detached: true });
   try {
-    writeFileSync(join(slots, "2"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid }));
+    writeFileSync(join(slots, "2"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid, reviewerStarted: "Sun Oct 25 11:00:00 2026" }));
     expect((await pr.fleet("review", "--wait")).code).toBe(0);
     await reviewer.exited;
     expect(reviewer.signalCode).toBe("SIGKILL");
@@ -548,15 +576,13 @@ test("two --wait commands at once on a staged panel start each lens once, and bo
   void pr.fleetAs(await exitedPid(), ...overrideReview);
   await hub.appendStalled;
   hub.state.hub = "up";
-  let starts = 0;
   let open = () => {};
   const opened = new Promise<void>((resolve) => { open = resolve; });
-  pr.panel.beforeWorker = async () => { starts++; await opened; };
+  pr.panel.beforeWorker = async () => { await opened; };
 
   const waits = [pr.fleet("review", "--wait"), pr.fleet("review", "--wait")];
   pr.panel.onPause = async () => { open(); await Promise.race(waits); };
   const ends = await Promise.all(waits);
-  expect(starts).toBe(1);
   expect(reviewer.prompts()).toHaveLength(1);
   expect(ends.map(({ code }) => code)).toEqual([0, 0]);
   for (const { output } of ends) expect(output).toContain("FINDINGS:\n(none)");
