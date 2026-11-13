@@ -106,6 +106,16 @@ test("--message takes an earlier answer by its id, and --words or --message alon
   expect(recorded.output).toBe(`- 👤 **Accept the prod-shape gap? example/product#42: No sandbox** 2026-10-25 "Accept the gap (Recommended)" (the user, proof-gap, thread mcp:thread-1) [${idIn(recorded.output)}]`);
 });
 
+test("a plain yes accepts the gap the question named; an answer that keeps it open or says no never does", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.chooseGap("prod-shape", "No sandbox", "No, keep it open");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow(`The user chose "No, keep it open", which does not accept the gap`);
+  pr.chooseGap("prod-shape", "No sandbox", "Yes");
+  expect((await acceptGap(pr, "prod-shape")).code).toBe(0);
+  expect((await pr.fleet("gate")).code).toBe(0);
+});
+
 test("a legacy acceptance in the gap file still counts, and survives a new reason", async () => {
   const pr = await checkout();
   await owing(pr, "prod-shape");

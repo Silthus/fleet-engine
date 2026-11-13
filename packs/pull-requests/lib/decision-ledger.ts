@@ -222,7 +222,7 @@ answer, with the date they gave it. --thread defaults to this T3 thread (T3CODE_
 question tool in the T3 app count; a typed message does not. Each --pr must be named in that question (#n,
 repo#n, owner/repo#n, or its URL), so one answer covers every PR its question named and no other. One answer
 records one decision. With --class proof-gap and --kind, the decision accepts those gaps of each PR, and the user's
-choice must start with "Accept"; with --keep-owed, it keeps them owed whatever an agent decides. --condition names
+choice must start with "Accept" or "Yes"; with --keep-owed, it keeps them owed whatever an agent decides. --condition names
 what must stay true at HEAD; the judge checks it. Classes: ${askClasses.join(", ")}.
 record with 🤖 records the agent's own decision with the option it rejected. Fleet reads each PR's Tier line in its
 merge-risk callout at HEAD: it refuses an ungraded PR, and on a critical PR anything but process (review and status
@@ -340,7 +340,7 @@ function fits(heard: HeardAnswer, input: Hearing) {
   if (unnamed.length) throw new Error(`The question the user answered does not name ${unnamed.map(refText).join(", ")}. An answer covers only the PRs its question named; ask them about the others. The question: ${heard.answered}`);
   const unnamedKinds = (input.kinds ?? []).filter((kind) => !new RegExp(`(?<![\\w-])${escape(kind)}(?![\\w-])`, "i").test(heard.answered));
   if (unnamedKinds.length) throw new Error(`The question the user answered does not name the ${unnamedKinds.join(", ")} gap. Ask them about each gap kind by name. The question: ${heard.answered}`);
-  if (input.class === "proof-gap" && !input.keepOwed && !normalized(heard.words).startsWith("accept")) throw new Error(`The user chose "${heard.words}", which does not accept the gap. The gap stays open`);
+  if (input.class === "proof-gap" && !input.keepOwed && !acceptsGap(heard.words)) throw new Error(`The user chose "${heard.words}", which does not accept the gap. The gap stays open`);
 }
 
 export async function appendDecision(ledger: Ledger, decision: Decision) {
@@ -431,3 +431,5 @@ export async function decisionCommand(args: string[], context: DecisionContext):
   if (name === "void") return voidDecision(parse(args, ["--reason"], [], []), context, ledger);
   throw new Error(`Unknown command ${name}. Run fleet decision --help`);
 }
+
+const acceptsGap = (words: string) => /^(accept|yes)\b/.test(normalized(words));
