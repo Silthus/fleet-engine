@@ -102,11 +102,17 @@ the person's own subscriptions, never for someone else's.
   weekly quota resets first. A full or unreadable subscription gets priority
   0. It keeps fill-first routing, and session affinity keeps each session on
   one subscription. `fleet cli-proxy-balance --dry-run` prints the ranking and
-  changes nothing. Unreadable usage does not fail the run. When the proxy says
-  a subscription's login expired (`invalid_grant`) while that subscription
-  fails, the balancer's log line says so, and `fleet cli-proxy doctor` warns
-  with the subscription's short id, never its file name, which holds the
-  account's email, and its sign-in command. The doctor counts only working
+  changes nothing. Unreadable usage does not fail the run. Its log lines name a
+  subscription by provider and short id, such as `Claude subscription
+  aaaabbbb`, never by its file name, which holds the account's email. The
+  short id is the first 8 characters of the subscription's Auth Index in the
+  management panel. When the Auth Index holds other characters than letters,
+  digits, `-` and `_`, the short id is the first 8 characters of the SHA-256
+  of the file name instead: `printf %s <file name> | sha256sum | cut -c1-8`
+  on the hub finds it. When the proxy says a subscription's login expired
+  (`invalid_grant`) while that subscription fails, the balancer's log line says
+  so, and `fleet cli-proxy doctor` warns with the same short id and its sign-in
+  command. The doctor counts only working
   subscriptions toward the minimum and fails when too few work. Usage that is
   unreadable for another reason has no such warning: it clears on a later run.
 - **Claude Code.** On the `claude` and `both` plans, on the hub and on each

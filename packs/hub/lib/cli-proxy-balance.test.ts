@@ -92,9 +92,9 @@ test("balance sets fill-first routing, ranks the Claude subscriptions by weekly 
   ]);
   expect(calls.some((call) => (call.body as { auth_index?: string } | undefined)?.auth_index === "4")).toBe(false);
   expect(lines).toContain("routing strategy round-robin -> fill-first");
-  expect(lines).toContain("b.json: priority 1 -> 2, 7d 70% resets in 1d 0h, 5h unknown");
-  expect(lines).toContain("a.json: priority 2 -> 1, 7d 20% resets in 5d 0h, 5h 5% resets in 2h");
-  expect(lines).toContain("b.json: cleared quota cooldown after live usage confirmed capacity");
+  expect(lines).toContain("Claude subscription 2: priority 1 -> 2, 7d 70% resets in 1d 0h, 5h unknown");
+  expect(lines).toContain("Claude subscription 1: priority 2 -> 1, 7d 20% resets in 5d 0h, 5h 5% resets in 2h");
+  expect(lines).toContain("Claude subscription 2: cleared quota cooldown after live usage confirmed capacity");
 });
 
 test("a dry run reads usage and logs the ranking, but writes nothing", async () => {
@@ -102,7 +102,7 @@ test("a dry run reads usage and logs the ranking, but writes nothing", async () 
   const lines: string[] = [];
   await balance({ fetch, managementKey, now, dryRun: true, log: (line) => lines.push(line) });
   expect(calls.filter((call) => call.method !== "GET" && call.path !== "api-call")).toEqual([]);
-  expect(lines).toContain("c.json: priority 0, 7d 100% resets in 2d 0h, 5h unknown");
+  expect(lines).toContain("Claude subscription 3: priority 0, 7d 100% resets in 2d 0h, 5h unknown");
 });
 
 test("a balanced pool with fill-first routing changes nothing and logs nothing", async () => {
@@ -134,7 +134,7 @@ test("balance reads each Codex subscription's windows from its own usage API, lo
   const lines: string[] = [];
   await balance({ fetch, managementKey, now, dryRun: true, log: (line) => lines.push(line) });
   expect(calls).toContainEqual(expect.objectContaining({ path: "api-call", body: { auth_index: "5", method: "GET", url: codexUsageUrl, header: { Authorization: "Bearer $TOKEN$" } } }));
-  expect(lines).toContain("codex.json: priority 7, 7d 10% resets in 3d 0h, 5h 30% resets in 2h");
+  expect(lines).toContain("Codex subscription 5: priority 7, 7d 10% resets in 3d 0h, 5h 30% resets in 2h");
 
   const live = managementApi();
   await balance({ fetch: live.fetch, managementKey, now, dryRun: false, log: () => {} });
@@ -151,7 +151,7 @@ test("a Codex subscription that hit its limit stays in its cooldown, and one who
   const lines: string[] = [];
   await balance({ fetch, managementKey, now, dryRun: false, log: (line) => lines.push(line) });
   expect(calls.filter((call) => call.path === "reset-quota").map((call) => call.body)).toEqual([{ auth_index: "6" }]);
-  expect(lines).toContain("free.json: cleared quota cooldown after live usage confirmed capacity");
+  expect(lines).toContain("Codex subscription 6: cleared quota cooldown after live usage confirmed capacity");
 });
 
 test("from the raw usage answer, a Codex cooldown clears only while every limit has room and every window reads", async () => {
@@ -191,7 +191,7 @@ test("unreadable Codex usage is logged as unreadable and clears no cooldown", as
   const { fetch, calls } = managementApi({ strategy: "fill-first", files, codexUsage: { "5": { rate_limit: { allowed: true } } } });
   const lines: string[] = [];
   await balance({ fetch, managementKey, now, dryRun: false, log: (line) => lines.push(line) });
-  expect(lines).toEqual(["odd.json: priority 0, usage unreadable"]);
+  expect(lines).toEqual(["Codex subscription 5: priority 0, usage unreadable"]);
   expect(calls.filter((call) => call.path === "reset-quota")).toEqual([]);
 });
 
@@ -208,10 +208,10 @@ test("balance tells an expired login apart from usage it could not read, ranks t
   mkdirSync(join(home, ".local/share/fleet-cli-proxy"), { recursive: true });
   writeFileSync(join(home, ".local/share/fleet-cli-proxy/management.env"), `MANAGEMENT_PASSWORD=${managementKey}\n`);
   expect(await balanceCommand([], { home, fetch, now: () => now, ledger: false, log: (line) => lines.push(line) })).toBe(0);
-  expect(lines.filter((line) => !line.startsWith("a.json"))).toEqual([
-    "expired.json: priority 0, usage unreadable: its login expired. Sign it in again on the hub; fleet cli-proxy doctor names the command",
-    "odd.json: priority 0, usage unreadable",
-    "back.json: priority 0, usage unreadable",
+  expect(lines.filter((line) => !line.startsWith("Claude subscription 1:"))).toEqual([
+    "Claude subscription 2: priority 0, usage unreadable: its login expired. Sign it in again on the hub; fleet cli-proxy doctor names the command",
+    "Claude subscription 3: priority 0, usage unreadable",
+    "Claude subscription 4: priority 0, usage unreadable",
   ]);
   expect(lines.join("\n")).not.toContain("alice");
 });
@@ -232,15 +232,40 @@ test("balance reports each blocked credential of either provider on every run, a
   for (const lines of runs) await balance({ fetch, managementKey, now, dryRun: false, log: (line) => lines.push(line) });
   for (const lines of runs) {
     expect(lines.filter((line) => line.includes("blocked"))).toEqual([
-      "revoked.json: blocked (authentication_error). The proxy skips this Claude subscription until you sign it in again on the hub.",
-      "codex.json: blocked (unauthorized). The proxy skips this Codex subscription until you sign it in again on the hub.",
-      "flaky.json: blocked (transient_error). The proxy skips this Codex subscription until the block clears.",
-      "unpaid.json: blocked (payment_required). The proxy skips this Claude subscription until its plan's billing is fixed.",
-      "named.json: blocked (unavailable). The proxy skips this Claude subscription until the block clears.",
+      "Claude subscription 2: blocked (authentication_error). The proxy skips it until you sign it in again on the hub.",
+      "Codex subscription 5: blocked (unauthorized). The proxy skips it until you sign it in again on the hub.",
+      "Codex subscription 7: blocked (transient_error). The proxy skips it until the block clears.",
+      "Claude subscription 8: blocked (payment_required). The proxy skips it until its plan's billing is fixed.",
+      "Claude subscription 9: blocked (unavailable). The proxy skips it until the block clears.",
     ]);
   }
   expect(runs[0]!.join("\n")).not.toContain("token revoked");
   expect(runs[0]!.join("\n")).not.toContain("alice");
+});
+
+test("the balancer's journal lines name each subscription by its short id, as fleet cli-proxy doctor does, and never by its auth file, which holds the account's email", async () => {
+  const files = [
+    { name: "claude-user@example.com.json", provider: "claude", auth_index: "aaaabbbbcccc", priority: 2 },
+    { name: "claude-other@example.com.json", provider: "claude", auth_index: "ddddeeeeffff", priority: 1, unavailable: true, cooldowns: [{ reason: "quota" }] },
+    { name: "claude-third@example.com.json", provider: "claude", auth_index: "1111222233334444", priority: 0, unavailable: true, cooldowns: [{ reason: "unauthorized" }] },
+    { name: "codex-user@example.com-team.json", provider: "codex", auth_index: "not an index!", priority: 0 },
+  ];
+  const iso = (days: number) => new Date(now + days * day).toISOString();
+  const usage = { aaaabbbbcccc: { seven_day: { utilization: 20, resets_at: iso(5) } }, ddddeeeeffff: { seven_day: { utilization: 70, resets_at: iso(1) } } };
+  const { fetch } = managementApi({ files, usage, codexUsage: {} });
+  const lines: string[] = [];
+  await balance({ fetch, managementKey, now, dryRun: false, ledger: true, log: (line) => lines.push(line) });
+  const hashed = new Bun.CryptoHasher("sha256").update("codex-user@example.com-team.json").digest("hex").slice(0, 8);
+  expect(lines).toEqual([
+    "routing strategy round-robin -> fill-first",
+    "Claude subscription aaaabbbb: priority 2 -> 1, 7d 20% resets in 5d 0h, 5h unknown",
+    "Claude subscription ddddeeee: priority 1 -> 2, 7d 70% resets in 1d 0h, 5h unknown",
+    "Claude subscription 11112222: priority 0, usage unreadable",
+    `Codex subscription ${hashed}: priority 0, usage unreadable`,
+    "Claude subscription 11112222: blocked (unauthorized). The proxy skips it until you sign it in again on the hub.",
+    "Claude subscription ddddeeee: cleared quota cooldown after live usage confirmed capacity",
+  ]);
+  for (const leak of ["@", "example.com", "user", "other", "third", ".json"]) expect(lines.join("\n")).not.toContain(leak);
 });
 
 test("while the panel is on, each balance records every named window of each subscription in the quota ledger, and a dry run or an off panel records none", async () => {
