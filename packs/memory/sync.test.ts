@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { git } from "../../src/testing/git.ts";
 import { fakeToken, memorySyncHarness } from "./sync-testing.ts";
 
-const { seed, setup, sync, remoteHistory } = memorySyncHarness();
+const { seed, setup, sync, remoteHistory, commitAll } = memorySyncHarness();
 
 test("checks out the repo, then shares each machine's notes and merges MEMORY.md by union", async () => {
   const { root, remote } = setup();
@@ -127,13 +127,21 @@ test("starts main in an empty repo", async () => {
   expect(readFileSync(join((await sync(root, remote, "box")).checkout, "MEMORY.md"), "utf8")).toContain("- first note");
 });
 
-test("refuses to sync with a repo other than the one in memory.repo", async () => {
+test("moves a checkout of another repo aside and carries its unsynced notes to the one in memory.repo", async () => {
   const { root, remote } = setup();
-  await sync(root, remote, "laptop");
-  const other = join(root, "other.git");
-  git(root, "init", "-q", "--bare", "-b", "main", other);
-  const result = await sync(root, other, "laptop");
-  expect([result.code, result.out]).toEqual([1, expect.stringContaining("but memory.repo is")]);
+  const env = { FLEET_MEMORY_SUBTREE: "memory" };
+  commitAll(join(root, "seed-main"), "notes", { "memory/MEMORY.md": "# Memory\n- shared\n", "memory/old.md": "old\n" });
+  const laptop = await sync(root, remote, "laptop", env);
+  const moved = join(root, "moved.git");
+  git(root, "clone", "-q", "--bare", remote, moved);
+  writeFileSync(join(laptop.checkout, "unsynced.md"), "only on the laptop\n");
+  writeFileSync(join(laptop.checkout, "old.md"), "old, edited\n");
+  const result = await sync(root, moved, "laptop", env);
+  expect([result.code, result.out]).toEqual([0, expect.stringContaining("carried this machine's unsynced notes over")]);
+  expect((await sync(root, moved, "laptop", env)).code).toBe(0);
+  expect(git(root, "--git-dir", moved, "show", "main:memory/unsynced.md")).toBe("only on the laptop");
+  expect(git(root, "--git-dir", moved, "show", "main:memory/old.md")).toBe("old, edited");
+  expect(git(root, "--git-dir", moved, "show", "main:memory/MEMORY.md")).toContain("- shared");
 });
 
 test.each([["untracked", false], ["ignored", true]])("keeps an %s note written while it set up a new checkout", async (_, ignored) => {
