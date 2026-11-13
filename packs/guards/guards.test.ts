@@ -561,6 +561,61 @@ describe("the gh guard", () => {
   });
 
   test.each([
+    "gh api repos/$ORG/$REPO/contents/README.md",
+    'gh api "repos/${ORG}/app/contents"',
+    "gh api repos/$(echo other)/app",
+    "gh api repos/`echo other`/app",
+    "gh api $ENDPOINT",
+    'gh api -H "Accept: application/vnd.github.raw" "${BASE}/contents/README.md"',
+    "gh api https://api.github.com/repos/$ORG/app",
+    "gh api repos/{other,}/app",
+    "gh api repos/oth*/app",
+    "gh api repos/{}/app",
+    'gh pr view 1 -R "$REPO"',
+    "gh pr view 1 --repo=$ORG/app",
+    "gh pr view 1 -R${REPO}",
+    "gh search code attachments --owner $ORG",
+    'gh repo view "$REPO"',
+    "gh repo view $ORG/app --json name",
+    "gh repo list $ORG",
+    "gh pr view https://github.com/$ORG/app/pull/1",
+    "GH_REPO=$REPO gh issue list",
+    'export GH_REPO="$REPO"; gh api repos/{owner}/{repo}/contents',
+    "body=$(gh api repos/$ORG/app/contents/a.ts)",
+    "for repo in a b; do gh api repos/$repo/x; done",
+    "echo other | xargs -I{} gh api repos/{}/app",
+    "bash -c 'gh api repos/$ORG/app'",
+    "(gh api repos/$ORG/app)",
+  ])("refuses a repository owner that is not spelled out: %s", (command) => {
+    expect(refusal(command)).toContain("is not spelled out");
+  });
+
+  test.each([
+    ["gh api repos//other/app", "other"],
+    ["gh api --method GET Repos/other/app", "other"],
+    ["gh api repos/\"other\"/app", "other"],
+    ["gh api -H 'Accept: application/vnd.github.raw' repos/other/app/contents/README.md", "other"],
+    ["body=$(gh api repos/other/app/contents/a.ts)", "other"],
+    ["gh repo view other/app --json name", "other"],
+  ])("refuses an outside owner however the command spells it: %s", (command, owner) => {
+    expect(refusal(command)).toContain(`\`${owner}\` is not one of the GitHub owners`);
+  });
+
+  test.each([
+    "gh api repos/{owner}/{repo}/pulls",
+    "gh api repos/:owner/:repo/pulls",
+    'gh api "repos/acme/app/contents/$FILE"',
+    "gh api repos/acme/$REPO/pulls",
+    "gh api repos/acme/app/commits --jq '.[] | select(.sha == $sha)'",
+    "gh api graphql -f query='query($n: Int!) { viewer { login } }' -F n=1",
+    "GH_REPO=acme/app gh pr list",
+    "gh repo view site",
+    'title=$(gh pr view "$PR" --json title -q .title)',
+  ])("allows spelled-out allowed owners and gh placeholders: %s", (command) => {
+    expect(refusal(command)).toBeUndefined();
+  });
+
+  test.each([
     "gh pr view 123 --json title",
     "gh api repos/ACME/app/pulls/1/comments --paginate",
     "gh api repos/{owner}/{repo}/git/refs/heads/old -X DELETE",

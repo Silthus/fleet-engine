@@ -8,6 +8,8 @@ const extensionReason = (person: string) => "Fleet blocked this command: a gh ex
 const exposureReason = (person: string) => `Fleet blocked this command: it deletes a repository or makes code public. If you need it, stop and ask ${person}.`;
 const ownerReason = (owner: string, person: string) => `Fleet blocked this command: \`${owner}\` is not one of the GitHub owners agents may use on this machine. `
   + `Use a repository of an allowed owner, or stop and ask ${person} to add \`${owner}\` to guards.owners.`;
+const spellOutReason = (owner: string) => `Fleet blocked this command: the repository owner \`${owner}\` is not spelled out, so the owner check cannot read it. `
+  + "A shell variable, substitution, or pattern can name any owner. Write the owner as plain text, such as `gh api repos/<owner>/<repo>/...` or `--repo <owner>/<repo>`.";
 
 type Gh = { group: string; action: string; operands: string[]; flags: Map<string, string[]> };
 
@@ -52,7 +54,6 @@ const aliases: Record<string, string> = { new: "create", ls: "list", rm: "delete
 const accountEndpoints = /^(?:user\/(?:keys|ssh_signing_keys|gpg_keys)|authorizations)\b/;
 const repositoryEndpoint = /^repos\/[^/]+\/[^/]+\/?$/;
 const repositoryCreation = /^(?:user\/repos|orgs\/[^/]+\/repos|repos\/[^/]+\/[^/]+\/generate)\/?$/;
-const ownerEndpoint = /^(?:repos|orgs)\/([^/{?]+)/;
 const githubUrl = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)/;
 const repoTargets = new Set(["clone", "view", "fork", "edit", "delete", "sync", "archive", "unarchive", "create", "set-default"]);
 const orgShortFlag = new Set(["secret", "variable", "ruleset"]);
@@ -147,6 +148,16 @@ function exposure(gh: Gh, person: string): string | undefined {
   return undefined;
 }
 
+const placeholders = new Set(["{owner}", ":owner"]);
+const plainName = /^[A-Za-z0-9._-]+$/;
+const plainOwner = /^[A-Za-z0-9-]+$/;
+
+function endpointOwner(endpoint: string): string {
+  const [first = "", owner = ""] = endpoint.split(/[?#]/)[0].split("/").filter(Boolean);
+  if (/^(?:repos|orgs)$/i.test(first)) return owner;
+  return /[$`]/.test(first) ? first : "";
+}
+
 function owners(gh: Gh, repoVariable: string | undefined): string[] {
   const repos = values(gh, "-R", "--repo");
   const found = [...repos, ...(repos.length === 0 && repoVariable ? [repoVariable] : [])].map(repoOwner);
@@ -154,10 +165,15 @@ function owners(gh: Gh, repoVariable: string | undefined): string[] {
   const operands = gh.group === "api" ? [] : [gh.action, ...gh.operands];
   for (const operand of operands) found.push(operand.match(githubUrl)?.[1] ?? "");
   const [target] = gh.operands;
-  if (gh.group === "repo" && repoTargets.has(gh.action) && target?.includes("/") && !githubUrl.test(target)) found.push(repoOwner(target));
+  if (gh.group === "repo" && repoTargets.has(gh.action) && target && !githubUrl.test(target) && (target.includes("/") || !plainName.test(target))) found.push(repoOwner(target));
   if (gh.group === "repo" && gh.action === "list" && target) found.push(target);
-  if (gh.group === "api") found.push(endpointOf(gh).match(ownerEndpoint)?.[1] ?? "");
-  return found.filter((owner) => owner && !/^[{$:]/.test(owner));
+  if (gh.group === "api") found.push(endpointOwner(endpointOf(gh)));
+  return found.filter((owner) => owner && !placeholders.has(owner));
+}
+
+function ownerRisk(owner: string, allowed: ReadonlySet<string>, person: string): string | undefined {
+  if (!plainOwner.test(owner)) return spellOutReason(owner);
+  return allowed.has(owner.toLowerCase()) ? undefined : ownerReason(owner, person);
 }
 
 /** Parses guards.owners, a list of GitHub owners separated by commas or spaces. No list means no owner rule. */
@@ -170,13 +186,17 @@ export function ownerList(value: unknown): Set<string> | null {
  * code, or name a repository whose owner is not allowed. `inheritedRepo` is the GH_REPO the agent's shell inherits. */
 export function ghRisk(command: string, allowed: ReadonlySet<string> | null, person: string, inheritedRepo?: string): string | undefined {
   for (const { name, args, env } of commandsIn(command)) {
-    if (name !== "gh") continue;
-    const gh = parseGh(args);
+    const ghArgs = name === "gh" ? args : name === "xargs" && args.includes("gh") ? args.slice(args.indexOf("gh") + 1) : undefined;
+    if (!ghArgs) continue;
+    const gh = parseGh(ghArgs);
     if (gh.flags.has("--help")) continue;
     const risk = exposure(gh, person);
     if (risk) return risk;
-    const outside = allowed && owners(gh, env.get("GH_REPO") ?? inheritedRepo).find((owner) => !allowed.has(owner.toLowerCase()));
-    if (outside) return ownerReason(outside, person);
+    if (!allowed) continue;
+    for (const owner of owners(gh, env.get("GH_REPO") ?? inheritedRepo)) {
+      const outside = ownerRisk(owner, allowed, person);
+      if (outside) return outside;
+    }
   }
   return undefined;
 }
