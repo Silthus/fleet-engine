@@ -4,8 +4,8 @@ import { readPullRequest, restJson, runIn } from "./pr-ci.ts";
 import { join } from "node:path";
 import { gapKind, ledgerRoot, readJson, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
-  agentRefusal, askClasses, brakeDays, brakeOf, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, liftCounted, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
-  type AskClass, type Decision, type DecisionState, type Env, type Ledger, type LedgerEvent, type Lift, type PrRef, type Reversal, type Ssh, type UsersMark,
+  agentRefusal, answerUse, askClasses, brakeDays, brakeOf, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, liftCounted, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
+  type AnswerUse, type AskClass, type Decision, type DecisionState, type Env, type Ledger, type LedgerEvent, type Lift, type PrRef, type Reversal, type Ssh, type UsersMark,
 } from "./decision-ledger.ts";
 
 export type DecisionContext = {
@@ -47,15 +47,16 @@ It refuses the user's keep-owed: only their acceptance lifts it.
 reverse records the user's reversal of a decision: their dated, quoted words in a message of theirs in the T3 thread,
 or on a GitHub comment written by the account gh is signed in as, which must hold each quoted part. The message must
 say the words on the quoted date; when two messages on that date do, --message picks one by its id. A comment must
-not be one Fleet writes: a decision line, the PR's proof receipt, or an end-of-run report. The user's words must be
+not be one Fleet writes: a decision line, the PR's proof receipt (matched by its comment id), or an end-of-run report. The user's words must be
 newer than the decision, and the reversal takes the time they wrote them. The decision then prints as 👤 with their
 words, the replaced answer struck through, and counts no more at the gate or in list --live; decide or ask again. It
 refuses the user's keep-owed, as void does, and a voided decision. Two reversals of 🤖 decisions in one class within
 ${brakeDays} days brake the class from the later of the two: record --mark 🤖 and fleet proof review --agent in it
-are refused until lift records the user's answer to your question tool. The question must ask to lift the brake and
-name the class, such as "Lift the brake on design decisions?"; the answer must start with "Lift" or "Yes", be given
-after the brake, and not be recorded as a decision. One answer lifts one brake: Fleet reads the ledger back and
-fails when another lift used it first. A 🤖 decision that lands while its class is braked counts nowhere.
+are refused until lift records the user's answer to your question tool. The question must name the brake and the
+class, and the answer must be given after the brake. An answer that starts with "Lift" lifts it; a "Yes" lifts it only
+when the question starts with "Lift the brake on <class>", such as "Lift the brake on design decisions?". One answer
+lifts one brake or records one decision, never both: record refuses an answer a lift used, lift refuses one a decision
+used, and each reads the ledger back and fails when the other used it first. A 🤖 decision that lands while its class is braked counts nowhere.
 record --mark 🤖 --class scope takes --link with the T3 thread a side fix started in.
 report prints the lane's end-of-run report in Markdown, in five sections: still yours (unaccepted gaps on critical
 heads first, judge gaps too, a question card that waits in --thread, open PRs whose judge has not run at HEAD with
@@ -108,7 +109,8 @@ async function reachHub<T>(step: () => Promise<T>) {
 const newId = () => `d-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
 const at = (context: DecisionContext) => (context.now?.() ?? new Date()).toISOString();
 const alreadyRecorded = (id: string) => new Error(`That answer is already recorded as decision ${id}. One answer records one decision; it covers the PRs its question named. Ask the user again`);
-const recordedFor = async (ledger: Ledger, where: Decision["where"]) => fold(await reachHub(() => ledger.read())).find((decision) => messageKey(decision.where) === messageKey(where));
+const alreadyLifted = (lifted: Lift) => new Error(`That answer already lifted the ${lifted.class} brake on ${lifted.at.slice(0, 10)}. One answer lifts one brake or records one decision; ask the user again`);
+const alreadyUsed = (use: AnswerUse) => "decision" in use ? alreadyRecorded(use.decision) : alreadyLifted(use.lift);
 
 export type Scope = { class: AskClass; prs: PrRef[]; kinds?: string[]; condition?: string };
 const scopeOf = ({ prs, kinds, condition }: Scope): Decision["scope"] => ({ prs: prs.map(refText), ...kinds?.length ? { kinds } : {}, ...condition ? { condition } : {} });
@@ -139,8 +141,8 @@ export async function hearUser(input: Hearing, context: DecisionContext, ledger:
     try {
       fits(heard, input);
       const where = { thread: word.thread, message: word.id, machine: thisMachine(context.env) };
-      const earlier = await recordedFor(ledger, where);
-      if (earlier) { used ??= alreadyRecorded(earlier.id); continue; }
+      const earlier = answerUse(await reachHub(() => ledger.read()), messageKey(where));
+      if (earlier) { used ??= alreadyUsed(earlier); continue; }
       const usedOn = await usedAnswer(context.home, heard);
       if (usedOn) { used ??= new Error(usedOn); continue; }
       return {
@@ -199,6 +201,8 @@ export async function appendDecision(ledger: Ledger, decision: Decision) {
   const winner = decision.where.message && decisions.find((recorded) => messageKey(recorded.where) === messageKey(decision.where));
   if (winner && winner.id !== decision.id) throw alreadyRecorded(winner.id);
   if (decisions.some((recorded) => recorded.id === decision.id)) return decision.id;
+  const lifted = answerUse(events, messageKey(decision.where));
+  if (lifted && "lift" in lifted) throw alreadyLifted(lifted.lift);
   if (unacknowledged) notRecorded(unacknowledged);
   if (decision.mark === "🤖" && brakeOf(events, decision.class)) {
     throw new Error(`The ${decision.class} class was braked while this decision was recorded, so it counts nowhere. An agent decides no ${decision.class} ask alone until the user lifts the brake; ask them`);
@@ -285,6 +289,7 @@ const quoteWithDate = () => new Error(`Quote the user's words with the date they
 const quotedDate = (words: string) => /\b\d{4}-\d{2}-\d{2}\b/.exec(words)![0];
 const fleetText = (body: string) => /\[d-[0-9a-f]{8}\]/.test(body) || /^#+ End-of-run report\b/m.test(body);
 const receiptOf = async (home: string, repository: string, pr: string) => (await readJson<{ url?: string } | undefined>(join(ledgerRoot(home), repository, String(pr), "receipt.json"), undefined))?.url;
+const commentId = (url: string | undefined) => url === undefined ? undefined : commentPattern.exec(url)?.[3];
 
 async function heardInThread(thread: string, words: string, message: string | undefined, context: DecisionContext) {
   if (!isDatedQuote(words)) throw quoteWithDate();
@@ -314,7 +319,7 @@ async function heardOnComment(url: string, words: string, context: DecisionConte
   const comment = restJson<{ user?: { login?: string }; body?: string; created_at?: string }>(`repos/${repository}/issues/comments/${id}`, run);
   const author = comment.user?.login ?? "";
   if (author.toLowerCase() !== login.toLowerCase()) throw new Error(`The comment is by ${author || "nobody"}, not the user (${login}). Only the user's own words reverse a decision`);
-  if (fleetText(comment.body ?? "") || await receiptOf(context.home, repository, pr) === url) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
+  if (fleetText(comment.body ?? "") || commentId(await receiptOf(context.home, repository, pr)) === id) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
   const body = normalized(comment.body ?? "");
   const missing = quotes(words).find((quote) => !body.includes(quote));
   if (missing) throw new Error(`"${missing}" is not in the comment ${url}. Quote the user's words as they wrote them`);
@@ -347,8 +352,16 @@ async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger)
   return 0;
 }
 
-const asksToLift = (question: string, decisionClass: AskClass) => /\blift\b/i.test(question) && /\bbrake\b/i.test(question) && namesKind(question, decisionClass);
-const liftsBrake = (words: string) => /^(lift|yes)\b/.test(normalized(words));
+const namesBrake = (question: string, decisionClass: AskClass) => /\bbrake\b/i.test(question) && namesKind(question, decisionClass);
+const liftQuestion = (decisionClass: AskClass) => `Lift the brake on ${decisionClass}`;
+
+function refuseUnlifting(heard: ThreadWord, decisionClass: AskClass) {
+  if (!namesBrake(heard.answered, decisionClass)) throw new Error(`The question the user answered does not ask to lift the ${decisionClass} brake. The question: ${heard.answered}`);
+  const answer = normalized(heard.text);
+  if (/^lift\b/.test(answer)) return;
+  if (!/^yes\b/.test(answer)) throw new Error(`The user chose "${heard.text}", which does not lift the ${decisionClass} brake. It stays on`);
+  if (!normalized(heard.answered).startsWith(normalized(liftQuestion(decisionClass)))) throw new Error(`The user chose "${heard.text}" to a question that does not start with "${liftQuestion(decisionClass)}". A plain yes lifts only the question that asks it; the brake stays on. The question: ${heard.answered}`);
+}
 
 async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const decisionClass = askClass(required(parsed, "--class"));
@@ -359,8 +372,7 @@ async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   if (!brake) throw new Error(`The ${decisionClass} class is not braked, so there is nothing to lift`);
   const heard = await heardInThread(thread, words, parsed.options.get("--message"), context);
   if (heard.source !== "question") throw new Error(`"${heard.text}" is a message the user typed. Only their answer to your question tool lifts a brake: ask them with it`);
-  if (!asksToLift(heard.answered, decisionClass)) throw new Error(`The question the user answered does not ask to lift the ${decisionClass} brake. The question: ${heard.answered}`);
-  if (!liftsBrake(heard.text)) throw new Error(`The user chose "${heard.text}", which does not lift the ${decisionClass} brake. It stays on`);
+  refuseUnlifting(heard, decisionClass);
   const decided = fold(events).find((decision) => messageKey(decision.where) === `${heard.thread}/${heard.id}`);
   if (decided) throw alreadyRecorded(decided.id);
   const usedOn = await usedAnswer(context.home, heardAnswer(heard));
@@ -370,7 +382,12 @@ async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const answered = answeredAt(heard);
   if (Date.parse(answered) <= Date.parse(brake.at)) throw new Error(`The user wrote that before the brake, which the reversal of ${brake.ids[1]} set on ${brake.at.slice(0, 10)}. Only an answer after it lifts it; ask them`);
   const event: Lift = { type: "lift", class: decisionClass, words, thread: heard.thread, message: heard.id, machine: thisMachine(context.env), at: answered };
-  if (!liftCounted(await appendHeard(ledger, event), event)) throw new Error("Not lifted: another lift used that answer first, or the brake changed while Fleet recorded it. One answer lifts one brake; ask the user again");
+  const read = await appendHeard(ledger, event);
+  if (!liftCounted(read, event)) {
+    const use = answerUse(read, `${heard.thread}/${heard.id}`);
+    if (use && "decision" in use) throw new Error(`Not lifted: decision ${use.decision} used that answer first. One answer lifts one brake or records one decision; ask the user again`);
+    throw new Error("Not lifted: another lift used that answer first, or the brake changed while Fleet recorded it. One answer lifts one brake; ask the user again");
+  }
   context.print(`Lifted the brake on ${decisionClass} (reversals of ${brake.ids[0]} and ${brake.ids[1]}): the agent decides its asks alone again. (the user, ${words}, thread ${thread})`);
   return 0;
 }

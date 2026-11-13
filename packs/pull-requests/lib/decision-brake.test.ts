@@ -185,3 +185,62 @@ test("a voided decision has nothing to reverse", async () => {
 
   await expect(reverse(pr, id, "2026-10-25", "No")).rejects.toThrow(`Decision ${id} is voided: HEAD now splits the parser. It counts no more, so there is nothing to reverse`);
 });
+
+test("a yes lifts a brake only when the question starts by asking to lift it, and a lift answer lifts in any question that names the brake and the class", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await brake(pr, "design", "2026-10-10", "2026-10-20");
+  on(pr, "2026-10-21");
+
+  pr.choose("Yes, keep it", "Keep the brake on design decisions, or lift it?");
+  await expect(lift(pr, "design", "2026-10-21", "Yes, keep it")).rejects.toThrow(`The user chose "Yes, keep it" to a question that does not start with "Lift the brake on design". A plain yes lifts only the question that asks it; the brake stays on. The question: Keep the brake on design decisions, or lift it?`);
+  await expect(decideAlone(pr, "design", "Third design call?")).rejects.toThrow("The design class is braked");
+
+  pr.choose("Lift it", "Keep the brake on design decisions?");
+  expect((await lift(pr, "design", "2026-10-21", "Lift it")).code).toBe(0);
+  expect((await decideAlone(pr, "design", "Third design call?")).code).toBe(0);
+});
+
+test("one answer either lifts a brake or records a decision, never both, even when both commands run at once", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  hubAt(pr);
+  await brake(pr, "design", "2026-10-10", "2026-10-20");
+  on(pr, "2026-10-21");
+  const recordDesign = (words: string) => pr.decide("record", "--mark", "👤", "--class", "design", "--pr", "example/product#42", "--words", `2026-10-21 "${words}"`);
+  const ssh = pr.hub.ssh!;
+  const beforeAppend = (type: string, step: () => Promise<unknown>) => {
+    let raced = false;
+    pr.hub.ssh = async (host, command, stdin) => {
+      if (!raced && stdin?.includes(`"type":"${type}"`)) { raced = true; await step(); }
+      return ssh(host, command, stdin);
+    };
+  };
+
+  pr.choose("Lift it", liftQuestion("design"));
+  let recorded = "";
+  beforeAppend("lift", async () => { recorded = idIn((await recordDesign("Lift it")).output); });
+  const refused = await lift(pr, "design", "2026-10-21", "Lift it").then(() => "lifted", (error: Error) => error.message);
+  expect(refused).toBe(`Not lifted: decision ${recorded} used that answer first. One answer lifts one brake or records one decision; ask the user again`);
+  await expect(decideAlone(pr, "design", "Third design call?")).rejects.toThrow("The design class is braked");
+
+  pr.choose("Lift the brake", liftQuestion("design"));
+  beforeAppend("decide", () => lift(pr, "design", "2026-10-21", "Lift the brake"));
+  await expect(recordDesign("Lift the brake")).rejects.toThrow("That answer already lifted the design brake on 2026-10-21");
+  expect((await decideAlone(pr, "design", "Third design call?")).code).toBe(0);
+  pr.hub.ssh = ssh;
+  await expect(recordDesign("Lift the brake")).rejects.toThrow("That answer already lifted the design brake on 2026-10-21");
+  expect((await pr.decide("list", "--class", "design")).output).not.toContain(`2026-10-21 "Lift the brake"`);
+});
+
+test("a reversal refuses the PR's receipt comment by its id, in either URL form", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  const id = idIn((await decideAlone(pr, "design", "Parser?")).output);
+  pr.githubComment(11, "the-user", "Proofs at HEAD: live-run passed. Reverse that one if it looks wrong.", "2026-10-25T13:00:00Z");
+  mkdirSync(pr.pullRequest, { recursive: true });
+  writeFileSync(join(pr.pullRequest, "receipt.json"), JSON.stringify({ url: "https://github.com/example/product/pull/42#issuecomment-11" }));
+
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/issues/42#issuecomment-11")).rejects.toThrow("is one Fleet writes");
+  expect((await pr.decide("list", "--live")).output).toContain(id);
+});
