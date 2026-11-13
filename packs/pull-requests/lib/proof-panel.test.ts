@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, type Checkout } from "./proof-testing.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, hubAt, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
 import { withSlot, type PanelIO } from "./proof-panel.ts";
 
@@ -400,6 +400,27 @@ test("a panel the user's override starts but that fails to plan keeps the answer
   writeFileSync(guide, panelGuide);
   const started = await review();
   expect(JSON.parse(started.output.split("\n")[0]!)).toMatchObject({ round: 1 });
+});
+
+test("a panel whose decision never reached the ledger starts no lens, and the same command records the answer and runs the round", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewer = fakeModel(pr, "REVIEWER", clean);
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  const review = ["review", "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`];
+  void pr.fleet(...review);
+  await hub.appendStalled;
+
+  await pr.fleet("review", "--wait").catch(() => undefined);
+  expect(reviewer.prompts()).toEqual([]);
+
+  hub.state.hub = "up";
+  expect((await pr.fleet(...review)).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"));
+  expect((await pr.decide("list", "--pr", "example/product#42")).output).toContain(`[${round.decision.id}]`);
 });
 
 test("rerunning a failed lens rebuilds its brief and runs it in the checkout of now", async () => {

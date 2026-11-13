@@ -215,7 +215,7 @@ export async function judge(input: JudgeInput, deps: JudgeDeps): Promise<JudgeOu
   const record = cached ?? await askJudge(prompt, images, readable, input.cwd, askedQuestions(input.risk !== undefined), deps);
   if ("cause" in record) return { state: "unavailable", lines: [`judge: unavailable (${record.cause})`], model: deps.model, broken: [] };
   if (!cached) await writeRecord(path, record);
-  const escalation = record.escalation ? [`judge: escalate to the user: ${record.escalation}. Ask them with the question tool and name the PR in the question. When they accept, record fleet proof gap --kind judge --reason <why> and their answer with fleet decision record --mark 👤 --class proof-gap --kind judge --pr <owner/repo#n>`] : [];
+  const escalation = record.escalation ? [`judge: escalate to the user: ${record.escalation}. First record fleet proof gap --kind judge --reason <why>, then ask them the question it prints with the question tool. When they accept, record their answer with fleet decision record --mark 👤 --class proof-gap --kind judge --pr <owner/repo#n>`] : [];
   return { state: record.passed ? "pass" : "fail", lines: [...verdictLines(record.verdict), ...escalation], model: record.model, broken: brokenConditions(record.verdict, input.conditions) };
 }
 

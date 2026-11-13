@@ -137,14 +137,15 @@ async function requirePlan(directory: string) {
 const readStatus = (directory: string, name: string) => readJson<LensStatus>(lensFile(directory, name, ".json"), { state: "queued", attempts: 0 });
 const writeStatus = (directory: string, name: string, status: LensStatus) => writeJson(lensFile(directory, name, ".json"), status);
 
-export async function planPanel(directory: string, plan: Plan, briefs: Map<string, string>) {
+export async function stagePanel(directory: string, plan: Plan, briefs: Map<string, string>) {
   await mkdir(join(directory, "lenses"), { recursive: true, mode: 0o700 });
   for (const lens of plan.lenses) {
     await writeFile(lensFile(directory, lens.name, ".prompt.md"), briefs.get(lens.name)!, { mode: 0o600 });
     await writeStatus(directory, lens.name, { state: "queued", attempts: 0 });
   }
-  await writeJson(planPath(directory), plan);
 }
+
+export const publishPanel = (directory: string, plan: Plan) => writeJson(planPath(directory), plan);
 
 export async function requeueFailed(directory: string, casts: Map<string, Cast>, fresh: { plan: Plan; briefs: Map<string, string> }) {
   const plan = await requirePlan(directory);

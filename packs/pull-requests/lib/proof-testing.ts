@@ -264,6 +264,29 @@ export const ledgerDecisions = (pr: Checkout) => {
   return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line).decision).filter(Boolean) : [];
 };
 
+type Hub = "up" | "down" | "drops appends" | "loses the acknowledgement of appends" | "stalls on appends";
+const refused = { code: 255, stdout: "", stderr: "ssh: connect to host fleet-hub port 22: Connection refused\n" };
+
+export function hubAt(pr: Checkout, hub: Hub | boolean = "up") {
+  const remote = join(pr.home, "hub-home");
+  const hosts: string[] = [];
+  const state = { hub: hub === true ? "up" : hub === false ? "down" : hub };
+  let stalled = () => {};
+  const appendStalled = new Promise<void>((resolve) => { stalled = resolve; });
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "hub.alias": "fleet-hub" });
+  pr.hub.ssh = async (host, command, stdin) => {
+    hosts.push(host);
+    if (state.hub === "down") return refused;
+    if (state.hub === "drops appends" && stdin !== undefined) return { code: 0, stdout: "", stderr: "" };
+    if (state.hub === "stalls on appends" && stdin !== undefined) { stalled(); return new Promise(() => {}); }
+    const child = Bun.spawn(["bash", "-c", command], { env: { HOME: remote, PATH: process.env.PATH }, stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (state.hub === "loses the acknowledgement of appends" && stdin !== undefined) return refused;
+    return { code, stdout, stderr };
+  };
+  return { remote, hosts, state, appendStalled };
+}
+
 export const acceptGap = (pr: Checkout, kind: string, ...more: string[]) => pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", kind, "--pr", "example/product#42", ...more);
 
 export const graded = (tier: string) => `## Merge risk\n\n<!-- merge-risk -->\n> [!NOTE]\n> 🔵 **Merge risk: low** · two-way door\n> - **Tier:** ${tier}\n<!-- /merge-risk -->\n`;

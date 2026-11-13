@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join } from "node:path";
 import { normalized, type HeardAnswer } from "./proof-answers.ts";
-import { agentRefusal, agentsAcceptance, covers, fold, keptOwed, panelRefusal, tierOf, usersAcceptance, type DecisionState, type Ledger, type Mark, type Tier } from "./decision-ledger.ts";
+import { agentRefusal, agentsAcceptance, covers, fold, keptOwed, panelRefusal, tierOf, usersAcceptance, type Decision, type DecisionState, type Ledger, type Mark, type Tier } from "./decision-ledger.ts";
 import type { Family } from "./proof-models.ts";
 import { quietReason, type DeltaKind, type QuietStep } from "./proof-delta.ts";
 
@@ -132,7 +132,7 @@ export function parseVerdict(output: string, model: string): ArbiterVerdict {
 
 export type ReviewLimits = { free: number; ceiling: number };
 
-async function permitReview(home: string, identity: ProofIdentity, due: boolean, ceiling: string | undefined, decision: ReviewDecision | undefined, { arbiter }: Permit) {
+async function permitReview(home: string, identity: ProofIdentity, due: boolean, ceiling: string | undefined, decision: DecisionMark | undefined, { arbiter }: Permit) {
   if (decision?.mark === "👤") return undefined;
   if (ceiling && !decision) throw new Error(askUser(identity, ceiling));
   if (!due) return undefined;
@@ -150,20 +150,15 @@ function askUser(identity: ProofIdentity, stop: string) {
 }
 
 export type CapturedBy = "fleet" | "author";
-export type ReviewDecision = { mark: Mark; id: string; record: () => Promise<unknown> };
-export type ReviewRequest = { scope: string; base?: string; from?: string; decision?: ReviewDecision; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; capturedBy?: CapturedBy };
+export type DecisionMark = Pick<Decision, "mark" | "id">;
+export type ReviewRequest = { scope: string; base?: string; from?: string; decision?: DecisionMark; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; capturedBy?: CapturedBy };
 export type Reserved = { round: number | "final"; id: string; directory: string };
 type Permit = { arbiter: Arbiter; limits: ReviewLimits };
 
-const reserveDecided = (reviews: string, name: string, record: object, decision: ReviewDecision | undefined) =>
+const reserveDecided = (reviews: string, name: string, record: object, decision: DecisionMark | undefined) =>
   reserve(reviews, name, { ...record, ...decision ? { decision: { mark: decision.mark, id: decision.id } } : {} });
 
-export async function recordReviewDecision(reserved: Reserved, decision: ReviewDecision | undefined) {
-  try { await decision?.record(); }
-  catch (error) { await rm(reserved.directory, { recursive: true, force: true }); throw error; }
-}
-
-async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: ReviewDecision | undefined, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {
+async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: DecisionMark | undefined, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, capturedBy: CapturedBy, from: string | undefined): Promise<Reserved> {
   if (base === undefined) throw new Error("A final read needs --base with the latest reviewed commit");
   if (base === identity.commit) throw new Error("HEAD is already reviewed. Skip the final read.");
   const quiet = decision ? undefined : reviewedThrough(identity.commit, new Set([base]), cleanBaseMerge, quietCommit);
@@ -204,7 +199,7 @@ export async function startReview(home: string, identity: ProofIdentity, request
   return startRound(home, identity, reviews, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy });
 }
 
-type RoundStart = { scope: string; base?: string; from?: string; decision: ReviewDecision | undefined; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
+type RoundStart = { scope: string; base?: string; from?: string; decision: DecisionMark | undefined; permit: Permit; cleanBaseMerge: CleanBaseMerge; capturedBy: CapturedBy };
 
 async function startRound(home: string, identity: ProofIdentity, reviews: string, { scope, base, from, decision, permit, cleanBaseMerge, capturedBy }: RoundStart): Promise<Reserved> {
   for (let round = 1; round <= 100; round++) {
@@ -224,7 +219,7 @@ async function startRound(home: string, identity: ProofIdentity, reviews: string
 type Claim = { repository: string; pr: number };
 const claimPath = (home: string, answer: HeardAnswer) => join(ledgerRoot(home), "claims", `${createHash("sha256").update(`${answer.thread}/${answer.message}`).digest("hex")}.json`);
 
-async function checkLaterRound(reviews: string, round: number, scope: string, base: string | undefined, decision: ReviewDecision | undefined, cleanBaseMerge: CleanBaseMerge) {
+async function checkLaterRound(reviews: string, round: number, scope: string, base: string | undefined, decision: DecisionMark | undefined, cleanBaseMerge: CleanBaseMerge) {
   try { await access(join(reviews, String(round - 1), "findings.md")); }
   catch { throw new Error("Previous review round is unfinished. Reuse its reservation before starting another panel."); }
   if (scope === "full" && decision) return;
@@ -266,7 +261,7 @@ export function requireChoice(answer: HeardAnswer, lead: string, [accept, declin
   if (![accept, `${accept} (Recommended)`].map(normalized).includes(normalized(answer.words))) throw new Error(`The user chose "${answer.words}", not "${accept}". ${refused}`);
 }
 
-type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; from?: string; capturedBy?: CapturedBy; reviewer?: string };
+type Reservation = ProofIdentity & { round: number | "final"; scope: string; base?: string; from?: string; capturedBy?: CapturedBy; reviewer?: string; decision?: DecisionMark };
 
 export type RoundId = number | `final-${number}`;
 
@@ -553,7 +548,7 @@ function standingCommands(instructions: string) {
 export async function judgeGap(home: string, identity: ProofIdentity, now: Date, decisions: Decisions, tier: Tier) {
   const gap = await readJson<Gap | undefined>(gapPath(home, identity, "judge"), undefined);
   if (gap?.commit !== identity.commit) return undefined;
-  const weighed = await gapAcceptance({ home, identity, now, decisions, tier, conditions: [], lapsed: [] }, gap, "judge");
+  const weighed = await gapAcceptance({ home, identity, now, decisions, tier }, gap, "judge");
   return { reason: gap.reason, acceptance: weighed.acceptance, line: weighed.acceptance?.line ?? notAccepted(decisions, weighed), condition: weighed.condition };
 }
 
@@ -573,7 +568,7 @@ export async function readDecisions(ledger: Ledger): Promise<Decisions> {
 
 type Acceptance = { by: "the user" | "agent" | "standing rule"; line: string; id?: string; mark?: Mark };
 export type Condition = { id: string; kind: string; condition: string };
-type Weigh = { home: string; identity: ProofIdentity; now: Date; decisions: Decisions; tier: Tier; ci?: CiResult; conditions: Condition[]; lapsed: string[] };
+type Weigh = { home: string; identity: ProofIdentity; now: Date; decisions: Decisions; tier: Tier; ci?: CiResult };
 type Weighed = { acceptance?: Acceptance; lapsed?: { id: string; reason: string }; condition?: Condition };
 
 async function gapAcceptance(weigh: Weigh, gap: Gap | undefined, kind: GapKind): Promise<Weighed> {
@@ -599,12 +594,8 @@ async function gapAcceptance(weigh: Weigh, gap: Gap | undefined, kind: GapKind):
   return standing ? { acceptance: { by: "standing rule", line: `accepted by standing rule until ${standing.until}` } } : { lapsed };
 }
 
-const counted = ({ conditions }: Weigh, { condition }: Weighed) => { if (condition) conditions.push(condition); };
-
-function settled<T extends Pick<Status, "problem">>(weigh: Weigh, { lapsed }: Weighed, status: T) {
-  if (status.problem && lapsed && !weigh.lapsed.includes(lapsed.id)) weigh.lapsed.push(lapsed.id);
-  return status;
-}
+const lapseOf = ({ lapsed }: Weighed) => lapsed && { lapsed: lapsed.id };
+const countedGap = (weighed: Weighed) => ({ condition: weighed.condition, ...lapseOf(weighed) });
 
 const notAccepted = (decisions: Decisions, { lapsed }: Weighed) => lapsed ? `not accepted (🤖 decision ${lapsed.id} lapsed: ${lapsed.reason})` : Array.isArray(decisions) ? "not accepted" : `not accepted: hub unreachable (${decisions.unreachable})`;
 
@@ -653,7 +644,7 @@ async function provedCommits(home: string, identity: ProofIdentity, kind: ProofK
   return proved;
 }
 
-type Status = { problem: "missing" | "gap" | undefined; line: string; covered?: string; evidence?: string };
+type Status = { problem: "missing" | "gap" | undefined; line: string; covered?: string; evidence?: string; condition?: Condition; lapsed?: string };
 
 export type KindProof = { kind: ProofKind; line: string } & (
   | { state: "pending" }
@@ -681,33 +672,28 @@ const evidenceDirectory = (home: string, identity: ProofIdentity, kind: ProofKin
 const evidenceState = (identity: ProofIdentity, proof: Proved, directory: string): KindState =>
   proof.reuse ? { state: "reused", from: proof.reuse.from, reason: proof.reuse.reason, directory } : { state: "ran", commit: identity.commit, directory };
 
-type KindStatus = { problem: Status["problem"]; proof: KindProof; evidence?: string };
+type KindStatus = Pick<Status, "problem" | "condition" | "lapsed"> & { proof: KindProof; evidence?: string };
 
 const kindStatusOf = (kind: ProofKind, problem: Status["problem"], state: KindState, evidence?: string): KindStatus =>
   ({ problem, proof: { kind, line: kindLine(kind, state), ...state } as KindProof, evidence });
 
 async function kindStatus(weigh: Weigh, kind: ProofKind, landed: boolean, cleanBaseMerge: CleanBaseMerge): Promise<KindStatus> {
-  const { home, identity } = weigh;
-  if (kind === "post-deploy-watch" && !landed) return kindStatusOf(kind, undefined, { state: "pending" });
-  const gap = await readJson<Gap | undefined>(gapPath(home, identity, kind), undefined);
-  const weighed = await gapAcceptance(weigh, gap, kind);
-  return settled(weigh, weighed, await weighedKindStatus(weigh, kind, gap, weighed, cleanBaseMerge));
-}
-
-async function weighedKindStatus(weigh: Weigh, kind: ProofKind, gap: Gap | undefined, weighed: Weighed, cleanBaseMerge: CleanBaseMerge): Promise<KindStatus> {
   const { home, identity, decisions } = weigh;
   const status = (problem: Status["problem"], state: KindState, evidence?: string) => kindStatusOf(kind, problem, state, evidence);
+  if (kind === "post-deploy-watch" && !landed) return status(undefined, { state: "pending" });
+  const gap = await readJson<Gap | undefined>(gapPath(home, identity, kind), undefined);
+  const weighed = await gapAcceptance(weigh, gap, kind);
   const acceptance = weighed.acceptance;
   const gapState = (): KindState => ({ state: "gap", accepted: acceptance !== undefined, gap: gapProof(gap, weighed, decisions) });
-  if (acceptance?.by === "the user") { counted(weigh, weighed); return status(undefined, gapState()); }
+  if (acceptance?.by === "the user") return { ...status(undefined, gapState()), ...countedGap(weighed) };
   const proved = await provedCommits(home, identity, kind);
   const head = proved.get(identity.commit);
   if (head) { const directory = evidenceDirectory(home, identity, kind, head); return status(undefined, evidenceState(identity, head, directory), directory); }
   const carried = reviewedThroughMerges(identity.commit, new Set(proved.keys()), cleanBaseMerge);
   if (carried) { const directory = evidenceDirectory(home, identity, kind, proved.get(carried.from)!); return status(undefined, { state: "carried", from: carried.from, merges: carried.merges.length, directory }, directory); }
-  if (gap) { counted(weigh, weighed); return status(acceptance ? undefined : "gap", gapState()); }
+  if (gap) return { ...status(acceptance ? undefined : "gap", gapState()), ...countedGap(weighed) };
   const newest = [...proved].sort(([, a], [, b]) => (a.time < b.time ? 1 : -1))[0]?.[0];
-  return status("missing", newest ? { state: "missing", newest } : { state: "missing" });
+  return { ...status("missing", newest ? { state: "missing", newest } : { state: "missing" }), ...lapseOf(weighed) };
 }
 
 type FinishedReview = { name: string; commit: string; reviewer?: string; finishedAt: bigint; panel: boolean };
@@ -774,19 +760,13 @@ async function reviewStatus(weigh: Weigh, cleanBaseMerge: CleanBaseMerge, quietC
   if (firstPanel) return headReview(home, identity, all.filter((review) => review.finishedAt >= firstPanel.finishedAt), cleanBaseMerge, quietCommit);
   const gap = await readJson<Gap | undefined>(gapPath(home, identity, "panel"), undefined);
   const weighed = await gapAcceptance(weigh, gap, "panel");
-  return settled(weigh, weighed, await panelStatus(weigh, gap, weighed, all, cleanBaseMerge, quietCommit));
-}
-
-async function panelStatus(weigh: Weigh, gap: Gap | undefined, weighed: Weighed, all: FinishedReview[], cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit): Promise<Status & { panelGap?: GapProof }> {
-  const { home, identity, decisions } = weigh;
   const acceptance = weighed.acceptance;
-  if (!gap && acceptance?.by !== "the user") return { problem: "missing", line: `review: no finished panel round on the PR${all.length ? `; ${all.length} single-reviewer review(s) do not count` : ""}. ${panelHint}` };
-  counted(weigh, weighed);
+  if (!gap && acceptance?.by !== "the user") return { problem: "missing", line: `review: no finished panel round on the PR${all.length ? `; ${all.length} single-reviewer review(s) do not count` : ""}. ${panelHint}`, ...lapseOf(weighed) };
   const panelGap = gapProof(gap, weighed, decisions);
   const line = `panel ${gapText(panelGap)}`;
   const head = await headReview(home, identity, all, cleanBaseMerge, quietCommit);
-  if (!acceptance) return { problem: head.problem ?? "gap", line: `${head.line}; ${line}`, panelGap };
-  return { ...head, line: `${head.line}; ${line}`, covered: head.covered && `${head.covered}, ${line}`, panelGap };
+  if (!acceptance) return { problem: head.problem ?? "gap", line: `${head.line}; ${line}`, panelGap, ...countedGap(weighed) };
+  return { ...head, line: `${head.line}; ${line}`, covered: head.covered && `${head.covered}, ${line}`, panelGap, ...countedGap(weighed) };
 }
 
 async function headReview(home: string, identity: ProofIdentity, finished: FinishedReview[], cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit): Promise<Status> {
@@ -825,10 +805,9 @@ async function ciStatus(weigh: Weigh, ci: CiResult): Promise<Status & { gap?: Ga
   if (ci.state === "green") return { problem: undefined, line, covered: "green" };
   const gap = await readJson<Gap | undefined>(gapPath(home, identity, "ci"), undefined);
   const weighed = await gapAcceptance({ ...weigh, ci }, gap, "ci");
-  if (!gap && weighed.acceptance?.by !== "the user") return settled(weigh, weighed, { problem: "missing", line: ci.state === "pending" ? line : `${line}. Fix it, or record fleet proof gap --kind ci --reason <why CI cannot run> when it cannot run here` });
-  counted(weigh, weighed);
+  if (!gap && weighed.acceptance?.by !== "the user") return { problem: "missing", line: ci.state === "pending" ? line : `${line}. Fix it, or record fleet proof gap --kind ci --reason <why CI cannot run> when it cannot run here`, ...lapseOf(weighed) };
   const recorded = gapProof(gap, weighed, decisions);
-  return settled(weigh, weighed, { problem: weighed.acceptance ? undefined : "gap", line: `${line}; ${gapText(recorded)}`, covered: "gap accepted", gap: recorded });
+  return { problem: weighed.acceptance ? undefined : "gap", line: `${line}; ${gapText(recorded)}`, covered: "gap accepted", gap: recorded, ...countedGap(weighed) };
 }
 
 export type PushedHead = { commit: string; body?: string } | { error: string };
@@ -870,7 +849,7 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const before = pushedHead();
   const tier = "error" in before || before.body === undefined ? "ungraded" : tierOf(before.body);
   const decisions = await readDecisions(ledger);
-  const weigh: Weigh = { home, identity, now, decisions, tier, conditions: [], lapsed: [] };
+  const weigh: Weigh = { home, identity, now, decisions, tier };
   const owed = await readOwed(home, identity);
   const kinds = await Promise.all((owed?.kinds ?? []).map((kind) => kindStatus(weigh, kind, landed, cleanBaseMerge)));
   const review = await reviewStatus(weigh, cleanBaseMerge, quietCommit);
@@ -879,6 +858,9 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const head = headStatus(identity, before, pushedHead());
   const checks = await ciStatus(weigh, ciResult);
   const problems = [owed ? undefined : "missing", ...kinds.map((kind) => kind.problem), review.problem, ...responses.map((response) => response.problem), head.problem, checks.problem];
+  const weighed = [...kinds, review, checks];
+  const lapsed = [...new Set(weighed.flatMap((status) => status.problem && status.lapsed ? [status.lapsed] : []))];
+  const conditions = weighed.flatMap((status) => status.condition ? [status.condition] : []);
   const code = problems.includes("missing") ? 1 : problems.includes("gap") ? 3 : 0;
   const voided = (Array.isArray(decisions) ? decisions : []).filter((decision) => decision.voided && covers(decision, identity)).map((decision) => decision.id);
   const receipt = (await readJson<{ url?: string } | undefined>(join(pullRequestDirectory(home, identity), "receipt.json"), undefined))?.url;
@@ -887,11 +869,11 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
     review: { state: review.problem ?? "covered", ...review.covered ? { covered: review.covered } : {}, ...review.panelGap ? { panelGap: review.panelGap } : {}, unanswered: responses.map((response) => response.line), line: review.line },
     head: { state: head.problem ? "missing" : "pushed", line: head.line },
     ci: { state: ciResult.state, detail: ciResult.detail, ...checks.gap ? { gap: checks.gap } : {}, line: checks.line },
-    lapsed: weigh.lapsed, ...weigh.lapsed.length ? { lapsedLine: lapsedLine(weigh.lapsed) } : {}, voided, ...receipt ? { receipt } : {},
+    lapsed, ...lapsed.length ? { lapsedLine: lapsedLine(lapsed) } : {}, voided, ...receipt ? { receipt } : {},
   };
   const summary = `kinds: ${owed?.kinds.length ? owed.kinds.join(", ") : "none"}; review: ${review.covered}; CI: ${checks.covered}`;
   const evidence = kinds.map(({ proof, evidence }) => ({ kind: proof.kind, line: proof.line, directory: evidence }));
-  return { code, lines: summaryLines(proofSummary), summary, owed, evidence, ci: ciResult, decisions, tier, conditions: weigh.conditions, voided, proofSummary };
+  return { code, lines: summaryLines(proofSummary), summary, owed, evidence, ci: ciResult, decisions, tier, conditions, voided, proofSummary };
 }
 
 export async function reviewRecords(home: string, identity: ProofIdentity) {
