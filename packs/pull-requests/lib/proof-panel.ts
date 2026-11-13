@@ -369,30 +369,30 @@ async function olderThanGrace(path: string, now: Date) {
 
 const guardGenerations = 10;
 
-async function guard(path: string, text: string, owner: LockOwner) {
+async function guard(path: string, text: string, holder: Holder, owner: LockOwner) {
   const first = `${path}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
-  for (let generation = 1; generation <= guardGenerations; generation++) {
+  let generation = 1;
+  for (let attempt = 0; attempt < lockAttempts && generation <= guardGenerations; attempt++) {
     const lock = generation === 1 ? first : `${first}.${generation}`;
-    try {
-      await mkdir(lock, { mode: 0o700 });
-      await writeFile(join(lock, "holder"), JSON.stringify(await holderFor(owner)), { mode: 0o600 });
-      return lock;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !await stale(lock, await readSlot(join(lock, "holder")) ?? "", owner)) return undefined;
-    }
+    if (await claim(lock, holder)) return lock;
+    const current = await readSlot(lock);
+    if (current === undefined) continue;
+    if (!await stale(lock, current, owner)) return undefined;
+    generation++;
   }
   return undefined;
 }
 
 async function reclaim(path: string, text: string, owner: LockOwner) {
-  const lock = await guard(path, text, owner);
+  const holder = await holderFor(owner);
+  const lock = await guard(path, text, holder, owner);
   if (!lock) return false;
   try {
     if (await readSlot(path) !== text) return false;
     await stopReviewer(holderOf(text), owner);
     await rm(path, { force: true });
     return true;
-  } finally { await rm(lock, { recursive: true, force: true }); }
+  } finally { await release(lock, holder); }
 }
 
 const readSlot = (slot: string) => readFile(slot, "utf8").catch(() => undefined);

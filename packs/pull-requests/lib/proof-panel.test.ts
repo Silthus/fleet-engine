@@ -304,6 +304,46 @@ await withSlot({ env: {}, pause: () => new Promise((done) => setImmediate(done))
   } finally { paused.kill("SIGKILL"); }
 });
 
+test("a claimant paused just as it starts to reclaim a slot never shares the reclaim with the next claimant, however long the pause", async () => {
+  const slots = fixture("fleet-panel-slots-");
+  const scratch = fixture("fleet-panel-publish-");
+  const pausing = join(scratch, "pause.ts");
+  const stopped = join(scratch, "stopped");
+  const inSection = join(scratch, "in-section");
+  const waited = join(scratch, "waited");
+  const reviewer = await exitedPid();
+  writeFileSync(pausing, `import { writeFileSync } from "node:fs";
+import { withSlot } from ${JSON.stringify(join(import.meta.dir, "proof-panel.ts"))};
+let own = 0;
+const startTime = async (pid: number) => {
+  if (pid === process.pid && ++own === 2) { writeFileSync(${JSON.stringify(stopped)}, ""); process.kill(process.pid, "SIGSTOP"); }
+  if (pid === ${reviewer}) writeFileSync(${JSON.stringify(inSection)}, "");
+  return "Sun Oct 25 11:00:00 2026";
+};
+const pause = () => { writeFileSync(${JSON.stringify(waited)}, ""); return new Promise<void>((done) => setImmediate(done)); };
+await withSlot({ env: {}, pause, now: () => new Date(), startTime, slots: ${JSON.stringify(slots)}, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {});
+`);
+  writeFileSync(join(slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer, reviewerStarted: "Sun Oct 25 10:00:00 2026" }));
+  const paused = Bun.spawn(["bun", pausing], { stdout: "ignore", stderr: "inherit" });
+  try {
+    while (!existsSync(stopped)) await new Promise((done) => setImmediate(done));
+    let shared: boolean | undefined;
+    const startTime = async (pid: number) => {
+      if (pid === reviewer && shared === undefined) {
+        paused.kill("SIGCONT");
+        while (!existsSync(inSection) && !existsSync(waited)) await new Promise((done) => setImmediate(done));
+        shared = existsSync(inSection);
+      }
+      return "Sun Oct 25 11:00:00 2026";
+    };
+    const io = { ...slotIO(1), slots, startTime, now: () => new Date(Date.now() + 3_600_000) };
+
+    await withSlot(io, async () => undefined);
+    expect(shared).toBe(false);
+    expect(await paused.exited).toBe(0);
+  } finally { paused.kill("SIGKILL"); }
+});
+
 test("a process's start time stays the same while it runs and is unknown once it exits", async () => {
   const running = Bun.spawn(["sleep", "30"]);
   try {
