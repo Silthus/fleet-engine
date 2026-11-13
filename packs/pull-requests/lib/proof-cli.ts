@@ -9,7 +9,7 @@ import { ciOf, pushedHeadOf, readPullRequest, runIn } from "./pr-ci.ts";
 import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRiskRubric, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { judge, readCriticalPaths } from "./proof-judge.ts";
 import { runProof, type RunIO } from "./proof-run.ts";
-import { lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withRoundLock, withSlot, lockNewRound, processStart, roundLock, RoundBusy, type Lens, type LockOwner, type PanelGuide, type PanelIO, type Plan, type RoundLock, type StartTime } from "./proof-panel.ts";
+import { lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withRoundLock, withSlot, lockNewRound, processStart, roundLock, RoundBusy, RoundGone, type Lens, type LockOwner, type PanelGuide, type PanelIO, type Plan, type RoundLock, type StartTime } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
@@ -416,6 +416,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const { home, run } = context;
   const author = await authorOf(home, head);
   const pending = await unfinishedReview(home, head, "fleet");
+  if (pending) requireSameRequest(pending, options, run);
   const reserved: SingleRound = pending
     ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
     : await reserveFleetReview(options, head, context);
@@ -483,11 +484,14 @@ async function reserveRound(options: Map<string, string>, head: ProofIdentity, c
 async function unrecordedRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
   const pending = await unfinishedReview(context.home, head, "author");
   if (!pending?.reservation.decision || pending.reservation.recorded) return undefined;
-  const { reservation, directory } = pending;
-  const id = basename(directory);
+  requireSameRequest(pending, options, context.run);
+  return { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory };
+}
+
+function requireSameRequest({ reservation, directory }: { reservation: Reservation; directory: string }, options: Map<string, string>, run: Run) {
+  if (!reservation.decision || reservation.recorded) return;
   const reserved = reservedOptions(reservation);
-  if (reserved !== requestedOptions(options, reservation, context.run)) throw new Error(`Review round ${id} at this HEAD is reserved with ${reserved}, and its decision is not recorded yet. Run its command again with ${reserved} to record it, or remove ${directory} to drop it`);
-  return { round: reservation.round, id, directory };
+  if (reserved !== requestedOptions(options, reservation, run)) throw new Error(`Review round ${basename(directory)} at this HEAD is reserved with ${reserved}, and its decision is not recorded yet. Run its command again with ${reserved} to record it, or remove ${directory} to drop it`);
 }
 
 const reservedOptions = ({ scope, base, phase }: Reservation & { phase?: string }) =>
@@ -507,7 +511,7 @@ async function settleStrandedRounds(head: ProofIdentity, context: CommandContext
       if (!decision) return;
       if (await ledgerHolds(ledgerOf(context), decision.id)) await markRecorded(directory);
       else await rm(directory, { recursive: true, force: true });
-    }).catch(unless(RoundBusy, HubUnreachable));
+    }).catch(unless(RoundBusy, HubUnreachable, RoundGone));
   }
 }
 
@@ -561,6 +565,7 @@ async function runPanel({ options, lists }: Parsed, head: ProofIdentity, context
   const knowledge = await knowledgeOf(lists.get("--knowledge") ?? [], context.cwd);
   const lenses = lists.get("--lens")!.map((argument) => resolveLens(guide, argument, author, knowledge, env));
   const pending = await unfinishedReview(context.home, head, "fleet");
+  if (pending) requireSameRequest(pending, options, context.run);
   const directory = pending ? await rerunPanel(pending, head, lenses, guide, context) : await reservePanel(options, head, lenses, guide, context);
   const round = (await readJson<{ round: number | "final" }>(join(directory, "round.json"), { round: 0 })).round;
   print(JSON.stringify({ round, directory, lenses: lenses.map(({ name, family }) => ({ name, family })) }));
@@ -662,8 +667,8 @@ async function waitForReview(options: Map<string, string>, head: ProofIdentity, 
 }
 
 async function startStaged(directory: string, context: CommandContext) {
-  for (let poll = 0; await stagedPlan(directory); poll++) {
-    try { await roundStep(directory, context, () => recordAndStart(directory, context)); return; }
+  for (let poll = 0; !await readPlan(directory); poll++) {
+    try { await roundStep(directory, context, async () => { if (await stagedPlan(directory)) await recordAndStart(directory, context); }); return; }
     catch (error) { if (!(error instanceof RoundBusy) || poll >= waitPolls) throw error; }
     await pausing(context)();
   }
