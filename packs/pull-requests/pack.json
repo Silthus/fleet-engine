@@ -79,6 +79,13 @@
       "ask": "never"
     },
     {
+      "key": "pull-requests.criticalPathFiles",
+      "question": "Which file lists the critical paths of each repository, as owner/name=path pairs separated by commas? A path is relative to your home folder. The judge fails a merge-risk Tier line that is not critical when the diff touches a path on the list.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
       "key": "pull-requests.reviewTimeoutMinutes",
       "question": "How many minutes may one review run before it counts as failed?",
       "type": "number",
@@ -196,6 +203,12 @@
       "eval",
       "review-start",
       "review-finish"
+    ],
+    "decision": [
+      "help",
+      "record",
+      "list",
+      "void"
     ]
   }
 }

@@ -3,6 +3,15 @@ import { dirname, join } from "node:path";
 import type { CiResult, ProofIdentity, PushedHead } from "./proof.ts";
 
 export type Run = (command: string[]) => { code: number; stdout: string; stderr: string };
+
+export const runIn = (cwd: string, env: Record<string, string | undefined>): Run => (command) => {
+  try {
+    const child = Bun.spawnSync(command, { cwd, env: env as Record<string, string>, stdout: "pipe", stderr: "pipe" });
+    return { code: child.exitCode ?? 1, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
+  } catch (error) {
+    return { code: 127, stdout: "", stderr: `${command[0]}: ${(error as Error).message}` };
+  }
+};
 export type PullRequest = { title: string; body: string; draft: boolean; head: string; base: string; defaultBranch?: string };
 
 type CheckRun = { id: number; name: string; status: string; conclusion: string | null; app?: number | null };
@@ -30,7 +39,10 @@ export function readPullRequest(identity: ProofIdentity, run: Run): PullRequest 
 }
 
 export function pushedHeadOf(identity: ProofIdentity, run: Run): PushedHead {
-  try { return { commit: readPullRequest(identity, run).head }; }
+  try {
+    const pullRequest = readPullRequest(identity, run);
+    return { commit: pullRequest.head, body: pullRequest.body };
+  }
   catch (error) { return { error: (error as Error).message }; }
 }
 

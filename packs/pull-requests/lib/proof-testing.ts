@@ -1,11 +1,13 @@
 import { expect } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitEnv, template } from "../../../src/testing/git.ts";
 import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
+import { decisionCommand } from "./decision-cli.ts";
+import type { Ssh, SshResult } from "./decision-ledger.ts";
 
 const fixtures: string[] = [];
 export const cleanFixtures = () => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true }));
@@ -94,7 +96,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const env: Record<string, string | undefined> = {
     ...gitEnv, PATH: `${bin}:${process.env.PATH}`,
     CLAUDE_CODE_SESSION_ID: "session-under-test", CODEX_THREAD_ID: undefined, FLEET_SETTINGS: JSON.stringify(settings), FLEET_MODELS: JSON.stringify(models),
-    FLEET_PROOF_JUDGE: `cat >/dev/null; echo '${verdict()}'`, FLEET_PROOF_JUDGE_MODEL: "judge-under-test",
+    FLEET_PROOF_JUDGE: `cat >/dev/null; echo '${verdict()}'`, FLEET_PROOF_JUDGE_MODEL: "judge-under-test", T3CODE_THREAD_ID: "thread-1",
   };
   const git = async (...args: string[]) => {
     const result = await spawnAsync(["git", ...args], { cwd: repository, env });
@@ -123,13 +125,17 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     return words;
   };
   const reader: { words?: ThreadWords } = { words: threadWords };
-  const panel: { lostWorkers: boolean; onPause?: () => Promise<void> } = { lostWorkers: false };
-  const fleetIn = async (cwd: string, ...args: string[]) => {
+  const hub: { ssh?: Ssh } = {};
+  const panel: { lostWorkers: boolean; onPause?: () => Promise<void>; beforeWorker?: () => Promise<void> } = { lostWorkers: false };
+  const startTimes = new Map<number, string>();
+  const fleetAt = async (cwd: string, pid: number, args: string[]) => {
     const lines: string[] = [];
     const context: ProofContext = {
-      home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words,
+      home, cwd, env, pid, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh,
+      startTime: async (holder) => startTimes.get(holder) ?? "Sun Oct 25 11:00:00 2026",
       detach: async (worker) => {
-        if (panel.lostWorkers) return (await spawnAsync(["true"])).pid;
+        if (panel.lostWorkers) return exitedPid();
+        await panel.beforeWorker?.();
         await proofCommand([...worker], { ...context, print: () => {} });
         return process.pid;
       },
@@ -141,13 +147,22 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     const code = await proofCommand(args, context);
     return { code, output: lines.join("\n") };
   };
+  const fleetIn = (cwd: string, ...args: string[]) => fleetAt(cwd, process.pid, args);
   const fleet = (...args: string[]) => fleetIn(repository, ...args);
+  const fleetAs = (pid: number, ...args: string[]) => fleetAt(repository, pid, args);
+  const decide = async (...args: string[]) => {
+    const lines: string[] = [];
+    const code = await decisionCommand(args, { home, cwd: repository, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh });
+    return { code, output: lines.join("\n") };
+  };
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, fleetAs, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel, hub, decide, startTimes };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;
+
+export const exitedPid = async () => (await spawnAsync(["true"])).pid;
 
 export const panelGuide = `# QA swarm panel
 
@@ -237,12 +252,42 @@ export async function reviewHead(pr: Checkout) {
 
 export const markPanel = (pr: Checkout, round: string) => writeFileSync(join(pr.pullRequest, "reviews", round, "panel.json"), JSON.stringify({ lenses: [], changedFiles: [], cwd: pr.repository, readable: [] }));
 
-export const decideRule = "Until 2026-11-26, decide review rounds, judge gaps, and post-deploy-watch gaps yourself.";
+export const ledgerDecisions = (pr: Checkout) => {
+  const path = join(pr.home, ".local/state/fleet/decisions.jsonl");
+  return existsSync(path) ? readFileSync(path, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line).decision).filter(Boolean) : [];
+};
 
-export function withDecideRule(pr: Checkout) {
-  const record = (kinds: string) => `\`fleet proof standing --kind ${kinds} --until 2026-11-26 --rule "${decideRule}"\``;
-  writeFileSync(join(pr.home, ".agents/AGENTS.md"), `# Agents\n\n## Skill settings\n\n- ${decideRule} Record it with ${record("review,judge,post-deploy-watch")}, ${record("review")}, or ${record("judge")}.\n`);
+type Hub = "up" | "down" | "drops appends" | "loses the acknowledgement of appends" | "stalls on appends" | "stalls after it lands an append";
+const refused = { code: 255, stdout: "", stderr: "ssh: connect to host fleet-hub port 22: Connection refused\n" };
+
+export function hubAt(pr: Checkout, hub: Hub | boolean = "up") {
+  const remote = join(pr.home, "hub-home");
+  const hosts: string[] = [];
+  const state: { hub: Hub; afterAppend?: () => void } = { hub: hub === true ? "up" : hub === false ? "down" : hub };
+  let stalled = () => {};
+  const appendStalled = new Promise<void>((resolve) => { stalled = resolve; });
+  const stalls: ((result: SshResult) => void)[] = [];
+  const stall = () => { stalled(); return new Promise<SshResult>((resolve) => stalls.push(resolve)); };
+  const releaseAppends = () => stalls.splice(0).forEach((resolve) => resolve(refused));
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "hub.alias": "fleet-hub" });
+  pr.hub.ssh = async (host, command, stdin) => {
+    hosts.push(host);
+    if (state.hub === "down") return refused;
+    if (state.hub === "drops appends" && stdin !== undefined) return { code: 0, stdout: "", stderr: "" };
+    if (state.hub === "stalls on appends" && stdin !== undefined) return stall();
+    const child = Bun.spawn(["bash", "-c", command], { env: { HOME: remote, PATH: process.env.PATH }, stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (stdin !== undefined) state.afterAppend?.();
+    if (state.hub === "stalls after it lands an append" && stdin !== undefined) return stall();
+    if (state.hub === "loses the acknowledgement of appends" && stdin !== undefined) return refused;
+    return { code, stdout, stderr };
+  };
+  return { remote, hosts, state, appendStalled, releaseAppends };
 }
+
+export const acceptGap = (pr: Checkout, kind: string, ...more: string[]) => pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", kind, "--pr", "example/product#42", ...more);
+
+export const graded = (tier: string) => `## Merge risk\n\n<!-- merge-risk -->\n> [!NOTE]\n> 🔵 **Merge risk: low** · two-way door\n> - **Tier:** ${tier}\n<!-- /merge-risk -->\n`;
 
 export async function finishRound(pr: Checkout, round: string) {
   writeFileSync(join(pr.repository, "findings.md"), `Findings of ${round}.\n`);

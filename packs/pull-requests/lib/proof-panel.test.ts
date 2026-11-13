@@ -1,10 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { spawnAsync } from "../../../src/testing/spawn.ts";
-import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, type Checkout } from "./proof-testing.ts";
+import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, hubAt, exitedPid, reviewHead, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
-import { withSlot, type PanelIO } from "./proof-panel.ts";
+import { processStart, withSlot, type PanelIO } from "./proof-panel.ts";
 
 afterEach(cleanFixtures);
 
@@ -155,10 +154,9 @@ test("a lens reads the whole diff from the round directory and REVIEW.md from th
   expect((await pr.fleet("gate")).code).toBe(0);
 });
 
-const exitedPid = async () => (await spawnAsync(["true"])).pid;
 
 function slotIO(slotCount: number): PanelIO {
-  return { env: {}, pause: () => new Promise((done) => setImmediate(done)), now: () => new Date(), slots: fixture("fleet-panel-slots-"), slotCount, pid: process.pid, limit: 60_000 };
+  return { env: {}, pause: () => new Promise((done) => setImmediate(done)), now: () => new Date(), startTime: async () => "Sun Oct 25 11:00:00 2026", slots: fixture("fleet-panel-slots-"), slotCount, pid: process.pid, limit: 60_000 };
 }
 
 test("claimants that find a dead worker's slot at once reclaim it once, so the panel never runs more lenses than its slots", async () => {
@@ -171,7 +169,7 @@ const [slots, running] = process.argv.slice(2);
 const tick = () => new Promise((done) => setImmediate(done));
 writeFileSync(running + "/ready-" + process.pid, "");
 while (readdirSync(running).filter((name) => name.startsWith("ready-")).length < 4) await tick();
-await withSlot({ env: {}, pause: tick, now: () => new Date(), slots, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {
+await withSlot({ env: {}, pause: tick, now: () => new Date(), startTime: async () => "Sun Oct 25 11:00:00 2026", slots, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {
   writeFileSync(running + "/" + process.pid, "");
   writeFileSync(running + "/most-" + process.pid, String(readdirSync(running).filter((name) => /^\\d+$/.test(name)).length));
   for (let count = 0; count < 2000; count++) await tick();
@@ -193,7 +191,7 @@ test("a reclaimed slot's reviewer stops with it, and a lens records its reviewer
   const io = slotIO(1);
   const reviewer = Bun.spawn(["sleep", "30"], { detached: true });
   try {
-    writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid }));
+    writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid, reviewerStarted: "Sun Oct 25 11:00:00 2026" }));
     await withSlot(io, async () => undefined);
     await reviewer.exited;
     expect(reviewer.signalCode).toBe("SIGKILL");
@@ -209,6 +207,159 @@ test("a reclaimed slot's reviewer stops with it, and a lens records its reviewer
   expect(JSON.parse(readFileSync(seen, "utf8"))).toMatchObject({ pid: process.pid, reviewer: Number(readFileSync(`${seen}.pid`, "utf8")) });
 });
 
+test("a reclaimed slot leaves alone a process that holds its reviewer's process id unless both start times are known and match", async () => {
+  for (const recorded of [undefined, "Sun Oct 25 11:00:00 2026"]) {
+    const unknown = Bun.spawn(["sleep", "30"], { detached: true });
+    try {
+      const io = { ...slotIO(1), startTime: async (pid: number) => pid === unknown.pid && recorded ? undefined : "Sun Oct 25 11:00:00 2026" };
+      writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: unknown.pid, reviewerStarted: recorded }));
+      await withSlot(io, async () => undefined);
+      unknown.kill("SIGTERM");
+      await unknown.exited;
+      expect(unknown.signalCode).toBe("SIGTERM");
+    } finally { unknown.kill("SIGKILL"); }
+  }
+});
+
+test("a reclaimed slot leaves alone a process that now holds its reviewer's process id but started later", async () => {
+  const later = Bun.spawn(["sleep", "30"], { detached: true });
+  try {
+    const io = { ...slotIO(1), startTime: async (pid: number) => pid === later.pid ? "Sun Oct 25 12:00:00 2026" : "Sun Oct 25 11:00:00 2026" };
+    writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: later.pid, reviewerStarted: "Sun Oct 25 10:00:00 2026" }));
+    await withSlot(io, async () => undefined);
+    later.kill("SIGTERM");
+    await later.exited;
+    expect(later.signalCode).toBe("SIGTERM");
+  } finally { later.kill("SIGKILL"); }
+});
+
+test("a claimant that judged a holder stale after another claimant took the slot over leaves the new claim in place and waits for it", async () => {
+  const io = slotIO(1);
+  writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: process.pid, token: "reused", started: "Sun Oct 25 09:00:00 2026" }));
+  const order: string[] = [];
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let first: Promise<void> | undefined;
+  let lookups = 0;
+  const late = {
+    ...io,
+    startTime: async () => {
+      if (++lookups === 2) {
+        first = withSlot(io, async () => { order.push("first in"); await held; order.push("first out"); });
+        while (!order.includes("first in")) await new Promise((done) => setImmediate(done));
+      }
+      return "Sun Oct 25 11:00:00 2026";
+    },
+    pause: async () => { release(); await new Promise((done) => setImmediate(done)); },
+  };
+
+  await withSlot(late, async () => { order.push("second in"); });
+  await first;
+  expect(order).toEqual(["first in", "first out", "second in"]);
+  expect(readdirSync(io.slots).filter((name) => !name.startsWith("."))).toEqual([]);
+});
+
+test("a claimant that crashed while it reclaimed a slot no longer holds it", async () => {
+  const slots = fixture("fleet-panel-slots-");
+  const crashing = join(fixture("fleet-panel-crash-"), "crash.ts");
+  const reviewer = await exitedPid();
+  writeFileSync(crashing, `import { withSlot } from ${JSON.stringify(join(import.meta.dir, "proof-panel.ts"))};
+const startTime = async (pid: number) => { if (pid === ${reviewer}) process.kill(process.pid, "SIGKILL"); return "Sun Oct 25 11:00:00 2026"; };
+await withSlot({ env: {}, pause: async () => {}, now: () => new Date(), startTime, slots: ${JSON.stringify(slots)}, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {});
+`);
+  writeFileSync(join(slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer, reviewerStarted: "Sun Oct 25 10:00:00 2026" }));
+  const crashed = Bun.spawn(["bun", crashing], { stdout: "ignore", stderr: "ignore" });
+  await crashed.exited;
+  expect(crashed.signalCode).toBe("SIGKILL");
+
+  const io = { ...slotIO(1), slots, now: () => new Date(Date.now() + 120_000) };
+  expect(await withSlot(io, async () => "ran")).toBe("ran");
+  expect(readdirSync(slots).filter((name) => /^\d+$/.test(name))).toEqual([]);
+});
+
+test("a claimant paused while it reclaims a slot is not fenced out, however long the pause: the next claimant waits until it resumes", async () => {
+  const slots = fixture("fleet-panel-slots-");
+  const scratch = fixture("fleet-panel-pause-");
+  const pausing = join(scratch, "pause.ts");
+  const inSection = join(scratch, "in-section");
+  const reviewer = await exitedPid();
+  writeFileSync(pausing, `import { writeFileSync } from "node:fs";
+import { withSlot } from ${JSON.stringify(join(import.meta.dir, "proof-panel.ts"))};
+const startTime = async (pid: number) => {
+  if (pid === ${reviewer}) { writeFileSync(${JSON.stringify(inSection)}, ""); process.kill(process.pid, "SIGSTOP"); }
+  return "Sun Oct 25 11:00:00 2026";
+};
+await withSlot({ env: {}, pause: () => new Promise((done) => setImmediate(done)), now: () => new Date(), startTime, slots: ${JSON.stringify(slots)}, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {});
+`);
+  writeFileSync(join(slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer, reviewerStarted: "Sun Oct 25 10:00:00 2026" }));
+  const paused = Bun.spawn(["bun", pausing], { stdout: "ignore", stderr: "inherit" });
+  try {
+    while (!existsSync(inSection)) await new Promise((done) => setImmediate(done));
+    let waits = 0;
+    let resumed = false;
+    const io = { ...slotIO(1), slots, now: () => new Date(Date.now() + 3_600_000), pause: async () => { if (++waits > 20) { resumed = true; paused.kill("SIGCONT"); } await new Promise((done) => setImmediate(done)); } };
+
+    expect(await withSlot(io, async () => resumed)).toBe(true);
+    expect(await paused.exited).toBe(0);
+  } finally { paused.kill("SIGKILL"); }
+});
+
+test("a claimant paused just as it starts to reclaim a slot never runs its work beside the next claimant's, however long the pause", async () => {
+  const slots = fixture("fleet-panel-slots-");
+  const scratch = fixture("fleet-panel-publish-");
+  const pausing = join(scratch, "pause.ts");
+  const at = (name: string) => join(scratch, name);
+  const reviewer = await exitedPid();
+  writeFileSync(pausing, `import { existsSync, writeFileSync } from "node:fs";
+import { withSlot } from ${JSON.stringify(join(import.meta.dir, "proof-panel.ts"))};
+let own = 0;
+const startTime = async (pid: number) => {
+  if (pid === process.pid && ++own === 2) { writeFileSync(${JSON.stringify(at("stopped"))}, ""); process.kill(process.pid, "SIGSTOP"); }
+  return "Sun Oct 25 11:00:00 2026";
+};
+const pause = () => { writeFileSync(${JSON.stringify(at("child-waits"))}, ""); return new Promise<void>((done) => setImmediate(done)); };
+await withSlot({ env: {}, pause, now: () => new Date(), startTime, slots: ${JSON.stringify(slots)}, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {
+  writeFileSync(${JSON.stringify(at("child-in"))}, "");
+  while (!existsSync(${JSON.stringify(at("parent-done"))}) && !existsSync(${JSON.stringify(at("parent-waits"))})) await new Promise((done) => setImmediate(done));
+  writeFileSync(${JSON.stringify(at("child-out"))}, "");
+});
+`);
+  writeFileSync(join(slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer, reviewerStarted: "Sun Oct 25 10:00:00 2026" }));
+  const paused = Bun.spawn(["bun", pausing], { stdout: "ignore", stderr: "inherit" });
+  const settled = (...names: string[]) => names.some((name) => existsSync(at(name))) || paused.exitCode !== null;
+  try {
+    while (!settled("stopped")) await new Promise((done) => setImmediate(done));
+    let resumed = false;
+    const startTime = async (pid: number) => {
+      if (pid === reviewer && !resumed) {
+        resumed = true;
+        paused.kill("SIGCONT");
+        while (!settled("child-in", "child-waits")) await new Promise((done) => setImmediate(done));
+      }
+      return "Sun Oct 25 11:00:00 2026";
+    };
+    const pause = () => { writeFileSync(at("parent-waits"), ""); return new Promise<void>((done) => setImmediate(done)); };
+    const io = { ...slotIO(1), slots, startTime, pause, now: () => new Date(Date.now() + 3_600_000) };
+
+    const together = await withSlot(io, async () => existsSync(at("child-in")) && !existsSync(at("child-out")));
+    writeFileSync(at("parent-done"), "");
+    expect(together).toBe(false);
+    expect(await paused.exited).toBe(0);
+    expect(existsSync(at("child-out"))).toBe(true);
+  } finally { paused.kill("SIGKILL"); }
+});
+
+test("a process's start time stays the same while it runs and is unknown once it exits", async () => {
+  const running = Bun.spawn(["sleep", "30"]);
+  try {
+    const started = await processStart(running.pid);
+    expect(started).toBeString();
+    expect(await processStart(running.pid)).toBe(started);
+    expect(await processStart(process.pid)).not.toBe(started);
+  } finally { running.kill("SIGKILL"); }
+  expect(await processStart(await exitedPid())).toBeUndefined();
+});
+
 test("--wait stops the reviewer of a lens whose worker died before it restarts the lens", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "greet\n");
@@ -221,7 +372,7 @@ test("--wait stops the reviewer of a lens whose worker died before it restarts t
   mkdirSync(slots, { recursive: true });
   const reviewer = Bun.spawn(["sleep", "30"], { detached: true });
   try {
-    writeFileSync(join(slots, "2"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid }));
+    writeFileSync(join(slots, "2"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer: reviewer.pid, reviewerStarted: "Sun Oct 25 11:00:00 2026" }));
     expect((await pr.fleet("review", "--wait")).code).toBe(0);
     await reviewer.exited;
     expect(reviewer.signalCode).toBe("SIGKILL");
@@ -315,7 +466,7 @@ test("a panel gap holds the gate until the user accepts it, and still needs a re
   expect(unaccepted.output).toMatch(new RegExp(`review: HEAD reviewed in round 1 by gpt-6\\.1-sol; panel gap from \\w{7}, not accepted: ${reason}`));
 
   pr.chooseGap("panel", reason);
-  await pr.fleet("gap", "--kind", "panel", "--accept", `2026-10-25 "Accept the gap"`, "--thread", "thread-1");
+  await acceptGap(pr, "panel");
   expect((await pr.fleet("gate")).code).toBe(0);
 });
 
@@ -384,6 +535,261 @@ test("a panel that fails to plan gives its round back, so the same command plans
   const started = await pr.fleet("review", "--lens", "correctness");
   expect(JSON.parse(started.output.split("\n")[0]!)).toMatchObject({ round: 1 });
   expect((await pr.fleet("review", "--wait")).code).toBe(0);
+});
+
+test("a panel the user's override starts but that fails to plan keeps the answer for the same command", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", clean);
+  const guide = join(pr.home, ".agents/skills/qa-swarm/PANEL.md");
+  writeFileSync(guide, panelGuide.replace("Goal: <goal>", "Goal: the title"));
+  pr.choose("Run one more round");
+  const review = () => pr.fleet("review", "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`);
+  await expect(review()).rejects.toThrow("has no <goal>");
+
+  writeFileSync(guide, panelGuide);
+  const started = await review();
+  expect(JSON.parse(started.output.split("\n")[0]!)).toMatchObject({ round: 1 });
+});
+
+const overrideReview = ["review", "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`];
+
+async function overridePanel() {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewer = fakeModel(pr, "REVIEWER", clean);
+  pr.choose("Run one more round");
+  return { pr, reviewer };
+}
+
+async function expectCountedPanel(pr: Checkout) {
+  fakeModel(pr, "JUDGE", verdict());
+  const gate = await pr.fleet("gate");
+  expect(gate.output).toContain("review: HEAD reviewed in round 1");
+  expect(gate.code).toBe(0);
+  const decisions = (await pr.decide("list", "--pr", "example/product#42")).output.split("\n").filter((line) => line.startsWith("- "));
+  const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"));
+  expect(decisions).toEqual([expect.stringContaining(`[${round.decision.id}]`)]);
+}
+
+test("a panel whose decision never reached the ledger starts no lens while the hub is down, and the same command records that decision and runs the round", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls on appends");
+  void pr.fleetAs(await exitedPid(), ...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "down";
+
+  await expect(pr.fleet("review", "--wait")).rejects.toThrow("Run the same command again once the hub is back");
+  await expect(pr.fleet(...overrideReview)).rejects.toThrow("Run the same command again once the hub is back");
+  expect(existsSync(join(pr.pullRequest, "reviews/1/lenses/correctness.prompt.md"))).toBe(true);
+  expect(reviewer.prompts()).toEqual([]);
+
+  hub.state.hub = "up";
+  expect((await pr.fleet(...overrideReview)).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await expectCountedPanel(pr);
+});
+
+test("a retry that takes over the round of a command whose process is gone records that same decision and runs the round, and the late command then ends without a second panel", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls on appends");
+  const first = pr.fleetAs(await exitedPid(), ...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  expect((await pr.fleet(...overrideReview)).code).toBe(0);
+  hub.releaseAppends();
+  expect((await first).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  expect(reviewer.prompts()).toHaveLength(1);
+  await expectCountedPanel(pr);
+});
+
+test("two retries at once after the first command's process is gone record one decision and run one panel, and a retry that finds the other at work names it", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls on appends");
+  const first = pr.fleetAs(await exitedPid(), ...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  const retries = await Promise.allSettled([pr.fleet(...overrideReview), pr.fleet(...overrideReview)]);
+  const ends = retries.map((end) => end.status === "fulfilled" ? end.value.code : (end.reason as Error).message);
+  expect(ends).toContain(0);
+  for (const end of ends) expect([0, expect.stringContaining(`Process ${process.pid}, another fleet proof command`)]).toContainEqual(end);
+  hub.releaseAppends();
+  expect((await first).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  expect(reviewer.prompts()).toHaveLength(1);
+  await expectCountedPanel(pr);
+});
+
+test("when the first command publishes a panel that a retry already published, it ends without starting the lenses again", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls after it lands an append");
+  const first = pr.fleetAs(await exitedPid(), ...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  expect((await pr.fleet(...overrideReview)).code).toBe(0);
+  hub.releaseAppends();
+  const late = await first;
+  expect(late.code).toBe(0);
+  expect(reviewer.prompts()).toHaveLength(1);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await expectCountedPanel(pr);
+});
+
+for (const resume of [overrideReview, ["review", "--wait"], ["review", "--wait", "--round", "1"]]) {
+  test(`a panel whose process dies after its decision reached the ledger, before its plan exists, resumes with ${resume.join(" ")} and asks for no new answer`, async () => {
+    const { pr, reviewer } = await overridePanel();
+    const hub = hubAt(pr, "stalls after it lands an append");
+    void pr.fleetAs(await exitedPid(), ...overrideReview);
+    await hub.appendStalled;
+    hub.state.hub = "up";
+    expect(reviewer.prompts()).toEqual([]);
+
+    await pr.fleet(...resume);
+    expect((await pr.fleet("review", "--wait")).code).toBe(0);
+    expect(reviewer.prompts()).toHaveLength(1);
+    await expectCountedPanel(pr);
+  });
+}
+
+test("a panel whose plan fails to publish after its decision reached the ledger keeps its round, and the same command resumes it", async () => {
+  const { pr } = await overridePanel();
+  const hub = hubAt(pr, "up");
+  const plan = join(pr.pullRequest, "reviews/1/panel.json");
+  hub.state.afterAppend = () => mkdirSync(plan);
+  await expect(pr.fleet(...overrideReview)).rejects.toThrow();
+  hub.state.afterAppend = undefined;
+  expect(existsSync(join(pr.pullRequest, "reviews/1/round.json"))).toBe(true);
+  rmSync(plan, { recursive: true, force: true });
+
+  expect((await pr.fleet(...overrideReview)).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await expectCountedPanel(pr);
+});
+
+test("two --wait commands at once on a staged panel start each lens once, and both print the findings", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls after it lands an append");
+  void pr.fleetAs(await exitedPid(), ...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+  let open = () => {};
+  const opened = new Promise<void>((resolve) => { open = resolve; });
+  pr.panel.beforeWorker = async () => { await opened; };
+
+  const waits = [pr.fleet("review", "--wait"), pr.fleet("review", "--wait")];
+  pr.panel.onPause = async () => { open(); await Promise.race(waits); };
+  const ends = await Promise.all(waits);
+  expect(reviewer.prompts()).toHaveLength(1);
+  expect(ends.map(({ code }) => code)).toEqual([0, 0]);
+  for (const { output } of ends) expect(output).toContain("FINDINGS:\n(none)");
+  await expectCountedPanel(pr);
+});
+
+test("--wait on a panel whose command still holds the round keeps polling until it ends, then runs the panel and prints its findings", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "stalls on appends");
+  const first = pr.fleet(...overrideReview);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+  pr.panel.onPause = async () => { hub.releaseAppends(); await first.catch(() => undefined); };
+
+  const waited = await pr.fleet("review", "--wait");
+  expect(waited.code).toBe(0);
+  expect(waited.output).toContain("FINDINGS:\n(none)");
+  expect(reviewer.prompts()).toHaveLength(1);
+  await expectCountedPanel(pr);
+});
+
+test("--wait on a panel whose command still writes its briefs keeps polling until the panel is staged, then runs it and prints its findings", async () => {
+  const { pr, reviewer } = await overridePanel();
+  const hub = hubAt(pr, "drops appends");
+  await expect(pr.fleet(...overrideReview)).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+  const round = join(pr.pullRequest, "reviews/1");
+  const staged = readFileSync(join(round, "panel.staged.json"), "utf8");
+  rmSync(join(round, "panel.staged.json"));
+  writeFileSync(join(round, "round.lock"), JSON.stringify({ pid: process.pid, token: "briefing", started: "Sun Oct 25 11:00:00 2026" }));
+  pr.panel.onPause = async () => {
+    writeFileSync(join(round, "panel.staged.json"), staged);
+    rmSync(join(round, "round.lock"));
+  };
+
+  const waited = await pr.fleet("review", "--wait");
+  expect(waited.code).toBe(0);
+  expect(waited.output).toContain("FINDINGS:\n(none)");
+  expect(reviewer.prompts()).toHaveLength(1);
+  await expectCountedPanel(pr);
+});
+
+test("a fleet review with another scope refuses the round whose decision is not recorded yet and names it", async () => {
+  const { pr } = await overridePanel();
+  const reviewed = await pr.commit("feature.txt", "greet again\n");
+  const hub = hubAt(pr, "drops appends");
+  await expect(pr.fleet(...overrideReview)).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+
+  const round = join(pr.pullRequest, "reviews/1");
+  await expect(pr.fleet("review", "--scope", "final", "--base", reviewed, "--agent", "one last read")).rejects.toThrow(`Review round 1 at this HEAD is reserved with --scope full, and its decision is not recorded yet. Run its command again with --scope full to record it, or remove ${round} to drop it`);
+  await expect(pr.fleet("review", "--lens", "correctness", "--scope", "final", "--base", reviewed, "--agent", "one last read")).rejects.toThrow("Review round 1 at this HEAD is reserved with --scope full");
+  expect((await pr.fleet(...overrideReview)).code).toBe(0);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
+  await expectCountedPanel(pr);
+});
+
+test("a review at a newer commit leaves alone the panel round that a command at an older commit still prepares and records", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewed = await reviewHead(pr);
+  const older = await pr.commit("feature.txt", "greet the member\n");
+  const reviewer = fakeModel(pr, "REVIEWER", clean);
+  const hub = hubAt(pr, "stalls after it lands an append");
+  pr.choose("Run one more round");
+  const first = pr.fleet("review", "--scope", "final", "--base", reviewed, "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+  const newer = await pr.commit("feature.txt", "greet the new member\n");
+
+  const review = await pr.fleet("review", "--scope", "fixes", "--base", reviewed);
+  expect(review.code).toBe(0);
+  expect(JSON.parse(review.output.split("\n")[0]!)).toMatchObject({ round: 2, id: "2" });
+  hub.releaseAppends();
+  expect((await first).code).toBe(0);
+  expect((await pr.fleet("review", "--wait", "--round", "final")).code).toBe(0);
+
+  const round = (id: string) => JSON.parse(readFileSync(join(pr.pullRequest, "reviews", id, "round.json"), "utf8"));
+  expect(round("final-1")).toMatchObject({ commit: older, recorded: true });
+  expect(round("2")).toMatchObject({ commit: newer });
+  const [single, panel] = reviewer.prompts();
+  expect(panel).toContain("+greet the member");
+  expect(panel).not.toContain("+greet the new member");
+  expect(single).toContain("+greet the new member");
+});
+
+test("a late single-reviewer command, after a retry finished its round, prints the saved findings and runs no second reviewer", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewer = fakeModel(pr, "REVIEWER", "No findings, the greeting is right.");
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  const single = ["review", "--override", `2026-10-25 "Run one more round"`];
+  const late = pr.fleetAs(await exitedPid(), ...single);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+  expect((await pr.fleet(...single)).code).toBe(0);
+
+  hub.releaseAppends();
+  const ended = await late;
+  expect(ended.code).toBe(0);
+  expect(ended.output).toContain("No findings, the greeting is right.");
+  expect(reviewer.prompts()).toHaveLength(1);
 });
 
 test("rerunning a failed lens rebuilds its brief and runs it in the checkout of now", async () => {

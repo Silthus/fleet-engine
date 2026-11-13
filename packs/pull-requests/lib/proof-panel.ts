@@ -1,6 +1,6 @@
-import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { anchorCheck } from "./finding-anchors.ts";
 import { readJson, roundId, storeCapturedFindings, writeJson, type ProofIdentity } from "./proof.ts";
@@ -14,7 +14,9 @@ export type BriefInput = { title: string; body: string; base: string; from: stri
 export type Cast = { family: Family; model: string; row: ModelRow };
 export type Plan = { lenses: ({ name: string; title: string } & Cast)[]; changedFiles: string[]; from?: string; cwd: string; readable: string[] };
 type LensStatus = { state: "queued" | "running" | "done" | "failed"; attempts: number; startedAt?: string; finishedAt?: string; cause?: string };
-export type PanelIO = { env: Record<string, string | undefined>; pause: () => Promise<void>; now: () => Date; slots: string; slotCount: number; pid: number; limit: number };
+export type StartTime = (pid: number) => Promise<string | undefined>;
+export type LockOwner = { pid: number; now: () => Date; startTime: StartTime };
+export type PanelIO = LockOwner & { env: Record<string, string | undefined>; pause: () => Promise<void>; slots: string; slotCount: number; limit: number };
 export type Restart = (name: string) => Promise<void>;
 
 const attemptsPerLens = 2;
@@ -123,10 +125,12 @@ const briefDrift = (placeholder: string) => new Error(`The Brief of PANEL.md has
 
 const lensFile = (directory: string, name: string, suffix: string) => join(directory, "lenses", `${name}${suffix}`);
 const planPath = (directory: string) => join(directory, "panel.json");
+const stagedPath = (directory: string) => join(directory, "panel.staged.json");
 export const lensLog = (directory: string, name: string) => lensFile(directory, name, ".log");
 const pidFile = (directory: string, name: string) => lensFile(directory, name, ".pid");
 
 export const readPlan = (directory: string) => readJson<Plan | undefined>(planPath(directory), undefined);
+export const stagedPlan = (directory: string) => readJson<Plan | undefined>(stagedPath(directory), undefined);
 
 async function requirePlan(directory: string) {
   const plan = await readPlan(directory);
@@ -137,13 +141,18 @@ async function requirePlan(directory: string) {
 const readStatus = (directory: string, name: string) => readJson<LensStatus>(lensFile(directory, name, ".json"), { state: "queued", attempts: 0 });
 const writeStatus = (directory: string, name: string, status: LensStatus) => writeJson(lensFile(directory, name, ".json"), status);
 
-export async function planPanel(directory: string, plan: Plan, briefs: Map<string, string>) {
+export async function stagePanel(directory: string, plan: Plan, briefs: Map<string, string>) {
   await mkdir(join(directory, "lenses"), { recursive: true, mode: 0o700 });
   for (const lens of plan.lenses) {
     await writeFile(lensFile(directory, lens.name, ".prompt.md"), briefs.get(lens.name)!, { mode: 0o600 });
     await writeStatus(directory, lens.name, { state: "queued", attempts: 0 });
   }
-  await writeJson(planPath(directory), plan);
+  await writeJson(stagedPath(directory), plan);
+}
+
+export async function publishPanel(directory: string) {
+  try { await rename(stagedPath(directory), planPath(directory)); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT" && await readPlan(directory)) return false; throw error; }
 }
 
 export async function requeueFailed(directory: string, casts: Map<string, Cast>, fresh: { plan: Plan; briefs: Map<string, string> }) {
@@ -156,6 +165,7 @@ export async function requeueFailed(directory: string, casts: Map<string, Cast>,
     Object.assign(lens, casts.get(lens.name));
     await writeFile(lensFile(directory, lens.name, ".prompt.md"), fresh.briefs.get(lens.name)!, { mode: 0o600 });
     await writeStatus(directory, lens.name, { state: "queued", attempts: 0 });
+    await rm(pidFile(directory, lens.name), { force: true });
     failed.push(lens.name);
   }
   await writeJson(planPath(directory), plan);
@@ -230,21 +240,94 @@ function laneProblem(answer: string, changedFiles: string[]) {
   return missed.length ? `COVERED misses ${missed.join(", ")}` : undefined;
 }
 
-type Holder = { pid: number; token?: string; reviewer?: number };
+type Holder = { pid: number; token?: string; started?: string; reviewer?: number; reviewerStarted?: string };
 export type Slot = { recordReviewer: (pid: number) => Promise<void> };
+export type RoundLock = { owner: LockOwner; holder: Holder };
+export class RoundBusy extends Error {}
+export class RoundGone extends Error {}
+
+export async function processStart(pid: number) {
+  const stat = await readFile(`/proc/${pid}/stat`, "utf8").catch(() => undefined);
+  if (stat !== undefined) return `ticks ${stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]}`;
+  try {
+    const ps = Bun.spawn(["ps", "-o", "lstart=", "-p", String(pid)], { env: { ...process.env, LC_ALL: "C", TZ: "UTC" }, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const [text, code] = await Promise.all([new Response(ps.stdout).text(), ps.exited]);
+    return code === 0 ? text.trim() || undefined : undefined;
+  } catch { return undefined; }
+}
+
+const holderFor = async (owner: LockOwner): Promise<Holder> => ({ pid: owner.pid, token: crypto.randomUUID(), started: await owner.startTime(owner.pid) });
 
 export async function withSlot<T>(io: PanelIO, work: (slot: Slot) => Promise<T>) {
-  const holder: Holder = { pid: io.pid, token: crypto.randomUUID() };
+  const holder = await holderFor(io);
   const slot = await takeSlot(io, holder);
-  const owned = async () => holderOf(await readSlot(slot))?.token === holder.token;
+  const owned = () => holds(slot, holder);
   const recordReviewer = async (reviewer: number) => {
     if (!await owned()) return;
     const temporary = `${slot}.${holder.token}`;
-    await writeFile(temporary, JSON.stringify({ ...holder, reviewer }), { mode: 0o600 });
+    await writeFile(temporary, JSON.stringify({ ...holder, reviewer, reviewerStarted: await io.startTime(reviewer) }), { mode: 0o600 });
     await rename(temporary, slot);
   };
   try { return await work({ recordReviewer }); }
-  finally { if (await owned()) await rm(slot, { force: true }); }
+  finally { await release(slot, holder); }
+}
+
+const lockAttempts = 100;
+const lockGrace = 60_000;
+const lockPath = (directory: string) => join(directory, "round.lock");
+
+export const roundLock = async (owner: LockOwner): Promise<RoundLock> => ({ owner, holder: await holderFor(owner) });
+
+export async function lockNewRound(directory: string, lock: RoundLock) {
+  await claim(lockPath(directory), lock.holder);
+}
+
+export async function withRoundLock<T>(directory: string, lock: RoundLock, step: () => Promise<T>) {
+  await takeLock(directory, lock);
+  try { return await step(); }
+  finally { await release(lockPath(directory), lock.holder); }
+}
+
+async function takeLock(directory: string, { owner, holder }: RoundLock) {
+  const path = lockPath(directory);
+  for (let attempt = 0; attempt < lockAttempts; attempt++) {
+    if (await claimRound(directory, holder)) return;
+    const text = await readSlot(path);
+    if (text === undefined) continue;
+    const current = holderOf(text);
+    if (current?.token === holder.token) return;
+    if (!await stale(path, text, owner)) throw await busy(directory, current);
+    await reclaim(path, text, owner);
+  }
+  throw new Error(`Cannot take the lock ${path}: other commands keep taking it over. Run the command again`);
+}
+
+async function claimRound(directory: string, holder: Holder) {
+  try { return await claim(lockPath(directory), holder); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new RoundGone(`Review round ${basename(directory)} is gone: ${directory}`);
+    throw error;
+  }
+}
+
+async function busy(directory: string, holder: Holder | undefined) {
+  const who = holder?.pid ? `Process ${holder.pid}, another fleet proof command,` : "Another fleet proof command";
+  const panel = await readPlan(directory) ?? await stagedPlan(directory);
+  return new RoundBusy(`${who} works on ${directory} and holds its lock ${lockPath(directory)}. Wait for it to end${panel ? ", or run fleet proof review --wait" : ", then run this command again"}`);
+}
+
+async function claim(path: string, holder: Holder) {
+  const temporary = `${path}.claim-${holder.token}`;
+  await writeFile(temporary, JSON.stringify(holder), { mode: 0o600 });
+  try { await link(temporary, path); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
+  finally { await rm(temporary, { force: true }); }
+}
+
+const holds = async (path: string, holder: Holder) => holderOf(await readSlot(path))?.token === holder.token;
+
+async function release(path: string, holder: Holder) {
+  if (await holds(path, holder)) await rm(path, { force: true });
 }
 
 async function takeSlot(io: PanelIO, holder: Holder) {
@@ -253,9 +336,8 @@ async function takeSlot(io: PanelIO, holder: Holder) {
   for (;;) {
     for (let index = 0; index < slots; index++) {
       const slot = join(io.slots, String(index));
-      try { await writeFile(slot, JSON.stringify(holder), { flag: "wx", mode: 0o600 }); return slot; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-      if (await reclaim(slot)) index--;
+      if (await claim(slot, holder)) return slot;
+      if (await reclaimStale(slot, io)) index--;
     }
     await io.pause();
   }
@@ -263,36 +345,70 @@ async function takeSlot(io: PanelIO, holder: Holder) {
 
 export async function reclaimSlots(io: PanelIO) {
   const names = await readdir(io.slots).catch(() => []);
-  for (const name of names.filter((entry) => /^\d+$/.test(entry))) await reclaim(join(io.slots, name));
+  for (const name of names.filter((entry) => /^\d+$/.test(entry))) await reclaimStale(join(io.slots, name), io);
 }
 
-async function reclaim(slot: string) {
-  const text = await readSlot(slot);
+async function reclaimStale(path: string, owner: LockOwner) {
+  const text = await readSlot(path);
+  return text !== undefined && await stale(path, text, owner) && await reclaim(path, text, owner);
+}
+
+async function stale(path: string, text: string, owner: LockOwner) {
   const holder = holderOf(text);
-  if (!holder?.pid || isAlive(holder.pid)) return false;
-  const lock = `${slot}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
-  try { await mkdir(lock, { mode: 0o700 }); }
-  catch { return false; }
-  try {
-    if (await readSlot(slot) !== text) return false;
-    stopGroup(holder.reviewer);
-    await rm(slot, { force: true });
-    return true;
-  } finally { await rm(lock, { recursive: true, force: true }); }
+  if (!holder?.pid) return olderThanGrace(path, owner.now());
+  if (!isAlive(holder.pid)) return true;
+  if (!holder.started) return false;
+  const started = await owner.startTime(holder.pid);
+  return started !== undefined && started !== holder.started;
 }
 
-const readSlot = (slot: string) => readFile(slot, "utf8").catch(() => "");
+async function olderThanGrace(path: string, now: Date) {
+  const written = await stat(path).then((info) => info.mtimeMs, () => undefined);
+  return written !== undefined && now.getTime() - written > lockGrace;
+}
 
-function holderOf(text: string): Holder | undefined {
+const guardGenerations = 10;
+
+async function guard(path: string, text: string, holder: Holder, owner: LockOwner) {
+  const first = `${path}.reclaim-${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
+  let generation = 1;
+  for (let attempt = 0; attempt < lockAttempts && generation <= guardGenerations; attempt++) {
+    const lock = generation === 1 ? first : `${first}.${generation}`;
+    if (await claim(lock, holder)) return lock;
+    const current = await readSlot(lock);
+    if (current === undefined) continue;
+    if (!await stale(lock, current, owner)) return undefined;
+    generation++;
+  }
+  return undefined;
+}
+
+async function reclaim(path: string, text: string, owner: LockOwner) {
+  const holder = await holderFor(owner);
+  const lock = await guard(path, text, holder, owner);
+  if (!lock) return false;
+  try {
+    if (await readSlot(path) !== text) return false;
+    await stopReviewer(holderOf(text), owner);
+    await rm(path, { force: true });
+    return true;
+  } finally { await release(lock, holder); }
+}
+
+const readSlot = (slot: string) => readFile(slot, "utf8").catch(() => undefined);
+
+function holderOf(text: string | undefined): Holder | undefined {
+  if (text === undefined) return undefined;
   try {
     const value = JSON.parse(text) as Holder | number;
     return typeof value === "number" ? { pid: value } : value;
   } catch { return undefined; }
 }
 
-function stopGroup(group: number | undefined) {
-  if (!group) return;
-  try { process.kill(-group, "SIGKILL"); } catch {}
+async function stopReviewer(holder: Holder | undefined, owner: LockOwner) {
+  if (!holder?.reviewer) return;
+  if (!holder.reviewerStarted || await owner.startTime(holder.reviewer) !== holder.reviewerStarted) return;
+  try { process.kill(-holder.reviewer, "SIGKILL"); } catch {}
 }
 
 function isAlive(pid: number) {
@@ -349,6 +465,10 @@ export async function waitForPanel(directory: string, io: PanelIO, restart: Rest
 async function lensStates(directory: string) {
   const plan = await requirePlan(directory);
   return Promise.all(plan.lenses.map(async (lens) => ({ ...lens, status: await readStatus(directory, lens.name) })));
+}
+
+export async function lensIdle(directory: string, name: string) {
+  return ["queued", "running"].includes((await readStatus(directory, name)).state) && !await workerAlive(directory, name);
 }
 
 async function workerAlive(directory: string, name: string) {

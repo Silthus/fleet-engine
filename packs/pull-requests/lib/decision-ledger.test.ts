@@ -1,0 +1,592 @@
+import { afterEach, expect, test } from "bun:test";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { acceptGap, checkout, cleanFixtures, exitedPid, fakeModel, graded, hubAt, ledgerDecisions, reviewHead, type Checkout } from "./proof-testing.ts";
+
+afterEach(cleanFixtures);
+
+const lineOf = (output: string, start: string) => output.split("\n").find((line) => line.startsWith(start));
+const idIn = (output: string) => /\[(d-[0-9a-f]+)\]/.exec(output)![1]!;
+const agent = (pr: Checkout, kind: string, ...prs: string[]) => pr.decide("record", "--mark", "🤖", "--class", "proof-gap", "--kind", kind, ...(prs.length ? prs : ["example/product#42"]).flatMap((ref) => ["--pr", ref]), "--question", `Accept the ${kind} gap?`, "--answer", "Accept it", "--rejected", "Ask the user", "--reason", "The proof cannot run here");
+
+async function owing(pr: Checkout, kind: string, reason = "No sandbox") {
+  await pr.commit("feature.txt", "new\n");
+  await reviewHead(pr);
+  await pr.fleet("require", ...(kind === "ci" ? ["--none", "--reason", "docs only"] : ["--kinds", kind]));
+  await pr.fleet("gap", "--kind", kind, "--reason", reason);
+}
+
+test("a gap reason recorded again after the user's acceptance leaves the gap accepted (2026-11-12)", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--kinds", "prod-shape");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
+  pr.choose("Accept the gap", "Accept the prod-shape gap? example/product#42: No production read access");
+  const recorded = await pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#42");
+  expect(recorded.code).toBe(0);
+  const id = idIn(recorded.output);
+
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "Still no production read access, reworded");
+  const gate = await pr.fleet("gate");
+  const short = (await pr.git("rev-parse", "HEAD")).slice(0, 7);
+  expect(lineOf(gate.output, "prod-shape:")).toBe(`prod-shape: gap from ${short}, accepted by 👤 decision ${id} (2026-10-25 "Accept the gap"): Still no production read access, reworded`);
+  expect(gate.code).toBe(0);
+});
+
+test("an agent never accepts a panel gap: record refuses it, and the gate lapses one already in the ledger", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  await pr.fleet("review-start", "--scope", "full");
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md");
+  await pr.fleet("gap", "--kind", "panel", "--reason", "A prune lane runs no QA swarm");
+
+  await expect(pr.decide("record", "--mark", "🤖", "--class", "proof-gap", "--kind", "panel", "--pr", "example/product#42", "--question", "Accept the panel gap?", "--answer", "Accept it", "--rejected", "Ask the user", "--reason", "A prune lane")).rejects.toThrow("a panel gap is the user's to accept");
+  expect(ledgerDecisions(pr)).toEqual([]);
+
+  const forged = { id: "d-0000feed", at: "2026-10-25T12:00:00.000Z", class: "proof-gap", mark: "🤖", question: "Accept the panel gap?", answer: "Accept it", rejected: "Ask the user", reason: "A prune lane", scope: { prs: ["example/product#42"], kinds: ["panel"] }, effect: "accept", where: { thread: "thread-1", machine: "box" } };
+  mkdirSync(join(pr.home, ".local/state/fleet"), { recursive: true });
+  appendFileSync(join(pr.home, ".local/state/fleet/decisions.jsonl"), JSON.stringify({ type: "decide", decision: forged }) + "\n");
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(3);
+  expect(gate.output).toContain("panel gap from");
+  expect(gate.output).toContain("not accepted (🤖 decision d-0000feed lapsed: a panel gap is the user's to accept): A prune lane runs no QA swarm");
+  expect(lineOf(gate.output, "lapsed:")).toBe("lapsed: 🤖 decision d-0000feed no longer counts; ask the user, or decide again once the reason is gone");
+});
+
+test("one answer whose question names three PRs accepts the gap on each of them and no fourth", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.choose("Accept the gap", "Accept the prod-shape gap? example/product#42, product#43 and https://github.com/example/product/pull/44: No sandbox");
+  const prs = ["example/product#42", "example/product#43", "https://github.com/example/product/pull/44"].flatMap((ref) => ["--pr", ref]);
+  const id = idIn((await pr.decide("record", "--mark", "👍", "--class", "proof-gap", "--kind", "prod-shape", ...prs)).output);
+
+  for (const ref of ["example/product#43", "example/product#44"]) expect((await pr.decide("list", "--pr", ref)).output).toContain(`[${id}]`);
+  expect((await pr.decide("list", "--pr", "example/product#45")).output).toBe("No decisions.");
+  expect(lineOf((await pr.fleet("gate")).output, "prod-shape:")).toContain(`accepted by 👍 decision ${id}`);
+  await expect(pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#45", "--message", "request-1:0")).rejects.toThrow("The question the user answered does not name example/product#45");
+});
+
+test("one answer records one decision: the same message twice is refused", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.chooseGap("prod-shape", "No sandbox");
+  const id = idIn((await acceptGap(pr, "prod-shape")).output);
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow(`That answer is already recorded as decision ${id}. One answer records one decision`);
+  await expect(acceptGap(pr, "prod-shape", "--message", "request-1:0")).rejects.toThrow(`already recorded as decision ${id}`);
+  expect((await pr.decide("list")).output.split("\n")).toHaveLength(1);
+});
+
+test("--message takes an earlier answer by its id, and --words or --message alone", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.chooseGap("prod-shape", "No sandbox", "Accept the gap (Recommended)");
+  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow(`The user chose "Keep the gap open", which does not accept the gap`);
+  await expect(acceptGap(pr, "prod-shape", "--message", "request-9:0")).rejects.toThrow("No message of the user's in thread thread-1 has the id request-9:0");
+  await expect(acceptGap(pr, "prod-shape", "--message", "request-1:0", "--words", `2026-10-25 "Accept the gap (Recommended)"`)).rejects.toThrow("Pass --message or --words, not both");
+  const recorded = await acceptGap(pr, "prod-shape", "--message", "request-1:0");
+  expect(recorded.output).toBe(`- 👤 **Accept the prod-shape gap? example/product#42: No sandbox** 2026-10-25 "Accept the gap (Recommended)" (the user, proof-gap, thread mcp:thread-1) [${idIn(recorded.output)}]`);
+});
+
+test("a plain yes accepts the gap the question named; an answer that keeps it open or says no never does", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.chooseGap("prod-shape", "No sandbox", "No, keep it open");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow(`The user chose "No, keep it open", which does not accept the gap`);
+  pr.chooseGap("prod-shape", "No sandbox", "Yes");
+  expect((await acceptGap(pr, "prod-shape")).code).toBe(0);
+  expect((await pr.fleet("gate")).code).toBe(0);
+});
+
+test("a legacy acceptance in the gap file still counts, and survives a new reason", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  const head = await pr.git("rev-parse", "HEAD");
+  const legacy = { commit: head, reason: "No sandbox", recordedAt: "2026-10-20T10:00:00.000Z", acceptance: { instruction: `2026-10-20 "Accept the gap"`, acceptedAt: "2026-10-20T10:05:00.000Z" } };
+  writeFileSync(join(pr.pullRequest, "gaps/prod-shape.json"), JSON.stringify(legacy));
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(0);
+  expect(lineOf(gate.output, "prod-shape:")).toBe(`prod-shape: gap from ${head.slice(0, 7)}, accepted ("2026-10-20 "Accept the gap""): No sandbox`);
+
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "The sandbox has no production rows");
+  expect(lineOf((await pr.fleet("gate")).output, "prod-shape:")).toBe(`prod-shape: gap from ${head.slice(0, 7)}, accepted ("2026-10-20 "Accept the gap""): The sandbox has no production rows`);
+});
+
+test("off the hub the ledger is read and appended over SSH to the hub alias", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  const { remote, hosts } = hubAt(pr);
+  pr.chooseGap("prod-shape", "No sandbox");
+  const id = idIn((await acceptGap(pr, "prod-shape")).output);
+
+  expect(existsSync(join(pr.home, ".local/state/fleet/decisions.jsonl"))).toBe(false);
+  const lines = readFileSync(join(remote, ".local/state/fleet/decisions.jsonl"), "utf8").trim().split("\n");
+  expect(lines.map((line) => JSON.parse(line).decision.id)).toEqual([id]);
+  expect((statSync(join(remote, ".local/state/fleet/decisions.jsonl")).mode & 0o777).toString(8)).toBe("600");
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(0);
+  expect(lineOf(gate.output, "prod-shape:")).toContain(`accepted by 👤 decision ${id}`);
+  expect(new Set(hosts)).toEqual(new Set(["fleet-hub"]));
+});
+
+test("on the hub the ledger is the local file, even when the hub alias does not answer", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  const { remote } = hubAt(pr, false);
+  const seeded = (home: string, id: string) => {
+    const decision = { id, at: "2026-10-25T12:00:00.000Z", class: "status", mark: "🤖", question: "Post the status?", answer: "Post it", rejected: "Wait", reason: "CI is green", scope: { prs: ["example/product#42"] }, where: { thread: "thread-1", machine: "box" } };
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    writeFileSync(join(home, ".local/state/fleet/decisions.jsonl"), JSON.stringify({ type: "decide", decision }) + "\n");
+  };
+  seeded(pr.home, "d-10ca1000");
+  seeded(remote, "d-0e307e00");
+  mkdirSync(join(pr.home, ".config/fleet"), { recursive: true });
+  writeFileSync(join(pr.home, ".config/fleet/machine.json"), JSON.stringify({ role: "hub" }));
+
+  const listed = (await pr.decide("list")).output;
+  expect(listed).toContain("[d-10ca1000]");
+  expect(listed).not.toContain("d-0e307e00");
+  pr.chooseGap("prod-shape", "No sandbox");
+  const id = idIn((await acceptGap(pr, "prod-shape")).output);
+  expect(ledgerDecisions(pr).map((decision) => decision.id)).toEqual(["d-10ca1000", id]);
+});
+
+test("an unreachable hub fails the gate closed with exit 3, and a record says it was not recorded", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.chooseGap("prod-shape", "No sandbox");
+  await acceptGap(pr, "prod-shape");
+  hubAt(pr, false);
+
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(3);
+  expect(lineOf(gate.output, "prod-shape:")).toContain("not accepted: hub unreachable (hub fleet-hub unreachable over SSH (ssh: connect to host fleet-hub port 22: Connection refused)): No sandbox");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow("Not recorded: hub fleet-hub unreachable over SSH");
+});
+
+test("the merge-risk tier at HEAD limits the agent: none on an ungraded PR, process only on a critical one", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  await expect(agent(pr, "prod-shape")).rejects.toThrow("example/product#42 is ungraded: its merge-risk callout has no Tier line at HEAD. An agent never decides alone on an ungraded PR");
+  pr.pullRequestState({ body: graded("critical") });
+  await expect(agent(pr, "prod-shape")).rejects.toThrow("example/product#42 is critical at HEAD: an agent decides only process there");
+  expect((await agent(pr, "post-deploy-watch")).code).toBe(0);
+  pr.pullRequestState({ body: graded("non-critical") });
+  const id = idIn((await agent(pr, "prod-shape")).output);
+  const accepted = await pr.fleet("gate");
+  expect(accepted.code).toBe(0);
+  expect(lineOf(accepted.output, "prod-shape:")).toContain(`accepted by 🤖 decision ${id} (Accept it)`);
+
+  pr.pullRequestState({ body: graded("critical") });
+  const critical = await pr.fleet("gate");
+  expect(critical.code).toBe(3);
+  expect(lineOf(critical.output, "prod-shape:")).toContain(`not accepted (🤖 decision ${id} lapsed: critical head)`);
+  expect(lineOf(critical.output, "lapsed:")).toContain(`🤖 decision ${id} no longer counts`);
+
+  pr.pullRequestState({ body: "## Merge risk\n\nNo tier yet.\n" });
+  expect(lineOf((await pr.fleet("gate")).output, "prod-shape:")).toContain(`not accepted (🤖 decision ${id} lapsed: ungraded)`);
+});
+
+test("an agent's ci acceptance counts only while CI has not run on HEAD", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "ci", "Fork CI cannot create its token");
+  pr.ci("none");
+  const id = idIn((await agent(pr, "ci")).output);
+  const none = await pr.fleet("gate");
+  expect(none.code).toBe(0);
+  expect(lineOf(none.output, "ci:")).toContain(`accepted by 🤖 decision ${id}`);
+
+  pr.ci([{ name: "test", bucket: "fail" }]);
+  const red = await pr.fleet("gate");
+  expect(red.code).toBe(3);
+  expect(lineOf(red.output, "ci:")).toContain(`not accepted (🤖 decision ${id} lapsed: CI on HEAD is red)`);
+});
+
+test("the user's keep-owed outranks an agent's acceptance and no void lifts it; a voided decision counts no more", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const agents = idIn((await agent(pr, "prod-shape")).output);
+  expect((await pr.fleet("gate")).code).toBe(0);
+
+  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow("does not accept the gap");
+  const kept = idIn((await acceptGap(pr, "prod-shape", "--keep-owed")).output);
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(3);
+  expect(lineOf(gate.output, "prod-shape:")).toContain(`not accepted (🤖 decision ${agents} lapsed: the user keeps it owed, decision ${kept})`);
+  await expect(pr.decide("record", "--mark", "🤖", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#42", "--keep-owed", "--question", "q", "--answer", "a", "--rejected", "r", "--reason", "why")).rejects.toThrow("--keep-owed are the user's");
+
+  await expect(pr.decide("void", kept, "--reason", "The user lifted it")).rejects.toThrow(`Decision ${kept} keeps the gap owed, and only the user lifts it`);
+  expect((await pr.fleet("gate")).code).toBe(3);
+
+  const voided = await pr.decide("void", agents, "--reason", "Its condition no longer holds");
+  expect(voided.output).toEndWith(`[${agents}] voided: Its condition no longer holds`);
+  await expect(pr.decide("void", agents, "--reason", "again")).rejects.toThrow(`Decision ${agents} is already voided`);
+  expect((await pr.decide("list", "--live")).output).not.toContain(agents);
+
+  pr.chooseGap("prod-shape", "No sandbox");
+  await acceptGap(pr, "prod-shape");
+  expect((await pr.fleet("gate")).code).toBe(0);
+});
+
+test("an unreachable hub hides no keep-owed: a standing rule never accepts the gap while the ledger cannot be read", async () => {
+  const pr = await checkout();
+  const rule = "Until 2026-11-02, I accept each owed Prod shape gap.";
+  writeFileSync(join(pr.home, ".agents/guides/standing-rules.md"), `- ${rule} \`fleet proof standing --kind prod-shape --until 2026-11-02 --rule "${rule}"\`\n`);
+  await owing(pr, "prod-shape");
+  await pr.fleet("standing", "--kind", "prod-shape", "--until", "2026-11-02", "--rule", rule);
+  const { state } = hubAt(pr);
+  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
+  await acceptGap(pr, "prod-shape", "--keep-owed");
+  expect((await pr.fleet("gate")).code).toBe(3);
+
+  state.hub = "down";
+  const gate = await pr.fleet("gate");
+  expect(lineOf(gate.output, "prod-shape:")).toContain("not accepted: hub unreachable");
+  expect(gate.code).toBe(3);
+});
+
+test("record without --message takes the latest answer that names each PR and each gap kind", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.chooseGap("prod-shape", "No sandbox");
+  pr.chooseGap("cross-version", "No old client");
+  const recorded = await acceptGap(pr, "prod-shape");
+  expect(recorded.output).toStartWith("- 👤 **Accept the prod-shape gap? example/product#42: No sandbox**");
+  expect((await pr.fleet("gate")).code).toBe(0);
+});
+
+for (const where of ["this machine", "the hub"]) test(`a record after a torn last line on ${where} still lands on its own line, and the torn line costs only itself`, async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const home = where === "the hub" ? hubAt(pr).remote : pr.home;
+  const agents = idIn((await agent(pr, "prod-shape")).output);
+  appendFileSync(join(home, ".local/state/fleet/decisions.jsonl"), `{"type":"decide","decision":{"id":"d-70`);
+
+  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
+  const kept = idIn((await acceptGap(pr, "prod-shape", "--keep-owed")).output);
+  const gate = await pr.fleet("gate");
+  expect(lineOf(gate.output, "prod-shape:")).toContain(`not accepted (🤖 decision ${agents} lapsed: the user keeps it owed, decision ${kept})`);
+  expect(gate.code).toBe(3);
+});
+
+test("a record fails unless its decision is in the ledger when it re-reads it", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  hubAt(pr, "drops appends");
+  await expect(agent(pr, "prod-shape")).rejects.toThrow("is not in the decision ledger when Fleet reads it back");
+  pr.chooseGap("prod-shape", "No sandbox");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow("is not in the decision ledger when Fleet reads it back");
+});
+
+test("a review override the hub wrote, but whose acknowledgement SSH lost, keeps its round", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const { remote } = hubAt(pr, "loses the acknowledgement of appends");
+  pr.choose("Run one more round");
+  const started = await pr.fleet("review-start", "--scope", "full", "--override", `2026-10-25 "Run one more round"`);
+  expect(started.code).toBe(0);
+  const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"));
+  const hub = readFileSync(join(remote, ".local/state/fleet/decisions.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line).decision.id);
+  expect(hub).toEqual([round.decision.id]);
+});
+
+const overrideStart = ["review-start", "--scope", "full", "--override", `2026-10-25 "Run one more round"`];
+const finishRound = (pr: Checkout) => {
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  return pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md");
+};
+const roundDecision = (pr: Checkout) => JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8")).decision.id as string;
+
+test("a review-start that dies before its decision reaches the ledger records that decision before review-finish saves the round", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  void pr.fleetAs(await exitedPid(), ...overrideStart);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  expect((await finishRound(pr)).code).toBe(0);
+  expect((await pr.decide("list", "--pr", "example/product#42")).output).toContain(`[${roundDecision(pr)}]`);
+});
+
+test("a review-start whose process is gone and whose append fails after review-finish saved the round keeps the round and its findings", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  const starting = pr.fleetAs(await exitedPid(), ...overrideStart);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+  expect((await finishRound(pr)).code).toBe(0);
+
+  hub.state.hub = "down";
+  hub.releaseAppends();
+  await expect(starting).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+  expect(readFileSync(join(pr.pullRequest, "reviews/1/findings.md"), "utf8")).toBe("No findings.\n");
+  const listed = (await pr.decide("list", "--pr", "example/product#42")).output.split("\n").filter((line) => line.startsWith("- "));
+  expect(listed).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("a review-start whose decision the hub drops keeps its round, and the same command records that decision", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow("is not in the decision ledger when Fleet reads it back. Run the same command again");
+  const decision = roundDecision(pr);
+
+  hub.state.hub = "up";
+  const started = await pr.fleet(...overrideStart);
+  expect(started.code).toBe(0);
+  expect(JSON.parse(started.output)).toMatchObject({ round: 1, id: "1" });
+  expect(roundDecision(pr)).toBe(decision);
+  expect((await finishRound(pr)).code).toBe(0);
+  const listed = (await pr.decide("list", "--pr", "example/product#42")).output.split("\n").filter((line) => line.startsWith("- "));
+  expect(listed).toEqual([expect.stringContaining(`[${decision}]`)]);
+});
+
+test("a review-start with another scope refuses the round whose decision is not recorded yet and names it, and the same command still takes it", async () => {
+  const pr = await checkout();
+  const reviewed = await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow("Not recorded");
+  const decision = roundDecision(pr);
+  hub.state.hub = "up";
+
+  const round = join(pr.pullRequest, "reviews/1");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--agent", "one last read")).rejects.toThrow(`Review round 1 at this HEAD is reserved with --scope full, and its decision is not recorded yet. Run its command again with --scope full to record it, or remove ${round} to drop it`);
+  expect(roundDecision(pr)).toBe(decision);
+  expect((await pr.fleet(...overrideStart)).code).toBe(0);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${decision}]`)]);
+});
+
+test("a review-start for a final read in another phase refuses the final read whose decision is not recorded yet", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewed = await reviewHead(pr);
+  await pr.commit("feature.txt", "newer\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--override", `2026-10-25 "Run one more round"`)).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--phase", "babysit", "--agent", "babysit read")).rejects.toThrow("Review round final-1 at this HEAD is reserved with --scope final --base");
+});
+
+test("review-finish saves a round whose decision is recorded while the hub is down", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr);
+  pr.choose("Run one more round");
+  expect((await pr.fleet(...overrideStart)).code).toBe(0);
+
+  hub.state.hub = "down";
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(readFileSync(join(pr.pullRequest, "reviews/1/findings.md"), "utf8")).toBe("No findings.\n");
+});
+
+test("review-finish refuses a round whose decision is not recorded while the hub is down, and saves it once the hub is back", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow("Not recorded");
+
+  hub.state.hub = "down";
+  await expect(finishRound(pr)).rejects.toThrow("Run the same command again once the hub is back");
+  expect(existsSync(join(pr.pullRequest, "reviews/1/findings.md"))).toBe(false);
+  hub.state.hub = "up";
+  expect((await finishRound(pr)).code).toBe(0);
+  expect((await pr.decide("list", "--pr", "example/product#42")).output).toContain(`[${roundDecision(pr)}]`);
+});
+
+const listedDecisions = async (pr: Checkout) => (await pr.decide("list", "--pr", "example/product#42")).output.split("\n").filter((line) => line.startsWith("- "));
+const hubLines = (remote: string) => readFileSync(join(remote, ".local/state/fleet/decisions.jsonl"), "utf8").trim().split("\n");
+
+test("a second command on a round that a running command works on stops and names that process, and runs once that command ends", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  const first = pr.fleet(...overrideStart);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  const round = join(pr.pullRequest, "reviews/1");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow(`Process ${process.pid}, another fleet proof command, works on ${round} and holds its lock ${join(round, "round.lock")}. Wait for it to end, then run this command again`);
+  await expect(finishRound(pr)).rejects.toThrow(`Process ${process.pid}`);
+  hub.releaseAppends();
+  await expect(first).rejects.toThrow("Not recorded");
+
+  expect((await pr.fleet(...overrideStart)).code).toBe(0);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("a round whose command died is taken over: the same command records its decision and goes on", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  void pr.fleetAs(await exitedPid(), ...overrideStart);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  const started = await pr.fleet(...overrideStart);
+  expect(started.code).toBe(0);
+  expect(JSON.parse(started.output)).toMatchObject({ round: 1, id: "1" });
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("a lock file that a crashed command left empty holds the round only for a short grace, then the same command takes it over", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+  const round = join(pr.pullRequest, "reviews/1");
+  const lock = join(round, "round.lock");
+  writeFileSync(lock, "");
+  utimesSync(lock, pr.clock.now, pr.clock.now);
+
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow(`Another fleet proof command works on ${round} and holds its lock ${lock}. Wait for it to end, then run this command again`);
+  const crashed = new Date(pr.clock.now.getTime() - 120_000);
+  utimesSync(lock, crashed, crashed);
+  expect((await pr.fleet(...overrideStart)).code).toBe(0);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("a round whose holder's process id now names a process that started later is taken over", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls on appends");
+  pr.choose("Run one more round");
+  const first = pr.fleet(...overrideStart);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  pr.startTimes.set(process.pid, "Mon Nov  2 08:00:00 2026");
+  const started = await pr.fleet(...overrideStart);
+  expect(started.code).toBe(0);
+  expect(JSON.parse(started.output)).toMatchObject({ round: 1, id: "1" });
+  hub.releaseAppends();
+  await first.catch(() => undefined);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("review-finish and --wait on a round that is not reserved say so", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  await expect(pr.fleet("review-finish", "--round", "3", "--reviewer", "gpt-6.1-sol", "findings.md")).rejects.toThrow("Review round 3 is not reserved. Reserve it with review-start first");
+  await expect(pr.fleet("review", "--wait", "--round", "3")).rejects.toThrow("Review round 3 is not reserved. Reserve it with review-start first");
+});
+
+test("while the hub is down, a round at an older commit whose decision is not recorded keeps its reservation, and a review that records no decision still runs", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  const reviewed = await reviewHead(pr);
+  await pr.commit("feature.txt", "newer\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--override", `2026-10-25 "Run one more round"`)).rejects.toThrow("Not recorded");
+  const stranded = readFileSync(join(pr.pullRequest, "reviews/final-1/round.json"), "utf8");
+  const head = await pr.commit("feature.txt", "newest\n");
+  hub.state.hub = "down";
+  fakeModel(pr, "REVIEWER", "No findings.");
+
+  const review = await pr.fleet("review", "--scope", "fixes", "--base", reviewed);
+  expect(review.code).toBe(0);
+  expect(JSON.parse(review.output.split("\n")[0]!)).toMatchObject({ round: 2, id: "2" });
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/2/round.json"), "utf8"))).toMatchObject({ commit: head });
+  expect(readFileSync(join(pr.pullRequest, "reviews/final-1/round.json"), "utf8")).toBe(stranded);
+});
+
+test("a rerun whose decision is already in the ledger appends it no second time", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls after it lands an append");
+  pr.choose("Run one more round");
+  void pr.fleetAs(await exitedPid(), ...overrideStart);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+
+  expect((await pr.fleet(...overrideStart)).code).toBe(0);
+  expect((await finishRound(pr)).code).toBe(0);
+  expect(hubLines(hub.remote).map((line) => JSON.parse(line).decision.id)).toEqual([roundDecision(pr)]);
+});
+
+test("a late command that marks the round recorded keeps the reviewer that review-finish saved", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "stalls after it lands an append");
+  pr.choose("Run one more round");
+  const late = pr.fleetAs(await exitedPid(), ...overrideStart);
+  await hub.appendStalled;
+  hub.state.hub = "up";
+  expect((await finishRound(pr)).code).toBe(0);
+
+  hub.releaseAppends();
+  expect((await late).code).toBe(0);
+  expect((await pr.fleet("show")).output.split("\n")).toEqual([
+    expect.stringMatching(/^round 1 on \w+: finished by gpt-6\.1-sol, saved by the author: /),
+    `decided by 👤 decision ${roundDecision(pr)}`,
+  ]);
+});
+
+test("a round whose decision never reached the ledger, reserved for an older commit, gives way to the next round", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const hub = hubAt(pr, "drops appends");
+  pr.choose("Run one more round");
+  await expect(pr.fleet(...overrideStart)).rejects.toThrow("Not recorded");
+  const fixed = await pr.commit("feature.txt", "newer\n");
+  hub.state.hub = "up";
+
+  const started = await pr.fleet(...overrideStart);
+  expect(started.code).toBe(0);
+  expect(JSON.parse(started.output)).toMatchObject({ round: 1, id: "1" });
+  expect((await finishRound(pr)).code).toBe(0);
+  expect((await pr.fleet("show")).output).toContain(`round 1 on ${fixed.slice(0, 7)}: finished by gpt-6.1-sol`);
+  expect(await listedDecisions(pr)).toEqual([expect.stringContaining(`[${roundDecision(pr)}]`)]);
+});
+
+test("a plain yes accepts a gap only when its question asks to accept that gap", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.choose("Yes", "Keep the prod-shape gap on example/product#42 owed?");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow(`The user chose "Yes" to a question that does not ask "Accept the prod-shape gap?"`);
+  expect((await pr.fleet("gate")).code).toBe(3);
+});
+
+test("an agent's acceptance that lapses under real evidence at HEAD is no lapse the gate prints", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  await agent(pr, "prod-shape");
+  pr.pullRequestState({ body: graded("critical") });
+  writeFileSync(join(pr.repository, "rows.log"), "$ psql -c 'select 1'\n1\nexit=0\n");
+  await pr.fleet("save", "--kind", "prod-shape", join(pr.repository, "rows.log"));
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(0);
+  expect(gate.output).not.toContain("lapsed");
+});

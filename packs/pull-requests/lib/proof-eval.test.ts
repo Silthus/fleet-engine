@@ -105,7 +105,7 @@ test("an eval records its judge in its panel slot, so reclaiming the slot of a d
   const dead = (await spawnAsync(["true"])).pid;
   pr.env.FLEET_PROOF_REVIEWER = "cat >/dev/null; echo 'feature.txt:1: the greeting names no member'";
   pr.env.FLEET_PROOF_EVAL_JUDGE = `cat >/dev/null; if mkdir "${first}" 2>/dev/null; then
-until grep -qs '"reviewer":'$$'}' "${slot}"; do :; done; cp "${slot}" "${seen}"
+until grep -qs '"reviewer":'$$'[,}]' "${slot}"; do :; done; cp "${slot}" "${seen}"
 sed 's/"pid":[0-9]*/"pid":${dead}/' "${seen}" > "${slot}.dead"; mv "${slot}.dead" "${slot}"; exec cat "${block}"
 else echo 'NOT NAMED: no finding is about email'; fi`;
   pr.env.FLEET_PROOF_EVAL_JUDGE_MODEL = "stub-judge";
