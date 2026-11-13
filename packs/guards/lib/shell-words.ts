@@ -479,23 +479,51 @@ export function shellInput(command: Command): { program: string; index: number }
   return inline ? { program: "", index: command.args.length } : { stdin: true };
 }
 
-function nestedPrograms(command: Command): { program: string; scope: Scope }[] {
+const conversion = /%(?:%|[-+ #0]*\d*(?:\.\d*)?[A-Za-z])/g;
+const unescaped = (text: string) => text.replace(/\\(.)/gs, (_, letter: string) => ({ n: "\n", t: "\t" })[letter] ?? letter);
+
+/** What `printf FORMAT ARGS` writes: the format, repeated while arguments are left, with each conversion taking one. */
+function printed([format = "", ...values]: string[]): string {
+  let text = "";
+  for (;;) {
+    const left = values.length;
+    text += format.replace(conversion, (spec) => (spec === "%%" ? "%" : values.shift() ?? ""));
+    if (values.length === 0 || values.length === left) return unescaped(text);
+  }
+}
+
+/** The text a pipeline's command writes when the command line spells it out: `echo` and `printf` arguments, and `cat`
+ * or `tee` passing on a heredoc, a here-string, or the text piped into them. Escapes count as `echo -e` reads them. */
+function output(pipeline: Command[], index: number): string | undefined {
+  const command = pipeline[index];
+  if (!command) return undefined;
+  const { name, args } = command;
+  const text = args.findIndex((arg) => !/^-[neE]+$/.test(arg));
+  if (name === "echo") return unescaped(args.slice(text < 0 ? args.length : text).join(" "));
+  if (name === "printf") return printed(args[0] === "--" ? args.slice(1) : args);
+  const passes = name === "tee" || (name === "cat" && args.every((arg) => arg === "-" || /^-[A-Za-z]+$/.test(arg)));
+  return passes ? command.stdin?.body ?? output(pipeline, index - 1) : undefined;
+}
+
+function nestedPrograms(command: Command, piped?: string): { program: string; scope: Scope }[] {
   const input = shellInput(command);
   const child = { parent: command.scope, chdir: command.chdir };
+  const stdin = command.stdin?.body ?? piped;
   return [
     ...command.substitutions.map((program) => ({ program, scope: { parent: command.scope } })),
     ...(input && "program" in input ? [{ program: input.program, scope: child }] : []),
-    ...(input && "stdin" in input && command.stdin !== undefined ? [{ program: command.stdin.body, scope: child }] : []),
+    ...(input && "stdin" in input && stdin !== undefined ? [{ program: stdin, scope: child }] : []),
     ...(command.name === "eval" ? [{ program: command.args.join(" "), scope: command.scope }] : []),
   ];
 }
 
 /** Every pipeline a command line runs, including those in `sh -c` programs, `$(...)` and backtick substitutions, `eval`,
- * and heredocs fed to a shell. A nested program comes before the command that holds it. */
+ * heredocs fed to a shell, and `echo`, `printf` or `cat` text piped into one. A nested program comes before the command
+ * that holds it. */
 export function pipelinesIn(program: string, context?: Context, depth = 0): Command[][] {
   if (depth > maxDepth) throw new Error(`it nests more than ${maxDepth} shell programs`);
   return parse(program, context).flatMap((pipeline) => [
-    ...pipeline.flatMap((command) => nestedPrograms(command).flatMap(({ program: nested, scope }) => pipelinesIn(nested, { ...command, scope }, depth + 1))),
+    ...pipeline.flatMap((command, index) => nestedPrograms(command, output(pipeline, index - 1)).flatMap(({ program: nested, scope }) => pipelinesIn(nested, { ...command, scope }, depth + 1))),
     pipeline,
   ]);
 }
