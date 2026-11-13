@@ -22,10 +22,12 @@ export type Decision = {
   where: { thread: string; message?: string; machine: string };
 };
 export type Reversal = { type: "reverse"; id: string; words: string; thread?: string; message?: string; comment?: string; machine: string; at: string };
+export type Lift = { type: "lift"; class: AskClass; words: string; thread: string; message: string; machine: string; at: string };
 export type LedgerEvent =
   | { type: "decide"; decision: Decision }
   | { type: "void"; id: string; reason: string; at: string }
-  | Reversal;
+  | Reversal
+  | Lift;
 
 export class HubUnreachable extends Error {}
 
@@ -41,13 +43,15 @@ const isRef = (value: string) => refPattern.test(value);
 const isFilled = (value: unknown): value is string => isText(value) && value.trim() !== "";
 const isTime = (value: unknown): value is string => isText(value) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value) && Number.isFinite(Date.parse(value));
 
-type RawEvent = { type?: unknown; id?: unknown; reason?: unknown; words?: unknown; at?: unknown; thread?: unknown; message?: unknown; comment?: unknown; decision?: Partial<Record<keyof Decision, unknown>> } | null;
-const heardEvent = (event: NonNullable<RawEvent>) => isFilled(event.words) && isTime(event.at) && ((isFilled(event.thread) && isFilled(event.message)) || isFilled(event.comment));
+type RawEvent = { type?: unknown; id?: unknown; class?: unknown; reason?: unknown; words?: unknown; at?: unknown; thread?: unknown; message?: unknown; comment?: unknown; decision?: Partial<Record<keyof Decision, unknown>> } | null;
+const inThread = (event: NonNullable<RawEvent>) => isFilled(event.words) && isTime(event.at) && isFilled(event.thread) && isFilled(event.message);
+const heardEvent = (event: NonNullable<RawEvent>) => inThread(event) || (isFilled(event.words) && isTime(event.at) && isFilled(event.comment));
 
 function validEvent(value: unknown): value is LedgerEvent {
   const event = value as RawEvent;
   if (event?.type === "void") return isText(event.id) && isText(event.reason);
   if (event?.type === "reverse") return isFilled(event.id) && heardEvent(event);
+  if (event?.type === "lift") return (askClasses as readonly unknown[]).includes(event.class) && inThread(event);
   const decision = event?.type === "decide" ? event.decision : undefined;
   if (!decision || !isText(decision.id) || !isText(decision.at) || !isText(decision.question) || !isText(decision.answer)) return false;
   if (!(askClasses as readonly unknown[]).includes(decision.class) || !(marks as readonly unknown[]).includes(decision.mark)) return false;
@@ -125,27 +129,45 @@ export type DecisionState = Decision & { voided?: { reason: string; at: string }
 
 const messageKey = ({ thread, message }: Decision["where"]) => message && `${thread}/${message}`;
 
-export function fold(events: LedgerEvent[]): DecisionState[] {
+export const brakeDays = 28;
+const dayMs = 24 * 60 * 60 * 1000;
+export type Brake = { ids: [string, string]; at: string };
+
+function replay(events: LedgerEvent[]) {
   const decisions = new Map<string, DecisionState>();
   const messages = new Set<string>();
+  const reversals = new Map<AskClass, { id: string; time: number }[]>();
+  const brakes = new Map<AskClass, Brake>();
   for (const event of events) {
     if (event.type === "decide") {
+      const { id, mark, class: decisionClass } = event.decision;
       const message = messageKey(event.decision.where);
-      if (decisions.has(event.decision.id) || (message && messages.has(message))) continue;
+      if (decisions.has(id) || (message && messages.has(message)) || (mark === "🤖" && brakes.has(decisionClass))) continue;
       if (message) messages.add(message);
-      decisions.set(event.decision.id, { ...event.decision });
+      decisions.set(id, { ...event.decision });
     } else if (event.type === "void") {
       const decision = decisions.get(event.id);
       if (decision && !decision.reversed) decision.voided = { reason: event.reason, at: event.at };
-    } else if (event.type === "reverse") {
+    } else if (event.type === "lift") {
+      reversals.delete(event.class);
+      brakes.delete(event.class);
+    } else {
       const decision = decisions.get(event.id);
       if (!decision || decision.reversed) continue;
       const { rejected, ...rest } = decision;
       decisions.set(event.id, { ...rest, mark: "👤", answer: event.words, reversed: { at: event.at, mark: decision.mark, answer: decision.answer, ...rejected ? { rejected } : {} } });
+      const time = Date.parse(event.at);
+      const earlier = reversals.get(decision.class) ?? [];
+      const close = earlier.find((other) => Math.abs(time - other.time) <= brakeDays * dayMs);
+      if (close && !brakes.has(decision.class)) brakes.set(decision.class, { ids: [close.id, event.id], at: event.at });
+      reversals.set(decision.class, [...earlier, { id: event.id, time }]);
     }
   }
-  return [...decisions.values()];
+  return { decisions: [...decisions.values()], brakes };
 }
+
+export const fold = (events: LedgerEvent[]): DecisionState[] => replay(events).decisions;
+export const brakeOf = (events: LedgerEvent[], decisionClass: AskClass): Brake | undefined => replay(events).brakes.get(decisionClass);
 
 export type PrRef = { repository: string; pr: number };
 const refPattern = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
@@ -229,6 +251,7 @@ const usage = `Usage:
   fleet decision list [--pr <owner/repo#n>] [--class <class>] [--live]
   fleet decision void <id> --reason <why its condition no longer holds>
   fleet decision reverse <id> --words '<date> "<the user's words>"' (--thread <id> | --comment <url>)
+  fleet decision lift --class <class> --words '<date> "<the user's answer>"' --thread <id>
 
 The decision ledger holds every decision about a pull request's proof and process. It lives on the Fleet hub that
 the setting hub.alias names; other machines read and append it over SSH. Without a hub, it lives on this machine.
@@ -251,7 +274,9 @@ void ends a decision whose condition HEAD no longer meets, such as when the judg
 reverse records the user's reversal of a decision: their dated, quoted words in a message of theirs in the T3 thread,
 or on a GitHub comment written by the account gh is signed in as, which must hold each quoted part. The decision then
 prints as 👤 with their words, the replaced answer struck through, and counts no more at the gate or in list --live;
-decide or ask again.`;
+decide or ask again. Two reversals in one class within ${brakeDays} days brake the class: record --mark 🤖 and fleet proof
+review --agent in it are refused until lift records the user's answer to your question tool, given after the brake.
+One answer lifts one brake. A 🤖 decision that lands while its class is braked counts nowhere.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
 
@@ -367,8 +392,12 @@ function fits(heard: HeardAnswer, input: Hearing) {
 
 export async function appendDecision(ledger: Ledger, decision: Decision) {
   await reachHub(() => ledger.append({ type: "decide", decision }));
-  if (!decision.where.message) return decision.id;
-  const winner = await recordedFor(ledger, decision.where);
+  if (!decision.where.message && decision.mark !== "🤖") return decision.id;
+  const decisions = fold(await reachHub(() => ledger.read()));
+  if (decision.mark === "🤖" && !decisions.some((candidate) => candidate.id === decision.id)) {
+    throw new Error(`The ${decision.class} class was braked while this decision was recorded, so it counts nowhere. An agent decides no ${decision.class} ask alone until the user lifts the brake; ask them`);
+  }
+  const winner = decision.where.message ? decisions.find((candidate) => messageKey(candidate.where) === messageKey(decision.where)) : undefined;
   if (winner && winner.id !== decision.id) throw alreadyRecorded(winner.id);
   return decision.id;
 }
@@ -377,13 +406,15 @@ const prsOf = (parsed: Parsed) => (parsed.lists.get("--pr") ?? []).map(prRef);
 
 export type AgentDecision = Scope & { question: string; answer: string; rejected: string; reason: string; thread?: string };
 
-export async function decideAlone(input: AgentDecision, context: DecisionContext): Promise<Decision> {
+export async function decideAlone(input: AgentDecision, context: DecisionContext, ledger: Ledger): Promise<Decision> {
   checkScope(input);
   for (const [name, value] of Object.entries({ "--question": input.question, "--answer": input.answer, "--rejected": input.rejected, "--reason": input.reason })) {
     if (!value.trim()) throw new Error(`An agent decision needs ${name}`);
   }
   const thread = input.thread ?? context.env.T3CODE_THREAD_ID;
   if (!thread) throw new Error("An agent decision needs --thread with this lane's T3 thread id");
+  const brake = brakeOf(await reachHub(() => ledger.read()), input.class);
+  if (brake) throw new Error(`The ${input.class} class is braked: the user reversed decisions ${brake.ids[0]} and ${brake.ids[1]} within ${brakeDays} days. An agent decides no ${input.class} ask alone until the user lifts it with fleet decision lift; ask them`);
   if (agentRefusal("non-critical", input.class, input.kinds) === "panel") throw new Error(`${input.prs.map(refText).join(", ")}: ${panelRefusal}. Ask them with your question tool and record their answer with --mark 👤`);
   const pullBody = pullBodyOf(context);
   for (const ref of input.prs) {
@@ -406,7 +437,7 @@ async function record(parsed: Parsed, context: DecisionContext, ledger: Ledger) 
   let decision: Decision;
   if (mark === "🤖") {
     if (parsed.options.has("--words") || parsed.options.has("--message") || keepOwed) throw new Error("--words, --message and --keep-owed are the user's: an agent decision takes --question, --answer, --rejected and --reason");
-    decision = await decideAlone({ ...scope, question: required(parsed, "--question"), answer: required(parsed, "--answer"), rejected: required(parsed, "--rejected"), reason: required(parsed, "--reason"), thread: parsed.options.get("--thread") }, context);
+    decision = await decideAlone({ ...scope, question: required(parsed, "--question"), answer: required(parsed, "--answer"), rejected: required(parsed, "--rejected"), reason: required(parsed, "--reason"), thread: parsed.options.get("--thread") }, context, ledger);
   } else if (mark === "👤" || mark === "👍") {
     for (const option of ["--question", "--answer", "--rejected", "--reason"]) if (parsed.options.has(option)) throw new Error(`${option} belongs to the agent's own decision. The user's decision takes its question and answer from T3`);
     decision = await hearUser({ ...scope, mark, keepOwed, thread: parsed.options.get("--thread"), words: parsed.options.get("--words"), message: parsed.options.get("--message") }, context, ledger);
@@ -473,6 +504,23 @@ async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger)
   return 0;
 }
 
+async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
+  const decisionClass = askClass(required(parsed, "--class"));
+  const words = required(parsed, "--words");
+  const thread = required(parsed, "--thread");
+  const events = await reachHub(() => ledger.read());
+  const brake = brakeOf(events, decisionClass);
+  if (!brake) throw new Error(`The ${decisionClass} class is not braked, so there is nothing to lift`);
+  const heard = await heardInThread(thread, words, context);
+  if (heard.source !== "question") throw new Error(`"${heard.text}" is a message the user typed. Only their answer to your question tool lifts a brake: ask them with it`);
+  const earlier = events.find((event): event is Lift => event.type === "lift" && event.thread === heard.thread && event.message === heard.id);
+  if (earlier) throw new Error(`That message already lifted the ${earlier.class} brake on ${earlier.at.slice(0, 10)}. One message lifts one brake; ask the user about this one`);
+  if (Date.parse(heard.at) <= Date.parse(brake.at)) throw new Error(`The user wrote that before the brake, which the reversal of ${brake.ids[1]} set on ${brake.at.slice(0, 10)}. Only an answer after it lifts it; ask them`);
+  await reachHub(() => ledger.append({ type: "lift", class: decisionClass, words, thread: heard.thread, message: heard.id, machine: thisMachine(context.env), at: at(context) }));
+  context.print(`Lifted the brake on ${decisionClass} (reversals of ${brake.ids[0]} and ${brake.ids[1]}): the agent decides its asks alone again. (the user, ${words}, thread ${thread})`);
+  return 0;
+}
+
 async function list(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const ref = parsed.options.has("--pr") ? prRef(parsed.options.get("--pr")!) : undefined;
   const decisionClass = parsed.options.has("--class") ? askClass(parsed.options.get("--class")!) : undefined;
@@ -496,6 +544,7 @@ export async function decisionCommand(args: string[], context: DecisionContext):
   if (name === "list") return list(parse(args, ["--pr", "--class"], [], ["--live"]), context, ledger);
   if (name === "void") return voidDecision(parse(args, ["--reason"], [], []), context, ledger);
   if (name === "reverse") return reverse(parse(args, ["--words", "--thread", "--comment"], [], []), context, ledger);
+  if (name === "lift") return lift(parse(args, ["--class", "--words", "--thread"], [], []), context, ledger);
   throw new Error(`Unknown command ${name}. Run fleet decision --help`);
 }
 

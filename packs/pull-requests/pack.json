@@ -208,7 +208,9 @@
       "help",
       "record",
       "list",
-      "void"
+      "void",
+      "reverse",
+      "lift"
     ]
   }
 }

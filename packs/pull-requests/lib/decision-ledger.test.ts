@@ -320,3 +320,81 @@ test("a reversal on a GitHub comment counts only when the user wrote it and it h
   expect((await reverse()).output).toStartWith(`- 👤 **Accept the prod-shape gap?** 2026-10-25 "Reverse that one" (reversed 2026-10-25 from ~~🤖 Accept it`);
   expect((await pr.fleet("gate")).code).toBe(3);
 });
+
+test("two reversals in one ask class within 28 days brake it until the user lifts it; 29 days apart they do not", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  const design = (question: string) => pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", question, "--answer", "Keep one module", "--rejected", "Split it", "--reason", "Small change");
+  const on = (day: string) => { pr.clock.now = new Date(`${day}T10:00:00Z`); };
+  const reverseOn = (day: string, id: string, words: string) => { on(day); pr.say(words); return pr.decide("reverse", id, "--words", `${day} "${words}"`, "--thread", "thread-1"); };
+  const lift = (day: string, words: string) => pr.decide("lift", "--class", "proof-gap", "--words", `${day} "${words}"`, "--thread", "thread-1");
+  const liftQuestion = "Lift the brake on proof-gap decisions of example/product#42?";
+  const ids: string[] = [];
+  for (let i = 0; i < 3; i++) ids.push(idIn((await agent(pr, "prod-shape")).output));
+  const firstDesign = idIn((await design("Where does the parser go?")).output);
+  const secondDesign = idIn((await design("Where does the printer go?")).output);
+
+  await reverseOn("2026-10-01", ids[0]!, "No");
+  await reverseOn("2026-10-29", ids[1]!, "Not this either");
+  await reverseOn("2026-10-01", firstDesign, "Wrong call");
+  await reverseOn("2026-10-30", secondDesign, "Also wrong");
+  appendFileSync(ledgerFile(pr), ['{"type":"lift","class":"proof-gap","words":"Lift it","thread":"thread-1","message":"m0","at":"z"}', `{"type":"reverse","id":"${ids[2]}","words":"No","thread":"thread-1","message":"m0","at":"2026-10-0"}`].join("\n") + "\n");
+  on("2026-11-01");
+  await expect(agent(pr, "prod-shape")).rejects.toThrow(`The proof-gap class is braked: the user reversed decisions ${ids[0]} and ${ids[1]} within 28 days`);
+  expect((await design("Where does the report go?")).code).toBe(0);
+
+  await expect(pr.decide("lift", "--class", "design", "--words", `2026-11-01 "Lift it"`, "--thread", "thread-1")).rejects.toThrow("The design class is not braked");
+  on("2026-11-05");
+  pr.say("Lift it, decide gaps again");
+  await expect(lift("2026-11-05", "Lift it, decide gaps again")).rejects.toThrow(`"Lift it, decide gaps again" is a message the user typed. Only their answer to your question tool lifts a brake`);
+  pr.choose("Lift it, decide gaps again", liftQuestion);
+  const lifted = await lift("2026-11-05", "Lift it, decide gaps again");
+  expect(lifted.output).toBe(`Lifted the brake on proof-gap (reversals of ${ids[0]} and ${ids[1]}): the agent decides its asks alone again. (the user, 2026-11-05 "Lift it, decide gaps again", thread thread-1)`);
+  const fourth = idIn((await agent(pr, "prod-shape")).output);
+
+  await reverseOn("2026-11-01", ids[2]!, "Wrong again");
+  await reverseOn("2026-11-01", fourth, "And again");
+  await expect(agent(pr, "prod-shape")).rejects.toThrow(`braked: the user reversed decisions ${ids[2]} and ${fourth}`);
+  await expect(lift("2026-11-05", "Lift it, decide gaps again")).rejects.toThrow("That message already lifted the proof-gap brake on 2026-11-05. One message lifts one brake");
+  on("2026-10-31");
+  pr.choose("Decide gaps alone", liftQuestion);
+  await expect(lift("2026-10-31", "Decide gaps alone")).rejects.toThrow(`The user wrote that before the brake, which the reversal of ${fourth} set on 2026-11-01. Only an answer after it lifts it`);
+  on("2026-11-06");
+  pr.choose("Lift it once more", liftQuestion);
+  expect((await lift("2026-11-06", "Lift it once more")).code).toBe(0);
+  expect((await agent(pr, "prod-shape")).code).toBe(0);
+});
+
+test("a braked review class refuses review --agent", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  const round = () => pr.decide("record", "--mark", "🤖", "--class", "review", "--pr", "example/product#42", "--question", "Run another round?", "--answer", "Run it", "--rejected", "Ask the user", "--reason", "The arbiter escalated");
+  for (const words of ["Stop the rounds", "No more rounds"]) {
+    const id = idIn((await round()).output);
+    pr.say(words);
+    await pr.decide("reverse", id, "--words", `2026-10-25 "${words}"`, "--thread", "thread-1");
+  }
+  await expect(pr.fleet("review-start", "--scope", "full", "--agent", "The arbiter escalated")).rejects.toThrow("The review class is braked");
+});
+
+test("an agent decision that lands while another machine brakes its class counts nowhere, and its lane is told", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const first = idIn((await agent(pr, "prod-shape")).output);
+  const second = idIn((await agent(pr, "prod-shape")).output);
+  pr.say("No");
+  await pr.decide("reverse", first, "--words", `2026-10-25 "No"`, "--thread", "thread-1");
+  const reversal = { type: "reverse", id: second, words: `2026-10-25 "Not that either"`, comment: "https://github.com/example/product/pull/42#issuecomment-7", machine: "other-box", at: "2026-10-25T12:00:00.000Z" };
+  pr.whileGithubReadsPull(`printf '%s\\n' '${JSON.stringify(reversal)}' >> "${ledgerFile(pr)}"`);
+
+  await expect(agent(pr, "prod-shape")).rejects.toThrow("The proof-gap class was braked while this decision was recorded, so it counts nowhere");
+  expect((await pr.fleet("gate")).code).toBe(3);
+  expect((await pr.decide("list", "--live")).output).toBe("No decisions.");
+
+  const older = { id: "d-0ld0ld01", at: "2026-10-25T12:30:00.000Z", class: "proof-gap", mark: "🤖", question: "Accept the prod-shape gap?", answer: "Accept it", rejected: "Ask the user", reason: "An older Fleet", scope: { prs: ["example/product#42"], kinds: ["prod-shape"] }, effect: "accept", where: { thread: "thread-1", machine: "old-box" } };
+  appendFileSync(ledgerFile(pr), JSON.stringify({ type: "decide", decision: older }) + "\n");
+  expect((await pr.fleet("gate")).code).toBe(3);
+  expect((await pr.decide("list", "--live")).output).toBe("No decisions.");
+});

@@ -680,7 +680,7 @@ async function decisionOf(options: Map<string, string>, head: ProofIdentity, con
   if (reason !== undefined && !reason.trim()) throw new Error("--agent needs your reason for this review");
   const decision = words !== undefined
     ? await hearUser({ ...ask, mark: "👤", words, thread: options.get("--thread"), fits: (heard) => requireChoice(heard, lead, [runOption, stopOption], "Stop the review loop") }, context, ledger)
-    : await decideAlone({ ...ask, question: `Run another review round of ${refText(head)} at ${short(head.commit)}?`, answer: `Run it: ${reason}`, rejected: "Ask the user", reason: reason!, thread: options.get("--thread") }, context);
+    : await decideAlone({ ...ask, question: `Run another review round of ${refText(head)} at ${short(head.commit)}?`, answer: `Run it: ${reason}`, rejected: "Ask the user", reason: reason!, thread: options.get("--thread") }, context, ledger);
   const reviewDecision: ReviewDecision = { mark: decision.mark, id: decision.id, record: () => appendDecision(ledger, decision) };
   return { ...rest, decision: reviewDecision };
 }

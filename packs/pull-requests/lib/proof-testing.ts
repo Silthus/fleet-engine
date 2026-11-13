@@ -48,6 +48,7 @@ body='"Adds the greeting."'; [ -f "${github}/body" ] && body=$(cat "${github}/bo
 case "$*" in
   "api "*"/pulls/"[0-9]*)
     [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head"
+    [ -f "${github}/while-reading" ] && { mv "${github}/while-reading" "${github}/while-reading.sh"; sh "${github}/while-reading.sh"; }
     draft=false; [ -f "${github}/draft" ] && draft=true
     printf '{"number":42,"title":"Greet new members","body":%s,"draft":%s,"head":{"sha":"%s"},"base":{"ref":"%s","repo":{"default_branch":"main"}}}\\n' "$body" "$draft" "$head" "$base"; exit 0;;
   "api "*"/rules/branches/"*)
@@ -91,6 +92,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     if (commit) writeFileSync(join(github, "head"), commit); else rmSync(join(github, "head"), { force: true });
     if (next) writeFileSync(join(github, "next-head"), next);
   };
+  const whileGithubReadsPull = (script: string) => writeFileSync(join(github, "while-reading"), script);
   const githubComment = (id: number, author: string, body: string) => writeFileSync(join(github, `comment-${id}`), JSON.stringify({ user: { login: author }, body }));
   const githubCalls = () => readFileSync(join(github, "calls"), "utf8").trim().split("\n");
   ci([{ name: "test", bucket: "pass" }]);
@@ -158,7 +160,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, clock, say, choose, chooseGap, reader, panel, hub, decide };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, decide };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;
