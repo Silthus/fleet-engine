@@ -25,6 +25,7 @@ export const shells = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 const maxDepth = 8;
 const operators = ["&&", "||", ";;", "|&", ";", "|", "&", "(", ")", "\n"];
 const keywords = new Set(["then", "do", "else", "elif", "if", "!", "{", "while", "until"]);
+const declarations = new Set(["export", "declare", "typeset", "readonly", "local"]);
 const loops = new Set(["for", "select", "while", "until"]);
 const assignment = /^([A-Za-z_]\w*)=(.*)$/s;
 const redirect = /^(\d+|&)?(>>|>\||>&|<&|<>|>|<)(?!\()/;
@@ -45,31 +46,53 @@ const wrappers: Record<string, { valued: string[]; operands?: number; chdir?: st
   builtin: { valued: [] },
 };
 
-function parenEnd(text: string, open: number): number {
+const unclosed = (what: string) => new Error(`it has ${what} that does not close`);
+const wordBreak = /[\s;&|()]/;
+
+function arithmeticEnd(text: string, open: number): number {
   let depth = 0;
+  for (let index = open; index < text.length; index++) {
+    if (text[index] === "(") depth++;
+    else if (text[index] === ")" && --depth === 0) return index;
+  }
+  throw unclosed("a (( arithmetic");
+}
+
+function parenEnd(text: string, open: number): number {
+  if (text[open + 1] === "(") return arithmeticEnd(text, open);
+  let depth = 0;
+  let cases = 0;
+  let atWordStart = true;
   const pending: Heredoc[] = [];
   for (let index = open; index < text.length; index++) {
     const char = text[index];
+    const startsWord = (word: string) => atWordStart && text.startsWith(word, index) && wordBreak.test(text[index + word.length] ?? " ");
     if (char === "\\") index++;
     else if (char === "'") index = quoteEnd(text, index + 1, "'");
     else if (char === '"') index = doubleQuoted(text, index + 1, true).end;
     else if (char === "`") index = quoteEnd(text, index + 1, "`");
     else if (char === "$" && text[index + 1] === "'") index = ansiQuoteEnd(text, index + 2);
     else if (char === "$" && text[index + 1] === "{") index = braceEnd(text, index + 2);
-    else if (char === "#" && /[\s;&|()]/.test(text[index - 1] ?? "")) {
+    else if (char === "#" && atWordStart) {
       const newline = text.indexOf("\n", index);
       index = (newline < 0 ? text.length : newline) - 1;
-    }
-    else if (text.startsWith("<<", index) && text[index + 2] !== "<") {
+    } else if (text.startsWith("<<", index) && text[index + 2] !== "<") {
       const stripTabs = text[index + 2] === "-";
       const { delimiter, literal, end } = readDelimiter(text, index + (stripTabs ? 3 : 2));
       pending.push({ delimiter, literal, stripTabs, body: "", substitutions: [] });
       index = end - 1;
-    } else if (char === "\n" && pending.length > 0) index = readBodies(text, index + 1, pending) - 1;
+    } else if (char === "\n" && pending.length > 0) index = readBodies(text, index + 1, pending, true) - 1;
+    else if (char === "(" && text[index + 1] === "(" && depth > 0) index = arithmeticEnd(text, index);
+    else if (startsWord("case")) cases++;
+    else if (startsWord("esac")) cases = Math.max(0, cases - 1);
     else if (char === "(") depth++;
-    else if (char === ")" && --depth === 0) return index;
+    else if (char === ")" && depth === 1 && cases > 0) {
+      atWordStart = true;
+      continue;
+    } else if (char === ")" && --depth === 0) return index;
+    atWordStart = wordBreak.test(char);
   }
-  return text.length;
+  throw unclosed("a $( or ( group");
 }
 
 function quoteEnd(text: string, start: number, quote: string): number {
@@ -77,7 +100,7 @@ function quoteEnd(text: string, start: number, quote: string): number {
     if (text[index] === "\\" && quote !== "'") index++;
     else if (text[index] === quote) return index;
   }
-  return text.length;
+  throw unclosed(`a ${quote} quote`);
 }
 
 function ansiQuoteEnd(text: string, start: number): number {
@@ -85,7 +108,7 @@ function ansiQuoteEnd(text: string, start: number): number {
     if (text[index] === "\\") index++;
     else if (text[index] === "'") return index;
   }
-  return text.length;
+  throw unclosed("a $' quote");
 }
 
 const backtickProgram = (inner: string) => inner.replace(/\\([`\\$])/g, "$1");
@@ -96,7 +119,7 @@ function braceEnd(text: string, start: number): number {
     else if (text[index] === "}") return index;
     else index = expansion(text, index)?.end ?? index;
   }
-  return text.length;
+  throw unclosed("a ${");
 }
 
 const programsInside = (inner: string) => doubleQuoted(inner, 0, false).substitutions;
@@ -141,6 +164,7 @@ function doubleQuoted(text: string, start: number, stopAtQuote: boolean) {
       index = found.end;
     } else value += char;
   }
+  if (stopAtQuote && index >= text.length) throw unclosed('a " quote');
   return { value, substitutions, end: index };
 }
 
@@ -164,16 +188,18 @@ function readDelimiter(text: string, start: number) {
   return { delimiter, literal, end: index };
 }
 
-function readBodies(text: string, start: number, pending: Heredoc[]): number {
+function readBodies(text: string, start: number, pending: Heredoc[], mustClose = false): number {
   let index = start;
   for (const heredoc of pending) {
-    while (index < text.length) {
+    let closed = false;
+    while (index < text.length && !closed) {
       const lineEnd = text.indexOf("\n", index) < 0 ? text.length : text.indexOf("\n", index);
       const line = text.slice(index, lineEnd);
       index = lineEnd + 1;
-      if ((heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter) break;
-      heredoc.body += `${line}\n`;
+      closed = (heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter;
+      if (!closed) heredoc.body += `${line}\n`;
     }
+    if (mustClose && !closed) throw unclosed(`a heredoc that ${heredoc.delimiter} should end inside a substitution`);
     if (!heredoc.literal) heredoc.substitutions = doubleQuoted(heredoc.body, 0, false).substitutions;
   }
   pending.length = 0;
@@ -317,7 +343,8 @@ function skipWrapper(texts: string[], start: number, env: Map<string, string>): 
 /** The simple commands of one shell program, grouped by pipeline in the order they run. Wrappers such as `sudo -u root`,
  * `env A=1`, `timeout 5`, `fleet heavy --` and keywords such as `then` are taken off, so `name` is the command that runs. */
 export function parse(program: string, context: Context = { env: new Map(), inLoop: false }): Command[][] {
-  const env = new Map(context.env);
+  let env = new Map(context.env);
+  const outerEnvs: Map<string, string>[] = [];
   const pipelines: Command[][] = [];
   let pipeline: Command[] = [];
   let words: Word[] = [];
@@ -357,8 +384,8 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
     const inLoop = context.inLoop || loopDepth > 0;
     if (name === "for" || name === "select") loopDepth++;
     if (name === "done") loopDepth = Math.max(0, loopDepth - 1);
-    if (name === "export") for (const pair of args.map((arg) => arg.match(assignment))) if (pair) assigned.set(pair[1], pair[2]);
-    if (name === "" || name === "export") for (const [key, value] of assigned) env.set(key, value), commandEnv.set(key, value);
+    if (declarations.has(name)) for (const pair of args.map((arg) => arg.match(assignment))) if (pair) assigned.set(pair[1], pair[2]);
+    if (name === "" || declarations.has(name)) for (const [key, value] of assigned) env.set(key, value), commandEnv.set(key, value);
     const substitutions = [...words.flatMap((word) => word.substitutions), ...(stdin?.substitutions ?? [])];
     const leadingSubstitutions = kept.slice(0, index + 1).flatMap((word) => word.substitutions);
     const argSubstitutions = kept.slice(index + 1).map((word) => word.substitutions);
@@ -378,12 +405,18 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
       hereString = false;
     } else if ("word" in token) words.push(token.word);
     else if ("herestring" in token) hereString = true;
-    else if ("heredoc" in token) stdin = { body: token.heredoc.body, substitutions: token.heredoc.substitutions };
+    else if ("heredoc" in token) stdin = { body: token.heredoc.body, substitutions: [...(stdin?.substitutions ?? []), ...token.heredoc.substitutions] };
     else if (token.operator === "|" || token.operator === "|&") finishCommand();
     else {
       finishPipeline();
-      if (token.operator === "(") scope = { parent: scope };
-      if (token.operator === ")") scope = scope.parent ?? scope;
+      if (token.operator === "(") {
+        scope = { parent: scope };
+        outerEnvs.push(new Map(env));
+      }
+      if (token.operator === ")") {
+        scope = scope.parent ?? scope;
+        env = outerEnvs.pop() ?? env;
+      }
     }
   }
   finishPipeline();

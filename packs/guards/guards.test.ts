@@ -537,6 +537,28 @@ describe("the gh guard", () => {
   });
 
   test.each([
+    "echo $((1 << 2\n)); gh auth token",
+    'echo "$(echo \\ #)"; gh auth token',
+    "echo \"$(echo ${x:-'}'})\"; gh auth token",
+    "echo \"$(cat <<$'END'\n)\nEND\n)\"; gh auth token",
+    'echo "$(cat <<A\nfoo\\\nA\n(\nA\n)"; gh auth token',
+    "echo \"$(case x in x) gh auth token;; esac)\"",
+    'echo "$(cat <<A <<B\n$(gh auth token)\nA\nhello\nB\n)"',
+  ])("refuses a command whose quoting it might misread, instead of missing a later part: %s", (command) => {
+    expect(refusal(command)).toMatch(/the GitHub token|could not check it/);
+  });
+
+  test.each([
+    "export GH_REPO=acme/app; (export GH_REPO=other/app); gh pr list",
+    'echo "$(case x in x) echo hi;; esac)"',
+    "x=$(\n  echo $((1 << 2))\n)",
+    "echo $((16#ff)) $# ${#x} a#b",
+    "gh pr list # (a comment)\ngh pr view 1",
+  ])("reads valid shell around substitutions, cases, and comments: %s", (command) => {
+    expect(refusal(command)).toBeUndefined();
+  });
+
+  test.each([
     "gh extension install github/gh-stack --pin v0.3.0",
     "gh ext upgrade stack",
     "gh extension install github/gh-stack",
@@ -609,6 +631,7 @@ describe("the gh guard", () => {
     ["gh repo create --template other/app acme/new --private", "other"],
     ["echo \"$(printf '(')\"; gh api repos/other/app", "other"],
     ["gh api $'repos/other/app'", "other"],
+    ["declare -x GH_REPO=other/app; gh pr list", "other"],
   ])("refuses an outside owner however the command spells it: %s", (command, owner) => {
     expect(refusal(command)).toContain(`\`${owner}\` is not one of the GitHub owners`);
   });
