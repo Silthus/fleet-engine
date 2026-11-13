@@ -272,6 +272,19 @@ export async function markRecorded(directory: string) {
   await writeJson(join(directory, "round.json"), { ...reservation, decision: { mark, id }, recorded: true } satisfies Reservation);
 }
 
+const hasFindings = (directory: string) => access(join(directory, "findings.md")).then(() => true, () => false);
+
+export async function unrecordedElsewhere(directory: string, commit: string) {
+  const reservation = await readReservation(directory);
+  if (!reservation?.decision || reservation.recorded || reservation.commit === commit || await hasFindings(directory)) return undefined;
+  return reservation.decision;
+}
+
+export async function roundDirectories(home: string, identity: ProofIdentity) {
+  const reviews = join(pullRequestDirectory(home, identity), "reviews");
+  return (await reviewNames(reviews)).map((name) => join(reviews, name));
+}
+
 export type RoundId = number | `final-${number}`;
 
 export function roundId(value: string): RoundId {
@@ -285,7 +298,7 @@ export async function unfinishedReview(home: string, identity: ProofIdentity, ca
   for (const name of await reviewNames(reviews)) {
     const directory = join(reviews, name);
     const reservation = await readReservation(directory);
-    const finished = await access(join(directory, "findings.md")).then(() => true, () => false);
+    const finished = await hasFindings(directory);
     if (reservation?.capturedBy !== capturedBy || reservation.commit !== identity.commit || finished) continue;
     if (capturedBy === "fleet" && reservation.scope !== "full" && !reservation.base) { await rm(directory, { recursive: true, force: true }); continue; }
     return { reservation, directory };
@@ -345,7 +358,7 @@ async function storeFindings(directory: string, identity: ProofIdentity, round: 
       if (!(await sameContent(destination, bytes))) throw new Error(`Round ${round} already has other findings in ${destination}`);
     } finally { await rm(temporary, { force: true }); }
   }
-  await writeJson(join(directory, "round.json"), { ...reservation, reviewer, capturedBy });
+  await writeJson(join(directory, "round.json"), { ...await readReservation(directory) ?? reservation, reviewer, capturedBy });
 }
 
 export async function respondToReview(home: string, identity: ProofIdentity, round: RoundId, responses: string) {

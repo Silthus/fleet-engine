@@ -176,6 +176,13 @@ export async function appendDecision(ledger: Ledger, decision: Decision) {
   throw new Error(`Not recorded: decision ${decision.id} is not in the decision ledger when Fleet reads it back. Run the same command again`);
 }
 
+export const inLedger = async (ledger: Ledger, id: string) => fold(await reachHub(() => ledger.read())).some((recorded) => recorded.id === id);
+
+export async function appendOnce(ledger: Ledger, decision: Decision) {
+  if (await inLedger(ledger, decision.id)) return decision.id;
+  return appendDecision(ledger, decision);
+}
+
 const unreachableOnly = (error: unknown) => { if (error instanceof HubUnreachable) return error; throw error; };
 
 const prsOf = (parsed: Parsed) => (parsed.lists.get("--pr") ?? []).map(prRef);

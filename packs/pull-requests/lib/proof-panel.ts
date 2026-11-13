@@ -163,6 +163,7 @@ export async function requeueFailed(directory: string, casts: Map<string, Cast>,
     Object.assign(lens, casts.get(lens.name));
     await writeFile(lensFile(directory, lens.name, ".prompt.md"), fresh.briefs.get(lens.name)!, { mode: 0o600 });
     await writeStatus(directory, lens.name, { state: "queued", attempts: 0 });
+    await rm(pidFile(directory, lens.name), { force: true });
     failed.push(lens.name);
   }
   await writeJson(planPath(directory), plan);
@@ -243,7 +244,7 @@ export type Slot = { recordReviewer: (pid: number) => Promise<void> };
 export async function withSlot<T>(io: PanelIO, work: (slot: Slot) => Promise<T>) {
   const holder: Holder = { pid: io.pid, token: crypto.randomUUID() };
   const slot = await takeSlot(io, holder);
-  const owned = async () => holderOf(await readSlot(slot))?.token === holder.token;
+  const owned = () => holds(slot, holder);
   const recordReviewer = async (reviewer: number) => {
     if (!await owned()) return;
     const temporary = `${slot}.${holder.token}`;
@@ -251,7 +252,38 @@ export async function withSlot<T>(io: PanelIO, work: (slot: Slot) => Promise<T>)
     await rename(temporary, slot);
   };
   try { return await work({ recordReviewer }); }
-  finally { if (await owned()) await rm(slot, { force: true }); }
+  finally { await release(slot, holder); }
+}
+
+const lockAttempts = 100;
+
+export async function withRoundLock<T>(directory: string, pid: number, step: () => Promise<T>) {
+  const lock = join(directory, "round.lock");
+  const holder: Holder = { pid, token: crypto.randomUUID() };
+  await takeLock(lock, holder);
+  try { return await step(); }
+  finally { await release(lock, holder); }
+}
+
+async function takeLock(lock: string, holder: Holder) {
+  for (let attempt = 0; attempt < lockAttempts; attempt++) {
+    if (await claim(lock, holder)) return;
+    const current = holderOf(await readSlot(lock));
+    if (current?.pid && isAlive(current.pid)) throw new Error(`Process ${current.pid}, another fleet proof command, works on ${dirname(lock)}. Wait for it to end, or run fleet proof review --wait`);
+    await reclaim(lock);
+  }
+  throw new Error(`Cannot lock ${dirname(lock)}: its lock file ${lock} holds no process`);
+}
+
+async function claim(path: string, holder: Holder) {
+  try { await writeFile(path, JSON.stringify(holder), { flag: "wx", mode: 0o600 }); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; return false; }
+}
+
+const holds = async (path: string, holder: Holder) => holderOf(await readSlot(path))?.token === holder.token;
+
+async function release(path: string, holder: Holder) {
+  if (await holds(path, holder)) await rm(path, { force: true });
 }
 
 async function takeSlot(io: PanelIO, holder: Holder) {
@@ -260,8 +292,7 @@ async function takeSlot(io: PanelIO, holder: Holder) {
   for (;;) {
     for (let index = 0; index < slots; index++) {
       const slot = join(io.slots, String(index));
-      try { await writeFile(slot, JSON.stringify(holder), { flag: "wx", mode: 0o600 }); return slot; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      if (await claim(slot, holder)) return slot;
       if (await reclaim(slot)) index--;
     }
     await io.pause();
@@ -356,6 +387,10 @@ export async function waitForPanel(directory: string, io: PanelIO, restart: Rest
 async function lensStates(directory: string) {
   const plan = await requirePlan(directory);
   return Promise.all(plan.lenses.map(async (lens) => ({ ...lens, status: await readStatus(directory, lens.name) })));
+}
+
+export async function lensIdle(directory: string, name: string) {
+  return ["queued", "running"].includes((await readStatus(directory, name)).state) && !await workerAlive(directory, name);
 }
 
 async function workerAlive(directory: string, name: string) {

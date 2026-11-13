@@ -126,13 +126,14 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const reader: { words?: ThreadWords } = { words: threadWords };
   const hub: { ssh?: Ssh } = {};
-  const panel: { lostWorkers: boolean; onPause?: () => Promise<void> } = { lostWorkers: false };
-  const fleetIn = async (cwd: string, ...args: string[]) => {
+  const panel: { lostWorkers: boolean; onPause?: () => Promise<void>; beforeWorker?: () => Promise<void> } = { lostWorkers: false };
+  const fleetAt = async (cwd: string, pid: number, args: string[]) => {
     const lines: string[] = [];
     const context: ProofContext = {
-      home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh,
+      home, cwd, env, pid, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh,
       detach: async (worker) => {
-        if (panel.lostWorkers) return (await spawnAsync(["true"])).pid;
+        if (panel.lostWorkers) return exitedPid();
+        await panel.beforeWorker?.();
         await proofCommand([...worker], { ...context, print: () => {} });
         return process.pid;
       },
@@ -144,7 +145,9 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     const code = await proofCommand(args, context);
     return { code, output: lines.join("\n") };
   };
+  const fleetIn = (cwd: string, ...args: string[]) => fleetAt(cwd, process.pid, args);
   const fleet = (...args: string[]) => fleetIn(repository, ...args);
+  const fleetAs = (pid: number, ...args: string[]) => fleetAt(repository, pid, args);
   const decide = async (...args: string[]) => {
     const lines: string[] = [];
     const code = await decisionCommand(args, { home, cwd: repository, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh });
@@ -152,10 +155,12 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel, hub, decide };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, fleetAs, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel, hub, decide };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;
+
+export const exitedPid = async () => (await spawnAsync(["true"])).pid;
 
 export const panelGuide = `# QA swarm panel
 
