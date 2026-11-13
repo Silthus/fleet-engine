@@ -17,7 +17,9 @@ they turn one on. Ask with your question tool, in one call:
 - **Their first name**, for the refusal message. Add
   `--set guards.person=<name>`.
 - **Which GitHub owners agents may use**: their login and their orgs,
-  separated by commas. Add `--set guards.owners=<owners>`.
+  separated by commas. Add `--set guards.owners=<owners>`. The shell guards
+  then also refuse a gh owner that is not spelled out, such as `$ORG` or
+  `$(…)`, because the shell could fill in any owner.
 - **Which repositories take pushes straight to `main`**, if any, as
   `owner/name` separated by commas. The shell guards refuse a push to `main`
   or `master` of any other GitHub repository, unless its `AGENTS.md` says to
