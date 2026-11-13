@@ -45,7 +45,7 @@ export function matchThread<T>(threads: T[], value: string, id: (thread: T) => s
 export function questionCard(thread: ShellThread | undefined): string | undefined {
   const card = thread?.pendingRuntimeRequest as { id?: unknown; kind?: unknown } | null | undefined;
   if (!thread || card?.kind !== "user_input") return undefined;
-  return typeof card.id === "string" ? card.id : thread.id;
+  return typeof card.id === "string" ? card.id : `${thread.id}:${thread.activeRunId ?? ""}`;
 }
 
 export async function findThread(client: T3Client, value: string): Promise<ShellThread | undefined> {

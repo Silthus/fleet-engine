@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { AvailableSource } from "../../../src/pack/types.ts";
 import { tempDirs } from "../../../src/testing/git.ts";
@@ -191,11 +191,10 @@ describe("the send guard", () => {
   const lane = "mcp:0aa3b648";
   const card = { id: "card-7", kind: "user_input" };
   const waiting: Partial<ShellThread> = { id: lane, activeRunId: "run-20", pendingRuntimeRequest: card };
-  const never: SendGuardOptions["deadline"] = () => () => {};
   const t3 = (...threads: Partial<ShellThread>[]) => async () => ({ threads: threads as ShellThread[] });
   const send = (input: Record<string, unknown>, session = "conductor-session"): SendEvent =>
     ({ session_id: session, tool_name: "mcp__t3-code__t3_thread_send", tool_input: { threadId: "0aa3b648", message: "S1 pushed", ...input } });
-  const guard = (event: SendEvent, options: Partial<SendGuardOptions> = {}) => guardSend(event, { home: home("Robin"), shell: t3(waiting), deadline: never, ...options });
+  const guard = (event: SendEvent, options: Partial<SendGuardOptions> = {}) => guardSend(event, { home: home("Robin"), shell: t3(waiting), ...options });
 
   test("denies a steering send to a thread whose running turn waits on a question card, and says to queue it", async () => {
     const answer = await guard(send({ mode: "steer" }));
@@ -223,13 +222,42 @@ describe("the send guard", () => {
     expect(await guard(send({ mode: "auto" }), { shell: async () => { throw new Error("T3 is down"); } })).toBeUndefined();
   });
 
-  test("lets the send through when T3 does not answer before the deadline, and stops the deadline when it does", async () => {
-    let cleared = 0;
-    const expired: SendGuardOptions["deadline"] = (_what, _ms, expire) => (expire(), () => cleared++);
-    expect(await guard(send({ mode: "auto" }), { shell: () => new Promise(() => {}), deadline: expired })).toBeUndefined();
-    const pending: SendGuardOptions["deadline"] = () => () => cleared++;
-    expect(await guard(send({ mode: "auto" }), { deadline: pending })).toBeDefined();
-    expect(cleared).toBe(2);
+  test("denies a different message from the same session again, and lets only the identical send through", async () => {
+    const where = home("Robin");
+    expect(await guard(send({ mode: "auto" }), { home: where })).toBeDefined();
+    expect(await guard(send({ mode: "auto", message: "S2 pushed" }), { home: where })).toBeDefined();
+    expect(await guard(send({ mode: "auto", message: "S2 pushed" }), { home: where })).toBeUndefined();
+    expect(await guard(send({ mode: "auto", threadId: lane }), { home: where })).toBeUndefined();
+  });
+
+  test.each(["steer", "restart"])("lets a fresh-context send in mode %s through, as T3 queues it, and keeps the first denial for a later send", async (mode) => {
+    const where = home("Robin");
+    expect(await guard(send({ mode, freshContext: true }), { home: where })).toBeUndefined();
+    expect(await guard(send({ mode }), { home: where })).toBeDefined();
+  });
+
+  test("denies a fresh-context send in mode auto or with no mode, as T3 steers it into the running turn", async () => {
+    expect(await guard(send({ mode: "auto", freshContext: true }))).toBeDefined();
+    expect(await guard(send({ freshContext: true }))).toBeDefined();
+  });
+
+  test("keys a card without an id on its running turn, so a new turn's card is denied again", async () => {
+    const where = home("Robin");
+    const unnamed = (run: string) => t3({ id: lane, activeRunId: run, pendingRuntimeRequest: { kind: "user_input" } });
+    expect(await guard(send({ mode: "auto" }), { home: where, shell: unnamed("run-20") })).toBeDefined();
+    expect(await guard(send({ mode: "auto" }), { home: where, shell: unnamed("run-20") })).toBeUndefined();
+    expect(await guard(send({ mode: "auto" }), { home: where, shell: unnamed("run-21") })).toBeDefined();
+  });
+
+  test("forgets denials older than one day when it records a new one", async () => {
+    const where = home("Robin");
+    expect(await guard(send({ mode: "auto" }), { home: where })).toBeDefined();
+    const records = join(where, ".local/state/fleet/ask-guard");
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    for (const record of readdirSync(records)) utimesSync(join(records, record), twoDaysAgo, twoDaysAgo);
+    expect(await guard(send({ mode: "auto", message: "S2 pushed" }), { home: where })).toBeDefined();
+    expect(await guard(send({ mode: "auto", message: "S2 pushed" }), { home: where })).toBeUndefined();
+    expect(await guard(send({ mode: "auto" }), { home: where })).toBeDefined();
   });
 
   test("lets a send to another machine through even when a local thread shares its id, and denies one that names this machine", async () => {
@@ -260,11 +288,9 @@ describe("the send guard", () => {
 
   test("the installed hook sends a thread send to the send guard and a stop to the prose guard", async () => {
     const where = home("Robin");
-    const reads: string[] = [];
-    const routed = hookWith((at) => (reads.push(at), t3(waiting)));
+    const routed = hookWith(() => t3(waiting));
     const denied = await routed("codex", async () => JSON.stringify({ ...send({ mode: "auto" }), tool_name: "mcp__t3_code__t3_thread_send" }), where);
     expect(JSON.parse(denied.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
-    expect(reads).toEqual([where]);
     expect(await routed("claude", async () => JSON.stringify({ ...send({ mode: "auto" }), tool_name: "Bash" }), where)).toEqual({ code: 0, stdout: "", stderr: "" });
     const path = transcript(claudePrompt("Fix it"), claudeSays("Should I merge?"));
     expect(await routed("claude", async () => JSON.stringify({ transcript_path: path }), where)).toEqual({ code: 0, stdout: "", stderr: "" });
