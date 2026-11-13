@@ -161,6 +161,22 @@ test("the judge reads each accepted gap's condition and the critical-path list, 
   expect(judge.prompts().at(-1)).toContain(`- judge (decision ${judgeId}): feature.txt holds copy only`);
 });
 
+test("an answer the user gave before the judge gap was recorded never accepts it", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: ["feature.txt"] } }));
+  pr.chooseGap("judge", "feature.txt is the greeting copy, not code");
+
+  pr.clock.now = new Date("2026-10-25T13:00:00Z");
+  await pr.fleet("gap", "--kind", "judge", "--reason", "feature.txt is the greeting copy, not code");
+  await acceptGap(pr, "judge");
+  const gate = await pr.fleet("gate");
+  expect(gate.output).toContain("judge gap: not accepted: feature.txt is the greeting copy, not code");
+  expect(gate.code).toBe(3);
+});
+
 test("without a replacement command, the judge runs the reviewer's row of the model table, and names its independence", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "greet new members\n");

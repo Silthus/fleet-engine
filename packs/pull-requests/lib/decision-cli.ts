@@ -2,7 +2,7 @@ import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type Thre
 import { readPullRequest, runIn } from "./pr-ci.ts";
 import { gapKind, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
-  agentRefusal, askClasses, covers, decisionLine, fold, hubLedger, HubUnreachable, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
+  agentRefusal, askClasses, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
   type AskClass, type Decision, type Env, type Ledger, type PrRef, type Ssh, type UsersMark,
 } from "./decision-ledger.ts";
 
@@ -21,20 +21,23 @@ The decision ledger holds every decision about a pull request's proof and proces
 the setting hub.alias names; other machines read and append it over SSH. Without a hub, it lives on this machine.
 
 record with 👤 or 👍 records the user's answer to your question tool. Without --words it takes their latest answer
-in the T3 thread whose question names each --pr: after they answer, pass only the mark, class, kinds and PRs, and
+in the T3 thread whose question names each --pr and each --kind: after they answer, pass only the mark, class, kinds and PRs, and
 check the answer in the printed line. --message takes an earlier answer by its id. --words quotes the words of an
 answer, with the date they gave it. --thread defaults to this T3 thread (T3CODE_THREAD_ID). Only answers to a
 question tool in the T3 app count; a typed message does not. Each --pr must be named in that question (#n,
 repo#n, owner/repo#n, or its URL), so one answer covers every PR its question named and no other. One answer
 records one decision. With --class proof-gap and --kind, the decision accepts those gaps of each PR, and the user's
-choice must start with "Accept" or "Yes"; with --keep-owed, it keeps them owed whatever an agent decides. --condition names
+choice must start with "Accept", or be "Yes" to a question that starts with "Accept the <kind> gap?"; with --keep-owed, it
+keeps them owed whatever an agent decides. A decision of the user's takes the time they answered. --condition names
 what must stay true at HEAD; the judge checks it. Classes: ${askClasses.join(", ")}.
 record with 🤖 records the agent's own decision with the option it rejected. Fleet reads each PR's Tier line in its
 merge-risk callout at HEAD: it refuses an ungraded PR, and on a critical PR anything but process (review and status
 asks, judge and post-deploy-watch gaps). It never takes a panel gap: ${panelRefusal}. The gate never counts a 🤖 ci
-acceptance over CI that ran, nor one under the user's keep-owed, and prints each 🤖 acceptance that lapsed.
+acceptance over CI that ran, nor one under the user's keep-owed, and prints each 🤖 acceptance that lapsed on a kind
+that stays open.
 list prints the decisions as decision lines with their ids. Run it before you ask.
-void ends a decision whose condition HEAD no longer meets, such as when the judge fails it; then decide or ask again.`;
+void ends a decision whose condition HEAD no longer meets, such as when the judge fails it; then decide or ask again.
+It refuses the user's keep-owed: only their acceptance lifts it.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
 
@@ -64,12 +67,14 @@ export function askClass(value: string): AskClass {
   return value as AskClass;
 }
 
+function notRecorded(error: unknown): never {
+  if (!(error instanceof HubUnreachable)) throw error;
+  throw new Error(`Not recorded: ${error.message}. Run the same command again once the hub is back`);
+}
+
 async function reachHub<T>(step: () => Promise<T>) {
   try { return await step(); }
-  catch (error) {
-    if (!(error instanceof HubUnreachable)) throw error;
-    throw new Error(`Not recorded: ${error.message}. Run the same command again once the hub is back`);
-  }
+  catch (error) { return notRecorded(error); }
 }
 
 const newId = () => `d-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
@@ -111,7 +116,7 @@ export async function hearUser(input: Hearing, context: DecisionContext, ledger:
       const usedOn = await usedAnswer(context.home, heard);
       if (usedOn) { used ??= new Error(usedOn); continue; }
       return {
-        id: newId(), at: at(context), class: input.class, mark: input.mark, question: word.answered, answer: `${word.at.slice(0, 10)} "${word.text}"`, scope: scopeOf(input),
+        id: newId(), at: answeredAt(word), class: input.class, mark: input.mark, question: word.answered, answer: `${word.at.slice(0, 10)} "${word.text}"`, scope: scopeOf(input),
         ...input.class === "proof-gap" ? { effect: input.keepOwed ? "keep-owed" as const : "accept" as const } : {}, where,
       };
     } catch (error) { refusals.push(error as Error); }
@@ -119,9 +124,15 @@ export async function hearUser(input: Hearing, context: DecisionContext, ledger:
   throw used ?? refusals[0]!;
 }
 
+function answeredAt(word: ThreadWord) {
+  const time = Date.parse(word.at);
+  if (Number.isNaN(time)) throw new Error(`T3 gives no time for the user's answer ${word.id} in thread ${word.thread}. Ask them again`);
+  return new Date(time).toISOString();
+}
+
 const heardAnswer = (word: ThreadWord): HeardAnswer => ({ thread: word.thread, message: word.id, words: word.text, answered: word.answered, at: word.at, source: word.source });
 
-function candidates(answers: ThreadWord[], { words, message, prs }: Hearing, thread: string): ThreadWord[] {
+function candidates(answers: ThreadWord[], { words, message, prs, kinds = [] }: Hearing, thread: string): ThreadWord[] {
   if (message !== undefined) {
     const named = answers.filter((word) => word.id === message);
     if (!named.length) throw new Error(`No message of the user's in thread ${thread} has the id ${message}`);
@@ -133,8 +144,8 @@ function candidates(answers: ThreadWord[], { words, message, prs }: Hearing, thr
     if (!said.length) throw new Error(`"${quotes(words).join('" … "')}" is not in a message of the user's in thread ${thread}. Quote their whole answer, so a refusal such as "Do not accept the gap." never reads as an acceptance. Only their answer to a question tool in the T3 app counts`);
     return said;
   }
-  const latest = answers.findLast((word) => word.source === "question" && prs.every((ref) => namesPr(word.answered, ref)));
-  if (!latest) throw new Error(`No answer of the user's to a question tool in thread ${thread} names ${prs.map(refText).join(", ")}. Ask them with the question tool and name each PR in the question. Only answers they gave in the T3 app count`);
+  const latest = answers.findLast((word) => word.source === "question" && prs.every((ref) => namesPr(word.answered, ref)) && kinds.every((kind) => namesKind(word.answered, kind)));
+  if (!latest) throw new Error(`No answer of the user's to a question tool in thread ${thread} names ${[...prs.map(refText), ...kinds.map((kind) => `the ${kind} gap`)].join(", ")}. Ask them with the question tool and name each PR in the question. Only answers they gave in the T3 app count`);
   return [latest];
 }
 
@@ -145,16 +156,25 @@ function fits(heard: HeardAnswer, input: Hearing) {
   if (unnamed.length) throw new Error(`The question the user answered does not name ${unnamed.map(refText).join(", ")}. An answer covers only the PRs its question named; ask them about the others. The question: ${heard.answered}`);
   const unnamedKinds = (input.kinds ?? []).filter((kind) => !namesKind(heard.answered, kind));
   if (unnamedKinds.length) throw new Error(`The question the user answered does not name the ${unnamedKinds.join(", ")} gap. Ask them about each gap kind by name. The question: ${heard.answered}`);
-  if (input.class === "proof-gap" && !input.keepOwed && !acceptsGap(heard.words)) throw new Error(`The user chose "${heard.words}", which does not accept the gap. The gap stays open`);
+  if (input.class !== "proof-gap" || input.keepOwed) return;
+  if (!acceptsGap(heard.words)) throw new Error(`The user chose "${heard.words}", which does not accept the gap. The gap stays open`);
+  const asked = acceptQuestion(input.kinds ?? []);
+  if (saysYes(heard.words) && !normalized(heard.answered).startsWith(normalized(asked))) throw new Error(`The user chose "${heard.words}" to a question that does not ask "${asked}". A plain yes accepts only the question that asks it; the gap stays open. The question: ${heard.answered}`);
 }
 
+const acceptQuestion = (kinds: string[]) => `Accept the ${kinds.join(" and ")} ${kinds.length === 1 ? "gap" : "gaps"}?`;
+
 export async function appendDecision(ledger: Ledger, decision: Decision) {
-  await reachHub(() => ledger.append({ type: "decide", decision }));
-  if (!decision.where.message) return decision.id;
-  const winner = await recordedFor(ledger, decision.where);
+  const unacknowledged = await ledger.append({ type: "decide", decision }).then(() => undefined, unreachableOnly);
+  const decisions = fold(await reachHub(() => ledger.read()));
+  const winner = decision.where.message && decisions.find((recorded) => messageKey(recorded.where) === messageKey(decision.where));
   if (winner && winner.id !== decision.id) throw alreadyRecorded(winner.id);
-  return decision.id;
+  if (decisions.some((recorded) => recorded.id === decision.id)) return decision.id;
+  if (unacknowledged) notRecorded(unacknowledged);
+  throw new Error(`Not recorded: decision ${decision.id} is not in the decision ledger when Fleet reads it back. Run the same command again`);
 }
+
+const unreachableOnly = (error: unknown) => { if (error instanceof HubUnreachable) return error; throw error; };
 
 const prsOf = (parsed: Parsed) => (parsed.lists.get("--pr") ?? []).map(prRef);
 
@@ -205,6 +225,7 @@ async function voidDecision(parsed: Parsed, context: DecisionContext, ledger: Le
   const decision = fold(await reachHub(() => ledger.read())).find((candidate) => candidate.id === id);
   if (!decision) throw new Error(`No decision ${id} in the ledger. Run fleet decision list`);
   if (decision.voided) throw new Error(`Decision ${id} is already voided: ${decision.voided.reason}`);
+  if (isUsers(decision) && decision.effect === "keep-owed") throw new Error(`Decision ${id} keeps the gap owed, and only the user lifts it: ask them with your question tool, and record their acceptance with --mark 👤`);
   const voidedAt = at(context);
   await reachHub(() => ledger.append({ type: "void", id, reason, at: voidedAt }));
   context.print(decisionLine({ ...decision, voided: { reason, at: voidedAt } }));
@@ -236,3 +257,4 @@ export async function decisionCommand(args: string[], context: DecisionContext):
 }
 
 const acceptsGap = (words: string) => /^(accept|yes)\b/.test(normalized(words));
+const saysYes = (words: string) => /^yes\b/.test(normalized(words));

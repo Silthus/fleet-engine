@@ -64,7 +64,8 @@ export function localLedger(home: string): Ledger {
     },
     append: async (event) => {
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      await appendFile(path, JSON.stringify(event) + "\n", { mode: 0o600 });
+      const torn = await readFile(path, "utf8").then((text) => text !== "" && !text.endsWith("\n"), () => false);
+      await appendFile(path, (torn ? "\n" : "") + JSON.stringify(event) + "\n", { mode: 0o600 });
     },
   };
 }
@@ -83,7 +84,7 @@ function sshLedger(hub: string, ssh: Ssh): Ledger {
       return parseEvents(result.stdout);
     },
     append: async (event) => {
-      const result = await ssh(hub, `umask 077 && f=${remoteFile} && mkdir -p "$(dirname "$f")" && t=$(mktemp "$f.XXXXXX") && cat > "$t" && cat "$t" >> "$f"; s=$?; rm -f "$t"; exit $s`, JSON.stringify(event) + "\n");
+      const result = await ssh(hub, `umask 077 && f=${remoteFile} && mkdir -p "$(dirname "$f")" && t=$(mktemp "$f.XXXXXX") && { [ ! -s "$f" ] || [ -z "$(tail -c 1 "$f")" ] || printf '\\n' >> "$t"; } && cat >> "$t" && cat "$t" >> "$f"; s=$?; rm -f "$t"; exit $s`, JSON.stringify(event) + "\n");
       if (result.code !== 0) throw unreachable(result);
     },
   };

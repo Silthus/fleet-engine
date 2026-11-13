@@ -16,18 +16,24 @@ async function owing(pr: Checkout, kind: string, reason = "No sandbox") {
   await pr.fleet("gap", "--kind", kind, "--reason", reason);
 }
 
-function hubAt(pr: Checkout, reachable = true) {
+type Hub = "up" | "down" | "drops appends" | "loses the acknowledgement of appends";
+const refused = { code: 255, stdout: "", stderr: "ssh: connect to host fleet-hub port 22: Connection refused\n" };
+
+function hubAt(pr: Checkout, hub: Hub | boolean = "up") {
   const remote = join(pr.home, "hub-home");
   const hosts: string[] = [];
+  const state = { hub: hub === true ? "up" : hub === false ? "down" : hub };
   pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "hub.alias": "fleet-hub" });
   pr.hub.ssh = async (host, command, stdin) => {
     hosts.push(host);
-    if (!reachable) return { code: 255, stdout: "", stderr: "ssh: connect to host fleet-hub port 22: Connection refused\n" };
+    if (state.hub === "down") return refused;
+    if (state.hub === "drops appends" && stdin !== undefined) return { code: 0, stdout: "", stderr: "" };
     const child = Bun.spawn(["bash", "-c", command], { env: { HOME: remote, PATH: process.env.PATH }, stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (state.hub === "loses the acknowledgement of appends" && stdin !== undefined) return refused;
     return { code, stdout, stderr };
   };
-  return { remote, hosts };
+  return { remote, hosts, state };
 }
 
 test("a gap reason recorded again after the user's acceptance leaves the gap accepted (2026-11-12)", async () => {
@@ -221,7 +227,7 @@ test("an agent's ci acceptance counts only while CI has not run on HEAD", async 
   expect(lineOf(red.output, "ci:")).toContain(`not accepted (🤖 decision ${id} lapsed: CI on HEAD is red)`);
 });
 
-test("the user's keep-owed outranks an agent's acceptance, and a voided decision counts no more", async () => {
+test("the user's keep-owed outranks an agent's acceptance and no void lifts it; a voided decision counts no more", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });
   await owing(pr, "prod-shape");
@@ -236,9 +242,71 @@ test("the user's keep-owed outranks an agent's acceptance, and a voided decision
   expect(lineOf(gate.output, "prod-shape:")).toContain(`not accepted (🤖 decision ${agents} lapsed: the user keeps it owed, decision ${kept})`);
   await expect(pr.decide("record", "--mark", "🤖", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#42", "--keep-owed", "--question", "q", "--answer", "a", "--rejected", "r", "--reason", "why")).rejects.toThrow("--keep-owed are the user's");
 
-  const voided = await pr.decide("void", kept, "--reason", "The user lifted it");
-  expect(voided.output).toEndWith(`[${kept}] voided: The user lifted it`);
+  await expect(pr.decide("void", kept, "--reason", "The user lifted it")).rejects.toThrow(`Decision ${kept} keeps the gap owed, and only the user lifts it`);
+  expect((await pr.fleet("gate")).code).toBe(3);
+
+  const voided = await pr.decide("void", agents, "--reason", "Its condition no longer holds");
+  expect(voided.output).toEndWith(`[${agents}] voided: Its condition no longer holds`);
+  await expect(pr.decide("void", agents, "--reason", "again")).rejects.toThrow(`Decision ${agents} is already voided`);
+  expect((await pr.decide("list", "--live")).output).not.toContain(agents);
+
+  pr.chooseGap("prod-shape", "No sandbox");
+  await acceptGap(pr, "prod-shape");
   expect((await pr.fleet("gate")).code).toBe(0);
-  await expect(pr.decide("void", kept, "--reason", "again")).rejects.toThrow(`Decision ${kept} is already voided`);
-  expect((await pr.decide("list", "--live")).output).not.toContain(kept);
 });
+
+test("record without --message takes the latest answer that names each PR and each gap kind", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.chooseGap("prod-shape", "No sandbox");
+  pr.chooseGap("cross-version", "No old client");
+  const recorded = await acceptGap(pr, "prod-shape");
+  expect(recorded.output).toStartWith("- 👤 **Accept the prod-shape gap? example/product#42: No sandbox**");
+  expect((await pr.fleet("gate")).code).toBe(0);
+});
+
+for (const where of ["this machine", "the hub"]) test(`a record after a torn last line on ${where} still lands on its own line, and the torn line costs only itself`, async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const home = where === "the hub" ? hubAt(pr).remote : pr.home;
+  const agents = idIn((await agent(pr, "prod-shape")).output);
+  appendFileSync(join(home, ".local/state/fleet/decisions.jsonl"), `{"type":"decide","decision":{"id":"d-70`);
+
+  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
+  const kept = idIn((await acceptGap(pr, "prod-shape", "--keep-owed")).output);
+  const gate = await pr.fleet("gate");
+  expect(lineOf(gate.output, "prod-shape:")).toContain(`not accepted (🤖 decision ${agents} lapsed: the user keeps it owed, decision ${kept})`);
+  expect(gate.code).toBe(3);
+});
+
+test("a record fails unless its decision is in the ledger when it re-reads it", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  hubAt(pr, "drops appends");
+  await expect(agent(pr, "prod-shape")).rejects.toThrow("is not in the decision ledger when Fleet reads it back");
+  pr.chooseGap("prod-shape", "No sandbox");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow("is not in the decision ledger when Fleet reads it back");
+});
+
+test("a review override the hub wrote, but whose acknowledgement SSH lost, keeps its round", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  const { remote } = hubAt(pr, "loses the acknowledgement of appends");
+  pr.choose("Run one more round");
+  const started = await pr.fleet("review-start", "--scope", "full", "--override", `2026-10-25 "Run one more round"`);
+  expect(started.code).toBe(0);
+  const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8"));
+  const hub = readFileSync(join(remote, ".local/state/fleet/decisions.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line).decision.id);
+  expect(hub).toEqual([round.decision.id]);
+});
+
+test("a plain yes accepts a gap only when its question asks to accept that gap", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.choose("Yes", "Keep the prod-shape gap on example/product#42 owed?");
+  await expect(acceptGap(pr, "prod-shape")).rejects.toThrow(`The user chose "Yes" to a question that does not ask "Accept the prod-shape gap?"`);
+  expect((await pr.fleet("gate")).code).toBe(3);
+});
+
