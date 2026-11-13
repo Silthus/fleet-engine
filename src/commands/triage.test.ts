@@ -13,6 +13,8 @@ afterEach(() => temp.cleanup());
 const spell = (alphabet: string, length: number, start: number) => Array.from({ length }, (_, index) => alphabet[(start + index * 11) % alphabet.length]).join("");
 const letters = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const mixed = `${letters}23456789`;
+const capitals = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const lowers = "abcdefghijkmnopqrstuvwxyz";
 const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ234567";
 
 /** Secrets in the shapes real services issue, built at run time so no real-looking secret is in the repository. */
@@ -31,6 +33,7 @@ function secrets() {
     splitLetters: [spell(letters, 22, 21), "-", spell(letters, 21, 22)].join(""),
     containedLetters: spell(letters, 32, 23),
     containedSplit: [spell(letters, 16, 24), "-", spell(letters, 16, 25)].join(""),
+    unevenSplit: [spell(capitals, 13, 26), spell(lowers, 4, 27), "_", spell(capitals, 3, 28), spell(lowers, 13, 29), "=="].join(""),
     password: spell(mixed, 14, 14),
     privateKey: ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\n", spell(mixed, 64, 15).match(/.{16}/g)!.join("\n"), "\n-----END OPENSSH ", "PRIVATE KEY-----"].join(""),
     multiline: [spell(mixed, 10, 16), " river\npearl ", spell(mixed, 10, 17)].join(""),
@@ -82,6 +85,7 @@ function failedMachine(home: string, leaked = secrets()) {
       `  refresh ${leaked.splitLetters} and FLEET_ENGINE_DIR/scripts/build-page-and-site`,
       `  kept /Library/Application/Containers/Preferences/Caches/Storage/Sessions/Current/${leaked.containedLetters}`,
       `  kept /Library/Application/Containers/Preferences/Caches/Storage/Sessions/Current/${leaked.containedSplit}`,
+      `  refresh ${leaked.unevenSplit} done`,
       `  cloning https://nora:${leaked.password}@github.com/nora/fleet-profile.git`,
       `  Pairing URL: http://127.0.0.1:3773/pair#token=${leaked.password}`,
       leaked.privateKey,
