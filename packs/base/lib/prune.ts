@@ -24,7 +24,7 @@ export type Facts = {
   agent: boolean;
 };
 
-export type Thread = { status: string | null; archived: boolean; deleted: boolean; settled: boolean; pending: boolean; activeAt: number };
+export type Thread = { status: string | null; archived: boolean; deleted: boolean; settled: boolean; pending: boolean; activeAt: number; child?: boolean };
 export type Verdict = { path: string; remove: boolean; reason: string };
 export type PruneOptions = {
   worktreeRoot: string; statePath: string; now: number;
@@ -69,6 +69,7 @@ export function decide(facts: Facts, options: IdleLimits & Pick<PruneOptions, "a
   if (idle < idleWindow(facts, options)) return keep(`no T3 thread or agent owns it; active ${idle.toFixed(1)}h ago`);
   if (facts.dirty && !(closed && facts.disposable)) return keep("uncommitted changes");
   if (facts.unreferenced > 0) return keep(`${facts.unreferenced} commits exist only in this worktree`);
+  if (facts.thread && !closed && !facts.thread.child) return keep("its T3 thread is open");
   if (facts.landed) return remove(`all commits are on ${facts.defaultBranch}`);
   if (facts.prMerged) return remove(`pull request for ${facts.branch} is merged`);
   if (closed) return remove(`T3 thread is ${closed}; commits stay on ${facts.branch ?? "other refs"}`);
@@ -122,6 +123,7 @@ export type T3State = { ok: boolean; threads: Map<string, Thread>; projects: str
 
 type StateRow = {
   path: string; archived: string | null; deleted: string | null; created: string; override: string | null; settled: string | null; messaged: string | null; pending: number; status: string | null; turned: string | null;
+  parent: string | null;
 };
 
 function hasTable(db: Database, name: string): boolean {
@@ -131,6 +133,7 @@ function hasTable(db: Database, name: string): boolean {
 function orchestrationRows(db: Database): StateRow[] {
   return db.query(`select json_extract(t.payload_json, '$.worktreePath') path, t.archived_at archived, t.deleted_at deleted, t.created_at created,
       json_extract(t.payload_json, '$.settledOverride') override, json_extract(t.payload_json, '$.settledAt') settled,
+      json_extract(t.payload_json, '$.lineage.parentThreadId') parent,
       (select max(m.created_at) from orchestration_v2_projection_messages m where m.thread_id = t.thread_id and m.role = 'user') messaged,
       (select count(*) from orchestration_v2_projection_runtime_requests q where q.thread_id = t.thread_id and q.resolved_at is null) pending,
       (select r.status from orchestration_v2_projection_runs r where r.thread_id = t.thread_id
@@ -143,7 +146,7 @@ function legacyRows(db: Database): StateRow[] {
   const columns = new Set((db.query("pragma table_info(projection_threads)").all() as Array<{ name: string }>).map((column) => column.name));
   const settle = columns.has("settled_override") ? "t.settled_override override, t.settled_at settled" : "null override, null settled";
   return db.query(`select t.worktree_path path, t.archived_at archived, t.deleted_at deleted, t.created_at created,
-      ${settle},
+      ${settle}, null parent,
       t.latest_user_message_at messaged, t.pending_approval_count + t.pending_user_input_count pending, s.status status,
       (select max(coalesce(completed_at, started_at, requested_at)) from projection_turns u where u.thread_id = t.thread_id) turned
     from projection_threads t left join projection_thread_sessions s using (thread_id) where t.worktree_path is not null`).all() as StateRow[];
@@ -156,6 +159,7 @@ export function readState(statePath: string): T3State {
   try {
     db = new Database(statePath, { readonly: true });
     const rows = hasTable(db, "orchestration_v2_projection_threads") ? orchestrationRows(db) : legacyRows(db);
+    const led = new Set<string>();
     for (const row of rows) {
       const thread: Thread = {
         status: row.status, archived: Boolean(row.archived), deleted: Boolean(row.deleted), pending: row.pending > 0,
@@ -166,7 +170,9 @@ export function readState(statePath: string): T3State {
       const previous = state.threads.get(key);
       const open = (item: Thread) => !closedAs(item);
       if (!previous || (open(thread) && !open(previous)) || (open(thread) === open(previous) && thread.activeAt > previous.activeAt)) state.threads.set(key, thread);
+      if (open(thread) && !row.parent) led.add(key);
     }
+    for (const [key, thread] of state.threads) thread.child = !led.has(key);
     if (hasTable(db, "projection_projects")) state.projects = (db.query("select workspace_root root from projection_projects where deleted_at is null").all() as Array<{ root: string }>).map((row) => resolve(row.root));
   } catch {
     return { ok: false, threads: new Map(), projects: [] };

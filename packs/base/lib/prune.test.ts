@@ -43,6 +43,15 @@ test("keeps work that is active, dirty, unmerged, or held only by the worktree",
   for (const [change, reason] of cases) expect(decide({ ...idle, ...change }, limits)).toEqual({ path: idle.path, remove: false, reason });
 });
 
+test("keeps a landed or merged worktree while its top-level thread is open, and removes it once only a subagent thread uses it", () => {
+  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, child: false };
+  const reason = "its T3 thread is open";
+  expect(decide({ ...idle, branch: null, thread: open }, limits)).toEqual({ path: idle.path, remove: false, reason });
+  expect(decide({ ...idle, landed: false, prMerged: true, thread: open }, limits)).toEqual({ path: idle.path, remove: false, reason });
+  expect(decide({ ...idle, thread: { ...open, child: true } }, limits)).toMatchObject({ remove: true, reason: "all commits are on origin/main" });
+  expect(decide({ ...idle, thread: { ...open, settled: true } }, limits)).toMatchObject({ remove: true, reason: "all commits are on origin/main" });
+});
+
 test("removes a worktree of a closed thread whose only changes are ones tools make, and keeps it while the thread is open", () => {
   const settled = { status: "completed", archived: false, deleted: false, settled: true, pending: false, activeAt: 0 };
   const touched = { ...idle, landed: false, dirty: true, disposable: true };
@@ -238,6 +247,9 @@ test("reads the live orchestration v2 state of a nightly T3 and ignores its froz
   thread("busy", {});
   thread("asking", {});
   thread("archived", {}, "2026-09-23T00:00:00Z");
+  thread("review", { lineage: { parentThreadId: "busy", relationshipToParent: "subagent" } });
+  db.run("insert into orchestration_v2_projection_threads values ('lead', '2026-09-20T00:00:00Z', null, null, ?)", [JSON.stringify({ worktreePath: "/w/review", lineage: { parentThreadId: null } })]);
+  thread("solo-child", { lineage: { parentThreadId: "busy" } });
   db.run("insert into orchestration_v2_projection_runs values ('d1', 'done', 1, 'completed', '2026-09-21T00:00:00Z', '2026-09-22T00:00:00Z')");
   db.run("insert into orchestration_v2_projection_runs values ('b1', 'busy', 1, 'completed', '2026-09-21T00:00:00Z', '2026-09-21T01:00:00Z')");
   db.run("insert into orchestration_v2_projection_runs values ('b2', 'busy', 2, 'running', '2026-09-25T10:00:00Z', null)");
@@ -253,6 +265,9 @@ test("reads the live orchestration v2 state of a nightly T3 and ignores its froz
   expect(threads.get("/w/busy")).toMatchObject({ status: "running", settled: false, activeAt: Date.parse("2026-09-25T10:00:00Z") });
   expect(threads.get("/w/asking")).toMatchObject({ pending: true, activeAt: Date.parse("2026-09-23T00:00:00Z") });
   expect(threads.get("/w/archived")).toMatchObject({ archived: true });
+  expect(threads.get("/w/busy")).toMatchObject({ child: false });
+  expect(threads.get("/w/solo-child")).toMatchObject({ child: true });
+  expect(threads.get("/w/review")).toMatchObject({ child: false });
   expect(decide({ ...idle, path: "/w/busy", thread: threads.get("/w/busy")! }, limits).reason).toBe("T3 session is running");
   expect(threads.get("/w/waiting")).toMatchObject({ status: "running" });
   const queued = { ...threads.get("/w/busy")!, status: "queued" };
