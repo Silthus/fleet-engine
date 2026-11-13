@@ -569,6 +569,10 @@ describe("the gh guard", () => {
     "gh api graphql -f query='query { repository(owner: \"acme\", name: \"app\") { name } }'",
     "mkdir -p src/{a,b} && gh pr list",
     "gh pr view 1 --help",
+    "gh search repos --owner acme,acme --limit 10",
+    "gh api users/octocat",
+    "gh api graphql -f query='{ repository(owner: \"\", name: \"x\") { id } }'",
+    "gh api search/issues -X GET -f q='repo:acme/app is:open'",
     "gh browse src/main.ts",
     'gh pr list --search "is:open author:@me"',
     "$PYTHON api.py",
@@ -665,6 +669,17 @@ describe("the gh guard", () => {
     ["gh api graphql -f query='{ search(query: \"repo:other/app bug\", type: ISSUE, first: 1) { issueCount } }'", "other"],
     ["gh search code repo:other/app", "other"],
     ['gh search issues "bug org:other"', "other"],
+    ["gh issue develop 1 --branch-repo other/app", "other"],
+    ["gh api search/code -X GET -f q='repo:other/app password'", "other"],
+    ['gh api "search/issues?q=repo:other/app+bug"', "other"],
+    ["gh api graphql -F q='repo:other/app' -f 'query=query($q:String!){search(query:$q,type:ISSUE,first:1){issueCount}}'", "other"],
+    ["gh api graphql -f 'query={ repository(owner: \"\"\"other\"\"\", name: \"app\") { name } }'", "other"],
+    ["gh api users/other/repos", "other"],
+    ["gh search repos --owner acme,other", "other"],
+    ["gh issue transfer 1 other/app", "other"],
+    ["gh label clone other/app", "other"],
+    ["gh repo garden other/app", "other"],
+    ["gh attestation verify f.tgz -o other", "other"],
   ])("refuses an outside owner however the command spells it: %s", (command, owner) => {
     expect(refusal(command)).toContain(`\`${owner}\` is not one of the GitHub owners`);
   });

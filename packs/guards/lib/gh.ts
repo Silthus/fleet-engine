@@ -58,8 +58,8 @@ const accountEndpoints = /^(?:user\/(?:keys|ssh_signing_keys|gpg_keys)|authoriza
 const repositoryEndpoint = /^repos\/[^/]+\/[^/]+\/?$/;
 const repositoryCreation = /^(?:user\/repos|orgs\/[^/]+\/repos|repos\/[^/]+\/[^/]+\/generate)\/?$/;
 const githubUrl = /^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+)/;
-const repoTargets = new Set(["clone", "view", "fork", "edit", "delete", "sync", "archive", "unarchive", "create", "set-default"]);
-const orgShortFlag = new Set(["secret", "variable", "ruleset"]);
+const repoTargets = new Set(["clone", "view", "fork", "edit", "delete", "sync", "archive", "unarchive", "create", "set-default", "garden"]);
+const orgShortFlag = new Set(["secret", "variable", "ruleset", "attestation"]);
 
 function parseFlags(args: string[], table: string) {
   const valued = new Set(`${repoFlags} ${table}`.split(" "));
@@ -157,12 +157,12 @@ const plainOwner = /^[A-Za-z0-9-]+$/;
 
 function endpointOwner(endpoint: string): string {
   const [first = "", owner = ""] = endpoint.replace(/\?[^/]*=.*$|#.*$/s, "").split("/").filter(Boolean);
-  if (/^(?:repos|orgs)$/i.test(first)) return owner;
+  if (/^(?:repos|orgs)$/i.test(first) || (/^users$/i.test(first) && /^\/?users\/[^/]+\/repos\b/i.test(endpoint))) return owner;
   return /[$`*?[]/.test(first) ? first : "";
 }
 
 const searchQualifier = /(?:^|\s)"?(repo|org|user):"?([^\s"]+)/gi;
-const graphqlOwner = /\b(?:owner|login)\s*:\s*(?:"([^"]*)"|\$(\w+))/gi;
+const graphqlOwner = /\b(?:owner|login)\s*:\s*(?:"""([^"]*)"""|"([^"]*)"|\$(\w+))/gi;
 
 const qualifiedOwners = (text: string) =>
   [...text.matchAll(searchQualifier)].map(([, kind, value]) => (kind.toLowerCase() === "repo" ? repoOwner(value) : value));
@@ -171,14 +171,22 @@ function graphqlOwners(gh: Gh): string[] {
   const fields = new Map(apiFields(gh).map(([key, value]) => [fieldName(key), value]));
   const query = fields.get("query") ?? "";
   const found = ["owner", "login", "org", "organization"].flatMap((name) => fields.get(name) ?? []);
-  for (const [, literal, variable] of query.matchAll(graphqlOwner)) found.push(literal ?? fields.get(variable.toLowerCase()) ?? "");
-  return [...found, ...qualifiedOwners(query)];
+  for (const [, block, literal, variable] of query.matchAll(graphqlOwner)) found.push(block ?? literal ?? fields.get(variable.toLowerCase()) ?? "");
+  return [...found, ...[...fields.values()].flatMap(qualifiedOwners)];
+}
+
+/** The owners in the `q` of a REST search, given as a field or in the endpoint's query string. */
+function restSearchOwners(gh: Gh, endpoint: string): string[] {
+  const inUrl = new URLSearchParams(endpoint.match(/\?(.*)$/s)?.[1] ?? "").getAll("q");
+  const inFields = apiFields(gh).filter(([key]) => fieldName(key) === "q").map(([, value]) => value);
+  return [...inUrl, ...inFields].flatMap(qualifiedOwners);
 }
 
 function owners(gh: Gh, repoVariable: string | undefined): string[] {
-  const repos = values(gh, "-R", "--repo");
-  const found = [...repos, ...(repos.length === 0 && repoVariable ? [repoVariable] : [])].map(repoOwner);
-  found.push(...values(gh, "--org", "--owner", ...(orgShortFlag.has(gh.group) ? ["-o"] : [])));
+  const listed = (...names: string[]) => values(gh, ...names).flatMap((value) => value.split(","));
+  const repos = listed("-R", "--repo");
+  const found = [...repos, ...(repos.length === 0 && repoVariable ? [repoVariable] : []), ...listed("--branch-repo")].map(repoOwner);
+  found.push(...listed("--org", "--owner", ...(orgShortFlag.has(gh.group) ? ["-o"] : [])));
   const operands = gh.group === "api" ? [] : [gh.action, ...gh.operands];
   for (const operand of operands) found.push(operand.match(githubUrl)?.[1] ?? "");
   const [target] = gh.operands;
@@ -186,7 +194,10 @@ function owners(gh: Gh, repoVariable: string | undefined): string[] {
   if (gh.group === "repo" && gh.action === "list" && target) found.push(target);
   if (gh.group === "repo" && gh.action === "sync") found.push(...values(gh, "-s", "--source").map(repoOwner));
   if (gh.group === "repo" && gh.action === "create") found.push(...values(gh, "-p", "--template").map(repoOwner));
+  if (gh.group === "issue" && gh.action === "transfer" && gh.operands[1]) found.push(repoOwner(gh.operands[1]));
+  if (gh.group === "label" && gh.action === "clone" && target) found.push(repoOwner(target));
   if (gh.group === "api") found.push(endpointOwner(endpointOf(gh)));
+  if (gh.group === "api" && /^search\//i.test(endpointOf(gh))) found.push(...restSearchOwners(gh, endpointOf(gh)));
   if (gh.group === "api" && endpointOf(gh) === "graphql") found.push(...graphqlOwners(gh));
   if (gh.group === "search") found.push(...qualifiedOwners(gh.operands.join(" ")));
   return found.filter((owner) => owner && !placeholders.has(owner));
