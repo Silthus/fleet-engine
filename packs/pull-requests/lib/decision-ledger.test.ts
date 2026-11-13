@@ -130,7 +130,7 @@ test("a legacy acceptance in the gap file still counts, and survives a new reaso
   expect(lineOf((await pr.fleet("gate")).output, "prod-shape:")).toBe(`prod-shape: gap from ${head.slice(0, 7)}, accepted ("2026-10-20 "Accept the gap""): The sandbox has no production rows`);
 });
 
-test("off the hub the ledger is read and appended over SSH to the hub alias; on the hub it is the local file", async () => {
+test("off the hub the ledger is read and appended over SSH to the hub alias", async () => {
   const pr = await checkout();
   await owing(pr, "prod-shape");
   const { remote, hosts } = hubAt(pr);
@@ -145,12 +145,28 @@ test("off the hub the ledger is read and appended over SSH to the hub alias; on 
   expect(gate.code).toBe(0);
   expect(lineOf(gate.output, "prod-shape:")).toContain(`accepted by 👤 decision ${id}`);
   expect(new Set(hosts)).toEqual(new Set(["fleet-hub"]));
+});
 
+test("on the hub the ledger is the local file, even when the hub alias does not answer", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  const { remote } = hubAt(pr, false);
+  const seeded = (home: string, id: string) => {
+    const decision = { id, at: "2026-10-25T12:00:00.000Z", class: "status", mark: "🤖", question: "Post the status?", answer: "Post it", rejected: "Wait", reason: "CI is green", scope: { prs: ["example/product#42"] }, where: { thread: "thread-1", machine: "box" } };
+    mkdirSync(join(home, ".local/state/fleet"), { recursive: true });
+    writeFileSync(join(home, ".local/state/fleet/decisions.jsonl"), JSON.stringify({ type: "decide", decision }) + "\n");
+  };
+  seeded(pr.home, "d-10ca1000");
+  seeded(remote, "d-0e307e00");
   mkdirSync(join(pr.home, ".config/fleet"), { recursive: true });
   writeFileSync(join(pr.home, ".config/fleet/machine.json"), JSON.stringify({ role: "hub" }));
-  const calls = hosts.length;
-  expect((await pr.decide("list")).output).toBe("No decisions.");
-  expect(hosts).toHaveLength(calls);
+
+  const listed = (await pr.decide("list")).output;
+  expect(listed).toContain("[d-10ca1000]");
+  expect(listed).not.toContain("d-0e307e00");
+  pr.chooseGap("prod-shape", "No sandbox");
+  const id = idIn((await acceptGap(pr, "prod-shape")).output);
+  expect(ledgerDecisions(pr).map((decision) => decision.id)).toEqual(["d-10ca1000", id]);
 });
 
 test("an unreachable hub fails the gate closed with exit 3, and a record says it was not recorded", async () => {
