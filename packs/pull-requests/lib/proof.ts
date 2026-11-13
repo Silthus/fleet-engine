@@ -9,7 +9,7 @@ export type ProofIdentity = { repository: string; pr: number; commit: string };
 const sha = /^[0-9a-f]{40}$/;
 export const ledgerRoot = (home: string) => join(home, ".local/state/fleet/proof");
 
-function pullRequestDirectory(home: string, identity: ProofIdentity) {
+export function pullRequestDirectory(home: string, identity: ProofIdentity) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(identity.repository) || identity.repository.split("/").some((part) => part === "." || part === "..")) throw new Error(`Invalid repository ${identity.repository || "(none)"}. Use owner/name`);
   if (!Number.isSafeInteger(identity.pr) || identity.pr < 1 || !sha.test(identity.commit)) throw new Error("Use a positive PR number and a full commit SHA");
   return join(ledgerRoot(home), identity.repository, String(identity.pr));
@@ -32,12 +32,14 @@ export function isScreenshot(path: string, bytes: Buffer): boolean {
   return webp || screenshotSignatures.some((signature) => bytes.subarray(0, signature.length).equals(signature));
 }
 
+export const uiWalkRule = "A UI walk keeps only screenshots of the running app";
+
 export async function saveProof(home: string, identity: ProofIdentity, source: string, kind?: string): Promise<string> {
   const bytes = await readFile(source);
   if (!bytes.length) throw new Error(`${source} is empty. Save the output that shows the behavior`);
   const extension = extname(source).toLowerCase();
   if (!/^\.[a-z0-9]{1,10}$/.test(extension)) throw new Error("Proof files need a simple file extension");
-  if (kind === "ui-walk" && !isScreenshot(source, bytes)) throw new Error("A UI walk keeps only screenshots of the running app");
+  if (kind === "ui-walk" && !isScreenshot(source, bytes)) throw new Error(uiWalkRule);
   const name = createHash("sha256").update(bytes).digest("hex") + extension;
   const directory = kind === undefined ? proofDirectory(home, identity) : join(proofDirectory(home, identity), proofKind(kind));
   await mkdir(directory, { recursive: true, mode: 0o700 });
