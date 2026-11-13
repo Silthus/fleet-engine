@@ -1,7 +1,7 @@
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
 import { renderReport } from "./decision-report.ts";
-import { commentUrl, readComment, readPullRequest, restJson, runIn, sameComment } from "./pr-ci.ts";
-import { gapKind, receiptMarker, receiptOf, refuseInstructionQuote, usedAnswer } from "./proof.ts";
+import { readPullRequest, runIn } from "./pr-ci.ts";
+import { gapKind, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
   agentRefusal, answerUse, askClasses, brakeDays, brakeOf, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, liftCounted, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
   type AnswerUse, type AskClass, type Decision, type DecisionState, type Env, type Ledger, type LedgerEvent, type Lift, type PrRef, type Reversal, type Ssh, type UsersMark,
@@ -17,7 +17,7 @@ const usage = `Usage:
   fleet decision record --mark 🤖 --class <class> --pr <owner/repo#n>... --question <q> --answer <a> --rejected <option> --reason <why> [--kind <kind>...] [--condition <text>] [--thread <id>] [--link <side-fix thread>]
   fleet decision list [--pr <owner/repo#n>] [--class <class>] [--live]
   fleet decision void <id> --reason <why its condition no longer holds>
-  fleet decision reverse <id> --words '<date> "<the user's words>"' (--thread <id> [--message <id>] | --comment <url>)
+  fleet decision reverse <id> --words '<date> "<the user's words>"' --thread <id> [--message <id>]
   fleet decision lift --class <class> --words '<date> "<the user's answer>"' --thread <id> [--message <id>]
   fleet decision report --pr <owner/repo#n>... [--thread <id>]
 
@@ -43,12 +43,10 @@ that stays open.
 list prints the decisions as decision lines with their ids. Run it before you ask.
 void ends a decision whose condition HEAD no longer meets, such as when the judge fails it; then decide or ask again.
 It refuses the user's keep-owed: only their acceptance lifts it.
-reverse records the user's reversal of a decision: their dated, quoted words in a message of theirs in the T3 thread,
-or on a GitHub comment written by the account gh is signed in as, which must hold each quoted part. The message must
-say the words on the quoted date; when two messages on that date do, --message picks one by its id. A comment must
-be on the PR its URL names, and not one Fleet writes: a decision line, a proof receipt (it carries the marker
-<!-- fleet-proof-receipt -->), or an end-of-run report. The user's words must be
-newer than the decision, and the reversal takes the time they wrote them. The decision then prints as 👤 with their
+reverse records the user's reversal of a decision: their dated, quoted words in a message they typed in the T3 app,
+or their answer to your question tool there. Agents post on GitHub as the user, so a GitHub comment never reverses a
+decision. The message must say the words on the quoted date; when two messages on that date do, --message picks one
+by its id. One answer reverses one decision. The user's words must be newer than the decision, and the reversal takes the time they wrote them. The decision then prints as 👤 with their
 words, the replaced answer struck through, and counts no more at the gate or in list --live; decide or ask again. It
 refuses the user's keep-owed, as void does, and a voided decision. Two reversals of 🤖 decisions in one class within
 ${brakeDays} days brake the class from the later of the two: record --mark 🤖 and fleet proof review --agent in it
@@ -117,7 +115,8 @@ const at = (context: DecisionContext) => (context.now?.() ?? new Date()).toISOSt
 export class AnswerTaken extends Error {}
 const alreadyRecorded = (id: string) => new AnswerTaken(`That answer is already recorded as decision ${id}. One answer records one decision; it covers the PRs its question named. Ask the user again`);
 const alreadyLifted = (lifted: Lift) => new AnswerTaken(`That answer already lifted the ${lifted.class} brake on ${lifted.at.slice(0, 10)}. One answer lifts one brake or records one decision; ask the user again`);
-const alreadyUsed = (use: AnswerUse) => "decision" in use ? alreadyRecorded(use.decision) : alreadyLifted(use.lift);
+const alreadyReversed = (id: string) => new AnswerTaken(`That answer already reversed decision ${id}. One answer reverses one decision; ask the user about this one`);
+const alreadyUsed = (use: AnswerUse) => "decision" in use ? alreadyRecorded(use.decision) : "lift" in use ? alreadyLifted(use.lift) : alreadyReversed(use.reversal);
 
 export type Scope = { class: AskClass; prs: PrRef[]; kinds?: string[]; condition?: string };
 const scopeOf = ({ prs, kinds, condition }: Scope): Decision["scope"] => ({ prs: prs.map(refText), ...kinds?.length ? { kinds } : {}, ...condition ? { condition } : {} });
@@ -301,7 +300,6 @@ const refuseKeptOwed = (decision: DecisionState) => {
 
 const quoteWithDate = () => new Error(`Quote the user's words with the date they wrote them, such as '2026-10-24 "Reverse that."'`);
 const quotedDate = (words: string) => /\b\d{4}-\d{2}-\d{2}\b/.exec(words)![0];
-const fleetText = (body: string) => /\[d-[0-9a-f]{8}\]/.test(body) || /^#+ End-of-run report\b/m.test(body) || body.includes(receiptMarker);
 
 async function heardInThread(thread: string, words: string, message: string | undefined, context: DecisionContext) {
   if (!isDatedQuote(words)) throw quoteWithDate();
@@ -322,42 +320,25 @@ async function heardInThread(thread: string, words: string, message: string | un
   return onDate[0]!;
 }
 
-async function heardOnComment(url: string, words: string, context: DecisionContext) {
-  commentUrl(url);
-  if (!isDatedQuote(words)) throw quoteWithDate();
-  const run = runIn(context.cwd, context.env);
-  const login = restJson<{ login: string }>("user", run).login;
-  const comment = readComment(url, run);
-  if (comment.author.toLowerCase() !== login.toLowerCase()) throw new Error(`The comment is by ${comment.author || "nobody"}, not the user (${login}). Only the user's own words reverse a decision`);
-  if (fleetText(comment.body) || sameComment(await receiptOf(context.home, comment), url)) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
-  const body = normalized(comment.body);
-  const missing = quotes(words).find((quote) => !body.includes(quote));
-  if (missing) throw new Error(`"${missing}" is not in the comment ${url}. Quote the user's words as they wrote them`);
-  const time = Date.parse(comment.createdAt ?? "");
-  if (Number.isNaN(time)) throw new Error(`GitHub gives no time for the comment ${url}. Run the same command again`);
-  return { comment: url, at: new Date(time).toISOString() };
-}
-
 async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const [id, ...rest] = parsed.positional;
   if (!id || rest.length) throw new Error("Name one decision id. Run fleet decision --help");
   const words = required(parsed, "--words");
   const thread = parsed.options.get("--thread");
-  const comment = parsed.options.get("--comment");
-  if ((thread === undefined) === (comment === undefined)) throw new Error("Pass --thread with the T3 thread where the user reversed it, or --comment with the GitHub comment where they did. Run fleet decision --help");
-  if (comment !== undefined && parsed.options.has("--message")) throw new Error("--message picks a message in --thread; a comment names its own");
+  if (thread === undefined) throw new Error("Pass --thread with the T3 thread where the user reversed it. Run fleet decision --help");
   const events = await reachHub(() => ledger.read());
   const decision = fold(events).find((candidate) => candidate.id === id);
   if (!decision) throw new Error(`No decision ${id} in the ledger. Run fleet decision list`);
   if (decision.reversed) throw new Error(`Decision ${id} is already reversed, on ${decision.reversed.at.slice(0, 10)}`);
   if (decision.voided) throw new Error(`Decision ${id} is voided: ${decision.voided.reason}. It counts no more, so there is nothing to reverse`);
   refuseKeptOwed(decision);
-  const heard = thread !== undefined
-    ? await heardInThread(thread, words, parsed.options.get("--message"), context).then((word) => ({ thread, message: word.id, at: answeredAt(word) }))
-    : await heardOnComment(comment!, words, context);
+  const word = await heardInThread(thread, words, parsed.options.get("--message"), context);
+  const heard = { thread: word.thread, message: word.id, at: answeredAt(word) };
   if (Date.parse(heard.at) < Date.parse(decision.at)) throw new Error(`The user wrote that on ${heard.at.slice(0, 10)}, before decision ${id} was recorded on ${decision.at.slice(0, 10)}. Only their words after it reverse it`);
   const event: Reversal = { type: "reverse", id, words, ...heard, machine: thisMachine(context.env) };
-  await appendHeard(ledger, event, { type: "void", id, reason: `reversed by the user: ${words}`, at: event.at });
+  const read = await appendHeard(ledger, event, { type: "void", id, reason: `reversed by the user: ${words}`, at: event.at });
+  const use = answerUse(read, `${heard.thread}/${heard.message}`);
+  if (!use || !("reversal" in use) || use.reversal !== id) throw new Error(`Not reversed: ${use ? alreadyUsed(use).message : `another reversal of decision ${id} came first`}`);
   context.print(decisionLine(fold([...events, event]).find((candidate) => candidate.id === id)!));
   return 0;
 }
@@ -432,7 +413,7 @@ export async function decisionCommand(args: string[], context: DecisionContext):
   if (name === "record") return record(parse(args, ["--mark", "--words", "--message", "--thread", "--class", "--condition", "--question", "--answer", "--rejected", "--reason", "--link"], ["--pr", "--kind"], ["--keep-owed"]), context, ledger);
   if (name === "list") return list(parse(args, ["--pr", "--class"], [], ["--live"]), context, ledger);
   if (name === "void") return voidDecision(parse(args, ["--reason"], [], []), context, ledger);
-  if (name === "reverse") return reverse(parse(args, ["--words", "--thread", "--comment", "--message"], [], []), context, ledger);
+  if (name === "reverse") return reverse(parse(args, ["--words", "--thread", "--message"], [], []), context, ledger);
   if (name === "lift") return lift(parse(args, ["--class", "--words", "--thread", "--message"], [], []), context, ledger);
   if (name === "report") return report(parse(args, ["--thread"], ["--pr"], []), context, ledger);
   throw new Error(`Unknown command ${name}. Run fleet decision --help`);

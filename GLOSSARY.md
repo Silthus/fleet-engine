@@ -91,7 +91,7 @@ The gate no longer counts an agent's acceptance, because the tier changed, CI ra
 _Avoid_: Expiry, revoke
 
 **Reversal**:
-The user's own words, in a T3 thread or on a GitHub comment they wrote, that replace a decision's answer. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more. A reversal takes the time the user wrote their words, and those words must be newer than the decision. A comment must be on the pull request its URL names. A comment that Fleet writes, such as a decision line, a proof receipt or an end-of-run report, is never a reversal. `fleet proof receipt` records only a comment that carries the receipt marker `<!-- fleet-proof-receipt -->`, so Fleet refuses a receipt on every machine, whichever machine recorded it. A gap the user keeps owed and a voided decision take no reversal.
+The user's own words in a T3 thread, a message they typed in the T3 app or their answer to a question tool, that replace a decision's answer. A GitHub comment never counts, since agents post on GitHub as the user. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more. A reversal takes the time the user wrote their words, and those words must be newer than the decision. One answer reverses one decision. A gap the user keeps owed and a voided decision take no reversal.
 _Avoid_: Undo, override
 
 **Brake**:

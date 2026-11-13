@@ -132,7 +132,8 @@ const dayMs = 24 * 60 * 60 * 1000;
 export type Brake = { ids: [string, string]; at: string };
 
 const liftKey = (lift: Lift) => `${lift.thread}/${lift.message}`;
-export type AnswerUse = { decision: string } | { lift: Lift };
+export type AnswerUse = { decision: string } | { lift: Lift } | { reversal: string };
+const reversalKey = (reversal: Reversal) => reversal.thread !== undefined && reversal.message !== undefined ? `${reversal.thread}/${reversal.message}` : undefined;
 
 function replay(events: LedgerEvent[]) {
   const decisions = new Map<string, DecisionState>();
@@ -140,6 +141,7 @@ function replay(events: LedgerEvent[]) {
   const reversals = new Map<AskClass, { id: string; time: number }[]>();
   const brakes = new Map<AskClass, Brake>();
   const lifts = new Set<Lift>();
+  const unheard = new Set<string>();
   for (const event of events) {
     if (event.type === "decide") {
       const { id, mark, class: decisionClass } = event.decision;
@@ -148,6 +150,7 @@ function replay(events: LedgerEvent[]) {
       if (message) answers.set(message, { decision: id });
       decisions.set(id, { ...event.decision });
     } else if (event.type === "void") {
+      if (unheard.has(`${event.id}@${event.at}`)) continue;
       const decision = decisions.get(event.id);
       if (decision && !decision.reversed) decision.voided = { reason: event.reason, at: event.at };
     } else if (event.type === "lift") {
@@ -159,7 +162,10 @@ function replay(events: LedgerEvent[]) {
       brakes.delete(event.class);
     } else {
       const decision = decisions.get(event.id);
+      const answer = reversalKey(event);
+      if (answer && answers.has(answer)) { unheard.add(`${event.id}@${event.at}`); continue; }
       if (!decision || decision.reversed) continue;
+      if (answer) answers.set(answer, { reversal: event.id });
       const { rejected, ...rest } = decision;
       decisions.set(event.id, { ...rest, mark: "👤", answer: event.words, reversed: { at: event.at, mark: decision.mark, answer: decision.answer, ...rejected ? { rejected } : {} } });
       if (decision.mark !== "🤖") continue;

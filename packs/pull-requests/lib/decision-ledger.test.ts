@@ -663,28 +663,25 @@ test("the user reverses an agent decision with their words in the thread: it pri
   expect(fold(olderReader).find((decision) => decision.id === id)?.voided).toBeDefined();
 });
 
-test("a reversal on a GitHub comment counts only when the user wrote it and it holds each quoted part of their words", async () => {
+test("a reversal takes only the user's own words in the T3 app, never a GitHub comment, which agents also post as the user", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });
   await owing(pr, "prod-shape");
   const id = idIn((await agent(pr, "prod-shape")).output);
-  const url = "https://github.com/example/product/pull/42#issuecomment-123";
-  const reverse = (words = `2026-10-25 "Reverse that one"`) => pr.decide("reverse", id, "--words", words, "--comment", url);
+  const reverse = (words = `2026-10-25 "Reverse that one"`) => pr.decide("reverse", id, "--words", words, "--thread", "thread-1");
 
-  pr.githubComment(123, "someone-else", "Reverse that one");
-  await expect(reverse()).rejects.toThrow("The comment is by someone-else, not the user (the-user). Only the user's own words reverse a decision");
-  pr.githubComment(123, "The-User", "Keep it");
-  await expect(reverse()).rejects.toThrow(`"reverse that one" is not in the comment ${url}`);
+  pr.githubComment(123, "the-user", "Reverse that one", "2026-10-25T13:00:00Z");
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/pull/42#issuecomment-123")).rejects.toThrow("Unknown option --comment");
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`)).rejects.toThrow("Pass --thread with the T3 thread where the user reversed it");
   await expect(reverse(`2026-10-25 "***"`)).rejects.toThrow("Quote the user's words with the date they wrote them");
-  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/pull/42")).rejects.toThrow("--comment takes the URL of a GitHub issue or PR comment");
-  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`)).rejects.toThrow("Pass --thread with the T3 thread where the user reversed it, or --comment");
+  await expect(reverse()).rejects.toThrow(`"reverse that one" is not in a message of the user's in thread thread-1`);
   expect((await pr.fleet("gate")).code).toBe(0);
 
-  pr.githubComment(123, "The-User", "Please **reverse that one**, it needs the proof.", "2026-10-25T13:00:00Z");
+  pr.clock.now = new Date("2026-10-25T13:00:00Z");
+  pr.say("Reverse that one");
   expect((await reverse()).output).toStartWith(`- 👤 **Accept the prod-shape gap?** 2026-10-25 "Reverse that one" (reversed 2026-10-25 from ~~🤖 Accept it`);
   expect((await pr.fleet("gate")).code).toBe(3);
 });
-
 test("two reversals in one ask class within 28 days brake it until the user lifts it; 29 days apart they do not", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });
@@ -809,7 +806,7 @@ test("the end-of-run report prints its five sections in order: still yours, narr
   await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access", "--repo", "example/product", "--pr", "41");
   pr.chooseGap("prod-shape", "No production read access", "Accept the gap", 41);
   const users = idIn((await pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#41")).output);
-  pr.githubComment(9, "the-user", "<!-- fleet-proof-receipt -->\nProofs at HEAD: live-run passed.", "2026-10-25T12:00:00Z", 41);
+  pr.githubComment(9, "the-user", "Proofs at HEAD: live-run passed.", "2026-10-25T12:00:00Z", 41);
   await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/41#issuecomment-9", "--repo", "example/product", "--pr", "41");
   pr.pullRequestState({ number: 41, merged: true });
 
@@ -908,8 +905,10 @@ test("a reversal and a lift take the time the user wrote their words, not the ti
   await pr.decide("reverse", second, "--words", `2026-10-20 "Also wrong"`, "--thread", "thread-1");
   expect((await design("Where does the index go?")).code).toBe(0);
 
-  pr.githubComment(7, "the-user", "Wrong as well", "2026-10-21T08:00:00Z");
-  expect((await pr.decide("reverse", third, "--words", `2026-10-21 "Wrong as well"`, "--comment", "https://github.com/example/product/pull/42#issuecomment-7")).output).toContain("(reversed 2026-10-21 from");
+  on("2026-10-21");
+  pr.say("Wrong as well");
+  on("2026-10-25");
+  expect((await pr.decide("reverse", third, "--words", `2026-10-21 "Wrong as well"`, "--thread", "thread-1")).output).toContain("(reversed 2026-10-21 from");
   await expect(design("Where does the cache go?")).rejects.toThrow(`The design class is braked: the user reversed decisions ${second} and ${third}`);
 
   on("2026-10-22");

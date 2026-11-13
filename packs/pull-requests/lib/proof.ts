@@ -925,7 +925,6 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
 
 const receiptPath = (home: string, ref: PrRef) => join(prDirectory(home, ref), "receipt.json");
 export const receiptOf = async (home: string, ref: PrRef) => (await readJson<{ url?: string } | undefined>(receiptPath(home, ref), undefined))?.url;
-export const receiptMarker = "<!-- fleet-proof-receipt -->";
 export const recordReceipt = (home: string, ref: PrRef, url: string) => writeJson(receiptPath(home, ref), { url });
 
 export async function reviewRecords(home: string, identity: ProofIdentity) {

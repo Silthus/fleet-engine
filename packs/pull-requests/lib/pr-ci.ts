@@ -42,7 +42,6 @@ export function readPullRequest(identity: ProofIdentity, run: Run): PullRequest 
 const commentPattern = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:issues|pull)\/([1-9]\d*)#issuecomment-(\d+)$/;
 
 export type CommentUrl = { repository: string; pr: number; id: string };
-export type PrComment = CommentUrl & { author: string; body: string; createdAt?: string };
 
 export function commentUrl(url: string): CommentUrl {
   const [, repository, pr, id] = commentPattern.exec(url) ?? [];
@@ -50,16 +49,14 @@ export function commentUrl(url: string): CommentUrl {
   return { repository, pr: Number(pr), id };
 }
 
-export const sameComment = (a: string | undefined, b: string) => a !== undefined && commentPattern.exec(a)?.[3] === commentPattern.exec(b)?.[3];
-
-export function readComment(url: string, run: Run): PrComment {
+export function readComment(url: string, run: Run): CommentUrl {
   const named = commentUrl(url);
-  type Raw = { user?: { login?: string }; body?: string; created_at?: string; issue_url?: string };
+  type Raw = { issue_url?: string };
   const raw = restJson<Raw>(`repos/${named.repository}/issues/comments/${named.id}`, run);
   const [, repository = "", pr = ""] = /\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)$/.exec(raw.issue_url ?? "") ?? [];
   const on = repository ? `${repository}#${pr}` : "no PR GitHub names";
   if (on.toLowerCase() !== `${named.repository}#${named.pr}`.toLowerCase()) throw new Error(`The comment ${url} is on ${on}, not on ${named.repository}#${named.pr}`);
-  return { ...named, author: raw.user?.login ?? "", body: raw.body ?? "", ...raw.created_at ? { createdAt: raw.created_at } : {} };
+  return named;
 }
 
 function readRequired(repository: string, branch: string, run: Run): RequiredCheck[] {

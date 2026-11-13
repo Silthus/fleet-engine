@@ -5,7 +5,6 @@ import { checkout, cleanFixtures, graded, hubAt, type Checkout } from "./proof-t
 
 afterEach(cleanFixtures);
 
-const receiptMarker = "<!-- fleet-proof-receipt -->";
 const idIn = (output: string) => /\[(d-[0-9a-f]+)\]/.exec(output)![1]!;
 const ledgerFile = (pr: Checkout) => join(pr.home, ".local/state/fleet/decisions.jsonl");
 const on = (pr: Checkout, day: string, time = "10:00") => { pr.clock.now = new Date(`${day}T${time}:00Z`); };
@@ -137,28 +136,6 @@ test("a reversal needs words the user wrote after the decision", async () => {
   expect((await pr.decide("list", "--live")).output).toContain(id);
 });
 
-test("a reversal on a GitHub comment needs one written after the decision, and never one Fleet wrote", async () => {
-  const pr = await checkout();
-  pr.pullRequestState({ body: graded("non-critical") });
-  const id = idIn((await decideAlone(pr, "design", "Parser?")).output);
-  const url = (n: number) => `https://github.com/example/product/pull/42#issuecomment-${n}`;
-  const reverseOn = (n: number) => pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", url(n));
-
-  pr.githubComment(7, "the-user", "Reverse that one", "2026-10-25T11:00:00Z");
-  await expect(reverseOn(7)).rejects.toThrow(`The user wrote that on 2026-10-25, before decision ${id} was recorded on 2026-10-25`);
-  pr.githubComment(8, "the-user", `- 🤖 **Parser?** Go ahead Rejected: Ask the user. (agent, design, thread thread-1) [${id}]\n\nReverse that one`, "2026-10-25T13:00:00Z");
-  await expect(reverseOn(8)).rejects.toThrow(`The comment ${url(8)} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
-  pr.githubComment(9, "the-user", "## End-of-run report: example/product#42\n\nReverse that one", "2026-10-25T13:00:00Z");
-  await expect(reverseOn(9)).rejects.toThrow("is one Fleet writes");
-  pr.githubComment(11, "the-user", `${receiptMarker}\nProofs at HEAD: live-run passed. Reverse that one if it looks wrong.`, "2026-10-25T13:00:00Z");
-  expect((await pr.fleet("receipt", "--comment", url(11))).code).toBe(0);
-  await expect(reverseOn(11)).rejects.toThrow(`The comment ${url(11)} is one Fleet writes`);
-  expect((await pr.decide("list", "--live")).output).toContain(id);
-
-  pr.githubComment(10, "the-user", "Please reverse that one.", "2026-10-25T13:00:00Z");
-  expect((await reverseOn(10)).code).toBe(0);
-});
-
 test("only reversals of the agent's decisions count toward a brake", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });
@@ -233,40 +210,43 @@ test("one answer either lifts a brake or records a decision, never both, even wh
   expect((await pr.decide("list", "--class", "design")).output).not.toContain(`2026-10-21 "Lift the brake"`);
 });
 
-test("a reversal refuses the PR's receipt comment by its id, in either URL form", async () => {
+test("fleet proof receipt records only a comment on the PR it names", async () => {
   const pr = await checkout();
-  pr.pullRequestState({ body: graded("non-critical") });
-  const id = idIn((await decideAlone(pr, "design", "Parser?")).output);
-  pr.githubComment(11, "the-user", `${receiptMarker}\nProofs at HEAD: live-run passed. Reverse that one if it looks wrong.`, "2026-10-25T13:00:00Z");
-  pr.githubComment(12, "the-user", `${receiptMarker}\nProofs at HEAD: live-run passed. Reverse that one if it looks wrong.`, "2026-10-25T13:00:00Z", 43);
+  pr.githubComment(11, "the-user", "Proofs at HEAD: live-run passed.", "2026-10-25T13:00:00Z");
+  pr.githubComment(12, "the-user", "Proofs at HEAD: live-run passed.", "2026-10-25T13:00:00Z", 43);
   await expect(pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/43#issuecomment-12")).rejects.toThrow("The comment https://github.com/example/product/pull/43#issuecomment-12 is on example/product#43, not on example/product#42");
   expect((await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/42#issuecomment-11")).output).toBe("receipt: https://github.com/example/product/pull/42#issuecomment-11");
-
-  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/issues/42#issuecomment-11")).rejects.toThrow("is one Fleet writes");
-  expect((await pr.decide("list", "--live")).output).toContain(id);
 });
-
-test("a receipt carries the receipt marker, so a reversal refuses it on every machine, whichever machine recorded it", async () => {
+test("one answer of the user's reverses one decision, and an answer already recorded as a decision reverses none", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });
-  const id = idIn((await decideAlone(pr, "design", "Parser?")).output);
-  const url = (n: number) => `https://github.com/example/product/pull/42#issuecomment-${n}`;
-  pr.githubComment(11, "the-user", "Proofs at HEAD: live-run passed. Reverse that one if it looks wrong.", "2026-10-25T13:00:00Z");
-  await expect(pr.fleet("receipt", "--comment", url(11))).rejects.toThrow(`The comment ${url(11)} does not carry the receipt marker ${receiptMarker}`);
-  pr.githubComment(13, "the-user", `${receiptMarker}\nProofs at the next HEAD: live-run passed. Reverse that one if it looks wrong.`, "2026-10-25T14:00:00Z");
-
-  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", url(13))).rejects.toThrow(`The comment ${url(13)} is one Fleet writes`);
-  expect((await pr.fleet("receipt", "--comment", url(13))).code).toBe(0);
-  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/Example/Product/pull/42#issuecomment-13")).rejects.toThrow("is one Fleet writes");
-  expect((await pr.decide("list", "--live")).output).toContain(id);
+  on(pr, "2026-10-20");
+  const first = idIn((await decideAlone(pr, "design", "First design call?")).output);
+  const second = idIn((await decideAlone(pr, "design", "Second design call?")).output);
+  on(pr, "2026-10-21");
+  pr.say("Undo that one");
+  expect((await reverse(pr, first, "2026-10-21", "Undo that one")).code).toBe(0);
+  await expect(reverse(pr, second, "2026-10-21", "Undo that one")).rejects.toThrow(`That answer already reversed decision ${first}. One answer reverses one decision; ask the user about this one`);
+  pr.choose("Use the shared parser", "Where does the parser of example/product#42 go?");
+  const recorded = idIn((await pr.decide("record", "--mark", "👤", "--class", "design", "--pr", "example/product#42")).output);
+  await expect(reverse(pr, second, "2026-10-21", "Use the shared parser")).rejects.toThrow(`That answer is already recorded as decision ${recorded}`);
+  expect((await pr.decide("list", "--live")).output).toContain(second);
+  expect((await decideAlone(pr, "design", "Third design call?")).code).toBe(0);
 });
 
-test("a reversal refuses a comment under the URL of a PR it is not on", async () => {
+test("a reversal that another machine wrote with an answer already used counts no more, and neither does its void", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });
-  const id = idIn((await decideAlone(pr, "design", "Parser?")).output);
-  pr.githubComment(11, "the-user", "Please reverse that one.", "2026-10-25T13:00:00Z");
+  on(pr, "2026-10-20");
+  const first = idIn((await decideAlone(pr, "design", "First design call?")).output);
+  const second = idIn((await decideAlone(pr, "design", "Second design call?")).output);
+  on(pr, "2026-10-21");
+  pr.say("Undo that one");
+  await reverse(pr, first, "2026-10-21", "Undo that one");
+  const reversal = readFileSync(ledgerFile(pr), "utf8").trim().split("\n").map((line) => JSON.parse(line)).find((event) => event.type === "reverse");
+  const at = "2026-10-21T10:05:00.000Z";
+  appendFileSync(ledgerFile(pr), `${JSON.stringify({ ...reversal, id: second, machine: "other-machine", at })}\n${JSON.stringify({ type: "void", id: second, reason: 'reversed by the user: 2026-10-21 "Undo that one"', at })}\n`);
 
-  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/pull/43#issuecomment-11")).rejects.toThrow("The comment https://github.com/example/product/pull/43#issuecomment-11 is on example/product#42, not on example/product#43");
-  expect((await pr.decide("list", "--live")).output).toContain(id);
+  expect((await pr.decide("list", "--live")).output).toContain(second);
+  expect((await decideAlone(pr, "design", "Third design call?")).code).toBe(0);
 });
