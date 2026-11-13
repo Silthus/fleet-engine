@@ -165,6 +165,7 @@ function endpointOwner(endpoint: string): string {
 }
 
 const searchQualifier = /(?:^|\s)"?(repo|org|user):"?([^\s"]+)/gi;
+const graphqlDefault = /\$(\w+)\s*:\s*[\w![\]\s]+?=\s*"([^"]*)"/g;
 const graphqlOwner = /\b(?:owner|login)\s*:\s*(?:"""([^"]*)"""|"([^"]*)"|\$(\w+))/gi;
 
 const qualifiedOwners = (text: string) =>
@@ -174,7 +175,10 @@ function graphqlOwners(gh: Gh): string[] {
   const fields = new Map(apiFields(gh).map(([key, value]) => [fieldName(key), value]));
   const query = fields.get("query") ?? "";
   const found = ["owner", "login", "org", "organization"].flatMap((name) => fields.get(name) ?? []);
-  for (const [, block, literal, variable] of query.matchAll(graphqlOwner)) found.push(block ?? literal ?? fields.get(variable.toLowerCase()) ?? "");
+  const defaults = new Map([...query.matchAll(graphqlDefault)].map(([, name, value]) => [name.toLowerCase(), value]));
+  for (const [, block, literal, variable] of query.matchAll(graphqlOwner)) {
+    found.push(block ?? literal ?? fields.get(variable.toLowerCase()) ?? defaults.get(variable.toLowerCase()) ?? "");
+  }
   return [...found, ...[...fields.values()].flatMap(qualifiedOwners)];
 }
 
@@ -199,6 +203,7 @@ function owners(gh: Gh, repoVariable: string | undefined): string[] {
   if (gh.group === "repo" && gh.action === "create") found.push(...values(gh, "-p", "--template").map(repoOwner));
   if (gh.group === "issue" && gh.action === "transfer" && gh.operands[1]) found.push(repoOwner(gh.operands[1]));
   if (gh.group === "label" && gh.action === "clone" && target) found.push(repoOwner(target));
+  if (gh.group === "pr") found.push(...values(gh, "-H", "--head").filter((head) => head.includes(":")).map((head) => head.split(":")[0]));
   if (gh.group === "skill" && target && !githubUrl.test(target)) found.push(repoOwner(target));
   if (gh.group === "api") found.push(endpointOwner(endpointOf(gh)));
   if (gh.group === "api" && /^search\//i.test(endpointOf(gh))) found.push(...restSearchOwners(gh, endpointOf(gh)));
