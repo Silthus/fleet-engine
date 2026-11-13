@@ -42,7 +42,7 @@ function looksRandom(text: string) {
   if (evenCases(parts.reduce(add, { letters: 0, upper: 0 }))) return true;
   for (let start = 0; start < parts.length; start++) {
     let window: Tally = { letters: 0, upper: 0 };
-    for (let end = start; end < parts.length && window.letters < windowLetters; end++) {
+    for (let end = start; end < parts.length && window.letters - parts[start]!.letters < windowLetters; end++) {
       window = add(window, parts[end]!);
       if (evenCases(window)) return true;
     }
