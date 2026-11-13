@@ -13,7 +13,7 @@ With the `fleet` CLI, every decision about a pull request's proof and process go
 - When I reverse a decision, record my words with `fleet decision reverse <id> --words '<date> "<my words>"' --thread <id>`, or `--comment <url>` when I wrote them on GitHub. Quote the date I wrote them; when I wrote the same words twice that day, add `--message <id>`. Only my words after the decision reverse it, and never a comment Fleet wrote. Then decide or ask again. It refuses my keep-owed and a voided decision.
 - Two reversals of your decisions in one class within 28 days brake the class: decide nothing alone in it. Ask me with your question tool, in a question that asks to lift the brake and names the class, such as "Lift the brake on design decisions?". When I answer "Lift" or "Yes", record it with `fleet decision lift --class <class> --words '<date> "<my answer>"' --thread <id>`. One answer lifts one brake.
 - When you start a side fix alone, record it as a `scope` decision with `--link <the side fix's thread>`.
-- When the lane ends, send the output of `fleet decision report --pr <owner/repo#n>...` as your final message, and post it once on the lane's ticket or its bottom pull request.
+- When the lane ends, run `fleet proof gate` on each open pull request, then send the output of `fleet decision report --pr <owner/repo#n>...` as your final message, and post it once on the lane's ticket or its bottom pull request. The report reads the judge's verdict that the gate saved and never runs the judge.
 
 ## Standing rules
 

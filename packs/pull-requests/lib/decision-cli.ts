@@ -1,4 +1,5 @@
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
+import { renderReport } from "./decision-report.ts";
 import { readPullRequest, restJson, runIn } from "./pr-ci.ts";
 import { join } from "node:path";
 import { gapKind, ledgerRoot, readJson, refuseInstructionQuote, usedAnswer } from "./proof.ts";
@@ -57,10 +58,13 @@ after the brake, and not be recorded as a decision. One answer lifts one brake: 
 fails when another lift used it first. A 🤖 decision that lands while its class is braked counts nowhere.
 record --mark 🤖 --class scope takes --link with the T3 thread a side fix started in.
 report prints the lane's end-of-run report in Markdown, in five sections: still yours (unaccepted gaps on critical
-heads first, a question card that waits in --thread, then open PRs whose proofs pass and wait on the user's merge
-word), PRs merged under the narrow grant (merged lines of the rollout log that orchestration.rolloutLog names, whose
-note names the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs row per PR from its proof summary at
-its HEAD on GitHub with its receipt link, and the side fixes the lane started. --thread defaults to this T3 thread.
+heads first, judge gaps too, a question card that waits in --thread, open PRs whose judge has not run at HEAD with
+their current proofs, then open PRs whose full gate passes, judge included, and wait on the user's merge word), PRs
+merged under the narrow grant (merged lines of the rollout log that orchestration.rolloutLog names, whose note names
+the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs row per PR from the gate's proof summary at its
+HEAD on GitHub with its judge and receipt link, and the side fixes the lane started. The report never runs the judge:
+it reads the verdict fleet proof gate saved for the same proofs, and says so when there is none. A merged PR counts as
+landed, so its post-deploy-watch is weighed. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
@@ -374,7 +378,6 @@ async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
 async function report(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const prs = prsOf(parsed);
   if (!prs.length) throw new Error("--pr is required: name each PR of the lane. Run fleet decision --help");
-  const { renderReport } = await import("./decision-report.ts");
   context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID }, fold(await reachHub(() => ledger.read())), context));
   return 0;
 }

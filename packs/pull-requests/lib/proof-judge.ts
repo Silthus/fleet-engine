@@ -196,8 +196,8 @@ const failureReasons = (verdict: Verdict) => [
 ];
 
 type JudgeRecord = { commit: string; model: string; verdict: Verdict; passed: boolean; escalation?: string; judgedAt: string };
-export type JudgeDeps = { ask: (request: ModelRequest) => Promise<ModelAnswer>; model: string; arbiter: Arbiter; directory: string; commit: string; now: Date };
-export type JudgeOutcome = { state: "pass" | "fail" | "unavailable"; lines: string[]; model: string; broken: string[] };
+export type JudgeDeps = { ask: (request: ModelRequest) => Promise<ModelAnswer>; model: string; arbiter: Arbiter; directory: string; commit: string; now: Date; cachedOnly?: boolean };
+export type JudgeOutcome = { state: "pass" | "fail" | "unavailable" | "not run"; lines: string[]; model: string; broken: string[] };
 
 const freeJudgeFails = 2;
 const arbiterInstructions = `You decide if an agent may keep trying to pass a judge, or must ask the user. Below are the reasons a judge failed one pull request on each run, oldest first.
@@ -212,6 +212,7 @@ export async function judge(input: JudgeInput, deps: JudgeDeps): Promise<JudgeOu
   for (const image of images) key.update("\0").update(await readFile(image));
   const path = join(deps.directory, `${key.digest("hex")}.json`);
   const cached = await readFile(path, "utf8").then((text) => JSON.parse(text) as JudgeRecord, () => undefined);
+  if (!cached && deps.cachedOnly) return { state: "not run", lines: ["judge: not run at HEAD with these proofs; run fleet proof gate"], model: deps.model, broken: [] };
   const record = cached ?? await askJudge(prompt, images, readable, input.cwd, askedQuestions(input.risk !== undefined), deps);
   if ("cause" in record) return { state: "unavailable", lines: [`judge: unavailable (${record.cause})`], model: deps.model, broken: [] };
   if (!cached) await writeRecord(path, record);

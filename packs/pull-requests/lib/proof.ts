@@ -549,7 +549,7 @@ export async function judgeGap(home: string, identity: ProofIdentity, now: Date,
   const gap = await readJson<Gap | undefined>(gapPath(home, identity, "judge"), undefined);
   if (gap?.commit !== identity.commit) return undefined;
   const weighed = await gapAcceptance({ home, identity, now, decisions, tier }, gap, "judge");
-  return { reason: gap.reason, acceptance: weighed.acceptance, line: weighed.acceptance?.line ?? notAccepted(decisions, weighed), condition: weighed.condition };
+  return { reason: gap.reason, acceptance: weighed.acceptance, lapsed: weighed.lapsed, line: weighed.acceptance?.line ?? notAccepted(decisions, weighed), condition: weighed.condition };
 }
 
 export type JudgeGap = NonNullable<Awaited<ReturnType<typeof judgeGap>>>;
@@ -558,6 +558,10 @@ export function withBrokenConditions(gap: JudgeGap, broken: string[]): JudgeGap 
   if (!gap.acceptance || !broken.length) return gap;
   return { ...gap, acceptance: undefined, line: `not accepted (the judge finds the condition of decision ${broken.join(", ")} broken)`, broken };
 }
+
+export const judgeGapProof = (commit: string, gap: JudgeGap): GapProof => ({
+  commit, reason: gap.reason, ...acceptedPart(gap.acceptance), ...!gap.acceptance && gap.lapsed ? { lapsed: gap.lapsed } : {}, text: gap.line,
+});
 
 export type Decisions = DecisionState[] | { unreachable: string };
 
@@ -599,14 +603,17 @@ const countedGap = (weighed: Weighed) => ({ condition: weighed.condition, ...lap
 
 const notAccepted = (decisions: Decisions, { lapsed }: Weighed) => lapsed ? `not accepted (🤖 decision ${lapsed.id} lapsed: ${lapsed.reason})` : Array.isArray(decisions) ? "not accepted" : `not accepted: hub unreachable (${decisions.unreachable})`;
 
-export type GapProof = { commit?: string; reason?: string; accepted?: { by: Acceptance["by"]; mark?: Mark; id?: string }; lapsed?: string; text: string };
+export type GapProof = { commit?: string; reason?: string; accepted?: { by: Acceptance["by"]; mark?: Mark; id?: string }; lapsed?: { id: string; reason: string }; text: string };
+
+const acceptedPart = (acceptance: Acceptance | undefined) =>
+  acceptance ? { accepted: { by: acceptance.by, ...acceptance.mark ? { mark: acceptance.mark } : {}, ...acceptance.id ? { id: acceptance.id } : {} } } : {};
 
 function gapProof(gap: Gap | undefined, weighed: Weighed, decisions: Decisions): GapProof {
   const { acceptance, lapsed } = weighed;
   return {
     ...gap ? { commit: gap.commit, reason: gap.reason } : {},
-    ...acceptance ? { accepted: { by: acceptance.by, ...acceptance.mark ? { mark: acceptance.mark } : {}, ...acceptance.id ? { id: acceptance.id } : {} } } : {},
-    ...!acceptance && lapsed ? { lapsed: lapsed.id } : {},
+    ...acceptedPart(acceptance),
+    ...!acceptance && lapsed ? { lapsed } : {},
     text: acceptance?.line ?? notAccepted(decisions, weighed),
   };
 }
@@ -829,16 +836,19 @@ export type ProofSummary = {
   review: { state: "covered" | "missing" | "gap"; covered?: string; panelGap?: GapProof; unanswered: string[]; line: string };
   head: { state: "pushed" | "missing"; line: string };
   ci: { state: CiResult["state"]; detail: string; gap?: GapProof; line: string };
-  judge?: { state: string; model?: string; gap?: GapProof; lines: string[] };
+  judge: JudgeSummary;
   lapsed: string[]; lapsedLine?: string; voided: string[]; receipt?: string;
 };
 
-export const summaryLines = (summary: ProofSummary) => [
+export type JudgeSummary = { state: "pass" | "fail" | "unavailable" | "not run" | "skipped"; model?: string; gap?: GapProof; lines: string[] };
+export type CheckedSummary = Omit<ProofSummary, "judge">;
+
+export const summaryLines = (summary: CheckedSummary) => [
   ...summary.owed.line ? [summary.owed.line] : [], ...summary.kinds.map((kind) => kind.line), summary.review.line, ...summary.review.unanswered,
   summary.head.line, summary.ci.line, ...summary.lapsedLine ? [summary.lapsedLine] : [],
 ];
 
-const owedPart = (owed: Owed | undefined): ProofSummary["owed"] =>
+const owedPart = (owed: Owed | undefined): CheckedSummary["owed"] =>
   !owed ? { state: "unrecorded", kinds: [], line: "owed proofs: not recorded; run fleet proof require --kinds <kind,kind> or fleet proof require --none --reason <why>" }
   : !owed.kinds.length ? { state: "none", kinds: [], ...owed.none ? { reason: owed.none.reason } : {}, line: `owed proofs: none (${owed.none?.reason ?? "no reason recorded"})` }
   : { state: "owed", kinds: owed.kinds };
@@ -864,7 +874,7 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const code = problems.includes("missing") ? 1 : problems.includes("gap") ? 3 : 0;
   const voided = (Array.isArray(decisions) ? decisions : []).filter((decision) => decision.voided && covers(decision, identity)).map((decision) => decision.id);
   const receipt = (await readJson<{ url?: string } | undefined>(join(pullRequestDirectory(home, identity), "receipt.json"), undefined))?.url;
-  const proofSummary: ProofSummary = {
+  const proofSummary: CheckedSummary = {
     repository: identity.repository, pr: identity.pr, commit: identity.commit, tier, code, owed: owedPart(owed), kinds: kinds.map((kind) => kind.proof),
     review: { state: review.problem ?? "covered", ...review.covered ? { covered: review.covered } : {}, ...review.panelGap ? { panelGap: review.panelGap } : {}, unanswered: responses.map((response) => response.line), line: review.line },
     head: { state: head.problem ? "missing" : "pushed", line: head.line },

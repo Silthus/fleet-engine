@@ -2,11 +2,12 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { optionalStringSetting } from "../../base/lib/settings.ts";
 import { findThread, withT3Session } from "../../base/lib/t3/index.ts";
-import { covers, decisionLine, refText, type DecisionState, type Mark, type PrRef } from "./decision-ledger.ts";
-import type { DecisionContext } from "./decision-cli.ts";
+import { covers, decisionLine, refText, type DecisionState, type Env, type Mark, type PrRef, type Ssh } from "./decision-ledger.ts";
 import { readPullRequest, runIn } from "./pr-ci.ts";
-import { proofSummaryAt } from "./proof-cli.ts";
 import type { GapProof, ProofSummary } from "./proof.ts";
+import { finalGate } from "./proof-gate.ts";
+
+export type ReportContext = { home: string; cwd: string; env: Env; now?: () => Date; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean> };
 
 export const rolloutLogSetting = "orchestration.rolloutLog";
 
@@ -19,17 +20,17 @@ const cell = (items: string[], empty: string) => (items.length ? items.join("; "
 const listed = (lines: string[]) => lines.length ? lines : ["None."];
 const sameThread = (a: string, b: string) => a === b || a.endsWith(`:${b}`) || b.endsWith(`:${a}`);
 
-async function lanePr(ref: PrRef, context: DecisionContext): Promise<LanePr> {
-  const pull = readPullRequest({ ...ref, commit: "" }, runIn(context.cwd, context.env));
-  return { ref, summary: await proofSummaryAt({ ...ref, commit: pull.head }, context), state: pull.state };
+async function lanePr(ref: PrRef, context: ReportContext): Promise<LanePr> {
+  const run = runIn(context.cwd, context.env);
+  const pull = readPullRequest({ ...ref, commit: "" }, run);
+  const gate = await finalGate({ ...ref, commit: pull.head }, { ...context, run }, { landed: pull.state === "merged", judge: "cached" });
+  return { ref, summary: gate.summary, state: pull.state };
 }
 
 const t3PendingCard = (home: string) => async (thread: string) => {
   const found = await withT3Session((client) => findThread(client, thread), { home });
   return (found?.pendingRuntimeRequest as { kind?: string } | null | undefined)?.kind === "user_input";
 };
-
-const lapseOf = (gap: GapProof) => /^not accepted \((.+)\)$/.exec(gap.text)?.[1];
 
 function acceptedBy(gap: GapProof) {
   const by = gap.accepted;
@@ -42,21 +43,25 @@ function gaps(summary: ProofSummary): { kind: string; gap: GapProof }[] {
     ...summary.kinds.flatMap((kind) => kind.state === "gap" ? [{ kind: kind.kind as string, gap: kind.gap }] : []),
     ...summary.review.panelGap ? [{ kind: "panel", gap: summary.review.panelGap }] : [],
     ...summary.ci.gap ? [{ kind: "ci", gap: summary.ci.gap }] : [],
+    ...summary.judge.gap ? [{ kind: "judge", gap: summary.judge.gap }] : [],
   ];
 }
 
 function stillYours(lane: LanePr[], card: string | undefined) {
   const blockers = lane.filter(({ summary }) => summary.tier === "critical").flatMap(({ ref, summary }) =>
-    gaps(summary).filter(({ gap }) => !gap.accepted).map(({ kind, gap }) => {
-      const lapse = lapseOf(gap);
-      return `- **Blocker:** ${refText(ref)} is critical at HEAD and its ${kind} gap is not accepted: ${gap.reason ?? "no reason recorded"}${lapse ? ` (${lapse})` : ""}.`;
-    }));
-  const merges = lane.filter(({ summary, state }) => state === "open" && summary.code === 0)
+    gaps(summary).filter(({ gap }) => !gap.accepted).map(({ kind, gap }) =>
+      `- **Blocker:** ${refText(ref)} is critical at HEAD and its ${kind} gap is not accepted: ${gap.reason ?? "no reason recorded"}${gap.lapsed ? ` (🤖 decision ${gap.lapsed.id} lapsed: ${gap.lapsed.reason})` : ""}.`));
+  const open = lane.filter(({ state }) => state === "open");
+  const unjudged = open.filter(({ summary }) => summary.judge.state === "not run")
+    .map(({ ref, summary }) => `- ${refText(ref)}: the judge has not run at HEAD ${short(summary.commit)} with these proofs, so they are not known to pass. Run fleet proof gate.`);
+  const merges = open.filter(({ summary }) => summary.code === 0)
     .map(({ ref }) => `- Merge ${refText(ref)}: its proofs pass, and it waits on your merge word.`);
-  return [...blockers, ...card ? [`- A question card waits for your answer in thread ${card}.`] : [], ...merges];
+  return [...blockers, ...card ? [`- A question card waits for your answer in thread ${card}.`] : [], ...unjudged, ...merges];
 }
 
-async function grantMerges(prs: PrRef[], context: DecisionContext) {
+const mergedAt = (at: string | undefined) => at && Number.isFinite(Date.parse(at)) ? `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC` : "at an unknown time";
+
+async function grantMerges(prs: PrRef[], context: ReportContext) {
   const setting = optionalStringSetting(rolloutLogSetting, context.env);
   if (!setting) return [`- No rollout log: the setting ${rolloutLogSetting} is empty, so merges under the grant are unknown.`];
   const path = setting.startsWith("~/") ? join(context.home, setting.slice(2)) : setting;
@@ -69,7 +74,7 @@ async function grantMerges(prs: PrRef[], context: DecisionContext) {
   const lines = text.split("\n").flatMap((line): RolloutLine[] => { try { return line.trim() ? [JSON.parse(line) as RolloutLine] : []; } catch { return []; } });
   const inLane = (line: RolloutLine) => prs.some((ref) => line.repo?.toLowerCase() === ref.repository.toLowerCase() && line.pr === ref.pr);
   return lines.filter((line) => line.stage === "merged" && /narrow grant/i.test(line.note ?? "") && inLane(line))
-    .map((line) => `- ${line.repo}#${line.pr} merged ${line.at ? `${new Date(line.at).toISOString().slice(0, 16).replace("T", " ")} UTC` : "at an unknown time"} (${line.note})`);
+    .map((line) => `- ${line.repo}#${line.pr} merged ${mergedAt(line.at)} (${line.note})`);
 }
 
 function proofRow({ ref, summary }: LanePr, decisions: DecisionState[]) {
@@ -87,6 +92,7 @@ function proofRow({ ref, summary }: LanePr, decisions: DecisionState[]) {
       : kind.state === "gap" ? [deferredGap(kind.kind, kind.gap)] : []),
     ...summary.review.panelGap ? [deferredGap("panel", summary.review.panelGap)] : [],
     ...summary.ci.gap ? [deferredGap("ci", summary.ci.gap)] : [],
+    ...summary.judge.gap ? [deferredGap("judge", summary.judge.gap)] : summary.judge.state === "pass" ? [] : [["not run", "skipped"].includes(summary.judge.state) ? "judge: not run at HEAD" : `judge: ${summary.judge.state}`],
   ];
   const voided = [
     ...summary.lapsed.map((id) => `${id} lapsed`),
@@ -97,12 +103,11 @@ function proofRow({ ref, summary }: LanePr, decisions: DecisionState[]) {
   return `| ${refText(ref)} | ${cell(ran, "none")} | ${cell(deferred, "none")} | ${cell(voided, "none")} | ${receipt} |`;
 }
 
-export async function renderReport({ prs, thread }: { prs: PrRef[]; thread?: string }, decisions: DecisionState[], context: DecisionContext): Promise<string> {
+export async function renderReport({ prs, thread }: { prs: PrRef[]; thread?: string }, decisions: DecisionState[], context: ReportContext): Promise<string> {
   const lane = await Promise.all(prs.map((ref) => lanePr(ref, context)));
   const card = thread && await (context.pendingCard ?? t3PendingCard(context.home))(thread) ? thread : undefined;
   const ours = decisions.filter((decision) => prs.some((ref) => covers(decision, ref)) || (thread !== undefined && sameThread(decision.where.thread, thread)));
-  const sorted = ours.map((decision, index) => ({ decision, index }))
-    .sort((a, b) => markOrder.indexOf(a.decision.mark) - markOrder.indexOf(b.decision.mark) || a.index - b.index).map(({ decision }) => decision);
+  const sorted = [...ours].sort((a, b) => markOrder.indexOf(a.mark) - markOrder.indexOf(b.mark));
   const sideFixes = ours.filter((decision) => decision.class === "scope" && decision.where.link)
     .map((decision) => `- ${decision.question} ${decision.answer}: ${decision.where.link} [${decision.id}]`);
   return [

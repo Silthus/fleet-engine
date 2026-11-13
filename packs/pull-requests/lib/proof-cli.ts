@@ -2,20 +2,21 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity } from "./proof.ts";
+import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type ProofIdentity } from "./proof.ts";
 import { appendDecision, decideAlone, hearUser, ledgerOf } from "./decision-cli.ts";
 import { fold, refText, type Decision, type Ssh } from "./decision-ledger.ts";
-import { ciOf, pushedHeadOf, readPullRequest, runIn } from "./pr-ci.ts";
-import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRiskRubric, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
-import { judge, readCriticalPaths } from "./proof-judge.ts";
+import { runIn } from "./pr-ci.ts";
+import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { runProof, type RunIO } from "./proof-run.ts";
 import { lensBrief, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagePanel, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO, type Plan } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
-import { reviewedDiff, reviewPrompt } from "./proof-review.ts";
+import { reviewPrompt } from "./proof-review.ts";
 import { leftOutNote, reviewRange } from "./proof-range.ts";
 import { quietCommitIn } from "./proof-delta.ts";
+import { baseTip, cleanBaseMerge, mergeBase, pullRequestDetails, remotesOf, topLevel } from "./proof-checkout.ts";
+import { arbiterOf, finalGate, reviewLimit } from "./proof-gate.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
 import type { ThreadWords } from "./proof-answers.ts";
@@ -285,22 +286,19 @@ the hub and the tier from the merge-risk callout at HEAD; with the hub unreachab
 gate fails closed. It prints each 🤖 acceptance that lapsed. The setting
 pull-requests.reviewTimeoutMinutes limits the judge, and spent quota stops it early, as for fleet proof review.
 FLEET_PROOF_JUDGE replaces its command, and FLEET_PROOF_JUDGE_MODEL its model.
---json prints the proof summary instead of the lines, with the exit code and the judge's verdict at HEAD: each owed
-kind as pending, ran, reused, carried, gap (with the decision that accepts it, or the 🤖 decision that lapsed), or
-missing; the review and its unanswered findings; the head; CI; the tier; the lapsed and voided decision ids; and the
-receipt link once one is recorded. The gate's lines come from the same summary.`,
+--json prints the proof summary instead of the lines, with the gate's exit code: each owed kind as pending, ran,
+reused, carried, gap (with the decision that accepts it, or the 🤖 decision that lapsed and why), or missing; the
+review and its unanswered findings; the head; CI; the tier; the judge at HEAD as pass, fail, unavailable, or skipped
+when the gate's own checks fail first, with its lines and its judge gap; the lapsed and voided decision ids; and the
+receipt link once one is recorded. The gate's lines and fleet decision report come from the same summary.`,
     examples: ["fleet proof gate", "fleet proof gate --landed", "fleet proof gate --json"], flags: ["--landed", "--json"],
     run: async ({ flags }, identity, context) => {
       const { print } = context;
       const head = identity();
-      const gate = await gateAt(head, context, flags.has("--landed"));
-      const json = flags.has("--json");
-      if (!json) for (const line of gate.lines) print(line);
-      const judged = gate.code === 0 ? await judgeHead(head, gate, context) : { code: gate.code, lines: [], covered: "", judge: undefined };
-      if (json) { print(JSON.stringify({ ...gate.proofSummary, code: judged.code, ...judged.judge ? { judge: judged.judge } : {} })); return judged.code; }
-      for (const line of judged.lines) print(line);
-      print(judged.code === 0 ? `gate: pass (${gate.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`);
-      return judged.code;
+      const gate = await finalGate(head, context, { landed: flags.has("--landed"), judge: "run" });
+      if (flags.has("--json")) print(JSON.stringify(gate.summary));
+      else for (const line of [...gate.lines, gate.verdict]) print(line);
+      return gate.code;
     },
   },
   miss: {
@@ -464,8 +462,6 @@ const waitPolls = 108;
 const pollInterval = 5_000;
 const proofEntry = resolve(import.meta.dir, "../commands/proof.ts");
 
-const reviewLimit = (env: Record<string, string | undefined>) => numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
-
 const panelIO = ({ home, env, now, pause }: CommandContext): PanelIO => ({
   env, now: now ?? (() => new Date()), pause: pause ?? (() => Bun.sleep(pollInterval)), slots: join(ledgerRoot(home), ".panel-slots"),
   slotCount: numberSetting("pull-requests.panelSlots", env), pid: process.pid, limit: reviewLimit(env),
@@ -628,51 +624,6 @@ function positive(value: string, option: string, name: string) {
   return number;
 }
 
-type Gate = Awaited<ReturnType<typeof proofGate>>;
-
-export async function proofSummaryAt(head: ProofIdentity, context: ProofContext) {
-  return (await gateAt(head, { ...context, run: runIn(context.cwd, context.env) })).proofSummary;
-}
-
-function gateAt(head: ProofIdentity, context: CommandContext, landed = false) {
-  const { home, run, now } = context;
-  return proofGate(home, head, { landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), ledger: ledgerOf(context), now: now?.() });
-}
-
-async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContext) {
-  const { home, cwd, env, run, now } = context;
-  const author = await authorOf(home, head);
-  const row = reviewerRow(author, env);
-  const limit = reviewLimit(env);
-  const from = mergeBase(head, run);
-  const riskRubric = await readRiskRubric(home);
-  const today = now?.() ?? new Date();
-  const weighedGap = await judgeGap(home, head, today, gate.decisions, gate.tier);
-  const input = {
-    risk: riskRubric === undefined ? undefined : { rubric: riskRubric, body: pullRequestDetails(head, run).body },
-    cwd: topLevel(run) ?? cwd, from, commit: head.commit, diff: diffOf(from, head.commit, run), crossFamily: familyOf(row) !== author, ci: gate.ci, owed: gate.owed!, ledger: gate.lines,
-    evidence: gate.evidence, reviews: await reviewRecords(home, head), rubric: await readRubric(home), references: skillReferences(home),
-    conditions: [...gate.conditions, ...weighedGap?.condition ? [weighedGap.condition] : []], criticalPaths: await readCriticalPaths(home, head.repository, env),
-  };
-  const outcome = await judge(input, {
-    ask: (request) => askModel("judge", row, request, env, limit), model: modelLabel("judge", row, env), arbiter: arbiterOf(context),
-    directory: judgeDirectory(home, head), commit: head.commit, now: today,
-  });
-  if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
-  const verdict = { state: outcome.state, model: outcome.model, lines: outcome.lines };
-  if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}`, judge: verdict };
-  const gap = weighedGap && withBrokenConditions(weighedGap, outcome.broken);
-  const judged = gap && { ...verdict, gap: { commit: head.commit, reason: gap.reason, ...gap.acceptance ? { accepted: { by: gap.acceptance.by, ...gap.acceptance.mark ? { mark: gap.acceptance.mark } : {}, ...gap.acceptance.id ? { id: gap.acceptance.id } : {} } } : {}, text: gap.line } };
-  if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}`, judge: judged };
-  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${gap.broken ? voidBroken(gap.broken) : askGap(head, "judge", gap.reason)}`], covered: "", judge: judged };
-  const hint = gate.tier === "ungraded"
-    ? "judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and ask the user; an agent never decides on an ungraded PR"
-    : `judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and decide it with fleet decision record --mark 🤖 --class proof-gap --kind judge --pr ${refText(head)} --question <q> --answer <a> --rejected <option> --reason <why>, or ask the user`;
-  return { code: 1, lines: [...outcome.lines, hint], covered: "", judge: verdict };
-}
-
-const voidBroken = (ids: string[]) => `End ${ids.map((id) => `decision ${id}`).join(" and ")} with fleet decision void <id> --reason <why its condition no longer holds>, then decide or ask again`;
-
 async function roundLines(directory: string, { now }: CommandContext) {
   const round = await readJson<{ round: number | "final"; commit: string; reviewer?: string; capturedBy?: string; standing?: { reason: string; until: string }; decision?: { mark: string; id: string } } | undefined>(join(directory, "round.json"), undefined);
   if (!round) throw new Error(`${directory} has no reservation`);
@@ -688,13 +639,6 @@ function roundOption(options: Map<string, string>) {
   const round = options.get("--round");
   return round === undefined ? undefined : round === "final" ? "final" : roundId(round);
 }
-
-const arbiterLimit = 180_000;
-
-const arbiterOf = ({ env, cwd }: CommandContext): Arbiter => async (prompt) => {
-  const answer = await askModel("arbiter", modelFor("lookup", env), { prompt, cwd }, env, arbiterLimit);
-  return answer.ok ? parseVerdict(answer.text, answer.model) : { verdict: "unavailable", reason: answer.cause, model: answer.model };
-};
 
 async function decisionOf(options: Map<string, string>, head: ProofIdentity, context: CommandContext): Promise<{ arbiter: Arbiter; limits: { free: number; ceiling: number }; decision?: Decision }> {
   const rest = { arbiter: arbiterOf(context), limits: { free: numberSetting("pull-requests.freeReviews", context.env), ceiling: numberSetting("pull-requests.reviewCeiling", context.env) } };
@@ -789,65 +733,6 @@ function resolvePullRequest(repository: string | undefined, pr: string | undefin
 function resolveIdentity(options: Map<string, string>, run: Run): ProofIdentity {
   const commit = resolveCommit(options.get("--commit") ?? "HEAD", run);
   return { ...resolvePullRequest(options.get("--repo"), options.get("--pr"), run), commit };
-}
-
-function topLevel(run: Run) {
-  const result = run(["git", "rev-parse", "--show-toplevel"]);
-  return result.code === 0 ? result.stdout.trim() : undefined;
-}
-
-function mergeBase(identity: ProofIdentity, run: Run) {
-  for (const ref of baseRefs(identity, run)) {
-    const result = run(["git", "merge-base", ref, identity.commit]);
-    if (result.code === 0) return result.stdout.trim();
-  }
-  throw new Error(`Cannot find where ${identity.repository}#${identity.pr} branched from its base here. Fetch the base branch from a remote of ${identity.repository}`);
-}
-
-function baseTip(identity: ProofIdentity, run: Run) {
-  for (const ref of baseRefs(identity, run)) {
-    const result = run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
-    if (result.code === 0) return result.stdout.trim();
-  }
-  throw new Error(`Cannot find the base branch of ${identity.repository}#${identity.pr} here. Fetch it from a remote of ${identity.repository}`);
-}
-
-function diffOf(from: string, to: string, run: Run) {
-  const diff = run(["git", "diff", "--no-ext-diff", "--no-textconv", "--no-relative", from, to]);
-  if (diff.code !== 0) throw new Error(`Cannot diff ${short(from)}..${short(to)} here (${firstLine(diff.stderr)})`);
-  return reviewedDiff(diff.stdout);
-}
-
-function pullRequestDetails(identity: ProofIdentity, run: Run) {
-  try {
-    const { title, body, base } = readPullRequest(identity, run);
-    return { title, body, baseRefName: base };
-  } catch (error) {
-    throw new Error(`Cannot read ${identity.repository}#${identity.pr} over GitHub's REST API (${(error as Error).message})`);
-  }
-}
-
-function baseRefs(identity: ProofIdentity, run: Run) {
-  const base = pullRequestDetails(identity, run).baseRefName;
-  return remotesOf(identity.repository, run).map((remote) => `refs/remotes/${remote}/${base}`);
-}
-
-function remotesOf(repository: string, run: Run) {
-  const remotes = run(["git", "remote"]).stdout.split("\n").filter(Boolean);
-  return remotes.filter((remote) => new RegExp(`github\\.com[:/]${repository.replace(/\./g, "\\.")}(\\.git)?/?$`, "i").test(run(["git", "remote", "get-url", remote]).stdout.trim()));
-}
-
-function cleanBaseMerge(identity: ProofIdentity, run: Run): CleanBaseMerge {
-  let bases: string[] | undefined;
-  return (commit) => {
-    const parents = run(["git", "rev-list", "--parents", "-n", "1", commit]);
-    const [, reviewedSide, baseSide, ...more] = parents.code === 0 ? parents.stdout.trim().split(" ") : [];
-    if (!reviewedSide || !baseSide || more.length) return undefined;
-    bases ??= baseRefs(identity, run);
-    if (!bases.some((ref) => run(["git", "merge-base", "--is-ancestor", baseSide, ref]).code === 0)) return undefined;
-    const remerge = run(["git", "show", "--remerge-diff", "--format=", "--no-relative", "--no-ext-diff", "--no-textconv", commit]);
-    return remerge.code === 0 && !remerge.stdout.trim() ? reviewedSide : undefined;
-  };
 }
 
 const short = (commit: string) => commit.slice(0, 7);

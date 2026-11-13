@@ -350,7 +350,7 @@ test("gate --json prints the proof summary: each owed kind's state with its acce
     { kind: "live-run", state: "ran", commit: head, directory: expect.stringContaining("live-run") },
     { kind: "ui-walk", state: "missing" },
     { kind: "prod-shape", state: "gap", accepted: true, gap: { commit: head, reason: "No production read access", accepted: { by: "the user", mark: "👤", id: users }, text: `accepted by 👤 decision ${users} (2026-10-25 "Accept the gap")` } },
-    { kind: "cross-version", state: "gap", accepted: false, gap: { commit: head, reason: "No older client to run", lapsed, text: `not accepted (🤖 decision ${lapsed} lapsed: critical head)` } },
+    { kind: "cross-version", state: "gap", accepted: false, gap: { commit: head, reason: "No older client to run", lapsed: { id: lapsed, reason: "critical head" }, text: `not accepted (🤖 decision ${lapsed} lapsed: critical head)` } },
     { kind: "shadow-diff", state: "reused", from: earlier, reason: "The later commit only renames a variable", directory: expect.stringContaining("shadow-diff") },
     { kind: "post-deploy-watch", state: "pending" },
   ]);
@@ -535,12 +535,14 @@ test("the end-of-run report prints its five sections in order: still yours, narr
   pr.pullRequestState({ number: 42, body: graded("critical (a migration)") });
 
   await pr.fleet("require", "--none", "--reason", "docs only", "--repo", "example/product", "--pr", "43");
+  expect((await pr.fleet("gate", "--repo", "example/product", "--pr", "43")).code).toBe(0);
   pr.pendingCards.add("thread-1");
   writeFileSync(rollouts, [
     { at: "2026-10-25T09:00:00Z", repo: "example/product", pr: 41, stage: "merged", state: "done", note: "standing merge: narrow grant, card" },
     { at: "2026-10-25T09:05:00Z", repo: "example/product", pr: 44, stage: "merged", state: "done", note: "standing merge: narrow grant" },
     { at: "2026-10-25T09:10:00Z", repo: "example/product", pr: 42, stage: "deployed", state: "done", note: "standing merge: narrow grant" },
     { at: "2026-10-25T09:15:00Z", repo: "example/product", pr: 43, stage: "merged", state: "done", note: "the user's merge word" },
+    { at: "yesterday morning", repo: "example/product", pr: 42, stage: "merged", state: "done", note: "standing merge: narrow grant" },
   ].map((line) => JSON.stringify(line)).join("\n") + "\n");
 
   const printed = await pr.decide("report", "--pr", "example/product#41", "--pr", "https://github.com/example/product/pull/42", "--pr", "example/product#43", "--thread", "thread-1");
@@ -556,7 +558,7 @@ test("the end-of-run report prints its five sections in order: still yours, narr
     "- A question card waits for your answer in thread thread-1.",
     "- Merge example/product#43: its proofs pass, and it waits on your merge word.",
   ]);
-  expect(section("### Merged under the narrow grant")).toEqual(["- example/product#41 merged 2026-10-25 09:00 UTC (standing merge: narrow grant, card)"]);
+  expect(section("### Merged under the narrow grant")).toEqual(["- example/product#41 merged 2026-10-25 09:00 UTC (standing merge: narrow grant, card)", "- example/product#42 merged at an unknown time (standing merge: narrow grant)"]);
   const decisions = section("### Decisions");
   expect(decisions.map((line) => [line.slice(2, 4).trim(), idIn(line)])).toEqual([["👤", users], ["👤", reversed], ["👤", inThread], ["👍", recommended], ["🤖", lapsed], ["🤖", side]]);
   expect(decisions[1]).toContain("(reversed 2026-10-25 from ~~🤖 A new module Rejected: The shared parser.~~)");
@@ -564,8 +566,8 @@ test("the end-of-run report prints its five sections in order: still yours, narr
   expect(section("### Proofs")).toEqual([
     "| PR | Ran | Deferred | Voided | Receipt |",
     "| --- | --- | --- | --- | --- |",
-    `| example/product#41 | live-run at ${short} | prod-shape: No production read access (accepted by 👤 ${users}); shadow-diff: No old output to diff (not accepted) | none | [receipt](https://github.com/example/product/pull/41#issuecomment-9) |`,
-    `| example/product#42 | none | prod-shape: No sandbox (not accepted); cross-version: No older client to run (not accepted) | ${lapsed} lapsed; ${reversed} reversed | none yet |`,
+    `| example/product#41 | live-run at ${short} | prod-shape: No production read access (accepted by 👤 ${users}); shadow-diff: No old output to diff (not accepted); judge: not run at HEAD | none | [receipt](https://github.com/example/product/pull/41#issuecomment-9) |`,
+    `| example/product#42 | none | prod-shape: No sandbox (not accepted); cross-version: No older client to run (not accepted); judge: not run at HEAD | ${lapsed} lapsed; ${reversed} reversed | none yet |`,
     "| example/product#43 | none owed (docs only) | none | none | none yet |",
   ]);
   expect(section("### Side fixes started")).toEqual([`- Fix the flaky clock test on the side? Yes, in its own thread: t3-thread://side-fix [${side}]`]);

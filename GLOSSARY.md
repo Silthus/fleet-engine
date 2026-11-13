@@ -99,7 +99,7 @@ Two reversals of the agent's decisions in one ask class within 28 days. The brak
 _Avoid_: Lock, freeze
 
 **Proof summary**:
-The proof state of a pull request at HEAD that the gate builds: each owed kind, the review, the head, CI, the tier, and the lapsed and voided decisions. The gate prints its lines from it, `fleet proof gate --json` prints it, and the end-of-run report reads it.
+The proof state of a pull request at HEAD that the gate builds: each owed kind, the review, the head, CI, the tier, the judge's verdict, and the lapsed and voided decisions. The gate prints its lines from it, `fleet proof gate --json` prints it, and the end-of-run report reads it. The report reads the judge's saved verdict for the same proofs and never runs the judge.
 _Avoid_: Proof status, gate result
 
 **End-of-run report**:
