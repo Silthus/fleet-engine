@@ -54,6 +54,12 @@ case "$*" in
     all="$*"; branch=\${all##*/rules/branches/}; page=\${all##*page=}; branch=\${branch%%\\?*}
     [ -f "${github}/rules-error-$branch" ] && { cat "${github}/rules-error-$branch" >&2; exit 1; }
     cat "${github}/rules-$branch-$page" 2>/dev/null || echo '[]'; exit 0;;
+  "api user")
+    printf '{"login":"%s"}\\n' "$(cat "${github}/user" 2>/dev/null || echo the-user)"; exit 0;;
+  "api "*"/issues/comments/"*)
+    all="$*"; id=\${all##*/issues/comments/}
+    [ -f "${github}/comment-$id" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+    cat "${github}/comment-$id"; exit 0;;
   "api "*"/branches/"*)
     all="$*"; branch=\${all##*/branches/}; branch=\${branch%% *}
     cat "${github}/branch-$branch" 2>/dev/null || echo '{"protected":false}'; exit 0;;
@@ -85,6 +91,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     if (commit) writeFileSync(join(github, "head"), commit); else rmSync(join(github, "head"), { force: true });
     if (next) writeFileSync(join(github, "next-head"), next);
   };
+  const githubComment = (id: number, author: string, body: string) => writeFileSync(join(github, `comment-${id}`), JSON.stringify({ user: { login: author }, body }));
   const githubCalls = () => readFileSync(join(github, "calls"), "utf8").trim().split("\n");
   ci([{ name: "test", bucket: "pass" }]);
   mkdirSync(join(home, ".agents/guides"), { recursive: true });
@@ -151,7 +158,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, clock, say, choose, chooseGap, reader, panel, hub, decide };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, clock, say, choose, chooseGap, reader, panel, hub, decide };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;

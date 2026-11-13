@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fold, type LedgerEvent } from "./decision-ledger.ts";
 import { acceptGap, checkout, cleanFixtures, graded, ledgerDecisions, reviewHead, settings, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
@@ -269,4 +270,53 @@ test("gate --json prints the proof summary: each owed kind's state with its acce
   const lines = [summary.owed.line, ...summary.kinds.map((kind: { line: string }) => kind.line), summary.review.line, summary.head.line, summary.ci.line, summary.lapsedLine].filter(Boolean);
   expect(gate.output.split("\n")).toEqual([...lines, "gate: fail (exit 1)"]);
   expect(lineOf(gate.output, "cross-version:")).toBe(`cross-version: gap from ${head.slice(0, 7)}, not accepted (🤖 decision ${lapsed} lapsed: critical head): No older client to run`);
+});
+
+const ledgerFile = (pr: Checkout) => join(pr.home, ".local/state/fleet/decisions.jsonl");
+
+test("the user reverses an agent decision with their words in the thread: it prints as 👤 with the replaced answer struck through, and counts no more", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const id = idIn((await agent(pr, "prod-shape")).output);
+  expect((await pr.fleet("gate")).code).toBe(0);
+  pr.say("No, run the prod-shape proof");
+
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Words they never typed"`, "--thread", "thread-1")).rejects.toThrow(`"words they never typed" is not in a message of the user's in thread thread-1`);
+  const reversed = await pr.decide("reverse", id, "--words", `2026-10-25 "No, run the prod-shape proof"`, "--thread", "thread-1");
+  expect(reversed.code).toBe(0);
+  const line = `- 👤 **Accept the prod-shape gap?** 2026-10-25 "No, run the prod-shape proof" (reversed 2026-10-25 from ~~🤖 Accept it Rejected: Ask the user.~~) (the user, proof-gap, thread thread-1) [${id}]`;
+  expect(reversed.output).toBe(line);
+
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(3);
+  expect(lineOf(gate.output, "prod-shape:")).toEndWith(", not accepted: No sandbox");
+  expect((await pr.decide("list", "--live")).output).toBe("No decisions.");
+  expect((await pr.decide("list")).output).toBe(line);
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "No, run the prod-shape proof"`, "--thread", "thread-1")).rejects.toThrow(`Decision ${id} is already reversed`);
+
+  const olderReader = readFileSync(ledgerFile(pr), "utf8").trim().split("\n").map((text) => JSON.parse(text) as LedgerEvent).filter((event) => event.type === "decide" || event.type === "void");
+  expect(fold(olderReader).find((decision) => decision.id === id)?.voided).toBeDefined();
+});
+
+test("a reversal on a GitHub comment counts only when the user wrote it and it holds each quoted part of their words", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const id = idIn((await agent(pr, "prod-shape")).output);
+  const url = "https://github.com/example/product/pull/42#issuecomment-123";
+  const reverse = (words = `2026-10-25 "Reverse that one"`) => pr.decide("reverse", id, "--words", words, "--comment", url);
+
+  pr.githubComment(123, "someone-else", "Reverse that one");
+  await expect(reverse()).rejects.toThrow("The comment is by someone-else, not the user (the-user). Only the user's own words reverse a decision");
+  pr.githubComment(123, "The-User", "Keep it");
+  await expect(reverse()).rejects.toThrow(`"reverse that one" is not in the comment ${url}`);
+  await expect(reverse(`2026-10-25 "***"`)).rejects.toThrow("Quote the user's words with the date they wrote them");
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/pull/42")).rejects.toThrow("--comment takes the URL of a GitHub issue or PR comment");
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`)).rejects.toThrow("Pass --thread with the T3 thread where the user reversed it, or --comment");
+  expect((await pr.fleet("gate")).code).toBe(0);
+
+  pr.githubComment(123, "The-User", "Please **reverse that one**, it needs the proof.");
+  expect((await reverse()).output).toStartWith(`- 👤 **Accept the prod-shape gap?** 2026-10-25 "Reverse that one" (reversed 2026-10-25 from ~~🤖 Accept it`);
+  expect((await pr.fleet("gate")).code).toBe(3);
 });

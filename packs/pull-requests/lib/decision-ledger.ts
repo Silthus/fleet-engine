@@ -4,7 +4,7 @@ import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { optionalStringSetting } from "../../base/lib/settings.ts";
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
-import { readPullRequest, runIn } from "./pr-ci.ts";
+import { readPullRequest, restJson, runIn } from "./pr-ci.ts";
 import { gapKind, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 
 export const askClasses = ["proof-gap", "review", "merge", "deploy", "secret", "design", "scope", "status"] as const;
@@ -21,13 +21,16 @@ export type Decision = {
   effect?: Effect;
   where: { thread: string; message?: string; machine: string };
 };
+export type Reversal = { type: "reverse"; id: string; words: string; thread?: string; message?: string; comment?: string; machine: string; at: string };
 export type LedgerEvent =
   | { type: "decide"; decision: Decision }
-  | { type: "void"; id: string; reason: string; at: string };
+  | { type: "void"; id: string; reason: string; at: string }
+  | Reversal;
 
 export class HubUnreachable extends Error {}
 
-export type Ledger = { read(): Promise<LedgerEvent[]>; append(event: LedgerEvent): Promise<void> };
+export type Ledger = { read(): Promise<LedgerEvent[]>; append(...events: LedgerEvent[]): Promise<void> };
+const lines = (events: LedgerEvent[]) => events.map((event) => JSON.stringify(event) + "\n").join("");
 
 const relativePath = ".local/state/fleet/decisions.jsonl";
 export const ledgerPath = (home: string) => join(home, relativePath);
@@ -35,10 +38,16 @@ export const ledgerPath = (home: string) => join(home, relativePath);
 const isText = (value: unknown): value is string => typeof value === "string";
 const isTexts = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText);
 const isRef = (value: string) => refPattern.test(value);
+const isFilled = (value: unknown): value is string => isText(value) && value.trim() !== "";
+const isTime = (value: unknown): value is string => isText(value) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value) && Number.isFinite(Date.parse(value));
+
+type RawEvent = { type?: unknown; id?: unknown; reason?: unknown; words?: unknown; at?: unknown; thread?: unknown; message?: unknown; comment?: unknown; decision?: Partial<Record<keyof Decision, unknown>> } | null;
+const heardEvent = (event: NonNullable<RawEvent>) => isFilled(event.words) && isTime(event.at) && ((isFilled(event.thread) && isFilled(event.message)) || isFilled(event.comment));
 
 function validEvent(value: unknown): value is LedgerEvent {
-  const event = value as { type?: unknown; id?: unknown; reason?: unknown; decision?: Partial<Record<keyof Decision, unknown>> } | null;
+  const event = value as RawEvent;
   if (event?.type === "void") return isText(event.id) && isText(event.reason);
+  if (event?.type === "reverse") return isFilled(event.id) && heardEvent(event);
   const decision = event?.type === "decide" ? event.decision : undefined;
   if (!decision || !isText(decision.id) || !isText(decision.at) || !isText(decision.question) || !isText(decision.answer)) return false;
   if (!(askClasses as readonly unknown[]).includes(decision.class) || !(marks as readonly unknown[]).includes(decision.mark)) return false;
@@ -65,9 +74,9 @@ export function localLedger(home: string): Ledger {
       try { return parseEvents(await readFile(path, "utf8")); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
     },
-    append: async (event) => {
+    append: async (...events) => {
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      await appendFile(path, JSON.stringify(event) + "\n", { mode: 0o600 });
+      await appendFile(path, lines(events), { mode: 0o600 });
     },
   };
 }
@@ -85,8 +94,8 @@ function sshLedger(hub: string, ssh: Ssh): Ledger {
       if (result.code !== 0) throw unreachable(result);
       return parseEvents(result.stdout);
     },
-    append: async (event) => {
-      const result = await ssh(hub, `umask 077 && f=${remoteFile} && mkdir -p "$(dirname "$f")" && t=$(mktemp "$f.XXXXXX") && cat > "$t" && cat "$t" >> "$f"; s=$?; rm -f "$t"; exit $s`, JSON.stringify(event) + "\n");
+    append: async (...events) => {
+      const result = await ssh(hub, `umask 077 && f=${remoteFile} && mkdir -p "$(dirname "$f")" && t=$(mktemp "$f.XXXXXX") && cat > "$t" && cat "$t" >> "$f"; s=$?; rm -f "$t"; exit $s`, lines(events));
       if (result.code !== 0) throw unreachable(result);
     },
   };
@@ -112,7 +121,7 @@ export function hubLedger(home: string, env: Env, ssh: Ssh = runSsh): Ledger {
 
 export const thisMachine = (env: Env) => env.CODER_WORKSPACE_NAME || hostname();
 
-export type DecisionState = Decision & { voided?: { reason: string; at: string } };
+export type DecisionState = Decision & { voided?: { reason: string; at: string }; reversed?: { at: string; mark: Mark; answer: string; rejected?: string } };
 
 const messageKey = ({ thread, message }: Decision["where"]) => message && `${thread}/${message}`;
 
@@ -127,7 +136,12 @@ export function fold(events: LedgerEvent[]): DecisionState[] {
       decisions.set(event.decision.id, { ...event.decision });
     } else if (event.type === "void") {
       const decision = decisions.get(event.id);
-      if (decision) decision.voided = { reason: event.reason, at: event.at };
+      if (decision && !decision.reversed) decision.voided = { reason: event.reason, at: event.at };
+    } else if (event.type === "reverse") {
+      const decision = decisions.get(event.id);
+      if (!decision || decision.reversed) continue;
+      const { rejected, ...rest } = decision;
+      decisions.set(event.id, { ...rest, mark: "👤", answer: event.words, reversed: { at: event.at, mark: decision.mark, answer: decision.answer, ...rejected ? { rejected } : {} } });
     }
   }
   return [...decisions.values()];
@@ -159,13 +173,16 @@ export function namesPr(question: string, { repository, pr }: PrRef) {
 
 const who = (mark: Mark) => mark === "🤖" ? "agent" : "the user";
 
+const rejectedText = (rejected: string | undefined) => rejected ? ` Rejected: ${rejected}.` : "";
+
 export function decisionLine(decision: DecisionState) {
-  const rejected = decision.rejected ? ` Rejected: ${decision.rejected}.` : "";
+  const { reversed } = decision;
+  const replaced = reversed ? ` (reversed ${reversed.at.slice(0, 10)} from ~~${reversed.mark} ${reversed.answer}${rejectedText(reversed.rejected)}~~)` : "";
   const state = decision.voided ? ` voided: ${decision.voided.reason}` : "";
-  return `- ${decision.mark} **${decision.question}** ${decision.answer}${rejected} (${who(decision.mark)}, ${decision.class}, thread ${decision.where.thread}) [${decision.id}]${state}`;
+  return `- ${decision.mark} **${decision.question}** ${decision.answer}${rejectedText(decision.rejected)}${replaced} (${who(decision.mark)}, ${decision.class}, thread ${decision.where.thread}) [${decision.id}]${state}`;
 }
 
-const live = (decision: DecisionState) => !decision.voided;
+export const live = (decision: DecisionState) => !decision.voided && !decision.reversed;
 const isUsers = (decision: Decision) => decision.mark === "👤" || decision.mark === "👍";
 const gapDecision = (decision: DecisionState, ref: PrRef, kind: string, effect: Effect) =>
   live(decision) && decision.class === "proof-gap" && decision.effect === effect && decision.scope.kinds?.includes(kind) && covers(decision, ref);
@@ -211,6 +228,7 @@ const usage = `Usage:
   fleet decision record --mark 🤖 --class <class> --pr <owner/repo#n>... --question <q> --answer <a> --rejected <option> --reason <why> [--kind <kind>...] [--condition <text>] [--thread <id>]
   fleet decision list [--pr <owner/repo#n>] [--class <class>] [--live]
   fleet decision void <id> --reason <why its condition no longer holds>
+  fleet decision reverse <id> --words '<date> "<the user's words>"' (--thread <id> | --comment <url>)
 
 The decision ledger holds every decision about a pull request's proof and process. It lives on the Fleet hub that
 the setting hub.alias names; other machines read and append it over SSH. Without a hub, it lives on this machine.
@@ -229,7 +247,11 @@ merge-risk callout at HEAD: it refuses an ungraded PR, and on a critical PR anyt
 asks, judge and post-deploy-watch gaps). It never takes a panel gap: ${panelRefusal}. The gate never counts a 🤖 ci
 acceptance over CI that ran, nor one under the user's keep-owed, and prints each 🤖 acceptance that lapsed.
 list prints the decisions as decision lines with their ids. Run it before you ask.
-void ends a decision whose condition HEAD no longer meets, such as when the judge fails it; then decide or ask again.`;
+void ends a decision whose condition HEAD no longer meets, such as when the judge fails it; then decide or ask again.
+reverse records the user's reversal of a decision: their dated, quoted words in a message of theirs in the T3 thread,
+or on a GitHub comment written by the account gh is signed in as, which must hold each quoted part. The decision then
+prints as 👤 with their words, the replaced answer struck through, and counts no more at the gate or in list --live;
+decide or ask again.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
 
@@ -407,6 +429,50 @@ async function voidDecision(parsed: Parsed, context: DecisionContext, ledger: Le
   return 0;
 }
 
+const commentPattern = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:issues|pull)\/[1-9]\d*#issuecomment-(\d+)$/;
+const quoteWithDate = new Error(`Quote the user's words with the date they wrote them, such as '2026-10-24 "Reverse that."'`);
+
+async function heardInThread(thread: string, words: string, context: DecisionContext) {
+  if (!isDatedQuote(words)) throw quoteWithDate;
+  await refuseInstructionQuote(context.home, words);
+  const said = (await (context.threadWords ?? t3ThreadWords(context.home))(thread)).filter((word) => normalized(word.text) === quotes(words).join(" "));
+  const word = said.at(-1);
+  if (!word) throw new Error(`"${quotes(words).join('" … "')}" is not in a message of the user's in thread ${thread}. Quote their whole message`);
+  return word;
+}
+
+async function heardOnComment(url: string, words: string, context: DecisionContext) {
+  const [, repository, id] = commentPattern.exec(url) ?? [];
+  if (!repository || !id) throw new Error(`--comment takes the URL of a GitHub issue or PR comment, such as https://github.com/owner/repo/issues/1#issuecomment-2, not ${url}`);
+  if (!isDatedQuote(words)) throw quoteWithDate;
+  const run = runIn(context.cwd, context.env);
+  const login = restJson<{ login: string }>("user", run).login;
+  const comment = restJson<{ user?: { login?: string }; body?: string }>(`repos/${repository}/issues/comments/${id}`, run);
+  const author = comment.user?.login ?? "";
+  if (author.toLowerCase() !== login.toLowerCase()) throw new Error(`The comment is by ${author || "nobody"}, not the user (${login}). Only the user's own words reverse a decision`);
+  const body = normalized(comment.body ?? "");
+  const missing = quotes(words).find((quote) => !body.includes(quote));
+  if (missing) throw new Error(`"${missing}" is not in the comment ${url}. Quote the user's words as they wrote them`);
+}
+
+async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
+  const [id, ...rest] = parsed.positional;
+  if (!id || rest.length) throw new Error("Name one decision id. Run fleet decision --help");
+  const words = required(parsed, "--words");
+  const thread = parsed.options.get("--thread");
+  const comment = parsed.options.get("--comment");
+  if ((thread === undefined) === (comment === undefined)) throw new Error("Pass --thread with the T3 thread where the user reversed it, or --comment with the GitHub comment where they did. Run fleet decision --help");
+  const events = await reachHub(() => ledger.read());
+  const decision = fold(events).find((candidate) => candidate.id === id);
+  if (!decision) throw new Error(`No decision ${id} in the ledger. Run fleet decision list`);
+  if (decision.reversed) throw new Error(`Decision ${id} is already reversed, on ${decision.reversed.at.slice(0, 10)}`);
+  const where = thread !== undefined ? { thread, message: (await heardInThread(thread, words, context)).id } : (await heardOnComment(comment!, words, context), { comment: comment! });
+  const event: Reversal = { type: "reverse", id, words, ...where, machine: thisMachine(context.env), at: at(context) };
+  await reachHub(() => ledger.append(event, { type: "void", id, reason: `reversed by the user: ${words}`, at: event.at }));
+  context.print(decisionLine(fold([...events, event]).find((candidate) => candidate.id === id)!));
+  return 0;
+}
+
 async function list(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const ref = parsed.options.has("--pr") ? prRef(parsed.options.get("--pr")!) : undefined;
   const decisionClass = parsed.options.has("--class") ? askClass(parsed.options.get("--class")!) : undefined;
@@ -429,6 +495,7 @@ export async function decisionCommand(args: string[], context: DecisionContext):
   if (name === "record") return record(parse(args, ["--mark", "--words", "--message", "--thread", "--class", "--condition", "--question", "--answer", "--rejected", "--reason"], ["--pr", "--kind"], ["--keep-owed"]), context, ledger);
   if (name === "list") return list(parse(args, ["--pr", "--class"], [], ["--live"]), context, ledger);
   if (name === "void") return voidDecision(parse(args, ["--reason"], [], []), context, ledger);
+  if (name === "reverse") return reverse(parse(args, ["--words", "--thread", "--comment"], [], []), context, ledger);
   throw new Error(`Unknown command ${name}. Run fleet decision --help`);
 }
 

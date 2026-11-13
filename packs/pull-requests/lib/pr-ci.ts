@@ -26,7 +26,7 @@ const cacheMs = 60 * 60_000;
 const short = (commit: string) => commit.slice(0, 7);
 const firstLine = (text: string) => text.trim().split("\n")[0] || "no output";
 
-function restJson<T>(path: string, run: Run): T {
+export function restJson<T>(path: string, run: Run): T {
   const result = run(["gh", "api", path]);
   if (result.code !== 0) throw new Error(`gh api ${path.split("?")[0]} failed (${firstLine(result.stderr)})`);
   return JSON.parse(result.stdout) as T;
