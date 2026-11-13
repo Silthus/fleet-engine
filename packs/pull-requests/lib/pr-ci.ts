@@ -12,7 +12,7 @@ export const runIn = (cwd: string, env: Record<string, string | undefined>): Run
     return { code: 127, stdout: "", stderr: `${command[0]}: ${(error as Error).message}` };
   }
 };
-export type PullRequest = { title: string; body: string; draft: boolean; head: string; base: string; defaultBranch?: string };
+export type PullRequest = { title: string; body: string; draft: boolean; state: "open" | "closed" | "merged"; head: string; base: string; defaultBranch?: string };
 
 type CheckRun = { id: number; name: string; status: string; conclusion: string | null; app?: number | null };
 type CommitStatus = { context: string; state: string };
@@ -33,9 +33,10 @@ export function restJson<T>(path: string, run: Run): T {
 }
 
 export function readPullRequest(identity: ProofIdentity, run: Run): PullRequest {
-  type Raw = { title?: string; body?: string | null; draft?: boolean; head?: { sha?: string }; base?: { ref?: string; repo?: { default_branch?: string } } };
+  type Raw = { title?: string; body?: string | null; draft?: boolean; state?: string; merged_at?: string | null; head?: { sha?: string }; base?: { ref?: string; repo?: { default_branch?: string } } };
   const raw = restJson<Raw>(`repos/${identity.repository}/pulls/${identity.pr}`, run);
-  return { title: raw.title ?? "", body: raw.body ?? "", draft: raw.draft === true, head: raw.head?.sha ?? "", base: raw.base?.ref ?? "", defaultBranch: raw.base?.repo?.default_branch };
+  const state = raw.merged_at ? "merged" : raw.state === "closed" ? "closed" : "open";
+  return { title: raw.title ?? "", body: raw.body ?? "", draft: raw.draft === true, state, head: raw.head?.sha ?? "", base: raw.base?.ref ?? "", defaultBranch: raw.base?.repo?.default_branch };
 }
 
 export function pushedHeadOf(identity: ProofIdentity, run: Run): PushedHead {

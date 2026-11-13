@@ -50,7 +50,10 @@ case "$*" in
     [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head"
     [ -f "${github}/while-reading" ] && { mv "${github}/while-reading" "${github}/while-reading.sh"; sh "${github}/while-reading.sh"; }
     draft=false; [ -f "${github}/draft" ] && draft=true
-    printf '{"number":42,"title":"Greet new members","body":%s,"draft":%s,"head":{"sha":"%s"},"base":{"ref":"%s","repo":{"default_branch":"main"}}}\\n' "$body" "$draft" "$head" "$base"; exit 0;;
+    all="$*"; n=\${all##*/pulls/}; n=\${n%%[!0-9]*}
+    [ -f "${github}/body-$n" ] && body=$(cat "${github}/body-$n")
+    state=open; merged=null; [ -f "${github}/merged-$n" ] && { state=closed; merged='"2026-10-25T09:00:00Z"'; }
+    printf '{"number":%s,"title":"Greet new members","body":%s,"draft":%s,"state":"%s","merged_at":%s,"head":{"sha":"%s"},"base":{"ref":"%s","repo":{"default_branch":"main"}}}\\n' "$n" "$body" "$draft" "$state" "$merged" "$head" "$base"; exit 0;;
   "api "*"/rules/branches/"*)
     all="$*"; branch=\${all##*/rules/branches/}; page=\${all##*page=}; branch=\${branch%%\\?*}
     [ -f "${github}/rules-error-$branch" ] && { cat "${github}/rules-error-$branch" >&2; exit 1; }
@@ -82,8 +85,9 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     else writeFileSync(join(github, `rules-${branch}-${page}`), JSON.stringify([...Array.from({ length: others }, () => ({ type: "deletion" })), ...(rules.length ? [{ type: "required_status_checks", parameters: { required_status_checks: rules } }] : [])]));
     if (classic) writeFileSync(join(github, `branch-${branch}`), JSON.stringify({ protected: true, protection: { required_status_checks: { enforcement_level: "everyone", contexts: classic, checks: classic.map((context) => ({ context, app_id: null })) } } }));
   };
-  const pullRequestState = ({ draft, base, body }: { draft?: boolean; base?: string; body?: string }) => {
-    if (body !== undefined) writeFileSync(join(github, "body"), JSON.stringify(body));
+  const pullRequestState = ({ draft, base, body, number, merged }: { draft?: boolean; base?: string; body?: string; number?: number; merged?: boolean }) => {
+    if (body !== undefined) writeFileSync(join(github, number === undefined ? "body" : `body-${number}`), JSON.stringify(body));
+    if (merged) writeFileSync(join(github, `merged-${number ?? 42}`), "");
     if (draft !== undefined) { if (draft) writeFileSync(join(github, "draft"), ""); else rmSync(join(github, "draft"), { force: true }); }
     if (base !== undefined) writeFileSync(join(github, "base"), base);
   };
@@ -134,6 +138,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const reader: { words?: ThreadWords } = { words: threadWords };
   const hub: { ssh?: Ssh } = {};
+  const pendingCards = new Set<string>();
   const panel: { lostWorkers: boolean; onPause?: () => Promise<void> } = { lostWorkers: false };
   const fleetIn = async (cwd: string, ...args: string[]) => {
     const lines: string[] = [];
@@ -155,12 +160,12 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const fleet = (...args: string[]) => fleetIn(repository, ...args);
   const decide = async (...args: string[]) => {
     const lines: string[] = [];
-    const code = await decisionCommand(args, { home, cwd: repository, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh });
+    const code = await decisionCommand(args, { home, cwd: repository, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh, pendingCard: async (thread) => pendingCards.has(thread) });
     return { code, output: lines.join("\n") };
   };
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, decide };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, decide };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;

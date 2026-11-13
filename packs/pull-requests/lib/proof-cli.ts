@@ -607,6 +607,10 @@ function positive(value: string, option: string, name: string) {
 
 type Gate = Awaited<ReturnType<typeof proofGate>>;
 
+export async function proofSummaryAt(head: ProofIdentity, context: ProofContext) {
+  return (await gateAt(head, { ...context, run: runIn(context.cwd, context.env) })).proofSummary;
+}
+
 function gateAt(head: ProofIdentity, context: CommandContext, landed = false) {
   const { home, run, now } = context;
   return proofGate(home, head, { landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), ledger: ledgerOf(context), now: now?.() });

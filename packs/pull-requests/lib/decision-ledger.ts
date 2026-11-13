@@ -19,7 +19,7 @@ export type Decision = {
   rejected?: string; reason?: string;
   scope: { prs: string[]; kinds?: string[]; condition?: string };
   effect?: Effect;
-  where: { thread: string; message?: string; machine: string };
+  where: { thread: string; message?: string; machine: string; link?: string };
 };
 export type Reversal = { type: "reverse"; id: string; words: string; thread?: string; message?: string; comment?: string; machine: string; at: string };
 export type Lift = { type: "lift"; class: AskClass; words: string; thread: string; message: string; machine: string; at: string };
@@ -242,16 +242,17 @@ export function agentRefusal(tier: Tier, decisionClass: AskClass, kinds: string[
 
 export type DecisionContext = {
   home: string; cwd: string; env: Env; print: (text: string) => void; now?: () => Date;
-  threadWords?: ThreadWords; ssh?: Ssh; ledger?: Ledger; pullBody?: (ref: PrRef) => Promise<string>;
+  threadWords?: ThreadWords; ssh?: Ssh; ledger?: Ledger; pullBody?: (ref: PrRef) => Promise<string>; pendingCard?: (thread: string) => Promise<boolean>;
 };
 
 const usage = `Usage:
   fleet decision record --mark 👤|👍 --class <class> --pr <owner/repo#n>... [--kind <kind>...] [--thread <id>] [--message <id> | --words '<date> "<the user's words>"'] [--condition <text>] [--keep-owed]
-  fleet decision record --mark 🤖 --class <class> --pr <owner/repo#n>... --question <q> --answer <a> --rejected <option> --reason <why> [--kind <kind>...] [--condition <text>] [--thread <id>]
+  fleet decision record --mark 🤖 --class <class> --pr <owner/repo#n>... --question <q> --answer <a> --rejected <option> --reason <why> [--kind <kind>...] [--condition <text>] [--thread <id>] [--link <side-fix thread>]
   fleet decision list [--pr <owner/repo#n>] [--class <class>] [--live]
   fleet decision void <id> --reason <why its condition no longer holds>
   fleet decision reverse <id> --words '<date> "<the user's words>"' (--thread <id> | --comment <url>)
   fleet decision lift --class <class> --words '<date> "<the user's answer>"' --thread <id>
+  fleet decision report --pr <owner/repo#n>... [--thread <id>]
 
 The decision ledger holds every decision about a pull request's proof and process. It lives on the Fleet hub that
 the setting hub.alias names; other machines read and append it over SSH. Without a hub, it lives on this machine.
@@ -276,7 +277,14 @@ or on a GitHub comment written by the account gh is signed in as, which must hol
 prints as 👤 with their words, the replaced answer struck through, and counts no more at the gate or in list --live;
 decide or ask again. Two reversals in one class within ${brakeDays} days brake the class: record --mark 🤖 and fleet proof
 review --agent in it are refused until lift records the user's answer to your question tool, given after the brake.
-One answer lifts one brake. A 🤖 decision that lands while its class is braked counts nowhere.`;
+One answer lifts one brake. A 🤖 decision that lands while its class is braked counts nowhere.
+record --mark 🤖 --class scope takes --link with the T3 thread a side fix started in.
+report prints the lane's end-of-run report in Markdown, in five sections: still yours (unaccepted gaps on critical
+heads first, a question card that waits in --thread, then open PRs whose proofs pass and wait on the user's merge
+word), PRs merged under the narrow grant (merged lines of the rollout log that orchestration.rolloutLog names, whose
+note names the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs row per PR from its proof summary at
+its HEAD on GitHub with its receipt link, and the side fixes the lane started. --thread defaults to this T3 thread.
+Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
 
@@ -404,7 +412,7 @@ export async function appendDecision(ledger: Ledger, decision: Decision) {
 
 const prsOf = (parsed: Parsed) => (parsed.lists.get("--pr") ?? []).map(prRef);
 
-export type AgentDecision = Scope & { question: string; answer: string; rejected: string; reason: string; thread?: string };
+export type AgentDecision = Scope & { question: string; answer: string; rejected: string; reason: string; thread?: string; link?: string };
 
 export async function decideAlone(input: AgentDecision, context: DecisionContext, ledger: Ledger): Promise<Decision> {
   checkScope(input);
@@ -413,6 +421,7 @@ export async function decideAlone(input: AgentDecision, context: DecisionContext
   }
   const thread = input.thread ?? context.env.T3CODE_THREAD_ID;
   if (!thread) throw new Error("An agent decision needs --thread with this lane's T3 thread id");
+  if (input.link !== undefined && input.class !== "scope") throw new Error("--link belongs to a scope decision: the T3 thread its side fix started in");
   const brake = brakeOf(await reachHub(() => ledger.read()), input.class);
   if (brake) throw new Error(`The ${input.class} class is braked: the user reversed decisions ${brake.ids[0]} and ${brake.ids[1]} within ${brakeDays} days. An agent decides no ${input.class} ask alone until the user lifts it with fleet decision lift; ask them`);
   if (agentRefusal("non-critical", input.class, input.kinds) === "panel") throw new Error(`${input.prs.map(refText).join(", ")}: ${panelRefusal}. Ask them with your question tool and record their answer with --mark 👤`);
@@ -425,7 +434,7 @@ export async function decideAlone(input: AgentDecision, context: DecisionContext
   return {
     id: newId(), at: at(context), class: input.class, mark: "🤖", question: input.question, answer: input.answer,
     rejected: input.rejected, reason: input.reason, scope: scopeOf(input), ...input.class === "proof-gap" ? { effect: "accept" as const } : {},
-    where: { thread, machine: thisMachine(context.env) },
+    where: { thread, machine: thisMachine(context.env), ...input.link ? { link: input.link } : {} },
   };
 }
 
@@ -437,9 +446,9 @@ async function record(parsed: Parsed, context: DecisionContext, ledger: Ledger) 
   let decision: Decision;
   if (mark === "🤖") {
     if (parsed.options.has("--words") || parsed.options.has("--message") || keepOwed) throw new Error("--words, --message and --keep-owed are the user's: an agent decision takes --question, --answer, --rejected and --reason");
-    decision = await decideAlone({ ...scope, question: required(parsed, "--question"), answer: required(parsed, "--answer"), rejected: required(parsed, "--rejected"), reason: required(parsed, "--reason"), thread: parsed.options.get("--thread") }, context, ledger);
+    decision = await decideAlone({ ...scope, question: required(parsed, "--question"), answer: required(parsed, "--answer"), rejected: required(parsed, "--rejected"), reason: required(parsed, "--reason"), thread: parsed.options.get("--thread"), link: parsed.options.get("--link") }, context, ledger);
   } else if (mark === "👤" || mark === "👍") {
-    for (const option of ["--question", "--answer", "--rejected", "--reason"]) if (parsed.options.has(option)) throw new Error(`${option} belongs to the agent's own decision. The user's decision takes its question and answer from T3`);
+    for (const option of ["--question", "--answer", "--rejected", "--reason", "--link"]) if (parsed.options.has(option)) throw new Error(`${option} belongs to the agent's own decision. The user's decision takes its question and answer from T3`);
     decision = await hearUser({ ...scope, mark, keepOwed, thread: parsed.options.get("--thread"), words: parsed.options.get("--words"), message: parsed.options.get("--message") }, context, ledger);
   } else throw new Error("--mark takes 👤 (the user's own answer), 👍 (they accepted the recommended default) or 🤖 (the agent's own decision)");
   await appendDecision(ledger, decision);
@@ -540,10 +549,18 @@ export async function decisionCommand(args: string[], context: DecisionContext):
   const name = args.shift();
   if (name === undefined || ["help", "--help", "-h"].includes(name) || args.includes("--help")) { context.print(usage); return name === undefined ? 1 : 0; }
   const ledger = ledgerOf(context);
-  if (name === "record") return record(parse(args, ["--mark", "--words", "--message", "--thread", "--class", "--condition", "--question", "--answer", "--rejected", "--reason"], ["--pr", "--kind"], ["--keep-owed"]), context, ledger);
+  if (name === "record") return record(parse(args, ["--mark", "--words", "--message", "--thread", "--class", "--condition", "--question", "--answer", "--rejected", "--reason", "--link"], ["--pr", "--kind"], ["--keep-owed"]), context, ledger);
   if (name === "list") return list(parse(args, ["--pr", "--class"], [], ["--live"]), context, ledger);
   if (name === "void") return voidDecision(parse(args, ["--reason"], [], []), context, ledger);
   if (name === "reverse") return reverse(parse(args, ["--words", "--thread", "--comment"], [], []), context, ledger);
+  if (name === "report") {
+    const parsed = parse(args, ["--thread"], ["--pr"], []);
+    const prs = prsOf(parsed);
+    if (!prs.length) throw new Error("--pr is required: name each PR of the lane. Run fleet decision --help");
+    const { renderReport } = await import("./decision-report.ts");
+    context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID }, fold(await reachHub(() => ledger.read())), context));
+    return 0;
+  }
   if (name === "lift") return lift(parse(args, ["--class", "--words", "--thread"], [], []), context, ledger);
   throw new Error(`Unknown command ${name}. Run fleet decision --help`);
 }

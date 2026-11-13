@@ -398,3 +398,85 @@ test("an agent decision that lands while another machine brakes its class counts
   expect((await pr.fleet("gate")).code).toBe(3);
   expect((await pr.decide("list", "--live")).output).toBe("No decisions.");
 });
+
+async function reviewPr(pr: Checkout, n: number) {
+  await pr.fleet("review-start", "--scope", "full", "--repo", "example/product", "--pr", String(n));
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md", "--repo", "example/product", "--pr", String(n));
+  writeFileSync(join(pr.home, `.local/state/fleet/proof/example/product/${n}/reviews/1/panel.json`), JSON.stringify({ lenses: [], changedFiles: [], cwd: pr.repository, readable: [] }));
+}
+
+test("the end-of-run report prints its five sections in order: still yours, narrow-grant merges, decisions, proofs, side fixes", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "new\n");
+  const rollouts = join(pr.home, "rollouts.jsonl");
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "orchestration.rolloutLog": rollouts });
+  for (const n of [5, 41, 42, 43]) pr.pullRequestState({ number: n, body: graded("non-critical") });
+  for (const n of [41, 42, 43]) await reviewPr(pr, n);
+
+  await pr.fleet("require", "--kinds", "live-run,prod-shape,shadow-diff", "--repo", "example/product", "--pr", "41");
+  await pr.fleet("gap", "--kind", "shadow-diff", "--reason", "No old output to diff", "--repo", "example/product", "--pr", "41");
+  writeFileSync(join(pr.repository, "run.log"), "sent 1 email, delivered");
+  await pr.fleet("save", "--kind", "live-run", "run.log", "--repo", "example/product", "--pr", "41");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access", "--repo", "example/product", "--pr", "41");
+  pr.chooseGap("prod-shape", "No production read access", "Accept the gap", 41);
+  const users = idIn((await pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#41")).output);
+  writeFileSync(join(pr.home, ".local/state/fleet/proof/example/product/41/receipt.json"), JSON.stringify({ url: "https://github.com/example/product/pull/41#issuecomment-9" }));
+  pr.pullRequestState({ number: 41, merged: true });
+
+  await pr.fleet("require", "--kinds", "prod-shape,cross-version");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
+  await pr.fleet("gap", "--kind", "cross-version", "--reason", "No older client to run");
+  const lapsed = idIn((await agent(pr, "cross-version")).output);
+  const reversed = idIn((await pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", "Where does the parser go?", "--answer", "A new module", "--rejected", "The shared parser", "--reason", "Smaller diff")).output);
+  pr.say("Use the shared parser");
+  await pr.decide("reverse", reversed, "--words", `2026-10-25 "Use the shared parser"`, "--thread", "thread-1");
+  await expect(pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", "q", "--answer", "a", "--rejected", "r", "--reason", "why", "--link", "t3-thread://elsewhere")).rejects.toThrow("--link belongs to a scope decision");
+  const side = idIn((await pr.decide("record", "--mark", "🤖", "--class", "scope", "--pr", "example/product#42", "--question", "Fix the flaky clock test on the side?", "--answer", "Yes, in its own thread", "--rejected", "Leave it", "--reason", "It fails one run in ten", "--link", "t3-thread://side-fix")).output);
+  await pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/other#5", "--question", "Another lane's choice?", "--answer", "Theirs", "--rejected", "Ours", "--reason", "Not this lane", "--thread", "other-thread");
+  pr.chooseGap("judge", "The judge times out", "Yes", 41);
+  const recommended = idIn((await pr.decide("record", "--mark", "👍", "--class", "proof-gap", "--kind", "judge", "--pr", "example/product#41")).output);
+  pr.chooseGap("prod-shape", "A side PR without a sandbox", "Accept the gap", 45);
+  const inThread = idIn((await pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#45")).output);
+  pr.pullRequestState({ number: 42, body: graded("critical (a migration)") });
+
+  await pr.fleet("require", "--none", "--reason", "docs only", "--repo", "example/product", "--pr", "43");
+  pr.pendingCards.add("thread-1");
+  writeFileSync(rollouts, [
+    { at: "2026-10-25T09:00:00Z", repo: "example/product", pr: 41, stage: "merged", state: "done", note: "standing merge: narrow grant, card" },
+    { at: "2026-10-25T09:05:00Z", repo: "example/product", pr: 44, stage: "merged", state: "done", note: "standing merge: narrow grant" },
+    { at: "2026-10-25T09:10:00Z", repo: "example/product", pr: 42, stage: "deployed", state: "done", note: "standing merge: narrow grant" },
+    { at: "2026-10-25T09:15:00Z", repo: "example/product", pr: 43, stage: "merged", state: "done", note: "the user's merge word" },
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+
+  const printed = await pr.decide("report", "--pr", "example/product#41", "--pr", "https://github.com/example/product/pull/42", "--pr", "example/product#43", "--thread", "thread-1");
+  expect(printed.code).toBe(0);
+  const report = printed.output.split("\n");
+  expect(report[0]).toBe("## End-of-run report: example/product#41, example/product#42, example/product#43");
+  expect(report.filter((line) => line.startsWith("### "))).toEqual(["### Still yours", "### Merged under the narrow grant", "### Decisions", "### Proofs", "### Side fixes started"]);
+  const section = (heading: string) => { const from = report.indexOf(heading) + 1; const to = report.findIndex((line, index) => index >= from && line.startsWith("### ")); return report.slice(from, to < 0 ? undefined : to).filter(Boolean); };
+
+  expect(section("### Still yours")).toEqual([
+    "- **Blocker:** example/product#42 is critical at HEAD and its prod-shape gap is not accepted: No sandbox.",
+    `- **Blocker:** example/product#42 is critical at HEAD and its cross-version gap is not accepted: No older client to run (🤖 decision ${lapsed} lapsed: critical head).`,
+    "- A question card waits for your answer in thread thread-1.",
+    "- Merge example/product#43: its proofs pass, and it waits on your merge word.",
+  ]);
+  expect(section("### Merged under the narrow grant")).toEqual(["- example/product#41 merged 2026-10-25 09:00 UTC (standing merge: narrow grant, card)"]);
+  const decisions = section("### Decisions");
+  expect(decisions.map((line) => [line.slice(2, 4).trim(), idIn(line)])).toEqual([["👤", users], ["👤", reversed], ["👤", inThread], ["👍", recommended], ["🤖", lapsed], ["🤖", side]]);
+  expect(decisions[1]).toContain("(reversed 2026-10-25 from ~~🤖 A new module Rejected: The shared parser.~~)");
+  const short = head.slice(0, 7);
+  expect(section("### Proofs")).toEqual([
+    "| PR | Ran | Deferred | Voided | Receipt |",
+    "| --- | --- | --- | --- | --- |",
+    `| example/product#41 | live-run at ${short} | prod-shape: No production read access (accepted by 👤 ${users}); shadow-diff: No old output to diff (not accepted) | none | [receipt](https://github.com/example/product/pull/41#issuecomment-9) |`,
+    `| example/product#42 | none | prod-shape: No sandbox (not accepted); cross-version: No older client to run (not accepted) | ${lapsed} lapsed; ${reversed} reversed | none yet |`,
+    "| example/product#43 | none owed (docs only) | none | none | none yet |",
+  ]);
+  expect(section("### Side fixes started")).toEqual([`- Fix the flaky clock test on the side? Yes, in its own thread: t3-thread://side-fix [${side}]`]);
+
+  pr.env.FLEET_SETTINGS = JSON.stringify(settings);
+  const unlogged = (await pr.decide("report", "--pr", "example/product#41")).output.split("\n");
+  expect(unlogged[unlogged.indexOf("### Merged under the narrow grant") + 1]).toBe("- No rollout log: the setting orchestration.rolloutLog is empty, so merges under the grant are unknown.");
+});

@@ -210,7 +210,8 @@
       "list",
       "void",
       "reverse",
-      "lift"
+      "lift",
+      "report"
     ]
   }
 }
