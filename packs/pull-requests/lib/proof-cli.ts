@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
+import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, writeJson, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
 import { AnswerTaken, appendOnce, decideAlone, hearUser, ledgerHolds, ledgerOf } from "./decision-cli.ts";
 import { HubUnreachable, refText, type Decision, type Ssh } from "./decision-ledger.ts";
 import { readComment, runIn } from "./pr-ci.ts";
@@ -402,7 +402,10 @@ ${overrideHelp}`,
     run: async ({ options }, identity, context) => {
       const head = identity();
       const { round, id, directory } = await unrecordedRound(options, head, context) ?? await reserveRound(options, head, context, "author");
-      await roundStep(directory, context, () => recordRound(directory, context));
+      await roundStep(directory, context, async () => {
+        await takeOverride(directory, options, head, context);
+        await recordRound(directory, context);
+      });
       context.print(JSON.stringify({ round, id, directory }));
       return 0;
     },
@@ -444,6 +447,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
     : await reserveFleetReview(options, head, context);
   return roundStep(reserved.directory, context, async () => {
     if (await readPlan(reserved.directory) || await stagedPlan(reserved.directory)) throw new Error(`${reserved.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
+    await takeOverride(reserved.directory, options, head, context);
     await recordRound(reserved.directory, context);
     if (existsSync(join(reserved.directory, "findings.md"))) return printSavedReview(reserved, context);
     return askReviewer(reserved, head, author, context);
@@ -543,6 +547,13 @@ const lockOwner = (context: ProofContext): LockOwner => ({ pid: context.pid ?? p
 
 const roundStep = async <T>(directory: string, context: CommandContext, step: () => Promise<T>) => withRoundLock(directory, await context.lock(), step);
 
+async function takeOverride(directory: string, options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+  const reservation = await readReservation(directory);
+  if (!options.has("--override") || !reservation?.decision || reservation.recorded || reservation.decision.mark !== "🤖") return;
+  const { decision } = await decisionOf(options, head, context);
+  await writeJson(join(directory, "round.json"), { ...reservation, decision } satisfies Reservation);
+}
+
 async function recordRound(directory: string, context: CommandContext) {
   const reservation = await readReservation(directory);
   if (!reservation?.decision || reservation.recorded) return;
@@ -586,7 +597,7 @@ async function runPanel({ options, lists }: Parsed, head: ProofIdentity, context
   const lenses = lists.get("--lens")!.map((argument) => resolveLens(guide, argument, author, knowledge, env));
   const pending = await unfinishedReview(context.home, head, "fleet");
   if (pending) requireSameRequest(pending, options, context.run);
-  const directory = pending ? await rerunPanel(pending, head, lenses, guide, context) : await reservePanel(options, head, lenses, guide, context);
+  const directory = pending ? await rerunPanel(pending, options, head, lenses, guide, context) : await reservePanel(options, head, lenses, guide, context);
   const round = (await readJson<{ round: number | "final" }>(join(directory, "round.json"), { round: 0 })).round;
   print(JSON.stringify({ round, directory, lenses: lenses.map(({ name, family }) => ({ name, family })) }));
   print("The lenses run in the background. Run fleet proof review --wait for the findings, and fleet proof show to see each lens.");
@@ -643,13 +654,14 @@ async function panelBriefs(reserved: { directory: string; from?: string }, head:
   return { plan, briefs: new Map(briefed.map((lens) => [lens.name, lensBrief(guide, lens, input)])) };
 }
 
-async function rerunPanel(pending: { directory: string; reservation: { scope: string; base?: string; from?: string } }, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
+async function rerunPanel(pending: { directory: string; reservation: { scope: string; base?: string; from?: string } }, options: Map<string, string>, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
   const { directory, reservation } = pending;
   const plan = await readPlan(directory) ?? await stagedPlan(directory);
   if (!plan) throw new Error(`${directory} is reserved for one reviewer. Run fleet proof review without --lens to retry it`);
   const planned = plan.lenses.map((lens) => lens.name);
   if (lenses.map((lens) => lens.name).sort().join() !== [...planned].sort().join()) throw new Error(`The unfinished round runs the lenses ${planned.join(", ")}. Pass the same --lens set to rerun its failed lenses`);
   return roundStep(directory, context, async () => {
+    await takeOverride(directory, options, head, context);
     await recordRound(directory, context);
     if (await readPlan(directory)) {
       const casts = new Map(lenses.map((lens) => [lens.name, castOf(lens, context.env)]));

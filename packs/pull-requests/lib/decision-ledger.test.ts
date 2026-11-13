@@ -743,6 +743,29 @@ test("a braked review class refuses review --agent", async () => {
   await expect(pr.fleet("review-start", "--scope", "full", "--agent", "The arbiter escalated")).rejects.toThrow("The review class is braked");
 });
 
+test("the user's override takes a round whose agent decision never reached the ledger before its class was braked", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  const hub = hubAt(pr, "drops appends");
+  await expect(pr.fleet("review-start", "--scope", "full", "--agent", "The arbiter escalated")).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+  const round = () => pr.decide("record", "--mark", "🤖", "--class", "review", "--pr", "example/product#42", "--question", "Run another round?", "--answer", "Run it", "--rejected", "Ask the user", "--reason", "The arbiter escalated");
+  for (const words of ["Stop the rounds", "No more rounds"]) {
+    const id = idIn((await round()).output);
+    pr.say(words);
+    await pr.decide("reverse", id, "--words", `2026-10-25 "${words}"`, "--thread", "thread-1");
+  }
+  await expect(pr.fleet("review-start", "--scope", "full", "--agent", "The arbiter escalated")).rejects.toThrow("braked");
+
+  pr.choose("Run one more round");
+  const started = await pr.fleet("review-start", "--scope", "full", "--override", `2026-10-25 "Run one more round"`);
+  expect(started.code).toBe(0);
+  const decision = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8")).decision.id;
+  expect((await pr.decide("list", "--pr", "example/product#42", "--live")).output).toContain(`👤 **Run one more review round?`);
+  expect((await pr.decide("list", "--pr", "example/product#42", "--live")).output).toContain(`[${decision}]`);
+});
+
 test("an agent decision that lands while another machine brakes its class counts nowhere, and its lane is told", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });
