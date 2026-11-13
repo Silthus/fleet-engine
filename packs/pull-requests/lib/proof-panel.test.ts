@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanFixtures, settings, checkout, clean, verdict, fakeModel, recordingModel, fixture, stalledOnQuota, panelGuide, acceptGap, hubAt, exitedPid, reviewHead, type Checkout } from "./proof-testing.ts";
 import { askModel } from "./proof-models.ts";
@@ -234,17 +233,30 @@ test("a reclaimed slot leaves alone a process that now holds its reviewer's proc
   } finally { later.kill("SIGKILL"); }
 });
 
-test("a reclaim guard that a crashed command left behind holds the slot only for a short grace", async () => {
+test("a claimant that judged a holder stale after another claimant took the slot over leaves the new claim in place and waits for it", async () => {
   const io = slotIO(1);
-  const dead = JSON.stringify({ pid: await exitedPid(), token: "dead" });
-  writeFileSync(join(io.slots, "0"), dead);
-  const guard = join(io.slots, `0.reclaim-${createHash("sha256").update(dead).digest("hex").slice(0, 16)}`);
-  mkdirSync(guard);
-  const crashed = new Date(Date.now() - 120_000);
-  utimesSync(guard, crashed, crashed);
+  writeFileSync(join(io.slots, "0"), JSON.stringify({ pid: process.pid, token: "reused", started: "Sun Oct 25 09:00:00 2026" }));
+  const order: string[] = [];
+  let release = () => {};
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let first: Promise<void> | undefined;
+  let lookups = 0;
+  const late = {
+    ...io,
+    startTime: async () => {
+      if (++lookups === 2) {
+        first = withSlot(io, async () => { order.push("first in"); await held; order.push("first out"); });
+        while (!order.includes("first in")) await new Promise((done) => setImmediate(done));
+      }
+      return "Sun Oct 25 11:00:00 2026";
+    },
+    pause: async () => { release(); await new Promise((done) => setImmediate(done)); },
+  };
 
-  expect(await withSlot(io, async () => "ran")).toBe("ran");
-  expect(existsSync(guard)).toBe(false);
+  await withSlot(late, async () => { order.push("second in"); });
+  await first;
+  expect(order).toEqual(["first in", "first out", "second in"]);
+  expect(readdirSync(io.slots).filter((name) => !name.startsWith("."))).toEqual([]);
 });
 
 test("a process's start time stays the same while it runs and is unknown once it exits", async () => {
