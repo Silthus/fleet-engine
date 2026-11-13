@@ -1,10 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parse, stringify } from "smol-toml";
-import { loginExpired, management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey } from "./cli-proxy-balance.ts";
+import { loginExpired, management, managementFile, managementPattern, proxyDir, proxyUrl, readManagementKey, shortId } from "./cli-proxy-balance.ts";
 import { requireHubRole } from "./hub-job.ts";
 import { quote, readRole, remoteFleet } from "./machine.ts";
 import { changedFiles, ownedFiles, readIfThere, removeUnits, requireInstalled, writeFiles, type Managed } from "./managed.ts";
@@ -242,12 +242,6 @@ async function panelDoctor(machine: ProxyMachine, paths: Layout, managementKey: 
 }
 
 type AuthFile = { name?: string; auth_index?: string; provider?: string; disabled?: boolean; unavailable?: boolean; status?: string; status_message?: string };
-
-/** The proxy names an auth file after the account's email address, so Fleet shows its auth index, or a hash of its name, instead. */
-function shortId(file: AuthFile): string {
-  const index = typeof file.auth_index === "string" && /^[A-Za-z0-9_-]+$/.test(file.auth_index) ? file.auth_index : createHash("sha256").update(file.name ?? "").digest("hex");
-  return index.slice(0, 8);
-}
 
 const silent = `The proxy at ${proxyUrl} does not answer.`;
 
