@@ -160,14 +160,15 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     return { code, output: lines.join("\n") };
   };
   const fleet = (...args: string[]) => fleetIn(repository, ...args);
-  const decide = async (...args: string[]) => {
+  const decideIn = async (cwd: string, ...args: string[]) => {
     const lines: string[] = [];
-    const code = await decisionCommand(args, { home, cwd: repository, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh, pendingCard: async (thread) => pendingCards.has(thread) });
+    const code = await decisionCommand(args, { home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh, pendingCard: async (thread) => pendingCards.has(thread) });
     return { code, output: lines.join("\n") };
   };
+  const decide = (...args: string[]) => decideIn(repository, ...args);
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, writer, decide };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, writer, decide, decideIn };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;

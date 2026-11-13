@@ -279,9 +279,9 @@ does the evidence prove HEAD, do the owed kinds fit the diff, does the review ho
 holds when it is fixed, rejected for a sound reason, or parked with a reach read for a problem the diff did not
 introduce. When the merge-risk skill is installed at ~/.agents/skills/merge-risk/SKILL.md, the judge also gets the PR
 body and that skill, and answers a fifth question: does the merge-risk callout's grade and door follow from what the
-diff measurably changes. A body without a callout passes it. A failed
-question or a high quality finding fails the gate; medium and low findings are listed. The verdict is cached per set
-of inputs. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
+diff measurably changes. A body without a callout passes it. A failed question or a high quality finding fails the
+gate; medium and low findings are listed. The verdict is cached per set of inputs. Each run saves the judge's outcome
+at HEAD for fleet decision report, an unavailable judge included, and the next run asks an unavailable judge again. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
 --kind judge) lets the gate pass once a decision in the ledger accepts it: the user's answer, recorded with fleet
 decision record --mark 👤, or your own 🤖 decision when the PR's tier lets you. A refusal or a typed message never
 accepts it. The judge reads the condition of each accepted gap and fails one that HEAD breaks; the setting

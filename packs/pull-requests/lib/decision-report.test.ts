@@ -1,14 +1,14 @@
 import { afterEach, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { acceptGap, checkout, cleanFixtures, fakeModel, graded, reviewHead, verdict, type Checkout } from "./proof-testing.ts";
+import { acceptGap, checkout, cleanFixtures, fakeModel, fixture, graded, reviewHead, settings, verdict, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
 const idIn = (output: string) => /\[(d-[0-9a-f]+)\]/.exec(output)![1]!;
 
-async function reportOf(pr: Checkout) {
-  const report = (await pr.decide("report", "--pr", "example/product#42")).output.split("\n");
+async function reportOf(pr: Checkout, cwd = pr.repository, ...prs: string[]) {
+  const report = (await pr.decideIn(cwd, "report", ...(prs.length ? prs : ["example/product#42"]).flatMap((ref) => ["--pr", ref]))).output.split("\n");
   const section = (heading: string) => { const from = report.indexOf(heading) + 1; const to = report.findIndex((line, index) => index >= from && line.startsWith("### ")); return report.slice(from, to < 0 ? undefined : to).filter(Boolean); };
   return { stillYours: section("### Still yours"), proofs: section("### Proofs").slice(2) };
 }
@@ -60,4 +60,66 @@ test("the report weighs a merged PR's post-deploy watch as landed", async () => 
   await pr.fleet("save", "--kind", "post-deploy-watch", "watch.log");
 
   expect((await reportOf(pr)).proofs).toEqual([`| example/product#42 | post-deploy-watch at ${head.slice(0, 7)} | judge: not run at HEAD | none | none yet |`]);
+});
+
+test("the report shows the gate's outcome when the judge was unavailable and the user accepted that gap, and a later gate asks the judge again", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  const judge = fakeModel(pr, "JUDGE", "not json");
+
+  expect((await pr.fleet("gate")).output).toContain("judge: unavailable (unparseable answer: not json)");
+  await pr.fleet("gap", "--kind", "judge", "--reason", "The judge is down");
+  pr.chooseGap("judge", "The judge is down");
+  const accepted = idIn((await acceptGap(pr, "judge")).output);
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect(await reportOf(pr)).toEqual({
+    stillYours: ["- Merge example/product#42: its proofs pass, and it waits on your merge word."],
+    proofs: [`| example/product#42 | none owed (Docs only) | judge: The judge is down (accepted by 👤 ${accepted}) | none | none yet |`],
+  });
+
+  judge.answer(verdict());
+  expect(JSON.parse((await pr.fleet("gate", "--json")).output)).toMatchObject({ code: 0, judge: { state: "pass" } });
+  expect((await reportOf(pr)).proofs).toEqual(["| example/product#42 | none owed (Docs only) | none | none | none yet |"]);
+});
+
+test("the report reads each PR's gate outcome without a checkout, and one PR it cannot read prints as not known here", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  expect((await pr.fleet("gate")).code).toBe(0);
+  const elsewhere = fixture("fleet-report-elsewhere-");
+
+  expect(await reportOf(pr, elsewhere)).toEqual({
+    stillYours: ["- Merge example/product#42: its proofs pass, and it waits on your merge word."],
+    proofs: ["| example/product#42 | none owed (Docs only) | none | none | none yet |"],
+  });
+
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "pull-requests.criticalPathFiles": "example/product=critical-paths.md" });
+  expect(await reportOf(pr, elsewhere, "example/product#42", "example/other#7")).toEqual({
+    stillYours: ["None."],
+    proofs: [
+      expect.stringMatching(/^\| example\/product#42 \| not known here: Cannot read the critical-path file .* \| none \| none \| none yet \|$/),
+      "| example/other#7 | none | owed proofs: not recorded; judge: not run at HEAD | none | none yet |",
+    ],
+  });
+});
+
+test("the report trusts a saved gate outcome only while the judge's input is the same", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  expect((await pr.fleet("gate")).code).toBe(0);
+  writeFileSync(join(pr.home, ".agents/guides/coding-standards.md"), "# Coding standards\n\n- Test every branch.");
+
+  expect(await reportOf(pr)).toEqual({
+    stillYours: [`- example/product#42: the judge has not run at HEAD ${head.slice(0, 7)} with these proofs, so they are not known to pass. Run fleet proof gate.`],
+    proofs: ["| example/product#42 | none owed (Docs only) | judge: not run at HEAD | none | none yet |"],
+  });
 });

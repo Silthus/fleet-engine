@@ -12,6 +12,8 @@ export type ReportContext = { home: string; cwd: string; env: Env; now?: () => D
 export const rolloutLogSetting = "orchestration.rolloutLog";
 
 type LanePr = { ref: PrRef; summary: ProofSummary; state: "open" | "closed" | "merged" };
+type UnknownPr = { ref: PrRef; unknown: string };
+const known = (pr: LanePr | UnknownPr): pr is LanePr => !("unknown" in pr);
 type RolloutLine = { at?: string; repo?: string; pr?: number; stage?: string; note?: string };
 
 const markOrder: Mark[] = ["👤", "👍", "🤖"];
@@ -20,11 +22,13 @@ const cell = (items: string[], empty: string) => (items.length ? items.join("; "
 const listed = (lines: string[]) => lines.length ? lines : ["None."];
 const sameThread = (a: string, b: string) => a === b || a.endsWith(`:${b}`) || b.endsWith(`:${a}`);
 
-async function lanePr(ref: PrRef, context: ReportContext): Promise<LanePr> {
-  const run = runIn(context.cwd, context.env);
-  const pull = readPullRequest({ ...ref, commit: "" }, run);
-  const gate = await finalGate({ ...ref, commit: pull.head }, { ...context, run }, { landed: pull.state === "merged", judge: "cached" });
-  return { ref, summary: gate.summary, state: pull.state };
+async function lanePr(ref: PrRef, context: ReportContext): Promise<LanePr | UnknownPr> {
+  try {
+    const run = runIn(context.cwd, context.env);
+    const pull = readPullRequest({ ...ref, commit: "" }, run);
+    const gate = await finalGate({ ...ref, commit: pull.head }, { ...context, run }, { landed: pull.state === "merged", judge: "cached" });
+    return { ref, summary: gate.summary, state: pull.state };
+  } catch (error) { return { ref, unknown: (error as Error).message }; }
 }
 
 const t3PendingCard = (home: string) => async (thread: string) => {
@@ -77,7 +81,10 @@ async function grantMerges(prs: PrRef[], context: ReportContext) {
     .map((line) => `- ${line.repo}#${line.pr} merged ${mergedAt(line.at)} (${line.note})`);
 }
 
-function proofRow({ ref, summary }: LanePr, decisions: DecisionState[]) {
+function proofRow(pr: LanePr | UnknownPr, decisions: DecisionState[]) {
+  const reversed = decisions.filter((decision) => decision.reversed && covers(decision, pr.ref)).map((decision) => `${decision.id} reversed`);
+  if (!known(pr)) return `| ${refText(pr.ref)} | ${cell([`not known here: ${pr.unknown}`], "")} | none | ${cell(reversed, "none")} | none yet |`;
+  const { ref, summary } = pr;
   const ran = summary.kinds.flatMap((kind) =>
     kind.state === "ran" ? [`${kind.kind} at ${short(kind.commit)}`]
     : kind.state === "reused" ? [`${kind.kind} reused from ${short(kind.from)}`]
@@ -97,14 +104,15 @@ function proofRow({ ref, summary }: LanePr, decisions: DecisionState[]) {
   const voided = [
     ...summary.lapsed.map((id) => `${id} lapsed`),
     ...summary.voided.map((id) => `${id} voided`),
-    ...decisions.filter((decision) => decision.reversed && covers(decision, ref)).map((decision) => `${decision.id} reversed`),
+    ...reversed,
   ];
   const receipt = summary.receipt ? `[receipt](${summary.receipt})` : "none yet";
   return `| ${refText(ref)} | ${cell(ran, "none")} | ${cell(deferred, "none")} | ${cell(voided, "none")} | ${receipt} |`;
 }
 
 export async function renderReport({ prs, thread }: { prs: PrRef[]; thread?: string }, decisions: DecisionState[], context: ReportContext): Promise<string> {
-  const lane = await Promise.all(prs.map((ref) => lanePr(ref, context)));
+  const rows = await Promise.all(prs.map((ref) => lanePr(ref, context)));
+  const lane = rows.filter(known);
   const card = thread && await (context.pendingCard ?? t3PendingCard(context.home))(thread) ? thread : undefined;
   const ours = decisions.filter((decision) => prs.some((ref) => covers(decision, ref)) || (thread !== undefined && sameThread(decision.where.thread, thread)));
   const sorted = [...ours].sort((a, b) => markOrder.indexOf(a.mark) - markOrder.indexOf(b.mark));
@@ -115,7 +123,7 @@ export async function renderReport({ prs, thread }: { prs: PrRef[]; thread?: str
     "### Still yours", ...listed(stillYours(lane, card)), "",
     "### Merged under the narrow grant", ...listed(await grantMerges(prs, context)), "",
     "### Decisions", ...listed(sorted.map(decisionLine)), "",
-    "### Proofs", "| PR | Ran | Deferred | Voided | Receipt |", "| --- | --- | --- | --- | --- |", ...lane.map((pr) => proofRow(pr, decisions)), "",
+    "### Proofs", "| PR | Ran | Deferred | Voided | Receipt |", "| --- | --- | --- | --- | --- |", ...rows.map((pr) => proofRow(pr, decisions)), "",
     "### Side fixes started", ...listed(sideFixes),
   ].join("\n");
 }

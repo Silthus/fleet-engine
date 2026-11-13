@@ -63,8 +63,10 @@ heads first, judge gaps too, a question card that waits in --thread, open PRs wh
 their current proofs, then open PRs whose full gate passes, judge included, and wait on the user's merge word), PRs
 merged under the narrow grant (merged lines of the rollout log that orchestration.rolloutLog names, whose note names
 the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs row per PR from the gate's proof summary at its
-HEAD on GitHub with its judge and receipt link, and the side fixes the lane started. The report never runs the judge:
-it reads the verdict fleet proof gate saved for the same proofs, and says so when there is none. A merged PR counts as
+HEAD on GitHub with its judge and receipt link, and the side fixes the lane started. The report never runs the judge
+and needs no checkout: it reads the outcome fleet proof gate saved at HEAD, an unavailable judge included, while the
+judge's input but the diff is the same, and says the judge has not run when it is not. A PR whose proofs it cannot
+read prints as not known here, and the other PRs still print. A merged PR counts as
 landed, so its post-deploy-watch is weighed. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 

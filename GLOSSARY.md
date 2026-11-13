@@ -99,9 +99,9 @@ Two reversals of the agent's decisions in one ask class within 28 days. The brak
 _Avoid_: Lock, freeze
 
 **Proof summary**:
-The proof state of a pull request at HEAD that the gate builds: each owed kind, the review, the head, CI, the tier, the judge's verdict, and the lapsed and voided decisions. The gate prints its lines from it, `fleet proof gate --json` prints it, and the end-of-run report reads it. The report reads the judge's saved verdict for the same proofs and never runs the judge.
+The proof state of a pull request at HEAD that the gate builds: each owed kind, the review, the head, CI, the tier, the judge's verdict, and the lapsed and voided decisions. The gate prints its lines from it, `fleet proof gate --json` prints it, and the end-of-run report reads it. Each `fleet proof gate` saves the judge's outcome at HEAD, an unavailable judge included, with a fingerprint of everything the judge reads but the diff. The report reads that outcome while HEAD and the fingerprint match, so it needs no checkout and never runs the judge. Otherwise it says the judge has not run at HEAD with these proofs.
 _Avoid_: Proof status, gate result
 
 **End-of-run report**:
-The Markdown that `fleet decision report` prints when a lane ends: what is still the user's, merges under the narrow grant, the lane's decisions, one proofs row per pull request, and the side fixes it started.
+The Markdown that `fleet decision report` prints when a lane ends: what is still the user's, merges under the narrow grant, the lane's decisions, one proofs row per pull request, and the side fixes it started. A pull request whose proofs Fleet cannot read gets a row that says they are not known here, and the other rows still print.
 _Avoid_: Summary, wrap-up

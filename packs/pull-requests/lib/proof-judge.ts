@@ -196,7 +196,7 @@ const failureReasons = (verdict: Verdict) => [
 ];
 
 type JudgeRecord = { commit: string; model: string; verdict: Verdict; passed: boolean; escalation?: string; judgedAt: string };
-export type JudgeDeps = { ask: (request: ModelRequest) => Promise<ModelAnswer>; model: string; arbiter: Arbiter; directory: string; commit: string; now: Date; cachedOnly?: boolean };
+export type JudgeDeps = { ask: (request: ModelRequest) => Promise<ModelAnswer>; model: string; arbiter: Arbiter; directory: string; commit: string; now: Date };
 export type JudgeOutcome = { state: "pass" | "fail" | "unavailable" | "not run"; lines: string[]; model: string; broken: string[] };
 
 const freeJudgeFails = 2;
@@ -206,13 +206,21 @@ Answer ESCALATE only when the same failure comes back after the author answered 
 
 Your first line must be exactly CONTINUE, or ESCALATE: followed by one sentence that names the failure. Write nothing else.`;
 
+async function inputKey(model: string, prompt: string, images: string[]) {
+  const key = createHash("sha256").update(model).update("\0").update(prompt);
+  for (const image of images) key.update("\0").update(await readFile(image));
+  return key.digest("hex");
+}
+
+export async function judgeFingerprint(input: JudgeInput, model: string) {
+  const { prompt, images } = await judgePrompt(input);
+  return inputKey(model, prompt, images);
+}
+
 export async function judge(input: JudgeInput, deps: JudgeDeps): Promise<JudgeOutcome> {
   const { prompt, images, readable } = await judgePrompt(input);
-  const key = createHash("sha256").update(deps.model).update("\0").update(prompt);
-  for (const image of images) key.update("\0").update(await readFile(image));
-  const path = join(deps.directory, `${key.digest("hex")}.json`);
+  const path = join(deps.directory, `${await inputKey(deps.model, prompt, images)}.json`);
   const cached = await readFile(path, "utf8").then((text) => JSON.parse(text) as JudgeRecord, () => undefined);
-  if (!cached && deps.cachedOnly) return { state: "not run", lines: ["judge: not run at HEAD with these proofs; run fleet proof gate"], model: deps.model, broken: [] };
   const record = cached ?? await askJudge(prompt, images, readable, input.cwd, askedQuestions(input.risk !== undefined), deps);
   if ("cause" in record) return { state: "unavailable", lines: [`judge: unavailable (${record.cause})`], model: deps.model, broken: [] };
   if (!cached) await writeRecord(path, record);

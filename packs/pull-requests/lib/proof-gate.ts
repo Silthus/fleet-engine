@@ -1,11 +1,12 @@
-import { modelFor } from "../../base/lib/models.ts";
+import { join } from "node:path";
+import { modelFor, type ModelRow } from "../../base/lib/models.ts";
 import { numberSetting } from "../../base/lib/settings.ts";
 import { hubLedger, refText, type Env, type Ssh } from "./decision-ledger.ts";
 import { ciOf, pushedHeadOf, type Run } from "./pr-ci.ts";
-import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, parseVerdict, proofGate, reviewRecords, withBrokenConditions, type Arbiter, type JudgeSummary, type ProofIdentity, type ProofSummary } from "./proof.ts";
+import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, parseVerdict, proofGate, pullRequestDirectory, readJson, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type JudgeSummary, type ProofIdentity, type ProofSummary } from "./proof.ts";
 import { cleanBaseMerge, diffOf, mergeBase, pullRequestDetails, topLevel } from "./proof-checkout.ts";
 import { quietCommitIn } from "./proof-delta.ts";
-import { judge, readCriticalPaths } from "./proof-judge.ts";
+import { judge, judgeFingerprint, readCriticalPaths, type JudgeInput, type JudgeOutcome } from "./proof-judge.ts";
 import { askModel, familyOf, modelLabel, readRiskRubric, readRubric, reviewerRow, skillReferences } from "./proof-models.ts";
 
 export type GateContext = { home: string; cwd: string; env: Env; run: Run; now?: () => Date; ssh?: Ssh };
@@ -39,25 +40,27 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
   };
 }
 
+type SavedOutcome = { commit: string; fingerprint: string; outcome: JudgeOutcome };
+
 async function judgeHead(head: ProofIdentity, checked: Checked, context: GateContext, mode: JudgeMode): Promise<Judged> {
   const { home, cwd, env, run, now } = context;
   const author = await authorOf(home, head);
   const row = reviewerRow(author, env);
-  const from = mergeBase(head, run);
   const riskRubric = await readRiskRubric(home);
   const today = now?.() ?? new Date();
   const weighedGap = await judgeGap(home, head, today, checked.decisions, checked.tier);
-  const input = {
+  const known = {
     risk: riskRubric === undefined ? undefined : { rubric: riskRubric, body: pullRequestDetails(head, run).body },
-    cwd: topLevel(run) ?? cwd, from, commit: head.commit, diff: diffOf(from, head.commit, run), crossFamily: familyOf(row) !== author, ci: checked.ci, owed: checked.owed!, ledger: checked.lines,
+    commit: head.commit, crossFamily: familyOf(row) !== author, ci: checked.ci, owed: checked.owed!, ledger: checked.lines,
     evidence: checked.evidence, reviews: await reviewRecords(home, head), rubric: await readRubric(home), references: skillReferences(home),
     conditions: [...checked.conditions, ...weighedGap?.condition ? [weighedGap.condition] : []], criticalPaths: await readCriticalPaths(home, head.repository, env),
   };
-  const limit = reviewLimit(env);
-  const outcome = await judge(input, {
-    ask: (request) => askModel("judge", row, request, env, limit), model: modelLabel("judge", row, env), arbiter: arbiterOf(context),
-    directory: judgeDirectory(home, head), commit: head.commit, now: today, cachedOnly: mode === "cached",
-  });
+  const model = modelLabel("judge", row, env);
+  const fingerprint = await judgeFingerprint({ ...known, cwd, from: "", diff: "" }, model);
+  const saved = join(pullRequestDirectory(home, head), "judge-outcome.json");
+  const outcome = mode === "cached"
+    ? await readJson<SavedOutcome | undefined>(saved, undefined).then((record) => record?.commit === head.commit && record.fingerprint === fingerprint ? record.outcome : notRun(model))
+    : await judgeAndSave(head, known, row, fingerprint, saved, context);
   const verdict = (lines: string[], gap?: JudgeSummary["gap"]): JudgeSummary => ({ state: outcome.state, model: outcome.model, ...gap ? { gap } : {}, lines });
   if (outcome.state === "not run") return { code: 1, lines: outcome.lines, covered: "", judge: verdict(outcome.lines) };
   if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
@@ -77,5 +80,18 @@ async function judgeHead(head: ProofIdentity, checked: Checked, context: GateCon
   const lines = [...outcome.lines, hint];
   return { code: 1, lines, covered: "", judge: verdict(lines) };
 }
+
+async function judgeAndSave(head: ProofIdentity, known: Omit<JudgeInput, "cwd" | "from" | "diff">, row: ModelRow, fingerprint: string, saved: string, context: GateContext) {
+  const { home, cwd, env, run, now } = context;
+  const from = mergeBase(head, run);
+  const outcome = await judge({ ...known, cwd: topLevel(run) ?? cwd, from, diff: diffOf(from, known.commit, run) }, {
+    ask: (request) => askModel("judge", row, request, env, reviewLimit(env)), model: modelLabel("judge", row, env), arbiter: arbiterOf(context),
+    directory: judgeDirectory(home, head), commit: known.commit, now: now?.() ?? new Date(),
+  });
+  await writeJson(saved, { commit: known.commit, fingerprint, outcome } satisfies SavedOutcome);
+  return outcome;
+}
+
+const notRun = (model: string): JudgeOutcome => ({ state: "not run", lines: ["judge: not run at HEAD with these proofs; run fleet proof gate"], model, broken: [] });
 
 const voidBroken = (ids: string[]) => `End ${ids.map((id) => `decision ${id}`).join(" and ")} with fleet decision void <id> --reason <why its condition no longer holds>, then decide or ask again`;
