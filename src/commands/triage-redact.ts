@@ -29,15 +29,18 @@ const rules: Rule[] = [
 function looksRandom(text: string) {
   if (!/[A-Z]/.test(text) || !/[a-z]/.test(text)) return false;
   if (/[0-9]/.test(text)) return true;
-  const parts = text.replace(/=+$/, "").split(/[+/_-]/);
-  const mixed = parts.filter((part) => /[A-Z]/.test(part) && /[a-z]/.test(part)).join("");
-  const even = parts.filter(evenCases).join("");
-  return [mixed, even].some((letters) => letters.length >= 32 && evenCases(letters));
-}
-
-function evenCases(letters: string) {
-  const upper = letters.match(/[A-Z]/g)?.length ?? 0;
-  return Math.min(upper, letters.length - upper) * 4 >= letters.length;
+  const parts = text.replace(/=+$/, "").split(/[+/_-]/).filter((part) => /[A-Z]/.test(part) && /[a-z]/.test(part));
+  const capitals = parts.map((part) => part.match(/[A-Z]/g)!.length);
+  for (let start = 0; start < parts.length; start++) {
+    let letters = 0;
+    let upper = 0;
+    for (let end = start; end < parts.length && letters < 128; end++) {
+      letters += parts[end]!.length;
+      upper += capitals[end]!;
+      if (letters >= 32 && Math.min(upper, letters - upper) * 4 >= letters) return true;
+    }
+  }
+  return false;
 }
 
 /**
