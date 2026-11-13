@@ -28,6 +28,7 @@ function secrets() {
     opaque: spell(mixed, 44, 12),
     opaqueLetters: spell(letters, 44, 13),
     cachedLetters: spell(letters, 44, 20),
+    splitLetters: [spell(letters, 22, 21), "-", spell(letters, 21, 22)].join(""),
     password: spell(mixed, 14, 14),
     privateKey: ["-----BEGIN OPENSSH ", "PRIVATE KEY-----\n", spell(mixed, 64, 15).match(/.{16}/g)!.join("\n"), "\n-----END OPENSSH ", "PRIVATE KEY-----"].join(""),
     multiline: [spell(mixed, 10, 16), " river\npearl ", spell(mixed, 10, 17)].join(""),
@@ -76,6 +77,7 @@ function failedMachine(home: string, leaked = secrets()) {
       `  opaque ${leaked.opaque} and ${leaked.opaqueLetters} in a log`,
       "  tapped /opt/homebrew/Library/Taps/homebrew/homebrew-core for AbstractSingletonProxyFactoryBean",
       `  cached /opt/homebrew/var/lib/someservice/sessions/cache/storage/tokens/current/${leaked.cachedLetters}`,
+      `  refresh ${leaked.splitLetters} and FLEET_ENGINE_DIR/scripts/build-page-and-site`,
       `  cloning https://nora:${leaked.password}@github.com/nora/fleet-profile.git`,
       `  Pairing URL: http://127.0.0.1:3773/pair#token=${leaked.password}`,
       leaked.privateKey,
@@ -136,6 +138,7 @@ describe("fleet triage", () => {
     expect(shown).toContain("export GITHUB_TOKEN=<redacted>");
     expect(shown).toContain("opaque <secret> and <secret> in a log");
     expect(shown).toContain("tapped /opt/homebrew/Library/Taps/homebrew/homebrew-core for AbstractSingletonProxyFactoryBean");
+    expect(shown).toContain("refresh <secret> and FLEET_ENGINE_DIR/scripts/build-page-and-site");
     expect(shown).toContain("https://<credentials>@github.com/<profile repo>.git");
     expect(shown).toContain(`{"password":"<redacted>"} and {'client_secret': '<redacted>'}`);
     expect(shown).toContain("invited <email> as <name> and <name>, then ssh <devbox 2> true (Q7 stays)");
