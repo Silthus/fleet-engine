@@ -185,6 +185,20 @@
       "ask": "never"
     },
     {
+      "key": "context.repo",
+      "question": "Which GitHub repo, such as you/context, holds what your agents learn and record: memory, notes, maps, and logs? Share it with your team, but keep it private. Fleet takes the memory, library, map, and log settings from it unless you set them.",
+      "type": "string",
+      "optional": true,
+      "ask": "never"
+    },
+    {
+      "key": "context.path",
+      "question": "Which folder holds the checkout of your context repo?",
+      "type": "string",
+      "default": "~/dev/context",
+      "ask": "never"
+    },
+    {
       "key": "base.usageHost",
       "question": "Which analytics host receives Fleet's usage events? Give its capture URL, such as https://us.i.posthog.com.",
       "type": "string"

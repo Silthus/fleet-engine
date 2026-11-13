@@ -9,7 +9,7 @@ const settingTypes = ["string", "number", "boolean", "choice"];
 export const packName = /^[a-z][a-z0-9-]*$/;
 
 /** Settings the engine reads, which any pack may declare to set their default. */
-export const engineSettings = ["identity.signer"];
+export const engineSettings = ["identity.signer", "context.repo", "context.path"];
 
 export async function loadPacks(sourceDir: string): Promise<LoadedPack[]> {
   const root = join(sourceDir, "packs");
@@ -154,6 +154,8 @@ function checkShapes(raw: Record<string, unknown>, fail: (message: string) => ne
     const zones = item.defaultByTimeZone;
     need(zones === undefined || (isRecord(zones) && Object.values(zones).every(fits)), `${label}: defaultByTimeZone must map time-zone prefixes to values that fit type ${String(item.type)}`);
     need(zones === undefined || item.ask === "setup", `${label}: defaultByTimeZone needs ask setup, because only setup reads it`);
+    const context = item.fromContext;
+    need(context === undefined || (item.type === "string" && isRecord(context) && typeof context.value === "string" && (context.unlessSet === undefined || filled(context.unlessSet))), `${label}: fromContext needs type string, a value, and an optional unlessSet key`);
   });
   each("workflows", (item, label) => {
     need(typeof item.name === "string" && typeof item.sentence === "string", `${label}: needs a name and a sentence`);

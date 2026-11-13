@@ -36,6 +36,8 @@ export const hublessReason = "your profile names no hub. Run fleet hub here on t
 
 /** Guide names the engine writes itself. */
 const engineGuides = ["skill-settings"];
+export const contextRepoSetting = "context.repo";
+const contextPathSetting = "context.path";
 
 type Candidate = LoadedPack & { source: AvailableSource };
 
@@ -141,7 +143,7 @@ export function resolve(profile: Profile, saved: MachineFile, sources: FetchedSo
   const settings = machineDefaults(activeSettings(order, active), machine);
   plan.settings = settingValues(settings, profile.hub && settings.some((setting) => setting.key === hubAlias) ? { ...profile.settings, [hubAlias]: profile.hub } : profile.settings);
   plan.unanswered = settings.filter((setting) => plan.settings[setting.key] === undefined && !setting.optional && setting.ask !== "never");
-  plan.ask = settings.filter((setting) => setting.ask === "setup" || (setting.ask !== "never" && setting.default === undefined)).map(({ pack: _, ...setting }) => setting);
+  plan.ask = askedOnce(settings.filter((setting) => setting.ask === "setup" || (setting.ask !== "never" && setting.default === undefined)), settings, profile.settings).map(({ pack: _, ...setting }) => setting);
   for (const job of plan.models.length ? plan.jobs : []) {
     if (job.task && !plan.models.some((row) => row.role === job.task!.modelRole)) throw new ResolveError(`job ${job.id} asks for model role ${job.task.modelRole}, which the model table lacks`);
   }
@@ -362,13 +364,31 @@ function machineDefaults(settings: Array<PackSetting & { pack: string }>, machin
     .map((setting) => (setting.key === signerSetting && setting.pack === "base" && machine.coder ? { ...setting, default: "coder" } : setting));
 }
 
+function askedOnce(asked: Array<PackSetting & { pack: string }>, settings: Array<PackSetting & { pack: string }>, answers: Record<string, SettingValue>) {
+  const repos = asked.filter((setting) => setting.ask === "setup" && setting.fromContext?.value === "{repo}" && answers[setting.key] === undefined);
+  const context = settings.find((setting) => setting.key === contextRepoSetting);
+  if (repos.length < 2 || !context) return asked;
+  const { optional: _, ...required } = context;
+  const first = asked.indexOf(repos[0]!);
+  return [...asked.slice(0, first), { ...required, ask: "setup" as const }, ...asked.slice(first).filter((setting) => !repos.includes(setting))];
+}
+
 function settingValues(settings: PackSetting[], answers: Record<string, SettingValue>) {
   const values: Record<string, SettingValue> = {};
+  const contextPath = answers[contextPathSetting] ?? settings.find((setting) => setting.key === contextPathSetting)?.default;
   for (const setting of settings) {
-    const value = answers[setting.key] ?? setting.default;
+    const value = answers[setting.key] ?? contextValue(setting, answers, contextPath) ?? setting.default;
     if (value !== undefined) values[setting.key] = value;
   }
   return values;
+}
+
+export function contextValue(setting: PackSetting, answers: Record<string, SettingValue>, path: SettingValue | undefined = answers[contextPathSetting]): string | undefined {
+  const repo = answers[contextRepoSetting];
+  if (!setting.fromContext || typeof repo !== "string" || !repo.trim() || answers[setting.key] !== undefined) return undefined;
+  if (setting.fromContext.unlessSet && answers[setting.fromContext.unlessSet] !== undefined) return undefined;
+  if (setting.fromContext.value.includes("{path}") && (typeof path !== "string" || !path.trim())) return undefined;
+  return setting.fromContext.value.replaceAll("{repo}", repo.trim()).replaceAll("{path}", String(path ?? "").trim().replace(/\/+$/, ""));
 }
 
 /** The rows of the profile's plan from the one pack that declares a model table, with the profile's rows replacing those of the same role. */
