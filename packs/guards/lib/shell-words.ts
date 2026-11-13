@@ -11,13 +11,14 @@ export type Command = {
   argSubstitutions: string[][];
   stdin?: { body: string; substitutions: string[] };
   outputs: string[];
+  bare: string[];
   inLoop: boolean;
   scope: Scope;
   chdir?: string;
 };
 
 type Context = { env: ReadonlyMap<string, string>; inLoop: boolean; scope?: Scope };
-type Word = { text: string; raw: string; substitutions: string[] };
+type Word = { text: string; raw: string; bare: string; substitutions: string[] };
 type Heredoc = { delimiter: string; literal: boolean; stripTabs: boolean; body: string; substitutions: string[] };
 type Token = { word: Word } | { operator: string } | { heredoc: Heredoc } | { herestring: true };
 
@@ -25,6 +26,7 @@ export const shells = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 const maxDepth = 8;
 const operators = ["&&", "||", ";;", "|&", ";", "|", "&", "(", ")", "\n"];
 const keywords = new Set(["then", "do", "else", "elif", "if", "!", "{", "while", "until"]);
+const declarations = new Set(["export", "declare", "typeset", "readonly", "local"]);
 const loops = new Set(["for", "select", "while", "until"]);
 const assignment = /^([A-Za-z_]\w*)=(.*)$/s;
 const redirect = /^(\d+|&)?(>>|>\||>&|<&|<>|>|<)(?!\()/;
@@ -45,18 +47,70 @@ const wrappers: Record<string, { valued: string[]; operands?: number; chdir?: st
   builtin: { valued: [] },
 };
 
-function parenEnd(text: string, open: number): number {
+const unclosed = (what: string) => new Error(`it has ${what} that does not close`);
+const wordBreak = /[\s;&|()]/;
+
+function arithmeticEnd(text: string, open: number): number {
   let depth = 0;
   for (let index = open; index < text.length; index++) {
+    if (text[index] === "(") depth++;
+    else if (text[index] === ")" && --depth === 0) return index;
+  }
+  throw unclosed("a (( arithmetic");
+}
+
+const reservedWords = ["then", "do", "else", "elif", "if", "while", "until", "{", "!", "time"];
+
+function parenEnd(text: string, open: number): number {
+  if (text[open + 1] === "(") return arithmeticEnd(text, open);
+  let depth = 0;
+  let cases = 0;
+  let atWordStart = true;
+  let atCommandStart = true;
+  const pending: Heredoc[] = [];
+  for (let index = open; index < text.length; index++) {
     const char = text[index];
+    const startsWord = (word: string) => atWordStart && text.startsWith(word, index) && wordBreak.test(text[index + word.length] ?? " ");
+    const keyword = atCommandStart ? reservedWords.find(startsWord) : undefined;
+    if (keyword) {
+      index += keyword.length - 1;
+      atWordStart = false;
+      continue;
+    }
     if (char === "\\") index++;
     else if (char === "'") index = quoteEnd(text, index + 1, "'");
     else if (char === '"') index = doubleQuoted(text, index + 1, true).end;
     else if (char === "`") index = quoteEnd(text, index + 1, "`");
-    else if (char === "(") depth++;
-    else if (char === ")" && --depth === 0) return index;
+    else if (char === "$" && text[index + 1] === "'") index = ansiQuoteEnd(text, index + 2);
+    else if (char === "$" && text[index + 1] === "{") index = braceEnd(text, index + 2, false);
+    else if (char === "#" && atWordStart) {
+      const newline = text.indexOf("\n", index);
+      index = (newline < 0 ? text.length : newline) - 1;
+    } else if (text.startsWith("<<<", index)) index += 2;
+    else if (text.startsWith("<<", index)) {
+      const stripTabs = text[index + 2] === "-";
+      const { delimiter, literal, end } = readDelimiter(text, index + (stripTabs ? 3 : 2));
+      pending.push({ delimiter, literal, stripTabs, body: "", substitutions: [] });
+      index = end - 1;
+    } else if (char === "\n" && pending.length > 0) index = readBodies(text, index + 1, pending, true) - 1;
+    else if (char === "(" && text[index + 1] === "(" && depth > 0) index = arithmeticEnd(text, index);
+    else if (atCommandStart && startsWord("case")) {
+      cases++;
+      index += 3;
+    } else if (atCommandStart && startsWord("esac")) {
+      cases = Math.max(0, cases - 1);
+      index += 3;
+    } else if (char === "(") depth++;
+    else if (char === ")" && depth === 1 && cases > 0) {
+      atWordStart = true;
+      atCommandStart = true;
+      continue;
+    } else if (char === ")" && --depth === 0) return index;
+    atWordStart = wordBreak.test(char);
+    if (/[;&|(\n]/.test(char)) atCommandStart = true;
+    else if (!/\s/.test(char)) atCommandStart = false;
   }
-  return text.length;
+  throw unclosed("a $( or ( group");
 }
 
 function quoteEnd(text: string, start: number, quote: string): number {
@@ -64,23 +118,45 @@ function quoteEnd(text: string, start: number, quote: string): number {
     if (text[index] === "\\" && quote !== "'") index++;
     else if (text[index] === quote) return index;
   }
-  return text.length;
+  throw unclosed(`a ${quote} quote`);
+}
+
+const ansiEscapes: Record<string, string> = { a: "\x07", b: "\b", e: "\x1b", E: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v", "\\": "\\", "'": "'", '"': '"', "?": "?" };
+
+const ansiDecoded = (body: string) =>
+  body.replace(/\\(?:([0-7]{1,3})|x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|U([0-9A-Fa-f]{1,8})|c(.)|(.))/gs, (escape, octal, hex, short, long, control, other) => {
+    if (octal) return String.fromCharCode(parseInt(octal, 8) & 255);
+    if (hex) return String.fromCharCode(parseInt(hex, 16));
+    if (short || long) return String.fromCodePoint(parseInt(short ?? long, 16));
+    if (control) return String.fromCharCode(control.charCodeAt(0) & 31);
+    return ansiEscapes[other] ?? escape;
+  });
+
+function ansiQuoteEnd(text: string, start: number): number {
+  for (let index = start; index < text.length; index++) {
+    if (text[index] === "\\") index++;
+    else if (text[index] === "'") return index;
+  }
+  throw unclosed("a $' quote");
 }
 
 const backtickProgram = (inner: string) => inner.replace(/\\([`\\$])/g, "$1");
 
-function braceEnd(text: string, start: number): number {
+function braceEnd(text: string, start: number, inDoubleQuotes: boolean): number {
   for (let index = start; index < text.length; index++) {
     if (text[index] === "\\") index++;
     else if (text[index] === "}") return index;
-    else index = expansion(text, index)?.end ?? index;
+    else if (text[index] === '"') index = doubleQuoted(text, index + 1, true).end;
+    else if (text[index] === "'" && inDoubleQuotes) throw new Error("a single quote inside ${…} inside double quotes, which shells read differently");
+    else if (text[index] === "'") index = quoteEnd(text, index + 1, "'");
+    else index = expansion(text, index, inDoubleQuotes)?.end ?? index;
   }
-  return text.length;
+  throw unclosed("a ${");
 }
 
 const programsInside = (inner: string) => doubleQuoted(inner, 0, false).substitutions;
 
-function expansion(text: string, index: number): { end: number; programs: string[] } | undefined {
+function expansion(text: string, index: number, inDoubleQuotes: boolean): { end: number; programs: string[] } | undefined {
   if (text[index] === "`") {
     const end = quoteEnd(text, index + 1, "`");
     return { end, programs: [backtickProgram(text.slice(index + 1, end))] };
@@ -95,7 +171,7 @@ function expansion(text: string, index: number): { end: number; programs: string
     return { end, programs: [text.slice(index + 2, end)] };
   }
   if (text[index + 1] === "{") {
-    const end = braceEnd(text, index + 2);
+    const end = braceEnd(text, index + 2, inDoubleQuotes);
     return { end, programs: programsInside(text.slice(index + 2, end)) };
   }
   return undefined;
@@ -113,13 +189,14 @@ function doubleQuoted(text: string, start: number, stopAtQuote: boolean) {
       index++;
       continue;
     }
-    const found = expansion(text, index);
+    const found = expansion(text, index, true);
     if (found) {
       substitutions.push(...found.programs);
       value += text.slice(index, found.end + 1);
       index = found.end;
     } else value += char;
   }
+  if (stopAtQuote && index >= text.length) throw unclosed('a " quote');
   return { value, substitutions, end: index };
 }
 
@@ -130,7 +207,12 @@ function readDelimiter(text: string, start: number) {
   let literal = false;
   for (; index < text.length && !/[\s;&|()<>]/.test(text[index]); index++) {
     const char = text[index];
-    if (char === "'" || char === '"') {
+    if (char === "$" && text[index + 1] === "'") {
+      const end = ansiQuoteEnd(text, index + 2);
+      delimiter += ansiDecoded(text.slice(index + 2, end));
+      literal = true;
+      index = end;
+    } else if (char === "'" || char === '"') {
       const end = quoteEnd(text, index + 1, char);
       delimiter += text.slice(index + 1, end);
       literal = true;
@@ -143,16 +225,18 @@ function readDelimiter(text: string, start: number) {
   return { delimiter, literal, end: index };
 }
 
-function readBodies(text: string, start: number, pending: Heredoc[]): number {
+function readBodies(text: string, start: number, pending: Heredoc[], mustClose = false): number {
   let index = start;
   for (const heredoc of pending) {
-    while (index < text.length) {
+    let closed = false;
+    while (index < text.length && !closed) {
       const lineEnd = text.indexOf("\n", index) < 0 ? text.length : text.indexOf("\n", index);
       const line = text.slice(index, lineEnd);
       index = lineEnd + 1;
-      if ((heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter) break;
-      heredoc.body += `${line}\n`;
+      closed = (heredoc.stripTabs ? line.replace(/^\t+/, "") : line) === heredoc.delimiter;
+      if (!closed) heredoc.body += `${line}\n`;
     }
+    if (mustClose && !closed) throw unclosed(`a heredoc that ${heredoc.delimiter} should end inside a substitution`);
     if (!heredoc.literal) heredoc.substitutions = doubleQuoted(heredoc.body, 0, false).substitutions;
   }
   pending.length = 0;
@@ -163,10 +247,11 @@ function tokenize(text: string): Token[] {
   const tokens: Token[] = [];
   const pending: Heredoc[] = [];
   let word: Word | undefined;
-  const append = (value: string, raw: string, substitutions: string[] = []) => {
-    word ??= { text: "", raw: "", substitutions: [] };
+  const append = (value: string, raw: string, substitutions: string[] = [], bare = "_") => {
+    word ??= { text: "", raw: "", bare: "", substitutions: [] };
     word.text += value;
     word.raw += raw;
+    word.bare += bare;
     word.substitutions.push(...substitutions);
   };
   const endWord = () => {
@@ -190,8 +275,8 @@ function tokenize(text: string): Token[] {
       append(text.slice(index + 1, end), text.slice(index, end + 1));
       index = end + 1;
     } else if (char === "$" && next === "'") {
-      const end = quoteEnd(text, index + 2, "'");
-      append(text.slice(index + 2, end).replace(/\\(.)/g, "$1"), text.slice(index, end + 1));
+      const end = ansiQuoteEnd(text, index + 2);
+      append(ansiDecoded(text.slice(index + 2, end)), text.slice(index, end + 1));
       index = end + 1;
     } else if (char === '"') {
       const quoted = doubleQuoted(text, index + 1, true);
@@ -221,6 +306,10 @@ function tokenize(text: string): Token[] {
       if (char === "&" && next === ">" && !/[<>]$/.test(word?.raw ?? "")) endWord();
       append(char, char);
       index++;
+    } else if (char === "(" && next === "(" && !word) {
+      const end = arithmeticEnd(text, index);
+      append(text.slice(index, end + 1), text.slice(index, end + 1), programsInside(text.slice(index + 2, end - 1)));
+      index = end + 1;
     } else if (/[;&|()]/.test(char)) {
       endWord();
       const operator = operators.find((candidate) => text.startsWith(candidate, index))!;
@@ -228,9 +317,9 @@ function tokenize(text: string): Token[] {
       index += operator.length;
     } else {
       if ((char === "<" || char === ">") && word && !/^\d+$|[<>&]$/.test(word.raw)) endWord();
-      const found = expansion(text, index);
+      const found = expansion(text, index, false);
       const end = found?.end ?? index;
-      append(text.slice(index, end + 1), text.slice(index, end + 1), found?.programs);
+      append(text.slice(index, end + 1), text.slice(index, end + 1), found?.programs, found ? "_" : char);
       index = end + 1;
     }
   }
@@ -336,12 +425,13 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
     const inLoop = context.inLoop || loopDepth > 0;
     if (name === "for" || name === "select") loopDepth++;
     if (name === "done") loopDepth = Math.max(0, loopDepth - 1);
-    if (name === "export") for (const pair of args.map((arg) => arg.match(assignment))) if (pair) assigned.set(pair[1], pair[2]);
-    if (name === "" || name === "export") for (const [key, value] of assigned) env.set(key, value), commandEnv.set(key, value);
+    if (declarations.has(name)) for (const pair of args.map((arg) => arg.match(assignment))) if (pair) assigned.set(pair[1], pair[2]);
+    if (name === "" || declarations.has(name)) for (const [key, value] of assigned) env.set(key, value), commandEnv.set(key, value);
     const substitutions = [...words.flatMap((word) => word.substitutions), ...(stdin?.substitutions ?? [])];
     const leadingSubstitutions = kept.slice(0, index + 1).flatMap((word) => word.substitutions);
     const argSubstitutions = kept.slice(index + 1).map((word) => word.substitutions);
-    pipeline.push({ name, args, env: commandEnv, substitutions, leadingSubstitutions, argSubstitutions, stdin, outputs, inLoop, scope, chdir });
+    const bare = kept.slice(index).map((word) => word.bare);
+    pipeline.push({ name, args, env: commandEnv, substitutions, leadingSubstitutions, argSubstitutions, stdin, outputs, bare, inLoop, scope, chdir });
     words = [];
     stdin = undefined;
   };
@@ -357,7 +447,7 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
       hereString = false;
     } else if ("word" in token) words.push(token.word);
     else if ("herestring" in token) hereString = true;
-    else if ("heredoc" in token) stdin = { body: token.heredoc.body, substitutions: token.heredoc.substitutions };
+    else if ("heredoc" in token) stdin = { body: token.heredoc.body, substitutions: [...(stdin?.substitutions ?? []), ...token.heredoc.substitutions] };
     else if (token.operator === "|" || token.operator === "|&") finishCommand();
     else {
       finishPipeline();
@@ -389,23 +479,51 @@ export function shellInput(command: Command): { program: string; index: number }
   return inline ? { program: "", index: command.args.length } : { stdin: true };
 }
 
-function nestedPrograms(command: Command): { program: string; scope: Scope }[] {
+const conversion = /%(?:%|[-+ #0]*\d*(?:\.\d*)?[A-Za-z])/g;
+const unescaped = (text: string) => text.replace(/\\(.)/gs, (_, letter: string) => ({ n: "\n", t: "\t" })[letter] ?? letter);
+
+/** What `printf FORMAT ARGS` writes: the format, repeated while arguments are left, with each conversion taking one. */
+function printed([format = "", ...values]: string[]): string {
+  let text = "";
+  for (;;) {
+    const left = values.length;
+    text += format.replace(conversion, (spec) => (spec === "%%" ? "%" : values.shift() ?? ""));
+    if (values.length === 0 || values.length === left) return unescaped(text);
+  }
+}
+
+/** The text a pipeline's command writes when the command line spells it out: `echo` and `printf` arguments, and `cat`
+ * or `tee` passing on a heredoc, a here-string, or the text piped into them. Escapes count as `echo -e` reads them. */
+function output(pipeline: Command[], index: number): string | undefined {
+  const command = pipeline[index];
+  if (!command) return undefined;
+  const { name, args } = command;
+  const text = args.findIndex((arg) => !/^-[neE]+$/.test(arg));
+  if (name === "echo") return unescaped(args.slice(text < 0 ? args.length : text).join(" "));
+  if (name === "printf") return printed(args[0] === "--" ? args.slice(1) : args);
+  const passes = name === "tee" || (name === "cat" && args.every((arg) => arg === "-" || /^-[A-Za-z]+$/.test(arg)));
+  return passes ? command.stdin?.body ?? output(pipeline, index - 1) : undefined;
+}
+
+function nestedPrograms(command: Command, piped?: string): { program: string; scope: Scope }[] {
   const input = shellInput(command);
   const child = { parent: command.scope, chdir: command.chdir };
+  const stdin = command.stdin?.body ?? piped;
   return [
     ...command.substitutions.map((program) => ({ program, scope: { parent: command.scope } })),
     ...(input && "program" in input ? [{ program: input.program, scope: child }] : []),
-    ...(input && "stdin" in input && command.stdin !== undefined ? [{ program: command.stdin.body, scope: child }] : []),
+    ...(input && "stdin" in input && stdin !== undefined ? [{ program: stdin, scope: child }] : []),
     ...(command.name === "eval" ? [{ program: command.args.join(" "), scope: command.scope }] : []),
   ];
 }
 
 /** Every pipeline a command line runs, including those in `sh -c` programs, `$(...)` and backtick substitutions, `eval`,
- * and heredocs fed to a shell. A nested program comes before the command that holds it. */
+ * heredocs fed to a shell, and `echo`, `printf` or `cat` text piped into one. A nested program comes before the command
+ * that holds it. */
 export function pipelinesIn(program: string, context?: Context, depth = 0): Command[][] {
   if (depth > maxDepth) throw new Error(`it nests more than ${maxDepth} shell programs`);
   return parse(program, context).flatMap((pipeline) => [
-    ...pipeline.flatMap((command) => nestedPrograms(command).flatMap(({ program: nested, scope }) => pipelinesIn(nested, { ...command, scope }, depth + 1))),
+    ...pipeline.flatMap((command, index) => nestedPrograms(command, output(pipeline, index - 1)).flatMap(({ program: nested, scope }) => pipelinesIn(nested, { ...command, scope }, depth + 1))),
     pipeline,
   ]);
 }

@@ -11,7 +11,7 @@ import { secretStore } from "../../src/runner/context.ts";
 import { launcher, listen, ownerOf, slackTrigger, type SlackCommandDeps } from "./lib/command.ts";
 import { launchHere, launchOnBox, launchOnNodes, spawnRunner, type Run } from "./lib/launch.ts";
 import { manifest, serve } from "./lib/slack.ts";
-import { handleTrigger, retryPending, takeTurn, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
+import { handleTrigger, retryPending, syncFollowed, takeTurn, triggerOf, type Started, type TriggerDeps } from "./lib/trigger.ts";
 import { startSlackStub, type Message } from "./testing.ts";
 
 const temp = tempDirs();
@@ -324,7 +324,7 @@ describe("saving to the context library", () => {
     expect(reactionCalls(slack)).toEqual(["reactions.add 200.2 eyes", "reactions.remove 200.2 eyes", "reactions.remove 200.2 brain"]);
     const told = slack.method("chat.postEphemeral")[0]!.args;
     expect(told).toMatchObject({ channel: "C1", user: ownerId, thread_ts: "200.1" });
-    expect(told.text).toBe(`:brain: Added <${captured.url}|Sprint &lt;planning&gt;> in your context library (\`${captured.path}\`).`);
+    expect(told.text).toBe(`:brain: Added <${captured.url}|Sprint &lt;planning&gt;> in your context library (\`${captured.path}\`). It updates as the thread gets replies.`);
   });
 
   test("a failed capture keeps the :brain:, says why, and a second :brain: tries again and updates the note", async () => {
@@ -338,7 +338,7 @@ describe("saving to the context library", () => {
     expect(captures(ran)).toHaveLength(2);
     expect(slack.method("chat.postEphemeral").map((call) => call.args.text)).toEqual([
       ":brain: Could not save this to your context library: the push to main kept failing; nothing was saved. React again to retry.",
-      `:brain: Updated <${captured.url}|Sprint &lt;planning&gt;> in your context library (\`${captured.path}\`).`,
+      `:brain: Updated <${captured.url}|Sprint &lt;planning&gt;> in your context library (\`${captured.path}\`). It updates as the thread gets replies.`,
     ]);
     expect(reactionCalls(slack)).toEqual(["reactions.add 200.1 eyes", "reactions.remove 200.1 eyes", "reactions.add 200.1 eyes", "reactions.remove 200.1 eyes", "reactions.remove 200.1 brain"]);
     expect(ran.calls.some((call) => call.argv[0] !== "bun" && call.argv[0] !== "git")).toBe(false);
@@ -357,6 +357,56 @@ describe("saving to the context library", () => {
     await first;
     await handleTrigger(trigger, deps);
     expect(calls).toEqual(["https://example.slack.com/archives/C1/p11", "https://example.slack.com/archives/C1/p11"]);
+  });
+
+  test("a saved thread's note updates after new replies and 30 quiet minutes, stops after three failed updates, and stops after a month without replies", async () => {
+    const minute = 60_000;
+    const replies: Message[] = [{ user: "U0OTHER", ts: "1700000000.000100", text: "plan" }];
+    const told: string[] = [];
+    const sources: string[] = [];
+    let failing = 0;
+    let now = 1_700_000_000_000;
+    const deps: TriggerDeps = {
+      owner: { ...owner, captureEmoji: "brain" }, statePath: statePath(temp.make("home-")), now: () => now, log: () => {}, launch: async () => ({ failed: "no" }),
+      slack: async (method, args) => {
+        if (method === "conversations.replies") return { messages: args.limit === "1" ? replies.slice(0, 1) : replies.filter((message) => message === replies[0] || Number(message.ts) > Number(args.oldest ?? 0)) };
+        if (method === "chat.getPermalink") return { permalink: "https://example.slack.com/archives/C1/p1700000000000100" };
+        if (method === "chat.postEphemeral") told.push(args.text!);
+        return {};
+      },
+      capture: async (input) => {
+        sources.push(input.source);
+        if (failing > 0) throw (failing--, new Error("the push kept failing"));
+        return captured;
+      },
+    };
+    const reply = (text: string) => replies.push({ user: "U0OTHER", ts: `${now / 1000}.000000`, text });
+    await handleTrigger({ kind: "capture", channel: "C1", ts: "1700000000.000100" }, deps);
+    await syncFollowed(deps);
+    expect(sources).toHaveLength(1);
+    now += minute;
+    reply("load test first");
+    now += 29 * minute;
+    await syncFollowed(deps);
+    expect(sources).toHaveLength(1);
+    now += 2 * minute;
+    await syncFollowed(deps);
+    await syncFollowed(deps);
+    expect(sources).toHaveLength(2);
+    reply("moved to Friday");
+    now += 31 * minute;
+    failing = 3;
+    for (const _ of [1, 2, 3, 4]) await syncFollowed(deps);
+    expect(sources).toHaveLength(5);
+    expect(told.at(-1)).toStartWith(":brain: The note of this thread failed to update 3 times");
+    await handleTrigger({ kind: "capture", channel: "C1", ts: "1700000000.000100" }, deps);
+    expect(sources).toHaveLength(6);
+    now += 32 * 24 * 60 * minute;
+    await syncFollowed(deps);
+    reply("too late");
+    now += 31 * minute;
+    await syncFollowed(deps);
+    expect(sources).toHaveLength(6);
   });
 
   test("without the Context library pack, :brain: does nothing, and slack.captureEmoji picks another emoji", async () => {
