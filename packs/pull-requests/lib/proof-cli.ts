@@ -130,7 +130,8 @@ again after you change the repository's access.`,
   receipt: {
     usage: "receipt --comment <url>",
     summary: `Record the PR's proof receipt: the comment you posted on the PR with the gate's result. GitHub must show the
-comment on this PR. fleet decision reverse never takes the receipt as the user's words, in either URL form, and fleet
+comment on this PR. fleet decision reverse never takes a receipt recorded on this machine as the user's words, in any
+URL form, and fleet
 proof gate --json and fleet decision report link it.`,
     examples: ["fleet proof receipt --comment https://github.com/owner/name/pull/7#issuecomment-1"], options: ["--comment"],
     run: async ({ options }, identity, { home, print, run }) => {
@@ -138,7 +139,7 @@ proof gate --json and fleet decision report link it.`,
       const comment = readComment(url, run);
       const { repository, pr } = identity();
       if (`${comment.repository}#${comment.pr}`.toLowerCase() !== refText({ repository, pr }).toLowerCase()) throw new Error(`The comment ${url} is on ${comment.repository}#${comment.pr}, not on ${refText({ repository, pr })}`);
-      await recordReceipt(home, { repository, pr }, url);
+      await recordReceipt(home, { repository, pr }, url, comment.id);
       print(`receipt: ${url}`);
       return 0;
     },

@@ -925,7 +925,13 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
 
 const receiptPath = (home: string, ref: PrRef) => join(prDirectory(home, ref), "receipt.json");
 export const receiptOf = async (home: string, ref: PrRef) => (await readJson<{ url?: string } | undefined>(receiptPath(home, ref), undefined))?.url;
-export const recordReceipt = (home: string, ref: PrRef, url: string) => writeJson(receiptPath(home, ref), { url });
+const receiptComments = (home: string) => join(ledgerRoot(home), "receipt-comments");
+export const isReceipt = (home: string, comment: string) => access(join(receiptComments(home), comment)).then(() => true, () => false);
+export async function recordReceipt(home: string, ref: PrRef, url: string, comment: string) {
+  await mkdir(receiptComments(home), { recursive: true, mode: 0o700 });
+  await writeFile(join(receiptComments(home), comment), `${url}\n`, { mode: 0o600 });
+  await writeJson(receiptPath(home, ref), { url });
+}
 
 export async function reviewRecords(home: string, identity: ProofIdentity) {
   const reviews = join(pullRequestDirectory(home, identity), "reviews");

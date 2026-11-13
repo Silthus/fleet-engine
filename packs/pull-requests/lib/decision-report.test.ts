@@ -32,7 +32,7 @@ test("the report prints the gate's last summary at HEAD, and sends the user to t
   const failed = await pr.fleet("gate", "--json");
   expect(failed.code).toBe(1);
   expect(JSON.parse(failed.output)).toMatchObject({ code: 1, judge: { state: "fail", model: "judge-under-test" } });
-  expect(await reportOf(pr)).toEqual({ stillYours: ["None."], proofs: ["| example/product#42 | none owed (Docs only) | judge: fail | none | none yet |"] });
+  expect(await reportOf(pr)).toEqual({ stillYours: [`- example/product#42: its proofs are not shown to pass at HEAD ${short} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`], proofs: ["| example/product#42 | none owed (Docs only) | judge: fail | none | none yet |"] });
 
   await pr.fleet("gap", "--kind", "judge", "--reason", "The judge reads feature.txt as code");
   pr.pullRequestState({ body: graded("critical") });
@@ -121,17 +121,18 @@ test("the report reads each PR's gate outcome without a checkout, and a PR it ca
   expect((await reportOf(pr, elsewhere, "example/other#7")).stillYours).toEqual([`- example/other#7: its proofs are not known here (${unreadable}). Run fleet proof gate.`]);
 });
 
-test("the report keeps a passing gate whose review carried across a clean base merge, read without a checkout", async () => {
+test("a report outside the checkout never offers the merge of a PR whose carried review it cannot check, and the checkout's report does", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "new\n");
   pr.pullRequestState({ body: graded("non-critical") });
   await reviewHead(pr);
   await pr.advanceBase("base.txt", "base\n");
-  await pr.git("merge", "-q", "--no-edit", "origin/main");
+  const head = await pr.git("merge", "-q", "--no-edit", "origin/main").then(() => pr.git("rev-parse", "HEAD"));
   await pr.fleet("require", "--none", "--reason", "Docs only");
   expect((await pr.fleet("gate")).code).toBe(0);
 
-  expect((await reportOf(pr, fixture("fleet-report-elsewhere-"))).stillYours).toEqual(["- Merge example/product#42: its proofs pass, and it waits on your merge word."]);
+  expect((await reportOf(pr)).stillYours).toEqual(["- Merge example/product#42: its proofs pass, and it waits on your merge word."]);
+  expect((await reportOf(pr, fixture("fleet-report-elsewhere-"))).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.trim().slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
 });
 
 test("the report sends the user back to the gate after new proofs, a decision on the PR, a new tier, a new base, or a moved base", async () => {
@@ -151,8 +152,9 @@ test("the report sends the user back to the gate after new proofs, a decision on
   expect((await pr.fleet("gate")).code).toBe(0);
   expect(await reportOf(pr)).toEqual(merge);
 
-  await pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", "Where does the parser go?", "--answer", "A new module", "--rejected", "The shared parser", "--reason", "Smaller diff");
   await pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/other#5", "--question", "Another PR's choice?", "--answer", "Theirs", "--rejected", "Ours", "--reason", "Not this PR");
+  expect(await reportOf(pr)).toEqual(merge);
+  await pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", "Where does the parser go?", "--answer", "A new module", "--rejected", "The shared parser", "--reason", "Smaller diff");
   expect(await reportOf(pr)).toEqual(notGated(short));
   expect((await pr.fleet("gate")).code).toBe(0);
   expect(await reportOf(pr)).toEqual(merge);
@@ -170,6 +172,20 @@ test("the report sends the user back to the gate after new proofs, a decision on
 
   await pr.advanceBase("base.txt", "base\n");
   expect(await reportOf(pr)).toEqual(notGated(short));
+});
+
+test("the report stops offering the merge once a check fails after a passing gate", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  pr.ci([{ name: "test", bucket: "pass" }]);
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect((await reportOf(pr)).stillYours).toEqual(["- Merge example/product#42: its proofs pass, and it waits on your merge word."]);
+
+  pr.ci([{ name: "test", bucket: "fail" }]);
+  expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
 });
 
 test("the report keeps the gate of HEAD when a gate of an older commit finishes later", async () => {

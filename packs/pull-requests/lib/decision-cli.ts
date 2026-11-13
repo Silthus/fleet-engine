@@ -1,7 +1,7 @@
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
 import { renderReport } from "./decision-report.ts";
 import { commentUrl, readComment, readPullRequest, restJson, runIn, sameComment } from "./pr-ci.ts";
-import { gapKind, receiptOf, refuseInstructionQuote, usedAnswer } from "./proof.ts";
+import { gapKind, isReceipt, receiptOf, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
   agentRefusal, answerUse, askClasses, brakeDays, brakeOf, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, liftCounted, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
   type AnswerUse, type AskClass, type Decision, type DecisionState, type Env, type Ledger, type LedgerEvent, type Lift, type PrRef, type Reversal, type Ssh, type UsersMark,
@@ -60,14 +60,16 @@ used, and each reads the ledger back and fails when the other used it first. A �
 record --mark 🤖 --class scope takes --link with the T3 thread a side fix started in.
 report prints the lane's end-of-run report in Markdown, in five sections: still yours (unaccepted gaps on critical
 heads first, judge gaps too, a question card that waits in --thread, PRs whose proofs it cannot read, PRs that no
-gate has judged at their HEAD with their current proofs, then open PRs whose full gate passed, judge included, and
-wait on the user's merge word), PRs merged under the narrow grant (merged lines of the rollout log that
+gate has judged at their HEAD with their current proofs, open PRs whose proofs do not pass as read now, then open
+PRs whose full gate passed, judge included, and wait on the user's merge word), PRs merged under the narrow grant (merged lines of the rollout log that
 orchestration.rolloutLog names, whose note names the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs
 row per PR from the proof summary the gate saved at its HEAD on GitHub, with its receipt link, and the side fixes the
-lane started. The report never runs the gate or the judge and needs no checkout: it prints the summary fleet proof
-gate saved only while the PR's head, base and base SHA on GitHub, its tier, --landed for a merged PR, and the PR's
-proof files, standing rules and ledger decisions are the same. Otherwise it says the gate has not run at HEAD with
-these proofs; a decision recorded after the gate counts as a change. --thread defaults to this T3 thread.
+lane started. The report never runs the judge. It builds each PR's proof summary again at HEAD, so CI, standing
+rules, decisions and the tier are read as they are now, and takes the judge's verdict from the summary fleet proof gate
+saved, only while the PR's head, base and base SHA on GitHub, its tier, --landed for a merged PR, and the PR's proof
+files, standing rules and ledger decisions are the same. Otherwise it says the gate has not run at HEAD with these
+proofs; a decision recorded after the gate counts as a change. A summary that does not pass now offers no merge: run
+it in the PR's checkout, where a review carried across commits can be checked. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
@@ -325,7 +327,7 @@ async function heardOnComment(url: string, words: string, context: DecisionConte
   const login = restJson<{ login: string }>("user", run).login;
   const comment = readComment(url, run);
   if (comment.author.toLowerCase() !== login.toLowerCase()) throw new Error(`The comment is by ${comment.author || "nobody"}, not the user (${login}). Only the user's own words reverse a decision`);
-  if (fleetText(comment.body) || sameComment(await receiptOf(context.home, comment), url)) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
+  if (fleetText(comment.body) || await isReceipt(context.home, comment.id) || sameComment(await receiptOf(context.home, comment), url)) throw new Error(`The comment ${url} is one Fleet writes: a decision line, a proof receipt or an end-of-run report. Only the user's own words reverse a decision`);
   const body = normalized(comment.body);
   const missing = quotes(words).find((quote) => !body.includes(quote));
   if (missing) throw new Error(`"${missing}" is not in the comment ${url}. Quote the user's words as they wrote them`);
@@ -401,7 +403,9 @@ async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
 async function report(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const prs = prsOf(parsed);
   if (!prs.length) throw new Error("--pr is required: name each PR of the lane. Run fleet decision --help");
-  context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID }, fold(await reachHub(() => ledger.read())), context));
+  const events = await reachHub(() => ledger.read());
+  const read: Ledger = { read: async () => events, append: (...added) => ledger.append(...added) };
+  context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID }, read, fold(events), context));
   return 0;
 }
 

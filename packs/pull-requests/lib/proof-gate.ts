@@ -75,7 +75,19 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
   return gate;
 }
 
-export async function savedSummary(home: string, ref: PrRef, pull: PullRequest, ledger: Ledger): Promise<ProofSummary | undefined> {
+export async function currentSummary(ref: PrRef, pull: PullRequest, ledger: Ledger, context: GateContext): Promise<ProofSummary | undefined> {
+  const saved = await savedSummary(context.home, ref, pull, ledger);
+  if (!saved) return undefined;
+  const { home, run, now } = context;
+  const head = { ...ref, commit: pull.head };
+  const live = await proofGate(home, head, {
+    landed: pull.state === "merged", cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run),
+    ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => ({ commit: pull.head, body: pull.body }), ledger, now: now?.(),
+  });
+  return { ...saved, ...live.proofSummary, code: live.code === 0 ? saved.code : live.code };
+}
+
+async function savedSummary(home: string, ref: PrRef, pull: PullRequest, ledger: Ledger): Promise<ProofSummary | undefined> {
   const saved = await readJson<SavedGate | undefined>(savedPath(home, ref, pull.head), undefined);
   if (!saved) return undefined;
   const key = keyOf(pull, pull.state === "merged", await fingerprintOf(home, ref, await proofFiles(home, ref), await readDecisions(ledger)));

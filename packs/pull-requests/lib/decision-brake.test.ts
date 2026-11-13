@@ -245,6 +245,20 @@ test("a reversal refuses the PR's receipt comment by its id, in either URL form"
   expect((await pr.decide("list", "--live")).output).toContain(id);
 });
 
+test("a reversal refuses every receipt comment the PR had, under any capitals of its URL", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  const id = idIn((await decideAlone(pr, "design", "Parser?")).output);
+  pr.githubComment(11, "the-user", "Proofs at HEAD: live-run passed. Reverse that one if it looks wrong.", "2026-10-25T13:00:00Z");
+  pr.githubComment(13, "the-user", "Proofs at the next HEAD: live-run passed. Reverse that one if it looks wrong.", "2026-10-25T14:00:00Z");
+  expect((await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/42#issuecomment-11")).code).toBe(0);
+  expect((await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/42#issuecomment-13")).code).toBe(0);
+
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/pull/42#issuecomment-11")).rejects.toThrow("is one Fleet writes");
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/Example/Product/pull/42#issuecomment-13")).rejects.toThrow("is one Fleet writes");
+  expect((await pr.decide("list", "--live")).output).toContain(id);
+});
+
 test("a reversal refuses a comment under the URL of a PR it is not on", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });

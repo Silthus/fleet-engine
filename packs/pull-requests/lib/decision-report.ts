@@ -2,10 +2,10 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { optionalStringSetting } from "../../base/lib/settings.ts";
 import { findThread, withT3Session } from "../../base/lib/t3/index.ts";
-import { covers, decisionLine, hubLedger, refText, type DecisionState, type Env, type Mark, type PrRef, type Ssh } from "./decision-ledger.ts";
+import { covers, decisionLine, refText, type DecisionState, type Env, type Ledger, type Mark, type PrRef, type Ssh } from "./decision-ledger.ts";
 import { readPullRequest, runIn, type PullRequest } from "./pr-ci.ts";
 import { receiptOf, type GapProof, type ProofSummary } from "./proof.ts";
-import { savedSummary } from "./proof-gate.ts";
+import { currentSummary } from "./proof-gate.ts";
 
 export type ReportContext = { home: string; cwd: string; env: Env; now?: () => Date; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean> };
 
@@ -24,11 +24,12 @@ const cell = (items: string[], empty: string) => (items.length ? items.join("; "
 const listed = (lines: string[]) => lines.length ? lines : ["None."];
 const sameThread = (a: string, b: string) => a === b || a.endsWith(`:${b}`) || b.endsWith(`:${a}`);
 
-async function lanePr(ref: PrRef, context: ReportContext): Promise<Row> {
-  const { home, cwd, env, ssh } = context;
+async function lanePr(ref: PrRef, ledger: Ledger, context: ReportContext): Promise<Row> {
+  const { home, cwd, env, now, ssh } = context;
   try {
-    const pull = readPullRequest({ ...ref, commit: "" }, runIn(cwd, env));
-    const summary = await savedSummary(home, ref, pull, hubLedger(home, env, ssh));
+    const run = runIn(cwd, env);
+    const pull = readPullRequest({ ...ref, commit: "" }, run);
+    const summary = await currentSummary(ref, pull, ledger, { home, cwd, env, run, now, ssh });
     if (summary) return { ref, summary, state: pull.state };
     const receipt = await receiptOf(home, ref);
     return { ref, ungated: pull.head, state: pull.state, ...receipt ? { receipt } : {} };
@@ -63,9 +64,12 @@ function stillYours(rows: Row[], card: string | undefined) {
   const unknown = rows.flatMap((pr) => "unknown" in pr ? [`- ${refText(pr.ref)}: its proofs are not known here (${pr.unknown}). Run fleet proof gate.`] : []);
   const ungated = rows.flatMap((pr) => "ungated" in pr && pr.state !== "closed"
     ? [`- ${refText(pr.ref)}: the gate has not run at HEAD ${short(pr.ungated)} with these proofs, so they are not known to pass. Run fleet proof gate${pr.state === "merged" ? " --landed" : ""}.`] : []);
+  const blocked = new Set(lane.filter(({ summary }) => summary.tier === "critical" && gaps(summary).some(({ gap }) => !gap.accepted)).map(({ ref }) => refText(ref)));
+  const failing = lane.filter(({ ref, state, summary }) => state === "open" && summary.code !== 0 && !blocked.has(refText(ref)))
+    .map(({ ref, summary }) => `- ${refText(ref)}: its proofs are not shown to pass at HEAD ${short(summary.commit)} as read now (gate exit ${summary.code}). Run fleet proof gate in its checkout to see why.`);
   const merges = lane.filter(({ state, summary }) => state === "open" && summary.code === 0)
     .map(({ ref }) => `- Merge ${refText(ref)}: its proofs pass, and it waits on your merge word.`);
-  return [...blockers, ...card ? [`- A question card waits for your answer in thread ${card}.`] : [], ...unknown, ...ungated, ...merges];
+  return [...blockers, ...card ? [`- A question card waits for your answer in thread ${card}.`] : [], ...unknown, ...ungated, ...failing, ...merges];
 }
 
 const mergedAt = (at: string | undefined) => at && Number.isFinite(Date.parse(at)) ? `${new Date(at).toISOString().slice(0, 16).replace("T", " ")} UTC` : "at an unknown time";
@@ -117,8 +121,8 @@ function proofRow(pr: Row, decisions: DecisionState[]) {
   return `| ${refText(ref)} | ${cell(ran, "none")} | ${cell(deferred, "none")} | ${cell(voided, "none")} | ${receiptCell(summary.receipt)} |`;
 }
 
-export async function renderReport({ prs, thread }: { prs: PrRef[]; thread?: string }, decisions: DecisionState[], context: ReportContext): Promise<string> {
-  const rows = await Promise.all(prs.map((ref) => lanePr(ref, context)));
+export async function renderReport({ prs, thread }: { prs: PrRef[]; thread?: string }, ledger: Ledger, decisions: DecisionState[], context: ReportContext): Promise<string> {
+  const rows = await Promise.all(prs.map((ref) => lanePr(ref, ledger, context)));
   const card = thread && await (context.pendingCard ?? t3PendingCard(context.home))(thread) ? thread : undefined;
   const ours = decisions.filter((decision) => prs.some((ref) => covers(decision, ref)) || (thread !== undefined && sameThread(decision.where.thread, thread)));
   const sorted = [...ours].sort((a, b) => markOrder.indexOf(a.mark) - markOrder.indexOf(b.mark));
