@@ -89,3 +89,19 @@ _Avoid_: Waiver, override
 **Lapse**:
 The gate no longer counts an agent's acceptance, because the tier changed, CI ran on HEAD, the user keeps the gap owed, or the gap is a panel gap. The gate prints each lapsed decision.
 _Avoid_: Expiry, revoke
+
+**Reversal**:
+The user's own words, in a T3 thread or on a GitHub comment they wrote, that replace a decision's answer. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more.
+_Avoid_: Undo, override
+
+**Brake**:
+Two reversals in one ask class within 28 days. While it holds, an agent decides nothing alone in that class. Only the user's answer, given after the brake, lifts it.
+_Avoid_: Lock, freeze
+
+**Proof summary**:
+The proof state of a pull request at HEAD that the gate builds: each owed kind, the review, the head, CI, the tier, and the lapsed and voided decisions. The gate prints its lines from it, `fleet proof gate --json` prints it, and the end-of-run report reads it.
+_Avoid_: Proof status, gate result
+
+**End-of-run report**:
+The Markdown that `fleet decision report` prints when a lane ends: what is still the user's, merges under the narrow grant, the lane's decisions, one proofs row per pull request, and the side fixes it started.
+_Avoid_: Summary, wrap-up
