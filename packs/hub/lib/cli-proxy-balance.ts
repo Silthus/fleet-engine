@@ -45,7 +45,6 @@ export function quotaStatus({ usage, provider }: Credential): "available" | "exh
   return windows.some((window) => window.utilization >= 100) ? "exhausted" : "available";
 }
 
-/** The proxy names an auth file after the account's email address, so Fleet shows its auth index, or a hash of its name, instead. */
 export function shortId(file: { name?: string; auth_index?: string }): string {
   const index = typeof file.auth_index === "string" && /^[A-Za-z0-9_-]+$/.test(file.auth_index) ? file.auth_index : createHash("sha256").update(file.name ?? "").digest("hex");
   return index.slice(0, 8);
@@ -203,7 +202,7 @@ function usageWindow(raw: RawWindow): UsageWindow | undefined {
 function describe(credential: Credential, priority: number, now: number): string {
   const change = credential.priority === priority ? `priority ${priority}` : `priority ${credential.priority} -> ${priority}`;
   if (!credential.usage) return `${label(credential)}: ${change}, usage unreadable${credential.loginExpired ? ": its login expired. Sign it in again on the hub; fleet cli-proxy doctor names the command" : ""}`;
-  const window = (label: string, value?: UsageWindow) => (value ? `${label} ${value.utilization}% resets in ${value.resetsAt === undefined ? "unknown" : duration(value.resetsAt - now)}` : `${label} unknown`);
+  const window = (span: string, value?: UsageWindow) => (value ? `${span} ${value.utilization}% resets in ${value.resetsAt === undefined ? "unknown" : duration(value.resetsAt - now)}` : `${span} unknown`);
   return `${label(credential)}: ${change}, ${window("7d", credential.usage.sevenDay)}, ${window("5h", credential.usage.fiveHour)}`;
 }
 
