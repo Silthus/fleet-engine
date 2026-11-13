@@ -150,7 +150,8 @@ export async function readCriticalPaths(home: string, repository: string, env: R
   const pairs = (optionalStringSetting("pull-requests.criticalPathFiles", env) ?? "").split(",").map((pair) => pair.trim()).filter(Boolean);
   const file = pairs.map((pair) => pair.split("=")).find(([name]) => name?.trim().toLowerCase() === repository.toLowerCase())?.[1]?.trim();
   if (!file) return undefined;
-  return readFile(isAbsolute(file) ? file : join(home, file), "utf8").catch(() => undefined);
+  const path = isAbsolute(file) ? file : join(home, file);
+  return readFile(path, "utf8").catch((error: Error) => { throw new Error(`Cannot read the critical-path file ${path} of ${repository}, which pull-requests.criticalPathFiles names (${error.message}). Restore it, or remove its entry`); });
 }
 
 const riskSection = (risk: RiskCheck) => `
@@ -196,7 +197,7 @@ const failureReasons = (verdict: Verdict) => [
 
 type JudgeRecord = { commit: string; model: string; verdict: Verdict; passed: boolean; escalation?: string; judgedAt: string };
 export type JudgeDeps = { ask: (request: ModelRequest) => Promise<ModelAnswer>; model: string; arbiter: Arbiter; directory: string; commit: string; now: Date };
-export type JudgeOutcome = { state: "pass" | "fail" | "unavailable"; lines: string[]; model: string };
+export type JudgeOutcome = { state: "pass" | "fail" | "unavailable"; lines: string[]; model: string; broken: string[] };
 
 const freeJudgeFails = 2;
 const arbiterInstructions = `You decide if an agent may keep trying to pass a judge, or must ask the user. Below are the reasons a judge failed one pull request on each run, oldest first.
@@ -212,10 +213,16 @@ export async function judge(input: JudgeInput, deps: JudgeDeps): Promise<JudgeOu
   const path = join(deps.directory, `${key.digest("hex")}.json`);
   const cached = await readFile(path, "utf8").then((text) => JSON.parse(text) as JudgeRecord, () => undefined);
   const record = cached ?? await askJudge(prompt, images, readable, input.cwd, askedQuestions(input.risk !== undefined), deps);
-  if ("cause" in record) return { state: "unavailable", lines: [`judge: unavailable (${record.cause})`], model: deps.model };
+  if ("cause" in record) return { state: "unavailable", lines: [`judge: unavailable (${record.cause})`], model: deps.model, broken: [] };
   if (!cached) await writeRecord(path, record);
   const escalation = record.escalation ? [`judge: escalate to the user: ${record.escalation}. Ask them with the question tool and name the PR in the question. When they accept, record fleet proof gap --kind judge --reason <why> and their answer with fleet decision record --mark 👤 --class proof-gap --kind judge --pr <owner/repo#n>`] : [];
-  return { state: record.passed ? "pass" : "fail", lines: [...verdictLines(record.verdict), ...escalation], model: record.model };
+  return { state: record.passed ? "pass" : "fail", lines: [...verdictLines(record.verdict), ...escalation], model: record.model, broken: brokenConditions(record.verdict, input.conditions) };
+}
+
+function brokenConditions(verdict: Verdict, conditions: JudgeInput["conditions"] = []) {
+  const failed = answeredQuestions(verdict).map((name) => verdict[name]!).filter((question) => question.verdict === "fail");
+  const named = (id: string) => failed.some(({ reason, citations }) => [reason, ...citations].some((text) => text.includes(id)));
+  return [...new Set(conditions.map(({ id }) => id))].filter(named);
 }
 
 async function askJudge(prompt: string, images: string[], readable: string[], cwd: string, asked: QuestionName[], deps: JudgeDeps): Promise<JudgeRecord | { cause: string }> {

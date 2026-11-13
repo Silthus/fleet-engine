@@ -161,6 +161,33 @@ test("the judge reads each accepted gap's condition and the critical-path list, 
   expect(judge.prompts().at(-1)).toContain(`- judge (decision ${judgeId}): feature.txt holds copy only`);
 });
 
+test("a judge gap acceptance never covers a broken condition of another accepted gap", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--kinds", "prod-shape");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
+  pr.chooseGap("prod-shape", "No production read access");
+  const id = /\[(d-[0-9a-f]+)\]/.exec((await acceptGap(pr, "prod-shape", "--condition", "feature.txt reads no stored rows")).output)![1]!;
+  fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: `HEAD breaks the condition of decision ${id}: feature.txt now reads stored rows`, citations: ["feature.txt:1"] } }));
+  await pr.fleet("gap", "--kind", "judge", "--reason", "The judge misreads the copy");
+  pr.chooseGap("judge", "The judge misreads the copy");
+  await acceptGap(pr, "judge");
+
+  const gate = await pr.fleet("gate");
+  expect(gate.output).toContain(`judge gap: not accepted (the judge finds the condition of decision ${id} broken): The judge misreads the copy`);
+  expect(gate.code).toBe(3);
+});
+
+test("a configured critical-path file the gate cannot read fails the gate and names the file", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...JSON.parse(pr.env.FLEET_SETTINGS!), "pull-requests.criticalPathFiles": "example/product=critical-paths.md" });
+  await expect(pr.fleet("gate")).rejects.toThrow(`Cannot read the critical-path file ${join(pr.home, "critical-paths.md")} of example/product`);
+});
+
 test("an answer the user gave before the judge gap was recorded never accepts it", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "greet new members\n");

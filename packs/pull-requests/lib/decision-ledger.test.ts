@@ -255,6 +255,23 @@ test("the user's keep-owed outranks an agent's acceptance and no void lifts it; 
   expect((await pr.fleet("gate")).code).toBe(0);
 });
 
+test("an unreachable hub hides no keep-owed: a standing rule never accepts the gap while the ledger cannot be read", async () => {
+  const pr = await checkout();
+  const rule = "Until 2026-11-02, I accept each owed Prod shape gap.";
+  writeFileSync(join(pr.home, ".agents/guides/standing-rules.md"), `- ${rule} \`fleet proof standing --kind prod-shape --until 2026-11-02 --rule "${rule}"\`\n`);
+  await owing(pr, "prod-shape");
+  await pr.fleet("standing", "--kind", "prod-shape", "--until", "2026-11-02", "--rule", rule);
+  const { state } = hubAt(pr);
+  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
+  await acceptGap(pr, "prod-shape", "--keep-owed");
+  expect((await pr.fleet("gate")).code).toBe(3);
+
+  state.hub = "down";
+  const gate = await pr.fleet("gate");
+  expect(lineOf(gate.output, "prod-shape:")).toContain("not accepted: hub unreachable");
+  expect(gate.code).toBe(3);
+});
+
 test("record without --message takes the latest answer that names each PR and each gap kind", async () => {
   const pr = await checkout();
   await owing(pr, "prod-shape");
@@ -310,3 +327,15 @@ test("a plain yes accepts a gap only when its question asks to accept that gap",
   expect((await pr.fleet("gate")).code).toBe(3);
 });
 
+test("an agent's acceptance that lapses under real evidence at HEAD is no lapse the gate prints", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  await agent(pr, "prod-shape");
+  pr.pullRequestState({ body: graded("critical") });
+  writeFileSync(join(pr.repository, "rows.log"), "$ psql -c 'select 1'\n1\nexit=0\n");
+  await pr.fleet("save", "--kind", "prod-shape", join(pr.repository, "rows.log"));
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(0);
+  expect(gate.output).not.toContain("lapsed");
+});
