@@ -67,3 +67,9 @@ _Avoid_: Worker box
 **Hub**:
 The one machine that the profile's `hub` names, with `fleet hub here`. It runs the items placed on the hub and manages the other machines.
 _Avoid_: Controller, master box
+
+## Threads
+
+**Question card**:
+A question a thread asks the person with the question tool: `AskUserQuestion` in Claude, `request_user_input` in Codex. T3 shows it as a card, and the thread's turn waits until the person answers. A message sent to the thread in a mode other than `queue` cancels the card.
+_Avoid_: Prompt, popup, dialog

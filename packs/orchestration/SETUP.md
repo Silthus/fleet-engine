@@ -31,3 +31,29 @@ lines. Once a node runs, turn one on with its answers:
 ```sh
 fleet packs --workflows quality-loop=on --set orchestration.loopProject=<folder> --set orchestration.qualityArea=<paths> --set orchestration.ledgerRepo=<owner/name>
 ```
+
+## Question guard
+
+The `question-guard` workflow is on by default. It installs one hook file,
+`hooks/ask-guard.ts`, for two events in Claude and Codex:
+
+- **Stop.** A top-level T3 thread that ends its turn with a decision in prose
+  is stopped once and told to ask with the question tool.
+- **PreToolUse on `t3_thread_send`.** An agent sends to a thread on this
+  machine whose running turn waits on a question card. When the send's mode is
+  `auto`, `steer` or `restart`, it interrupts that turn, and T3 cancels the
+  card. The hook denies such a send and tells the agent to send again with
+  `mode: "queue"`. The queued message reaches the thread after the person
+  answers. A send in mode `queue`, or to an idle thread, passes. The hook reads
+  the card from `pendingRuntimeRequest` in T3's shell snapshot.
+
+The send guard never traps an agent:
+
+- It denies a send once for each session and card. The same send again passes,
+  for an agent whose message replaces what the card asks. It keeps this record
+  in `~/.local/state/fleet/ask-guard/`.
+- It lets the send pass on any error: when T3 cannot be read, when T3 does not
+  answer within 6 seconds (3 seconds for each T3 call), when it cannot write
+  its record, and when the send names another machine's `environmentId`.
+- While `~/.config/fleet/ask-guard.off` exists, every send passes. The Stop
+  check stays on.
