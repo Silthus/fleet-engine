@@ -135,7 +135,7 @@ test("removes an idle agent worktree with unmerged commits on a branch, and keep
 });
 
 test("under disk pressure, evicts a clean worktree whose commits a ref keeps, even with an open thread or unreadable state", () => {
-  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, openLead: false };
+  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, openLead: true };
   const pressure = { ...limits, minIdleHours: 1 };
   const unmerged = { ...idle, landed: false, thread: open };
   expect(evictable(unmerged, pressure)).toBe(true);
@@ -153,7 +153,7 @@ test("under disk pressure, keeps a worktree that no thread or agent owns for the
   expect(evictable(detached, pressure)).toBe(false);
   expect(decide({ ...detached, landed: true }, pressure).reason).toBe("no T3 thread or agent owns it; active 3.0h ago");
   expect(evictable({ ...detached, lastActivity: now - 7 * 3600_000 }, pressure)).toBe(true);
-  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, openLead: false };
+  const open = { status: "completed", archived: false, deleted: false, settled: false, pending: false, activeAt: 0, openLead: true };
   expect(evictable({ ...detached, thread: open }, pressure)).toBe(true);
 });
 
