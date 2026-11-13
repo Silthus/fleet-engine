@@ -259,7 +259,7 @@ test("a claimant that judged a holder stale after another claimant took the slot
   expect(readdirSync(io.slots).filter((name) => !name.startsWith("."))).toEqual([]);
 });
 
-test("a claimant that crashed while it reclaimed a slot holds that slot only for a short grace", async () => {
+test("a claimant that crashed while it reclaimed a slot no longer holds it", async () => {
   const slots = fixture("fleet-panel-slots-");
   const crashing = join(fixture("fleet-panel-crash-"), "crash.ts");
   const reviewer = await exitedPid();
@@ -275,6 +275,33 @@ await withSlot({ env: {}, pause: async () => {}, now: () => new Date(), startTim
   const io = { ...slotIO(1), slots, now: () => new Date(Date.now() + 120_000) };
   expect(await withSlot(io, async () => "ran")).toBe("ran");
   expect(readdirSync(slots).filter((name) => /^\d+$/.test(name))).toEqual([]);
+});
+
+test("a claimant paused while it reclaims a slot is not fenced out, however long the pause: the next claimant waits until it resumes", async () => {
+  const slots = fixture("fleet-panel-slots-");
+  const scratch = fixture("fleet-panel-pause-");
+  const pausing = join(scratch, "pause.ts");
+  const inSection = join(scratch, "in-section");
+  const reviewer = await exitedPid();
+  writeFileSync(pausing, `import { writeFileSync } from "node:fs";
+import { withSlot } from ${JSON.stringify(join(import.meta.dir, "proof-panel.ts"))};
+const startTime = async (pid: number) => {
+  if (pid === ${reviewer}) { writeFileSync(${JSON.stringify(inSection)}, ""); process.kill(process.pid, "SIGSTOP"); }
+  return "Sun Oct 25 11:00:00 2026";
+};
+await withSlot({ env: {}, pause: () => new Promise((done) => setImmediate(done)), now: () => new Date(), startTime, slots: ${JSON.stringify(slots)}, slotCount: 1, pid: process.pid, limit: 60000 }, async () => {});
+`);
+  writeFileSync(join(slots, "0"), JSON.stringify({ pid: await exitedPid(), token: "dead", reviewer, reviewerStarted: "Sun Oct 25 10:00:00 2026" }));
+  const paused = Bun.spawn(["bun", pausing], { stdout: "ignore", stderr: "inherit" });
+  try {
+    while (!existsSync(inSection)) await new Promise((done) => setImmediate(done));
+    let waits = 0;
+    let resumed = false;
+    const io = { ...slotIO(1), slots, now: () => new Date(Date.now() + 3_600_000), pause: async () => { if (++waits > 20) { resumed = true; paused.kill("SIGCONT"); } await new Promise((done) => setImmediate(done)); } };
+
+    expect(await withSlot(io, async () => resumed)).toBe(true);
+    expect(await paused.exited).toBe(0);
+  } finally { paused.kill("SIGKILL"); }
 });
 
 test("a process's start time stays the same while it runs and is unknown once it exits", async () => {
