@@ -87,5 +87,5 @@ A decision that lets the gate pass over a proof gap. The user's acceptance alway
 _Avoid_: Waiver, override
 
 **Lapse**:
-The gate no longer counts an agent's acceptance, because the tier changed, CI ran on HEAD, the user keeps the gap owed, or the gap is a panel gap. The gate prints each lapsed decision.
+The gate no longer counts an agent's acceptance, because the tier changed, CI ran on HEAD, the user keeps the gap owed, or the gap is a panel gap. The gate prints each lapsed decision of a kind that stays open.
 _Avoid_: Expiry, revoke
