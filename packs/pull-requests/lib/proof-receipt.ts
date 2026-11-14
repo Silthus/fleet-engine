@@ -146,9 +146,7 @@ export function receiptLink(body: string) {
   const start = body.indexOf(receiptOpen);
   const end = body.indexOf(receiptClose);
   if (start < 0 || end < start) return undefined;
-  const url = /^Full receipt: (https:\/\/\S+)\s*$/m.exec(body.slice(start, end))?.[1];
-  const id = url ? new URL(url).pathname.split("/").filter(Boolean).at(-1) : undefined;
-  return url && id ? { url, id } : undefined;
+  return /^Full receipt: (https:\/\/\S+)\s*$/m.exec(body.slice(start, end))?.[1];
 }
 
 export async function screenshotFiles(summary: ProofSummary) {
@@ -162,7 +160,9 @@ const count = (text: string, part: string) => text.split(part).length - 1;
 
 export function checkMarkers(body: string) {
   const [opens, closes] = [count(body, receiptOpen), count(body, receiptClose)];
-  if (opens > 1 || closes > 1 || opens !== closes || body.indexOf(receiptClose) < body.indexOf(receiptOpen)) {
+  const start = body.indexOf(receiptOpen);
+  const whole = start < 0 || new RegExp(`^${marker.source}`).test(body.slice(start));
+  if (opens > 1 || closes > 1 || opens !== closes || body.indexOf(receiptClose) < start || !whole) {
     throw new Error(`The PR body holds broken receipt markers (${opens} opening, ${closes} closing). Fix them by hand to one ${receiptOpen} ... --> and one ${receiptClose}, then run the receipt again`);
   }
 }
@@ -192,7 +192,8 @@ export function placeReceipt(body: string, receipt: Receipt, heading: string) {
   }
   const found = new RegExp(String.raw`^#{1,6}[ \t]+${name}[ \t]*\r?$`, "m").exec(body);
   const after = found ? found.index + found[0].length : 0;
-  const next = found ? /^#{1,2}[ \t]+\S/m.exec(body.slice(after)) : null;
+  const depth = found ? found[0].indexOf(" ") : 0;
+  const next = found ? new RegExp(String.raw`^#{1,${depth}}[ \t]+\S`, "m").exec(body.slice(after)) : null;
   if (next) return `${body.slice(0, after + next.index)}${blockOf(receipt, undefined)}\n\n${body.slice(after + next.index)}`;
   return `${body}\n${blockOf(receipt, found ? undefined : heading)}\n`;
 }

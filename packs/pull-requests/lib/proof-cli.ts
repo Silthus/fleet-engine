@@ -168,13 +168,14 @@ a number of four or more digits, a percentage, a thousands separator, an email a
 it; move such detail into an evidence note. The prod-shape result always reads "${prodShapeResult}". A pack's
 ${publisherSeam} handler publishes the full receipt: it reads {repository, pr, title, page, previous: {id, url}} as
 JSON on stdin and prints {id, url}, or {failed}, as its last line; the block then links the URL, and the next run
-passes it back as previous. Without a handler, fleet writes the page to display/receipt.md in the PR's proof store,
+on this machine passes it back as previous. A machine that did not publish it sends no previous, so the handler
+publishes a new page. Without a handler, fleet writes the page to display/receipt.md in the PR's proof store,
 prints its path, and links nothing. The page shows the proof of each commit, each review round with its lenses and
 findings, the judge verdicts, the gaps with their decisions, the screenshots, the live-run and prod-shape notes
 without command output, the decisions, and what was not checked. When the handler's request is over ${receiptBudget}
 bytes, the page leaves out the raw lens answers, then the judge reasons, then note lines past the 40th, and says so.
 fleet refuses an empty body read, a body that changed between its read and the write,
-broken markers, and a body that reads back different. It warns about each proof without a line and each screenshot
+broken markers, a write that would change the merge-risk callout, and a body that reads back different. It warns about each proof without a line and each screenshot
 without a caption or a published URL. Exit 0 when the receipt is current or written; 1 when publishing or GitHub
 fails, or the page is still over the budget; 2 when the guard refuses a field; 3 when the hub ledger cannot be reached. --comment records a comment you
 posted on the PR as its receipt instead: GitHub must show the comment on this PR. fleet proof gate --json and fleet
