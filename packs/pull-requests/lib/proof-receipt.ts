@@ -254,9 +254,11 @@ export function placeReceipt(body: string, receipt: Receipt, heading: string): s
     const generated = /^[^\n]*-->\r?\n#{1,6}[ \t]+([^\r\n]*?)[ \t]*\r?\n/.exec(body.slice(start, end))?.[1];
     const { found, next } = sectionOf(body, heading);
     const inSection = found !== undefined && found.start < start && (!next || start < next.start);
-    const inPlace = body.slice(0, start) + blockOf(receipt, generated) + body.slice(end);
-    if ((generated === heading || (generated === undefined && inSection)) && blocksAround(body, { start, end }) !== undefined) return inPlace;
-    return placeReceipt(lifted(body, start, end), receipt, heading);
+    const around = blocksAround(body, { start, end });
+    const rest = lifted(body, start, end);
+    const stays = generated === heading || (generated === undefined && inSection) || blocksOf(rest) !== around;
+    if (around !== undefined && stays) return body.slice(0, start) + blockOf(receipt, generated && heading) + body.slice(end);
+    return placeReceipt(rest, receipt, heading);
   }
   const { found, next } = sectionOf(body, heading);
   if (next) return `${afterBlankLine(body.slice(0, next.start))}${blockOf(receipt, undefined)}\n\n${body.slice(next.start)}`;

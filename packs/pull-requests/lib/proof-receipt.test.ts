@@ -683,3 +683,20 @@ test("a receipt between two ordered lists refreshes where it is and keeps both l
   expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe(body.replace(old, "<block>"));
   expect(Bun.markdown.html(pr.githubBody())).toContain('<ol start="7">');
 });
+
+test("a changed receipt heading refreshes the receipt where it is when moving it would join the lists or code blocks around it", async () => {
+  const { pr } = await provedPr();
+  pr.env.FLEET_SETTINGS = JSON.stringify({ "pull-requests.receiptHeading": "Evidence" });
+  const old = (heading: string) => `<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n${heading}| Proof |\n| --- |\n| old |\n<!-- /fleet-proof-receipt -->`;
+  const cases = [["1. First", "7. Seventh", "<ol"], ["- one", "- two", "<ul"], ["    one", "    two", "<pre>"]] as const;
+  for (const [first, last, tag] of cases) for (const [heading, shown] of [["## Testing\n\n", "## Evidence"], ["", "| Proof | What ran | Result | Commit |"]] as const) {
+    const body = `Adds the greeting.\n\n### Testing\n\n${first}\n\n${old(heading)}\n\n${last}\n\n### Evidence\n\nA picture.\n`;
+    pr.pullRequestState({ body });
+    expect((await pr.fleet("receipt")).output).toContain("receipt written");
+    const written = pr.githubBody();
+    expect(written.replace(block(written), "<block>")).toBe(body.replace(old(heading), "<block>"));
+    expect(block(written).split("\n")[1]).toBe(shown);
+    expect(Bun.markdown.html(written).split(tag).length - 1).toBe(2);
+    expect((await pr.fleet("receipt")).output).toContain("receipt current");
+  }
+});
