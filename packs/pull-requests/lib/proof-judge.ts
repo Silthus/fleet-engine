@@ -184,7 +184,7 @@ const isStrings = (value: unknown) => Array.isArray(value) && value.every((item)
 const highFindings = (verdict: Verdict) => verdict.quality.findings.filter((finding) => finding.rating === "high");
 const passes = (verdict: Verdict) => answeredQuestions(verdict).every((name) => verdict[name]!.verdict === "pass") && !highFindings(verdict).length;
 
-function verdictLines(verdict: Verdict) {
+export function verdictLines(verdict: Verdict) {
   const cited = (citations: string[]) => citations.length ? ` (${citations.join(", ")})` : "";
   const findings = [...verdict.quality.findings].sort((a, b) => ratings.indexOf(a.rating) - ratings.indexOf(b.rating));
   const quality = findings.length ? `, ${findings.map((finding) => `${finding.rating}: ${finding.problem} (${finding.citation})`).join("; ")}` : `: ${verdict.quality.reason}`;
@@ -199,7 +199,7 @@ const failureReasons = (verdict: Verdict) => [
   ...highFindings(verdict).map((finding) => `quality: ${finding.problem} (${finding.citation})`),
 ];
 
-type JudgeRecord = { commit: string; model: string; verdict: Verdict; passed: boolean; escalation?: string; judgedAt: string };
+export type JudgeRecord = { commit: string; model: string; verdict: Verdict; passed: boolean; escalation?: string; judgedAt: string };
 export type JudgeDeps = { ask: (request: ModelRequest) => Promise<ModelAnswer>; model: string; arbiter: Arbiter; directory: string; commit: string; now: Date };
 export type JudgeOutcome = { state: "pass" | "fail" | "unavailable"; lines: string[]; model: string; broken: string[] };
 
@@ -248,11 +248,13 @@ async function askJudge(prompt: string, images: string[], readable: string[], cw
   return { ...record, escalation: decision.verdict === "escalate" ? decision.reason : `the arbiter gave no verdict (${decision.reason})` };
 }
 
-async function failedRecords(directory: string) {
+export async function storedVerdicts(directory: string) {
   const names = (await readdir(directory).catch(() => [])).filter((name) => name.endsWith(".json"));
   const records = await Promise.all(names.map(async (name) => JSON.parse(await readFile(join(directory, name), "utf8")) as JudgeRecord));
-  return records.filter((record) => !record.passed).sort((a, b) => a.judgedAt.localeCompare(b.judgedAt));
+  return records.sort((a, b) => a.judgedAt.localeCompare(b.judgedAt));
 }
+
+const failedRecords = async (directory: string) => (await storedVerdicts(directory)).filter((record) => !record.passed);
 
 async function writeRecord(path: string, record: JudgeRecord) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });

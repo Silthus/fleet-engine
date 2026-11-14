@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import type { DecisionState } from "./decision-ledger.ts";
+import type { Plan } from "./proof-panel.ts";
 import type { Display } from "./proof-display.ts";
 import type { ReviewDisplay } from "./proof-review-display.ts";
 import type { GapProof, KindProof, ProofSummary } from "./proof.ts";
@@ -47,7 +48,7 @@ const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br
 const row = (cells: string[]) => `|${cells.map((text) => text ? ` ${cell(text)} ` : " ").join("|")}|`;
 export const prodShapeResult = "measured on production; details in the receipt";
 
-export type ReceiptReview = ReviewDisplay & { lenses?: string[] };
+export type ReceiptReview = ReviewDisplay & { lenses?: Plan["lenses"] };
 export type ReceiptInput = {
   summary: ProofSummary; decisions: DecisionState[]; display: Display; notChecked: string[]; reviews: ReceiptReview[];
   screenshots: { commit: string; names: string[] }[];
@@ -79,10 +80,10 @@ function reviewRow(reviews: ReceiptReview[]) {
   if (!reviews.length) return row(["Review", "no finished review", "", ""]);
   for (const review of reviews) {
     guardField("review label", review.label);
-    for (const model of review.lenses ?? []) guardField(`panel model of ${review.label}`, model);
+    for (const { model } of review.lenses ?? []) guardField(`panel model of ${review.label}`, model);
     if (!review.lenses && review.reviewer) guardField(`reviewer of ${review.label}`, review.reviewer);
   }
-  const models = [...new Set(reviews.flatMap((review) => review.lenses ?? (review.reviewer ? [review.reviewer] : [])))];
+  const models = [...new Set(reviews.flatMap((review) => review.lenses?.map((lens) => lens.model) ?? (review.reviewer ? [review.reviewer] : [])))];
   const lenses = Math.max(0, ...reviews.map((review) => review.lenses?.length ?? 0));
   const who = lenses ? `${lenses}-lens panel (${models.join(", ")})` : `single reviewer (${models.join(", ") || "unnamed"})`;
   const sum = (key: keyof ReviewDisplay["counts"]) => reviews.reduce((total, review) => total + review.counts[key], 0);
