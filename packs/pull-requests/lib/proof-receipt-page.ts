@@ -33,6 +33,7 @@ const fenced = (text: string) => {
 };
 
 const quoted = /^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/;
+const codeMark = "\uE003";
 const escaped = (text: string) => text.replace(/[\\`*_[\]~|]/g, "\\$&");
 const unescaped = (text: string) => text.replace(/\\(.)/g, "$1");
 const startsBlock = (text: string) => text.replace(/^([ \t]*)([-+>#=]|\d+[.)])/gm, "$1\\$2");
@@ -73,32 +74,32 @@ function proseShape(count: (lines: number) => void) {
     tr: (children: string) => `|${children}\n`,
     th: (children: string) => { headerCells++; return ` ${children.replace(/\n/g, " ")} |`; },
     td: (children: string) => ` ${children.replace(/\n/g, " ")} |`,
-    code: (children: string) => { count(children.split("\n").filter((line) => /\S/.test(line)).length); return ""; },
+    code: (children: string) => { count(children.split("\n").filter((line) => /\S/.test(line)).length); return `${codeMark}\n\n`; },
   };
 }
 
-const pureFence = /^[ \t]*(?:`{3,}[^`]*|~{3,}.*)$/;
-
-function withoutTranscripts(lines: string[]) {
-  const inner = lines.map((line) => line.replace(quoted, ""));
-  const nextExit: number[] = [];
-  for (let index = lines.length - 1, exit = -1; index >= 0; index--) nextExit[index] = exit = inner[index]!.startsWith("exit=") ? index : exit;
-  let through = -1;
-  let left = 0;
-  const kept = lines.map((line, index) => {
-    if (index > through && inner[index]!.startsWith("$ ")) through = Math.max(index, nextExit[index]!);
-    if (index > through && !inner[index]!.startsWith("exit=") || pureFence.test(inner[index]!)) return line;
-    left++;
-    return "";
-  });
-  return { kept, left };
-}
+const leadOf = (line: string) => unescaped(line.replace(quoted, "")).replace(/^(?:\*\*|_|~~)+/, "");
+const endsTranscript = (lead: string) => lead.startsWith("exit=") || lead.startsWith("$ ") || lead === codeMark;
 
 export function proseOf(text: string) {
-  const { kept, left: transcripts } = withoutTranscripts(text.split(/\r\n|\r|\n/));
-  let left = transcripts;
-  const prose = Bun.markdown.render(kept.join("\n"), proseShape((lines) => { left += lines; }));
-  return { text: prose.replace(/\n{3,}/g, "\n\n").trim(), left };
+  let left = 0;
+  const lines = Bun.markdown.render(text.replaceAll(codeMark, "\uE002"), proseShape((lines) => { left += lines; })).split("\n");
+  const lead = lines.map(leadOf);
+  const kept: string[] = [];
+  let through = -1;
+  lead.forEach((line, index) => {
+    if (index > through && line.startsWith("$ ")) {
+      let end = index + 1;
+      while (end < lead.length && !endsTranscript(lead[end]!)) end++;
+      let block = index + 1;
+      while (block < end && lines[block]!.trim()) block++;
+      through = lead[end]?.startsWith("exit=") ? end : block - 1;
+    }
+    if (line === codeMark) return;
+    if (index <= through || line.startsWith("exit=")) left++;
+    else kept.push(lines[index]!);
+  });
+  return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), left };
 }
 
 const severities = ["blocker", "major", "minor", "nit", "high", "medium", "low"];
