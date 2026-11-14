@@ -57,8 +57,8 @@ export function guardField(field: string, text: string) {
 const modelSnapshot = /-20\d{6}$/;
 const guardModel = (field: string, model: string) => guardField(field, model.replace(modelSnapshot, ""));
 
-const short = (commit: string) => commit.slice(0, 7);
-const at = (commit: string) => `\`${short(commit)}\``;
+export const short = (commit: string) => commit.slice(0, 7);
+export const at = (commit: string) => `\`${short(commit)}\``;
 const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
 const row = (cells: string[]) => `|${cells.map((text) => text ? ` ${cell(text)} ` : " ").join("|")}|`;
 export const prodShapeResult = "measured on production; details in the receipt";

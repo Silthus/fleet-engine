@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { decisionLine, type DecisionState } from "./decision-ledger.ts";
 import type { Display } from "./proof-display.ts";
 import { storedVerdicts, verdictLines, type JudgeRecord } from "./proof-judge.ts";
-import type { ReceiptReview } from "./proof-receipt.ts";
+import { at, kindSource, type ReceiptReview } from "./proof-receipt.ts";
 import type { PublishRequest } from "./proof-receipt-publisher.ts";
-import { entries, judgeDirectory, pullRequestDirectory, readJson, reviewedFindings, summaryGaps, type GapProof, type ProofIdentity, type ProofKind, type ProofSummary } from "./proof.ts";
+import { entries, judgeDirectory, pullRequestDirectory, readJson, reviewedFindings, summaryGaps, type GapProof, type KindProof, type ProofIdentity, type ProofKind, type ProofSummary } from "./proof.ts";
 
 export const receiptBudget = 900_000;
 
@@ -20,8 +20,6 @@ export type Page = {
 };
 type PageInput = Pick<Page, "summary" | "title" | "decisions" | "display" | "notChecked"> & { reviews: ReceiptReview[] };
 
-const short = (commit: string) => commit.slice(0, 7);
-const at = (commit: string) => `\`${short(commit)}\``;
 const time = (iso: string) => `${iso.slice(0, 16).replace("T", " ")} UTC`;
 const plain = (text: string) => text.replace(/</g, "&lt;");
 const cell = (text: string) => plain(text).replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
@@ -34,20 +32,29 @@ const fenced = (text: string) => {
   return [`${fence}text`, text, fence].join("\n");
 };
 
+const quoted = /^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/;
+
 export function proseOf(text: string) {
+  const lines = text.split(/\r?\n/);
   const kept: string[] = [];
   let fence: string | undefined;
+  let through = -1;
   let left = 0;
-  for (const line of text.split(/\r?\n/)) {
-    const inner = line.replace(/^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/, "");
+  lines.forEach((line, index) => {
+    const inner = line.replace(quoted, "");
     const marker = /^(`{3,}|~{3,})/.exec(inner)?.[1];
-    if (fence) {
+    if (index <= through) left++;
+    else if (fence) {
       left++;
       if (marker && marker[0] === fence[0] && marker.length >= fence.length && inner.trim() === marker) fence = undefined;
     } else if (marker) { fence = marker; left++; }
-    else if (/^(?:\$ |exit=)/.test(inner)) left++;
-    else kept.push(line);
-  }
+    else if (inner.startsWith("$ ")) {
+      left++;
+      const exit = lines.findIndex((later, at) => at > index && later.replace(quoted, "").startsWith("exit="));
+      if (exit > index) through = exit;
+    } else if (inner.startsWith("exit=") || /^(?: {4}|\t)/.test(line) && !/^\s*(?:[-*+]|\d+[.)])\s/.test(line)) left++;
+    else kept.push(line.replace(/^((?:\s*>)*\s*)#{1,6}[ \t]+(.*?)[ \t#]*$/, "$1**$2**"));
+  });
   return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), left };
 }
 
@@ -120,13 +127,16 @@ export async function gatherPage(home: string, head: ProofIdentity, input: PageI
   const verdicts = await storedVerdicts(judgeDirectory(home, head));
   for (const verdict of verdicts) rowOf(verdict.commit).judge.push(verdict.passed ? "✅" : "❌");
   rowOf(summary.commit);
-  const times = new Map(await Promise.all([...rows.keys()].map(async (commit) => [commit, await stat(join(directory, commit)).then((info) => info.mtimeMs, () => Infinity)] as const)));
+  const times = new Map<string, number>();
+  const seen = (commit: string, time: number) => times.set(commit, Math.min(times.get(commit) ?? Infinity, time));
+  for (const commit of rows.keys()) seen(commit, await stat(join(directory, commit)).then((info) => info.mtimeMs, () => Infinity));
+  for (const review of input.reviews) seen(review.commit, await stat(join(review.directory, "findings.md")).then((info) => info.mtimeMs, () => Infinity));
+  for (const verdict of verdicts) seen(verdict.commit, Date.parse(verdict.judgedAt));
   const commits = [...rows.values()].sort((a, b) => Number(a.commit === summary.commit) - Number(b.commit === summary.commit) || times.get(a.commit)! - times.get(b.commit)! || a.commit.localeCompare(b.commit));
   const notes: Page["notes"] = {};
   for (const kind of summary.kinds) {
-    if ((kind.kind === "live-run" || kind.kind === "prod-shape") && "directory" in kind) {
-      notes[kind.kind] = await notesOf(kind.directory, kind.state === "ran" ? summary.commit : kind.from);
-    }
+    const from = kindSource(kind, summary.commit);
+    if (from && "directory" in kind) notes[kind.kind] = await notesOf(kind.directory, from.commit);
   }
   const { reviews, ...rest } = input;
   return { ...rest, commits, records, rounds: await roundsOf(reviews), verdicts, notes };
@@ -153,14 +163,17 @@ function noteText(note: Note, cut: boolean) {
   return [`#### Note \`${note.name}\` at ${at(note.commit)}`, "", ...shown.map(plain), ...note.left ? ["", `[${note.left} lines of command output left out]`] : [], ""];
 }
 
-function kindPart(page: Page, kind: ProofKind, heading: string, cut: boolean) {
-  const proof = page.summary.kinds.find((candidate) => candidate.kind === kind);
-  if (!proof) return [];
-  const from = proof.state === "ran" ? page.summary.commit : proof.state === "reused" || proof.state === "carried" ? proof.from : undefined;
-  const lines = from ? page.display.lines[from]?.[kind] : undefined;
+const kindHeadings: Record<ProofKind, string> = {
+  "live-run": "Live run", "ui-walk": "UI walk", "prod-shape": "Production shape", "cross-version": "Cross-version", "shadow-diff": "Shadow diff", "post-deploy-watch": "Post-deploy watch",
+};
+
+function kindPart(page: Page, proof: KindProof, cut: boolean) {
+  const kind = proof.kind;
+  const from = kindSource(proof, page.summary.commit);
+  const lines = from ? page.display.lines[from.commit]?.[kind] : undefined;
   const notes = page.notes[kind] ?? [];
   if (!lines && !notes.length) return [];
-  return [`## ${heading}`, "", ...lines ? [plain(`**What ran:** ${sentence(lines.ran)} **Result:** ${sentence(lines.result)}`), ""] : [], ...notes.flatMap((note) => noteText(note, cut))];
+  return [`## ${kindHeadings[kind]}`, "", ...lines ? [plain(`**What ran:** ${sentence(lines.ran)} **Result:** ${sentence(lines.result)}`), ""] : [], ...notes.flatMap((note) => noteText(note, cut))];
 }
 
 function roundPart(round: Round, applied: readonly Cut[]) {
@@ -199,11 +212,18 @@ function judgePart(page: Page, atHead: JudgeRecord | undefined, applied: readonl
   return out;
 }
 
+function judgeAtHead(summary: ProofSummary, stored: JudgeRecord | undefined) {
+  const by = stored ? ` (${stored.model}, ${time(stored.judgedAt)})` : "";
+  if (summary.judge.state === "pass") return `✅ passed${by}${summary.code !== 0 ? ", but the gate fails now" : ""}`;
+  if (summary.judge.state === "fail") return `❌ failed${by}`;
+  return summary.judge.state === "unavailable" ? "unavailable" : "not yet run";
+}
+
 export function renderPage(page: Page, applied: readonly Cut[] = []) {
   const { summary } = page;
   const ref = `${summary.repository}#${summary.pr}`;
   const atHead = page.verdicts.filter((verdict) => verdict.commit === summary.commit).at(-1);
-  const judgeState = atHead ? `${atHead.passed ? "✅ passed" : "❌ failed"} (${atHead.model}, ${time(atHead.judgedAt)})` : "not yet run";
+  const judgeState = judgeAtHead(summary, atHead);
   const owed = summary.kinds.map((kind) => kind.kind);
   const notesCut = applied.includes("evidence notes past their first 40 lines");
   const gaps = summaryGaps(summary);
@@ -220,8 +240,7 @@ export function renderPage(page: Page, applied: readonly Cut[] = []) {
     ...gaps.length ? ["## Gaps and who accepted them", "", ...table(["Kind", "Commit", "Why", "Question", "Answer", "Who", "When", "Thread"], gaps.map((gap) => gapRow(gap, page.decisions))), ""] : [],
     ...page.display.screenshots.length ? ["## Screenshots in journey order", "", ...page.display.screenshots.map((shot, index) =>
       `${index + 1}. ${shot.url ? `[${plain(shot.caption)}](${shot.url})` : `${plain(shot.caption)} (not published)`} at ${at(shot.commit)}, evidence \`${shot.name}\``), ""] : [],
-    ...kindPart(page, "live-run", "Live run", notesCut),
-    ...kindPart(page, "prod-shape", "Production shape", notesCut),
+    ...summary.kinds.flatMap((kind) => kindPart(page, kind, notesCut)),
     ...page.decisions.length ? ["## Decisions", "", ...page.decisions.map((decision) => plain(decisionLine(decision))), ""] : [],
     ...page.notChecked.length ? ["## Not checked", "", ...page.notChecked.map((item) => `- ${plain(item)}`), ""] : [],
   ];
@@ -230,13 +249,12 @@ export function renderPage(page: Page, applied: readonly Cut[] = []) {
 
 export class PageTooLarge extends Error {}
 
-export function fitPage(page: Page, request: (content: string) => PublishRequest, budget = receiptBudget) {
+export function fitPage(page: Page, metadata: Omit<PublishRequest, "page">) {
   let bytes = 0;
   for (let applied = 0; applied <= cuts.length; applied++) {
-    const content = renderPage(page, cuts.slice(0, applied));
-    const fitted = request(content);
+    const fitted: PublishRequest = { ...metadata, page: renderPage(page, cuts.slice(0, applied)) };
     bytes = Buffer.byteLength(JSON.stringify(fitted));
-    if (bytes < budget) return fitted;
+    if (bytes < receiptBudget) return fitted;
   }
-  throw new PageTooLarge(`receipt refused: the full receipt is ${bytes} bytes after every cut, over the budget of ${budget} bytes. Shorten the evidence notes or the lens answers.`);
+  throw new PageTooLarge(`receipt refused: the full receipt is ${bytes} bytes after every cut, over the budget of ${receiptBudget} bytes. Shorten the evidence notes or the lens answers.`);
 }

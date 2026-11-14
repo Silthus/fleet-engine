@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { stringSetting } from "../../base/lib/settings.ts";
 import { covers, hubLedger } from "./decision-ledger.ts";
 import { readPullRequest, type PullRequest } from "./pr-ci.ts";
-import { prDirectory, readDecisions, readJson, recordReceipt, reviewRecords, writeJson, type ProofIdentity } from "./proof.ts";
+import { receiptOf, prDirectory, readDecisions, readJson, recordReceipt, reviewRecords, writeJson, type ProofIdentity } from "./proof.ts";
 import { displayEntry, readDisplay, readNotChecked, recordNotChecked } from "./proof-display.ts";
 import { receiptSummary, type GateContext } from "./proof-gate.ts";
 import { readPlan } from "./proof-panel.ts";
@@ -71,7 +71,7 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
   const page = await gatherPage(home, head, { summary, title: first.title, decisions: covered, display, notChecked, reviews });
   let request: PublishRequest | undefined;
   if (publish) {
-    try { request = fitPage(page, (content) => ({ repository: head.repository, pr: head.pr, title, page: content, ...previous ? { previous } : {} })); }
+    try { request = fitPage(page, { repository: head.repository, pr: head.pr, title, ...previous ? { previous } : {} }); }
     catch (error) { if (error instanceof PageTooLarge) { print(error.message); return 1; } throw error; }
   }
   const content = request?.page ?? renderPage(page);
@@ -82,10 +82,12 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
     await writeFile(local, content, { mode: 0o600 });
     print(`receipt page: ${local}`);
   };
+  const recordBody = async () => { if (!publish && !await receiptOf(home, head)) await recordReceipt(home, head, `https://github.com/${head.repository}/pull/${head.pr}`); };
   const place = (url: string | undefined) => placeReceipt(first.body, { head: head.commit, hash, section: url ? withLink(rendered.section, url) : rendered.section }, heading);
   if ((!publish || previous) && place(publish && previous?.url) === first.body) {
     if (!publish && await readFile(local, "utf8").catch(() => undefined) !== content) await saveLocal();
     if (items) await recordNotChecked(home, head, items);
+    await recordBody();
     print("receipt current");
     return 0;
   }
@@ -101,6 +103,7 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
   await writeBody(head, intended, context);
   if (readBody(head, context).body !== intended) throw new Error("The PR body reads back different from the one fleet wrote. Check the body by hand, then run the receipt again");
   if (items) await recordNotChecked(home, head, items);
+  await recordBody();
   print(`receipt written at ${short(head.commit)}${published ? `: ${published.url}` : ""}`);
   return 0;
 }

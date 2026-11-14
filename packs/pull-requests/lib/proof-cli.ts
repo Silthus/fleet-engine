@@ -170,9 +170,11 @@ ${publisherSeam} handler publishes the full receipt: it reads {repository, pr, t
 JSON on stdin and prints {id, url}, or {failed}, as its last line; the block then links the URL, and the next run
 on this machine passes it back as previous. A machine that did not publish it sends no previous, so the handler
 publishes a new page. Without a handler, fleet writes the page to display/receipt.md in the PR's proof store,
-prints its path, and links nothing. The page shows the proof of each commit, each review round with its lenses and
-findings, the judge verdicts, the gaps with their decisions, the screenshots, the live-run and prod-shape notes
-without command output, the decisions, and what was not checked. When the handler's request is over ${receiptBudget}
+prints its path, links nothing in the block, and records the PR itself as the receipt unless one is recorded. The
+page shows the proof of each commit in the order it was proved or reviewed, each review round with its lenses and
+findings, the judge verdicts, the gaps with their decisions, the screenshots, the lines and notes of each owed proof,
+the decisions, and what was not checked. Notes keep their prose only: fenced and indented code, command transcripts
+through their exit line, and HTML are left out or shown as text, and their headings show as bold lines. When the handler's request is over ${receiptBudget}
 bytes, the page leaves out the raw lens answers, then the judge reasons, then note lines past the 40th, and says so.
 fleet refuses an empty body read, a body that changed between its read and the write,
 broken markers, a write that would change the merge-risk callout, and a body that reads back different. It warns about each proof without a line and each screenshot

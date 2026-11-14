@@ -338,19 +338,18 @@ test("the first receipt written into a body, and each refresh, leave the judge's
 const heavy = (repeats: number) => `é"\\`.repeat(repeats);
 const pageOf = (handler: ReturnType<typeof publisher>) => handler.requests().at(-1).page as string;
 
-function panelRound({ lensAnswer, findingText }: { lensAnswer?: string; findingText?: string } = {}) {
+const lensAnswer = (finding = "Retries twice -> a second email") => `FINDINGS:\n- feature.txt:1 | major | Correctness | ${finding} | retry once | sites: feature.txt:1 | anchor: greet new members by name\nCOVERED: feature.txt\n`;
+
+function panelRound({ answer, minutes = 4.5 }: { answer?: string; minutes?: number } = {}) {
   return async (pr: Checkout) => {
-    expect((await pr.fleet("review-start", "--scope", "full")).code).toBe(0);
-    writeFileSync(join(pr.repository, "findings.md"), [
-      "## Correctness lens, by gpt-6.1-sol", "", "FINDINGS:", `- feature.txt:1 | major | Correctness | ${findingText ?? "Retries twice -> a second email"} | retry once`, "COVERED: feature.txt", "",
-      "## Fresh eyes lens, by claude-opus-5-5", "", "FINDINGS:", "- feature.txt:1 | minor | Fresh eyes | Unclear name -> a slower read | rename it", "COVERED: feature.txt", "",
-    ].join("\n"));
-    expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
-    const round = join(pr.pullRequest, "reviews", "1");
-    writeFileSync(join(round, "panel.json"), JSON.stringify({ lenses: [{ name: "correctness", title: "Correctness", family: "gpt", model: "gpt-6.1-sol" }, { name: "fresh-eyes", title: "Fresh eyes", family: "claude", model: "claude-opus-5-5" }], changedFiles: [], cwd: pr.repository, readable: [] }));
-    mkdirSync(join(round, "lenses"), { recursive: true });
-    writeFileSync(join(round, "lenses", "correctness.md"), lensAnswer ?? "FINDINGS:\n- feature.txt:1 | major | Correctness | Retries twice -> a second email | retry once\nCOVERED: feature.txt\n");
-    writeFileSync(join(round, "lenses", "correctness.json"), JSON.stringify({ state: "done", attempts: 1, startedAt: "2026-10-25T11:10:00Z", finishedAt: "2026-10-25T11:14:30Z" }));
+    fakeModel(pr, "REVIEWER", answer ?? lensAnswer());
+    pr.env.FLEET_PROOF_REVIEWER_MODEL = "gpt-6.1-sol";
+    const start = pr.clock.now.getTime();
+    let reads = 0;
+    Object.defineProperty(pr.clock, "now", { get: () => new Date(start + reads++ * minutes * 60_000), configurable: true });
+    await pr.fleet("review", "--lens", "correctness", "--lens", "fresh-eyes");
+    expect((await pr.fleet("review", "--wait")).code).toBe(0);
+    Object.defineProperty(pr.clock, "now", { value: new Date(start), writable: true, configurable: true, enumerable: true });
     writeFileSync(join(pr.repository, "responses.md"), "1. fixed: one retry\n2. rejected: the domain term\n");
     expect((await pr.fleet("respond", "--round", "1", "responses.md")).code).toBe(0);
   };
@@ -366,13 +365,13 @@ async function pagePr(options: Parameters<typeof panelRound>[0] = {}) {
   return { ...proved, handler: publisher(pr) };
 }
 
-test("the full receipt holds the header and the nine parts in order, and the body section links it", async () => {
+test("the full receipt holds the header and its parts in order, and the body section links it", async () => {
   const { pr, older, head, handler } = await pagePr();
   expect((await pr.fleet("receipt", "--not-checked", "Safari")).code).toBe(0);
   const page = pageOf(handler);
   expect(page.match(/^## .+$/gm)).toEqual([
     "## Proof by commit", "## Review rounds", "## Judge verdicts", "## Gaps and who accepted them", "## Screenshots in journey order",
-    "## Live run", "## Production shape", "## Decisions", "## Not checked",
+    "## Live run", "## UI walk", "## Production shape", "## Decisions", "## Not checked",
   ]);
   expect(page).toStartWith("# Proof receipt: example/product#42\n\n[example/product#42](https://github.com/example/product/pull/42): Greet new members\n\n");
   for (const line of [
@@ -382,15 +381,15 @@ test("the full receipt holds the header and the nine parts in order, and the bod
     `| \`${short(head)}\` | saved | reused from \`${short(older)}\` | saved | gap | round 1 | ✅ |`,
     `- \`${short(head)}\` ui-walk reused from \`${short(older)}\`: Only the greeting text changed since`,
     "| Correctness | gpt-6.1-sol | 4 min 30 s | 1 |",
-    "| Fresh eyes | claude-opus-5-5 | | no answer |",
-    "| 1 | major | Correctness | `feature.txt:1` | Retries twice -> a second email \\| retry once | fixed: one retry |",
-    "| 2 | minor | Fresh eyes | `feature.txt:1` | Unclear name -> a slower read \\| rename it | rejected: the domain term |",
+    "| Fresh eyes | gpt-6.1-sol | 4 min 30 s | 1 |",
+    "| 1 | major | Correctness | `feature.txt:1` | Retries twice -> a second email \\| retry once \\| sites: feature.txt:1 \\| anchor: greet new members by name | fixed: one retry |",
     "<summary>Raw answer of the Correctness lens, by gpt-6.1-sol</summary>",
     "| pass | pass | pass | | pass | ✅ |",
     "judge proof: pass:",
     `| cross-version | \`${short(head)}\` | The old client is retired |`, "| 👤 the user |",
     `1. The sender settings page after the save (not published) at \`${short(older)}\`, evidence`,
     "**What ran:** Sent a test email to the sandbox inbox. **Result:** Delivered in one attempt.",
+    "**What ran:** Walked the sender settings page. **Result:** The new sender shows after a reload.",
     "The sandbox inbox shows the email.", "The status API reads delivered.", "[6 lines of command output left out]",
     "Read 48,213 stored senders.",
     "- Safari",
@@ -398,68 +397,106 @@ test("the full receipt holds the header and the nine parts in order, and the bod
   expect(page).toMatch(/^- 👤 \*\*.+\(the user, proof-gap, /m);
   for (const output of ["curl", "\"count\"", "bun run status", "exit=0"]) expect(page).not.toContain(output);
   expect(block(pr.githubBody())).toContain("Full receipt: https://receipts.example/r/receipt-1\n<!-- /fleet-proof-receipt -->");
+});
 
+test("a new decision publishes the page again under the same id, and an unchanged page is current", async () => {
+  const { pr, handler } = await pagePr();
+  expect((await pr.fleet("receipt")).code).toBe(0);
   expect((await pr.fleet("receipt")).output.split("\n").at(-1)).toBe("receipt current");
   expect(handler.requests()).toHaveLength(1);
-  writeFileSync(join(pr.pullRequest, "reviews", "1", "lenses", "correctness.json"), JSON.stringify({ state: "done", attempts: 1, startedAt: "2026-10-25T11:10:00Z", finishedAt: "2026-10-25T11:15:00Z" }));
-  expect((await pr.fleet("receipt")).output.split("\n").at(-1)).toBe("receipt written at " + short(head) + ": https://receipts.example/r/receipt-1");
-  expect(pageOf(handler)).toContain("| Correctness | gpt-6.1-sol | 5 min 0 s | 1 |");
   await pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", "Retry once here?", "--answer", "Yes, in this PR", "--rejected", "A follow-up", "--reason", "Small change");
   expect((await pr.fleet("receipt")).code).toBe(0);
-  expect(handler.requests()).toHaveLength(3);
+  expect(handler.requests()).toHaveLength(2);
   expect(pageOf(handler)).toMatch(/^- 🤖 \*\*Retry once here\?\*\* Yes, in this PR/m);
   expect(handler.requests().at(-1).previous).toEqual({ id: "receipt-1", url: "https://receipts.example/r/receipt-1" });
 });
 
-test("without a publisher the page goes to a local file, its path is printed, and the body has no link", async () => {
-  const { pr } = await provedPr(async (pr) => { await reviewHead(pr); });
+test("the page headline says the judge has not run at HEAD once evidence changes after the gate", async () => {
+  const { pr, file, handler } = await pagePr();
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent two test emails", "--result", "Both delivered", file("again.log", "delivered twice\n"));
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(pageOf(handler)).toContain("**Judge at HEAD:** not yet run");
+  expect(pageOf(handler)).toContain("| 1 | `");
+});
+
+async function localPr() {
+  const { pr, file } = await provedPr(async (pr) => { await reviewHead(pr); });
+  return { pr, file, local: join(pr.pullRequest, "display", "receipt.md") };
+}
+
+test("without a publisher the page goes to a local file, its path is printed, the body has no link, and the report links the PR", async () => {
+  const { pr, local } = await localPr();
   const written = await pr.fleet("receipt");
   expect(written.code).toBe(0);
-  const path = /^receipt page: (\S+)$/m.exec(written.output)?.[1] ?? "";
-  expect(path).toBe(join(pr.pullRequest, "display", "receipt.md"));
-  const page = readFileSync(path, "utf8");
-  expect(page.match(/^## .+$/gm)).toEqual(["## Proof by commit", "## Review rounds", "## Judge verdicts", "## Gaps and who accepted them", "## Screenshots in journey order", "## Live run", "## Production shape", "## Decisions"]);
+  expect(/^receipt page: (\S+)$/m.exec(written.output)?.[1]).toBe(local);
+  const page = readFileSync(local, "utf8");
+  expect(page.match(/^## .+$/gm)).toEqual(["## Proof by commit", "## Review rounds", "## Judge verdicts", "## Gaps and who accepted them", "## Screenshots in journey order", "## Live run", "## UI walk", "## Production shape", "## Decisions"]);
   expect(page).toContain("> No judge run is stored at HEAD");
   expect(block(pr.githubBody())).not.toContain("Full receipt");
+  expect((await pr.decide("report", "--pr", "example/product#42")).output).toContain("[receipt](https://github.com/example/product/pull/42)");
+});
 
-  const bare = await checkout();
-  const reviewed = await bare.commit("feature.txt", "greet\n");
-  bare.pullRequestState({ body: "Adds the greeting." });
-  await reviewHead(bare);
-  await bare.commit("feature.txt", "greet by name\n");
-  await bare.fleet("require", "--kinds", "live-run");
-  writeFileSync(join(bare.repository, "run.log"), "delivered\n");
-  await bare.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", "run.log");
-  const proved = await bare.git("rev-parse", "HEAD");
-  expect((await bare.fleet("receipt")).code).toBe(0);
-  expect(readFileSync(join(bare.pullRequest, "display", "receipt.md"), "utf8")).toContain(`| \`${short(reviewed)}\` | | round 1 | |\n| \`${short(proved)}\` | saved | | |`);
-  await bare.advanceBase("base.txt", "base\n");
-  await bare.git("merge", "-q", "--no-edit", "origin/main");
-  const merge = await bare.git("rev-parse", "HEAD");
-  expect((await bare.fleet("receipt")).code).toBe(0);
-  const carried = readFileSync(join(bare.pullRequest, "display", "receipt.md"), "utf8");
-  expect(carried.match(/^## .+$/gm)).toEqual(["## Proof by commit", "## Review rounds", "## Judge verdicts", "## Live run"]);
-  expect(carried).toContain(`| \`${short(merge)}\` | carried from \`${short(proved)}\` | | |`);
-  expect(carried).toContain(`- \`${short(merge)}\` live-run carried from \`${short(proved)}\` across 1 clean merge(s) of the base`);
-  expect(carried).toContain("**What ran:** Sent a test email. **Result:** Delivered.");
-
-  const local = join(bare.pullRequest, "display", "receipt.md");
+test("a lost local page is written again while the body stays current", async () => {
+  const { pr, local } = await localPr();
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const page = readFileSync(local, "utf8");
   rmSync(local);
-  const restored = await bare.fleet("receipt");
+  const restored = await pr.fleet("receipt");
   expect(restored.output.split("\n").slice(-2)).toEqual([`receipt page: ${local}`, "receipt current"]);
-  expect(readFileSync(local, "utf8")).toBe(carried);
+  expect(readFileSync(local, "utf8")).toBe(page);
+});
 
+test("a local page over the publisher's budget is kept whole", async () => {
+  const { pr, file, local } = await localPr();
   const wide = Array.from({ length: 40 }, (_, index) => `Wide line ${index + 1}: ${heavy(10_000)}`).join("\n");
-  writeFileSync(join(bare.repository, "wide.md"), wide);
-  await bare.fleet("save", "--kind", "live-run", "--ran", "Walked the mailbox", "--result", "Every message arrived", "wide.md");
-  expect((await bare.fleet("receipt")).code).toBe(0);
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Walked the mailbox", "--result", "Every message arrived", file("wide.md", wide));
+  expect((await pr.fleet("receipt")).code).toBe(0);
   const full = readFileSync(local, "utf8");
   expect(full).toContain("Wide line 40:");
   expect(full).not.toContain("Left out to fit the page");
 });
 
+test("commits are listed in the order they were proved or reviewed, HEAD last", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: template });
+  const reviewed: string[] = [];
+  for (const [round, text] of ["greet", "greet them", "greet them all", "greet them all by name"].entries()) {
+    reviewed.push(await pr.commit("feature.txt", `${text}\n`));
+    if (round === 0) await reviewHead(pr); else await reviewAgain(pr, round + 1);
+  }
+  const head = await pr.commit("feature.txt", "greet them all by first name\n");
+  await pr.fleet("require", "--kinds", "live-run");
+  writeFileSync(join(pr.repository, "run.log"), "delivered\n");
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", "run.log");
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const rows = readFileSync(join(pr.pullRequest, "display", "receipt.md"), "utf8").split("\n").filter((line) => /^\| `[0-9a-f]{7}` \|/.test(line));
+  expect(rows.map((line) => line.slice(3, 10))).toEqual([...reviewed, head].map(short));
+});
+
+test("evidence reused and then carried across a base merge shows the lines and notes of the commit that ran it", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet\n");
+  pr.pullRequestState({ body: "Adds the greeting." });
+  await reviewHead(pr);
+  await pr.fleet("require", "--kinds", "live-run");
+  writeFileSync(join(pr.repository, "run.log"), "delivered\n");
+  writeFileSync(join(pr.repository, "mailbox.md"), "The inbox shows the email.\n");
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", "run.log", "mailbox.md");
+  const ran = await pr.git("rev-parse", "HEAD");
+  const reused = await pr.commit("feature.txt", "greet by name\n");
+  await pr.fleet("save", "--kind", "live-run", "--reuse-from", ran, "--reason", "Only the greeting text changed");
+  await pr.advanceBase("base.txt", "base\n");
+  await pr.git("merge", "-q", "--no-edit", "origin/main");
+  const merge = await pr.git("rev-parse", "HEAD");
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const page = readFileSync(join(pr.pullRequest, "display", "receipt.md"), "utf8");
+  expect(page).toContain(`| \`${short(merge)}\` | carried from \`${short(reused)}\` | | |`);
+  expect(page).toContain("**What ran:** Sent a test email. **Result:** Delivered.");
+  expect(page).toContain(`at \`${short(ran)}\`\n\nThe inbox shows the email.`);
+});
+
 test("a page over the byte budget drops raw lens answers, then judge reasons, then long notes, each with a notice, then refuses", async () => {
-  const lens = await pagePr({ lensAnswer: heavy(250_000) });
+  const lens = await pagePr({ answer: `${lensAnswer()}\n${heavy(250_000)}\n` });
   expect((await lens.pr.fleet("receipt")).code).toBe(0);
   const lean = pageOf(lens.handler);
   expect(lean).toContain("> Left out to fit the page: raw lens answers.");
@@ -488,9 +525,10 @@ test("a page over the byte budget drops raw lens answers, then judge reasons, th
 });
 
 test("stored text stays text on the page: command output in lists and quotes is left out, tags show as text, and a backtick run cannot close its fence", async () => {
-  const { pr, handler, file } = await pagePr({ findingText: "</td></tr></table><h1>FAKE PASS</h1>", lensAnswer: "FINDINGS:\n(none)\n````\nCOVERED: feature.txt\n" });
+  const { pr, handler, file } = await pagePr({ answer: lensAnswer("</td></tr></table><h1>FAKE PASS</h1>").replace("COVERED", "````\nCOVERED") });
   const note = ["Before the list.", "", "- The transcript:", "", "    ```sh", "    $ curl https://sandbox.example", "    TOKEN=private-value", "    ```", "",
-    "> ~~~", "> $ bun run status", "> SECRET=quoted-value", "> ~~~", "", "> exit=0", "After the quote.", "", "1. ```sh", "   LISTED=list-value", "   ```", "After the listed fence.", "<details open><summary>ALL PASS</summary></details>"].join("\n");
+    "> ~~~", "> $ bun run status", "> SECRET=quoted-value", "> ~~~", "", "> exit=0", "After the quote.", "", "1. ```sh", "   LISTED=list-value", "   ```", "After the listed fence.", "<details open><summary>ALL PASS</summary></details>", "",
+    "# Mailbox check", "", "    INDENTED=code-value", "", "## Result", "", "$ bun run check", "UNFENCED=output-value", "exit=0", "After the transcript."].join("\n");
   await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", file("nested.md", note));
   for (const hour of ["13", "14"]) {
     pr.clock.now = new Date(`2026-10-25T${hour}:00:00Z`);
@@ -500,8 +538,9 @@ test("stored text stays text on the page: command output in lists and quotes is 
   expect((await pr.fleet("receipt")).code).toBe(0);
   const page = pageOf(handler);
   expect([...page.matchAll(/^\| (\d) \| `[0-9a-f]{7}` \| [^|]+ \| 2026-10-25 (\d\d):00 UTC \|/gm)].map((match) => `${match[1]} ${match[2]}`)).toEqual(["1 12", "2 13", "3 14"]);
-  for (const kept of ["Before the list.", "After the quote.", "After the listed fence.", "&lt;/td>&lt;/tr>&lt;/table>&lt;h1>FAKE PASS&lt;/h1>", "&lt;details open>&lt;summary>ALL PASS&lt;/summary>&lt;/details>"]) expect(page).toContain(kept);
-  for (const output of ["curl", "TOKEN=private-value", "LISTED=list-value", "bun run status", "SECRET=quoted-value", "exit=0", "<h1>", "<details open>"]) expect(page).not.toContain(output);
+  for (const kept of ["Before the list.", "After the quote.", "After the listed fence.", "**Mailbox check**", "**Result**", "After the transcript.", "&lt;/td>&lt;/tr>&lt;/table>&lt;h1>FAKE PASS&lt;/h1>", "&lt;details open>&lt;summary>ALL PASS&lt;/summary>&lt;/details>"]) expect(page).toContain(kept);
+  const shown = page.replace(/<details>\n<summary>Raw answer[\s\S]*?<\/details>/g, "");
+  for (const output of ["curl", "TOKEN=private-value", "LISTED=list-value", "bun run status", "SECRET=quoted-value", "exit=0", "<h1>", "<details open>", "INDENTED=code-value", "UNFENCED=output-value", "bun run check", "# Mailbox check", "## Result"]) expect(shown).not.toContain(output);
   const raw = /<summary>Raw answer of the Correctness lens, by gpt-6\.1-sol<\/summary>\n\n(`+)text\n/.exec(page);
   expect(raw?.[1]).toBe("`````");
 });
