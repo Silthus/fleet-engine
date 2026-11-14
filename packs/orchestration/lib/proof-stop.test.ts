@@ -157,6 +157,8 @@ describe("the Stop proof check blocks a lane that owns an open PR", () => {
     expect(await check([thread(), child])).toBeDefined();
     expect(await check([thread(), { ...child, pendingBackgroundTasks: [{ kind: "command", taskId: "dev-server" }] }])).toBeDefined();
     expect(await check([thread(), child, grandchild])).toBeDefined();
+    expect(await check([thread(), { ...child, pendingBackgroundTasks: [{ kind: "monitor", taskId: "log-watcher" }] }])).toBeDefined();
+    expect(await check([thread(), { ...child, pendingBackgroundTasks: [{ kind: "monitor", taskId: "log-watcher", awaited: true }] }])).toBeUndefined();
     expect(await check([thread(), { ...child, status: "running", activeRunId: "run-2" }])).toBeUndefined();
     expect(await check([thread(), { ...child, pendingBackgroundTasks: [{ kind: "subagent", taskId: "native-child" }] }])).toBeUndefined();
     expect(await check([thread(), { ...child, pendingBackgroundTasks: [{ kind: "command", taskId: "tests", awaited: true }] }])).toBeUndefined();

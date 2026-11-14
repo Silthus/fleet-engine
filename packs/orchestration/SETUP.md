@@ -101,10 +101,10 @@ The stop passes when any of these holds:
   blocks at most once per turn;
 - the thread waits on a question card, or its last line starts with
   `NEEDS_HUMAN:`;
-- the thread waits on a child task, a thread wait, or a shell command it
-  awaits; on Claude, on a subagent, a monitor, or a scheduled wake-up. A plain
-  background command, such as a dev server, is no wait, and neither is a PR
-  watch whose CI has settled;
+- the thread waits on a child task, a thread wait, or a command or monitor
+  it awaits; on Claude, on a subagent, a monitor, or a scheduled wake-up. A
+  command or monitor the thread does not await, such as a dev server or a PR
+  watch whose CI has settled, is no wait, as in T3;
 - a subagent thread of the thread, such as a delegated task, still runs,
   waits on a question, or awaits work of its own. A fork of the thread is no
   wait;

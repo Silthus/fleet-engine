@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { isWaiting, matchThread, type PullRequestWatch, type ShellThread } from "../../base/lib/t3/index.ts";
+import { matchThread, type PullRequestWatch, type ShellThread } from "../../base/lib/t3/index.ts";
 import { ownedPullRequests, subagentParent } from "../../pull-requests/lib/pr-owners.ts";
 import { lastGateRun } from "../../pull-requests/lib/proof.ts";
 import { needsHuman } from "./lanes.ts";
@@ -124,8 +124,8 @@ const waitsInClaude = (event: ProofStopEvent) =>
   Boolean(event.background_tasks?.some((task) => ["running", "pending"].includes(task.status ?? "") && task.type !== "shell") || event.session_crons?.length);
 
 const runningStatuses = ["preparing", "queued", "starting", "running", "waiting"];
-const settledWatch = (task: ShellTask) => task.taskId?.startsWith("pull-request-watch:") && !task.awaited;
-const awaitsWork = (thread: ShellThread) => isWaiting({ ...thread, pendingBackgroundTasks: thread.pendingBackgroundTasks?.filter((task) => !settledWatch(task)) });
+const holdsCompletion = (task: ShellTask) => task.awaited === true || !["command", "monitor"].includes(task.kind);
+const awaitsWork = (thread: ShellThread) => Boolean(thread.blockedOnThreadWait) || (thread.pendingBackgroundTasks ?? []).some(holdsCompletion);
 const maxChildDepth = 8;
 
 function waitsOnSubagent(threads: ShellThread[], parent: ShellThread, depth = 0): boolean {
