@@ -434,7 +434,7 @@ export function answeredFindings(findings: string, responses: string) {
     const match = answerItem.exec(line);
     const number = Number(match?.[1]);
     if (match && number >= 1 && number <= items.length && !answers.has(number)) answers.set(number, last = { verdict: match[2]!.toLowerCase() as Answer["verdict"], text: line.trim() });
-    else if (last && continued.test(line)) last.text += `\n${line.trim()}`;
+    else if (!match && last && continued.test(line)) last.text += `\n${line.trim()}`;
     else if (line.trim()) { last = undefined; other.push(line.trim()); }
   }
   return { findings: items.map((text, index) => ({ text, ...answers.has(index + 1) ? { answer: answers.get(index + 1)! } : {} })), other: other.join("\n") };

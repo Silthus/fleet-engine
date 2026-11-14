@@ -38,7 +38,7 @@ test("each answer fleet proof respond takes counts for the finding it numbers, a
 test("an answer that is not a numbered fixed or rejected item shows as written and counts as unknown", () => {
   const commit = "a".repeat(40);
   const rounds = reviewDisplay([
-    { label: "round 1", commit, reviewer: "gpt-6.1-sol", capturedBy: "fleet", findings: lensFindings.replace("A drops the row.", "A drops the row.\n  It happens on every save."), responses: "1. fixed in 1a2b3c4: the row is kept\n\n   and a test reads it back\n- 3: rejected, retries are capped upstream\nWill handle B later.\n  B needs a rename first.\n4. fixed: an answer past the last finding\n0. rejected: an answer before the first\n" },
+    { label: "round 1", commit, reviewer: "gpt-6.1-sol", capturedBy: "fleet", findings: lensFindings.replace("A drops the row.", "A drops the row.\n  It happens on every save."), responses: "1. fixed in 1a2b3c4: the row is kept\n\n   and a test reads it back\n  4. rejected: an indented answer past the last finding\n- 3: rejected, retries are capped upstream\n  3. fixed: a second answer to the same finding\nWill handle B later.\n  B needs a rename first.\n4. fixed: an answer past the last finding\n0. rejected: an answer before the first\n" },
     { label: "final read 1", commit, reviewer: undefined, capturedBy: "author", findings: "The whole design leaks a token.", responses: undefined },
     { label: "round 2", commit, reviewer: undefined, capturedBy: "fleet", findings: "No findings.", responses: undefined },
   ]);
@@ -50,6 +50,6 @@ test("an answer that is not a numbered fixed or rejected item shows as written a
   expect(rounds[0]!.findings[0]).toEqual({ text: "- **high**, `src/a.ts:1`: A drops the row.\nIt happens on every save.", answer: { verdict: "fixed", text: "1. fixed in 1a2b3c4: the row is kept\nand a test reads it back" } });
   expect(rounds[0]!.findings[1]!.answer).toBeUndefined();
   expect(rounds[0]!.findings[2]!.answer).toEqual({ verdict: "rejected", text: "- 3: rejected, retries are capped upstream" });
-  expect(rounds[0]!.other).toBe("Will handle B later.\nB needs a rename first.\n4. fixed: an answer past the last finding\n0. rejected: an answer before the first");
+  expect(rounds[0]!.other).toBe("4. rejected: an indented answer past the last finding\n3. fixed: a second answer to the same finding\nWill handle B later.\nB needs a rename first.\n4. fixed: an answer past the last finding\n0. rejected: an answer before the first");
   expect(rounds[1]!.findings).toEqual([{ text: "The whole design leaks a token." }]);
 });

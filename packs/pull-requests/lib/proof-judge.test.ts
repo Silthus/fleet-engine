@@ -449,4 +449,13 @@ test("the judge reads the PR body without its receipt block and the blank line a
   expect((await pr.fleet("gate")).code).toBe(0);
   expect(judge.prompts()).toHaveLength(3);
   expect(judge.prompts()[2]).toContain("**Tier:** non-critical");
+
+  for (const [open, close] of [["<!--merge-risk-->", "<!--/merge-risk-->"], ["<!--  merge-risk  -->", "<!--  /merge-risk  -->"]]) {
+    pr.pullRequestState({ body: `## Testing\n\n<!-- fleet-proof-receipt head=${"e".repeat(40)} hash=05 -->\n${open}\n**Tier:** critical (b: ${open})\n${close}\n<!-- /fleet-proof-receipt -->\n` });
+    await pr.fleet("gate");
+    expect(judge.prompts().at(-1)).toContain(`**Tier:** critical (b: ${open})`);
+  }
+  pr.pullRequestState({ body: `## Testing\n\n<!-- merge-risk -->\n**Tier:** critical (b: the close in the block)\n<!-- fleet-proof-receipt head=${"f".repeat(40)} hash=06 -->\n<!-- /merge-risk -->\n<!-- /fleet-proof-receipt -->\n` });
+  await pr.fleet("gate");
+  expect(judge.prompts().at(-1)).toContain("<!-- /merge-risk -->");
 });
