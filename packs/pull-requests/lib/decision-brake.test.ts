@@ -259,6 +259,28 @@ test("when two machines reverse two decisions with one answer at once, the one t
   expect((await pr.decide("list", "--live")).output).toContain(second);
 });
 
+test("a reversal of a decision that another machine voids while it is heard counts nowhere and brakes nothing", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  hubAt(pr);
+  on(pr, "2026-10-20");
+  const first = idIn((await decideAlone(pr, "design", "First design call?")).output);
+  const second = idIn((await decideAlone(pr, "design", "Second design call?")).output);
+  on(pr, "2026-10-21");
+  pr.say("Undo the first one");
+  expect((await reverse(pr, first, "2026-10-21", "Undo the first one")).code).toBe(0);
+  pr.say("Undo the second one");
+  const ssh = pr.hub.ssh!;
+  let raced = false;
+  pr.hub.ssh = async (host, command, stdin) => {
+    if (!raced && stdin?.includes('"type":"reverse"')) { raced = true; await ssh(host, command, `${JSON.stringify({ type: "void", id: second, reason: "recorded twice", at: "2026-10-21T09:59:00.000Z" })}\n`); }
+    return ssh(host, command, stdin);
+  };
+
+  await expect(reverse(pr, second, "2026-10-21", "Undo the second one")).rejects.toThrow(`Not reversed: decision ${second} was voided first`);
+  expect((await decideAlone(pr, "design", "Third design call?")).code).toBe(0);
+});
+
 test("when the hub drops a reversal's void for older readers, running the same reversal again writes it", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });

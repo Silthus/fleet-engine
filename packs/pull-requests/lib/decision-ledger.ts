@@ -164,7 +164,7 @@ function replay(events: LedgerEvent[]) {
       const decision = decisions.get(event.id);
       const answer = reversalKey(event);
       if (answer && answers.has(answer)) { unheard.add(`${event.id}@${event.at}`); continue; }
-      if (!decision || decision.reversed) continue;
+      if (!decision || decision.reversed || decision.voided) continue;
       if (answer) answers.set(answer, { reversal: event.id });
       const { rejected, ...rest } = decision;
       decisions.set(event.id, { ...rest, mark: "👤", answer: event.words, reversed: { at: event.at, mark: decision.mark, answer: decision.answer, ...rejected ? { rejected } : {} } });
