@@ -38,9 +38,9 @@ test("each answer fleet proof respond takes counts for the finding it numbers, a
 test("an answer that is not a numbered fixed or rejected item shows as written and counts as unknown", () => {
   const commit = "a".repeat(40);
   const rounds = reviewDisplay([
-    { label: "round 1", commit, reviewer: "gpt-6.1-sol", capturedBy: "fleet", findings: lensFindings, responses: "1. fixed in 1a2b3c4: the row is kept\n- 3: rejected, retries are capped upstream\nWill handle B later.\n" },
-    { label: "final read 1", commit, reviewer: undefined, capturedBy: "author", findings: "The whole design leaks a token.", responses: undefined },
-    { label: "round 2", commit, reviewer: undefined, capturedBy: "fleet", findings: "No findings.", responses: undefined },
+    { label: "round 1", directory: "round-1", commit, reviewer: "gpt-6.1-sol", capturedBy: "fleet", findings: lensFindings, responses: "1. fixed in 1a2b3c4: the row is kept\n- 3: rejected, retries are capped upstream\nWill handle B later.\n" },
+    { label: "final read 1", directory: "final-1", commit, reviewer: undefined, capturedBy: "author", findings: "The whole design leaks a token.", responses: undefined },
+    { label: "round 2", directory: "round-2", commit, reviewer: undefined, capturedBy: "fleet", findings: "No findings.", responses: undefined },
   ]);
   expect(rounds.map(({ label, counts }) => [label, counts])).toEqual([
     ["round 1", { findings: 3, fixed: 1, rejected: 1, unknown: 1 }],

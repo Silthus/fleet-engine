@@ -65,6 +65,13 @@
       "optional": true
     },
     {
+      "key": "pull-requests.receiptHeading",
+      "question": "Under which heading of a PR body does fleet proof receipt write the proof receipt? Give the heading's words without the hashes.",
+      "type": "string",
+      "default": "Testing",
+      "ask": "never"
+    },
+    {
       "key": "pull-requests.freeReviews",
       "question": "How many review rounds may run before the review arbiter decides whether another round is worth it?",
       "type": "number",

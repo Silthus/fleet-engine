@@ -13,7 +13,7 @@ import { judge, readCriticalPaths, type JudgeInput } from "./proof-judge.ts";
 import { askModel, familyOf, modelLabel, readRiskRubric, readRubric, reviewerRow, skillReferences } from "./proof-models.ts";
 
 export type GateContext = { home: string; cwd: string; env: Env; run: Run; now?: () => Date; ssh?: Ssh };
-export type FinalGate = { code: number; lines: string[]; verdict: string; summary: ProofSummary };
+export type FinalGate = { code: number; lines: string[]; verdict: string; summary: ProofSummary; body?: string };
 
 type Checked = Awaited<ReturnType<typeof proofGate>>;
 type Judged = { code: number; lines: string[]; covered: string; judge: JudgeSummary };
@@ -68,7 +68,7 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
     summary: { ...checked.proofSummary, code: judged.code, judge: judged.judge },
   };
   if (pull) await writeJson(savedPath(home, head, head.commit), { key: keyOf(pull, landed, await fingerprintOf(home, head, files, checked.decisions)), gate, conditions: checked.conditions } satisfies SavedGate);
-  return gate;
+  return pull ? { ...gate, body: (pull as PullRequest).body } : gate;
 }
 
 const pushedHeadOf = (head: ProofIdentity, run: Run, seen: (pull: PullRequest) => void = () => {}) => (): PushedHead => {
@@ -94,6 +94,17 @@ export async function currentSummary(ref: PrRef, pull: PullRequest, ledger: Ledg
   const judged = readAsSaved && JSON.stringify(live.conditions) === JSON.stringify(saved.conditions) && live.proofSummary.ci.line === saved.gate.summary.ci.line && JSON.stringify(live.proofSummary.ci.checks) === JSON.stringify(saved.gate.summary.ci.checks);
   const receipt = await receiptOf(home, ref);
   return { ...saved.gate.summary, ...receipt ? { receipt } : {}, ...live.proofSummary, code: live.code !== 0 ? live.code : judged ? saved.gate.code : 1 };
+}
+
+export async function receiptSummary(head: ProofIdentity, pull: PullRequest, ledger: Ledger, context: GateContext): Promise<ProofSummary> {
+  const current = await currentSummary(head, pull, ledger, context);
+  if (current) return current;
+  const { home, run, now } = context;
+  const live = await proofGate(home, head, {
+    landed: pull.state === "merged", cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run),
+    ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: pushedHeadOf(head, run), ledger, now: now?.(),
+  });
+  return { ...live.proofSummary, code: live.code, judge: { state: "skipped", lines: [] } };
 }
 
 async function savedGate(home: string, ref: PrRef, pull: PullRequest, ledger: Ledger): Promise<SavedGate | undefined> {

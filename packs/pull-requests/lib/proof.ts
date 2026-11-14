@@ -933,7 +933,7 @@ export async function reviewRecords(home: string, identity: ProofIdentity) {
   return Promise.all((await finishedReviews(home, identity)).map(async ({ name, commit, reviewer }) => {
     const reservation = await readJson<Reservation | undefined>(join(reviews, name, "round.json"), undefined);
     return {
-      label: reviewLabel(name), commit, reviewer, capturedBy: reservation?.capturedBy ?? "author",
+      label: reviewLabel(name), directory: join(reviews, name), commit, reviewer, capturedBy: reservation?.capturedBy ?? "author",
       findings: await readFile(join(reviews, name, "findings.md"), "utf8"),
       responses: await readFile(join(reviews, name, "responses.md"), "utf8").catch(() => undefined),
     };

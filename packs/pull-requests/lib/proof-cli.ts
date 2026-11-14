@@ -13,6 +13,9 @@ import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCas
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { displayLine, recordCaption, recordLines } from "./proof-display.ts";
+import { prodShapeResult, receiptClose, receiptMarker, receiptOpen } from "./proof-receipt.ts";
+import { runReceipt } from "./proof-receipt-command.ts";
+import { publisherSeam } from "./proof-receipt-publisher.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { leftOutNote, reviewRange } from "./proof-range.ts";
 import { quietCommitIn } from "./proof-delta.ts";
@@ -150,17 +153,37 @@ again after you change the repository's access.`,
     },
   },
   receipt: {
-    usage: "receipt --comment <url>",
-    summary: `Record the PR's proof receipt: the comment you posted on the PR with the gate's result. GitHub must show the
-comment on this PR. fleet proof gate --json and fleet decision report link it.`,
-    examples: ["fleet proof receipt --comment https://github.com/owner/name/pull/7#issuecomment-1"], options: ["--comment"],
-    run: async ({ options }, identity, { home, print, run }) => {
+    usage: "receipt [--not-checked <item>]... | receipt --comment <url>",
+    summary: `Write the PR's public-safe proof receipt into its body, and publish the full receipt when a pack offers a
+publisher. The block sits at the end of the section under the heading the setting pull-requests.receiptHeading names,
+or with that heading at the end of the body: a row per owed proof (what ran, the result, the commit or the commit it
+was reused from), a review row, a judge row, what was not checked, and each gap with who accepted it. It reads the
+proof summary the gate saved at HEAD and the decision ledger, never a proof's pass or fail itself. The block sits
+between ${receiptOpen} head=<sha> hash=<hex> --> and ${receiptClose}; the rest of the body stays as it is, and the
+judge never reads the block. A run does nothing when the body already holds the receipt of HEAD with the same
+content. --not-checked replaces the list of what was not checked; without it the last list stays. Run it after each
+fleet proof gate on a new head. The body is public: fleet reads each field as GitHub renders it and refuses one with
+a number of four or more digits, a percentage, a thousands separator, an email address or an HTML entity, and names
+it; move such detail into an evidence note. The prod-shape result always reads "${prodShapeResult}". A pack's
+${publisherSeam} handler publishes the full receipt: it reads {repository, pr, title, page, previous: {id, url}} as
+JSON on stdin and prints {id, url}, or {failed}, as its last line; the block then links the URL, and the next run
+passes it back as previous. fleet refuses an empty body read, a body that changed between its read and the write,
+broken markers, and a body that reads back different. It warns about each proof without a line and each screenshot
+without a caption or a published URL. Exit 0 when the receipt is current or written; 1 when publishing or GitHub
+fails; 2 when the guard refuses a field; 3 when the hub ledger cannot be reached. --comment records a comment you
+posted on the PR as its receipt instead: GitHub must show the comment on this PR. fleet proof gate --json and fleet
+decision report link the receipt.`,
+    examples: ["fleet proof receipt --not-checked 'Safari' --not-checked 'the mobile layout'", "fleet proof receipt", "fleet proof receipt --comment https://github.com/owner/name/pull/7#issuecomment-1"],
+    options: ["--comment"], repeatable: ["--not-checked"],
+    run: async ({ options, lists }, identity, context) => {
+      if (!options.has("--comment")) return runReceipt(identity(), lists.get("--not-checked"), context);
+      if (lists.has("--not-checked")) throw usageError("receipt", "Pass --comment or --not-checked, not both");
       const url = required(options, "--comment", "receipt");
-      const comment = readComment(url, run);
+      const comment = readComment(url, context.run);
       const { repository, pr } = identity();
       if (`${comment.repository}#${comment.pr}`.toLowerCase() !== refText({ repository, pr }).toLowerCase()) throw new Error(`The comment ${url} is on ${comment.repository}#${comment.pr}, not on ${refText({ repository, pr })}`);
-      await recordReceipt(home, { repository, pr }, url);
-      print(`receipt: ${url}`);
+      await recordReceipt(context.home, { repository, pr }, url);
+      context.print(`receipt: ${url}`);
       return 0;
     },
   },
@@ -349,8 +372,10 @@ receipt link once one is recorded. The gate's lines and fleet decision report co
       const { print } = context;
       const head = identity();
       const gate = await finalGate(head, context, { landed: flags.has("--landed") });
-      if (flags.has("--json")) print(JSON.stringify(gate.summary));
-      else for (const line of [...gate.lines, gate.verdict]) print(line);
+      if (flags.has("--json")) { print(JSON.stringify(gate.summary)); return gate.code; }
+      for (const line of [...gate.lines, gate.verdict]) print(line);
+      const receipt = gate.body === undefined ? undefined : receiptMarker(gate.body);
+      if (receipt && receipt.head !== head.commit) print(`receipt: the PR body shows the receipt of ${receipt.head.slice(0, 7)}, not HEAD ${head.commit.slice(0, 7)}. Refresh it with fleet proof receipt`);
       return gate.code;
     },
   },
