@@ -10,9 +10,9 @@ export const sourceName = /^[a-z0-9][a-z0-9-]*$/;
 const fetchTimeoutMs = 120_000;
 const cacheWaitMs = 10 * 60_000;
 
-export type Clock = { now(): number; sleep(ms: number): Promise<void> };
+export type Clock = { sleep(ms: number): Promise<void> };
 
-const realClock: Clock = { now: Date.now, sleep: (ms) => Bun.sleep(ms) };
+const realClock: Clock = { sleep: (ms) => Bun.sleep(ms) };
 
 /** What the cache last loaded successfully: the source's repository, ref, and commit. */
 type Good = { repo: string; ref: string; commit: string };
@@ -30,7 +30,7 @@ export async function fetchSources(refs: SourceRef[], cacheRoot: string): Promis
 export async function fetchSource(ref: SourceRef, cacheRoot: string, loadLimitMs = fetchTimeoutMs, clock: Clock = realClock): Promise<FetchedSource> {
   const dir = cacheDir(ref, cacheRoot);
   if (typeof dir !== "string") return { ref, error: dir.error };
-  const lock = await waitLock(cacheLock(cacheRoot, ref.name), clock.now, clock.sleep, cacheWaitMs);
+  const lock = await waitLock(cacheLock(cacheRoot, ref.name), clock.sleep, cacheWaitMs);
   if (!lock) return { ref, error: `another Fleet run kept working in ${dir} for over ${cacheWaitMs / 60_000} minutes` };
   try {
     return await fetchLocked(ref, dir, loadLimitMs);
@@ -165,7 +165,7 @@ export type Advance =
   | { state: "moved"; commit: string; source: AvailableSource }
   | { state: "busy" }
   | { state: "edited"; say: string }
-  | { state: "refused"; commit: string; say: string }
+  | { state: "refused"; say: string }
   | { state: "failed"; say: string };
 
 /**
@@ -174,19 +174,19 @@ export type Advance =
  * source as it is while another run works in its cache, while it has local edits,
  * and when the new commit does not build on the old one.
  */
-export async function advanceSource(ref: SourceRef, cacheRoot: string, from: string, refused: string | undefined, now: number, loadLimitMs = fetchTimeoutMs): Promise<Advance> {
+export async function advanceSource(ref: SourceRef, cacheRoot: string, from: string, loadLimitMs = fetchTimeoutMs): Promise<Advance> {
   const dir = cacheDir(ref, cacheRoot);
   if (typeof dir !== "string") return { state: "failed", say: dir.error };
-  const lock = tryLock(cacheLock(cacheRoot, ref.name), now);
+  const lock = tryLock(cacheLock(cacheRoot, ref.name));
   if (!lock) return { state: "busy" };
   try {
-    return await advanceLocked(ref, dir, from, refused, loadLimitMs);
+    return await advanceLocked(ref, dir, from, loadLimitMs);
   } finally {
     lock.release();
   }
 }
 
-async function advanceLocked(ref: SourceRef, dir: string, from: string, refused: string | undefined, loadLimitMs: number): Promise<Advance> {
+async function advanceLocked(ref: SourceRef, dir: string, from: string, loadLimitMs: number): Promise<Advance> {
   const repo = repoUrl(ref.repo);
   const branch = ref.ref.replace(/^refs\/heads\//, "");
   const head = `refs/heads/${branch}`;
@@ -195,8 +195,7 @@ async function advanceLocked(ref: SourceRef, dir: string, from: string, refused:
   const commit = listed.stdout.split("\n").map((line) => line.split("\t")).find(([, name]) => name === head)?.[0];
   if (!commit) return { state: "failed", say: `${ref.repo} has no branch ${branch}` };
   if (commit === from) return { state: "same", commit };
-  const rewritten = (tip: string) => ({ state: "refused" as const, commit: tip, say: `${branch} of ${ref.repo} moved to ${tip.slice(0, 12)}, which does not build on ${from.slice(0, 12)}, the commit Fleet loaded last. Fleet refresh runs no pack code from a rewritten branch. Run fleet update to take it.` });
-  if (commit === refused) return rewritten(commit);
+  const rewritten = (tip: string) => ({ state: "refused" as const, say: `${branch} of ${ref.repo} moved to ${tip.slice(0, 12)}, which does not build on ${from.slice(0, 12)}, the commit Fleet loaded last. Fleet refresh runs no pack code from a rewritten branch. Run fleet update to take it.` });
   const edits = await localEdits(dir);
   if (edits.length) return { state: "edited", say: `${ref.name} moved, but Fleet ${editsReason(ref, dir, edits)}.` };
   const fetched = await git(dir, "fetch", "-q", "--no-tags", repo, head);
