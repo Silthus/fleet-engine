@@ -129,6 +129,10 @@ describe("secret guard", () => {
     ["a serialized cookie map", JSON.stringify({ [cookieKey]: metabaseSession })],
     ["a serialized browser cookie", JSON.stringify([{ name: cookieKey, value: metabaseSession }])],
     ["a JSON-escaped serialized cookie", JSON.stringify({ stdout: JSON.stringify({ name: cookieKey, value: metabaseSession }) })],
+    ["a pretty-printed browser cookie list", JSON.stringify([{ name: cookieKey, value: metabaseSession }], null, 2)],
+    ["a browser cookie with properties between its name and value", JSON.stringify([{ name: cookieKey, domain: "metabase.example.com", path: "/", httpOnly: true, value: metabaseSession }], null, 2)],
+    ["a browser cookie whose value comes before its name", JSON.stringify([{ domain: "metabase.example.com", value: metabaseSession, path: "/", name: cookieKey }], null, 2)],
+    ["a JSON-escaped pretty-printed cookie", JSON.stringify({ stdout: JSON.stringify([{ name: cookieKey, secure: true, value: metabaseSession }], null, 2) })],
   ])("finds a Metabase session cookie in %s", (_, text) => {
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: text })));

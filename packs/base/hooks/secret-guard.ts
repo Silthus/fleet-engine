@@ -20,7 +20,8 @@ const colour = String.raw`(?:(?:\x1b|\\u001[bB])\[[0-9;]*m)*`;
 const quote = String.raw`(?:\\?["'])?`;
 const metabaseCookie = String.raw`metabase\.(?:SESSION|DEVICE)`;
 const metabaseValue = "(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}";
-const gap = String.raw`[ \t]{0,16}`;
+const gap = String.raw`(?:\s|\\[rnt]){0,16}`;
+const sameRecord = "[^{}]{0,400}";
 const cookieName = new RegExp(`^${metabaseCookie}$`);
 const shapes: Array<{ kind: string; pattern: RegExp }> = [
   { kind: "PostHog personal API key", pattern: new RegExp(`${start}phx_[A-Za-z0-9]{30,}`, "g") },
@@ -33,7 +34,8 @@ const shapes: Array<{ kind: string; pattern: RegExp }> = [
   { kind: "Convex deploy key", pattern: new RegExp(`(?<![A-Za-z0-9_-])(?:prod|dev|preview|project):[A-Za-z0-9:_-]{1,120}\\|[A-Za-z0-9+/=_-]{30,}`, "g") },
   { kind: "Coder session token", pattern: new RegExp(String.raw`(?:(?<=^${colour}[+-]?)|(?<=\\[rn]${colour}[+-]?|["']))[ \t]*${colour}${coderToken}${colour}[ \t]*(?=$|\\[rn]|\\?["'])`, "gm") },
   { kind: "Coder session token", pattern: new RegExp(String.raw`(?=${coderToken}(?![A-Za-z0-9]))(?<=(?:coder[_-]?session[_-]?token(?:\\?["'])?[ \t]*[:=]|--token[ \t=])[ \t]*(?:\\?["'])?)${coderToken}`, "gi") },
-  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=(?<![\w.-])${metabaseCookie}${quote}(?:${gap}[=:]${gap}|${gap},${gap}${quote}value${quote}${gap}:${gap})${quote})${metabaseValue}`, "g") },
+  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=(?<![\w.-])${metabaseCookie}${quote}(?:${gap}[=:]${gap}|${sameRecord}${quote}value${quote}${gap}:${gap})${quote})${metabaseValue}`, "g") },
+  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=${quote}value${quote}${gap}:${gap}${quote})${metabaseValue}(?=${quote}${sameRecord}${quote}name${quote}${gap}:${gap}${quote}${metabaseCookie}${quote})`, "g") },
   { kind: "private key", pattern: new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----(?:${lineBreak}*[A-Za-z-]+:[^\\r\\n\\\\]*${lineEnd})*${lineBreak}*[A-Za-z0-9+/=]{20,}(?:[A-Za-z0-9+/=\\s]|\\\\[rn])*(?:-----END [A-Z ]*PRIVATE KEY-----)?`, "g") },
 ];
 

@@ -126,7 +126,8 @@ fleet secret drop --lane example/tickets#401
   name: when two lanes put one name at once, the later put deletes its value
   and is refused.
 - A put is refused when its name, lane, links or reason would spell a value
-  the store already holds, or when the log already shows its value.
+  the store already holds, or when the log already shows its value. Puts take
+  no lock, so a put that lands in the same instant is not part of this check.
 - A put is refused when any line Fleet prints from it would spell the value:
   its list line, card, stored and dropped lines, its due and need lines in
   each expiry state, and the report's revoke and late-put lines. A line that
