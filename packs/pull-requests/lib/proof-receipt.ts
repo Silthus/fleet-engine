@@ -183,24 +183,32 @@ const blockShape = {
 };
 const blocksOf = (text: string) => Bun.markdown.render(text, blockShape);
 
+type Span = { start: number; end: number };
+
+function receiptSpan(text: string): Span | undefined {
+  const match = new RegExp(blockText).exec(text);
+  return match ? { start: match.index, end: match.index + match[0].length } : undefined;
+}
+
+function blocksAround(text: string, { start, end }: Span) {
+  const [shown, before, part] = [blocksOf(text), blocksOf(text.slice(0, start)), blocksOf(text.slice(start, end))];
+  return shown.startsWith(before + part) ? before + shown.slice(before.length + part.length) : undefined;
+}
+
+function blocksWithout(body: string) {
+  const span = receiptSpan(body);
+  return span ? blocksAround(body, span) ?? blocksOf(lifted(body, span.start, span.end)) : blocksOf(body);
+}
+
 export function keepBody(body: string, placed: string) {
   if (riskCalloutOf(placed) !== riskCalloutOf(body)) {
     throw new Error("Writing the receipt would change the merge-risk callout, because the receipt block holds part of it or lands inside it. Move the callout out of the receipt block and the testing section by hand, then run the receipt again");
   }
-  if (!showsOnce(placed, withoutReceipt(body))) {
+  const span = receiptSpan(placed);
+  if (!span || blocksAround(placed, span) !== blocksWithout(body)) {
     throw new Error("The receipt would not show as a block of its own, because a code fence, an HTML block or a comment before it stays open, or it would change how GitHub shows the rest of the body. Close the open block by hand, then run the receipt again");
   }
   return placed;
-}
-
-function showsOnce(placed: string, base: string) {
-  const part = blocksOf(new RegExp(blockText).exec(placed)?.[0] ?? "");
-  const [shown, without] = [blocksOf(placed), blocksOf(base)];
-  if (shown.length !== without.length + part.length) return false;
-  let prefix = 0;
-  while (prefix < without.length && shown[prefix] === without[prefix]) prefix++;
-  for (let at = prefix; at >= 0; at--) if (shown.startsWith(part, at) && shown.slice(at + part.length) === without.slice(at)) return true;
-  return false;
 }
 
 export function checkPlacement(body: string, heading: string) {
@@ -246,7 +254,7 @@ export function placeReceipt(body: string, receipt: Receipt, heading: string): s
     const { found, next } = sectionOf(body, heading);
     const inSection = found !== undefined && found.start < start && (!next || start < next.start);
     const inPlace = body.slice(0, start) + blockOf(receipt, generated) + body.slice(end);
-    if ((generated === heading || (generated === undefined && inSection)) && showsOnce(inPlace, withoutReceipt(body))) return inPlace;
+    if ((generated === heading || (generated === undefined && inSection)) && blocksAround(body, { start, end }) !== undefined) return inPlace;
     return placeReceipt(lifted(body, start, end), receipt, heading);
   }
   const { found, next } = sectionOf(body, heading);

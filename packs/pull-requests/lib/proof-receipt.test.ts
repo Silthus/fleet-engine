@@ -436,3 +436,13 @@ test("a body that ends inside an open code fence, HTML block or comment refuses 
   }
   expect(patches(pr)).toBe(0);
 });
+
+test("a receipt between two ordered lists refreshes where it is and keeps both lists", async () => {
+  const { pr } = await provedPr();
+  const old = `<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n| Proof |\n| --- |\n| old |\n<!-- /fleet-proof-receipt -->`;
+  const body = `Adds the greeting.\n\n### Testing\n\n1. First\n\n${old}\n\n7. Seventh\n`;
+  pr.pullRequestState({ body });
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe(body.replace(old, "<block>"));
+  expect(Bun.markdown.html(pr.githubBody())).toContain('<ol start="7">');
+});
