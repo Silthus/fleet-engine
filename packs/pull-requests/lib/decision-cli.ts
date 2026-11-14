@@ -67,7 +67,7 @@ rules, decisions and the tier are read as they are now, and takes the judge's ve
 saved, only while the PR's head, base and base SHA on GitHub, its tier, --landed for a merged PR, and the PR's proof
 files, standing rules and ledger decisions are the same. Otherwise it says the gate has not run at HEAD with these
 proofs; a decision recorded after the gate counts as a change. A summary that does not pass now offers no merge,
-and nor does an accepted gap whose condition the saved judge did not weigh, a CI state other than the one it weighed,
+and nor does an accepted gap whose condition the saved judge did not weigh, CI checks other than the ones it weighed,
 or a head that moves while the report reads it: run the gate in the PR's checkout (with --landed for a merged PR), where a review carried across commits can
 be checked. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
@@ -336,8 +336,11 @@ async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger)
   const heard = { thread: word.thread, message: word.id, at: answeredAt(word) };
   if (Date.parse(heard.at) < Date.parse(decision.at)) throw new Error(`The user wrote that on ${heard.at.slice(0, 10)}, before decision ${id} was recorded on ${decision.at.slice(0, 10)}. Only their words after it reverse it`);
   const event: Reversal = { type: "reverse", id, words, ...heard, machine: thisMachine(context.env) };
+  const answer = `${heard.thread}/${heard.message}`;
+  const earlier = answerUse(events, answer);
+  if (earlier) throw alreadyUsed(earlier);
   const read = await appendHeard(ledger, event, { type: "void", id, reason: `reversed by the user: ${words}`, at: event.at });
-  const use = answerUse(read, `${heard.thread}/${heard.message}`);
+  const use = answerUse(read, answer);
   if (!use || !("reversal" in use) || use.reversal !== id) throw new Error(`Not reversed: ${use ? alreadyUsed(use).message : `another reversal of decision ${id} came first`}`);
   context.print(decisionLine(fold([...events, event]).find((candidate) => candidate.id === id)!));
   return 0;

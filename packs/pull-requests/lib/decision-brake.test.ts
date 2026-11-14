@@ -227,9 +227,12 @@ test("one answer of the user's reverses one decision, and an answer already reco
   pr.say("Undo that one");
   expect((await reverse(pr, first, "2026-10-21", "Undo that one")).code).toBe(0);
   await expect(reverse(pr, second, "2026-10-21", "Undo that one")).rejects.toThrow(`That answer already reversed decision ${first}. One answer reverses one decision; ask the user about this one`);
+  const aboutSecond = () => readFileSync(ledgerFile(pr), "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.id === second);
+  expect(aboutSecond()).toEqual([]);
   pr.choose("Use the shared parser", "Where does the parser of example/product#42 go?");
   const recorded = idIn((await pr.decide("record", "--mark", "👤", "--class", "design", "--pr", "example/product#42")).output);
   await expect(reverse(pr, second, "2026-10-21", "Use the shared parser")).rejects.toThrow(`That answer is already recorded as decision ${recorded}`);
+  expect(aboutSecond()).toEqual([]);
   expect((await pr.decide("list", "--live")).output).toContain(second);
   expect((await decideAlone(pr, "design", "Third design call?")).code).toBe(0);
 });

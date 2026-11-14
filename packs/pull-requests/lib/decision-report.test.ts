@@ -249,6 +249,24 @@ test("the report never offers the merge once a check fails after the judge weigh
   expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
 });
 
+test("the report never offers the merge once an optional check fails after the judge weighed an accepted gap's condition", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--kinds", "prod-shape");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
+  pr.chooseGap("prod-shape", "No production read access");
+  await acceptGap(pr, "prod-shape", "--condition", "No check at HEAD has failed");
+  pr.required("main", [{ context: "test" }]);
+  pr.ci([{ name: "test", bucket: "pass" }, { name: "lint", bucket: "pass" }]);
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect((await reportOf(pr)).stillYours).toEqual(["- Merge example/product#42: its proofs pass, and it waits on your merge word."]);
+
+  pr.ci([{ name: "test", bucket: "pass" }, { name: "lint", bucket: "fail" }]);
+  expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
+});
+
 test("the report keeps the gate of HEAD when a gate of an older commit finishes later", async () => {
   const pr = await checkout();
   const older = await pr.commit("feature.txt", "greet new members\n");

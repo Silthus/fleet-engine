@@ -87,7 +87,7 @@ export async function currentSummary(ref: PrRef, pull: PullRequest, ledger: Ledg
     landed: pull.state === "merged", cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run),
     ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: pushedHeadOf(head, run), ledger, now: now?.(),
   });
-  const judged = JSON.stringify(live.conditions) === JSON.stringify(saved.conditions) && live.proofSummary.ci.state === saved.gate.summary.ci.state;
+  const judged = JSON.stringify(live.conditions) === JSON.stringify(saved.conditions) && live.proofSummary.ci.line === saved.gate.summary.ci.line;
   const receipt = await receiptOf(home, ref);
   return { ...saved.gate.summary, ...receipt ? { receipt } : {}, ...live.proofSummary, code: live.code !== 0 ? live.code : judged ? saved.gate.code : 1 };
 }
