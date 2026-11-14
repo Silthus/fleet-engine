@@ -477,6 +477,8 @@ test("stripping receipts never changes the merge-risk callout or tier the ledger
     `## Testing\n\n<!-- merge-risk -->\n**Tier:** critical (b)\n${receipt("<!-- /merge-risk -->")}`,
     `## Testing\n\n${receipt("<!-- merge-risk -->\n**Tier:** non-critical")}**Tier:** critical (b)\n<!-- /merge-risk -->\n`,
     `## Testing\n\n${callout("**Tier:** non-critical")}${receipt(callout("**Tier:** critical (b)"))}`,
+    `## Testing\n\n<!-- merge-${receipt("a receipt inside a marker")}risk -->\n**Tier:** non-critical\n<!-- /merge-risk -->\n${callout("**Tier:** critical (b)")}`,
+    `## Testing\n\n${callout("**Tier:** critical (b)", `<!-- merge-${receipt("x")}risk -->`)}`,
   ];
   for (const body of bodies) {
     expect([riskCalloutOf(withoutReceipt(body)), tierOf(withoutReceipt(body))]).toEqual([riskCalloutOf(body), tierOf(body)]);
