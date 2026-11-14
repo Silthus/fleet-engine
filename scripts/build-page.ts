@@ -124,7 +124,4 @@ function fail(message: string): never {
   process.exit(2);
 }
 
-if (import.meta.main) {
-  await main(Bun.argv.slice(2));
-  process.exit(0);
-}
+if (import.meta.main) await main(Bun.argv.slice(2));
