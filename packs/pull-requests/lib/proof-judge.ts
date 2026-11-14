@@ -108,11 +108,14 @@ export async function judgePrompt(input: JudgeInput) {
 
 ## Ledger, as fleet read it
 
-${input.ledger.join("\n")}
+Fleet wrote these lines, but they quote CI check names and gap reasons that the author wrote.
+
+${untrusted("the gate's lines", input.ledger.join("\n"))}
 
 Owed kinds: ${owed}
-CI on HEAD: ${input.ci.state}, ${input.ci.detail}
-${input.ci.checks ? `CI checks on HEAD: ${input.ci.checks.join("; ") || "none"}\n` : ""}
+CI on HEAD, as GitHub reports it:
+${untrusted("CI on HEAD", [`${input.ci.state}, ${input.ci.detail}`, ...input.ci.checks ? [`Checks: ${input.ci.checks.join("; ") || "none"}`] : []].join("\n"))}
+
 ## Conditions of accepted gaps
 
 ${conditionsSection(input.conditions)}
