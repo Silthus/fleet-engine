@@ -32,11 +32,10 @@ function snippet(text: string, terms: string[]) {
   return `${at ? "…" : ""}${text.slice(at, at + snippetLength).replaceAll("\n", " ")}${text.length > at + snippetLength ? "…" : ""}`;
 }
 
-export function searchSessions(state: string, words: string[], { since, repo }: { since: number; repo?: string }): string {
+export function searchSessions(state: string, words: string[], { since }: { since: number }): string {
   const terms = words.map((word) => word.toLowerCase());
   const sessions = new Map<string, Digest>();
   for (const item of storedDigests(state)) {
-    if (repo && item.repo !== repo) continue;
     const key = `${item.provider}:${item.session}`;
     const known = sessions.get(key);
     const entries = known ? [...known.entries, ...item.entries.filter((entry) => !known.entries.some((old) => old.at === entry.at && old.text === entry.text))] : item.entries;

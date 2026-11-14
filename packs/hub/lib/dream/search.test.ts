@@ -53,20 +53,13 @@ test("search on the hub lists the sessions of the last 30 days that name every w
   ].join("\n"));
 });
 
-test("search narrows by --repo and --since, and says when nothing matches", async () => {
+test("search says when nothing matches", async () => {
   const home = hubWithRuns();
   const { io, printed } = quietIo(home);
 
-  expect(await dreamCommand(["search", "tuesday", "--repo", "web"], io)).toBe(0);
-  expect(await dreamCommand(["search", "tuesday", "--since", "3d"], io)).toBe(0);
   expect(await dreamCommand(["search", "tuesday", "wednesday"], io)).toBe(0);
 
-  const [web, recent, none] = printed;
-  expect(web).toStartWith("2026-10-20T09:00 devbox-2 claude s-old (web)");
-  expect(web).not.toContain("s-new");
-  expect(recent).toContain("s-new");
-  expect(recent).toContain("s-box");
-  expect(recent).not.toContain("s-old");
+  const [none] = printed;
   expect(none).toBe('No session in the last 30 days names "tuesday" and "wednesday".\n');
 });
 
@@ -76,18 +69,18 @@ test("search away from the hub asks the hub over SSH and passes on its answer an
   const asked: string[] = [];
   const { io, printed } = quietIo(home, { onPeer: async (alias, command) => (asked.push(`${alias}: ${command}`), { code: 0, stdout: "2026-11-04T09:00 hub claude s-1 (app)\n", stderr: "" }) });
 
-  expect(await dreamCommand(["search", "it's", "deploy", "--since", "7d"], io)).toBe(0);
+  expect(await dreamCommand(["search", "it's", "deploy"], io)).toBe(0);
 
-  expect(asked).toEqual([`my-hub: sh "$HOME/.local/share/fleet/engine/fleet" dream search 'it'\\''s' 'deploy' '--since' '7d'`]);
+  expect(asked).toEqual([`my-hub: sh "$HOME/.local/share/fleet/engine/fleet" dream search 'it'\\''s' 'deploy'`]);
   expect(printed).toEqual(["2026-11-04T09:00 hub claude s-1 (app)\n"]);
 });
 
 test("search with no word prints its usage and exits 2", async () => {
   const { io, said } = quietIo(hubWithRuns());
 
-  expect(await dreamCommand(["search", "--repo", "web"], io)).toBe(2);
+  expect(await dreamCommand(["search"], io)).toBe(2);
 
-  expect(said).toEqual(["Usage: fleet dream search <word>... [--since 30d] [--repo <repo>]"]);
+  expect(said).toEqual(["Usage: fleet dream search <word>..."]);
 });
 
 test("the hub keeps runs and box digests for 30 days, then drops them", async () => {
