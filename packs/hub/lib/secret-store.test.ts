@@ -747,3 +747,13 @@ test("a put through a provider without a check is stored with a note that it wen
   expect(await machine.dev("list")).toBe(0);
   expect(machine.since(before)).toContain("sandbox-login: standing, example-login, project Sandbox, scope the sandbox project only (unchecked: its provider has no check), stored");
 });
+
+test("an on request from a machine whose fleet secret predates the answer check asks for an update there", async () => {
+  const machine = fleet();
+  expect(await machine.dev("off", "suspected leak")).toBe(0);
+  const printed: string[] = [];
+  const code = await secretCommand(["hub"], { home: machine.hubHome, env: { FLEET_SETTINGS: "{}" }, rows: testRows(), out: (shown) => printed.push(text(shown)), err: (shown) => printed.push(text(shown)), stdin: async () => JSON.stringify({ op: "on", words: '2026-11-13 "Yes, turn it on"', thread: "users-thread" }) });
+  expect(code).toBe(0);
+  expect(JSON.parse(printed.join(""))).toEqual({ ok: false, error: "The calling machine's fleet secret sends no answer to check. Run fleet update there, then fleet secret on again" });
+  expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).code).toBe(1);
+});

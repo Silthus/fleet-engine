@@ -64,6 +64,7 @@ async function answer(context: SecretContext, request: Request): Promise<Answer>
   try {
     if (request.op === "off") { turnOff(store, request); return { ok: true, lines: ["The store is off: every read is refused until the user's words turn it on (fleet secret on)."] }; }
     if (request.op === "on") {
+      if ([request.question, request.answer, request.message, request.at].some((field) => typeof field !== "string")) return { ok: false, error: "The calling machine's fleet secret sends no answer to check. Run fleet update there, then fleet secret on again" };
       turnOn(store, currentOff(store), request);
       return { ok: true, lines: [`The store is on again, by the user's words ${request.words} (thread ${request.thread}).`] };
     }
