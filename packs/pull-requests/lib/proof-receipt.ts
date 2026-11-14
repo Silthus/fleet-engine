@@ -37,17 +37,17 @@ const shown = (text: string) => spaced(Bun.markdown.html(text).replace(/<img\b[^
 
 function views(text: string) {
   const plain = text.normalize("NFKC").replace(invisible, "");
-  return [shown(plain), spaced(plain.replace(/[`*_~]/g, ""))];
+  return { written: spaced(plain), read: [shown(plain), spaced(plain.replace(/`/g, "")), spaced(plain.replace(/[`*_~]/g, ""))] };
 }
+
+const holdsFigure = (seen: string) => figures.some((pattern) => pattern.test(kept.reduce((value, exempt) => value.replace(exempt, " "), seen)));
 
 export function guardField(field: string, text: string) {
   if (text.includes("<!--") || text.includes("-->")) throw new GuardRefusal(`receipt refused: the ${field} holds an HTML comment marker. Remove it.`);
   if (entity.test(text)) throw new GuardRefusal(`receipt refused: the ${field} holds an HTML entity. Write the character itself.`);
-  for (const seen of views(text)) {
-    const rest = kept.reduce((value, pattern) => value.replace(pattern, " "), seen);
-    if (email.test(seen) || percent.test(seen) || figures.some((pattern) => pattern.test(rest))) {
-      throw new GuardRefusal(`receipt refused: the ${field} looks like a production figure or an email address. Move the detail into an evidence note, which only the full receipt shows.`);
-    }
+  const { written, read } = views(text);
+  if (holdsFigure(written) || read.some((seen) => email.test(seen) || percent.test(seen) || holdsFigure(seen))) {
+    throw new GuardRefusal(`receipt refused: the ${field} looks like a production figure or an email address. Move the detail into an evidence note, which only the full receipt shows.`);
   }
   return text;
 }
