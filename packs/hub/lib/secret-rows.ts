@@ -1,5 +1,5 @@
 import type { Env } from "./hub-transport.ts";
-import type { Provider, SecretRow } from "./secret-store.ts";
+import { SecretRefusal, type Provider, type SecretRow } from "./secret-store.ts";
 
 export type ProviderOptions = Record<string, string>;
 export type ProviderFactory = (options: ProviderOptions) => Provider;
@@ -18,13 +18,17 @@ export function lookup(providers: Record<string, ProviderFactory>): ProviderLook
   return (name, options = {}) => Object.hasOwn(providers, name) ? providers[name]!(options) : notInstalled(name);
 }
 
+const sameSet = (one: string[], other: string[]) => new Set(one).size === one.length && one.length === other.length && one.every((key) => other.includes(key));
+
 export function checkedRows(rows: SecretRow[]): SecretRow[] {
   const seen = new Set<string>();
   for (const row of rows) {
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(row.name)) throw new Error(`The secret row ${JSON.stringify(row.name)} needs a name of lowercase letters, digits and hyphens`);
-    if (seen.has(row.name)) throw new Error(`Two secret rows are named ${row.name}`);
-    if (!row.env.length || row.env.some((key) => !/^[A-Z_][A-Z0-9_]*$/.test(key))) throw new Error(`The secret row ${row.name} needs one or more variable names such as API_KEY`);
-    if (row.file && (row.file.path.startsWith("/") || row.file.path.split("/").includes(".."))) throw new Error(`The secret row ${row.name} names its file by a path under the home, not ${row.file.path}`);
+    const refuse = (problem: string) => { throw new SecretRefusal(`The secret row ${JSON.stringify(row.name)} ${problem}`); };
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(row.name)) refuse("needs a name of lowercase letters, digits and hyphens");
+    if (seen.has(row.name)) refuse("is declared twice");
+    if (!row.env.length || row.env.some((key) => !/^[A-Z_][A-Z0-9_]*$/.test(key)) || new Set(row.env).size !== row.env.length) refuse("needs one or more different variable names such as API_KEY");
+    if (row.file && (row.file.path.startsWith("/") || row.file.path.split("/").includes(".."))) refuse(`names its file by a path under the home, not ${row.file.path}`);
+    if (row.file?.fields && !sameSet(Object.values(row.file.fields), row.env)) refuse(`maps its file's fields to ${Object.values(row.file.fields).join(", ")}, which must be its variables ${row.env.join(", ")}, each once`);
     seen.add(row.name);
   }
   return rows;

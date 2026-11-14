@@ -67,7 +67,9 @@ fleet secret run example-send -- <command>
 - `list --need <name>...` prints, for each named secret that is missing or
   fails its live check, the text of the `request_secret` card to ask the user
   with. The checks run on the hub, and each appends a read event marked
-  `check`. An `off` that lands during a check stops the rest.
+  `check`. A check that throws counts as failing, and its message is not
+  shown. An `off` that lands during a check stops the rest and withholds the
+  answers.
 - `list --due` names each secret within 7 days of its expiry, past it, or
   missing, with the same card text.
 
@@ -85,8 +87,9 @@ characters. A value that the put's own record or `list` line would spell is
 refused. A new value replaces the stored one only after the check passes; on
 failure the old value stays.
 
-`--expires <date>` is the provider's expiry. A past date, or one more than 90
-days out, is refused. The store expiry is the earlier of the provider's expiry
+`--expires <date>` is the provider's expiry: a real calendar date such as
+`2026-12-31`, or a time with its zone such as `2026-12-31T18:00Z`. A past date,
+or one more than 90 days out, is refused. The store expiry is the earlier of the provider's expiry
 and 90 days after the put. `--why` names a late reason: `intake` (the default),
 `failed-check`, `expired`, `revoked`, `scope`, or `missed`.
 
@@ -97,15 +100,22 @@ fleet secret off "suspected leak in <thread>"
 fleet secret on --words '2026-11-13 "Turn it back on"' --thread <id>
 ```
 
-Any agent may turn the store off. Only the user's answer to a question card in
-the given T3 thread, given after the store went off, turns it on, and each
-answer turns it on once. `off --help` prints the usage, and `off` refuses a
-reason that starts with `-`.
+Any agent may turn the store off. To turn it on, ask the user with the
+question tool: "Turn the secret store back on?", with the options "Yes, turn it
+on" and "No, keep it off". Only a yes to that question in the given T3 thread,
+given after the store went off, turns it on, and each answer turns it on once.
+`off --help` prints the usage, and `off` refuses a reason that starts with `-`.
+
+A line of the event log that is not JSON, or an `off` line without its fields,
+counts as an `off`: an interrupted `off` keeps the store off. The user's yes
+turns it on as for any other `off`.
 
 ## Threat model
 
 The store guards against accidental exposure: a value in a transcript, in tool
-output, or on a devbox's disk. It does not guard against the hub's own user
+output, or on a devbox's disk. A failure that is not a refusal prints a fixed
+message, never the error's own text, and a caller never shows the hub's
+stderr. It does not guard against the hub's own user
 reading a value file, or a value that a command encodes, splits, or writes to a
 file. After a suspected leak, run `off` first, then rotate the secret at its
 settings link.
@@ -121,3 +131,10 @@ Other machines send one JSON request to `fleet secret hub` over SSH stdin and
 read one JSON answer on stdout, so a value never reaches a command line. The hub
 is the only reader of value files, so the switch and the read log cover every
 store read.
+
+The hub trusts the caller's report of the user's answer, as the decision
+ledger does. An agent that can reach the hub over SSH can read its files, so a
+check on the hub would not stop a hostile agent; the store guards against
+mistakes. Each change is one append to the log, and the order of the log
+decides: an `on` checks the log again after its append and stays off when a
+newer `off` landed.

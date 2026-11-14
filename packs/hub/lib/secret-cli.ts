@@ -4,10 +4,10 @@ import { answeredAt, heardInThread } from "../../pull-requests/lib/decision-cli.
 import { thisMachine } from "../../pull-requests/lib/decision-ledger.ts";
 import type { ThreadWords } from "../../pull-requests/lib/proof-answers.ts";
 import { fleetOnHub, HubUnreachable, lastLine, remoteHub, runSsh, type Env, type Ssh } from "./hub-transport.ts";
-import { injectedRows } from "./secret-rows.ts";
+import { checkedRows, injectedRows } from "./secret-rows.ts";
 import {
-  currentOff, deliver, dueLines, listLines, needLines, putValue, secretFilesDir, SecretRefusal, standingDays, storedLine, turnOff, turnOn, whys,
-  type Delivered, type PutInput, type SecretRow, type Store, type Why,
+  currentOff, deliver, dueLines, enableQuestion, failureOf, listLines, needLines, putValue, secretFilesDir, standingDays, storedLine, turnOff, turnOn, whys,
+  type Delivered, type Heard, type PutInput, type SecretRow, type Store, type Why,
 } from "./secret-store.ts";
 
 export const usage = `Usage:
@@ -28,8 +28,8 @@ run sets each secret's variables in the command's environment only, and replaces
 list shows each secret's kind, project, region, scope and state, never a value. --need prints the request_secret
 card text of each named secret that is missing or fails its check. --due lists each secret within 7 days of its
 expiry, past it, or missing, with its card text.
-off stops every store read at once; any agent may run it. on needs the user's dated, quoted answer to your question
-tool in the T3 thread, given after the store went off.`;
+off stops every store read at once; any agent may run it. on needs the user's dated, quoted "Yes" to the question
+"${enableQuestion}", asked with your question tool in the T3 thread after the store went off.`;
 
 export type SecretContext = {
   home: string; env: Env;
@@ -41,7 +41,6 @@ export type SecretContext = {
 
 class UsageError extends Error {}
 
-type Heard = { words: string; thread: string; message: string; at: string };
 type Request =
   | ({ op: "put" } & PutInput)
   | { op: "deliver"; names: string[]; thread?: string; machine: string }
@@ -53,10 +52,12 @@ type Answer = { ok: true; lines?: string[]; delivered?: Delivered[] } | { ok: fa
 const machineOf = (context: SecretContext) => thisMachine(context.env);
 const threadOf = (context: SecretContext) => context.env.T3CODE_THREAD_ID ? { thread: context.env.T3CODE_THREAD_ID } : {};
 const slowCallMs = 180_000;
+const sshFailed = 255;
 
 async function answer(context: SecretContext, request: Request): Promise<Answer> {
-  const store: Store = { home: context.home, rows: context.rows ?? await injectedRows(context.env), now: context.now?.() ?? new Date(), ...context.beforeAppend ? { beforeAppend: context.beforeAppend } : {} };
   try {
+    const rows = context.rows ? checkedRows(context.rows) : await injectedRows(context.env);
+    const store: Store = { home: context.home, rows, now: context.now?.() ?? new Date(), ...context.beforeAppend ? { beforeAppend: context.beforeAppend } : {} };
     if (request.op === "put") return { ok: true, lines: [storedLine(await putValue(store, request))] };
     if (request.op === "deliver") return { ok: true, delivered: deliver(store, request) };
     if (request.op === "off") { turnOff(store, request); return { ok: true, lines: ["The store is off: every read is refused until the user's words turn it on (fleet secret on)."] }; }
@@ -68,8 +69,7 @@ async function answer(context: SecretContext, request: Request): Promise<Answer>
     if (request.due) return { ok: true, lines: dueLines(store) };
     return { ok: true, lines: listLines(store) };
   } catch (error) {
-    if (error instanceof SecretRefusal) return { ok: false, error: error.message };
-    throw error;
+    return { ok: false, error: failureOf(error) };
   }
 }
 
@@ -78,7 +78,8 @@ async function ask(context: SecretContext, request: Request): Promise<Answer> {
   if (!hub) return answer(context, request);
   const slow = request.op === "put" || (request.op === "list" && request.need !== undefined);
   const result = await (context.ssh ?? runSsh)(hub, fleetOnHub(hub, ["secret", "hub"]), JSON.stringify(request), slow ? slowCallMs : undefined);
-  if (result.code !== 0) throw new HubUnreachable(`the hub ${hub} did not answer over SSH (exit ${result.code}${lastLine(result.stderr) ? `: ${lastLine(result.stderr)}` : ""})`);
+  if (result.code === sshFailed) throw new HubUnreachable(`the hub ${hub} did not answer over SSH (exit ${result.code}${lastLine(result.stderr) ? `: ${lastLine(result.stderr)}` : ""})`);
+  if (result.code !== 0) throw new HubUnreachable(`fleet secret hub failed on the hub ${hub} (exit ${result.code}). Its output is not shown, as it could hold a value; run fleet update there, then look at it on the hub`);
   try { return JSON.parse(result.stdout) as Answer; }
   catch { throw new HubUnreachable(`the hub ${hub} sent no answer the store understands; run fleet update there`); }
 }
@@ -121,16 +122,27 @@ function secretFile(path: string | undefined, home: string) {
   return real;
 }
 
+function fileOptions(args: string[]) {
+  const paths: (string | undefined)[] = [];
+  for (let at = args.indexOf("--file"); at >= 0; at = args.indexOf("--file")) {
+    const value = args[at + 1];
+    const named = value !== undefined && !value.startsWith("--");
+    paths.push(named ? value : undefined);
+    args.splice(at, named ? 2 : 1);
+  }
+  return paths;
+}
+
 async function put(args: string[], context: SecretContext) {
-  const at = args.indexOf("--file");
-  if (at < 0) throw new UsageError(`put needs --file with a request_secret file.\n${usage}`);
-  const real = secretFile(args[at + 1], context.home);
-  args.splice(at, 2);
-  const remove = () => rmSync(real, { force: true });
+  const paths = fileOptions(args);
+  const cards = paths.flatMap((path) => { try { return [secretFile(path, context.home)]; } catch { return []; } });
+  const remove = () => cards.forEach((card) => rmSync(card, { force: true }));
   const interrupted = () => { remove(); process.exit(130); };
   process.once("SIGINT", interrupted);
   process.once("SIGTERM", interrupted);
   try {
+    if (paths.length > 1) throw new UsageError(`put takes one --file; each request_secret file it named in the secret-file directory was deleted.\n${usage}`);
+    const real = secretFile(paths[0], context.home);
     const expires = option(args, "--expires");
     const why = option(args, "--why") ?? "intake";
     const [name, ...rest] = args;
@@ -168,7 +180,7 @@ export function redactExact(text: string, secrets: { value: string; label: strin
 const plainLabel = "[redacted]";
 const withheld = "[fleet secret: a line of output was withheld, because its redaction would still show a stored value]\n";
 
-function lineRedactor(secrets: { value: string; label: string }[], write: (text: string) => void) {
+export function lineRedactor(secrets: { value: string; label: string }[], write: (text: string) => void) {
   const safe = (text: string) => secrets.some(({ value }) => text.includes(value)) ? undefined : text;
   const show = (text: string) => write(safe(redactExact(text, secrets)) ?? safe(withheld) ?? "");
   const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
@@ -202,6 +214,9 @@ async function run(args: string[], context: SecretContext) {
   const reply = await ask(context, { op: "deliver", names, ...threadOf(context), machine: machineOf(context) });
   if (!reply.ok) return done(context, reply);
   const delivered = reply.delivered ?? [];
+  const keys = delivered.flatMap(({ values }) => Object.keys(values));
+  const twice = keys.find((key, index) => keys.indexOf(key) !== index);
+  if (twice) return done(context, { ok: false, error: `two of ${names.join(", ")} set ${twice}, so none was used` });
   const all = delivered.flatMap(({ values }) => Object.values(values).filter(Boolean));
   const label = (name: string) => all.some((value) => `[redacted ${name}]`.includes(value)) ? plainLabel : `[redacted ${name}]`;
   const secrets = delivered.flatMap(({ name, values }) => Object.values(values).filter(Boolean).map((value) => ({ value, label: label(name) })));
@@ -221,7 +236,7 @@ async function hearOn(args: string[], context: SecretContext) {
   try {
     const word = await heardInThread(thread, words, message, { home: context.home, cwd: process.cwd(), env: context.env, print: context.out, ...context.threadWords ? { threadWords: context.threadWords } : {} });
     if (word.source !== "question") throw new Error(`"${word.text}" is a message the user typed. Only their answer to your question tool turns the store on: ask them with it`);
-    heard = { words, thread: word.thread, message: word.id, at: answeredAt(word) };
+    heard = { words, thread: word.thread, message: word.id, at: answeredAt(word), question: word.answered, answer: word.text };
   } catch (error) {
     context.err(`Fleet secret: ${(error as Error).message}\n`);
     return 1;
