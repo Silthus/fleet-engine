@@ -12,9 +12,9 @@ const codeConcepts = [
 const configKey = /^\s*["']?([A-Za-z_][\w.-]*)["']?\s*[:=]/g;
 
 async function git(cwd: string, ...args: string[]) {
-  const child = Bun.spawn(["git", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(["git", "-c", "core.quotePath=false", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  if (exitCode > 1 || (exitCode === 1 && args[0] !== "grep")) throw new Error(`git ${args[0]}: ${stderr.trim()}`);
+  if (exitCode > 1 || (exitCode === 1 && args[0] !== "grep")) throw new Error(`git ${args.join(" ")}: ${stderr.trim()}`);
   return { exitCode, stdout };
 }
 
@@ -32,7 +32,7 @@ function addedNames(diff: string) {
   for (const line of diff.split("\n")) {
     if (line.startsWith("+++ ")) {
       const path = line.slice(6);
-      patterns = !authored(path) || /\.mdx?$/.test(path) ? [] : /\.(json|ya?ml|toml)$/.test(path) ? [configKey] : codeConcepts;
+      patterns = !authored(path) || /\.mdx?$/.test(path) ? [] : /(config|settings)[^/]*\.(json|ya?ml|toml)$/i.test(path) ? [configKey] : codeConcepts;
     } else if (line.startsWith("+")) for (const pattern of patterns) for (const match of line.slice(1).matchAll(pattern)) names.add(match[1]!);
   }
   return [...names];
@@ -44,12 +44,13 @@ export async function prSize(args: string[], cwd: string) {
   const lines = count(args, "--lines");
   const concepts = count(args, "--concepts");
   const from = (await git(cwd, "merge-base", base, "HEAD")).stdout.trim();
-  const numstat = (await git(cwd, "diff", "--numstat", from, "HEAD")).stdout.split("\n").map((row) => row.split("\t"));
+  const diff = ["diff", "--no-color", "--no-renames", from, "HEAD"];
+  const numstat = (await git(cwd, ...diff, "--numstat")).stdout.split("\n").map((row) => row.split("\t"));
   const authoredLines = numstat.filter(([, , path]) => path && authored(path)).reduce((sum, [added]) => sum + (Number(added) || 0), 0);
-  const newFiles = (await git(cwd, "diff", "--name-only", "--diff-filter=A", from, "HEAD")).stdout.split("\n").filter((path) => path && authored(path));
-  const names = addedNames((await git(cwd, "diff", "-U0", from, "HEAD")).stdout);
-  const newConcepts = [];
-  for (const name of names) if ((await git(cwd, "grep", "-q", "-F", "-e", name, from)).exitCode === 1) newConcepts.push(name);
+  const newFiles = (await git(cwd, ...diff, "--name-only", "--diff-filter=A")).stdout.split("\n").filter((path) => path && authored(path));
+  const names = addedNames((await git(cwd, ...diff, "-U0")).stdout);
+  const known = names.length ? new Set((await git(cwd, "grep", "--no-color", "-h", "-o", "-w", "-F", ...names.flatMap((name) => ["-e", name]), from, "--", ":(top)")).stdout.split("\n")) : new Set();
+  const newConcepts = names.filter((name) => !known.has(name));
   const counted = (count: number, noun: string, items: string[] = []) => `${count} ${noun}${count === 1 ? "" : "s"}${items.length ? ` (${items.join(", ")})` : ""}`;
   const summary = `size: ${counted(authoredLines, "authored line")}, ${counted(newFiles.length, "new file", newFiles)}, ${counted(newConcepts.length, "new concept", newConcepts)}`;
   if (lines === undefined && concepts === undefined) return { output: `${summary}\nno estimate: the size contract did not run`, exitCode: 0 };
