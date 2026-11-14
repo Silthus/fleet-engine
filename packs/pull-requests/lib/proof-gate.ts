@@ -7,6 +7,7 @@ import { covers, hubLedger, refText, riskCalloutOf, tierOf, type Env, type Ledge
 import { ciOf, readPullRequest, type PullRequest, type Run } from "./pr-ci.ts";
 import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
 import { displayEntry } from "./proof-display.ts";
+import { receiptMarker } from "./proof-receipt.ts";
 import { cleanBaseMerge, diffOf, mergeBase, pullRequestDetails, topLevel } from "./proof-checkout.ts";
 import { quietCommitIn } from "./proof-delta.ts";
 import { judge, readCriticalPaths, type JudgeInput } from "./proof-judge.ts";
@@ -61,10 +62,12 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
     pushedHead, ledger: hubLedger(home, env, ssh), now: now?.(),
   });
   const judged: Judged = checked.code === 0 ? await judgeHead(head, checked, context) : { code: checked.code, lines: [], covered: "", judge: { state: "skipped", lines: [] }, reason: checked.failure };
+  const shown = pull === undefined ? undefined : receiptMarker((pull as PullRequest).body);
+  const stale = shown && shown.head !== head.commit ? [`receipt: the PR body shows the receipt of ${shown.head.slice(0, 7)}, not HEAD ${head.commit.slice(0, 7)}. Refresh it with fleet proof receipt`] : [];
   const gate = {
     code: judged.code,
     reason: judged.code === 0 ? "pass" : judged.reason ?? `exit ${judged.code}`,
-    lines: [...checked.lines, ...judged.lines],
+    lines: [...checked.lines, ...judged.lines, ...stale],
     verdict: judged.code === 0 ? `gate: pass (${checked.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`,
     summary: { ...checked.proofSummary, code: judged.code, judge: judged.judge },
   };
@@ -95,6 +98,17 @@ export async function currentSummary(ref: PrRef, pull: PullRequest, ledger: Ledg
   const judged = readAsSaved && JSON.stringify(live.conditions) === JSON.stringify(saved.conditions) && live.proofSummary.ci.line === saved.gate.summary.ci.line && JSON.stringify(live.proofSummary.ci.checks) === JSON.stringify(saved.gate.summary.ci.checks);
   const receipt = await receiptOf(home, ref);
   return { ...saved.gate.summary, ...receipt ? { receipt } : {}, ...live.proofSummary, code: live.code !== 0 ? live.code : judged ? saved.gate.code : 1 };
+}
+
+export async function receiptSummary(head: ProofIdentity, pull: PullRequest, ledger: Ledger, context: GateContext): Promise<ProofSummary> {
+  const current = await currentSummary(head, pull, ledger, context);
+  if (current) return current;
+  const { home, run, now } = context;
+  const live = await proofGate(home, head, {
+    landed: pull.state === "merged", cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run),
+    ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: pushedHeadOf(head, run), ledger, now: now?.(),
+  });
+  return { ...live.proofSummary, code: live.code, judge: { state: "skipped", lines: [] } };
 }
 
 async function savedGate(home: string, ref: PrRef, pull: PullRequest, ledger: Ledger): Promise<SavedGate | undefined> {

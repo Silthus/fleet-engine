@@ -4,7 +4,7 @@ import { optionalStringSetting } from "../../base/lib/settings.ts";
 import { findThread, questionCard, withT3Session } from "../../base/lib/t3/index.ts";
 import { covers, decisionLine, refText, type DecisionState, type Env, type Ledger, type Mark, type PrRef, type Ssh } from "./decision-ledger.ts";
 import { readPullRequest, runIn, type PullRequest } from "./pr-ci.ts";
-import { receiptOf, type GapProof, type ProofSummary } from "./proof.ts";
+import { receiptOf, summaryGaps, type GapProof, type ProofSummary } from "./proof.ts";
 import { currentSummary } from "./proof-gate.ts";
 
 export type ReportContext = { home: string; cwd: string; env: Env; now?: () => Date; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean> };
@@ -45,24 +45,15 @@ function acceptedBy(gap: GapProof) {
   return by.id ? `accepted by ${by.mark ?? by.by} ${by.id}` : `accepted by ${by.by}`;
 }
 
-function gaps(summary: ProofSummary): { kind: string; gap: GapProof }[] {
-  return [
-    ...summary.kinds.flatMap((kind) => kind.state === "gap" ? [{ kind: kind.kind as string, gap: kind.gap }] : []),
-    ...summary.review.panelGap ? [{ kind: "panel", gap: summary.review.panelGap }] : [],
-    ...summary.ci.gap ? [{ kind: "ci", gap: summary.ci.gap }] : [],
-    ...summary.judge.gap ? [{ kind: "judge", gap: summary.judge.gap }] : [],
-  ];
-}
-
 function stillYours(rows: Row[], card: string | undefined) {
   const lane = rows.filter(gated);
   const blockers = lane.filter(({ state, summary }) => state !== "closed" && summary.tier === "critical").flatMap(({ ref, summary }) =>
-    gaps(summary).filter(({ gap }) => !gap.accepted).map(({ kind, gap }) =>
+    summaryGaps(summary).filter(({ gap }) => !gap.accepted).map(({ kind, gap }) =>
       `- **Blocker:** ${refText(ref)} is critical at HEAD and its ${kind} gap is not accepted: ${gap.reason ?? "no reason recorded"}${gap.lapsed ? ` (🤖 decision ${gap.lapsed.id} lapsed: ${gap.lapsed.reason})` : ""}.`));
   const unknown = rows.flatMap((pr) => "unknown" in pr ? [`- ${refText(pr.ref)}: its proofs are not known here (${pr.unknown}). Run fleet proof gate.`] : []);
   const ungated = rows.flatMap((pr) => "ungated" in pr && pr.state !== "closed"
     ? [`- ${refText(pr.ref)}: the gate has not run at HEAD ${short(pr.ungated)} with these proofs, so they are not known to pass. Run fleet proof gate${pr.state === "merged" ? " --landed" : ""}.`] : []);
-  const blocked = new Set(lane.filter(({ summary }) => summary.tier === "critical" && gaps(summary).some(({ gap }) => !gap.accepted)).map(({ ref }) => refText(ref)));
+  const blocked = new Set(lane.filter(({ summary }) => summary.tier === "critical" && summaryGaps(summary).some(({ gap }) => !gap.accepted)).map(({ ref }) => refText(ref)));
   const failing = lane.filter(({ ref, state, summary }) => state !== "closed" && summary.code !== 0 && !blocked.has(refText(ref)))
     .map(({ ref, state, summary }) => `- ${refText(ref)}: its proofs are not shown to pass at HEAD ${short(summary.commit)} as read now (gate exit ${summary.code}). Run fleet proof gate${state === "merged" ? " --landed" : ""} in its checkout to see why.`);
   const merges = lane.filter(({ state, summary }) => state === "open" && summary.code === 0)

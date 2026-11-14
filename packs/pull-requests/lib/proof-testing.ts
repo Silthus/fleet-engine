@@ -18,7 +18,7 @@ export function fixture(prefix: string) {
   return directory;
 }
 
-export const settings = { "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 6, "pull-requests.reviewTimeoutMinutes": 20, "pull-requests.panelSlots": 3 };
+export const settings = { "pull-requests.receiptHeading": "Testing", "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 6, "pull-requests.reviewTimeoutMinutes": 20, "pull-requests.panelSlots": 3 };
 export const lookup = { role: "lookup", work: "Find files", provider: "claude", model: "lookup-model", effort: "medium" };
 export const models = [lookup, { role: "review", work: "Review Claude's code", provider: "codex", model: "review-model", effort: "high" }, { role: "review-codex", work: "Review Codex's code", provider: "claude", model: "review-codex-model", effort: "high" }];
 
@@ -48,6 +48,11 @@ base=main; [ -f "${github}/base" ] && read -r base < "${github}/base"
 if [ -f "${github}/base-sha" ]; then read -r basesha < "${github}/base-sha"; else basesha=$(git -C "${repository}" rev-parse refs/remotes/origin/main 2>/dev/null); fi
 body='"Adds the greeting."'; [ -f "${github}/body" ] && body=$(cat "${github}/body")
 case "$*" in
+  "api "*"/pulls/"[0-9]*" --method PATCH --input "*)
+    [ -f "${github}/patch-error" ] && { cat "${github}/patch-error" >&2; exit 1; }
+    all="$*"; n=\${all##*/pulls/}; n=\${n%%[!0-9]*}; target="${github}/body"; [ -f "${github}/body-$n" ] && target="${github}/body-$n"
+    "${process.execPath}" -e 'const [input, target, mangle] = process.argv.slice(1); const fs = require("fs"); const body = JSON.parse(fs.readFileSync(input, "utf8")).body; fs.writeFileSync(target, JSON.stringify(fs.existsSync(mangle) ? body + fs.readFileSync(mangle, "utf8") : body));' "\${all##* }" "$target" "${github}/patch-mangle"
+    echo '{}'; exit 0;;
   "api "*"/pulls/"[0-9]*)
     [ -f "${github}/next-head" ] && mv "${github}/next-head" "${github}/head"
     [ -f "${github}/while-reading" ] && { mv "${github}/while-reading" "${github}/while-reading.sh"; sh "${github}/while-reading.sh"; }
@@ -103,6 +108,8 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   };
   const whileGithubReadsPull = (script: string) => writeFileSync(join(github, "while-reading"), script);
   const githubComment = (id: number, author: string, body: string, createdAt = "2026-10-25T11:00:00Z", on = 42) => writeFileSync(join(github, `comment-${id}`), JSON.stringify({ user: { login: author }, body, created_at: createdAt, issue_url: `https://api.github.com/repos/example/product/issues/${on}` }));
+  const githubBody = (number = 42) => JSON.parse(readFileSync(join(github, existsSync(join(github, `body-${number}`)) ? `body-${number}` : "body"), "utf8")) as string;
+  const githubFault = (fault: "patch-error" | "patch-mangle", text: string | undefined) => text === undefined ? rmSync(join(github, fault), { force: true }) : writeFileSync(join(github, fault), text);
   const githubCalls = () => readFileSync(join(github, "calls"), "utf8").trim().split("\n");
   ci([{ name: "test", bucket: "pass" }]);
   mkdirSync(join(home, ".agents/guides"), { recursive: true });
@@ -176,7 +183,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const decide = (...args: string[]) => decideIn(repository, ...args);
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, fleetAs, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, decide, decideIn, startTimes };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, fleetAs, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubBody, githubFault, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, decide, decideIn, startTimes };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;

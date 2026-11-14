@@ -57,3 +57,7 @@ export async function readDisplay(home: string, ref: PrRef): Promise<Display> {
   }));
   return { lines, screenshots };
 }
+
+const notCheckedPath = (home: string, ref: PrRef) => join(displayDirectory(home, ref), "not-checked.json");
+export const readNotChecked = async (home: string, ref: PrRef) => (await readJson<{ items?: string[] } | undefined>(notCheckedPath(home, ref), undefined))?.items ?? [];
+export const recordNotChecked = (home: string, ref: PrRef, items: string[]) => writeJson(notCheckedPath(home, ref), { items });

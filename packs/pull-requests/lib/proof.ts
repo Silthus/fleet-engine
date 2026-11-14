@@ -756,7 +756,7 @@ export type KindProof = { kind: ProofKind; line: string } & (
   | { state: "pending" }
   | { state: "ran"; commit: string; directory: string }
   | { state: "reused"; from: string; reason: string; directory: string }
-  | { state: "carried"; from: string; merges: number; directory: string }
+  | { state: "carried"; from: string; origin?: string; merges: number; directory: string }
   | { state: "gap"; accepted: boolean; gap: GapProof }
   | { state: "missing"; newest?: string });
 type KindState = KindProof extends infer P ? P extends KindProof ? Omit<P, "kind" | "line"> : never : never;
@@ -796,7 +796,11 @@ async function kindStatus(weigh: Weigh, kind: ProofKind, landed: boolean, cleanB
   const head = proved.get(identity.commit);
   if (head) { const directory = evidenceDirectory(home, identity, kind, head); return status(undefined, evidenceState(identity, head, directory), directory); }
   const carried = reviewedThroughMerges(identity.commit, new Set(proved.keys()), cleanBaseMerge);
-  if (carried) { const directory = evidenceDirectory(home, identity, kind, proved.get(carried.from)!); return status(undefined, { state: "carried", from: carried.from, merges: carried.merges.length, directory }, directory); }
+  if (carried) {
+    const proof = proved.get(carried.from)!;
+    const directory = evidenceDirectory(home, identity, kind, proof);
+    return status(undefined, { state: "carried", from: carried.from, origin: proof.reuse?.from ?? carried.from, merges: carried.merges.length, directory }, directory);
+  }
   if (gap) return { ...status(acceptance ? undefined : "gap", gapState()), ...countedGap(weighed) };
   const newest = [...proved].sort(([, a], [, b]) => (a.time < b.time ? 1 : -1))[0]?.[0];
   return { ...status("missing", newest ? { state: "missing", newest } : { state: "missing" }), ...lapseOf(weighed) };
@@ -942,6 +946,13 @@ export type ProofSummary = {
 export type JudgeSummary = { state: "pass" | "fail" | "unavailable" | "skipped"; model?: string; gap?: GapProof; lines: string[] };
 export type CheckedSummary = Omit<ProofSummary, "judge">;
 
+export const summaryGaps = (summary: ProofSummary): { kind: string; gap: GapProof }[] => [
+  ...summary.kinds.flatMap((kind) => kind.state === "gap" ? [{ kind: kind.kind as string, gap: kind.gap }] : []),
+  ...summary.review.panelGap ? [{ kind: "panel", gap: summary.review.panelGap }] : [],
+  ...summary.ci.gap ? [{ kind: "ci", gap: summary.ci.gap }] : [],
+  ...summary.judge.gap ? [{ kind: "judge", gap: summary.judge.gap }] : [],
+];
+
 export const summaryLines = (summary: CheckedSummary) => [
   ...summary.owed.line ? [summary.owed.line] : [], ...summary.kinds.map((kind) => kind.line), summary.review.line, ...summary.review.unanswered,
   summary.head.line, summary.ci.line, ...summary.lapsedLine ? [summary.lapsedLine] : [],
@@ -995,7 +1006,7 @@ export async function reviewRecords(home: string, identity: ProofIdentity) {
   return Promise.all((await finishedReviews(home, identity)).map(async ({ name, commit, reviewer }) => {
     const reservation = await readJson<Reservation | undefined>(join(reviews, name, "round.json"), undefined);
     return {
-      label: reviewLabel(name), commit, reviewer, capturedBy: reservation?.capturedBy ?? "author",
+      label: reviewLabel(name), directory: join(reviews, name), commit, reviewer, capturedBy: reservation?.capturedBy ?? "author",
       findings: await readFile(join(reviews, name, "findings.md"), "utf8"),
       responses: await readFile(join(reviews, name, "responses.md"), "utf8").catch(() => undefined),
     };
