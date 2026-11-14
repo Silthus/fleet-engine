@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { stringSetting } from "../../base/lib/settings.ts";
 import { covers, hubLedger } from "./decision-ledger.ts";
 import { readPullRequest, type PullRequest } from "./pr-ci.ts";
-import { prDirectory, readDecisions, readJson, reviewRecords, writeJson, type ProofIdentity } from "./proof.ts";
-import { readDisplay, readNotChecked, recordNotChecked } from "./proof-display.ts";
+import { prDirectory, readDecisions, readJson, recordReceipt, reviewRecords, writeJson, type ProofIdentity } from "./proof.ts";
+import { displayEntry, readDisplay, readNotChecked, recordNotChecked } from "./proof-display.ts";
 import { receiptSummary, type GateContext } from "./proof-gate.ts";
 import { readPlan } from "./proof-panel.ts";
 import { checkPlacement, GuardRefusal, keepCallout, placeReceipt, receiptHash, receiptLink, receiptMarker, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
@@ -15,7 +15,7 @@ import { reviewDisplay } from "./proof-review-display.ts";
 export type ReceiptContext = GateContext & { print: (text: string) => void };
 
 const short = (commit: string) => commit.slice(0, 7);
-const publishedPath = (home: string, head: ProofIdentity) => join(prDirectory(home, head), "receipt.json");
+const publishedPath = (home: string, head: ProofIdentity) => join(prDirectory(home, head), displayEntry, "published-receipt.json");
 
 async function storedArtifact(home: string, head: ProofIdentity) {
   const stored = await readJson<{ url?: unknown; id?: unknown } | undefined>(publishedPath(home, head), undefined);
@@ -67,9 +67,9 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
   const hash = receiptHash(rendered.section, page);
   const publish = handlerPublisher(env);
   const link = receiptLink(first.body);
-  const previous = await storedArtifact(home, head) ?? link;
+  const previous = await storedArtifact(home, head);
   const live = receiptMarker(first.body);
-  if (live?.head === head.commit && live.hash === hash && (!publish || (link && link.url === previous?.url))) {
+  if (live?.head === head.commit && live.hash === hash && (!publish || (link && link === previous?.url))) {
     if (items) await recordNotChecked(home, head, items);
     print("receipt current");
     return 0;
@@ -79,6 +79,7 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
     try { published = await publish({ repository: head.repository, pr: head.pr, title, page, ...previous ? { previous } : {} }); }
     catch (error) { print((error as Error).message); return 1; }
     await writeJson(publishedPath(home, head), published);
+    await recordReceipt(home, head, published.url);
   }
   const intended = keepCallout(first.body, placeReceipt(first.body, { head: head.commit, hash, section: published ? withLink(rendered.section, published.url) : rendered.section }, heading));
   if (readBody(head, context).body !== first.body) throw new Error("The PR body changed while fleet built the receipt. Run the receipt again");

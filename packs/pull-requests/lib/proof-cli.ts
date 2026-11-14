@@ -167,8 +167,9 @@ a number of four or more digits, a percentage, a thousands separator, an email a
 it; move such detail into an evidence note. The prod-shape result always reads "${prodShapeResult}". A pack's
 ${publisherSeam} handler publishes the full receipt: it reads {repository, pr, title, page, previous: {id, url}} as
 JSON on stdin and prints {id, url}, or {failed}, as its last line; the block then links the URL, and the next run
-passes it back as previous. fleet refuses an empty body read, a body that changed between its read and the write,
-broken markers, and a body that reads back different. It warns about each proof without a line and each screenshot
+on this machine passes it back as previous. A machine that did not publish it sends no previous, so the handler
+publishes a new page. fleet refuses an empty body read, a body that changed between its read and the write,
+broken markers, a write that would change the merge-risk callout, and a body that reads back different. It warns about each proof without a line and each screenshot
 without a caption or a published URL. Exit 0 when the receipt is current or written; 1 when publishing or GitHub
 fails; 2 when the guard refuses a field; 3 when the hub ledger cannot be reached. --comment records a comment you
 posted on the PR as its receipt instead: GitHub must show the comment on this PR. fleet proof gate --json and fleet

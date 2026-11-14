@@ -117,7 +117,7 @@ test("an empty read, a body edited before the write, broken markers or a lost wr
 
   const handler = publisher(pr);
   const open = `<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->`;
-  for (const broken of [`${open}\nold\n<!-- /fleet-proof-receipt -->\n${open}\nold\n<!-- /fleet-proof-receipt -->`, `<!-- /fleet-proof-receipt -->\n${open}`, `${open}\nunclosed`]) {
+  for (const broken of [`${open}\nold\n<!-- /fleet-proof-receipt -->\n${open}\nold\n<!-- /fleet-proof-receipt -->`, `<!-- /fleet-proof-receipt -->\n${open}`, `${open}\nunclosed`, `${open.replace(" -->", "")}\nThe rationale a person wrote.\n<!-- /fleet-proof-receipt -->`]) {
     pr.pullRequestState({ body: `Adds the greeting.\n\n${broken}\n` });
     await expect(pr.fleet("receipt")).rejects.toThrow("broken receipt markers");
   }
@@ -147,6 +147,9 @@ test("an empty read, a body edited before the write, broken markers or a lost wr
   expect(body).toStartWith("Adds the greeting.\n<!-- fleet-proof-receipt head=");
   expect(block(body).split("\n")[1]).toBe("## Testing");
   expect(body.endsWith("<!-- /fleet-proof-receipt -->\n")).toBe(true);
+  pr.pullRequestState({ body: "Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n#### Detail\n\nMore rationale.\n\n### Screenshots\n\nA picture.\n" });
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n#### Detail\n\nMore rationale.\n\n<block>\n\n### Screenshots\n\nA picture.\n");
 });
 
 test("the body guard refuses figures and emails with the field named, and passes SHAs, versions, dates and references", async () => {
@@ -234,6 +237,23 @@ test("a publisher handler gets the page, title and previous id, and its link goe
   expect(handler.requests()).toHaveLength(4);
   expect(block(pr.githubBody())).toContain("| live-run | Sent two test emails | Both delivered |");
   expect(handler.requests().at(-1).previous).toEqual({ id: "receipt-2", url: "https://receipts.example/r/receipt-2" });
+
+  pr.githubComment(7, "the-user", "Proofs at HEAD: live-run passed.", "2026-10-25T12:00:00Z");
+  expect((await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/42#issuecomment-7")).code).toBe(0);
+  expect((await pr.decide("report", "--pr", "example/product#42")).output).toContain("issuecomment-7");
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent three test emails", "--result", "All delivered");
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(handler.requests().at(-1).previous).toEqual({ id: "receipt-2", url: "https://receipts.example/r/receipt-2" });
+});
+
+test("a receipt link written on another machine is never turned into a publisher id: the handler publishes a new page", async () => {
+  const { pr } = await provedPr();
+  expect((await pr.fleet("gate")).code).toBe(0);
+  const handler = publisher(pr);
+  pr.pullRequestState({ body: `${template}\n<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n## Testing\n\nAn older receipt.\nFull receipt: https://receipts.example/view?receipt=opaque-id\n<!-- /fleet-proof-receipt -->\n` });
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(handler.requests()[0].previous).toBeUndefined();
+  expect(block(pr.githubBody())).toEndWith("Full receipt: https://receipts.example/r/receipt-1\n<!-- /fleet-proof-receipt -->");
 });
 
 test("the first receipt written into a body, and each refresh, leave the judge's prompt as it was", async () => {
