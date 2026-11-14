@@ -33,24 +33,31 @@ const fenced = (text: string) => {
 };
 
 const quoted = /^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/;
-const bare = /^(?:[\s>|:*_=~`#+-]|\d{1,9}[.)])*$/;
-const lineMark = /(\d+)/g;
+const codeBlock = /\uE000([^\uE001]*)\uE001/g;
+const codeOnly = (children: string) => children.match(codeBlock)?.join("") ?? "";
+const codeShape = {
+  ...Object.fromEntries(["blockquote", "list", "listItem", "paragraph", "heading", "table", "thead", "tbody", "tr", "th", "td", "hr", "html"].map((kind) => [kind, codeOnly])),
+  code: (children: string) => `\uE000${children}\uE001`,
+  text: (text: string) => text,
+};
 
-function marked(line: string, index: number) {
-  if (bare.test(line)) return line;
-  const mark = `${index}`;
-  return /\|[ \t]*$/.test(line) ? line.replace(/\|([ \t]*)$/, `${mark}|$1`) : `${line}${mark}`;
+function codeTextOf(text: string) {
+  const shown = Bun.markdown.render(text, codeShape);
+  return new Set([...shown.matchAll(codeBlock)].flatMap((block) => block[1]!.split("\n")).map((line) => line.trim()).filter(Boolean));
 }
 
-function codeLines(lines: string[]) {
-  const source = lines.map((line, index) => marked(line, index)).join("\n");
-  const blocks = Bun.markdown.html(source).match(/<pre><code[^>]*>[\s\S]*?<\/code><\/pre>/g) ?? [];
-  return new Set(blocks.flatMap((block) => [...block.matchAll(lineMark)].map((match) => Number(match[1]))));
+function isCode(line: string, code: Set<string>) {
+  const prefix = quoted.exec(line)![0];
+  if (!/ {4}|\t/.test(prefix)) return false;
+  for (let at = 0; at <= prefix.length; at++) if (code.has(line.slice(at).trim())) return true;
+  return false;
 }
 
 export function proseOf(text: string) {
-  const lines = text.replace(/[]/g, "").split(/\r\n|\r|\n/);
-  const code = codeLines(lines);
+  const source = text.replace(/[\uE000\uE001]/g, "\uE002");
+  const lines = text.split(/\r\n|\r|\n/);
+  const sourceLines = source.split(/\r\n|\r|\n/);
+  const code = codeTextOf(source);
   const kept: string[] = [];
   let fence: string | undefined;
   let through = -1;
@@ -67,7 +74,7 @@ export function proseOf(text: string) {
       left++;
       const exit = lines.findIndex((later, at) => at > index && later.replace(quoted, "").startsWith("exit="));
       if (exit > index) through = exit;
-    } else if (inner.startsWith("exit=") || code.has(index)) left++;
+    } else if (inner.startsWith("exit=") || isCode(sourceLines[index]!, code)) left++;
     else kept.push(line.replace(/^((?:\s*>)*\s*)#{1,6}[ \t]+(.*?)[ \t#]*$/, "$1**$2**"));
   });
   return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), left };
