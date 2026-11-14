@@ -176,6 +176,7 @@ test("the body guard refuses figures and emails with the field named, and passes
     ["Sent 48~213~ emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 48__213__ emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 48<del>213</del> emails", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent <a href=\"https://example.com/48213\">a list</a>", "Delivered", `the what ran of live-run ${looksLike}`],
   ];
   for (const [ran, result, refusal] of refused) {
     await pr.fleet("save", "--kind", "live-run", "--ran", ran, "--result", result);
