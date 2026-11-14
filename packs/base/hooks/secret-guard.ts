@@ -133,7 +133,12 @@ export function secretKinds(value: unknown): string[] {
 export const replaceSecrets = (text: string, replace: (kind: string, value: string) => string) =>
   shapes.reduce((result, shape) => "pattern" in shape
     ? result.replace(shape.pattern, (value) => replace(shape.kind, value))
-    : shape.values(result).reduce((changed, value) => changed.split(value).join(replace(shape.kind, value)), result), text);
+    : replaceValues(result, shape.kind, shape.values, replace), text);
+
+function replaceValues(text: string, kind: string, values: (text: string) => string[], replace: (kind: string, value: string) => string) {
+  const replaced = values(text).reduce((changed, value) => changed.split(value).join(replace(kind, value)), text);
+  return values(replaced).length ? replace(kind, text) : replaced;
+}
 
 /** Replaces every secret-shaped value in a text with its kind. */
 export const redactSecrets = (text: string) => replaceSecrets(text, (kind) => `[redacted ${kind}]`);

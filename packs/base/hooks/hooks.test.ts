@@ -165,6 +165,21 @@ describe("secret guard", () => {
     expect(output.split(build)).toHaveLength(3);
   });
 
+  test.each([
+    ["an escaped slash", (session: string) => session.replace("-", "\\/")],
+    ["a unicode escape", (session: string) => `\\u0061${session}`],
+  ])("withholds a JSON cookie whose value is spelled with %s, as the text holds no literal copy to redact", (_, spell) => {
+    const spelled = spell(metabaseSession);
+    const text = `{"name":"${cookieKey}","value":"${spelled}"}`;
+    const decoded = (JSON.parse(text) as { value: string }).value;
+    expect(guard("claude", promptEvent(text))?.decision).toBe("block");
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: text }))?.hookSpecificOutput);
+    expect(output).toContain("[redacted Metabase session cookie]");
+    expect(output).not.toContain(decoded);
+    expect(output).not.toContain(JSON.stringify(spelled).slice(1, -1));
+    expect(output).not.toContain(metabaseSession.slice(9));
+  });
+
   test("redacts every long value in a text that names a Metabase cookie and is not JSON", () => {
     const build = "1234567890".repeat(4);
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: `- name: build-id\n  value: ${build}\n- name: ${cookieKey}\n  value: ${metabaseSession}\n` }))?.hookSpecificOutput);
