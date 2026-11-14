@@ -464,7 +464,7 @@ test("the full receipt holds the header and its parts in order, and the body sec
     `1. The sender settings page after the save (not published) at \`${short(older)}\`, evidence`,
     "**What ran:** Sent a test email to the sandbox inbox. **Result:** Delivered in one attempt.",
     "**What ran:** Walked the sender settings page. **Result:** The new sender shows after a reload.",
-    "The sandbox inbox shows the email.", "The status API reads delivered.", "[6 lines of command output left out]",
+    "The sandbox inbox shows the email.", "The status API reads delivered.", "[4 lines of command output left out]",
     "Read 48,213 stored senders.",
     "- Safari",
   ]) expect(page).toContain(line);
@@ -704,14 +704,19 @@ test("a changed receipt heading refreshes the receipt where it is when moving it
 test("code is left out of the page where the parser puts it, indented or fenced, whatever a line starts with, while prose that repeats a code line, nested lists and lazy lines stay", async () => {
   const { pr, handler, file } = await pagePr();
   const bulk = Array.from({ length: 70 }, (_, index) => `BULK_${index}=value`);
-  const note = ["Before the code.", "", "```text", ...bulk, "```", "", "    - TOP=list-marker", "    1. NUMBERED=list-marker", "", "> A quote.", ">", ">     - QUOTED=quoted-code", "", "- An item.", "", "        - ITEM=item-code", "",
+  const copied = Array.from({ length: 70 }, (_, index) => `Copied line ${index}.`);
+  const note = ["Before the code.", "", "```text", ...bulk, "```", "", ...copied, "", "```text", ...copied, "```", "", "```Delivered``` to the test inbox.", "", "\\`\\`\\` opens a fence in Markdown.", "", "    - TOP=list-marker", "    1. NUMBERED=list-marker", "", "> A quote.", ">", ">     - QUOTED=quoted-code", "", "- An item.", "", "        - ITEM=item-code", "",
     "Tabbed:", "", "\t* TABBED=tab-code", "", "| Step | Result |", "| --- | --- |", "    TABLED=after-table", "", "-     FIRST=item-first", "", "- Outer item.", "", "    - Nested item stays.", "", "A paragraph", "    - lazy line stays.", "", "The inbox shows it.", "", "    The inbox shows it.", "", "- A step", "    The inbox shows it.", "", "```sh", "- ```", "FENCED_LIST=after-list-fence", "> ```", "FENCED_QUOTE=after-quote-fence", "```", "After the fence.", "", "> ~~~", "> QUOTED_FENCE=in-quoted-fence", "> ~~~", "> After the quoted fence.", "", "> ~~~", "> QUOTED_BLANK=before-blank", ">", "> ~~~", "> After the blank quoted fence.", "", "Forged \uE0009007199254740992\uE001 count.", "", "```", "FORGED=after-forged-count", "```", "", "    CR_FIRST=one\r    CR_SECOND=two\rA line after a carriage return stays.", "", "- A table item.", "", "    | Step | Result |", "    | --- | --- |", "          TABLE_CODE=in-item", "", "- A bare heading item.", "", "    #", "          HEADED=after-bare-heading", "", "- A bare marker item.", "", "    +", "          MARKED=after-bare-marker", "", "- [ ]", "  1. A task step.", "", "      TASKED=after-task-box", "", "Delimiters:", "", "    DELIMITED=\uE001\uE000value", "", "After the code."].join("\r\n");
   await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", file("indented.md", note));
   expect((await pr.fleet("gate")).code).toBe(0);
   expect((await pr.fleet("receipt")).code).toBe(0);
   const page = pageOf(handler);
   expect(page.split("The inbox shows it.").length - 1).toBe(2);
+  for (const line of copied) expect(page.split(line).length - 1).toBe(1);
+  const shown = page.slice(page.indexOf("Before the code."), page.indexOf("After the code."));
+  expect(Bun.markdown.html(shown)).not.toContain("<pre>");
+  for (const written of ["\\`\\`\\` opens a fence in Markdown.", "\\- lazy line stays."]) expect(shown).toContain(written);
   expect(page.slice(page.indexOf("Before the code."), page.indexOf("After the code."))).not.toMatch(/```|~~~/);
-  for (const kept of ["Before the code.", "A quote.", "An item.", "Tabbed:", "| Step | Result |", "Outer item.", "Nested item stays.", "lazy line stays.", "A line after a carriage return stays.", "A table item.", "A task step.", "After the fence.", "After the quoted fence.", "After the blank quoted fence.", "After the code."]) expect(page).toContain(kept);
+  for (const kept of ["Before the code.", "A quote.", "An item.", "Tabbed:", "| Step | Result |", "Outer item.", "Nested item stays.", "lazy line stays.", "A line after a carriage return stays.", "A table item.", "A task step.", "to the test inbox.", "After the fence.", "After the quoted fence.", "After the blank quoted fence.", "After the code."]) expect(page).toContain(kept);
   for (const output of ["TOP=", "NUMBERED=", "QUOTED=", "ITEM=", "TABBED=", "TABLED=", "FIRST=", "CR_FIRST=", "CR_SECOND=", "TABLE_CODE=", "HEADED=", "MARKED=", "TASKED=", "DELIMITED=", "FENCED_LIST=", "FENCED_QUOTE=", "QUOTED_FENCE=", "QUOTED_BLANK=", "FORGED=", "BULK_"]) expect(page).not.toContain(output);
 });

@@ -33,48 +33,62 @@ const fenced = (text: string) => {
 };
 
 const quoted = /^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/;
-const codeBlock = /\uE000([^\uE001]*)\uE001/g;
-const codeOnly = (children: string) => children.match(codeBlock)?.join("") ?? "";
-const codeShape = {
-  ...Object.fromEntries(["blockquote", "list", "listItem", "paragraph", "heading", "table", "thead", "tbody", "tr", "th", "td", "hr", "html"].map((kind) => [kind, codeOnly])),
-  code: (children: string) => `\uE000${children}\uE001`,
-  text: (text: string) => text,
-};
-const checkBudget = 64;
+const escaped = (text: string) => text.replace(/[\\`*_[\]~|]/g, "\\$&");
+const unescaped = (text: string) => text.replace(/\\(.)/g, "$1");
+const startsBlock = (text: string) => text.replace(/^([ \t]*)([-+>#=]|\d+[.)])/gm, "$1\\$2");
+const block = (text: string) => `${startsBlock(text.trim())}\n\n`;
+const indented = (text: string, by: string) => text.trimEnd().split("\n").map((line, index) => index && line ? `${by}${line}` : line).join("\n");
 
-const codeTextsOf = (lines: string[]) => [...Bun.markdown.render(lines.join("\n"), codeShape).matchAll(codeBlock)]
-  .flatMap((block) => block[1]!.split("\n").map((line) => line.trim()).filter(Boolean));
+function codeSpan(children: string) {
+  const text = unescaped(children);
+  const fence = "`".repeat(Math.max(0, ...[...text.matchAll(/`+/g)].map((run) => run[0].length)) + 1);
+  const pad = /^`|`$/.test(text) ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
 
-function codeLinesOf(lines: string[]) {
-  const wanted = new Map<string, number>();
-  for (const text of codeTextsOf(lines)) wanted.set(text, (wanted.get(text) ?? 0) + 1);
-  const candidates = new Map<string, number[]>();
-  lines.forEach((line, index) => {
-    const prefix = quoted.exec(line)![0].length;
-    const texts = new Set(Array.from({ length: prefix + 1 }, (_, at) => line.slice(at).trim()).filter((text) => wanted.has(text)));
-    for (const text of texts) (candidates.get(text) ?? candidates.set(text, []).get(text)!).push(index);
-  });
-  const code = new Set<number>();
-  let checks = checkBudget;
-  const isCode = (index: number) => checks-- <= 0 || codeTextsOf(lines.slice(0, index + 1)).length > codeTextsOf(lines.slice(0, index)).length;
-  for (const [text, indexes] of candidates) for (const index of indexes) if (indexes.length <= wanted.get(text)! || isCode(index)) code.add(index);
-  return code;
+function proseShape(count: (lines: number) => void) {
+  let headerCells = 0;
+  return {
+    text: escaped,
+    codespan: codeSpan,
+    strong: (children: string) => `**${children}**`,
+    emphasis: (children: string) => `_${children}_`,
+    strikethrough: (children: string) => `~~${children}~~`,
+    link: (children: string, meta: { href: string }) => `[${children}](<${meta.href.replace(/[<>\s]/g, encodeURIComponent)}>)`,
+    image: (children: string, meta: { src: string }) => `[${children || "image"}](<${meta.src.replace(/[<>\s]/g, encodeURIComponent)}>)`,
+    paragraph: block,
+    html: block,
+    heading: (children: string) => `**${children.trim()}**\n\n`,
+    hr: () => "\\---\n\n",
+    blockquote: (children: string) => `${children.trimEnd().split("\n").map((line) => line ? `> ${line}` : ">").join("\n")}\n\n`,
+    list: (children: string, meta: { depth: number }) => meta.depth ? `\n${children}` : `${children}\n`,
+    listItem: (children: string, meta: { index: number; ordered: boolean; start?: number; checked?: boolean }) => {
+      const marker = meta.ordered ? `${(meta.start ?? 1) + meta.index}.` : "-";
+      const box = meta.checked === undefined ? "" : meta.checked ? "[x] " : "[ ] ";
+      return `${marker} ${box}${indented(children, " ".repeat(marker.length + 1))}\n`;
+    },
+    table: (children: string) => `${children}\n`,
+    thead: (children: string) => { const delimiter = `|${" --- |".repeat(headerCells)}\n`; headerCells = 0; return `${children}${delimiter}`; },
+    tr: (children: string) => `|${children}\n`,
+    th: (children: string) => { headerCells++; return ` ${children.replace(/\n/g, " ")} |`; },
+    td: (children: string) => ` ${children.replace(/\n/g, " ")} |`,
+    code: (children: string) => { count(children.split("\n").filter((line) => /\S/.test(line)).length); return ""; },
+  };
 }
 
 export function proseOf(text: string) {
-  const lines = text.split(/\r\n|\r|\n/);
-  const code = codeLinesOf(lines.map((line) => line.replace(/[\uE000\uE001]/g, "\uE002")));
+  let left = 0;
+  const lines = Bun.markdown.render(text, proseShape((lines) => { left += lines; })).split("\n");
   const kept: string[] = [];
   let through = -1;
-  let left = 0;
   lines.forEach((line, index) => {
-    const inner = line.replace(quoted, "");
-    if (code.has(index) || index <= through || /^(?:`{3,}|~{3,}|exit=)/.test(inner)) left++;
+    const inner = unescaped(line.replace(quoted, ""));
+    if (index <= through || inner.startsWith("exit=")) left++;
     else if (inner.startsWith("$ ")) {
       left++;
-      const exit = lines.findIndex((later, at) => at > index && later.replace(quoted, "").startsWith("exit="));
+      const exit = lines.findIndex((later, at) => at > index && unescaped(later.replace(quoted, "")).startsWith("exit="));
       if (exit > index) through = exit;
-    } else kept.push(line.replace(/^((?:\s*>)*\s*)#{1,6}[ \t]+(.*?)[ \t#]*$/, "$1**$2**"));
+    } else kept.push(line);
   });
   return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), left };
 }
