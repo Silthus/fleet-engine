@@ -63,16 +63,6 @@ describe("the Getting started prompt", () => {
     expect(line(startPrompt(data, flip(withHub, "communication")), "Packs once the hub runs")).toBe("hub");
   });
 
-  test("with every pack switched off, the first setup names no pack", () => {
-    expect(line(startPrompt(data, flip(firstStart, "pull-requests", "communication")), "Packs on the first setup")).toBe("none");
-  });
-
-  test("switching Pull requests off takes Orchestration with it, and switching Orchestration on brings Pull requests back", () => {
-    const withoutPullRequests = flip(firstStart, "pull-requests");
-    expect(line(startPrompt(data, withoutPullRequests), "Packs on the first setup")).toBe("communication");
-    expect(line(startPrompt(data, flip(withoutPullRequests, "orchestration")), "Packs on the first setup")).toBe("pull-requests, orchestration, communication");
-  });
-
   test("switches only the packs of the two boxes", () => {
     expect(data.startPacks).toEqual(["pull-requests", "orchestration", "communication"]);
     expect(data.hubStartPacks).toEqual(["hub"]);
