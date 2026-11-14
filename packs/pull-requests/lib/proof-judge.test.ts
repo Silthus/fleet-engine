@@ -421,3 +421,27 @@ test("review-finish refuses a reviewer name that could close the judge's untrust
   await expect(pr.fleet("review-finish", "--round", "1", "--reviewer", name, "findings.md")).rejects.toThrow("--reviewer needs the model");
   expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "claude-opus-5-5[1m]", "findings.md")).code).toBe(0);
 });
+
+test("the judge reads the PR body without its receipt block, so a receipt refresh reuses the cached verdict and other body text does not", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  installRiskSkill(pr);
+  const judge = fakeModel(pr, "JUDGE", verdict({ risk: { verdict: "pass", reason: "One text file changes: low, two-way", citations: [] } }));
+  const receipt = (head: string, hash: string) => `<!-- fleet-proof-receipt head=${head} hash=${hash} -->\n| Proof | What ran |\n| --- | --- |\n| live-run | sent ${hash} |\n<!-- /fleet-proof-receipt -->`;
+  const body = (block: string, tier: string) => `## Testing\n\nTest rationale: the send path.\n\n${block}\n\n${graded(tier)}`;
+
+  for (const block of [receipt("a".repeat(40), "01"), receipt("b".repeat(40), "02")]) {
+    pr.pullRequestState({ body: body(block, "non-critical") });
+    expect((await pr.fleet("gate")).code).toBe(0);
+  }
+  expect(judge.prompts()).toHaveLength(1);
+  expect(judge.prompts()[0]).not.toContain("fleet-proof-receipt");
+  expect(judge.prompts()[0]).toContain("Test rationale: the send path.");
+
+  pr.pullRequestState({ body: body(`${receipt("b".repeat(40), "02")}\n<!-- fleet-proof-receipt head=${"c".repeat(40)} hash=03 -->\nan unclosed block`, "non-critical") });
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect(judge.prompts()).toHaveLength(2);
+  expect(judge.prompts()[1]).toContain("an unclosed block");
+});

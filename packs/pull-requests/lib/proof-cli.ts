@@ -12,6 +12,7 @@ import { lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel,
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
+import { displayLine, recordCaption, recordLines } from "./proof-display.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { leftOutNote, reviewRange } from "./proof-range.ts";
 import { quietCommitIn } from "./proof-delta.ts";
@@ -72,21 +73,42 @@ const subcommands: Record<string, Subcommand> = {
     run: async (_, identity, { print, home }) => { print(proofDirectory(home, identity())); return 0; },
   },
   save: {
-    usage: "save [--kind <kind>] <file>... | save --kind <kind> --reuse-from <sha> --reason <why>",
+    usage: "save [--kind <kind> [--ran <what ran> --result <what it showed>]] <file>... | save --kind <kind> --ran <what ran> --result <what it showed> | save --kind ui-walk --caption <caption> <screenshot> | save --kind <kind> --reuse-from <sha> --reason <why>",
     summary: `Save evidence files for the commit. With --kind, the files prove that owed kind. Evidence counts for HEAD
 and for clean merges of the base on top of it. When the evidence of an earlier commit still proves HEAD, record
-that with --reuse-from and the reason; the gate prints it.`,
-    examples: ["fleet proof save --kind live-run run.log", "fleet proof save --kind live-run --reuse-from 1a2b3c4 --reason 'The fix only renames a variable'"],
-    options: ["--kind", "--reuse-from", "--reason"],
-    run: async ({ options, files }, identity, { print, home, cwd, run }) => {
+that with --reuse-from and the reason; the gate prints it.
+--ran and --result give one line each of what ran and what it showed, for the proof receipt. Without files they
+record only the lines, such as for evidence that fleet proof run saved. A later save of the kind at the commit with
+them replaces both, and a save without them keeps them. --caption names what one ui-walk screenshot shows; the
+receipt lists screenshots in the order of their first caption, and a new caption keeps that place. The lines and
+captions live in the PR's display/ directory, outside the evidence: the gate and the judge never read them.`,
+    examples: [
+      "fleet proof save --kind live-run --ran 'Sent a test email to the sandbox inbox' --result 'Delivered in one attempt' run.log",
+      "fleet proof save --kind ui-walk --caption 'Settings page after the save' after.png",
+      "fleet proof save --kind live-run --reuse-from 1a2b3c4 --reason 'The fix only renames a variable'",
+    ],
+    options: ["--kind", "--reuse-from", "--reason", "--ran", "--result", "--caption"],
+    run: async ({ options, files }, identity, { print, home, cwd, run, now }) => {
+      const kind = options.get("--kind");
+      const lines = options.has("--ran") || options.has("--result");
+      const caption = options.get("--caption");
+      if (lines && !(options.has("--ran") && options.has("--result"))) throw usageError("save", "Pass --ran and --result together");
+      if ((lines || caption !== undefined) && options.has("--reuse-from")) throw usageError("save", "A reused kind shows the lines of the commit it reuses. Drop --ran, --result, and --caption");
+      if (lines && kind === undefined) throw usageError("save", "--ran and --result need --kind");
+      if (caption !== undefined && kind !== "ui-walk") throw usageError("save", "--caption needs --kind ui-walk");
+      if (caption !== undefined && files.length !== 1) throw usageError("save", "--caption names one screenshot. Save each screenshot with its own caption");
       if (options.has("--reuse-from")) {
         if (files.length) throw usageError("save", "Pass files or --reuse-from, not both");
         const from = resolveCommit(options.get("--reuse-from")!, run);
         print(JSON.stringify(await reuseProof(home, identity(), required(options, "--kind", "save"), from, required(options, "--reason", "save"))));
         return 0;
       }
-      requireFiles(files, "save");
-      for (const file of files) print(await saveProof(home, identity(), resolve(cwd, file), options.get("--kind")));
+      for (const option of ["--ran", "--result", "--caption"]) if (options.has(option)) displayLine(options.get(option)!, option);
+      if (!lines) requireFiles(files, "save");
+      const saved: string[] = [];
+      for (const file of files) { saved.push(await saveProof(home, identity(), resolve(cwd, file), kind)); print(saved.at(-1)!); }
+      if (lines) await recordLines(home, identity(), kind!, options.get("--ran")!, options.get("--result")!);
+      if (caption !== undefined) await recordCaption(home, identity(), saved[0]!, caption, now?.() ?? new Date());
       return 0;
     },
   },

@@ -392,7 +392,7 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
 }
 
 const findingItem = /^\s*(?:[-*]|\d+[.)])\s+\S/;
-const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
+export const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(fixed|rejected)\b/i;
 
 const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
 
@@ -410,15 +410,16 @@ function reviewedLines(findings: string) {
   }).filter((line) => line.trim());
 }
 
-function findingCount(findings: string) {
+export function reviewedFindings(findings: string) {
   const reviewed = reviewedLines(findings);
-  const items = reviewed.filter((line) => findingItem.test(line)).length;
-  return items || (reviewed.every((line) => noFinding.test(line.trim())) ? 0 : 1);
+  const items = reviewed.filter((line) => findingItem.test(line)).map((line) => line.trim());
+  if (items.length || reviewed.every((line) => noFinding.test(line.trim()))) return items;
+  return [reviewed.map((line) => line.trim()).join("\n")];
 }
 
 function unanswered(findings: string, responses: string) {
-  const answered = new Set([...responses.matchAll(answerItem)].map((match) => Number(match[1])));
-  return Array.from({ length: findingCount(findings) }, (_, index) => index + 1).filter((number) => !answered.has(number));
+  const answered = new Set(responses.split("\n").flatMap((line) => answerItem.exec(line)?.[1] ?? []).map(Number));
+  return Array.from({ length: reviewedFindings(findings).length }, (_, index) => index + 1).filter((number) => !answered.has(number));
 }
 
 export const proofKinds = ["live-run", "ui-walk", "prod-shape", "cross-version", "shadow-diff", "post-deploy-watch"] as const;
