@@ -196,16 +196,6 @@ describe("fleet triage", () => {
     expect(savedReports(home)).toEqual([]);
   });
 
-  test("a long note is redacted before it is cut, so a cut never leaves part of a secret", async () => {
-    const home = temp.make("home-");
-    failedMachine(home);
-    const password = spell(mixed, 8, 19);
-    const result = await triage(home, ["--send", "--note", `${"x".repeat(3_970)} PASSWORD="${password} river pearl mountain"`], []);
-    const body = result.sent.find((call) => call.command[1] === "issue")!.input!;
-    expect(body).toContain(`${"x".repeat(3_970)} PASSWORD="<redacted>"`);
-    expect(body).not.toContain(password);
-  });
-
   test("names what setup saved before a profile exists: the machine name, draft sources, and the repos it created", async () => {
     const home = temp.make("home-");
     mkdirSync(join(home, ".config/fleet"), { recursive: true });
@@ -318,11 +308,9 @@ describe("fleet triage", () => {
     expect(body).toEndWith("Made by `fleet triage`.");
   });
 
-  test("long step errors and a huge dotted transcript line still give a report that fits", async () => {
+  test("a huge dotted transcript line still gives a report that fits", async () => {
     const home = temp.make("home-");
     failedMachine(home);
-    const steps = Array.from({ length: 20 }, (_, index) => ({ id: `step-${index}`, start: "2026-11-11T10:00:00.000Z", end: "2026-11-11T10:00:01.000Z", blocked: false, outcome: "failed", error: "command-output ".repeat(5_000) }));
-    writeFileSync(join(home, ".local/state/fleet/logs/setup-timings.json"), JSON.stringify({ schema: 1, started: "2026-11-11T10:00:00.000Z", usable: null, steps }));
     writeFileSync(join(home, ".local/state/fleet/logs/setup.log"), `${"a.".repeat(1_048_576)}\nthe newest line\n`);
     const result = await triage(home, ["--send"], []);
     const body = result.sent.find((call) => call.command[1] === "issue")!.input!;
@@ -330,18 +318,6 @@ describe("fleet triage", () => {
     expect(body).toContain("## Setup transcript (newest 1 lines)\n\n```text\nthe newest line\n```\n\nMade by `fleet triage`.");
     expect(body).toContain("## fleet doctor");
   }, 2_000);
-
-  test("a very long note is cut, and the report still fits once, with its transcript", async () => {
-    const home = temp.make("home-");
-    failedMachine(home);
-    writeFileSync(join(home, ".local/state/fleet/logs/setup.log"), "the only transcript line\n");
-    const result = await triage(home, ["--send", "--note", "z".repeat(130_000)], []);
-    const body = result.sent.find((call) => call.command[1] === "issue")!.input!;
-    expect(body.length).toBeLessThanOrEqual(60_000);
-    expect(body).toStartWith(`## What happened\n\n${"z".repeat(3_999)}…\n\n## Setup\n`);
-    expect(body.split("## What happened").length).toBe(2);
-    expect(body).toEndWith("```text\nthe only transcript line\n```\n\nMade by `fleet triage`.");
-  });
 });
 
 describe("fleet setup and triage", () => {

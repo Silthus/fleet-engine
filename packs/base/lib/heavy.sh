@@ -4,7 +4,7 @@ usage='Usage: fleet heavy [--unit <name> | --service <name> | --stop <name> | --
 commands=$(CDPATH='' cd -- "$(dirname -- "$0")/../commands" && pwd -P)
 self=$0
 if [ -n "${XDG_RUNTIME_DIR:-}" ]; then locks="$XDG_RUNTIME_DIR/fleet-heavy"; else locks="${TMPDIR:-/tmp}/fleet-heavy-$(id -u)"; fi
-report_every=${FLEET_HEAVY_REPORT_SECONDS:-120}
+report_every=120
 
 age() {
   if [ "$1" -lt 60 ]; then echo "${1}s"

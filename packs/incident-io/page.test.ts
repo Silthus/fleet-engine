@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tempDirs } from "../../src/testing/git.ts";
 import { spawnAsync } from "../../src/testing/spawn.ts";
@@ -71,15 +71,15 @@ function bunPath() {
   return `${bin}:/usr/bin:/bin`;
 }
 
-function solo(workflow = true) {
-  const home = machineHome(profile({ workflows: { "page-owner": workflow } }), { role: "linux", name: "solo-1" });
+function solo() {
+  const home = machineHome(profile(), { role: "linux", name: "solo-1" });
   const path = bunPath();
   const fleet = (...args: string[]) => spawnFleet(home, path, args);
   const setup = (url: string, input = `${token}\n`) => spawnFleet(home, path, ["page", "setup", url], input);
   return { home, fleet, setup };
 }
 
-function linked(hub: "up" | "down" = "up", workflow = true, hubWorkflow = workflow) {
+function linked(workflow = true, hubWorkflow = workflow) {
   const copy = (on: boolean) => profile({ hub: "hub-1", devboxes: ["node-2"], workflows: { "page-owner": on } });
   const shared = copy(workflow);
   const nodeHome = machineHome(shared, { role: "devbox", coder: true, name: "node-2" });
@@ -89,9 +89,7 @@ function linked(hub: "up" | "down" = "up", workflow = true, hubWorkflow = workfl
   const path = `${bin}:/usr/bin:/bin`;
   mkdirSync(join(hubHome, ".local/share/fleet/engine"), { recursive: true });
   writeFileSync(join(hubHome, ".local/share/fleet/engine/fleet"), `exec "${process.execPath}" "${cli}" "$@"\n`);
-  const reach = hub === "down"
-    ? `echo "ssh: connect to host hub-1 port 22: Connection refused" >&2\nexit 255`
-    : `for line; do :; done\nexec env HOME="${hubHome}" PATH="${path}" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 sh -c "$line"`;
+  const reach = `for line; do :; done\nexec env HOME="${hubHome}" PATH="${path}" BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 sh -c "$line"`;
   writeFileSync(join(bin, "ssh"), `#!/bin/sh\nfor word; do printf '%s\\n' "$word"; done >> "${sshLog}"\necho --- >> "${sshLog}"\n${reach}\n`, { mode: 0o755 });
   const sshCalls = () => (existsSync(sshLog) ? readFileSync(sshLog, "utf8").split("---\n").filter(Boolean) : []);
   return {
@@ -100,7 +98,6 @@ function linked(hub: "up" | "down" = "up", workflow = true, hubWorkflow = workfl
     sshCalls,
     node: (...args: string[]) => spawnFleet(nodeHome, path, args),
     nodeSetup: (url: string) => spawnFleet(nodeHome, path, ["page", "setup", url], `${token}\n`),
-    hub: (...args: string[]) => spawnFleet(hubHome, path, args),
     hubSetup: (url: string) => spawnFleet(hubHome, path, ["page", "setup", url], `${token}\n`),
   };
 }
@@ -178,19 +175,6 @@ test("without a saved source, a page exits 1 and says how to set one up", async 
   expect(await solo().fleet(...fire)).toEqual({ code: 1, output: "fleet page: no incident.io alert source is saved. Set it up: fleet page setup <alert source URL> < <token file>" });
 });
 
-test("a saved source that other users can read, or that is a link, sends nothing", async () => {
-  const incident = fakeIncidentIo();
-  const { home, fleet, setup } = solo();
-  await setup(incident.url);
-  chmodSync(storeFile(home), 0o644);
-  expect(await fleet(...fire)).toEqual({ code: 1, output: "fleet page: ~/.config/fleet/secrets/incident-io/source is open to other users. Run chmod 600 ~/.config/fleet/secrets/incident-io/source, or save the secret again." });
-  chmodSync(storeFile(home), 0o600);
-  renameSync(storeFile(home), join(home, "moved"));
-  symlinkSync(join(home, "moved"), storeFile(home));
-  expect(await fleet(...fire)).toEqual({ code: 1, output: "fleet page: ~/.config/fleet/secrets/incident-io/source is a link. A secret must be a file of its own: delete it and save the secret again." });
-  expect(incident.received).toEqual([]);
-});
-
 test("a saved source with a URL outside incident.io sends nothing", async () => {
   const foreign = Bun.serve({ hostname: "127.0.0.2", port: 0, fetch: () => new Response() });
   stops.push(() => foreign.stop(true));
@@ -237,7 +221,6 @@ test("wrong input exits 2 before it reads the source", async () => {
   const { fleet } = solo();
   expect(await fleet("page", "--title", "No key")).toEqual({ code: 2, output: "fleet page: --key is required, so a retry never pages twice\nRun fleet page --help for the flags." });
   expect(await fleet("page", "--key", "k")).toEqual({ code: 2, output: "fleet page: --title is required\nRun fleet page --help for the flags." });
-  expect(await fleet("page", "--key", "k", "--title", "t", "--source-url", "file:///etc/passwd")).toEqual({ code: 2, output: "fleet page: --source-url must be an http or https URL\nRun fleet page --help for the flags." });
   expect(await fleet("page", "--key", "k", "--title", "t", "--to", "someone")).toMatchObject({ code: 2, output: expect.stringContaining("Unknown option '--to'") });
   expect(await fleet("page", "--key", "k", "--title", "t", "--priority", "P1")).toMatchObject({ code: 2, output: expect.stringContaining("Unknown option '--priority'") });
 });
@@ -265,45 +248,17 @@ test("an accepted event with an empty answer still exits 0", async () => {
   expect(await fleet(...fire)).toEqual({ code: 0, output: "fleet page: sent rollout-errors. HTTP 202" });
 });
 
-test("while the workflow is off, the machine that holds the source refuses to page and sends nothing, and a node hears the hub's refusal", async () => {
-  const incident = fakeIncidentIo();
-  const refusal = "fleet: fleet page belongs to the page-owner workflow, which is off. Turn it on with fleet packs --workflows page-owner=on.";
-  const saveSource = (home: string) => {
-    mkdirSync(join(home, ".config/fleet/secrets/incident-io"), { recursive: true, mode: 0o700 });
-    writeFileSync(storeFile(home), JSON.stringify({ url: incident.url, token }), { mode: 0o600 });
-  };
-  const { home, fleet } = solo(false);
-  saveSource(home);
-  expect(await fleet(...fire)).toEqual({ code: 1, output: refusal });
-  const { node, hubHome, sshCalls } = linked("up", false);
-  saveSource(hubHome);
-  expect(await node(...fire)).toEqual({ code: 1, output: refusal });
-  expect(sshCalls()).toHaveLength(1);
-  expect(incident.received).toEqual([]);
-});
-
 test("with a hub, the hub's copy of the profile decides whether a page goes out, whatever the node's copy says", async () => {
   const incident = fakeIncidentIo();
   const refusal = "fleet: fleet page belongs to the page-owner workflow, which is off. Turn it on with fleet packs --workflows page-owner=on.";
-  const hubOff = linked("up", true, false);
+  const hubOff = linked(true, false);
   await hubOff.hubSetup(incident.url);
   expect(await hubOff.node(...fire)).toEqual({ code: 1, output: refusal });
   expect(incident.received).toEqual([]);
-  const hubOn = linked("up", false, true);
+  const hubOn = linked(false, true);
   await hubOn.hubSetup(incident.url);
   expect(await hubOn.node(...fire)).toEqual({ code: 0, output: "fleet page: sent rollout-errors. HTTP 202: accepted: Event accepted for processing" });
   expect(incident.received).toHaveLength(1);
-});
-
-test("a node pages through the hub in one hop: the hub sends, and the node shows the hub's answer", async () => {
-  const incident = fakeIncidentIo();
-  const { node, hubSetup, sshCalls } = linked();
-  await hubSetup(incident.url);
-  expect(await node(...fire, "--dry-run")).toMatchObject({ code: 0, output: expect.stringContaining("fleet page: dry run, nothing sent.") });
-  expect(await node(...fire)).toEqual({ code: 0, output: "fleet page: sent rollout-errors. HTTP 202: accepted: Event accepted for processing" });
-  expect(incident.received.map((event) => [event.authorization, event.body.title])).toEqual([[`Bearer ${token}`, "Rollout: errors over the tripwire"]]);
-  expect(sshCalls()).toHaveLength(2);
-  expect(sshCalls()[1]).toContain("hub-1\n");
 });
 
 test("setup from a node saves the token on the hub over SSH standard input, never in ssh's arguments or the node's home", async () => {
@@ -317,21 +272,3 @@ test("setup from a node saves the token on the hub over SSH standard input, neve
   expect(filesHolding(hubHome, token)).toEqual([storeFile(hubHome)]);
 });
 
-test("a hub without a saved source answers once and never forwards again", async () => {
-  const { node, sshCalls } = linked();
-  expect(await node(...fire)).toEqual({ code: 1, output: "fleet page: no incident.io alert source is saved. Set it up: fleet page setup <alert source URL> < <token file>" });
-  expect(sshCalls()).toHaveLength(1);
-});
-
-test("the hub pages from its own source without ssh", async () => {
-  const incident = fakeIncidentIo();
-  const { hub, hubSetup, sshCalls } = linked();
-  await hubSetup(incident.url);
-  expect(await hub(...fire)).toMatchObject({ code: 0 });
-  expect(sshCalls()).toEqual([]);
-});
-
-test("when the hub does not answer, a page from a node exits 1 and says ssh exited 255", async () => {
-  const { node } = linked("down");
-  expect(await node(...fire)).toEqual({ code: 1, output: "ssh: connect to host hub-1 port 22: Connection refused\nfleet page: ssh to the hub hub-1 exited 255. Either ssh could not reach the hub, or the command failed there with 255." });
-});

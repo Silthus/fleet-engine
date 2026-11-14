@@ -11,8 +11,7 @@ const rootOf = (memory: string) => join(memory, `fleet-test-${process.getuid!()}
 
 const mountsWith = (memory: string, ...mounted: string[]) => {
   const mounts = join(temp.make("mounts-"), "mounts");
-  const point = memory.replaceAll(" ", "\\040");
-  writeFileSync(mounts, ["/dev/root / ext4 rw,relatime 0 0", ...mounted.map((options) => `tmpfs ${point} tmpfs ${options} 0 0`)].join("\n") + "\n");
+  writeFileSync(mounts, ["/dev/root / ext4 rw,relatime 0 0", ...mounted.map((options) => `tmpfs ${memory} tmpfs ${options} 0 0`)].join("\n") + "\n");
   return mounts;
 };
 
@@ -65,13 +64,6 @@ test("leaves TMPDIR alone where the memory root is mounted noexec, since tests r
   expect(memoryTemp(env, { memory, pid: process.pid, mounts: mountsWith(memory, "rw,nosuid,nodev,noexec") })).toBeUndefined();
   expect(env).toEqual({});
   expect(memoryTemp(env, { memory, pid: process.pid, mounts: mountsWith(memory, "rw,nosuid,nodev") })).toBe(env.TMPDIR!);
-});
-
-test("leaves TMPDIR alone where a mount point with a space in its name is noexec", () => {
-  const memory = temp.make("memory with space-");
-  const env: Record<string, string | undefined> = {};
-  expect(memoryTemp(env, { memory, pid: process.pid, mounts: mountsWith(memory, "rw,noexec") })).toBeUndefined();
-  expect(env).toEqual({});
 });
 
 test("follows the mount on top where two are mounted at the memory root", () => {

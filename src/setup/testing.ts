@@ -100,7 +100,7 @@ export const onBox = (command: string[]) => (command[0] === "ssh" ? command.at(-
  * Each box's T3 environment id is env-<host>, except on the hosts withoutT3, where T3 never ran.
  * T3 here lists hereLinks as its linked environments, and unlink forgets one, or fails with unlinkFails. ssh never reaches the hosts named unreachable.
  */
-export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: unknown; linked: unknown }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; boxTunnel?: string; withoutT3?: string[]; hereLinks?: HereLink[]; unreachable?: string[]; unlinkFails?: string } = {}) {
+export function fakeMachine(home: string, polls: Partial<Record<SignInName, number>> = {}, options: { org?: boolean; createFails?: string; createFailsAfterMaking?: string; lookupFails?: string; publicRepos?: string[]; scopes?: string; failRun?: boolean; exits?: Partial<Record<SignInName, number>>; connectHere?: boolean; boxFiles?: Record<string, string>; hubDown?: boolean; hubUpdateFails?: string; boxCoderAt?: string; boxCoderSameUser?: boolean; claude?: Partial<Record<"claude" | "box:claude", ClaudeSignedIn>>; startedAt?: number; cliPrintsTunnel?: boolean; serverWithoutLinkState?: Array<"box" | "here">; runtimeOrigin?: string; runtimePid?: unknown; serverGone?: boolean; boxConnect?: { authenticated: unknown; linked: unknown }; t3Home?: string; devServerUrl?: string; tunnelStartsAfter?: number; withoutT3?: string[]; hereLinks?: HereLink[]; unreachable?: string[]; unlinkFails?: string } = {}) {
   const left: Record<SignInName, number> = { github: 0, claude: 0, chatgpt: 0, coder: 0, "box:github": 0, "box:claude": 0, "box:chatgpt": 0, "box:t3": 0, "box:coder": 0, ...polls };
   const started = new Set<SignInName>();
   const calls: Array<{ command: string[]; cwd?: string; timeoutMs?: number; input?: string }> = [];
@@ -228,7 +228,7 @@ export function fakeMachine(home: string, polls: Partial<Record<SignInName, numb
     if (line.includes("/.config/fleet/machine.json")) return forReal(line, host, input);
     if (line.includes("/userdata/logs/boot-service.log")) return forReal(line, host, input);
     if (line.startsWith("sh -c ") && line.includes("/userdata/environment-id")) return options.withoutT3?.includes(host) ? result(false, "cat: environment-id: No such file or directory") : result(true, `env-${host}\n`);
-    return t3(line, "BOXCODE", input, { name: "box", home: boxHome(home, host), linked: passes("box:t3"), tunnel: options.boxTunnel ?? "box-1.relay.example", sessions: boxSessions }) ?? result(false, `unexpected on the box: ${line}`);
+    return t3(line, "BOXCODE", input, { name: "box", home: boxHome(home, host), linked: passes("box:t3"), tunnel: "box-1.relay.example", sessions: boxSessions }) ?? result(false, `unexpected on the box: ${line}`);
   };
   const machine: Machine = {
     async exec(command, run = {}) {

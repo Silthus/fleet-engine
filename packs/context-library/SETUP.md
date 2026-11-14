@@ -16,9 +16,8 @@ keeps a checkout of it. Ask with your question tool:
   add `--set context-library.repo=<their login>/context-library`.
 
 With the MCP gateway on, the hub also serves the library's search as the
-`context_search` tool. It mounts the hub's checkout read-only and logs only
-the time and the number of results of each search, never the words or the
-results. Until the hub's first sync clones the library, the gateway runs
+`context_search` tool. It mounts the hub's checkout read-only and logs no
+search. Until the hub's first sync clones the library, the gateway runs
 without the tool, and its upstream check says what it waits for.
 
 With the Slack pack's trigger on, their own `:brain:` reaction on a Slack

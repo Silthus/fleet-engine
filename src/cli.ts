@@ -217,7 +217,7 @@ async function runRefresh(args: string[], options: CliOptions) {
     printReport({ ok: !result.blocked, actions: result.actions, findings: result.findings, humanLeft: [] }, "apply", options.print);
     return !result.blocked;
   };
-  return refresh({ home: options.home, cache: sourceCache(options.home), sources: profile.sources, print: options.print, now: options.clock?.now ?? Date.now, apply: applyFiles });
+  return refresh({ home: options.home, cache: sourceCache(options.home), sources: profile.sources, print: options.print, apply: applyFiles });
 }
 
 async function runPackCommand(name: string, args: string[], options: CliOptions) {

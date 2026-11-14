@@ -138,12 +138,12 @@ describe("usage events", () => {
     expect(existsSync(spool(home))).toBe(false);
   });
 
-  test("a flush sends each event once, and a distinct id from the settings names every event", async () => {
-    const home = await machine([], { ...destination(), "base.usageDistinctId": "me" });
+  test("a flush sends each event once", async () => {
+    const home = await machine([], destination());
     await fleet(["settings"], home);
     await fleet(["usage", "flush"], home);
     await fleet(["usage", "flush"], home);
-    expect(received.map((request) => request.body.batch.map((event) => [event.event, event.properties.distinct_id]))).toEqual([[["fleet command", "me"]]]);
+    expect(received.map((request) => request.body.batch.map((event) => [event.event, event.properties.distinct_id]))).toEqual([[["fleet command", expect.stringMatching(/^fleet-/)]]]);
   });
 
   test("a machine that cannot send keeps at most 5 MB of events", async () => {
@@ -171,27 +171,17 @@ describe("a command a node forwards to the hub", () => {
 });
 
 describe("fleet usage flush", () => {
-  const to = () => ({ host: `http://127.0.0.1:${server.port}`, projectKey: projectKey(), distinctId: "" });
-  const io = (waits: number[]) => ({ send: fetch, wait: async (ms: number) => void waits.push(ms) });
+  const to = () => ({ host: `http://127.0.0.1:${server.port}`, projectKey: projectKey() });
+  const io = () => ({ send: fetch });
 
-  test("tries again after a failed send, waiting longer each time", async () => {
+  test("keeps the events when the send fails, and sends them with the next events on the next flush", async () => {
     const home = await machine([], destination());
     await fleet(["settings"], home);
-    answers = [503, 503];
-    const waits: number[] = [];
-    expect(await flush(home, to(), io(waits))).toBe(1);
-    expect(waits).toEqual([1000, 2000]);
-    expect(received).toHaveLength(3);
-  });
-
-  test("keeps the events when every try fails, and sends them with the next events on the next flush", async () => {
-    const home = await machine([], destination());
-    await fleet(["settings"], home);
-    answers = [500, 500, 500];
-    await expect(flush(home, to(), io([]))).rejects.toThrow("answered 500 3 times. The events stay in the spool for the next flush.");
+    answers = [500];
+    await expect(flush(home, to(), io())).rejects.toThrow("answered 500. The events stay in the spool for the next flush.");
     await fleet(["packs"], home);
     received.length = 0;
-    expect(await flush(home, to(), io([]))).toBe(2);
+    expect(await flush(home, to(), io())).toBe(2);
     expect(received[0]!.body.batch.map((event) => event.properties.command).sort()).toEqual(["packs", "settings"]);
   });
 
@@ -204,7 +194,7 @@ describe("fleet usage flush", () => {
       writeFileSync(join(state(home), "usage.sending.jsonl.new"), event("arrived"));
       writeFileSync(join(state(home), "usage.jsonl"), event("newest"));
       received.length = 0;
-      expect(await flush(home, to(), io([]))).toBe(3);
+      expect(await flush(home, to(), io())).toBe(3);
       expect(received[0]!.body.batch.map((item) => item.properties.command).sort()).toEqual(["arrived", "newest", "waiting"]);
       for (const file of ["usage.jsonl", "usage.sending.jsonl", "usage.sending.jsonl.new"]) expect(existsSync(join(state(home), file))).toBe(false);
     }

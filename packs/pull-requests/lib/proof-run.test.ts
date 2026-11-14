@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,12 +14,6 @@ afterEach(() => fixtures.splice(0).forEach((path) => rmSync(path, { recursive: t
 
 const pr = { repository: "example/product", pr: 7 };
 const token = ["ghp", "_", "A1b2C3d4".repeat(5)].join("");
-
-async function gitRead(args: string[], cwd: string, env: Record<string, string>) {
-  const child = Bun.spawn(["git", "--no-optional-locks", ...args], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-  const [text, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-  return { ok: code === 0, text: text.trimEnd() };
-}
 
 async function git(cwd: string, env: Record<string, string>, ...args: string[]) {
   const child = Bun.spawn(["git", ...args], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
@@ -181,22 +175,6 @@ test("a spool that takes short writes still keeps every byte, and one that fails
   expect(run.spoolLeft()).toEqual([]);
 });
 
-test("a spool whose TMPDIR links back into the worktree refuses before the command runs", async () => {
-  const run = await fixture();
-  mkdirSync(join(run.repo, "ignored.txt.d"));
-  writeFileSync(join(run.repo, ".gitignore"), "ignored.txt\nignored.txt.d/\n");
-  await run.git("commit", "-q", "-am", "ignore the spool");
-  const link = join(run.base, "linked-tmp");
-  symlinkSync(join(run.repo, "ignored.txt.d"), link);
-  run.env.TMPDIR = link;
-  const marker = join(run.base, "ran");
-  expect(await run.run("--kind", "live-run", "--", "sh", "-c", 'touch "$1"; echo hi', "sh", marker)).toBe(1);
-  expect(run.printed.join("\n")).toContain("inside the worktree");
-  expect(existsSync(marker)).toBe(false);
-  expect(run.evidence()).toEqual([]);
-  expect(readdirSync(join(run.repo, "ignored.txt.d"))).toEqual([]);
-});
-
 test("the runner's own messages redact secrets in the command and the paths they name", async () => {
   const run = await fixture();
   expect(await run.run("--kind", "live-run", "--", token)).toBe(127);
@@ -316,36 +294,6 @@ test("evidence reused from a commit with runner files keeps that commit's mark",
   expect(prompt).not.toContain(mark(second));
 });
 
-test("a signal that arrives during the checks after the command still saves nothing", async () => {
-  const run = await fixture();
-  let stop: ((signal: NodeJS.Signals) => void) | undefined;
-  let statusReads = 0;
-  run.withIO({
-    signals: { on: (signal, listener) => { if (signal === "SIGTERM") stop = listener; }, off: () => {} },
-    git: async (args, cwd) => {
-      const result = await gitRead(args, cwd, run.env);
-      if (args[0] === "status" && ++statusReads === 2) stop?.("SIGTERM");
-      return result;
-    },
-  });
-  expect(await run.run("--kind", "live-run", "--", "echo", "measured")).toBe(143);
-  expect(run.printed.join("\n")).toContain("SIGTERM");
-  expect(run.evidence()).toEqual([]);
-  expect(run.records()).toEqual([]);
-  expect(run.spoolLeft()).toEqual([]);
-});
-
-test("a save that fails leaves no run record that a typed file with the same bytes could borrow", async () => {
-  const run = await fixture();
-  const head = await run.head();
-  mkdirSync(join(run.prDirectory, head), { recursive: true });
-  writeFileSync(join(run.prDirectory, head, "live-run"), "a file where the kind directory goes\n");
-  expect(await run.run("--kind", "live-run", "--", "echo", "measured")).toBe(1);
-  expect(run.printed.join("\n")).toContain("nothing saved");
-  expect(run.records()).toEqual([]);
-  expect(run.spoolLeft()).toEqual([]);
-});
-
 test("the saved path is printed with secrets redacted", async () => {
   const run = await fixture();
   const home = join(run.base, token);
@@ -353,19 +301,6 @@ test("the saved path is printed with secrets redacted", async () => {
   expect(await proofCommand(["run", "--repo", pr.repository, "--pr", String(pr.pr), "--kind", "live-run", "--", "echo", "measured"], { home, cwd: run.repo, env: run.env, print: (text) => run.printed.push(text), runIO: { stdout: () => {}, stderr: () => {} } })).toBe(0);
   expect(run.printed.join("\n")).toContain("[redacted GitHub token]");
   expect(run.printed.join("\n")).not.toContain(token);
-});
-
-test("a spool in an ignored directory whose name starts with two dots is still inside the worktree", async () => {
-  const run = await fixture();
-  writeFileSync(join(run.repo, ".gitignore"), "ignored.txt\n..cache/\n");
-  await run.git("commit", "-q", "-am", "ignore the cache");
-  mkdirSync(join(run.repo, "..cache"));
-  run.env.TMPDIR = join(run.repo, "..cache");
-  const marker = join(run.base, "ran");
-  expect(await run.run("--kind", "live-run", "--", "sh", "-c", 'touch "$1"; echo hi', "sh", marker)).toBe(1);
-  expect(run.printed.join("\n")).toContain("inside the worktree");
-  expect(existsSync(marker)).toBe(false);
-  expect(run.evidence()).toEqual([]);
 });
 
 test("run --help offers no way to choose a commit", async () => {

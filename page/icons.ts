@@ -31,5 +31,4 @@ export const packIcon = (name: string) => packIcons[name] ?? teamIcon;
 
 export const uiIcons = {
   arrow: drawn(`<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>`),
-  close: drawn(`<path d="m6 6 12 12"/><path d="M18 6 6 18"/>`),
 };

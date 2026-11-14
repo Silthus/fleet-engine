@@ -214,10 +214,6 @@ describe("the site build", () => {
     expect(readFileSync(join(root, "README.md"), "utf8")).toContain('src="docs/fleet-logo.svg"');
   });
 
-  test("no page shows a day, a moment, a word note, or the old pack dialog", () => {
-    for (const [path, html] of pagesOf(files)) expect([path, html.match(/A day with|moments?\b|New word|<dialog|does not ask|short-lived boxes/i)]).toEqual([path, null]);
-  });
-
   test("the public build refuses a private pack source", async () => {
     expect(pageData({ audience: "public", team: [teamPack()] })).rejects.toThrow("no pack from a private source");
     expect(buildSite({ audience: "public", team: [teamPack()] })).rejects.toThrow("no pack from a private source");
@@ -286,13 +282,4 @@ describe("the site build", () => {
     expect([single.exitCode, single.stderr.trim()]).toEqual([2, "build-page: --out takes a directory. The site has one HTML file for each route"]);
   });
 
-  test("the command line ends once it writes a build, also for a pack.ts whose helper keeps a timer", async () => {
-    const source = temp.make("source-");
-    mkdirSync(join(source, "packs", "team"), { recursive: true });
-    writeFileSync(join(source, "packs", "team", "pack.ts"), `setInterval(() => {}, 3_600_000);\nexport default { sdk: 1, name: "team", summary: "Team rules.", register() {} };\n`);
-    const out = temp.make("out-");
-    const run = await spawnAsync(["bun", join(root, "scripts/build-page.ts"), "--audience", "posthog", "--source", source, "--out", out], { cwd: root, timeout: 4000 });
-    expect([run.exitCode, run.stderr]).toEqual([0, ""]);
-    expect(readFileSync(join(out, "index.html"), "utf8")).toContain('"teamPacks":["team"]');
-  });
 });
