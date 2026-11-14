@@ -8,7 +8,6 @@ type Env = Record<string, string | undefined>;
 
 export const hostSetting = "base.usageHost";
 export const projectKeySetting = "base.usageProjectKey";
-export const distinctIdSetting = "base.usageDistinctId";
 
 const stateDir = (home: string) => join(home, ".local/state/fleet");
 export const spoolPath = (home: string) => join(stateDir(home), "usage.jsonl");
