@@ -57,7 +57,7 @@ test("counts flags, env vars and config keys the base does not name yet", async 
 
   const summary = "size: 5 authored lines, 1 new file (README.md), 5 new concepts (newKey, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
   expect(await size("--lines", "100", "--concepts", "5")).toEqual({ code: 0, out: `${summary}\nwithin the estimate of 100 lines and 5 concepts` });
-  expect(await size("--lines", "100", "--concepts", "3")).toEqual({ code: 1, out: `${summary}\nover 1.5 times the estimate of 100 lines and 3 concepts: run the delete pass` });
+  expect(await size("--lines", "100", "--concepts", "1")).toEqual({ code: 1, out: `${summary}\nover 1.5 times the estimate of 100 lines and 1 concept: run the delete pass` });
 });
 
 test("compares nothing without an estimate", async () => {

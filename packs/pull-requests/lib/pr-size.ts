@@ -50,10 +50,10 @@ export async function prSize(args: string[], cwd: string) {
   const names = addedNames((await git(cwd, "diff", "-U0", from, "HEAD")).stdout);
   const newConcepts = [];
   for (const name of names) if ((await git(cwd, "grep", "-q", "-F", "-e", name, from)).exitCode === 1) newConcepts.push(name);
-  const list = (items: string[]) => (items.length ? ` (${items.join(", ")})` : "");
-  const summary = `size: ${authoredLines} authored lines, ${newFiles.length} new file${newFiles.length === 1 ? "" : "s"}${list(newFiles)}, ${newConcepts.length} new concepts${list(newConcepts)}`;
+  const counted = (count: number, noun: string, items: string[] = []) => `${count} ${noun}${count === 1 ? "" : "s"}${items.length ? ` (${items.join(", ")})` : ""}`;
+  const summary = `size: ${counted(authoredLines, "authored line")}, ${counted(newFiles.length, "new file", newFiles)}, ${counted(newConcepts.length, "new concept", newConcepts)}`;
   if (lines === undefined && concepts === undefined) return { output: `${summary}\nno estimate: the size contract did not run`, exitCode: 0 };
-  const estimate = [lines === undefined ? "" : `${lines} lines`, concepts === undefined ? "" : `${concepts} concepts`].filter(Boolean).join(" and ");
+  const estimate = [lines === undefined ? "" : counted(lines, "line"), concepts === undefined ? "" : counted(concepts, "concept")].filter(Boolean).join(" and ");
   const over = (lines !== undefined && authoredLines > 1.5 * lines) || (concepts !== undefined && newConcepts.length > 1.5 * concepts);
   return over
     ? { output: `${summary}\nover 1.5 times the estimate of ${estimate}: run the delete pass`, exitCode: 1 }
