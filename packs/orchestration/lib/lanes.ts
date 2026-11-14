@@ -1,5 +1,5 @@
 import {
-  lastActivityAt, listLinkedThreads, matchThread, readLinkedItemText, readLinkedThread, readSnapshots, readTurnItems, T3ToolError, withT3Session,
+  isWaiting, lastActivityAt, listLinkedThreads, matchThread, readLinkedItemText, readLinkedThread, readSnapshots, readTurnItems, T3ToolError, withT3Session,
   type LinkedReadQuery, type LinkedTimelineItem, type LinkedThread, type LinkedThreadDetail, type ShellThread, type T3HttpClient, type T3SessionOptions,
 } from "../../base/lib/t3/index.ts";
 import { liveStatuses, readEachMachine, readMachines } from "./machines.ts";
@@ -105,8 +105,7 @@ export function needsHuman(message: string): string | null {
 }
 
 function isLive(thread: ShellThread): boolean {
-  return Boolean(thread.activeRunId) || liveStatuses.includes(thread.activityRunStatus ?? thread.status) ||
-    Boolean(thread.pendingBackgroundTasks?.some((task) => task.kind !== "command" && !task.childThreadId));
+  return Boolean(thread.activeRunId) || liveStatuses.includes(thread.activityRunStatus ?? thread.status) || isWaiting(thread, { childTasks: false });
 }
 
 export async function readLaneAttention(

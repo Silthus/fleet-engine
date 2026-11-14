@@ -1,6 +1,6 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { type LinkedThread, listLinkedThreads, matchThread, readSnapshots, type ShellThread, type T3HttpClient, withT3Session } from "../../base/lib/t3/index.ts";
+import { type LinkedThread, listLinkedThreads, matchThread, readSnapshots, type ShellPullRequest, type ShellThread, type T3HttpClient, withT3Session } from "../../base/lib/t3/index.ts";
 import type { Gh } from "./gh.ts";
 
 export type Handover = { pr: string; from: string; to: string; at: string };
@@ -41,18 +41,33 @@ export async function readHandovers(home: string): Promise<Handover[]> {
 }
 
 const live = (thread: ShellThread) => !thread.deletedAt && !thread.archivedAt && !thread.settledAt;
-const rootOf = (thread: ShellThread) => (thread.lineage?.parentThreadId ? thread.lineage.rootThreadId ?? thread.lineage.parentThreadId : undefined);
+export const subagentParent = (thread: ShellThread) =>
+  (thread.lineage?.relationshipToParent ?? "subagent") === "subagent" ? thread.lineage?.parentThreadId ?? undefined : undefined;
+
+function rootOf(threads: ShellThread[], thread: ShellThread): string | undefined {
+  let current = thread;
+  for (let parentId = subagentParent(current), steps = 0; parentId && steps < 64; parentId = subagentParent(current), steps++) {
+    const parent = threads.find((candidate) => candidate.id === parentId);
+    if (!parent) return current.lineage?.rootThreadId ?? parentId;
+    current = parent;
+  }
+  return current === thread ? undefined : current.id;
+}
 const seenOpen = (state: string | undefined) => !["merged", "closed"].includes(state ?? "");
 
 export function ownedLinks(threads: ShellThread[], id: string): string[] {
+  return ownedPullRequests(threads, id).map((pr) => pr.url);
+}
+
+export function ownedPullRequests(threads: ShellThread[], id: string): ShellPullRequest[] {
   const target = matchThread(threads, id, (thread) => thread.id);
   if (!target) return [];
-  const root = rootOf(target);
+  const root = rootOf(threads, target);
   if (root && threads.some((thread) => thread.id === root && live(thread))) return [];
-  const family = threads.filter((thread) => thread.id === target.id || (rootOf(thread) === target.id && live(thread)));
+  const family = threads.filter((thread) => thread.id === target.id || (rootOf(threads, thread) === target.id && live(thread)));
   const others = new Set(threads.filter((thread) => live(thread) && !family.includes(thread)).flatMap((thread) => (thread.pullRequests ?? []).map((pr) => key(pr.url))));
-  const links = new Map(family.flatMap((thread) => thread.pullRequests ?? []).filter((pr) => seenOpen(pr.snapshot?.state)).map((pr) => [key(pr.url), pr.url]));
-  return [...links].filter(([known]) => !others.has(known)).map(([, url]) => url);
+  const links = new Map(family.flatMap((thread) => thread.pullRequests ?? []).filter((pr) => seenOpen(pr.snapshot?.state)).map((pr) => [key(pr.url), pr]));
+  return [...links].filter(([known]) => !others.has(known)).map(([, pr]) => pr);
 }
 
 function handedOverBy(handovers: Handover[], threads: ShellThread[], id: string): Set<string> {
@@ -93,7 +108,7 @@ export function settleTarget(input: Record<string, unknown>, self: string | unde
 }
 
 export function threadsOwningPrs(threads: ShellThread[]): string[] {
-  return threads.filter((thread) => live(thread) && !rootOf(thread)).flatMap((thread) => {
+  return threads.filter((thread) => live(thread) && !rootOf(threads, thread)).flatMap((thread) => {
     const owned = ownedLinks(threads, thread.id);
     return owned.length ? [`${thread.title} (owns open PR ${owned.join(", ")})`] : [];
   });
@@ -113,7 +128,7 @@ function asShellThreads(linked: LinkedThread[]): ShellThread[] {
   return linked.map((thread) => ({
     id: thread.threadId, title: thread.title, projectId: thread.projectId, status: thread.status,
     ...(thread.settled ? { settledAt: thread.updatedAt || "settled" } : {}),
-    ...(thread.parentThreadId ? { lineage: { parentThreadId: thread.parentThreadId, rootThreadId: rootOfLinked(thread) } } : {}),
+    ...(thread.parentThreadId ? { lineage: { parentThreadId: thread.parentThreadId, rootThreadId: rootOfLinked(thread), relationshipToParent: thread.relationshipToParent ?? null } } : {}),
     pullRequests: (thread.pullRequests ?? []).map((pr) => ({ repository: pr.repository, number: pr.number, url: pr.url, ...(pr.state ? { snapshot: { state: pr.state } } : {}) })),
   }));
 }

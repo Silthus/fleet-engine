@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets, secretKinds } from "../../base/hooks/secret-guard.ts";
-import type { ModelRow } from "../../base/lib/models.ts";
+import { modelSessionEnv, type ModelRow } from "../../base/lib/models.ts";
 import { docUrl, stateDir, type Library } from "./config.ts";
 import { must, type Git, type Run } from "./git.ts";
 import { catalogName, parseDoc, readLibrary, renderCatalog, type Doc } from "./library.ts";
@@ -29,7 +29,7 @@ export function captureAgent(row: ModelRow, command = "claude"): Agent {
     const child = Bun.spawn(
       [command, "-p", "--model", row.model, "--effort", row.effort, "--no-session-persistence", "--permission-mode", "dontAsk",
         "--tools", [...fileTools, "WebFetch"].join(","), "--allowedTools", permissionRules(cwd, source).join(",")],
-      { cwd, stdin: Buffer.from(prompt), stdout: "pipe", stderr: "pipe", timeout: 900_000 },
+      { cwd, env: modelSessionEnv(process.env), stdin: Buffer.from(prompt), stdout: "pipe", stderr: "pipe", timeout: 900_000 },
     );
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     return { code, stdout, stderr };

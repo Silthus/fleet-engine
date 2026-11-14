@@ -155,3 +155,21 @@ test("without a running T3 server, fleet activity says so and exits 1 at once", 
   expect(stdout).toBe("");
   expect(stderr).toBe(`fleet: T3 is not running on this machine: no server-runtime.json in ${join(home, ".t3", "userdata")}. Start T3 Code, then try again.\n`);
 });
+
+test("a thread that awaits a shell command or waits on another thread is busy, and one with a plain background command is not", async () => {
+  const t3 = await stub({
+    shell: {
+      projects: [{ id: "project-local", title: "Local project", workspaceRoot: "/work/local" }],
+      threads: [
+        shellThread("mcp:awaits-shell", { status: "completed", pendingBackgroundTasks: [{ kind: "command", awaited: true }] }),
+        shellThread("mcp:waits-on-thread", { status: "completed", blockedOnThreadWait: true }),
+        shellThread("mcp:dev-server", { status: "completed", pendingBackgroundTasks: [{ kind: "command" }] }),
+      ],
+    },
+    archived: { projects: [], threads: [] },
+    links: [],
+  });
+  const { output } = await activity(t3);
+  const busy = output.split("\n").filter((line) => line.startsWith("  * ")).map((line) => line.split("Thread ").at(-1));
+  expect(busy.sort()).toEqual(["mcp:awaits-shell", "mcp:waits-on-thread"]);
+});

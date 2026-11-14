@@ -9,8 +9,8 @@ export {
   type LinkedEnvironment, type LinkedSend, type LinkedPullRequest, type LinkedReadQuery, type LinkedThread, type LinkedThreadDetail, type LinkedThreadQuery, type LinkedThreadRead, type LinkedTimelineItem,
 } from "./environments.ts";
 export {
-  findThread, lastActivityAt, matchThread, questionCard, readSnapshots, readLinkedThreadWords, readThread, readThreadWords, readTurnItems, sendMessage,
-  type SentMessage, type ShellProject, type ShellPullRequest, type ShellSnapshot, type ShellThread, type ThreadWord, type TurnItem,
+  findThread, isWaiting, lastActivityAt, matchThread, questionCard, readSnapshots, readLinkedThreadWords, readThread, readThreadWords, readTurnItems, sendMessage,
+  type PullRequestWatch, type SentMessage, type ShellProject, type ShellPullRequest, type ShellSnapshot, type ShellThread, type ThreadWord, type TurnItem,
 } from "./threads.ts";
 export { launchScratchThread, UnansweredLaunch, type ThreadLaunch } from "./launch.ts";
 export { t3Threads, threadUrl } from "./start.ts";
