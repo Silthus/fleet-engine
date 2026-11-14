@@ -1,6 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { isWaiting, matchThread, type PullRequestWatch, type ShellThread } from "../../base/lib/t3/index.ts";
-import { ownedPullRequests } from "../../pull-requests/lib/pr-owners.ts";
+import { ownedPullRequests, subagentParent } from "../../pull-requests/lib/pr-owners.ts";
 import { lastGateRun } from "../../pull-requests/lib/proof.ts";
 import { needsHuman } from "./lanes.ts";
 import { personName } from "./prose-question.ts";
@@ -125,11 +125,16 @@ const waitsInClaude = (event: ProofStopEvent) =>
 
 const runningStatuses = ["preparing", "queued", "starting", "running", "waiting"];
 const settledWatch = (task: ShellTask) => task.taskId?.startsWith("pull-request-watch:") && !task.awaited;
-const runningChild = (threads: ShellThread[], parent: ShellThread) => threads.some((thread) =>
-  thread.lineage?.parentThreadId === parent.id && !thread.settledAt && !thread.archivedAt && !thread.deletedAt
-  && Boolean(thread.activeRunId || runningStatuses.includes(thread.activityRunStatus ?? thread.status)));
-const waits = (threads: ShellThread[], thread: ShellThread) => runningChild(threads, thread)
-  || isWaiting({ ...thread, pendingBackgroundTasks: thread.pendingBackgroundTasks?.filter((task) => !settledWatch(task)) });
+const awaitsWork = (thread: ShellThread) => isWaiting({ ...thread, pendingBackgroundTasks: thread.pendingBackgroundTasks?.filter((task) => !settledWatch(task)) });
+const maxChildDepth = 8;
+
+function waitsOnSubagent(threads: ShellThread[], parent: ShellThread, depth = 0): boolean {
+  return depth < maxChildDepth && threads.some((child) => subagentParent(child) === parent.id && !child.settledAt && !child.archivedAt && !child.deletedAt
+    && (Boolean(child.activeRunId || child.pendingRuntimeRequest || runningStatuses.includes(child.activityRunStatus ?? child.status))
+      || awaitsWork(child) || waitsOnSubagent(threads, child, depth + 1)));
+}
+
+const waits = (threads: ShellThread[], thread: ShellThread) => awaitsWork(thread) || waitsOnSubagent(threads, thread);
 
 export async function proofStop(event: ProofStopEvent, options: ProofStopOptions): Promise<ProofStopBlock | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;

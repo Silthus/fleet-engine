@@ -41,7 +41,7 @@ export async function readHandovers(home: string): Promise<Handover[]> {
 }
 
 const live = (thread: ShellThread) => !thread.deletedAt && !thread.archivedAt && !thread.settledAt;
-const subagentParent = (thread: ShellThread) =>
+export const subagentParent = (thread: ShellThread) =>
   (thread.lineage?.relationshipToParent ?? "subagent") === "subagent" ? thread.lineage?.parentThreadId ?? undefined : undefined;
 
 function rootOf(threads: ShellThread[], thread: ShellThread): string | undefined {

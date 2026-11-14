@@ -191,4 +191,4 @@ export const hookWith = (shell: (home: string) => ReadShell, stop: StopDeps = {}
 
 export const hook = hookWith(liveShell);
 
-if (import.meta.main) await runHook(hook);
+if (import.meta.main) await runHook(hook, { exitOnAnswer: true });

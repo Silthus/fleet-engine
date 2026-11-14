@@ -105,7 +105,9 @@ The stop passes when any of these holds:
   awaits; on Claude, on a subagent, a monitor, or a scheduled wake-up. A plain
   background command, such as a dev server, is no wait, and neither is a PR
   watch whose CI has settled;
-- a child thread of the thread, such as a delegated task, still runs;
+- a subagent thread of the thread, such as a delegated task, still runs,
+  waits on a question, or awaits work of its own. A fork of the thread is no
+  wait;
 - a PR watch has not seen CI settle at the pushed head;
 - the thread was delegated from another machine;
 - the hook runs in a model session that another one started, such as a review
@@ -113,4 +115,5 @@ The stop passes when any of these holds:
   judge, reviewers, the arbiter, the eval judge, and `fleet context add`) get
   no `T3CODE_THREAD_ID`, so the check never runs in them;
 - any read fails, or the check takes longer than 10 seconds. At the deadline
-  it stops the git and `ps` commands it started.
+  it stops the git and `ps` commands it started, and the hook process exits
+  once it has answered, even when a helper of those commands still runs.

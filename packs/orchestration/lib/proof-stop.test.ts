@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gitEnv, spawnGit, tempDirs } from "../../../src/testing/git.ts";
 import type { ShellThread } from "../../base/lib/t3/index.ts";
@@ -150,11 +150,23 @@ describe("the Stop proof check blocks a lane that owns an open PR", () => {
     expect(await check([thread({ ...settled, pendingBackgroundTasks: [{ ...watchTask, awaited: true }] })])).toBeUndefined();
   });
 
-  test("once the lane's delegated child has finished", async () => {
+  test("once the lane's delegated child and the work it awaits have finished", async () => {
     const { thread, check } = await lane();
     const child: ShellThread = { id: "thread:delegated-task:review", title: "Review", projectId: "p", status: "completed", activeRunId: null, lineage: { parentThreadId: "mcp:lane", rootThreadId: "mcp:lane", relationshipToParent: "subagent" } };
+    const grandchild: ShellThread = { ...child, id: "thread:native-child", lineage: { parentThreadId: child.id, rootThreadId: "mcp:lane", relationshipToParent: "subagent" } };
     expect(await check([thread(), child])).toBeDefined();
+    expect(await check([thread(), { ...child, pendingBackgroundTasks: [{ kind: "command", taskId: "dev-server" }] }])).toBeDefined();
+    expect(await check([thread(), child, grandchild])).toBeDefined();
     expect(await check([thread(), { ...child, status: "running", activeRunId: "run-2" }])).toBeUndefined();
+    expect(await check([thread(), { ...child, pendingBackgroundTasks: [{ kind: "subagent", taskId: "native-child" }] }])).toBeUndefined();
+    expect(await check([thread(), { ...child, pendingBackgroundTasks: [{ kind: "command", taskId: "tests", awaited: true }] }])).toBeUndefined();
+    expect(await check([thread(), child, { ...grandchild, status: "running", activeRunId: "run-3" }])).toBeUndefined();
+  });
+
+  test("while a fork of the lane runs, since a fork is no work the lane waits on", async () => {
+    const { thread, check } = await lane();
+    const fork: ShellThread = { id: "mcp:fork", title: "Fork", projectId: "p", status: "running", activeRunId: "run-4", lineage: { parentThreadId: "mcp:lane", rootThreadId: "mcp:lane", relationshipToParent: "fork" } };
+    expect(await check([thread(), fork])).toBeDefined();
   });
 
   test("a fork owns the PRs of its own subagents, and the thread it forked from does not", async () => {
@@ -257,6 +269,41 @@ describe("the installed Stop hook", () => {
 });
 
 describe("the Stop hook process", () => {
+  test("exits once it has answered, even when a helper of the git it started keeps the output pipe open", async () => {
+    const dir = temp.make("helper-git-");
+    mkdirSync(join(dir, "bin"));
+    const [ready, helperPid] = [join(dir, "helper-ready"), join(dir, "helper.pid")];
+    expect(Bun.spawnSync(["mkfifo", ready]).exitCode).toBe(0);
+    writeFileSync(join(dir, "bin/git"), `#!/bin/sh\n(trap '' TERM; exec sl${"eep"} 30) &\necho $! > ${helperPid}\necho ready > ${ready}\nwait\n`, { mode: 0o755 });
+    const script = join(dir, "hook.ts");
+    writeFileSync(script, [
+      `import { runHook } from ${JSON.stringify(join(import.meta.dir, "../../base/lib/hook.ts"))};`,
+      `import { hookWith } from ${JSON.stringify(join(import.meta.dir, "../hooks/ask-guard.ts"))};`,
+      `import { realGit } from ${JSON.stringify(join(import.meta.dir, "proof-stop.ts"))};`,
+      "let started = () => {};",
+      "const gitStarted = new Promise<void>((resolve) => { started = resolve; });",
+      `const thread = { id: "mcp:lane", title: "Lane", projectId: "p", status: "idle", pullRequests: [] };`,
+      "await runHook(hookWith(() => async () => ({ threads: [thread] }), {",
+      `  threadId: "lane", topLevel: async () => true, processes: { pid: 30, table: async () => "30 1 bun\\n" },`,
+      `  deadline: () => gitStarted.then(() => Bun.file(${JSON.stringify(ready)}).text()).then(() => {}),`,
+      "  git: (cwd, args, signal) => { const result = realGit(cwd, args, signal); started(); return result; },",
+      "}), { exitOnAnswer: true });",
+    ].join("\n"));
+    const child = Bun.spawn([process.execPath, script, "claude"], {
+      env: { ...process.env, HOME: dir, PATH: `${join(dir, "bin")}:${process.env.PATH}` },
+      stdin: new Blob([JSON.stringify({ cwd: dir, last_assistant_message: "Done." })]), stdout: "pipe", stderr: "pipe",
+    });
+    try {
+      const exited = await Promise.race([child.exited.then(() => "exited"), Bun.sleep(4_000).then(() => "still running")]);
+      expect(exited).toBe("exited");
+      expect(child.exitCode).toBe(0);
+      expect(await new Response(child.stdout).text()).toBe("");
+    } finally {
+      child.kill();
+      process.kill(Number(readFileSync(helperPid, "utf8")), "SIGKILL");
+    }
+  });
+
   test("kills the git it started when the deadline cuts the check short, so the process can exit", async () => {
     const dir = temp.make("stalled-git-");
     mkdirSync(join(dir, "bin"));
