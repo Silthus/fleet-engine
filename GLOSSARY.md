@@ -111,3 +111,25 @@ _Avoid_: Proof status, gate result
 **End-of-run report**:
 The Markdown that `fleet decision report` prints when a lane ends: what is still the user's, merges under the narrow grant, the lane's decisions, one proofs row per pull request, and the side fixes it started. It never runs the judge. It builds the proof summary again at HEAD, so CI, the standing rules, the decisions and the tier are read as they are now, and it takes the judge's verdict from the summary the gate saved at HEAD. When a decision was recorded after the gate, or the head, base, merge-risk callout or proofs changed, it says the gate has not run at HEAD with these proofs. When the summary it builds does not pass, such as after a check fails, outside the checkout where a review carried across commits cannot be checked, when an accepted gap now rests on a condition the saved judge did not weigh, when CI shows other checks than the ones the judge weighed, or when the head, base or tier moves while the report reads it, it sends the user to the gate and offers no merge. This holds for a merged pull request too, which it sends to `fleet proof gate --landed`. A pull request whose proofs Fleet cannot read is still the user's, with the reason, and the other rows still print.
 _Avoid_: Summary, wrap-up
+
+## Secrets
+
+**Secret store**:
+The store on the hub that holds standing credentials and delivers secrets the hub already holds, each with its kind, scope, target project, expiry and check. `fleet secret` reaches it from any machine.
+_Avoid_: Vault, keychain, secrets folder
+
+**Standing credential**:
+A secret kept in the secret store and reused by every lane until it expires or is revoked.
+_Avoid_: Shared key, permanent token
+
+**Secret row**:
+The declaration of one secret, without its value: its provider, scope, project, region, settings link and variables. Packs and the profile declare rows.
+_Avoid_: Secret config, registry entry
+
+**Secret provider**:
+The code that owns a secret's shape rule and its read-only live check.
+_Avoid_: Validator, plugin
+
+**Live handoff**:
+A secret or confirmation that only works at the moment of use, such as an OAuth callback, a tool's literal `confirm`, or a token that lasts under a day. It is asked for at use time and never stored.
+_Avoid_: Late ask, just-in-time secret

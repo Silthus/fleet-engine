@@ -759,6 +759,15 @@
       "remove",
       "left"
     ],
+    "secret": [
+      "put",
+      "run",
+      "list",
+      "off",
+      "on",
+      "hub",
+      "help"
+    ],
     "ssh-tunnels": [
       "plan",
       "install",

@@ -191,7 +191,8 @@
       "stamp",
       "forecast",
       "blockers",
-      "bot-threads"
+      "bot-threads",
+      "size"
     ],
     "proof": [
       "help",
