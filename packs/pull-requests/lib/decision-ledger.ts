@@ -1,8 +1,7 @@
-import { readFileSync } from "node:fs";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { optionalStringSetting } from "../../base/lib/settings.ts";
+import { HubUnreachable, remoteHub, runSsh, type Env, type Ssh, type SshResult } from "../../hub/lib/hub-transport.ts";
 
 export const askClasses = ["proof-gap", "review", "merge", "deploy", "secret", "design", "scope", "status"] as const;
 export type AskClass = (typeof askClasses)[number];
@@ -26,7 +25,7 @@ export type LedgerEvent =
   | Reversal
   | Lift;
 
-export class HubUnreachable extends Error {}
+export { HubUnreachable, type Env, type Ssh, type SshResult };
 
 export type Ledger = { read(): Promise<LedgerEvent[]>; append(...events: LedgerEvent[]): Promise<void> };
 const lines = (events: LedgerEvent[]) => events.map((event) => JSON.stringify(event) + "\n").join("");
@@ -83,9 +82,6 @@ export function localLedger(home: string): Ledger {
   };
 }
 
-export type SshResult = { code: number; stdout: string; stderr: string };
-export type Ssh = (host: string, command: string, stdin?: string) => Promise<SshResult>;
-
 const remoteFile = `"$HOME/${relativePath}"`;
 
 function sshLedger(hub: string, ssh: Ssh): Ledger {
@@ -103,22 +99,9 @@ function sshLedger(hub: string, ssh: Ssh): Ledger {
   };
 }
 
-const runSsh: Ssh = async (host, command, stdin) => {
-  const child = Bun.spawn(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, command], { stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe", timeout: 20_000 });
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { code: code ?? 255, stdout, stderr };
-};
-
-export type Env = Record<string, string | undefined>;
-
-function isHub(home: string) {
-  try { return (JSON.parse(readFileSync(join(home, ".config/fleet/machine.json"), "utf8")) as { role?: unknown }).role === "hub"; }
-  catch { return false; }
-}
-
 export function hubLedger(home: string, env: Env, ssh: Ssh = runSsh): Ledger {
-  const hub = optionalStringSetting("hub.alias", env);
-  return hub && !isHub(home) ? sshLedger(hub, ssh) : localLedger(home);
+  const hub = remoteHub(home, env);
+  return hub ? sshLedger(hub, ssh) : localLedger(home);
 }
 
 export const thisMachine = (env: Env) => env.CODER_WORKSPACE_NAME || hostname();
