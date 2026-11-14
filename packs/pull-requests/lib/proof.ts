@@ -395,7 +395,8 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
   if (bytes.toString().match(knownItem)) {
     const reviews = join(pullRequestDirectory(home, identity), "reviews");
     const started = await reviewNames(reviews);
-    const spent = Math.max(await reviewsSpent(reviews, started, "review"), await reviewsSpent(reviews, started, "babysit"));
+    const phase = (await readJson<{ phase?: FinalReadPhase }>(join(directory, "round.json"), {})).phase ?? "review";
+    const spent = await reviewsSpent(reviews, started, phase);
     if (spent < ceiling) throw new Error(`Answer a finding "known" only once the review budget of ${ceiling} reviews is spent; ${spent} ran. Fix or reject it now`);
   }
   const destination = join(directory, "responses.md");

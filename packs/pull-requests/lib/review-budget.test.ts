@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { checkout, cleanFixtures, fakeModel, finishRound, graded, markPanel, reviewHead } from "./proof-testing.ts";
+import { checkout, cleanFixtures, fakeModel, finishRound, graded, markPanel, reviewHead, settings } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -211,4 +211,24 @@ test("deleting a test file that code imports needs a new review", async () => {
   await pr.git("rm", "-q", "policy.test.ts");
   await pr.git("commit", "-q", "-m", "drop the policy");
   expect((await pr.fleet("gate")).code).toBe(1);
+});
+
+test("a known answer waits for the budget of its own phase", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 2 });
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  const panel = await reviewHead(pr);
+  const read = await pr.commit("feature.txt", "greet the member\n");
+  await pr.fleet("review-start", "--scope", "final", "--base", panel);
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  await pr.fleet("review-finish", "--round", "final-1", "--reviewer", "gpt-6.1-sol", "findings.md");
+  await pr.commit("feature.txt", "greet the new member\n");
+  await pr.fleet("review-start", "--scope", "final", "--phase", "babysit", "--base", read);
+  writeFileSync(join(pr.repository, "findings.md"), "- major | feature.txt:1 | the member goes unnamed | anchor: greet the new member\n");
+  await pr.fleet("review-finish", "--round", "final-2", "--reviewer", "gpt-6.1-sol", "findings.md");
+
+  writeFileSync(join(pr.repository, "responses.md"), "1. known: listed under Known issues.\n");
+  await expect(pr.fleet("respond", "--round", "final-2", "responses.md")).rejects.toThrow("only once the review budget of 2 reviews is spent; 1 ran");
 });
