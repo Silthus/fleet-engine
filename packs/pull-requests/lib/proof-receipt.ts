@@ -187,12 +187,20 @@ export function keepBody(body: string, placed: string) {
   if (riskCalloutOf(placed) !== riskCalloutOf(body)) {
     throw new Error("Writing the receipt would change the merge-risk callout, because the receipt block holds part of it or lands inside it. Move the callout out of the receipt block and the testing section by hand, then run the receipt again");
   }
-  const receipt = blocksOf(new RegExp(blockText).exec(placed)?.[0] ?? "");
-  const shown = blocksOf(placed);
-  if (!shown.includes(receipt) || shown.replace(receipt, "") !== blocksOf(withoutReceipt(body))) {
+  if (!showsOnce(placed, withoutReceipt(body))) {
     throw new Error("The receipt would not show as a block of its own, because a code fence, an HTML block or a comment before it stays open, or it would change how GitHub shows the rest of the body. Close the open block by hand, then run the receipt again");
   }
   return placed;
+}
+
+function showsOnce(placed: string, base: string) {
+  const part = blocksOf(new RegExp(blockText).exec(placed)?.[0] ?? "");
+  const [shown, without] = [blocksOf(placed), blocksOf(base)];
+  if (shown.length !== without.length + part.length) return false;
+  let prefix = 0;
+  while (prefix < without.length && shown[prefix] === without[prefix]) prefix++;
+  for (let at = prefix; at >= 0; at--) if (shown.startsWith(part, at) && shown.slice(at + part.length) === without.slice(at)) return true;
+  return false;
 }
 
 export function checkPlacement(body: string, heading: string) {
@@ -237,7 +245,8 @@ export function placeReceipt(body: string, receipt: Receipt, heading: string): s
     const generated = /^[^\n]*-->\r?\n#{1,6}[ \t]+([^\r\n]*?)[ \t]*\r?\n/.exec(body.slice(start, end))?.[1];
     const { found, next } = sectionOf(body, heading);
     const inSection = found !== undefined && found.start < start && (!next || start < next.start);
-    if (generated === heading || (generated === undefined && inSection)) return body.slice(0, start) + blockOf(receipt, generated) + body.slice(end);
+    const inPlace = body.slice(0, start) + blockOf(receipt, generated) + body.slice(end);
+    if ((generated === heading || (generated === undefined && inSection)) && showsOnce(inPlace, withoutReceipt(body))) return inPlace;
     return placeReceipt(lifted(body, start, end), receipt, heading);
   }
   const { found, next } = sectionOf(body, heading);

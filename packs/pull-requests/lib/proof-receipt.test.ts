@@ -157,6 +157,7 @@ const blocksOf = (text: string) => Bun.markdown.render(text, blockShape);
 
 test("the receipt ends the testing section at the next heading GitHub renders, and nowhere else", async () => {
   const cases: [string, string, string][] = [
+    ["two template comments before the receipt", "<!-- a template note -->\n<!-- another note -->\n\nMore rationale.", "### Screenshots\n\nA picture."],
     ["a heading inside an HTML comment", "<!--\n# Hidden instructions\nKeep this hidden.\n-->", "### Screenshots\n\nA picture."],
     ["a heading inside a pre block", "<pre>\n# start the app\nbun run dev\n</pre>", "### Screenshots\n\nA picture."],
     ["a heading inside a div before its blank line", "<div>\n# start the app\n</div>", "### Screenshots\n\nA picture."],
@@ -186,6 +187,12 @@ test("a receipt added at the end of a body that ends in an HTML block starts a b
     expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe(`${body}\n\n<block>\n`);
     expect(blocksOf(pr.githubBody()).replace(blocksOf(block(pr.githubBody())), "")).toBe(blocksOf(body));
   }
+  const details = "Adds the greeting.\n\n<details>\n<summary>More</summary>\n\nHidden detail.\n\n</details>";
+  const { pr } = await provedPr();
+  pr.pullRequestState({ body: `${details}\n<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n## Testing\n\n| Proof |\n| --- |\n| old |\n<!-- /fleet-proof-receipt -->\n` });
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe(`${details}\n\n<block>\n`);
+  expect(block(pr.githubBody()).split("\n")[1]).toBe("## Testing");
 });
 
 test("the body guard refuses figures and emails with the field named, and passes SHAs, versions, dates and references", async () => {
