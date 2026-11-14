@@ -45,7 +45,8 @@ afterEach(() => {
 const lines = (count: number, line: string) => Array.from({ length: count }, (_, n) => `${line} ${n}`).join("\n") + "\n";
 
 test("counts authored lines without tests or lockfiles and runs the delete pass over 1.5 times the estimate", async () => {
-  const size = await branch({ "src/old.ts": "export {};\n", "src/gone.test.ts": lines(30, "// renamed"), "src/moving.ts": lines(12, "// moved") }, {
+  configured = { GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "diff.renames", GIT_CONFIG_VALUE_0: "false", GIT_CONFIG_KEY_1: "diff.failing.textconv", GIT_CONFIG_VALUE_1: "false" };
+  const size = await branch({ ".gitattributes": "*.ts diff=failing\n", "src/old.ts": "export {};\n", "src/gone.test.ts": lines(30, "// renamed"), "src/moving.ts": lines(12, "// moved") }, {
     "src/moving.ts": null,
     "lib/moved.ts": lines(12, "// moved"),
     "src/gone.test.ts": null,
