@@ -211,18 +211,32 @@ function headingsOf(body: string) {
   return found;
 }
 
-export function placeReceipt(body: string, receipt: Receipt, heading: string) {
-  const start = body.indexOf(receiptOpen);
-  if (start >= 0) {
-    const end = body.indexOf(receiptClose) + receiptClose.length;
-    const inside = new RegExp(String.raw`^[^\n]*-->\r?\n#{1,6}[ \t]+${escaped(heading)}`).test(body.slice(start, end));
-    return body.slice(0, start) + blockOf(receipt, inside ? heading : undefined) + body.slice(end);
-  }
+function sectionOf(body: string, heading: string) {
   const headings = headingsOf(body);
   const found = headings.find((candidate) => candidate.title === heading);
   const next = found && headings.find((candidate) => candidate.start > found.start && candidate.depth <= found.depth);
+  return { found, next };
+}
+
+export function placeReceipt(body: string, receipt: Receipt, heading: string): string {
+  const start = body.indexOf(receiptOpen);
+  if (start >= 0) {
+    const end = body.indexOf(receiptClose) + receiptClose.length;
+    const generated = /^[^\n]*-->\r?\n#{1,6}[ \t]+([^\r\n]*?)[ \t]*\r?\n/.exec(body.slice(start, end))?.[1];
+    const { found, next } = sectionOf(body, heading);
+    const inSection = found !== undefined && found.start < start && (!next || start < next.start);
+    if (generated === heading || (generated === undefined && inSection)) return body.slice(0, start) + blockOf(receipt, generated) + body.slice(end);
+    return placeReceipt(lifted(body, start, end), receipt, heading);
+  }
+  const { found, next } = sectionOf(body, heading);
   if (next) return `${afterBlankLine(body.slice(0, next.start))}${blockOf(receipt, undefined)}\n\n${body.slice(next.start)}`;
   return `${afterBlankLine(body)}${blockOf(receipt, found ? undefined : heading)}\n`;
+}
+
+function lifted(body: string, start: number, end: number) {
+  const before = body.slice(0, start);
+  const after = body.slice(end);
+  return before === "" || /\n[ \t\r]*\n$/.test(before) ? before + after.replace(/^(?:[ \t]*\r?\n)+/, "") : before + after;
 }
 
 const afterBlankLine = (text: string) => text === "" || /\n[ \t\r]*\n$/.test(text) ? text : `${text.replace(/\n?$/, "\n")}\n`;

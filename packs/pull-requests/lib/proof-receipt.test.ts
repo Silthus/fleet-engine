@@ -394,3 +394,27 @@ test("the first receipt written into a body, and each refresh, leave the judge's
   }
   expect(judge.prompts().length).toBeGreaterThan(1);
 });
+
+test("a changed receipt heading moves the receipt to that section and never leaves or drops a heading", async () => {
+  const evidence = JSON.stringify({ "pull-requests.receiptHeading": "Evidence" });
+  const sections = "Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n### Evidence\n\nA picture.\n";
+  const moved = await provedPr();
+  moved.pr.pullRequestState({ body: sections });
+  expect((await moved.pr.fleet("receipt")).code).toBe(0);
+  expect(moved.pr.githubBody().replace(block(moved.pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n<block>\n\n### Evidence\n\nA picture.\n");
+  moved.pr.env.FLEET_SETTINGS = evidence;
+  expect((await moved.pr.fleet("receipt")).output).toContain("receipt written");
+  expect(moved.pr.githubBody().replace(block(moved.pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n### Evidence\n\nA picture.\n\n<block>\n");
+  expect((await moved.pr.fleet("receipt")).output).toContain("receipt current");
+
+  const generated = await provedPr();
+  generated.pr.pullRequestState({ body: "Adds the greeting.\n" });
+  expect((await generated.pr.fleet("receipt")).code).toBe(0);
+  expect(block(generated.pr.githubBody()).split("\n")[1]).toBe("## Testing");
+  generated.pr.env.FLEET_SETTINGS = evidence;
+  expect((await generated.pr.fleet("receipt")).output).toContain("receipt written");
+  const body = generated.pr.githubBody();
+  expect(body.replace(block(body), "<block>")).toBe("Adds the greeting.\n\n<block>\n");
+  expect(block(body).split("\n")[1]).toBe("## Evidence");
+  expect(body).not.toContain("Testing");
+});
