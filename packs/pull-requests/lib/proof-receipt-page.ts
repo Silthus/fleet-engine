@@ -39,7 +39,7 @@ export function proseOf(text: string) {
   let fence: string | undefined;
   let left = 0;
   for (const line of text.split(/\r?\n/)) {
-    const inner = line.replace(/^[\s>]*/, "");
+    const inner = line.replace(/^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/, "");
     const marker = /^(`{3,}|~{3,})/.exec(inner)?.[1];
     if (fence) {
       left++;

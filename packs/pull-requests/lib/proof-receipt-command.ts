@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { stringSetting } from "../../base/lib/settings.ts";
@@ -9,7 +9,7 @@ import { displayEntry, readDisplay, readNotChecked, recordNotChecked } from "./p
 import { receiptSummary, type GateContext } from "./proof-gate.ts";
 import { readPlan } from "./proof-panel.ts";
 import { checkPlacement, GuardRefusal, keepCallout, placeReceipt, receiptHash, receiptLink, receiptMarker, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
-import { fitPage, gatherPage, PageTooLarge } from "./proof-receipt-page.ts";
+import { fitPage, gatherPage, PageTooLarge, renderPage } from "./proof-receipt-page.ts";
 import { handlerPublisher, type Published, type PublishRequest } from "./proof-receipt-publisher.ts";
 import { reviewDisplay } from "./proof-review-display.ts";
 
@@ -69,30 +69,34 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
   const publish = handlerPublisher(env);
   const link = receiptLink(first.body);
   const previous = await storedArtifact(home, head);
-  let request: PublishRequest;
-  try {
-    const page = await gatherPage(home, head, { summary, title: first.title, decisions: covered, display, notChecked, reviews });
-    request = fitPage(page, (content) => ({ repository: head.repository, pr: head.pr, title, page: content, ...previous ? { previous } : {} }));
-  } catch (error) { if (error instanceof PageTooLarge) { print(error.message); return 1; } throw error; }
-  const hash = receiptHash(rendered.section, request.page);
+  const page = await gatherPage(home, head, { summary, title: first.title, decisions: covered, display, notChecked, reviews });
+  let request: PublishRequest | undefined;
+  if (publish) {
+    try { request = fitPage(page, (content) => ({ repository: head.repository, pr: head.pr, title, page: content, ...previous ? { previous } : {} })); }
+    catch (error) { if (error instanceof PageTooLarge) { print(error.message); return 1; } throw error; }
+  }
+  const content = request?.page ?? renderPage(page);
+  const hash = receiptHash(rendered.section, content);
+  const local = join(prDirectory(home, head), displayEntry, "receipt.md");
+  const saveLocal = async () => {
+    await mkdir(dirname(local), { recursive: true, mode: 0o700 });
+    await writeFile(local, content, { mode: 0o600 });
+    print(`receipt page: ${local}`);
+  };
   const live = receiptMarker(first.body);
   if (live?.head === head.commit && live.hash === hash && (!publish || (link && link === previous?.url))) {
+    if (!publish && await readFile(local, "utf8").catch(() => undefined) !== content) await saveLocal();
     if (items) await recordNotChecked(home, head, items);
     print("receipt current");
     return 0;
   }
   let published: Published | undefined;
-  if (publish) {
+  if (publish && request) {
     try { published = await publish(request); }
     catch (error) { print((error as Error).message); return 1; }
     await writeJson(publishedPath(home, head), published);
     await recordReceipt(home, head, published.url);
-  } else {
-    const path = join(prDirectory(home, head), displayEntry, "receipt.md");
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await writeFile(path, request.page, { mode: 0o600 });
-    print(`receipt page: ${path}`);
-  }
+  } else await saveLocal();
   const intended = keepCallout(first.body, placeReceipt(first.body, { head: head.commit, hash, section: published ? withLink(rendered.section, published.url) : rendered.section }, heading));
   if (readBody(head, context).body !== first.body) throw new Error("The PR body changed while fleet built the receipt. Run the receipt again");
   await writeBody(head, intended, context);

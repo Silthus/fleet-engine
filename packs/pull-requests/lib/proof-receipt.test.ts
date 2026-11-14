@@ -382,6 +382,20 @@ test("without a publisher the page goes to a local file, its path is printed, an
   expect(carried).toContain(`| \`${short(merge)}\` | carried from \`${short(proved)}\` | | |`);
   expect(carried).toContain(`- \`${short(merge)}\` live-run carried from \`${short(proved)}\` across 1 clean merge(s) of the base`);
   expect(carried).toContain("**What ran:** Sent a test email. **Result:** Delivered.");
+
+  const local = join(bare.pullRequest, "display", "receipt.md");
+  rmSync(local);
+  const restored = await bare.fleet("receipt");
+  expect(restored.output.split("\n").slice(-2)).toEqual([`receipt page: ${local}`, "receipt current"]);
+  expect(readFileSync(local, "utf8")).toBe(carried);
+
+  const wide = Array.from({ length: 40 }, (_, index) => `Wide line ${index + 1}: ${heavy(10_000)}`).join("\n");
+  writeFileSync(join(bare.repository, "wide.md"), wide);
+  await bare.fleet("save", "--kind", "live-run", "--ran", "Walked the mailbox", "--result", "Every message arrived", "wide.md");
+  expect((await bare.fleet("receipt")).code).toBe(0);
+  const full = readFileSync(local, "utf8");
+  expect(full).toContain("Wide line 40:");
+  expect(full).not.toContain("Left out to fit the page");
 });
 
 test("a page over the byte budget drops raw lens answers, then judge reasons, then long notes, each with a notice, then refuses", async () => {
@@ -416,7 +430,7 @@ test("a page over the byte budget drops raw lens answers, then judge reasons, th
 test("stored text stays text on the page: command output in lists and quotes is left out, tags show as text, and a backtick run cannot close its fence", async () => {
   const { pr, handler, file } = await pagePr({ findingText: "</td></tr></table><h1>FAKE PASS</h1>", lensAnswer: "FINDINGS:\n(none)\n````\nCOVERED: feature.txt\n" });
   const note = ["Before the list.", "", "- The transcript:", "", "    ```sh", "    $ curl https://sandbox.example", "    TOKEN=private-value", "    ```", "",
-    "> ~~~", "> $ bun run status", "> SECRET=quoted-value", "> ~~~", "", "> exit=0", "After the quote.", "<details open><summary>ALL PASS</summary></details>"].join("\n");
+    "> ~~~", "> $ bun run status", "> SECRET=quoted-value", "> ~~~", "", "> exit=0", "After the quote.", "", "1. ```sh", "   LISTED=list-value", "   ```", "After the listed fence.", "<details open><summary>ALL PASS</summary></details>"].join("\n");
   await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", file("nested.md", note));
   for (const hour of ["13", "14"]) {
     pr.clock.now = new Date(`2026-10-25T${hour}:00:00Z`);
@@ -426,8 +440,8 @@ test("stored text stays text on the page: command output in lists and quotes is 
   expect((await pr.fleet("receipt")).code).toBe(0);
   const page = pageOf(handler);
   expect([...page.matchAll(/^\| (\d) \| `[0-9a-f]{7}` \| [^|]+ \| 2026-10-25 (\d\d):00 UTC \|/gm)].map((match) => `${match[1]} ${match[2]}`)).toEqual(["1 12", "2 13", "3 14"]);
-  for (const kept of ["Before the list.", "After the quote.", "&lt;/td>&lt;/tr>&lt;/table>&lt;h1>FAKE PASS&lt;/h1>", "&lt;details open>&lt;summary>ALL PASS&lt;/summary>&lt;/details>"]) expect(page).toContain(kept);
-  for (const output of ["curl", "TOKEN=private-value", "bun run status", "SECRET=quoted-value", "exit=0", "<h1>", "<details open>"]) expect(page).not.toContain(output);
+  for (const kept of ["Before the list.", "After the quote.", "After the listed fence.", "&lt;/td>&lt;/tr>&lt;/table>&lt;h1>FAKE PASS&lt;/h1>", "&lt;details open>&lt;summary>ALL PASS&lt;/summary>&lt;/details>"]) expect(page).toContain(kept);
+  for (const output of ["curl", "TOKEN=private-value", "LISTED=list-value", "bun run status", "SECRET=quoted-value", "exit=0", "<h1>", "<details open>"]) expect(page).not.toContain(output);
   const raw = /<summary>Raw answer of the Correctness lens, by gpt-6\.1-sol<\/summary>\n\n(`+)text\n/.exec(page);
   expect(raw?.[1]).toBe("`````");
 });
