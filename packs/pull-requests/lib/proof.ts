@@ -427,7 +427,7 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
 }
 
 const findingItem = /^\s*(?:[-*]|\d+[.)])\s+\S/;
-const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
+const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(fixed|rejected)\b/i;
 
 const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
 
@@ -442,19 +442,46 @@ function reviewedLines(findings: string) {
     if (/^COVERED\b/.test(line)) inside = false;
     else if (!lensAnswer && /^#/.test(line)) inside = true;
     return inside ? [line] : [];
-  }).filter((line) => line.trim());
+  });
 }
 
-function findingCount(findings: string) {
+const continued = /^\s+\S/;
+const lazyContinued = /^[^\s#]/;
+
+export function reviewedFindings(findings: string) {
   const reviewed = reviewedLines(findings);
-  const items = reviewed.filter((line) => findingItem.test(line)).length;
-  return items || (reviewed.every((line) => noFinding.test(line.trim())) ? 0 : 1);
+  const items: string[] = [];
+  let open = false;
+  for (const line of reviewed) {
+    const joins: boolean = items.length > 0 && (continued.test(line) || (open && lazyContinued.test(line)));
+    if (findingItem.test(line)) items.push(line.trim());
+    else if (joins) items[items.length - 1] += `\n${line.trim()}`;
+    open = Boolean(line.trim()) && (findingItem.test(line) || joins);
+  }
+  const text = reviewed.map((line) => line.trim()).filter(Boolean);
+  if (items.length || text.every((line) => noFinding.test(line))) return items;
+  return [text.join("\n")];
 }
 
-function unanswered(findings: string, responses: string) {
-  const answered = new Set([...responses.matchAll(answerItem)].map((match) => Number(match[1])));
-  return Array.from({ length: findingCount(findings) }, (_, index) => index + 1).filter((number) => !answered.has(number));
+export type Answer = { verdict: "fixed" | "rejected"; text: string };
+
+export function answeredFindings(findings: string, responses: string) {
+  const items = reviewedFindings(findings);
+  const answers = new Map<number, Answer>();
+  const other: string[] = [];
+  let last: Answer | undefined;
+  for (const line of responses.split("\n")) {
+    const match = answerItem.exec(line);
+    const number = Number(match?.[1]);
+    if (match && number >= 1 && number <= items.length && !answers.has(number)) answers.set(number, last = { verdict: match[2]!.toLowerCase() as Answer["verdict"], text: line.trim() });
+    else if (!match && last && continued.test(line)) last.text += `\n${line.trim()}`;
+    else if (line.trim()) { last = undefined; other.push(line.trim()); }
+  }
+  return { findings: items.map((text, index) => ({ text, ...answers.has(index + 1) ? { answer: answers.get(index + 1)! } : {} })), other: other.join("\n") };
 }
+
+const unanswered = (findings: string, responses: string) =>
+  answeredFindings(findings, responses).findings.flatMap((finding, index) => finding.answer ? [] : [index + 1]);
 
 export const proofKinds = ["live-run", "ui-walk", "prod-shape", "cross-version", "shadow-diff", "post-deploy-watch"] as const;
 export type ProofKind = (typeof proofKinds)[number];
@@ -694,7 +721,7 @@ const gapText = (gap: GapProof) => gap.commit ? `gap from ${short(gap.commit)}, 
 
 const short = (commit: string) => commit.slice(0, 7);
 
-async function entries(directory: string) {
+export async function entries(directory: string) {
   try { return await readdir(directory); }
   catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return []; throw error; }
 }

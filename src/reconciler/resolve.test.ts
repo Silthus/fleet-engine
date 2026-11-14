@@ -283,6 +283,15 @@ describe("resolve", () => {
     expect(() => plan({ packs: ["hub", "rival"] }, mac, [engine, clash])).toThrow("command box is shipped by both hub and rival");
   });
 
+  test("hands a profile's secret rows and a pack's secret providers to fleet secret", () => {
+    const rows = withPack({ schema: 1, name: "rows", summary: "Rows.", handlers: [{ seam: "secret-rows", path: "lib/rows.ts" }] }, { "lib/rows.ts": "export const rows = () => [];\n" });
+    const providers = withPack({ schema: 1, name: "keys", summary: "Keys.", handlers: [{ seam: "secret-providers", path: "lib/providers.ts" }] }, { "lib/providers.ts": "export const providers = {};\n" });
+    expect(plan({ packs: ["rows", "keys"] }, mac, [engine, rows, providers]).handlers).toEqual({
+      "secret-rows": { pack: "rows", path: join(rows.dir, "packs/rows/lib/rows.ts") },
+      "secret-providers": { pack: "keys", path: join(providers.dir, "packs/keys/lib/providers.ts") },
+    });
+  });
+
   test("collects the handlers of enabled packs by seam, and rejects two for one seam", () => {
     const bots = withPack({ schema: 1, name: "bots", summary: "Bots.", handlers: [{ seam: "review-bot", path: "lib/bot.ts" }] }, { "lib/bot.ts": "export {};\n" });
     expect(plan().handlers).toEqual({});
