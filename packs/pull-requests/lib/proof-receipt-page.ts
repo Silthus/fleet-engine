@@ -77,30 +77,21 @@ function proseShape(count: (lines: number) => void) {
     tr: (children: string) => `|${children}\n`,
     th: (children: string) => { headerCells++; return ` ${children.replace(/\n/g, " ")} |`; },
     td: (children: string) => ` ${children.replace(/\n/g, " ")} |`,
-    code: (children: string) => {
-      const lines = children.split("\n").filter((line) => /\S/.test(line));
-      count(lines.length);
-      return `${codeMark}${lines.some((line) => leadOf(line).startsWith("exit=")) ? "exit=" : ""}\n\n`;
-    },
+    code: (children: string) => { count(children.split("\n").filter((line) => /\S/.test(line)).length); return `${codeMark}\n\n`; },
   };
 }
 
 export function proseOf(text: string) {
   let left = 0;
   const lines = Bun.markdown.render(text, proseShape((lines) => { left += lines; })).split("\n");
-  const lead = lines.map(leadOf);
-  const nextExit: number[] = [];
-  for (let index = lead.length - 1, exit = lead.length; index >= 0; index--) {
-    nextExit[index] = exit;
-    if (lead[index]!.startsWith("exit=")) exit = index;
-  }
-  const kept: string[] = [];
-  let through = -1;
-  lead.forEach((line, index) => {
-    if (index > through && line.startsWith("$ ")) through = nextExit[index]!;
-    if (lines[index]!.includes(codeMark)) return;
-    if (index <= through || line.startsWith("exit=")) left++;
-    else kept.push(lines[index]!);
+  const firstCommand = lines.findIndex((line) => leadOf(line).startsWith("$ "));
+  const prose = firstCommand === -1 ? lines : lines.slice(0, firstCommand);
+  for (const line of lines.slice(prose.length)) if (/\S/.test(line) && !line.includes(codeMark)) left++;
+  const kept = prose.filter((line) => {
+    if (line.includes(codeMark)) return false;
+    if (!leadOf(line).startsWith("exit=")) return true;
+    left++;
+    return false;
   });
   return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), left };
 }

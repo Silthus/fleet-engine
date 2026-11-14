@@ -433,7 +433,7 @@ async function pagePr(options: Parameters<typeof panelRound>[0] = {}) {
   const proved = await provedPr(panelRound(options));
   const { pr, file } = proved;
   await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email to the sandbox inbox", "--result", "Delivered in one attempt", file("run.log", "delivered\n"),
-    file("mailbox.md", "The sandbox inbox shows the email.\n\n```\n$ curl -s https://sandbox.example/messages\n{\"count\": 1}\n```\n$ bun run status\nexit=0\nThe status API reads delivered.\n"));
+    file("mailbox.md", "The sandbox inbox shows the email.\n\nThe status API reads delivered.\n\n```\n$ curl -s https://sandbox.example/messages\n{\"count\": 1}\n```\n$ bun run status\nexit=0\n"));
   fakeModel(pr, "JUDGE", verdict());
   expect((await pr.fleet("gate")).code).toBe(0);
   return { ...proved, handler: publisher(pr) };
@@ -612,9 +612,9 @@ test("stored text stays text on the page: command output in lists and quotes is 
   expect((await pr.fleet("receipt")).code).toBe(0);
   const page = pageOf(handler);
   expect([...page.matchAll(/^\| (\d) \| `[0-9a-f]{7}` \| [^|]+ \| 2026-10-25 (\d\d):00 UTC \|/gm)].map((match) => `${match[1]} ${match[2]}`)).toEqual(["1 12", "2 13", "3 14"]);
-  for (const kept of ["Before the list.", "After the quote.", "After the listed fence.", "**Mailbox check**", "**Result**", "After the transcript.", "After the fenced transcript.", "&lt;/td>&lt;/tr>&lt;/table>&lt;h1>FAKE PASS&lt;/h1>", "&lt;details open>&lt;summary>ALL PASS&lt;/summary>&lt;/details>"]) expect(page).toContain(kept);
+  for (const kept of ["Before the list.", "After the quote.", "After the listed fence.", "**Mailbox check**", "**Result**", "&lt;/td>&lt;/tr>&lt;/table>&lt;h1>FAKE PASS&lt;/h1>", "&lt;details open>&lt;summary>ALL PASS&lt;/summary>&lt;/details>"]) expect(page).toContain(kept);
   const shown = page.replace(/<details>\n<summary>Raw answer[\s\S]*?<\/details>/g, "");
-  for (const output of ["curl", "TOKEN=private-value", "LISTED=list-value", "bun run status", "SECRET=quoted-value", "exit=0", "<h1>", "<details open>", "INDENTED=code-value", "UNFENCED=output-value", "bun run check", "FENCED=probe-value", "bun run probe", "# Mailbox check", "## Result"]) expect(shown).not.toContain(output);
+  for (const output of ["curl", "TOKEN=private-value", "LISTED=list-value", "bun run status", "SECRET=quoted-value", "exit=0", "<h1>", "<details open>", "INDENTED=code-value", "UNFENCED=output-value", "bun run check", "FENCED=probe-value", "bun run probe", "After the transcript.", "After the fenced transcript.", "# Mailbox check", "## Result"]) expect(shown).not.toContain(output);
   const raw = /<summary>Raw answer of the Correctness lens, by gpt-6\.1-sol<\/summary>\n\n(`+)text\n/.exec(page);
   expect(raw?.[1]).toBe("`````");
 });
@@ -701,12 +701,40 @@ test("a changed receipt heading refreshes the receipt where it is when moving it
   }
 });
 
+test("a note shows its prose up to its first command, whatever markup the command sits in, and leaves out everything after it", async () => {
+  const { pr, handler, file } = await pagePr();
+  const commands = {
+    plain: ["$ bun run plain", "PLAIN=private-value", "exit=0"],
+    setext: ["$ bun run report", "---", "SETEXT=private-value", "exit=0"],
+    escaped: ["\\$ bun run escaped", "ESCAPED=private-value", "exit=0"],
+    entity: ["&#36; bun run entity", "ENTITY=private-value", "exit=0"],
+    spanned: ["`$ bun run spanned`", "SPANNED=private-value", "exit=0"],
+    linked: ["[$ bun run linked](https://logs.example/run/1)", "LINKED=private-value", "exit=0"],
+    numbered: ["1. $ bun run numbered", "   NUMBERED=private-value", "   exit=0"],
+    quoted: ["> $ bun run quoted", "> QUOTED=private-value", "> exit=0"],
+    tabled: ["| Command | Output |", "| --- | --- |", "| $ bun run tabled | TABLED=private-value |"],
+    forged: ["$ cat status.log", "\"exit=0\"", "- exit=0", "> exit=0", "```", "exit=0", "```", "FORGED=private-value", "exit=0"],
+    open: ["$ bun run open", "OPEN=private-value"],
+  };
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered",
+    ...Object.entries(commands).map(([name, lines]) => file(`${name}.md`, [`Before ${name}.`, "", ...lines, "", `After ${name}.`, "", "More prose."].join("\n"))));
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const page = Bun.markdown.html(pageOf(handler));
+  for (const name of Object.keys(commands)) {
+    expect(page).toContain(`Before ${name}.`);
+    expect(page).not.toContain(`After ${name}.`);
+    expect(page).not.toContain(`${name.toUpperCase()}=`);
+  }
+  for (const output of ["bun run", "cat status", "exit=0", "More prose."]) expect(page).not.toContain(output);
+});
+
 test("code is left out of the page where the parser puts it, indented or fenced, whatever a line starts with, while prose that repeats a code line, nested lists and lazy lines stay", async () => {
   const { pr, handler, file } = await pagePr();
   const bulk = Array.from({ length: 70 }, (_, index) => `BULK_${index}=value`);
   const copied = Array.from({ length: 70 }, (_, index) => `Copied line ${index}.`);
-  const note = ["Before the code.", "", "```text", ...bulk, "```", "", ...copied, "", "```text", ...copied, "```", "", "```Delivered``` to the test inbox.", "", "\\`\\`\\` opens a fence in Markdown.", "", "The [run log](https://logs.example/run/123) holds it.", "", "$ bun run report", "---", "SETEXT_TOKEN=private-value", "exit=0", "Verified after the heading.", "", "$ bun run fenced", "FENCE_OUT=private-value", "```", "exit=0", "```", "After the fenced exit.", "", "Some prose", "$ bun run indented", "", "    output", "    exit=0", "    AFTER_EXIT=private-value", "", "$ bun run into", "```", "exit=0", "INTO_FENCE=private-value", "```", "", "\\$ bun run escaped", "ESCAPED_TOKEN=private-value", "exit=0", "", "&#36; bun run entity", "ENTITY_TOKEN=private-value", "exit=0", "", "```sh", "$ fleet proof run", "```", "", "The inbox shows the verification.", "", "$ bun run later", "LATER_OUT=private-value", "exit=0", "", "$ bun run table", "| key | value |", "| --- | --- |", "| token | TABLE_OUT=private-value |", "exit=0", "", "After the table transcript.", "", "1. $ bun run numbered", "   NUMBERED_OUT=private-value", "   exit=0", "", "After the numbered transcript.", "", "$ cat README.md", "PUBLIC", "", "```", "x", "```", "AFTER_FENCE_OUT=private-value", "exit=0", "", "$ bun run sentinel", "&#xE003;", "SENTINEL_OUT=private-value", "exit=0", "", "`$ bun run spanned`", "SPAN_OUT=private-value", "exit=0", "", "[$ bun run linked](https://logs.example/run/1)", "LINK_OUT=private-value", "exit=0", "", "&amp;#36; stays as written.", "", "$ bun run unfinished", "UNFINISHED_OUT=private-value", "", "PROSE_IN_OPEN_TRANSCRIPT=private-value", "", "$ bun run finished", "FINISHED_OUT=private-value", "exit=0", "", "$ bun run marked", "\uE003", "MARK_OUT=private-value", "exit=0", "", "$ bun run fenced", "", "PROSE_BEFORE_FENCE=private-value", "", "```", "FENCED_OUT=private-value", "```", "exit=0", "", "    - TOP=list-marker", "    1. NUMBERED=list-marker", "", "> A quote.", ">", ">     - QUOTED=quoted-code", "", "- An item.", "", "        - ITEM=item-code", "",
-    "Tabbed:", "", "\t* TABBED=tab-code", "", "| Step | Result |", "| --- | --- |", "    TABLED=after-table", "", "-     FIRST=item-first", "", "- Outer item.", "", "    - Nested item stays.", "", "A paragraph", "    - lazy line stays.", "", "The inbox shows it.", "", "    The inbox shows it.", "", "- A step", "    The inbox shows it.", "", "```sh", "- ```", "FENCED_LIST=after-list-fence", "> ```", "FENCED_QUOTE=after-quote-fence", "```", "After the fence.", "", "> ~~~", "> QUOTED_FENCE=in-quoted-fence", "> ~~~", "> After the quoted fence.", "", "> ~~~", "> QUOTED_BLANK=before-blank", ">", "> ~~~", "> After the blank quoted fence.", "", "Forged \uE0009007199254740992\uE001 count.", "", "```", "FORGED=after-forged-count", "```", "", "    CR_FIRST=one\r    CR_SECOND=two\rA line after a carriage return stays.", "", "- A table item.", "", "    | Step | Result |", "    | --- | --- |", "          TABLE_CODE=in-item", "", "- A bare heading item.", "", "    #", "          HEADED=after-bare-heading", "", "- A bare marker item.", "", "    +", "          MARKED=after-bare-marker", "", "- [ ]", "  1. A task step.", "", "      TASKED=after-task-box", "", "Delimiters:", "", "    DELIMITED=\uE001\uE000value", "", "After the code.", "", "<div>", "&#36; HTML_ENTITY_OUT=private-value", "</div>", "", "$ bun run trailing", "TRAILING_OUT=private-value", "", "TRAILING_PROSE=private-value"].join("\r\n");
+  const note = ["Before the code.", "", "```text", ...bulk, "```", "", ...copied, "", "```text", ...copied, "```", "", "```Delivered``` to the test inbox.", "", "\\`\\`\\` opens a fence in Markdown.", "", "The [run log](https://logs.example/run/123) holds it.", "", "```sh", "$ fleet proof run", "```", "", "The inbox shows the verification.", "", "&amp;#36; stays as written.", "", "    - TOP=list-marker", "    1. NUMBERED=list-marker", "", "> A quote.", ">", ">     - QUOTED=quoted-code", "", "- An item.", "", "        - ITEM=item-code", "",
+    "Tabbed:", "", "\t* TABBED=tab-code", "", "| Step | Result |", "| --- | --- |", "    TABLED=after-table", "", "-     FIRST=item-first", "", "- Outer item.", "", "    - Nested item stays.", "", "A paragraph", "    - lazy line stays.", "", "The inbox shows it.", "", "    The inbox shows it.", "", "- A step", "    The inbox shows it.", "", "```sh", "- ```", "FENCED_LIST=after-list-fence", "> ```", "FENCED_QUOTE=after-quote-fence", "```", "After the fence.", "", "> ~~~", "> QUOTED_FENCE=in-quoted-fence", "> ~~~", "> After the quoted fence.", "", "> ~~~", "> QUOTED_BLANK=before-blank", ">", "> ~~~", "> After the blank quoted fence.", "", "Forged \uE0009007199254740992\uE001 count.", "", "```", "FORGED=after-forged-count", "```", "", "    CR_FIRST=one\r    CR_SECOND=two\rA line after a carriage return stays.", "", "- A table item.", "", "    | Step | Result |", "    | --- | --- |", "          TABLE_CODE=in-item", "", "- A bare heading item.", "", "    #", "          HEADED=after-bare-heading", "", "- A bare marker item.", "", "    +", "          MARKED=after-bare-marker", "", "- [ ]", "  1. A task step.", "", "      TASKED=after-task-box", "", "Delimiters:", "", "    DELIMITED=\uE001\uE000value", "", "After the code.", "", "<div>", "&#36; HTML_ENTITY_OUT=private-value", "</div>"].join("\r\n");
   await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", file("indented.md", note));
   expect((await pr.fleet("gate")).code).toBe(0);
   expect((await pr.fleet("receipt")).code).toBe(0);
@@ -718,6 +746,6 @@ test("code is left out of the page where the parser puts it, indented or fenced,
   expect(Bun.markdown.html(shown)).toContain('<a href="https://logs.example/run/123">run log</a>');
   for (const written of ["\\`\\`\\` opens a fence in Markdown.", "\\- lazy line stays."]) expect(shown).toContain(written);
   expect(page.slice(page.indexOf("Before the code."), page.indexOf("After the code."))).not.toMatch(/```|~~~/);
-  for (const kept of ["Before the code.", "A quote.", "An item.", "Tabbed:", "| Step | Result |", "Outer item.", "Nested item stays.", "lazy line stays.", "A line after a carriage return stays.", "A table item.", "A task step.", "to the test inbox.", "Verified after the heading.", "After the fenced exit.", "Some prose", "The inbox shows the verification.", "After the table transcript.", "After the numbered transcript.", "After the fence.", "After the quoted fence.", "After the blank quoted fence.", "After the code."]) expect(page).toContain(kept);
-  for (const output of ["TOP=", "NUMBERED=", "QUOTED=", "ITEM=", "TABBED=", "TABLED=", "FIRST=", "CR_FIRST=", "CR_SECOND=", "TABLE_CODE=", "HEADED=", "MARKED=", "TASKED=", "DELIMITED=", "FENCED_LIST=", "FENCED_QUOTE=", "QUOTED_FENCE=", "QUOTED_BLANK=", "FORGED=", "BULK_", "SETEXT_TOKEN=", "FENCE_OUT=", "AFTER_EXIT=", "INTO_FENCE=", "ESCAPED_TOKEN=", "ENTITY_TOKEN=", "LATER_OUT=", "UNFINISHED_OUT=", "FINISHED_OUT=", "MARK_OUT=", "FENCED_OUT=", "PROSE_IN_OPEN_TRANSCRIPT=", "PROSE_BEFORE_FENCE=", "TABLE_OUT=", "AFTER_FENCE_OUT=", "SENTINEL_OUT=", "NUMBERED_OUT=", "SPAN_OUT=", "LINK_OUT=", "$ stays as written", "$ HTML_ENTITY_OUT", "TRAILING_OUT=", "TRAILING_PROSE=", "\uE003", "bun run"]) expect(Bun.markdown.html(page)).not.toContain(output);
+  for (const kept of ["Before the code.", "A quote.", "An item.", "Tabbed:", "| Step | Result |", "Outer item.", "Nested item stays.", "lazy line stays.", "A line after a carriage return stays.", "A table item.", "A task step.", "to the test inbox.", "The inbox shows the verification.", "After the fence.", "After the quoted fence.", "After the blank quoted fence.", "After the code."]) expect(page).toContain(kept);
+  for (const output of ["TOP=", "NUMBERED=", "QUOTED=", "ITEM=", "TABBED=", "TABLED=", "FIRST=", "CR_FIRST=", "CR_SECOND=", "TABLE_CODE=", "HEADED=", "MARKED=", "TASKED=", "DELIMITED=", "FENCED_LIST=", "FENCED_QUOTE=", "QUOTED_FENCE=", "QUOTED_BLANK=", "FORGED=", "BULK_", "$ stays as written", "$ HTML_ENTITY_OUT", "\uE003", "fleet proof run"]) expect(Bun.markdown.html(page)).not.toContain(output);
 });
