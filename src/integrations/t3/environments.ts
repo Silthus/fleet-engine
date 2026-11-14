@@ -11,7 +11,7 @@ export type LinkedPullRequest = { host: string; repository: string; number: numb
 
 export type LinkedThread = {
   threadId: string; projectId: string; title: string; status: string; model: string;
-  parentThreadId: string | null; settled: boolean; snoozedUntil: string | null;
+  parentThreadId: string | null; relationshipToParent?: "fork" | "subagent" | null; settled: boolean; snoozedUntil: string | null;
   pullRequests?: LinkedPullRequest[]; itemCount: number; createdAt: string; updatedAt: string;
 };
 

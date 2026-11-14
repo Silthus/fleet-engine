@@ -24,7 +24,7 @@ function isRow(value: unknown): value is ModelRow {
     && (row.provider === "claude" || row.provider === "codex") && efforts.includes(row.effort as string);
 }
 
-export function modelSessionEnv(env: Record<string, string | undefined>): Record<string, string> {
+export function modelSessionEnv(env: Record<string, string | undefined>) {
   const { T3CODE_THREAD_ID: _lane, ...rest } = env;
-  return Object.fromEntries(Object.entries(rest).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  return rest;
 }

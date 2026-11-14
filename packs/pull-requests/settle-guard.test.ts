@@ -291,4 +291,10 @@ describe("the installed settle guard", () => {
     const unread = await run(down, organize({ action: "settle", threadId: "mcp:far", environmentId: "env-there" }));
     expect(JSON.parse(unread.stdout).hookSpecificOutput.permissionDecisionReason).toBe("Fleet blocked this settle: T3 did not answer; retry, or settle in the T3 UI.");
   });
+
+  test("on a linked machine, a fork owns its PRs while the thread it forked from stays open", async () => {
+    const home = await machines([linkedThread("mcp:source", []), linkedThread("mcp:fork", [1], { parentThreadId: "mcp:source", relationshipToParent: "fork" })]);
+    const refused = await run(home, organize({ action: "settle", threadId: "mcp:fork", environmentId: "env-there" }));
+    expect(JSON.parse(refused.stdout).hookSpecificOutput.permissionDecisionReason).toContain("open PR(s) https://github.com/acme/app/pull/1, and");
+  });
 });

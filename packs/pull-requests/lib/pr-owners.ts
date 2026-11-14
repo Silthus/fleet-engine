@@ -128,7 +128,7 @@ function asShellThreads(linked: LinkedThread[]): ShellThread[] {
   return linked.map((thread) => ({
     id: thread.threadId, title: thread.title, projectId: thread.projectId, status: thread.status,
     ...(thread.settled ? { settledAt: thread.updatedAt || "settled" } : {}),
-    ...(thread.parentThreadId ? { lineage: { parentThreadId: thread.parentThreadId, rootThreadId: rootOfLinked(thread) } } : {}),
+    ...(thread.parentThreadId ? { lineage: { parentThreadId: thread.parentThreadId, rootThreadId: rootOfLinked(thread), relationshipToParent: thread.relationshipToParent ?? null } } : {}),
     pullRequests: (thread.pullRequests ?? []).map((pr) => ({ repository: pr.repository, number: pr.number, url: pr.url, ...(pr.state ? { snapshot: { state: pr.state } } : {}) })),
   }));
 }

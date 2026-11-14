@@ -74,9 +74,10 @@ one step still owed, with the command for that PR:
 
 - push the local commits on the PR's branch, then run the gate;
 - commit and push changed tracked files, or restore them, on the PR's branch
-  or on a detached HEAD that the PR's pushed head contains;
+  or on a detached HEAD at the PR's pushed head;
 - push the commits of a detached HEAD in the PR's worktree, when HEAD
-  continues the PR's pushed head;
+  continues the PR's pushed head. On a stack, that is the nearest layer that
+  HEAD continues;
 - run the gate at the pushed head, when no run is recorded there;
 - fix what the last gate run failed on, or, for exit 3, decide each gap by
   tier with `fleet decision record`, or ask the person.

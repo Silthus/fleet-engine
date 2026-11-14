@@ -139,6 +139,19 @@ describe("the Stop proof check blocks a lane that owns an open PR", () => {
     expect(reason).not.toContain(`#8`);
   });
 
+  test("on a stack linked upper layer first, naming the upper layer a detached HEAD continues", async () => {
+    const { head, gate, git, commit, push, thread, check } = await lane();
+    await gate(head, 0);
+    await git("checkout", "-q", "-b", "feat-2");
+    const upper = await commit("upper\n");
+    await push("feat-2");
+    await gate(upper, 0, "pass", 8);
+    await git("checkout", "-q", "--detach");
+    const detached = await commit("past upper\n");
+    const reason = await reasonOf(check([thread({ pullRequests: [pr(8, "feat-2"), pr(7, "feat")] })]));
+    expect(reason).toContain(`git push origin HEAD:refs/heads/feat-2, then run fleet proof gate --repo ${repository} --pr 8 --commit ${detached}`);
+  });
+
   test("a fork owns its PRs, unlike a subagent", async () => {
     const { thread, check } = await lane();
     const root: ShellThread = { id: "mcp:root", title: "Root", projectId: "p", status: "idle" };
@@ -209,6 +222,14 @@ describe("the Stop proof check lets the stop pass", () => {
     await gate(head, 0);
     await git("checkout", "-q", "--detach", "main");
     await git("commit", "-q", "--allow-empty", "-m", "main moved");
+    expect(await check()).toBeUndefined();
+  });
+
+  test("when tracked files changed at a detached HEAD on the PR's base, which its pushed head contains", async () => {
+    const { head, gate, git, checkout, check } = await lane();
+    await gate(head, 0);
+    await git("checkout", "-q", "--detach", "main");
+    writeFileSync(join(checkout, "app.ts"), "new work\n");
     expect(await check()).toBeUndefined();
   });
 

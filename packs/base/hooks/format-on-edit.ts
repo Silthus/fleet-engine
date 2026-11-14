@@ -21,13 +21,13 @@ export const runCommand: RunCommand = async (command, cwd, timeoutMs) => {
   return `\`${command.join(" ")}\` failed:\n${output.slice(-shownLines).join("\n")}`;
 };
 
-export async function formatAfterEdit(event: ToolEvent, run: RunCommand = runCommand, now: () => number = Date.now): Promise<string | undefined> {
-  const deadline = now() + budgetMs;
+export async function formatAfterEdit(event: ToolEvent, run: RunCommand = runCommand): Promise<string | undefined> {
+  const deadline = Date.now() + budgetMs;
   const problems: string[] = [];
   for (const file of writtenFiles(event).filter((path) => isAbsolute(path))) {
-    const left = deadline - now();
+    const left = deadline - Date.now();
     if (left <= 0) break;
-    const findings = await formatEditedFile(file, run, left).catch(() => []);
+    const findings = await formatEditedFile(file, run, left);
     if (findings.length) problems.push(`The repository's lint-staged checks found problems in ${file}. Fix them before you commit:\n\n${findings.join("\n\n")}`);
   }
   return problems.length ? problems.join("\n\n") : undefined;

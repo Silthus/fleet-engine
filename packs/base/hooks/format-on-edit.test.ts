@@ -125,15 +125,6 @@ describe("the format-on-edit hook", () => {
     expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toContain("broken.ts:1 syntax error");
   });
 
-  test("still formats a patch's other files when one file's formatter cannot start", async () => {
-    const repo = await repository(undefined, { "*.ts": "prettier --write" });
-    tool(repo, "prettier", 'printf "formatted\\n" > "$2"');
-    writeFileSync(join(repo, "src/good.ts"), "messy");
-    const patch = ["*** Begin Patch", "*** Update File: src/missing-dir/bad.ts", "@@", "+x", "*** Update File: src/good.ts", "@@", "+x", "*** End Patch"].join("\n");
-    await hook("codex", async () => JSON.stringify({ tool_name: "apply_patch", cwd: repo, tool_input: { command: patch } }), repo);
-    expect(readFileSync(join(repo, "src/good.ts"), "utf8")).toBe("formatted\n");
-  });
-
   test("ignores a formatter whose shell says a tool it needs is not found", async () => {
     const repo = await repository(undefined, { "*.ts": "prettier --write" });
     tool(repo, "prettier", 'echo "prettier: node: command not found" >&2; exit 1');

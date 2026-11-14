@@ -939,12 +939,11 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const ciResult = ci();
   const head = headStatus(identity, before, pushedHead());
   const checks = await ciStatus(weigh, ciResult);
-  const problems = [owed ? undefined : "missing", ...kinds.map((kind) => kind.problem), review.problem, ...responses.map((response) => response.problem), head.problem, checks.problem];
+  const held = [{ problem: owed ? undefined : "missing", line: owedPart(owed).line }, ...kinds.map((kind) => ({ problem: kind.problem, line: kind.proof.line })), review, ...responses, head, checks];
   const weighed = [...kinds, review, checks];
   const lapsed = [...new Set(weighed.flatMap((status) => status.problem && status.lapsed ? [status.lapsed] : []))];
   const conditions = weighed.flatMap((status) => status.condition ? [status.condition] : []);
-  const code = problems.includes("missing") ? 1 : problems.includes("gap") ? 3 : 0;
-  const held = [{ problem: owed ? undefined : "missing", line: owedPart(owed).line }, ...kinds.map((kind) => ({ problem: kind.problem, line: kind.proof.line })), review, ...responses, head, checks];
+  const code = held.some((status) => status.problem === "missing") ? 1 : held.some((status) => status.problem === "gap") ? 3 : 0;
   const failure = held.find((status) => status.problem === (code === 1 ? "missing" : "gap"))?.line?.split("\n")[0];
   const voided = (Array.isArray(decisions) ? decisions : []).filter((decision) => decision.voided && covers(decision, identity)).map((decision) => decision.id);
   const receipt = await receiptOf(home, identity);

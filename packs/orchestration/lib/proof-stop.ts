@@ -113,15 +113,20 @@ async function detachedStep(layers: Layer[], git: GitIn, worktreePath: string | 
   if ((await realpath(top)) !== (await realpath(worktreePath).catch(() => worktreePath))) return undefined;
   const here = (await git(["rev-parse", "HEAD"])).stdout;
   for (const layer of layers) {
-    if (!(await isAncestor(git, here, layer.head))) continue;
+    if (here !== layer.head) continue;
     if (!(await trackedChanges(git))) return undefined;
     return {
       pr: nameOf(layer),
       step: `${nameOf(layer)} has uncommitted changes to tracked files on a detached HEAD at ${here.slice(0, 7)} in this worktree. Commit them and push them to ${layer.branch}, then run ${gateAt(layer, "<full sha of the new head>")}; or restore them`,
     };
   }
+  const behind: Layer[] = [];
+  for (const layer of layers) if (await isAncestor(git, layer.head, here)) behind.push(layer);
   let continued: Layer | undefined;
-  for (const layer of layers) if (await isAncestor(git, layer.head, here)) continued = layer;
+  for (const layer of behind) {
+    const containsTheOthers = await Promise.all(behind.map((other) => isAncestor(git, other.head, layer.head)));
+    if (containsTheOthers.every(Boolean)) continued = layer;
+  }
   if (!continued) return undefined;
   return {
     pr: nameOf(continued),
