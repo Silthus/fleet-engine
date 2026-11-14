@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { spawnAsync } from "../src/testing/spawn.ts";
 
 const script = resolve(import.meta.dir, "install-gitleaks.sh");
 const directories: string[] = [];
@@ -13,7 +14,7 @@ function tempDir(prefix: string) {
   return dir;
 }
 
-function install(os: string, machine: string) {
+async function install(os: string, machine: string) {
   const bin = tempDir("fleet-gitleaks-bin-");
   const tools: Record<string, string> = {
     uname: `[ "$1" = -s ] && echo ${os} || echo ${machine}`,
@@ -24,8 +25,8 @@ function install(os: string, machine: string) {
     chmodSync(join(bin, name), 0o755);
   }
   const target = join(tempDir("fleet-gitleaks-target-"), "bin");
-  const child = Bun.spawnSync(["sh", script, target], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
-  return { code: child.exitCode, error: child.stderr.toString(), installed: existsSync(join(target, "gitleaks")) };
+  const child = await spawnAsync(["sh", script, target], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+  return { code: child.exitCode, error: child.stderr, installed: existsSync(join(target, "gitleaks")) };
 }
 
 test.each([
@@ -33,16 +34,16 @@ test.each([
   ["Linux", "aarch64", "linux_arm64"],
   ["Darwin", "x86_64", "darwin_x64"],
   ["Darwin", "arm64", "darwin_arm64"],
-])("on %s %s it checks the %s build and refuses a download that fails the checksum", (os, machine, platform) => {
-  expect(install(os, machine)).toEqual({
+])("on %s %s it checks the %s build and refuses a download that fails the checksum", async (os, machine, platform) => {
+  expect(await install(os, machine)).toEqual({
     code: 1,
     error: `install-gitleaks: checksum mismatch for gitleaks_8.21.2_${platform}.tar.gz.\n`,
     installed: false,
   });
 });
 
-test("refuses a machine without a pinned build", () => {
-  expect(install("Linux", "riscv64")).toEqual({
+test("refuses a machine without a pinned build", async () => {
+  expect(await install("Linux", "riscv64")).toEqual({
     code: 1,
     error: "install-gitleaks: no pinned gitleaks build for Linux riscv64.\n",
     installed: false,
