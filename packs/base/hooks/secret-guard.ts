@@ -28,16 +28,32 @@ const cookieNameKey = new RegExp(String.raw`${key("name")}${metabaseCookie}(?![\
 const valueKey = new RegExp(`${key("value")}(${metabaseValue})`, "g");
 
 function cookieRecordValues(text: string) {
-  const cookies = new Set([...text.matchAll(cookieNameKey)].map((match) => match.index));
-  if (!cookies.size) return [];
-  const names = [...text.matchAll(nameKey)].map((match) => match.index);
-  const between: string[][] = names.map(() => []).concat([[]]);
-  let slot = 0;
-  for (const match of text.matchAll(valueKey)) {
-    while (slot < names.length && names[slot]! < match.index) slot++;
-    between[slot]!.push(match[1]!);
+  const cookies = [...text.matchAll(cookieNameKey)].map((match) => match.index);
+  if (!cookies.length) return [];
+  const values = [...text.matchAll(valueKey)].map((match) => ({ at: match.index, value: match[1]! }));
+  const records = recordsAt(text, [...cookies, ...values.map((value) => value.at)]);
+  const cookieRecords = new Set(cookies.map((at) => records.get(at)));
+  return values.filter((value) => cookieRecords.has(records.get(value.at))).map((value) => value.value);
+}
+
+function recordsAt(text: string, positions: number[]) {
+  const wanted = [...new Set(positions)].sort((left, right) => left - right);
+  const records = new Map<number, string>();
+  const open: number[] = [];
+  let item = 0;
+  let quoted = false;
+  let lineStart = true;
+  let next = 0;
+  for (let at = 0; next < wanted.length; at++) {
+    while (wanted[next] === at) records.set(wanted[next++]!, `${open.at(-1) ?? -1}:${item}`);
+    const char = text[at];
+    if (char === '"' && text[at - 1] !== "\\") quoted = !quoted;
+    else if (!quoted && char === "{") open.push(at);
+    else if (!quoted && char === "}") open.pop();
+    else if (!quoted && lineStart && char === "-" && text[at + 1] === " ") item++;
+    lineStart = char === "\n" || (lineStart && (char === " " || char === "\t"));
   }
-  return names.flatMap((at, index) => cookies.has(at) ? [...between[index]!, ...between[index + 1]!] : []);
+  return records;
 }
 
 type Shape = { kind: string; pattern: RegExp } | { kind: string; values: (text: string) => string[] };

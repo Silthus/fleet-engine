@@ -148,6 +148,23 @@ describe("secret guard", () => {
   });
 
   test.each([
+    ["a JSON list", (build: string) => JSON.stringify([{ name: "build-id", value: build }, { name: cookieKey, value: metabaseSession }, { name: "trace-id", value: build }], null, 2)],
+    ["a JSON list, value first", (build: string) => JSON.stringify([{ value: build, name: "build-id" }, { value: metabaseSession, partitionKey: { site: "https://example.com" }, name: cookieKey }, { value: build, name: "trace-id" }])],
+    ["a YAML list", (build: string) => `- name: build-id\n  value: ${build}\n- name: ${cookieKey}\n  value: ${metabaseSession}\n- name: trace-id\n  value: ${build}\n`],
+  ])("redacts only the Metabase cookie in %s and keeps its neighbours' long values", (_, shape) => {
+    const build = "1234567890".repeat(4);
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: shape(build) }))?.hookSpecificOutput);
+    expect(output).not.toContain(metabaseSession);
+    expect(output.split(build)).toHaveLength(3);
+  });
+
+  test("leaves a placeholder cookie record alone when a neighbouring record holds a long value", () => {
+    const text = JSON.stringify([{ name: "build-id", value: "1234567890".repeat(4) }, { name: cookieKey, value: "<session-id>" }]);
+    expect(guard("claude", promptEvent(text))).toBeUndefined();
+    expect(guard("claude", toolEvent({ stdout: text }))).toBeUndefined();
+  });
+
+  test.each([
     `Set the ${cookieKey}=<session-id> cookie first.`,
     `curl -b "${cookieKey}=$METABASE_SESSION" https://metabase.example.com`,
     `Copy ${cookieKey}=YOUR_SESSION_TOKEN_HERE from the browser.`,
