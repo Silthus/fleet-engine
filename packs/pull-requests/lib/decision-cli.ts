@@ -162,7 +162,7 @@ export async function hearUser(input: Hearing, context: DecisionContext, ledger:
   throw used ?? refusals[0]!;
 }
 
-function answeredAt(word: ThreadWord) {
+export function answeredAt(word: ThreadWord) {
   const time = Date.parse(word.at);
   if (Number.isNaN(time)) throw new Error(`T3 gives no time for the user's answer ${word.id} in thread ${word.thread}. Ask them again`);
   return new Date(time).toISOString();
@@ -303,7 +303,7 @@ const refuseKeptOwed = (decision: DecisionState) => {
 const quoteWithDate = () => new Error(`Quote the user's words with the date they wrote them, such as '2026-10-24 "Reverse that."'`);
 const quotedDate = (words: string) => /\b\d{4}-\d{2}-\d{2}\b/.exec(words)![0];
 
-async function heardInThread(thread: string, words: string, message: string | undefined, context: DecisionContext) {
+export async function heardInThread(thread: string, words: string, message: string | undefined, context: DecisionContext) {
   if (!isDatedQuote(words)) throw quoteWithDate();
   await refuseInstructionQuote(context.home, words);
   const text = quotes(words).join(" ");
