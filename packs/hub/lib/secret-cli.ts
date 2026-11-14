@@ -85,7 +85,7 @@ async function answer(context: SecretContext, request: Request): Promise<Answer>
       return { ok: true, lines: [`The store is on again, by the user's words ${request.words} (thread ${request.thread}).`] };
     }
     if (request.op === "drop") return { ok: true, lines: [droppedLine(dropLane(store, request.lane), request.lane)] };
-    if (request.op === "lane") return { ok: true, puts: lanePuts(store, request.lane) };
+    if (request.op === "lane") return { ok: true, puts: lanePuts(context.home, request.lane) };
     const rows = await loadedRows(context);
     if (!Array.isArray(rows)) return rows;
     store.rows = rows;
@@ -323,12 +323,6 @@ function sweepHere(args: string[], context: SecretContext) {
   catch (error) { return done(context, { ok: false, error: failureOf(error) }); }
   const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   return done(context, { ok: true, lines: [`Swept ${count(counts.expired, "lane value", "lane values")} past ${counts.expired === 1 ? "its" : "their"} store expiry and ${count(counts.old, "value file", "value files")} that no current put names.`] });
-}
-
-export async function laneEvents(context: SecretContext, lane: string): Promise<PutEvent[]> {
-  const reply = await ask(context, { op: "lane", lane });
-  if (!reply.ok) throw new SecretRefusal(`The secret store refused the lane's puts: ${reply.error}`);
-  return reply.puts ?? [];
 }
 
 const helpWords = ["help", "--help", "-h"];

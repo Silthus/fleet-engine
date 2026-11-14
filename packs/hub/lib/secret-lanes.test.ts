@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { laneEvents } from "./secret-lane-source.ts";
 import { eventLogPath, valuesDir } from "./secret-store.ts";
 import { fleet, removeHomes, run, sendKey, values } from "./secret-testing.ts";
 
@@ -168,4 +169,17 @@ test("the sweep deletes only the store's own value files: a pack's files and cur
   expect(readFileSync(join(dir, "chat", "app.p-000000000003"), "utf8")).toBe("made-up-pack-file\n");
   expect((await run(machine.dev, machine.printed, ["stripe-test", "send-us"], `[ "$STRIPE_KEY" = "${renewed}" ] && [ "$EXAMPLE_API_KEY" = "${sendKey}" ] && echo both`)).text).toContain("both");
   machine.expectNoLeak(["made-up-orphan", "made-up-pack-file", "made-up-notes"]);
+});
+
+test("the report reads a lane's put events from the hub: names, whys and revoke links, never a value", async () => {
+  const machine = fleet();
+  expect(await lanePut(machine, "stripe-test", laneValue(), "--lane", laneA, "--env", "STRIPE_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/a")).toBe(0);
+  expect(await lanePut(machine, "other-test", laneValue(), "--lane", laneB, "--env", "OTHER_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/b")).toBe(0);
+  expect(await machine.dev("drop", "--lane", laneA)).toBe(0);
+  const puts = await laneEvents({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA);
+  expect(puts.map(({ name, why, revoke, lane }) => ({ name, why, revoke, lane }))).toEqual([{ name: "stripe-test", why: "intake", revoke: "https://example.com/revoke/a", lane: laneA }]);
+  machine.reach.hub = false;
+  await expect(laneEvents({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA)).rejects.toThrow("did not send the lane's secret puts (exit 255)");
+  for (const value of values) expect(JSON.stringify(puts)).not.toContain(value);
+  machine.expectNoLeak();
 });

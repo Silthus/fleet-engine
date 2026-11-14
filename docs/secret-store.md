@@ -134,6 +134,9 @@ fleet secret drop --lane example/tickets#401
 - At the lane's end, `drop --lane` deletes every value the lane put. Its put
   events stay, so the report still finds their revoke links. A drop names the
   put it ends, so a renewal that lands meanwhile stays.
+- `fleet decision report --pr <ref>... --lane <key>` lists the revoke link of
+  each lane secret under Still yours, and the lane's late puts (any `--why`
+  but `intake`), misses marked. It reads them from the event log on the hub.
 
 The hub runs `fleet secret sweep` each night at 02:47 as a pack job. It drops
 each lane value past its store expiry, and deletes each value file that a

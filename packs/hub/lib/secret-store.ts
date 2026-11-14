@@ -539,4 +539,4 @@ export function sweep(store: Store, diskNow = Date.now()) {
   return { expired: expired.length, old };
 }
 
-export const lanePuts = (store: Store, lane: string) => readEvents(store.home).filter((event): event is PutEvent => event.type === "put" && event.lane === lane);
+export const lanePuts = (home: string, lane: string) => readEvents(home).filter((event): event is PutEvent => event.type === "put" && event.lane === lane);

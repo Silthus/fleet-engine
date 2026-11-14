@@ -1,5 +1,7 @@
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
 import { renderReport } from "./decision-report.ts";
+import { laneEvents } from "../../hub/lib/secret-lane-source.ts";
+import type { PutEvent } from "../../hub/lib/secret-store.ts";
 import { readPullRequest, runIn } from "./pr-ci.ts";
 import { gapKind, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
@@ -9,7 +11,7 @@ import {
 
 export type DecisionContext = {
   home: string; cwd: string; env: Env; print: (text: string) => void; now?: () => Date;
-  threadWords?: ThreadWords; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean>;
+  threadWords?: ThreadWords; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean>; lanePuts?: (lane: string) => Promise<PutEvent[]>;
 };
 
 const usage = `Usage:
@@ -19,7 +21,7 @@ const usage = `Usage:
   fleet decision void <id> --reason <why its condition no longer holds>
   fleet decision reverse <id> --words '<date> "<the user's words>"' --thread <id> [--message <id>]
   fleet decision lift --class <class> --words '<date> "<the user's answer>"' --thread <id> [--message <id>]
-  fleet decision report --pr <owner/repo#n>... [--thread <id>]
+  fleet decision report --pr <owner/repo#n>... [--thread <id>] [--lane <key>]
 
 The decision ledger holds every decision about a pull request's proof and process. It lives on the Fleet hub that
 the setting hub.alias names; other machines read and append it over SSH. Without a hub, it lives on this machine.
@@ -71,7 +73,9 @@ files, standing rules and ledger decisions are the same. Otherwise it says the g
 proofs; a decision recorded after the gate counts as a change. A summary that does not pass now offers no merge,
 and nor does an accepted gap whose condition the saved judge did not weigh, CI checks other than the ones it weighed,
 or a head, base, tier or callout that moves while the report reads it: run the gate in the PR's checkout (with --landed for a merged PR), where a review carried across commits can
-be checked. --thread defaults to this T3 thread.
+be checked. --thread defaults to this T3 thread. --lane adds the secret store's part for that lane key: still yours
+gets the revoke link of each lane secret, and a late secret puts section lists its puts whose why is not intake,
+misses marked. Both come from the store's event log on the hub, so they outlast drop and the sweep.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
@@ -402,7 +406,9 @@ async function report(parsed: Parsed, context: DecisionContext, ledger: Ledger) 
   if (!prs.length) throw new Error("--pr is required: name each PR of the lane. Run fleet decision --help");
   const events = await reachHub(() => ledger.read());
   const read: Ledger = { read: async () => events, append: (...added) => ledger.append(...added) };
-  context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID }, read, fold(events), context));
+  const lane = parsed.options.get("--lane");
+  const lanePuts = context.lanePuts ?? ((key: string) => laneEvents(context, key));
+  context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID, ...lane === undefined ? {} : { lane } }, read, fold(events), { ...context, lanePuts }));
   return 0;
 }
 
@@ -429,7 +435,7 @@ export async function decisionCommand(args: string[], context: DecisionContext):
   if (name === "void") return voidDecision(parse(args, ["--reason"], [], []), context, ledger);
   if (name === "reverse") return reverse(parse(args, ["--words", "--thread", "--message"], [], []), context, ledger);
   if (name === "lift") return lift(parse(args, ["--class", "--words", "--thread", "--message"], [], []), context, ledger);
-  if (name === "report") return report(parse(args, ["--thread"], ["--pr"], []), context, ledger);
+  if (name === "report") return report(parse(args, ["--thread", "--lane"], ["--pr"], []), context, ledger);
   throw new Error(`Unknown command ${name}. Run fleet decision --help`);
 }
 
