@@ -231,11 +231,12 @@ export function lineRedactor(secrets: { value: string; label: string }[], write:
         show(held.subarray(0, cut + 1));
         held = held.subarray(cut + 1);
       }
-      if (held.length <= heldLimit) return;
-      const cut = cutOutside(held, encoded, held.length - longest + 1);
-      if (cut <= 0) return;
-      show(held.subarray(0, cut));
-      held = held.subarray(cut);
+      while (held.length > heldLimit) {
+        const cut = cutOutside(held, encoded, Math.min(heldLimit, held.length - longest + 1));
+        if (cut <= 0) return;
+        show(held.subarray(0, cut));
+        held = held.subarray(cut);
+      }
     },
     end() {
       if (held.length) show(held);

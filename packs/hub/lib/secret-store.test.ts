@@ -178,6 +178,16 @@ test("output pieces never join into a value, and a run of one repeated value sti
   expect(Buffer.concat(written).toString("utf8")).not.toContain("aaaaaaaa");
 });
 
+test("one large chunk without a line break streams in pieces of at most 64 KiB", () => {
+  const written: Uint8Array[] = [];
+  const redactor = lineRedactor([{ value: "12345678", label: "[redacted row]" }], (bytes) => written.push(bytes));
+  redactor.push(Buffer.from(`${"z".repeat(heldLimit * 2 - 3)}12345678${"z".repeat(heldLimit * 2)}`));
+  expect(written.length).toBeGreaterThanOrEqual(3);
+  expect(Math.max(...written.map((piece) => piece.length))).toBeLessThanOrEqual(heldLimit + "[redacted row]".length - "12345678".length);
+  redactor.end();
+  expect(Buffer.concat(written).toString("utf8")).toBe(`${"z".repeat(heldLimit * 2 - 3)}[redacted row]${"z".repeat(heldLimit * 2)}`);
+});
+
 test("a value longer than the streamed piece is held until it is complete, never written in part", () => {
   const big = made("big-").padEnd(heldLimit + 4_464, "q");
   const written: Uint8Array[] = [];
