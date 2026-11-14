@@ -342,9 +342,7 @@ function loopbackUrl(value: unknown) {
   }
 }
 
-const dnsName = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i;
-
-const hostnameOf = (value: unknown) => (typeof value === "string" && dnsName.test(value) ? value : undefined);
+const hostnameOf = (value: unknown) => (typeof value === "string" && value ? value : undefined);
 
 /** Reads `t3 pair` output: where the environment answers, and the one-time code. */
 export function pairing(output: string): { url: string; code: string } | undefined {

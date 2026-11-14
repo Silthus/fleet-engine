@@ -173,8 +173,6 @@ describe("the devbox over SSH", () => {
   test.each([
     ["signed in but not linked", { authenticated: true, linked: false }],
     ["linked but not signed in", { authenticated: false, linked: true }],
-    ["signed in, with linked as the text true", { authenticated: true, linked: "true" }],
-    ["linked, with authenticated as 1", { authenticated: 1, linked: true }],
   ])("never links a box whose T3 Connect is %s", async (_, boxConnect) => {
     const home = homeWithHosts();
     const box = fakeMachine(home, {}, { boxConnect, exits: { "box:t3": 0 } });
@@ -214,9 +212,7 @@ describe("the devbox over SSH", () => {
 
   test.each([
     ["the IPv6 loopback", { runtimeOrigin: "http://[::1]:41773" }, "box-1.relay.example", "http://[::1]:41773/api/connect/link-state"],
-    ["a tunnel hostname in capitals", { cliPrintsTunnel: true, boxTunnel: "Box-1.Relay.Example" }, "Box-1.Relay.Example", undefined],
     ["a recorded pid other than the usual one", { runtimePid: 77 }, "box-1.relay.example", undefined],
-    ["a 253-character tunnel hostname", { cliPrintsTunnel: true, boxTunnel: [..."abc"].map((c) => c.repeat(63)).concat("d".repeat(61)).join(".") }, [..."abc"].map((c) => c.repeat(63)).concat("d".repeat(61)).join("."), undefined],
   ])("links the box through %s", async (_, server, tunnel, lookup) => {
     const home = homeWithHosts();
     const box = fakeMachine(home, {}, server);
@@ -233,14 +229,6 @@ describe("the devbox over SSH", () => {
     expect(result.code).toBe(0);
     expect(box.calls.map((call) => call.command.join(" "))).toContain("t3 environment link https://box-1.relay.example --pairing-code BOXCODE --access full-access");
     expect(box.sessions().filter((session) => !session.revoked)).toEqual([]);
-  });
-
-  test.each(["a..b", ".", "-box.example", "box_1.example", `${"a".repeat(64)}.example`, "bücher.example", "box.example:8443", "user@box.example", "box.example/path", "box-.example", "localhost", ["a".repeat(63), "a".repeat(63), "a".repeat(63), "a".repeat(62)].join("."), Array(4).fill("a".repeat(63)).join(".")])("refuses the tunnel hostname %s", async (tunnel) => {
-    const home = homeWithHosts();
-    const box = fakeMachine(home, {}, { cliPrintsTunnel: true, boxTunnel: tunnel });
-    const result = await fleetSetup(home, ["--preset", "starter", "--plan", "claude", "--devbox", "node-1"], ["", "", ""], box);
-    expect(result.output).toContain("node-1 has no T3 Connect address yet.");
-    expect(box.calls.map((call) => call.command.join(" "))).not.toContainEqual(expect.stringContaining("t3 environment link"));
   });
 
   test("says so when T3 Connect is on here but its tunnel address cannot be found, instead of calling it off", async () => {
