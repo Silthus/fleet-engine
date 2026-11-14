@@ -13,6 +13,9 @@ command. Without a hub (`hub.alias` unset), the store lives on this machine.
 - **Existing**: a declared row with its own file, a secret the hub held before
   the store. It keeps its own file and renewal steps, and has no store expiry.
   `put` refuses it.
+- **Lane**: a secret that no row declares, put for one lane. It has one
+  variable, no check, and a store expiry at most 7 days after the put. See
+  [Lane secrets](#lane-secrets).
 - **Live handoff**: an OAuth callback, a literal `confirm`, or a token that
   lasts under a day. It is asked for at use time and never enters the store.
 
@@ -102,6 +105,43 @@ or one more than 90 days out, is refused. The store expiry is the earlier of the
 and 90 days after the put. `--why` names a late reason: `intake` (the default),
 `failed-check`, `expired`, `revoked`, `scope`, or `missed`.
 
+## Lane secrets
+
+A credential that one lane needs, and that no declared row covers, is a lane
+secret. Its lane key is the stack ticket (`owner/repo#n`) of a map's lane, as
+the conductor puts it at intake before the lane exists, or the thread id of a
+lane started on its own.
+
+```sh
+fleet secret put stripe-test --file <the saved file> --lane example/tickets#401 --env STRIPE_KEY --why intake --revoke <link>
+fleet secret drop --lane example/tickets#401
+```
+
+- `--env` names the one variable that `run` sets. `--why` is required:
+  `intake` for the kickoff put, otherwise the honest late reason.
+- It needs `--expires` within 7 days, or `--revoke` with the https link where
+  the user revokes it. Its store expiry is at most 7 days after the put.
+- A declared name is refused. A name that another lane holds is refused until
+  that lane's put passes its store expiry. The first put in the log owns the
+  name: when two lanes put one name at once, the later put deletes its value
+  and is refused.
+- A put is refused when any line Fleet prints from it would spell the value:
+  its list line, card, stored and dropped lines, and the report's revoke and
+  late-put lines.
+- `list` shows lane secrets after the declared rows, `list --due` names a lane
+  secret from 1 day before its store expiry, not 7, and `list --need` prints
+  its lane put card.
+- At the lane's end, `drop --lane` deletes every value the lane put. Its put
+  events stay, so the report still finds their revoke links. A drop names the
+  put it ends, so a renewal that lands meanwhile stays.
+
+The hub runs `fleet secret sweep` each night at 02:47 as a pack job. It drops
+each lane value past its store expiry, and deletes each value file that a
+later put or a drop replaced. A value file that no event names waits an hour,
+by the disk's clock, as its put may still be landing; the sweep deletes it
+after that, unless the event log is missing. It touches only the store's own
+`<name>.p-<id>` files: other packs' files in the same directory stay.
+
 ## Stop every read
 
 ```sh
@@ -136,8 +176,8 @@ settings link.
 
 - Values: `~/.config/fleet/secrets/<name>.<put id>` (0600, in a 0700
   directory). Each put writes a new file; none is rewritten.
-- Event log: `~/.local/state/fleet/secrets.jsonl`, one JSON line per put, read,
-  off and on, never a value.
+- Event log: `~/.local/state/fleet/secrets.jsonl`, one JSON line per put, drop,
+  read, off and on, never a value.
 
 Other machines send one JSON request to `fleet secret hub` over SSH stdin and
 read one JSON answer on stdout, so a value never reaches a command line. The hub

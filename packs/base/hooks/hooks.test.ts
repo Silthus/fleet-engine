@@ -25,12 +25,14 @@ const fakesBuiltAtRuntime: Array<[kind: string, value: string]> = [
   ["private key", `-----BEGIN OPENSSH ${"PRIVATE"} KEY-----\n${body(70)}\n`],
   ["private key", JSON.stringify({ private_key: `-----BEGIN ${"PRIVATE"} KEY-----\n${body(64)}\n${body(20)}\n-----END PRIVATE KEY-----\n` })],
   ["private key", `-----BEGIN RSA ${"PRIVATE"} KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,${body(32)}\n\n${body(64)}\n-----END RSA PRIVATE KEY-----\n`],
+  ["Metabase session cookie", `metabase${"."}SESSION=${body(8)}-${body(4)}-${body(4)}-${body(4)}-${body(12)}`],
 ];
 
 const promptEvent = (text: string): HookEvent => ({ hook_event_name: "UserPromptSubmit", prompt: text });
 const toolEvent = (tool_response: unknown): HookEvent => ({ hook_event_name: "PostToolUse", tool_response });
 const [, githubToken] = fakesBuiltAtRuntime[3];
 const [, convexKey] = fakesBuiltAtRuntime.find(([kind]) => kind === "Convex deploy key")!;
+const coderToken = `${body(10)}-${body(22)}`;
 
 describe("secret guard", () => {
   test.each(fakesBuiltAtRuntime)("blocks a prompt that carries a %s and points at request_secret", (kind, secret) => {
@@ -59,6 +61,55 @@ describe("secret guard", () => {
     expect(guard("claude", promptEvent(text))).toBeUndefined();
   });
 
+  test.each([
+    ["the bare output of coder tokens create", `${coderToken}\n`],
+    ["a JSON-escaped output line", `{"stdout":"${coderToken}\\n"}`],
+    ["a coloured output line", `\x1b[32m${coderToken}\x1b[0m\n`],
+    ["a session header", `curl -H 'Coder-Session-Token: ${coderToken}' https://coder.example.com/api/v2/users/me`],
+    ["an environment line", `export CODER_SESSION_TOKEN="${coderToken}"\nHOME=/home/coder`],
+    ["a JSON field", JSON.stringify({ coder_session_token: coderToken, user: "me" })],
+    ["a JSON-escaped coloured line", JSON.stringify({ stdout: `\x1b[32m${coderToken}\x1b[0m\n` })],
+    ["a single-quoted string", `token='${coderToken}'`],
+    ["a header with wide whitespace", `curl -H 'Coder-Session-Token:${" ".repeat(12)}${coderToken}' https://coder.example.com`],
+  ])("redacts a Coder session token in %s", (_, stdout) => {
+    const claude = guard("claude", toolEvent({ stdout }))!;
+    expect(JSON.stringify(claude)).toContain("[redacted Coder session token]");
+    expect(JSON.stringify(claude)).not.toContain(coderToken);
+    expect(guard("codex", toolEvent({ stdout }))?.decision).toBe("block");
+  });
+
+  test("redacts a Coder session token held as a structured field", () => {
+    const decision = guard("claude", toolEvent({ structuredContent: { coderSessionToken: coderToken, region: "us" } }))!;
+    expect(decision.hookSpecificOutput).toMatchObject({ updatedToolOutput: { structuredContent: { coderSessionToken: "[redacted Coder session token]", region: "us" } } });
+  });
+
+  test.each([
+    `Rebase ${coderToken} onto main.`,
+    "Merge monitoring-alertthresholdtuningv2 after the deploy.",
+    "secret-guard-shapes-a4075cf2ac5def14\nfeat/secret-guard-shapes",
+  ])("leaves ordinary hyphenated identifiers alone: %s", (text) => {
+    expect(guard("claude", toolEvent({ stdout: text }))).toBeUndefined();
+    expect(guard("claude", promptEvent(text))).toBeUndefined();
+  });
+
+  test("redacts both Metabase session cookies in a copied request and keeps the rest", () => {
+    const values = [`${body(8)}-${body(4)}-${body(4)}-${body(4)}-${body(12)}`, body(36)];
+    const cookie = [`metabase${"."}SESSION=${values[0]}`, `metabase${"."}DEVICE=${values[1]}`].join("; ");
+    const decision = guard("claude", toolEvent({ stdout: `curl 'https://metabase.example.com/api/user/current' -b '${cookie}; theme=dark'` }))!;
+    const output = JSON.stringify(decision.hookSpecificOutput);
+    for (const value of values) expect(output).not.toContain(value);
+    expect(output).toContain("[redacted Metabase session cookie]; theme=dark");
+  });
+
+  test.each(["claude", "codex"] as const)("%s guard messages point at request_secret file delivery and fleet secret put --file", (provider) => {
+    const decision = guard(provider, toolEvent({ stdout: githubToken }))!;
+    for (const reason of [guard(provider, promptEvent(`key: ${githubToken}`))!.reason, decision.reason ?? (decision.hookSpecificOutput as { additionalContext: string }).additionalContext]) {
+      expect(reason).toContain("`request_secret`");
+      expect(reason).toContain("file delivery");
+      expect(reason).toContain("`fleet secret put --file");
+    }
+  });
+
   test("Claude does not echo a blocked prompt back into the chat", () => {
     expect(guard("claude", promptEvent(`key: ${githubToken}`))?.hookSpecificOutput).toEqual({ hookEventName: "UserPromptSubmit", suppressOriginalPrompt: true });
   });
@@ -83,7 +134,7 @@ describe("secret guard", () => {
 
   test("decides quickly on output shaped to slow the scan", () => {
     const started = performance.now();
-    expect(guard("codex", toolEvent(`${"prod:".repeat(100_000)} ${githubToken}`))?.decision).toBe("block");
+    expect(guard("codex", toolEvent(`${"prod:".repeat(100_000)} coder_session_token=${" ".repeat(100_000)}x ${githubToken}`))?.decision).toBe("block");
     expect(performance.now() - started).toBeLessThan(1_000);
   });
 

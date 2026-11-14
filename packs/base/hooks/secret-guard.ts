@@ -15,6 +15,8 @@ export type HookDecision = {
 const start = String.raw`(?:(?<![A-Za-z0-9])|(?<=\x1b\[[0-9;]*m))`;
 const lineBreak = String.raw`(?:\s|\\[rn])`;
 const lineEnd = String.raw`(?:\r?\n|(?:\\r)?\\n)`;
+const coderToken = "[A-Za-z0-9]{10}-[A-Za-z0-9]{22}";
+const colour = String.raw`(?:(?:\x1b|\\u001[bB])\[[0-9;]*m)*`;
 const shapes: Array<{ kind: string; pattern: RegExp }> = [
   { kind: "PostHog personal API key", pattern: new RegExp(`${start}phx_[A-Za-z0-9]{30,}`, "g") },
   { kind: "PostHog secret API key", pattern: new RegExp(`${start}phs_[A-Za-z0-9]{30,}`, "g") },
@@ -24,6 +26,9 @@ const shapes: Array<{ kind: string; pattern: RegExp }> = [
   { kind: "Slack token", pattern: new RegExp(`${start}x(?:ox[abposre]|app)-[0-9]+-[A-Za-z0-9-]{10,}`, "g") },
   { kind: "Slack webhook URL", pattern: /hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]{20,}/g },
   { kind: "Convex deploy key", pattern: new RegExp(`(?<![A-Za-z0-9_-])(?:prod|dev|preview|project):[A-Za-z0-9:_-]{1,120}\\|[A-Za-z0-9+/=_-]{30,}`, "g") },
+  { kind: "Coder session token", pattern: new RegExp(String.raw`(?:^|(?<=\\[rn]|["']))[ \t]*${colour}${coderToken}${colour}[ \t]*(?=$|\\[rn]|\\?["'])`, "gm") },
+  { kind: "Coder session token", pattern: new RegExp(String.raw`(?=${coderToken}(?![A-Za-z0-9]))(?<=coder[_-]?session[_-]?token(?:\\?["'])?[ \t]*[:=][ \t]*(?:\\?["'])?)${coderToken}`, "gi") },
+  { kind: "Metabase session cookie", pattern: /(?<![\w.-])metabase\.(?:SESSION|DEVICE)=[^;\s'"\\]+/g },
   { kind: "private key", pattern: new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----(?:${lineBreak}*[A-Za-z-]+:[^\\r\\n\\\\]*${lineEnd})*${lineBreak}*[A-Za-z0-9+/=]{20,}(?:[A-Za-z0-9+/=\\s]|\\\\[rn])*(?:-----END [A-Z ]*PRIVATE KEY-----)?`, "g") },
 ];
 
@@ -69,16 +74,18 @@ export const redactSecrets = (text: string) => replaceSecrets(text, (kind) => `[
 
 const redact = (value: unknown) => mapStrings(value, redactSecrets);
 
+const storeHint = 'T3\'s `request_secret` tool and file delivery (`delivery: "file"`), then hand that file to `fleet secret put --file <path>` where this Fleet has `fleet secret`';
+
 function promptReason(kinds: string[]) {
   return `Fleet held this message back: it looks like it carries a ${kinds.join(", ")}. Send it again without the value. `
-    + "To give the agent a secret, let it ask with T3's `request_secret` tool, or save it in a file or an environment variable yourself and tell the agent its name. "
+    + `To give the agent a secret, let it ask with ${storeHint}, or save it in a file or an environment variable yourself and tell the agent its name. `
     + "If the value is real, rotate it: the app may have saved the message.";
 }
 
 function toolOutputReason(kinds: string[], action: string) {
   return `Fleet ${action} this tool output: it carries a ${kinds.join(", ")}. Never print a secret or repeat it in chat, commands, or files. `
     + "Rerun the command so its output leaves the value out, for example by reading it into an environment variable. "
-    + "When you need a secret from the user, call T3's `request_secret` tool: pass its secretRef to a T3 tool, or use `delivery: \"file\"` for a shell command. "
+    + `When you need a secret from the user, ask with ${storeHint}, or pass a \`request_secret\` secretRef to a T3 tool; never save the value by hand. `
     + "Without T3, ask the user to save it in a file or an environment variable and give you its name.";
 }
 
