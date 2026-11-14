@@ -7,7 +7,7 @@ import { fleetOnHub, HubUnreachable, remoteHub, runSsh, type Env, type Ssh } fro
 import { checkedRows, injectedRows, rowModules } from "./secret-rows.ts";
 import {
   currentOff, deliver, dueLines, enableOptions, enableQuestion, failureOf, listLines, needLines, piecesOf, putValue, secretFilesDir, SecretRefusal, standingDays, storedLine, turnOff, turnOn, unshown, whys,
-  type AppendLog, type Delivered, type Heard, type PutInput, type SecretRow, type Store, type Why,
+  type AppendLog, type WriteBytes, type Delivered, type Heard, type PutInput, type SecretRow, type Store, type Why,
 } from "./secret-store.ts";
 
 export const usage = `Usage:
@@ -36,7 +36,7 @@ export type SecretContext = {
   out: (text: string | Uint8Array) => void; err: (text: string | Uint8Array) => void;
   stdin?: () => Promise<string>;
   ssh?: Ssh; now?: () => Date; threadWords?: ThreadWords; rows?: SecretRow[];
-  appendLog?: AppendLog;
+  appendLog?: AppendLog; write?: WriteBytes;
 };
 
 class UsageError extends Error {}
@@ -63,7 +63,7 @@ async function loadedRows(context: SecretContext): Promise<SecretRow[] | Answer>
 }
 
 async function answer(context: SecretContext, request: Request): Promise<Answer> {
-  const store: Store = { home: context.home, rows: [], now: context.now?.() ?? new Date(), ...context.appendLog ? { appendLog: context.appendLog } : {} };
+  const store: Store = { home: context.home, rows: [], now: context.now?.() ?? new Date(), ...context.appendLog ? { appendLog: context.appendLog } : {}, ...context.write ? { write: context.write } : {} };
   try {
     if (request.op === "off") { turnOff(store, request); return { ok: true, lines: ["The store is off: every read is refused until the user's words turn it on (fleet secret on)."] }; }
     if (request.op === "on") {

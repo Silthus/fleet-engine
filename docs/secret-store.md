@@ -147,7 +147,8 @@ store read.
 The hub trusts the caller's report of the user's answer, as the decision
 ledger does. An agent that can reach the hub over SSH can read its files, so a
 check on the hub would not stop a hostile agent; the store guards against
-mistakes. Each change is one append to the log, synced to disk, and the order
+mistakes. Each change is one append to the log, written whole and synced to
+disk before it is acknowledged, and the order
 of the log decides. A read hands out its values only when no `off` stands
 before its read event in the log, and an `on` stays off when a newer `off`
 landed before it. Value files and their directory are synced before the put

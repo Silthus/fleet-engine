@@ -45,9 +45,21 @@ function madeDir(dir: string) {
   return true;
 }
 
-export function writeNewFile(path: string, data: string) {
+export type WriteBytes = (file: number, bytes: Uint8Array, offset: number) => number;
+const diskWrite: WriteBytes = (file, bytes, offset) => writeSync(file, bytes, offset);
+
+function writeAll(write: WriteBytes, file: number, text: string) {
+  const bytes = Buffer.from(text);
+  for (let at = 0; at < bytes.length;) {
+    const written = write(file, bytes, at);
+    if (!(written > 0)) throw new Error("a write to the store made no progress");
+    at += written;
+  }
+}
+
+export function writeNewFile(path: string, data: string, write = diskWrite) {
   madeDir(dirname(path));
-  synced(path, "wx", (file) => writeSync(file, data));
+  synced(path, "wx", (file) => writeAll(write, file, data));
   syncDir(dirname(path));
 }
 
@@ -85,14 +97,14 @@ export function readEvents(home: string): SecretEvent[] {
   return events;
 }
 
-export type AppendLog = (path: string, text: string) => void;
-export const appendToLog: AppendLog = (path, text) => synced(path, "a", (file) => writeSync(file, text));
-type LogStore = { home: string; appendLog?: AppendLog };
+export type AppendLog = (path: string, text: string, write?: WriteBytes) => void;
+export const appendToLog: AppendLog = (path, text, write = diskWrite) => synced(path, "a", (file) => writeAll(write, file, text));
+type LogStore = { home: string; appendLog?: AppendLog; write?: WriteBytes };
 
 export function appendEvents(store: LogStore, ...events: SecretEvent[]) {
   const path = eventLogPath(store.home);
   const fresh = madeDir(dirname(path)) || !existsSync(path);
-  (store.appendLog ?? appendToLog)(path, `\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+  (store.appendLog ?? appendToLog)(path, `\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`, store.write);
   if (fresh) syncDir(dirname(path));
 }
 
@@ -211,7 +223,7 @@ async function checkAndStore(store: Store, row: SecretRow, input: PutInput): Pro
   };
   const shown = [JSON.stringify(event), ...Object.values(event).filter((value): value is string => typeof value === "string"), ...printedLines(store, row, event)].join("\n");
   if (showsValue(shown, Object.values(fields))) throw new SecretRefusal(hiddenValue);
-  writeNewFile(valuePath(store.home, event), row.env.map((key) => `${key}=${fields[key]}\n`).join(""));
+  writeNewFile(valuePath(store.home, event), row.env.map((key) => `${key}=${fields[key]}\n`).join(""), store.write);
   appendEvents(store, event);
   return event;
 }

@@ -1,12 +1,12 @@
 import { afterEach, expect, test } from "bun:test";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, writeSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ThreadWord } from "../../pull-requests/lib/proof-answers.ts";
 import type { Ssh, SshResult } from "./hub-transport.ts";
 import { heldLimit, lineRedactor, secretCommand, type SecretContext } from "./secret-cli.ts";
 import { providersSeam, rowsSeam } from "./secret-rows.ts";
-import { appendToLog, eventLogPath, secretFilesDir, type CheckResult, type SecretRow } from "./secret-store.ts";
+import { appendToLog, eventLogPath, secretFilesDir, type CheckResult, type SecretRow, type WriteBytes } from "./secret-store.ts";
 
 const homes: string[] = [];
 afterEach(() => homes.splice(0).forEach((home) => rmSync(home, { recursive: true, force: true })));
@@ -58,12 +58,13 @@ function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretRow[] | 
   const printed: string[] = [];
   const commands: string[] = [];
   const reach: { hub: boolean; answer?: SshResult } = { hub: true };
-  const hooks: { whileHearing?: () => Promise<unknown>; beforeAppend?: () => void } = {};
+  const hooks: { whileHearing?: () => Promise<unknown>; beforeAppend?: () => void; write?: WriteBytes } = {};
+  const write: WriteBytes = (file, bytes, offset) => (hooks.write ?? ((at, all, from) => writeSync(at, all, from)))(file, bytes, offset);
   const threadWords = async () => { const step = hooks.whileHearing; hooks.whileHearing = undefined; await step?.(); return words; };
   const env = (machine: string) => ({ FLEET_SETTINGS: hubSettings, CODER_WORKSPACE_NAME: machine, T3CODE_THREAD_ID: "lane-thread", ...handlers ? { FLEET_HANDLERS: JSON.stringify(handlers) } : {} });
   const context = (home: string, machine: string): SecretContext => ({
     home, env: env(machine), now: () => clock.now, threadWords, out: (shown) => printed.push(text(shown)), err: (shown) => printed.push(text(shown)), ssh,
-    appendLog: (path, line) => { const step = hooks.beforeAppend; hooks.beforeAppend = undefined; step?.(); appendToLog(path, line); }, ...rows === "injected" ? {} : { rows },
+    write, appendLog: (path, line, writer) => { const step = hooks.beforeAppend; hooks.beforeAppend = undefined; step?.(); appendToLog(path, line, writer); }, ...rows === "injected" ? {} : { rows },
   });
   const ssh: Ssh = async (host, command, stdin) => {
     commands.push(command);
@@ -481,6 +482,25 @@ test("the fleet secret command prints a fixed message for an error that escapes 
   expect(code).toBe(1);
   expect(stderr).toBe("fleet secret: The store failed; its message is not shown, as it could hold a value\n");
   expect(stdout + stderr).not.toContain(inSettings);
+});
+
+test("a disk that writes one byte at a time still stores the whole value and a whole off, and one that writes nothing stores nothing", async () => {
+  const slow = fleet();
+  slow.hooks.write = (file, bytes, offset) => writeSync(file, bytes, offset, 1);
+  expect(await slow.dev("put", "send-us", "--file", slow.secretFile(slow.devHome, sendKey))).toBe(0);
+  expect((await run(slow.dev, slow.printed, ["send-us"], `[ "$EXAMPLE_API_KEY" = "${sendKey}" ] && echo whole-value`)).text).toContain("whole-value");
+  expect(await slow.dev("off", "a slow disk")).toBe(0);
+  const refused = await run(slow.dev, slow.printed, ["send-us"], "echo child-ran");
+  expect(refused.text).toContain("(a slow disk)");
+  expect(refused.text).not.toContain("child-ran");
+  const stuck = fleet();
+  stuck.hooks.write = () => 0;
+  expect(await stuck.dev("put", "send-us", "--file", stuck.secretFile(stuck.devHome, sendKey))).toBe(1);
+  expect(stuck.printed.join("")).toContain("The store failed; its message is not shown");
+  stuck.hooks.write = undefined;
+  expect((await run(stuck.dev, stuck.printed, ["send-us"], "echo child-ran")).text).toContain("send-us: missing");
+  slow.expectNoLeak();
+  stuck.expectNoLeak();
 });
 
 test("list --need prints the card for each missing or failing secret, nothing for one that is held and passes, and logs each check's read", async () => {
