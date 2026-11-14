@@ -32,9 +32,9 @@ const fenced = (text: string) => {
   return [`${fence}text`, text, fence].join("\n");
 };
 
-const quoted = /^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/;
 const codeMark = "\uE003";
-const escaped = (text: string) => text.replace(/[\\`*_[\]~|]/g, "\\$&");
+const indentedLists = 8;
+const escaped = (text: string) => text.replace(/[\\`*_[\]~|&]/g, "\\$&");
 const unescaped = (text: string) => text.replace(/\\(.)/g, "$1");
 const startsBlock = (text: string) => text.replace(/^([ \t]*)([-+>#=]|\d+[.)])/gm, "$1\\$2");
 const block = (text: string) => `${startsBlock(text.trim())}\n\n`;
@@ -47,6 +47,8 @@ function codeSpan(children: string) {
   const pad = /^`|`$/.test(text) ? " " : "";
   return `${fence}${pad}${text}${pad}${fence}`;
 }
+
+const leadOf = (line: string) => line.replace(/^(?:[^\p{L}\p{N}$]|\d+[.)])+/u, "");
 
 function proseShape(count: (lines: number) => void) {
   let headerCells = 0;
@@ -64,9 +66,10 @@ function proseShape(count: (lines: number) => void) {
     hr: () => "\\---\n\n",
     blockquote: (children: string) => `${children.trimEnd().split("\n").map((line) => line ? `> ${line}` : ">").join("\n")}\n\n`,
     list: (children: string, meta: { depth: number }) => meta.depth ? `\n${children}` : `${children}\n`,
-    listItem: (children: string, meta: { index: number; ordered: boolean; start?: number; checked?: boolean }) => {
+    listItem: (children: string, meta: { index: number; depth: number; ordered: boolean; start?: number; checked?: boolean }) => {
       const marker = meta.ordered ? `${(meta.start ?? 1) + meta.index}.` : "-";
       const box = meta.checked === undefined ? "" : meta.checked ? "[x] " : "[ ] ";
+      if (meta.depth >= indentedLists) return `${marker} ${box}${children}\n`;
       return `${marker} ${box}${indented(children, " ".repeat(marker.length + 1))}\n`;
     },
     table: (children: string) => `${children}\n`,
@@ -74,28 +77,28 @@ function proseShape(count: (lines: number) => void) {
     tr: (children: string) => `|${children}\n`,
     th: (children: string) => { headerCells++; return ` ${children.replace(/\n/g, " ")} |`; },
     td: (children: string) => ` ${children.replace(/\n/g, " ")} |`,
-    code: (children: string) => { count(children.split("\n").filter((line) => /\S/.test(line)).length); return `${codeMark}\n\n`; },
+    code: (children: string) => {
+      const lines = children.split("\n").filter((line) => /\S/.test(line));
+      count(lines.length);
+      return `${codeMark}${lines.some((line) => leadOf(line).startsWith("exit=")) ? "exit=" : ""}\n\n`;
+    },
   };
 }
 
-const leadOf = (line: string) => unescaped(line.replace(quoted, "")).replace(/^(?:\*\*|_|~~)+/, "");
-const endsTranscript = (lead: string) => lead.startsWith("exit=") || lead.startsWith("$ ") || lead === codeMark;
-
 export function proseOf(text: string) {
   let left = 0;
-  const lines = Bun.markdown.render(text.replaceAll(codeMark, "\uE002"), proseShape((lines) => { left += lines; })).split("\n");
+  const lines = Bun.markdown.render(text, proseShape((lines) => { left += lines; })).split("\n");
   const lead = lines.map(leadOf);
+  const nextExit: number[] = [];
+  for (let index = lead.length - 1, exit = lead.length; index >= 0; index--) {
+    nextExit[index] = exit;
+    if (lead[index]!.startsWith("exit=")) exit = index;
+  }
   const kept: string[] = [];
   let through = -1;
   lead.forEach((line, index) => {
-    if (index > through && line.startsWith("$ ")) {
-      let end = index + 1;
-      while (end < lead.length && !endsTranscript(lead[end]!)) end++;
-      let block = index + 1;
-      while (block < end && lines[block]!.trim()) block++;
-      through = lead[end]?.startsWith("exit=") ? end : block - 1;
-    }
-    if (line === codeMark) return;
+    if (index > through && line.startsWith("$ ")) through = nextExit[index]!;
+    if (lines[index]!.includes(codeMark)) return;
     if (index <= through || line.startsWith("exit=")) left++;
     else kept.push(lines[index]!);
   });
