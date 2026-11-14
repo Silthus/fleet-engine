@@ -56,7 +56,7 @@ function gaps(summary: ProofSummary): { kind: string; gap: GapProof }[] {
 
 function stillYours(rows: Row[], card: string | undefined) {
   const lane = rows.filter(gated);
-  const blockers = lane.filter(({ summary }) => summary.tier === "critical").flatMap(({ ref, summary }) =>
+  const blockers = lane.filter(({ state, summary }) => state !== "closed" && summary.tier === "critical").flatMap(({ ref, summary }) =>
     gaps(summary).filter(({ gap }) => !gap.accepted).map(({ kind, gap }) =>
       `- **Blocker:** ${refText(ref)} is critical at HEAD and its ${kind} gap is not accepted: ${gap.reason ?? "no reason recorded"}${gap.lapsed ? ` (🤖 decision ${gap.lapsed.id} lapsed: ${gap.lapsed.reason})` : ""}.`));
   const unknown = rows.flatMap((pr) => "unknown" in pr ? [`- ${refText(pr.ref)}: its proofs are not known here (${pr.unknown}). Run fleet proof gate.`] : []);

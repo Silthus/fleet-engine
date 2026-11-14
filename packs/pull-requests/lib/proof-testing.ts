@@ -55,7 +55,7 @@ case "$*" in
     all="$*"; n=\${all##*/pulls/}; n=\${n%%[!0-9]*}
     [ -f "${github}/pull-error-$n" ] && { cat "${github}/pull-error-$n" >&2; exit 1; }
     [ -f "${github}/body-$n" ] && body=$(cat "${github}/body-$n")
-    state=open; merged=null; [ -f "${github}/merged-$n" ] && { state=closed; merged='"2026-10-25T09:00:00Z"'; }
+    state=open; merged=null; [ -f "${github}/merged-$n" ] && { state=closed; merged='"2026-10-25T09:00:00Z"'; }; [ -f "${github}/closed-$n" ] && state=closed
     printf '{"number":%s,"title":"Greet new members","body":%s,"draft":%s,"state":"%s","merged_at":%s,"head":{"sha":"%s"},"base":{"ref":"%s","sha":"%s","repo":{"default_branch":"main"}}}\\n' "$n" "$body" "$draft" "$state" "$merged" "$head" "$base" "$basesha"; exit 0;;
   "api "*"/rules/branches/"*)
     all="$*"; branch=\${all##*/rules/branches/}; page=\${all##*page=}; branch=\${branch%%\\?*}
@@ -88,10 +88,11 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
     else writeFileSync(join(github, `rules-${branch}-${page}`), JSON.stringify([...Array.from({ length: others }, () => ({ type: "deletion" })), ...(rules.length ? [{ type: "required_status_checks", parameters: { required_status_checks: rules } }] : [])]));
     if (classic) writeFileSync(join(github, `branch-${branch}`), JSON.stringify({ protected: true, protection: { required_status_checks: { enforcement_level: "everyone", contexts: classic, checks: classic.map((context) => ({ context, app_id: null })) } } }));
   };
-  const pullRequestState = ({ draft, base, body, number, merged, unreadable }: { draft?: boolean; base?: string; body?: string; number?: number; merged?: boolean; unreadable?: string }) => {
+  const pullRequestState = ({ draft, base, body, number, merged, closed, unreadable }: { draft?: boolean; base?: string; body?: string; number?: number; merged?: boolean; closed?: boolean; unreadable?: string }) => {
     if (unreadable !== undefined) writeFileSync(join(github, `pull-error-${number ?? 42}`), unreadable);
     if (body !== undefined) writeFileSync(join(github, number === undefined ? "body" : `body-${number}`), JSON.stringify(body));
     if (merged) writeFileSync(join(github, `merged-${number ?? 42}`), "");
+    if (closed) writeFileSync(join(github, `closed-${number ?? 42}`), "");
     if (draft !== undefined) { if (draft) writeFileSync(join(github, "draft"), ""); else rmSync(join(github, "draft"), { force: true }); }
     if (base !== undefined) writeFileSync(join(github, "base"), base);
   };
