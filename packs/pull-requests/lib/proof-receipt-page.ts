@@ -33,55 +33,43 @@ const fenced = (text: string) => {
 };
 
 const quoted = /^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/;
-const codeCount = /\uE000(\d+)\uE001/g;
-const countsOnly = (children: string) => children.match(codeCount)?.join("") ?? "";
-const countShape = {
-  ...Object.fromEntries(["blockquote", "list", "listItem", "paragraph", "heading", "table", "thead", "tbody", "tr", "th", "td", "hr", "html"].map((kind) => [kind, countsOnly])),
-  code: (children: string) => `\uE000${children.split("\n").filter((line) => /\S/.test(line)).length}\uE001`,
+const codeBlock = /\uE000([^\uE001]*)\uE001/g;
+const codeOnly = (children: string) => children.match(codeBlock)?.join("") ?? "";
+const codeShape = {
+  ...Object.fromEntries(["blockquote", "list", "listItem", "paragraph", "heading", "table", "thead", "tbody", "tr", "th", "td", "hr", "html"].map((kind) => [kind, codeOnly])),
+  code: (children: string) => `\uE000${children}\uE001`,
   text: (text: string) => text,
 };
-type CodeCount = { blocks: number; lines: number };
-const filled = (lines: string[], from: number, to: number) => lines.slice(from, to).filter((line) => /\S/.test(line)).length;
+const checkBudget = 64;
 
-function codeCountOf(lines: string[], end: number): CodeCount {
-  const counts = [...Bun.markdown.render(lines.slice(0, end).join("\n"), countShape).matchAll(codeCount)];
-  return { blocks: counts.length, lines: counts.reduce((sum, count) => sum + Number(count[1]), 0) };
-}
+const codeTextsOf = (lines: string[]) => [...Bun.markdown.render(lines.join("\n"), codeShape).matchAll(codeBlock)]
+  .flatMap((block) => block[1]!.split("\n").map((line) => line.trim()).filter(Boolean));
 
 function codeLinesOf(lines: string[]) {
-  const code = new Set<number>();
-  const openers = new Set<number>();
-  const find = (from: number, to: number, before: CodeCount, after: CodeCount) => {
-    if (before.blocks === after.blocks && before.lines === after.lines) return;
-    if (after.lines - before.lines === filled(lines, from, to)) {
-      for (let index = from; index < to; index++) if (/\S/.test(lines[index]!)) code.add(index);
-      return;
-    }
-    if (to - from === 1) return void (after.lines > before.lines ? code : openers).add(from);
-    const middle = (from + to) >> 1;
-    const between = codeCountOf(lines, middle);
-    find(from, middle, before, between);
-    find(middle, to, between, after);
-  };
-  find(0, lines.length, { blocks: 0, lines: 0 }, codeCountOf(lines, lines.length));
-  let last = -1;
+  const wanted = new Map<string, number>();
+  for (const text of codeTextsOf(lines)) wanted.set(text, (wanted.get(text) ?? 0) + 1);
+  const candidates = new Map<string, number[]>();
   lines.forEach((line, index) => {
-    const closes = /^(?:`{3,}|~{3,})[ \t]*$/.test(line.replace(quoted, "")) && (code.has(last) || openers.has(last));
-    if (closes || openers.has(index)) code.add(index);
-    if (/\S/.test(line)) last = index;
+    const prefix = quoted.exec(line)![0].length;
+    const texts = new Set(Array.from({ length: prefix + 1 }, (_, at) => line.slice(at).trim()).filter((text) => wanted.has(text)));
+    for (const text of texts) (candidates.get(text) ?? candidates.set(text, []).get(text)!).push(index);
   });
+  const code = new Set<number>();
+  let checks = checkBudget;
+  const isCode = (index: number) => checks-- <= 0 || codeTextsOf(lines.slice(0, index + 1)).length > codeTextsOf(lines.slice(0, index)).length;
+  for (const [text, indexes] of candidates) for (const index of indexes) if (indexes.length <= wanted.get(text)! || isCode(index)) code.add(index);
   return code;
 }
 
 export function proseOf(text: string) {
   const lines = text.split(/\r\n|\r|\n/);
-  const code = codeLinesOf(lines);
+  const code = codeLinesOf(lines.map((line) => line.replace(/[\uE000\uE001]/g, "\uE002")));
   const kept: string[] = [];
   let through = -1;
   let left = 0;
   lines.forEach((line, index) => {
     const inner = line.replace(quoted, "");
-    if (code.has(index) || index <= through || inner.startsWith("exit=")) left++;
+    if (code.has(index) || index <= through || /^(?:`{3,}|~{3,}|exit=)/.test(inner)) left++;
     else if (inner.startsWith("$ ")) {
       left++;
       const exit = lines.findIndex((later, at) => at > index && later.replace(quoted, "").startsWith("exit="));
