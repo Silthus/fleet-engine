@@ -225,3 +225,14 @@ describe("the installed Stop hook", () => {
     expect(await routed("codex", async () => JSON.stringify({ transcript_path: transcript, cwd: checkout }), home)).toEqual({ code: 0, stdout: "", stderr: "" });
   });
 });
+
+describe("the Stop hook process", () => {
+  test("exits as soon as it has answered, without waiting out the deadline", async () => {
+    const env: Record<string, string | undefined> = { ...process.env, HOME: temp.make("home-") };
+    delete env.T3CODE_THREAD_ID;
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, "../hooks/ask-guard.ts"), "claude"], { env, stdin: new Blob([JSON.stringify({ cwd: "/", last_assistant_message: "Done." })]), stdout: "pipe", stderr: "pipe" });
+    const exited = await Promise.race([child.exited.then(() => "exited"), Bun.sleep(4_000).then(() => "still running")]);
+    child.kill();
+    expect(exited).toBe("exited");
+  });
+});

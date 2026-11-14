@@ -129,8 +129,13 @@ const waitsInClaude = (event: ProofStopEvent) =>
   Boolean(event.background_tasks?.some((task) => ["running", "pending"].includes(task.status ?? "") && task.type !== "shell") || event.session_crons?.length);
 
 export async function proofStop(event: ProofStopEvent, options: ProofStopOptions): Promise<ProofStopBlock | undefined> {
-  const deadline = (options.deadline ?? (() => Bun.sleep(proofStopDeadlineMs)))().then(() => undefined);
-  return Promise.race([check(event, options).catch(() => undefined), deadline]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = options.deadline?.() ?? new Promise<void>((resolve) => { timer = setTimeout(resolve, proofStopDeadlineMs); });
+  try {
+    return await Promise.race([check(event, options).catch(() => undefined), deadline.then(() => undefined)]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function check(event: ProofStopEvent, options: ProofStopOptions): Promise<ProofStopBlock | undefined> {
