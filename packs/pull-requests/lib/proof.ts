@@ -400,7 +400,7 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
   if (findings === undefined) throw new Error(`Review round ${round} has no findings yet`);
   const missing = unanswered(findings, bytes.toString());
   if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>", "${missing[0]}. rejected: <why>", or, at the review budget, "${missing[0]}. known: <why>" for a finding listed under Known issues. Minor and nit findings and TESTS items need no answer`);
-  if (bytes.toString().match(knownItem)) {
+  if (answeredFindings(findings, bytes.toString()).findings.some(({ answer }) => answer?.verdict === "known")) {
     const reviews = join(pullRequestDirectory(home, identity), "reviews");
     const started = await reviewNames(reviews);
     const phase = (await readJson<{ phase?: FinalReadPhase }>(join(directory, "round.json"), {})).phase ?? "review";
@@ -415,7 +415,7 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
 }
 
 const findingItem = /^\s*(?:[-*]|\d+[.)])\s+\S/;
-const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected|known)\b/gim;
+const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(fixed|rejected|known)\b/i;
 
 const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
 
@@ -432,7 +432,7 @@ function reviewedLines(findings: string) {
     if (/^COVERED\b/.test(line) || testsBlock.test(line)) inside = false;
     else if (!lensAnswer && /^#/.test(line)) inside = true;
     return inside ? [line] : [];
-  }).filter((line) => line.trim());
+  });
 }
 
 function ladderFindings(findings: string) {
@@ -444,24 +444,48 @@ function ladderFindings(findings: string) {
   }).join("\n");
 }
 
-function findingItems(findings: string) {
+const continued = /^\s+\S/;
+const lazyContinued = /^[^\s#]/;
+
+export function reviewedFindings(findings: string) {
   const reviewed = reviewedLines(findings);
-  const items = reviewed.filter((line) => findingItem.test(line));
-  return items.length || reviewed.every((line) => noFinding.test(line.trim())) ? items : [reviewed.join("\n")];
+  const items: string[] = [];
+  let open = false;
+  for (const line of reviewed) {
+    const joins: boolean = items.length > 0 && (continued.test(line) || (open && lazyContinued.test(line)));
+    if (findingItem.test(line)) items.push(line.trim());
+    else if (joins) items[items.length - 1] += `\n${line.trim()}`;
+    open = Boolean(line.trim()) && (findingItem.test(line) || joins);
+  }
+  const text = reviewed.map((line) => line.trim()).filter(Boolean);
+  if (items.length || text.every((line) => noFinding.test(line))) return items;
+  return [text.join("\n")];
 }
 
-const knownItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**known\b/gim;
+export type Answer = { verdict: "fixed" | "rejected" | "known"; text: string };
+
+export function answeredFindings(findings: string, responses: string) {
+  const items = reviewedFindings(findings);
+  const answers = new Map<number, Answer>();
+  const other: string[] = [];
+  let last: Answer | undefined;
+  for (const line of responses.split("\n")) {
+    const match = answerItem.exec(line);
+    const number = Number(match?.[1]);
+    if (match && number >= 1 && number <= items.length && !answers.has(number)) answers.set(number, last = { verdict: match[2]!.toLowerCase() as Answer["verdict"], text: line.trim() });
+    else if (!match && last && continued.test(line)) last.text += `\n${line.trim()}`;
+    else if (line.trim()) { last = undefined; other.push(line.trim()); }
+  }
+  return { findings: items.map((text, index) => ({ text, ...answers.has(index + 1) ? { answer: answers.get(index + 1)! } : {} })), other: other.join("\n") };
+}
+
 const majorItem = /^\s*(?:[-*]|\d+[.)])\s+(?:[^|\n]*\|)?\s*\**major\**\s*\|/i;
 
-function knownBlockers(findings: string, responses: string) {
-  const known = new Set([...responses.matchAll(knownItem)].map((match) => Number(match[1])));
-  return findingItems(findings).flatMap((item, index) => known.has(index + 1) && !majorItem.test(item) && !flooredItem.test(item) ? [index + 1] : []);
-}
+const knownBlockers = (findings: string, responses: string) =>
+  answeredFindings(findings, responses).findings.flatMap(({ text, answer }, index) => answer?.verdict === "known" && !majorItem.test(text) && !flooredItem.test(text) ? [index + 1] : []);
 
-function unanswered(findings: string, responses: string) {
-  const answered = new Set([...responses.matchAll(answerItem)].map((match) => Number(match[1])));
-  return findingItems(findings).flatMap((item, index) => flooredItem.test(item) || answered.has(index + 1) ? [] : [index + 1]);
-}
+const unanswered = (findings: string, responses: string) =>
+  answeredFindings(findings, responses).findings.flatMap(({ text, answer }, index) => answer || flooredItem.test(text) ? [] : [index + 1]);
 
 export const proofKinds = ["live-run", "ui-walk", "prod-shape", "cross-version", "shadow-diff", "post-deploy-watch"] as const;
 export type ProofKind = (typeof proofKinds)[number];
@@ -701,7 +725,7 @@ const gapText = (gap: GapProof) => gap.commit ? `gap from ${short(gap.commit)}, 
 
 const short = (commit: string) => commit.slice(0, 7);
 
-async function entries(directory: string) {
+export async function entries(directory: string) {
   try { return await readdir(directory); }
   catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return []; throw error; }
 }

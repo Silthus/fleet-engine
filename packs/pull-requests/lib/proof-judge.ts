@@ -5,6 +5,7 @@ import { optionalStringSetting } from "../../base/lib/settings.ts";
 import type { Arbiter, CiResult, Owed } from "./proof.ts";
 import type { ModelAnswer, ModelRequest } from "./proof-models.ts";
 import { capped, diffCap } from "./proof-review.ts";
+import { withoutReceipt } from "./proof-receipt.ts";
 import { runRecordOf } from "./proof-run.ts";
 
 export type JudgeInput = {
@@ -164,7 +165,7 @@ ${risk.rubric}
 
 ## PR body, with its merge-risk callout
 
-${untrusted("PR body", capped(risk.body, evidenceCap))}
+${untrusted("PR body", capped(withoutReceipt(risk.body), evidenceCap))}
 `;
 
 function parseVerdict(text: string, asked: QuestionName[]): Verdict | undefined {
