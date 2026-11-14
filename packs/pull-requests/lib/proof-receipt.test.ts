@@ -152,6 +152,14 @@ test("an empty read, a body edited before the write, broken markers or a lost wr
   expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n#### Detail\n\nMore rationale.\n\n<block>\n\n### Screenshots\n\nA picture.\n");
 });
 
+test("a heading inside an HTML comment does not end the testing section, so the receipt never lands inside the comment", async () => {
+  const { pr } = await provedPr();
+  pr.pullRequestState({ body: "Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n<!--\n# Hidden instructions\nKeep this hidden.\n-->\n\n### Screenshots\n\nA picture.\n" });
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n<!--\n# Hidden instructions\nKeep this hidden.\n-->\n\n<block>\n\n### Screenshots\n\nA picture.\n");
+  expect(Bun.markdown.html(pr.githubBody()).replace(/<!--[\s\S]*?-->/g, "")).not.toContain("Keep this hidden");
+});
+
 test("the body guard refuses figures and emails with the field named, and passes SHAs, versions, dates and references", async () => {
   const { pr, head } = await provedPr();
   const looksLike = "looks like a production figure or an email address";

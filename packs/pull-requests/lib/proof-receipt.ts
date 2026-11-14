@@ -193,12 +193,15 @@ type Heading = { start: number; depth: number; title: string };
 function headingsOf(body: string) {
   const found: Heading[] = [];
   let fence: string | undefined;
+  let comment = false;
   let start = 0;
   for (const raw of body.split("\n")) {
     const line = raw.replace(/\r$/, "");
     const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (fence) { if (opener?.startsWith(fence) && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = undefined; }
+    if (comment) comment = !line.includes("-->");
+    else if (fence) { if (opener?.startsWith(fence) && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = undefined; }
     else if (opener) fence = opener;
+    else if (/^ {0,3}<!--/.test(line)) comment = !line.slice(line.indexOf("<!--") + 4).includes("-->");
     else {
       const heading = /^(#{1,6})[ \t]+(\S.*?)[ \t]*$/.exec(line);
       if (heading) found.push({ start, depth: heading[1]!.length, title: heading[2]! });
