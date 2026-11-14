@@ -6,7 +6,7 @@ import { numberSetting } from "../../base/lib/settings.ts";
 import { covers, hubLedger, refText, riskCalloutOf, tierOf, type Env, type Ledger, type PrRef, type Ssh } from "./decision-ledger.ts";
 import { ciOf, readPullRequest, type PullRequest, type Run } from "./pr-ci.ts";
 import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
-import { cleanBaseMerge, diffOf, mergeBase, pullRequestDetails, smallPr, topLevel } from "./proof-checkout.ts";
+import { baseRefs, cleanBaseMerge, diffOf, mergeBase, pullRequestDetails, smallPr, topLevel } from "./proof-checkout.ts";
 import { quietCommitIn } from "./proof-delta.ts";
 import { judge, readCriticalPaths, type JudgeInput } from "./proof-judge.ts";
 import { askModel, familyOf, modelLabel, readRiskRubric, readRubric, reviewerRow, skillReferences } from "./proof-models.ts";
@@ -56,7 +56,7 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
   const pushedHead = pushedHeadOf(head, run, (read) => { pull ??= read; });
   const files = await proofFiles(home, head);
   const checked = await proofGate(home, head, {
-    landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), small: (body) => smallPr(head, run, body), ci: () => ciOf(home, head, run, now?.() ?? new Date()),
+    landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run, () => baseRefs(head, run)), small: (body) => smallPr(head, run, body), ci: () => ciOf(home, head, run, now?.() ?? new Date()),
     pushedHead, ledger: hubLedger(home, env, ssh), now: now?.(),
   });
   const judged: Judged = checked.code === 0 ? await judgeHead(head, checked, context) : { code: checked.code, lines: [], covered: "", judge: { state: "skipped", lines: [] } };
@@ -85,7 +85,7 @@ export async function currentSummary(ref: PrRef, pull: PullRequest, ledger: Ledg
   const head = { ...ref, commit: pull.head };
   let readAsSaved = true;
   const live = await proofGate(home, head, {
-    landed: pull.state === "merged", cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), small: (body) => smallPr(head, run, body),
+    landed: pull.state === "merged", cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run, () => baseRefs(head, run)), small: (body) => smallPr(head, run, body),
     ci: () => ciOf(home, head, run, now?.() ?? new Date()),
     pushedHead: pushedHeadOf(head, run, (read) => { readAsSaved &&= JSON.stringify(keyOf(read, saved.key.landed, saved.key.fingerprint)) === JSON.stringify(saved.key); }),
     ledger, now: now?.(),

@@ -144,9 +144,9 @@ export function parseVerdict(output: string, model: string): ArbiterVerdict {
 
 export type ReviewLimits = { free: number; ceiling: number; small?: boolean };
 
-export const atCeiling = `fleet proof asks nothing more. For each open blocker or major, revert the fix that brought it in, or list it in a "## Known issues" section of the PR body, one "- <blocker|major>: <file:line> <finding>" item each. A blocker or major that the last read found in the fixes since the panel is reverted, never listed. An open blocker holds the merge; the user's merge word accepts the rest. Only the user's --override runs another review`;
+export const atCeiling = `fleet proof asks nothing more. For each open blocker or major, revert the fix that brought it in, or list it in a "## Known issues" section of the PR body, one "- <blocker|major>: <file:line> <finding>" item each, and answer its finding "<n>. known: <why>". A blocker or major that the last read found in the fixes since the panel is reverted, never listed. An open blocker holds the merge; the user's merge word accepts the rest. Only the user's --override runs another review`;
 
-const budgetSpent = ({ ceiling, small }: ReviewLimits) => `${small ? "A small PR gets one read and no final read." : `The review budget is spent: ${ceiling} reviews, the panel, the fixes read, and the last read.`} ${atCeiling}`;
+const budgetSpent = ({ ceiling, small }: ReviewLimits) => `${small ? "A small PR gets one read and no final read." : `The review budget of ${ceiling} reviews is spent.`} ${atCeiling}`;
 
 async function permitReview(home: string, identity: ProofIdentity, due: boolean, ceiling: string | undefined, decision: DecisionMark | undefined, { arbiter }: Permit) {
   if (decision?.mark === "👤") return undefined;
@@ -391,7 +391,7 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
   const findings = await readFile(join(directory, "findings.md"), "utf8").catch(() => undefined);
   if (findings === undefined) throw new Error(`Review round ${round} has no findings yet`);
   const missing = unanswered(findings, bytes.toString());
-  if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>" or "${missing[0]}. rejected: <why>". Minor and nit findings and TESTS items need no answer`);
+  if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>", "${missing[0]}. rejected: <why>", or, at the review budget, "${missing[0]}. known: <why>" for a finding listed under Known issues. Minor and nit findings and TESTS items need no answer`);
   const destination = join(directory, "responses.md");
   const temporary = `${destination}.${crypto.randomUUID()}`;
   await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
@@ -400,12 +400,12 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
 }
 
 const findingItem = /^\s*(?:[-*]|\d+[.)])\s+\S/;
-const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
+const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected|known)\b/gim;
 
 const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
 
 const findingsBlock = /^\s*FINDINGS\b:?/;
-const testsBlock = /^\s*TESTS\b/;
+const testsBlock = /^\s*(?:#+\s*)?\**TESTS\b/;
 const flooredItem = /^\s*(?:[-*]|\d+[.)])\s+(?:[^|\n]*\|)?\s*\**(?:minor|nit)\**\s*\|/i;
 
 function reviewedLines(findings: string) {
@@ -890,7 +890,7 @@ function headStatus(identity: ProofIdentity, before: PushedHead, after: PushedHe
 
 export type GateOptions = { ci: () => CiResult; pushedHead: () => PushedHead; ledger: Ledger; landed?: boolean; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; small?: (body: string) => boolean; now?: Date };
 
-const knownBlocker = (body: string) => /^#+\s*Known issues\s*$([\s\S]*?)(?=^#|(?![\s\S]))/im.exec(body)?.[1]!.split("\n").find((line) => /^\s*[-*]\s+\**blocker\b/i.test(line))?.trim();
+const knownBlocker = (body: string) => /^#+\s*Known issues\b.*$([\s\S]*?)(?=^#|(?![\s\S]))/im.exec(body)?.[1]!.split("\n").find((line) => /^\s*[-*]\s+\**blocker\b/i.test(line))?.trim();
 
 function heldStatus(head: PushedHead): Status | undefined {
   const blocker = "body" in head && head.body !== undefined ? knownBlocker(head.body) : undefined;

@@ -94,7 +94,7 @@ test("commits that change only test files carry the final read, and a final read
   expect((await pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--standing", "The test pins a rule the code must keep.")).code).toBe(0);
 });
 
-test("a comment, a test folder, a deleted test, a code change beside a test, a test that code imports, a strange name, a mode change, a symlink, or a hidden submodule needs a new review", async () => {
+test("a comment, a test folder, a code change beside a test, a test that code imports, a strange name, a mode change, a symlink, or a hidden submodule needs a new review", async () => {
   const pr = await checkout();
   await pr.commit("feature.ts", "export const limit = 3;\n");
   await pr.commit("feature.test.ts", "expect(limit).toBe(3);\n");
@@ -109,7 +109,6 @@ test("a comment, a test folder, a deleted test, a code change beside a test, a t
   const changes: [string, () => Promise<unknown>][] = [
     ["a comment", () => pr.commit("feature.ts", "// The most a member may send.\nexport const limit = 3;\n")],
     ["a test folder", () => { mkdirSync(join(pr.repository, "test"), { recursive: true }); return pr.commit("test/allowed.ts", "export const allowed = true;\n"); }],
-    ["a deleted test", async () => { await pr.git("rm", "-q", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Drop the test"); }],
     ["a mode change", async () => { await pr.git("update-index", "--chmod=+x", "feature.test.ts"); await pr.git("commit", "-q", "-m", "Make the test executable"); }],
     ["a test with a code change", async () => { writeFileSync(join(pr.repository, "feature.ts"), "export const limit = 4;\n"); writeFileSync(join(pr.repository, "feature.test.ts"), "expect(limit).toBe(4);\n"); await pr.git("commit", "-q", "-a", "-m", "Raise the limit"); }],
     ["a new symlinked test", async () => { symlinkSync("feature.ts", join(pr.repository, "linked.test.ts")); await pr.git("add", "linked.test.ts"); await pr.git("commit", "-q", "-m", "Link a test"); }],
@@ -347,9 +346,9 @@ test("at the review budget fleet asks nothing, --agent cannot pass it, and only 
   const fourth = ["review-start", "--scope", "final", "--base", last];
 
   const refusal = pr.fleet(...fourth);
-  await expect(refusal).rejects.toThrow("The review budget is spent: 3 reviews, the panel, the fixes read, and the last read. fleet proof asks nothing more. For each open blocker or major, revert the fix that brought it in, or list it in a \"## Known issues\" section of the PR body");
+  await expect(refusal).rejects.toThrow("The review budget of 3 reviews is spent. fleet proof asks nothing more. For each open blocker or major, revert the fix that brought it in, or list it in a \"## Known issues\" section of the PR body");
   await expect(pr.fleet(...fourth)).rejects.not.toThrow("question tool");
-  await expect(pr.fleet(...fourth, "--agent", "One more read checks the last fix.")).rejects.toThrow("The review budget is spent");
+  await expect(pr.fleet(...fourth, "--agent", "One more read checks the last fix.")).rejects.toThrow("The review budget of 3 reviews is spent");
   expect(ledgerDecisions(pr)).toEqual([]);
   pr.choose("Run one more round");
   expect((await pr.fleet(...fourth, "--override", `2026-11-14 "Run one more round"`, "--thread", "thread-1")).code).toBe(0);
@@ -367,9 +366,9 @@ test("the review settings set how many reviews run free and where the loop stops
   pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
   await pr.fleet("review-start", "--scope", "fixes", "--base", head);
   await finishRound(pr, "2");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head)).rejects.toThrow("The review budget is spent: 2 reviews");
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head)).rejects.toThrow("The review budget of 2 reviews is spent");
   await pr.commit("feature.txt", "fixed\n");
-  await expect(pr.fleet("review-start", "--scope", "final", "--base", head)).rejects.toThrow("The review budget is spent: 2 reviews");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", head)).rejects.toThrow("The review budget of 2 reviews is spent");
   await expect(pr.fleet("review-start", "--scope", "final", "--base", head, "--phase", "babysit")).resolves.toMatchObject({ code: 0 });
 });
 

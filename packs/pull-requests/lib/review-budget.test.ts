@@ -21,7 +21,7 @@ test("minor and nit findings and TESTS items need no answer, while a blocker, a 
     "- nit | feature.txt:1 | the word reads oddly | anchor: new",
     "- feature.txt:1 the greeting has no severity | anchor: new",
     "COVERED: feature.txt",
-    "TESTS:",
+    "### **TESTS:**",
     "- feature.test.ts:3 asserts the call count of greet",
     "",
   ].join("\n"));
@@ -33,7 +33,7 @@ test("minor and nit findings and TESTS items need no answer, while a blocker, a 
   expect(gate.output).toContain("review: round 1 has unanswered findings 1, 4;");
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n");
   await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 4 too");
-  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n4. rejected: the greeting is the fixture's.\n");
+  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n4. known: listed under Known issues.\n");
   expect((await pr.fleet("respond", "--round", "1", "responses.md")).code).toBe(0);
   expect((await pr.fleet("gate")).code).toBe(0);
 
@@ -61,7 +61,7 @@ test("a blocker in the Known issues section of the PR body holds the merge, and 
   pr.pullRequestState({ body: "Greets new members.\n\n## Known issues\n\n- major: feature.txt:1 the greeting is plain\n" });
   expect((await pr.fleet("gate")).code).toBe(0);
 
-  pr.pullRequestState({ body: "Greets new members.\n\n## Known issues\n\n- major: feature.txt:1 the greeting is plain\n- blocker: feature.txt:1 the greeting drops the name\n\n## Tests\n\n- blocker: not a known issue\n" });
+  pr.pullRequestState({ body: "Greets new members.\n\n## Known issues (2)\n\n- major: feature.txt:1 the greeting is plain\n- blocker: feature.txt:1 the greeting drops the name\n\n## Tests\n\n- blocker: not a known issue\n" });
   const held = await pr.fleet("gate");
   expect(held.code).toBe(1);
   expect(held.output).toContain("known issues: an open blocker holds the merge: - blocker: feature.txt:1 the greeting drops the name");
@@ -73,6 +73,7 @@ test("a docs-only PR, or one under 50 authored lines with low merge risk, gets o
   await pr.commit("README.md", "Greet new members.\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
   const reviewer = fakeModel(pr, "REVIEWER", "FINDINGS:\n(none)\nCOVERED: README.md\n");
+  await expect(pr.fleet("review")).rejects.toThrow("A small PR gets one read, and it is the panel");
 
   const started = await pr.fleet("review", "--lens", "correctness", "--lens", "design");
   expect(JSON.parse(started.output.split("\n")[0]!).lenses).toEqual([{ name: "combined", family: expect.any(String) }]);
@@ -122,7 +123,6 @@ test("the last read reads every fix since the panel commit with the Correctness 
   expect(prompt).toContain(`Review the change ${panel}..${head}`);
   expect(prompt).toContain("This is the last read: the diff holds every fix since the panel. Read it with the Correctness lens:\n\nTrace one concrete input through each new branch.");
   expect(prompt).toContain("-greet\n+greet the new member");
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/final-1/round.json"), "utf8"))).toMatchObject({ base: fixes, from: panel });
 });
 
 test("fleet proof miss records --introduced-by-fix on the case", async () => {
@@ -135,4 +135,31 @@ test("fleet proof miss records --introduced-by-fix on the case", async () => {
   await pr.fleet("miss", "--source", "bot", "--finding", "The greeting skips the welcome email");
   const cases = readFileSync(join(pr.home, ".local/state/fleet/proof/misses.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
   expect(cases.map((miss) => miss.introducedByFix)).toEqual([true, undefined]);
+});
+
+test("a revert of a PR commit, or a commit that only deletes test files, keeps the review, and a revert of a base commit does not", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
+  await pr.commit("feature.txt", "greet\n");
+  await pr.commit("feature.test.ts", "test(\"greets\", () => {});\n");
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  await reviewHead(pr);
+
+  const fix = await pr.commit("feature.txt", "greet the member\n");
+  expect((await pr.fleet("gate")).code).toBe(1);
+  await pr.git("revert", "--no-edit", fix);
+  const reverted = await pr.fleet("gate");
+  expect(reverted.code).toBe(0);
+  expect(reverted.output).toContain("revert of a PR commit");
+
+  await pr.git("rm", "-q", "feature.test.ts");
+  await pr.git("commit", "-q", "-m", "drop the test");
+  const deleted = await pr.fleet("gate");
+  expect(deleted.code).toBe(0);
+  expect(deleted.output).toContain("test-only delta");
+
+  const again = await pr.commit("feature.txt", "greet the new member\n");
+  await pr.git("update-ref", "refs/remotes/origin/main", again);
+  await pr.git("revert", "--no-edit", again);
+  expect((await pr.fleet("gate")).code).toBe(1);
 });

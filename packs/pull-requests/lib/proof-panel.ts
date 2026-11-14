@@ -50,7 +50,7 @@ function section(text: string, heading: string) {
   return end < 0 ? rest : rest.slice(0, end);
 }
 
-function parseGuide(text: string, path: string): PanelGuide {
+export function parseGuide(text: string, path: string): PanelGuide {
   const brief = /```md\n([\s\S]*?)\n```/.exec(section(text, "## Brief") ?? "")?.[1];
   const lenses = section(text, "## Lenses");
   const freshEyes = /\*\*Fresh-eyes lane\*\*:.*?It runs (.+?)(?:, with |\. )/.exec(oneLine(text))?.[1];

@@ -8,14 +8,14 @@ import { HubUnreachable, refText, type Decision, type Ssh } from "./decision-led
 import { readComment, runIn } from "./pr-ci.ts";
 import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { runProof, type RunIO } from "./proof-run.ts";
-import { combinedLens, lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withRoundLock, withSlot, lockNewRound, processStart, roundLock, RoundBusy, RoundGone, type Lens, type LockOwner, type PanelGuide, type PanelIO, type Plan, type RoundLock, type StartTime } from "./proof-panel.ts";
+import { combinedLens, parseGuide, lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withRoundLock, withSlot, lockNewRound, processStart, roundLock, RoundBusy, RoundGone, type Lens, type LockOwner, type PanelGuide, type PanelIO, type Plan, type RoundLock, type StartTime } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { leftOutNote, reviewRange } from "./proof-range.ts";
 import { quietCommitIn } from "./proof-delta.ts";
-import { baseTip, cleanBaseMerge, mergeBase, pullRequestDetails, remotesOf, smallPr, topLevel } from "./proof-checkout.ts";
+import { baseRefs, baseTip, cleanBaseMerge, mergeBase, pullRequestDetails, remotesOf, smallPr, topLevel } from "./proof-checkout.ts";
 import { arbiterOf, finalGate, reviewLimit } from "./proof-gate.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
@@ -444,7 +444,7 @@ first and needs the hub; a round whose decision is recorded finishes without it.
   },
 };
 
-type SingleRound = { round: number | "final"; id: string; directory: string; scope: string; from?: string };
+type SingleRound = { round: number | "final"; id: string; directory: string; scope: string; base?: string; from?: string };
 
 async function runReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
   const { home, run } = context;
@@ -452,7 +452,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const pending = await unfinishedReview(home, head, "fleet");
   if (pending) requireSameRequest(pending, options, run);
   const reserved: SingleRound = pending
-    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
+    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
     : await reserveFleetReview(options, head, context);
   return roundStep(reserved.directory, context, async () => {
     if (await readPlan(reserved.directory) || await stagedPlan(reserved.directory)) throw new Error(`${reserved.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
@@ -483,7 +483,8 @@ async function askReviewer(reserved: SingleRound, head: ProofIdentity, author: F
   const rules = reviewRules(files, baseTip(head, run), run);
   const diffFile = join(reserved.directory, "diff.patch");
   await writeFile(diffFile, diff, { mode: 0o600 });
-  const lens = reserved.round === "final" ? (await readPanelGuide(home)).lenses.get("correctness")?.text : undefined;
+  const guide = reserved.round === "final" && reserved.from !== reserved.base ? await panelGuideText(home) : undefined;
+  const lens = guide && parseGuide(guide.text, guide.path).lenses.get("correctness")?.text;
   const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, diffFile, note: leftOutNote(leftOut), crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules, lens });
   const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory] }, env, limit);
   const label = reserved.round === "final" ? "The final read" : `Round ${reserved.round}`;
@@ -501,22 +502,24 @@ async function askReviewer(reserved: SingleRound, head: ProofIdentity, author: F
   return 0;
 }
 
-async function reserveFleetReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+async function reserveFleetReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext, panel = false) {
   const scope = options.get("--scope") ?? "full";
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
-  return reserveRound(options, head, context, "fleet");
+  return reserveRound(options, head, context, "fleet", panel);
 }
 
-async function reserveRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext, capturedBy: CapturedBy) {
+async function reserveRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext, capturedBy: CapturedBy, panel = false) {
   await settleStrandedRounds(head, context);
   const scope = options.get("--scope") ?? "full";
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-  const from = scope === "final" ? await panelCommit(context.home, head) ?? base : rangeStart(scope, base, head, context.run);
+  const lastRead = scope === "final" && (options.get("--phase") ?? "review") === "review";
+  const from = lastRead ? await panelCommit(context.home, head) ?? base : rangeStart(scope, base, head, context.run);
   const { decision, ...permit } = await decisionOf(options, head, context);
   const small = isSmall(head, context);
+  if (small && capturedBy === "fleet" && !panel && !decision && !await panelCommit(context.home, head)) throw new Error("A small PR gets one read, and it is the panel: run fleet proof review --lens <lens> ..., which runs the lenses as one combined lens");
   const limits = small ? { ...permit.limits, ceiling: 1, small } : permit.limits;
-  const reserved = await startReview(context.home, head, { scope, base, from, ...permit, limits, decision, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy, lock: async (directory) => lockNewRound(directory, await context.lock()) });
-  return { ...reserved, scope, from };
+  const reserved = await startReview(context.home, head, { scope, base, from, ...permit, limits, decision, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run, () => baseRefs(head, context.run)), capturedBy, lock: async (directory) => lockNewRound(directory, await context.lock()) });
+  return { ...reserved, scope, base, from };
 }
 
 async function unrecordedRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
@@ -576,7 +579,7 @@ async function recordRound(directory: string, context: CommandContext) {
 
 const rangeStart = (scope: string, base: string | undefined, head: ProofIdentity, run: Run) => scope === "full" ? mergeBase(head, run) : base;
 
-const isSmall = (head: ProofIdentity, { run }: CommandContext) => smallPr(head, run, pullRequestDetails(head, run).body);
+const isSmall = (head: ProofIdentity, { run }: CommandContext) => { try { return smallPr(head, run, pullRequestDetails(head, run).body); } catch { return false; } };
 
 const waitPolls = 108;
 const pollInterval = 5_000;
@@ -623,7 +626,7 @@ const castOf = ({ family, row }: Lens, env: Record<string, string | undefined>) 
 
 async function reservePanel(options: Map<string, string>, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
   const rubric = await readRubric(context.home);
-  const reserved = await reserveFleetReview(options, head, context);
+  const reserved = await reserveFleetReview(options, head, context, true);
   return roundStep(reserved.directory, context, async () => {
     try {
       const { plan, briefs } = await panelBriefs(reserved, head, lenses, guide, rubric, context);

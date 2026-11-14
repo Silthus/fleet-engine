@@ -48,7 +48,8 @@ export function smallPr(identity: ProofIdentity, run: Run, body: string) {
     const [added = "", deleted = "", path = ""] = entry.split("\t");
     return { lines: Number(added) + Number(deleted), path };
   });
-  if (files.length && files.every(({ path }) => docsFile.test(path))) return true;
+  if (!files.length) return false;
+  if (files.every(({ path }) => docsFile.test(path))) return true;
   const authored = files.filter(({ path }) => !isTestFile(path) && !lockFile.test(path)).reduce((sum, { lines }) => sum + lines, 0);
   return authored < smallLines && mergeRiskOf(body) === "low";
 }
