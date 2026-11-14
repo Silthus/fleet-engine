@@ -178,6 +178,17 @@ test("output pieces never join into a value, and a run of one repeated value sti
   expect(Buffer.concat(written).toString("utf8")).not.toContain("aaaaaaaa");
 });
 
+test("a value longer than the streamed piece is held until it is complete, never written in part", () => {
+  const big = made("big-").padEnd(heldLimit + 4_464, "q");
+  const written: Uint8Array[] = [];
+  const redactor = lineRedactor([{ value: big, label: "[redacted big]" }], (bytes) => written.push(bytes));
+  redactor.push(Buffer.from(big.slice(0, heldLimit + 1)));
+  expect(Buffer.concat(written).toString("utf8")).toBe("");
+  redactor.push(Buffer.from(`${big.slice(heldLimit + 1)}\n`));
+  redactor.end();
+  expect(Buffer.concat(written).toString("utf8")).toBe("[redacted big]\n");
+});
+
 test("a value with a line break is refused, and the request_secret file is gone after a refused put", async () => {
   const machine = fleet();
   const file = machine.secretFile(machine.devHome, `${sendKey}\n${otherKey}\n`);

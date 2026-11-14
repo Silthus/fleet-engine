@@ -65,7 +65,7 @@ fleet secret run example-send -- <command>
   `[redacted <name>]` (`[redacted]` when that label would spell a value), and
   exits with the command's code. Every other byte passes unchanged, binary
   output included, and a long line without a line break streams in pieces of
-  64 KiB. A line whose redaction would still show a value is withheld whole. A value that the command encodes, splits, or writes
+  64 KiB, holding back any part of a value until the value is complete. A line whose redaction would still show a value is withheld whole. A value that the command encodes, splits, or writes
   to a file is not redacted. Pass credentials through the environment or stdin,
   never argv.
 - `run` refuses when the store is off, a name is unknown, its value is missing

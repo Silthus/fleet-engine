@@ -233,6 +233,7 @@ export function lineRedactor(secrets: { value: string; label: string }[], write:
       }
       if (held.length <= heldLimit) return;
       const cut = cutOutside(held, encoded, held.length - longest + 1);
+      if (cut <= 0) return;
       show(held.subarray(0, cut));
       held = held.subarray(cut);
     },
