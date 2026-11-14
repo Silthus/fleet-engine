@@ -28,12 +28,29 @@ const cookieNameKey = new RegExp(String.raw`${key("name")}${metabaseCookie}(?![\
 const valueKey = new RegExp(`${key("value")}(${metabaseValue})`, "g");
 
 function cookieRecordValues(text: string) {
-  const cookies = [...text.matchAll(cookieNameKey)].map((match) => match.index);
-  if (!cookies.length) return [];
+  const cookies = new Set([...text.matchAll(cookieNameKey)].map((match) => match.index));
+  if (!cookies.size) return [];
+  const names = [...text.matchAll(nameKey)].map((match) => match.index);
   const values = [...text.matchAll(valueKey)].map((match) => ({ at: match.index, value: match[1]! }));
-  const records = recordsAt(text, [...cookies, ...values.map((value) => value.at)]);
-  const cookieRecords = new Set(cookies.map((at) => records.get(at)));
-  return values.filter((value) => cookieRecords.has(records.get(value.at))).map((value) => value.value);
+  const records = recordsAt(text, [...names, ...values.map((value) => value.at)]);
+  const namesIn = new Map([...Map.groupBy(names, (at) => records.get(at))].map(([record, owners]) => [record, new Set(owners)]));
+  const between: (typeof values)[] = names.map(() => []).concat([[]]);
+  let slot = 0;
+  for (const value of values) {
+    while (slot < names.length && names[slot]! < value.at) slot++;
+    between[slot]!.push(value);
+  }
+  const ownedElsewhere = (value: (typeof values)[number], cookie: number) => {
+    const owners = namesIn.get(records.get(value.at));
+    return !!owners && !owners.has(cookie);
+  };
+  return names.flatMap((at, index) => cookies.has(at) ? [...between[index]!, ...between[index + 1]!].filter((value) => !ownedElsewhere(value, at)).map((value) => value.value) : []);
+}
+
+function escapes(text: string, at: number) {
+  let count = 0;
+  while (text[at - 1 - count] === "\\") count++;
+  return count;
 }
 
 function recordsAt(text: string, positions: number[]) {
@@ -47,7 +64,7 @@ function recordsAt(text: string, positions: number[]) {
   for (let at = 0; next < wanted.length; at++) {
     while (wanted[next] === at) records.set(wanted[next++]!, `${open.at(-1) ?? -1}:${item}`);
     const char = text[at];
-    if (char === '"' && text[at - 1] !== "\\") quoted = !quoted;
+    if (char === '"' && escapes(text, at) % 2 === 0) quoted = !quoted;
     else if (!quoted && char === "{") open.push(at);
     else if (!quoted && char === "}") open.pop();
     else if (!quoted && lineStart && char === "-" && text[at + 1] === " ") item++;

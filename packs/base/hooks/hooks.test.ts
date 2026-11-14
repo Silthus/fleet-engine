@@ -139,6 +139,9 @@ describe("secret guard", () => {
     ["a JavaScript cookie literal", `await context.addCookies([{ name: '${cookieKey}', value: '${metabaseSession}', domain: 'metabase.example.com' }]);`],
     ["a YAML cookie list", `cookies:\n  - name: ${cookieKey}\n    domain: metabase.example.com\n    value: ${metabaseSession}\n`],
     ["a Netscape cookies.txt line", `metabase.example.com\tFALSE\t/\tTRUE\t0\t${cookieKey}\t${metabaseSession}\n`],
+    ["a JavaScript cookie whose path holds a brace", `{ name: '${cookieKey}', path: '/{', value: '${metabaseSession}' }`],
+    ["a YAML cookie whose path holds a brace", `- name: ${cookieKey}\n  path: '/{'\n  value: ${metabaseSession}\n`],
+    ["a JSON cookie with an escaped backslash before a brace", JSON.stringify([{ name: cookieKey, path: "\\", note: "{", value: metabaseSession }])],
     ["a JSON-escaped pretty-printed cookie", JSON.stringify({ stdout: JSON.stringify([{ name: cookieKey, secure: true, value: metabaseSession }], null, 2) })],
   ])("finds a Metabase session cookie in %s", (_, text) => {
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");
