@@ -101,6 +101,17 @@ describe("secret guard", () => {
     expect(output).toContain("[redacted Metabase session cookie]; theme=dark");
   });
 
+  test.each([
+    ["a quoted cookie", (value: string) => `Cookie: metabase${"."}SESSION="${value}"; theme=dark`],
+    ["a JSON-escaped quoted cookie", (value: string) => JSON.stringify({ header: `metabase${"."}DEVICE="${value}"` })],
+  ])("finds a Metabase session cookie in %s, in a prompt and in tool output", (_, shape) => {
+    const value = `${body(8)}-${body(4)}-${body(4)}-${body(4)}-${body(12)}`;
+    expect(guard("claude", promptEvent(shape(value)))?.decision).toBe("block");
+    const decision = guard("claude", toolEvent({ stdout: shape(value) }))!;
+    expect(JSON.stringify(decision)).toContain("[redacted Metabase session cookie]");
+    expect(JSON.stringify(decision)).not.toContain(value);
+  });
+
   test.each(["claude", "codex"] as const)("%s guard messages point at request_secret file delivery and fleet secret put --file", (provider) => {
     const decision = guard(provider, toolEvent({ stdout: githubToken }))!;
     for (const reason of [guard(provider, promptEvent(`key: ${githubToken}`))!.reason, decision.reason ?? (decision.hookSpecificOutput as { additionalContext: string }).additionalContext]) {

@@ -423,7 +423,17 @@ export function listLines(store: Store): string[] {
 
 function printedLines(store: Store, row: SecretRow, put: PutEvent) {
   const laneLines = isLane(put) ? [droppedLine([put.name], put.lane), revokeLine(put), latePutLine(put)] : [];
-  return [rowLine(store, row, put), cardText(row, put), storedLine(put), ...laneLines];
+  const day = (at: string | undefined) => at?.slice(0, 10) ?? "";
+  const ends = [put.storeExpiresAt, put.expiresAt].filter((at): at is string => !!at).sort();
+  const states = [...ends.flatMap((at) => [`expires ${day(at)}`, `expired ${day(at)}`]), `past its store expiry ${day(put.storeExpiresAt)}`, "missing its value file", "dropped by its lane", "missing"];
+  const stateLines = states.map((state) => `${row.name}: ${state}. ${cardText(row, put)}`);
+  return [rowLine(store, row, put), cardText(row, put), storedLine(put), ...laneLines, ...stateLines];
+}
+
+export function storedValues(home: string): string[] {
+  let puts: PutEvent[];
+  try { puts = [...fold(readEvents(home)).puts.values()]; } catch { return []; }
+  return puts.flatMap((put) => { try { return Object.values(parseValues(readFileSync(valuePath(home, put), "utf8"))).filter(Boolean); } catch { return []; } });
 }
 
 export const storedLine = (put: PutEvent) => `Stored ${put.name} (${put.id})${put.lane ? ` for lane ${put.lane}` : ""}; store expiry ${put.storeExpiresAt?.slice(0, 10)}.`;

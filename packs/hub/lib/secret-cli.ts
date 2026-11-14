@@ -7,7 +7,7 @@ import { fleetOnHub, HubUnreachable, remoteHub, runSsh, type Env, type Ssh } fro
 import { checkedRows, injectedRows, rowModules } from "./secret-rows.ts";
 import {
   currentOff, deliver, droppedLine, dropLane, dueLines, enableOptions, enableQuestion, failureOf, laneDays, lanePuts, listLines, needLines, piecesOf, putValue, secretFilesDir, SecretRefusal, standingDays,
-  olderHub, storedLine, sweep, turnOff, turnOn, unshown, whys,
+  olderHub, storedLine, storedValues, sweep, turnOff, turnOn, unshown, whys,
   type AppendLog, type WriteBytes, type Delivered, type Heard, type PutEvent, type PutInput, type SecretRow, type Store, type Why,
 } from "./secret-store.ts";
 
@@ -75,7 +75,17 @@ async function loadedRows(context: SecretContext): Promise<SecretRow[] | Answer>
 
 const storeOf = (context: SecretContext): Store => ({ home: context.home, rows: [], now: context.now?.() ?? new Date(), ...context.appendLog ? { appendLog: context.appendLog } : {}, ...context.write ? { write: context.write } : {} });
 
+const withheldLine = "A line was withheld, as it would show a stored value.";
+
 async function answer(context: SecretContext, request: Request): Promise<Answer> {
+  const before = storedValues(context.home);
+  const reply = await answerUnchecked(context, request);
+  const values = [...before, ...storedValues(context.home), ...request.op === "put" ? piecesOf(request.text) : []];
+  if (!reply.ok) return { ok: false, error: unshown([reply.error, "Refused, and the reason would show a stored value", "Refused"], values) };
+  return reply.lines ? { ...reply, lines: reply.lines.map((line) => unshown([line, withheldLine, "Withheld"], values)) } : reply;
+}
+
+async function answerUnchecked(context: SecretContext, request: Request): Promise<Answer> {
   const store = storeOf(context);
   try {
     if (request.op === "off") { turnOff(store, request); return { ok: true, lines: ["The store is off: every read is refused until the user's words turn it on (fleet secret on)."] }; }

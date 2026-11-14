@@ -191,3 +191,20 @@ test("a drop or a report against a hub with an older fleet secret, which answers
   expect(machine.printed.at(-1)).toBe("Fleet secret: the hub runs an older fleet secret that has no drop, so nothing was done there. Run fleet update on the hub\n");
   await expect(laneEvents({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA)).rejects.toThrow("has no lane read");
 });
+
+test("a value that spells a line Fleet prints later, such as a due line or a drop that names several secrets, never shows", async () => {
+  const machine = fleet();
+  const due = "stripe-test: expires";
+  const joined = "alpha-key, beta-key";
+  values.push(due, joined);
+  expect(await lanePut(machine, "stripe-test", due, "--lane", laneA, "--env", "STRIPE_KEY", "--why", "intake", "--expires", "2026-11-16")).toBe(1);
+  expect(machine.printed.at(-1)).toBe("Fleet secret: Refused, and the reason would show part of the value. Nothing was stored\n");
+  expect(await lanePut(machine, "alpha-key", joined, "--lane", laneA, "--env", "ALPHA_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/a")).toBe(0);
+  expect(await lanePut(machine, "beta-key", laneValue(), "--lane", laneA, "--env", "BETA_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/b")).toBe(0);
+  machine.clock.now = new Date("2026-11-19T12:00:00Z");
+  expect(await machine.dev("list", "--due")).toBe(0);
+  expect(await machine.dev("drop", "--lane", laneA)).toBe(0);
+  expect(machine.printed.at(-1)).toBe("A line was withheld, as it would show a stored value.\n");
+  expect(valueFiles(machine.hubHome)).toEqual([]);
+  machine.expectNoLeak();
+});

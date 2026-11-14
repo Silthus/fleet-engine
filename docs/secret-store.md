@@ -126,8 +126,10 @@ fleet secret drop --lane example/tickets#401
   name: when two lanes put one name at once, the later put deletes its value
   and is refused.
 - A put is refused when any line Fleet prints from it would spell the value:
-  its list line, card, stored and dropped lines, and the report's revoke and
-  late-put lines.
+  its list line, card, stored and dropped lines, its due and need lines in
+  each expiry state, and the report's revoke and late-put lines. A line that
+  joins several secrets, such as a drop's, is withheld when it would spell a
+  value.
 - `list` shows lane secrets after the declared rows, `list --due` names a lane
   secret from 1 day before its store expiry, not 7, and `list --need` prints
   its lane put card.
@@ -170,7 +172,9 @@ such a line; that costs one more question, never a read.
 The store guards against accidental exposure: a value in a transcript, in tool
 output, or on a devbox's disk. A failure that is not a refusal prints a fixed
 message, never the error's own text, and a caller never shows the hub's
-stderr. `put` checks every line it prints against the values it read. It does not guard against the hub's own user
+stderr. `put` checks every line it prints against the values it read, and the
+hub checks every line and error it sends back against the values it holds:
+it withholds a line that would show one. It does not guard against the hub's own user
 reading a value file, or a value that a command encodes, splits, or writes to a
 file. After a suspected leak, run `off` first, then rotate the secret at its
 settings link.
