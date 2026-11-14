@@ -1,4 +1,3 @@
-import { isBoxName } from "../../../src/hub/names.ts";
 import { onHost } from "../../../src/hub/ssh.ts";
 import { threadUrl, UnansweredLaunch } from "../../../src/integrations/t3/index.ts";
 import type { Threads } from "../../../src/sdk/index.ts";
@@ -84,7 +83,7 @@ const notConnected = /^ssh: (connect to host \S+ port \d+: |Could not resolve ho
  */
 export function launchOnNodes(nodes: string[], run: Run, turn: () => number): Launch {
   return async ({ claim, ...request }) => {
-    const held = claim && nodes.includes(claim.box) && !isBoxName(claim.box) ? claim.box : undefined;
+    const held = claim && nodes.includes(claim.box) ? claim.box : undefined;
     const node = held ?? nodes[turn() % nodes.length]!;
     const ran = await run(onHost(node, ["slack-trigger", "launch"], keepAlive), JSON.stringify(held ? request : { ...request, replay: undefined }), { timeoutMs: nodeLaunchLimitMs });
     const answer = answerOf(lastLine(ran.stdout));
