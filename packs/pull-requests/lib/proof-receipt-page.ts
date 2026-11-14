@@ -37,6 +37,7 @@ const escaped = (text: string) => text.replace(/[\\`*_[\]~|]/g, "\\$&");
 const unescaped = (text: string) => text.replace(/\\(.)/g, "$1");
 const startsBlock = (text: string) => text.replace(/^([ \t]*)([-+>#=]|\d+[.)])/gm, "$1\\$2");
 const block = (text: string) => `${startsBlock(text.trim())}\n\n`;
+const destination = (url: string) => url.replace(/[\s()<>]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`);
 const indented = (text: string, by: string) => text.trimEnd().split("\n").map((line, index) => index && line ? `${by}${line}` : line).join("\n");
 
 function codeSpan(children: string) {
@@ -54,8 +55,8 @@ function proseShape(count: (lines: number) => void) {
     strong: (children: string) => `**${children}**`,
     emphasis: (children: string) => `_${children}_`,
     strikethrough: (children: string) => `~~${children}~~`,
-    link: (children: string, meta: { href: string }) => `[${children}](<${meta.href.replace(/[<>\s]/g, encodeURIComponent)}>)`,
-    image: (children: string, meta: { src: string }) => `[${children || "image"}](<${meta.src.replace(/[<>\s]/g, encodeURIComponent)}>)`,
+    link: (children: string, meta: { href: string }) => `[${children}](${destination(meta.href)})`,
+    image: (children: string, meta: { src: string }) => `[${children || "image"}](${destination(meta.src)})`,
     paragraph: block,
     html: block,
     heading: (children: string) => `**${children.trim()}**\n\n`,
@@ -76,21 +77,28 @@ function proseShape(count: (lines: number) => void) {
   };
 }
 
-export function proseOf(text: string) {
-  let left = 0;
-  const lines = Bun.markdown.render(text, proseShape((lines) => { left += lines; })).split("\n");
-  const kept: string[] = [];
+const pureFence = /^[ \t]*(?:`{3,}[^`]*|~{3,}.*)$/;
+
+function withoutTranscripts(lines: string[]) {
+  const inner = lines.map((line) => line.replace(quoted, ""));
+  const nextExit: number[] = [];
+  for (let index = lines.length - 1, exit = -1; index >= 0; index--) nextExit[index] = exit = inner[index]!.startsWith("exit=") ? index : exit;
   let through = -1;
-  lines.forEach((line, index) => {
-    const inner = unescaped(line.replace(quoted, ""));
-    if (index <= through || inner.startsWith("exit=")) left++;
-    else if (inner.startsWith("$ ")) {
-      left++;
-      const exit = lines.findIndex((later, at) => at > index && unescaped(later.replace(quoted, "")).startsWith("exit="));
-      if (exit > index) through = exit;
-    } else kept.push(line);
+  let left = 0;
+  const kept = lines.map((line, index) => {
+    if (index > through && inner[index]!.startsWith("$ ")) through = Math.max(index, nextExit[index]!);
+    if (index > through && !inner[index]!.startsWith("exit=") || pureFence.test(inner[index]!)) return line;
+    left++;
+    return "";
   });
-  return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), left };
+  return { kept, left };
+}
+
+export function proseOf(text: string) {
+  const { kept, left: transcripts } = withoutTranscripts(text.split(/\r\n|\r|\n/));
+  let left = transcripts;
+  const prose = Bun.markdown.render(kept.join("\n"), proseShape((lines) => { left += lines; }));
+  return { text: prose.replace(/\n{3,}/g, "\n\n").trim(), left };
 }
 
 const severities = ["blocker", "major", "minor", "nit", "high", "medium", "low"];
