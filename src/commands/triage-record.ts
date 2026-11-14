@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Terminal } from "../setup/terminal.ts";
 
@@ -7,8 +7,6 @@ const logsDir = (home: string) => join(stateDir(home), "logs");
 export const transcriptPath = (home: string) => join(logsDir(home), "setup.log");
 export const failurePath = (home: string) => join(logsDir(home), "setup-failed.json");
 export const timingsPath = (home: string) => join(logsDir(home), "setup-timings.json");
-
-const keptBytes = 512 * 1024;
 
 /** The last failed setup run: when, at which step, and the error it printed. */
 export type SetupFailure = { at: string; step?: string; error: string };
@@ -27,16 +25,15 @@ export type Recorder = {
 
 /**
  * Records one fleet setup run: every line it prints and every answer typed,
- * appended to the setup transcript, which keeps only its newest part. A
- * new run clears the last failure. Only the user can read the records, and
- * a record that cannot be written never stops setup.
+ * appended to the setup transcript. A new run clears the last failure.
+ * Only the user can read the records, and a record that cannot be written
+ * never stops setup.
  */
 export function recordSetup(home: string, terminal: Terminal, args: string[], now = new Date()): Recorder {
   const path = transcriptPath(home);
   const ready = quietly(() => {
     mkdirSync(logsDir(home), { recursive: true, mode: 0o700 });
     chmodSync(logsDir(home), 0o700);
-    trim(path);
     rmSync(failurePath(home), { force: true });
     if (existsSync(path)) chmodSync(path, 0o600);
     return true;
@@ -79,13 +76,6 @@ function quietly<T>(work: () => T): T | undefined {
   } catch {
     return undefined;
   }
-}
-
-function trim(path: string) {
-  if (!existsSync(path) || statSync(path).size <= keptBytes) return;
-  const text = readFileSync(path, "utf8");
-  const tail = text.slice(-keptBytes);
-  writeFileSync(path, tail.slice(tail.indexOf("\n") + 1));
 }
 
 export function readFailure(home: string): SetupFailure | undefined {
