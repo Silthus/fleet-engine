@@ -33,49 +33,60 @@ const fenced = (text: string) => {
 };
 
 const quoted = /^(?:[\s>]|[-*+](?=\s)|\d+[.)](?=\s))*/;
-const codeBlock = /\uE000([^\uE001]*)\uE001/g;
-const codeOnly = (children: string) => children.match(codeBlock)?.join("") ?? "";
-const codeShape = {
-  ...Object.fromEntries(["blockquote", "list", "listItem", "paragraph", "heading", "table", "thead", "tbody", "tr", "th", "td", "hr", "html"].map((kind) => [kind, codeOnly])),
-  code: (children: string) => `\uE000${children}\uE001`,
+const codeCount = /\uE000(\d+)\uE001/g;
+const countsOnly = (children: string) => children.match(codeCount)?.join("") ?? "";
+const countShape = {
+  ...Object.fromEntries(["blockquote", "list", "listItem", "paragraph", "heading", "table", "thead", "tbody", "tr", "th", "td", "hr", "html"].map((kind) => [kind, countsOnly])),
+  code: (children: string) => `\uE000${children.split("\n").filter((line) => /\S/.test(line)).length}\uE001`,
   text: (text: string) => text,
 };
+type CodeCount = { blocks: number; lines: number };
+const filled = (lines: string[], from: number, to: number) => lines.slice(from, to).filter((line) => /\S/.test(line)).length;
 
-function codeTextOf(text: string) {
-  const shown = Bun.markdown.render(text, codeShape);
-  return new Set([...shown.matchAll(codeBlock)].flatMap((block) => block[1]!.split("\n")).map((line) => line.trim()).filter(Boolean));
+function codeCountOf(lines: string[], end: number): CodeCount {
+  const counts = [...Bun.markdown.render(lines.slice(0, end).join("\n"), countShape).matchAll(codeCount)];
+  return { blocks: counts.length, lines: counts.reduce((sum, count) => sum + Number(count[1]), 0) };
 }
 
-function isCode(line: string, code: Set<string>) {
-  const prefix = quoted.exec(line)![0];
-  if (!/ {4}|\t/.test(prefix)) return false;
-  for (let at = 0; at <= prefix.length; at++) if (code.has(line.slice(at).trim())) return true;
-  return false;
+function codeLinesOf(lines: string[]) {
+  const code = new Set<number>();
+  const openers = new Set<number>();
+  const find = (from: number, to: number, before: CodeCount, after: CodeCount) => {
+    if (before.blocks === after.blocks && before.lines === after.lines) return;
+    if (after.lines - before.lines === filled(lines, from, to)) {
+      for (let index = from; index < to; index++) if (/\S/.test(lines[index]!)) code.add(index);
+      return;
+    }
+    if (to - from === 1) return void (after.lines > before.lines ? code : openers).add(from);
+    const middle = (from + to) >> 1;
+    const between = codeCountOf(lines, middle);
+    find(from, middle, before, between);
+    find(middle, to, between, after);
+  };
+  find(0, lines.length, { blocks: 0, lines: 0 }, codeCountOf(lines, lines.length));
+  let last = -1;
+  lines.forEach((line, index) => {
+    const closes = /^(?:`{3,}|~{3,})[ \t]*$/.test(line.replace(quoted, "")) && (code.has(last) || openers.has(last));
+    if (closes || openers.has(index)) code.add(index);
+    if (/\S/.test(line)) last = index;
+  });
+  return code;
 }
 
 export function proseOf(text: string) {
-  const source = text.replace(/[\uE000\uE001]/g, "\uE002");
   const lines = text.split(/\r\n|\r|\n/);
-  const sourceLines = source.split(/\r\n|\r|\n/);
-  const code = codeTextOf(source);
+  const code = codeLinesOf(lines);
   const kept: string[] = [];
-  let fence: string | undefined;
   let through = -1;
   let left = 0;
   lines.forEach((line, index) => {
     const inner = line.replace(quoted, "");
-    const marker = /^(`{3,}|~{3,})/.exec(inner)?.[1];
-    if (fence) {
-      left++;
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length && inner.trim() === marker) fence = undefined;
-    } else if (marker) { fence = marker; left++; }
-    else if (index <= through) left++;
+    if (code.has(index) || index <= through || inner.startsWith("exit=")) left++;
     else if (inner.startsWith("$ ")) {
       left++;
       const exit = lines.findIndex((later, at) => at > index && later.replace(quoted, "").startsWith("exit="));
       if (exit > index) through = exit;
-    } else if (inner.startsWith("exit=") || isCode(sourceLines[index]!, code)) left++;
-    else kept.push(line.replace(/^((?:\s*>)*\s*)#{1,6}[ \t]+(.*?)[ \t#]*$/, "$1**$2**"));
+    } else kept.push(line.replace(/^((?:\s*>)*\s*)#{1,6}[ \t]+(.*?)[ \t#]*$/, "$1**$2**"));
   });
   return { text: kept.join("\n").replace(/\n{3,}/g, "\n\n").trim(), left };
 }
