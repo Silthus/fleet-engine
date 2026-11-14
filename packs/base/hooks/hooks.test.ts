@@ -197,6 +197,19 @@ describe("secret guard", () => {
     expect(output).not.toContain(tail);
   });
 
+  test("redacts a cookie value that holds another secret's shape whole, so no part of it is left", () => {
+    const head = "a1b2c3d4e5f6g7h8i9j0";
+    const value = `${head}-${["xo", "xb"].join("")}-123-${"k".repeat(12)}`;
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: JSON.stringify([{ name: cookieKey, value }]) }))?.hookSpecificOutput);
+    expect(output).not.toContain(head);
+    expect(output).toContain("[redacted Metabase session cookie]");
+  });
+
+  test("keeps the cookie's name in a cookie header", () => {
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: `Cookie: ${cookieKey}=${metabaseSession}; theme=dark` }))?.hookSpecificOutput);
+    expect(output).toContain(`${cookieKey}=[redacted Metabase session cookie]; theme=dark`);
+  });
+
   test("finds a secret inside deeply nested JSON text", () => {
     const text = `${"[".repeat(20_000)}"${githubToken}"${"]".repeat(20_000)}`;
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");

@@ -23,7 +23,7 @@ const metabaseValue = "(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}";
 const gap = String.raw`(?:\s|\\[rnt]){0,16}`;
 const cookieName = new RegExp(`^${metabaseCookie}$`);
 const cookieMention = new RegExp(metabaseCookie);
-const valueToken = new RegExp(`(?<![A-Za-z0-9._~+/=-])${metabaseValue}(?![A-Za-z0-9._~+/=-])`, "g");
+const valueToken = /(?<![A-Za-z0-9._~+/-])(?=[A-Za-z0-9._~+/-]*[0-9])[A-Za-z0-9._~+/-]{20,}={0,2}(?![A-Za-z0-9._~+/=-])/g;
 const wholeValue = new RegExp(`^${metabaseValue}$`);
 const jsonStart = /^\s*[[{"]/;
 
@@ -118,7 +118,7 @@ function mapProperties(value: object, change: (text: string) => string) {
 function cookieValue(cookie: string, entry: string, change: (text: string) => string) {
   const named = `${cookie}=`;
   const changed = change(`${named}${entry}`);
-  return changed.startsWith(named) ? changed.slice(named.length) : change(entry);
+  return changed.startsWith(named) ? changed.slice(named.length) : changed;
 }
 
 function uniqueNames() {
@@ -137,21 +137,22 @@ function uniqueNames() {
 export function secretKinds(value: unknown): string[] {
   const kinds = new Set<string>();
   mapStrings(value, (text) => {
-    for (const shape of shapes) if ("pattern" in shape ? text.match(shape.pattern) : shape.values(text).length) kinds.add(shape.kind);
+    for (const { kind } of secretsIn(text)) kinds.add(kind);
     return text;
   });
   return [...kinds];
 }
 
-export const replaceSecrets = (text: string, replace: (kind: string, value: string) => string) =>
-  shapes.reduce((result, shape) => "pattern" in shape
-    ? result.replace(shape.pattern, (value) => replace(shape.kind, value))
-    : replaceValues(result, shape.kind, shape.values, replace), text);
+const secretsIn = (text: string) =>
+  shapes.flatMap((shape) => ("pattern" in shape ? text.match(shape.pattern) ?? [] : shape.values(text)).map((value) => ({ kind: shape.kind, value })));
 
-function replaceValues(text: string, kind: string, values: (text: string) => string[], replace: (kind: string, value: string) => string) {
-  const longestFirst = [...new Set(values(text))].sort((left, right) => right.length - left.length);
-  const replaced = longestFirst.reduce((changed, value) => changed.split(value).join(replace(kind, value)), text);
-  return values(replaced).length ? replace(kind, text) : replaced;
+export function replaceSecrets(text: string, replace: (kind: string, value: string) => string) {
+  const kinds = new Map<string, string>();
+  for (const { kind, value } of secretsIn(text)) if (!kinds.has(value)) kinds.set(value, kind);
+  const longestFirst = [...kinds].sort(([left], [right]) => right.length - left.length);
+  const replaced = longestFirst.reduce((changed, [value, kind]) => changed.split(value).join(replace(kind, value)), text);
+  const left = secretsIn(replaced)[0];
+  return left ? replace(left.kind, text) : replaced;
 }
 
 /** Replaces every secret-shaped value in a text with its kind. */
