@@ -485,12 +485,12 @@ const majorItem = /^\s*(?:[-*]|\d+[.)])\s+(?:[^|\n]*\|)?\s*\**major\**\s*\|/i;
 const knownBlockers = (findings: string, responses: string) =>
   answeredFindings(findings, responses).findings.flatMap(({ text, answer }, index) => answer?.verdict === "known" && !majorItem.test(text) && !flooredItem.test(text) ? [index + 1] : []);
 
-const locationOf = (text: string) => /[\w./-]+:\d+/.exec(text)?.[0];
+const locations = (text: string) => [...text.matchAll(/(?<![\w./-])([\w./-]+:\d+)(?![\w:])/g)].map((match) => match[1]!);
 
 const unlistedKnown = (findings: string, responses: string, listed: string[]) =>
   answeredFindings(findings, responses).findings.flatMap(({ text, answer }, index) => {
-    const location = locationOf(text);
-    return answer?.verdict === "known" && !listed.some((item) => !location || item.includes(location)) ? [index + 1] : [];
+    const location = locations(text)[0];
+    return answer?.verdict === "known" && !(location && listed.some((item) => locations(item).includes(location))) ? [index + 1] : [];
   });
 
 const unanswered = (findings: string, responses: string) =>

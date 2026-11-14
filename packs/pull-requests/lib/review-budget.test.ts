@@ -109,8 +109,10 @@ test("at the budget a known answer settles a major the PR body lists by file:lin
   const unlisted = await pr.fleet("gate");
   expect(unlisted.code).toBe(1);
   expect(unlisted.output).toContain("known issues: round 1 answers findings 2 known, but the \"## Known issues\" section of the PR body does not list their file:line");
-  pr.pullRequestState({ body: "Greets new members.\n\n## Known issues\n\n- major: feature.txt:1 another finding\n" });
-  expect((await pr.fleet("gate")).code).toBe(1);
+  for (const item of ["feature.txt:1 another finding", "README.md:12 a later line", "docs/README.md:1 another file", "the page is terse"]) {
+    pr.pullRequestState({ body: `Greets new members.\n\n## Known issues\n\n- major: ${item}\n` });
+    expect((await pr.fleet("gate")).code).toBe(1);
+  }
   pr.pullRequestState({ body: "Greets new members.\n\n## Known issues\n\n- major: README.md:1 the page is terse\n" });
   expect((await pr.fleet("gate")).code).toBe(0);
 
