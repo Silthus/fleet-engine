@@ -229,15 +229,20 @@ its log while it runs.`,
   respond: {
     usage: "respond --round <number|final-n> <responses.md>",
     summary: `Save your answer to each finding of a finished review: fixed in which commit, or rejected and why. Number the
-answers in the order of the findings, one line each, such as "1. fixed in 1a2b3c4: <how>" or "2. rejected: <why>". Each
+answers in the order of the findings, one line each, such as "1. fixed in 1a2b3c4: <how>" or "2. rejected: <why>". Once
+the review budget is spent, "3. known: <why>" answers a finding listed under Known issues; a known blocker holds the
+merge. Each
 list item of findings.md is one finding; findings without a list are one. The gate fails while a finding has no
 answer. A new call replaces the earlier answer. A final read takes the id that review-start printed. The judge in fleet proof gate checks
 each answer against HEAD.`,
     examples: ["fleet proof respond --round 1 responses.md", "fleet proof respond --round final-1 responses.md"],
     options: ["--round"],
-    run: async ({ options, files }, identity, { print, home, cwd }) => {
+    run: async ({ options, files }, identity, context) => {
+      const { print, home, cwd } = context;
       if (files.length !== 1) throw usageError("respond", "Pass one responses file");
-      print(await respondToReview(home, identity(), roundId(required(options, "--round", "respond")), resolve(cwd, files[0]!)));
+      const head = identity();
+      const ceiling = isSmall(head, context) ? 1 : numberSetting("pull-requests.reviewCeiling", context.env);
+      print(await respondToReview(home, head, roundId(required(options, "--round", "respond")), resolve(cwd, files[0]!), ceiling));
       return 0;
     },
   },

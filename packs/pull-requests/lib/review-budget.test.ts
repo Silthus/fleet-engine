@@ -34,6 +34,8 @@ test("minor and nit findings and TESTS items need no answer, while a blocker, a 
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n");
   await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 4 too");
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n4. known: listed under Known issues.\n");
+  await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer a finding \"known\" only once the review budget of 6 reviews is spent; 1 ran");
+  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n4. rejected: the greeting is the fixture's.\n");
   expect((await pr.fleet("respond", "--round", "1", "responses.md")).code).toBe(0);
   expect((await pr.fleet("gate")).code).toBe(0);
 
@@ -89,6 +91,25 @@ test("a docs-only PR, or one under 50 authored lines with low merge risk, gets o
   const gate = await pr.fleet("gate");
   expect(gate.code).toBe(0);
   expect(gate.output).toContain("review: one read of a small PR in round 1; its fixes get no final read");
+});
+
+test("at the budget a known answer settles a major, and a known blocker holds the merge", async () => {
+  const pr = await checkout();
+  await pr.commit("README.md", "Greet new members.\n");
+  await pr.fleet("require", "--none", "--reason", "docs only");
+  fakeModel(pr, "REVIEWER", "FINDINGS:\n- README.md:1 | blocker | Correctness | the page names no member -> members see nothing | name them | anchor: Greet new members.\n- README.md:1 | major | Correctness | the page is terse -> members skim it | expand it | anchor: Greet new members.\nCOVERED: README.md\n");
+  await pr.fleet("review", "--lens", "correctness");
+  await pr.fleet("review", "--wait");
+
+  writeFileSync(join(pr.repository, "responses.md"), "1. rejected: the fixture names nobody.\n2. known: listed under Known issues.\n");
+  await pr.fleet("respond", "--round", "1", "responses.md");
+  expect((await pr.fleet("gate")).code).toBe(0);
+
+  writeFileSync(join(pr.repository, "responses.md"), "1. known: listed under Known issues.\n2. known: listed under Known issues.\n");
+  await pr.fleet("respond", "--round", "1", "responses.md");
+  const held = await pr.fleet("gate");
+  expect(held.code).toBe(1);
+  expect(held.output).toContain("known issues: round 1 answers findings 1 known, and an open blocker holds the merge");
 });
 
 test("a code PR under 50 authored lines gets the combined lens only at low merge risk", async () => {
@@ -158,8 +179,36 @@ test("a revert of a PR commit, or a commit that only deletes test files, keeps t
   expect(deleted.code).toBe(0);
   expect(deleted.output).toContain("test-only delta");
 
+  const fixed = await pr.commit("feature.txt", "greet every member\n");
+  await pr.commit("feature.test.ts", "test(\"greets every member\", () => {});\n");
+  await pr.git("revert", "--no-edit", fixed);
+  const apart = await pr.fleet("gate");
+  expect(apart.code).toBe(0);
+  expect(apart.output).toContain("revert of a PR commit and test-only delta");
+
+  const branch = await pr.git("rev-parse", "--abbrev-ref", "HEAD");
+  const before = await pr.git("rev-parse", "HEAD");
+  await pr.git("checkout", "-q", "-b", "elsewhere", `${before}~1`);
+  const elsewhere = await pr.commit("feature.txt", "greet\n");
+  await pr.git("checkout", "-q", branch);
+  await pr.git("revert", "--no-edit", elsewhere);
+  expect((await pr.fleet("gate")).code).toBe(1);
+  await pr.git("reset", "-q", "--hard", before);
+
   const again = await pr.commit("feature.txt", "greet the new member\n");
   await pr.git("update-ref", "refs/remotes/origin/main", again);
   await pr.git("revert", "--no-edit", again);
+  expect((await pr.fleet("gate")).code).toBe(1);
+});
+
+test("deleting a test file that code imports needs a new review", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
+  await pr.commit("policy.test.ts", "export const policy = 1;\n");
+  await pr.commit("app.ts", "import { policy } from \"./policy.test.ts\";\nexport const app = policy;\n");
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  await reviewHead(pr);
+  await pr.git("rm", "-q", "policy.test.ts");
+  await pr.git("commit", "-q", "-m", "drop the policy");
   expect((await pr.fleet("gate")).code).toBe(1);
 });

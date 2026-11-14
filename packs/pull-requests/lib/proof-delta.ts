@@ -1,5 +1,5 @@
 export type DeltaKind = "test" | "revert";
-export type QuietStep = { parent: string; kinds: DeltaKind[] };
+export type QuietStep = { parent: string; kinds: DeltaKind[]; cancels?: { commit: string; parent: string } };
 type Run = (command: string[]) => { code: number; stdout: string; stderr: string };
 export type FileChange = { status: string; oldMode: string; newMode: string; oldBlob: string; newBlob: string; path: string };
 
@@ -22,6 +22,7 @@ export type CommitReader = {
   filesNaming(commit: string, text: string): string[] | undefined;
   message(commit: string): string | undefined;
   inBase(commit: string): boolean;
+  isAncestor(ancestor: string, commit: string): boolean;
 };
 
 const importName = (path: string) => /_test\.go$/.test(path) || path.endsWith(".snap") ? undefined : path.split("/").at(-1)!.replace(/\.[cm]?[jt]sx?$|\.py$/, "");
@@ -45,10 +46,10 @@ function importedByCode(reader: CommitReader, commit: string, path: string) {
 const undoes = (revert: FileChange[], reverted: FileChange[]) => revert.length === reverted.length
   && revert.every((change) => reverted.some((done) => done.path === change.path && done.oldBlob === change.newBlob && done.newBlob === change.oldBlob && done.oldMode === change.newMode && done.newMode === change.oldMode));
 
-function revertedPrCommit(reader: CommitReader, commit: string, changes: FileChange[]) {
+function revertedPrCommit(reader: CommitReader, commit: string, parent: string, changes: FileChange[]) {
   const reverted = /^This reverts commit ([0-9a-f]{40})\b/m.exec(reader.message(commit) ?? "")?.[1];
   const parents = reverted ? reader.parents(reverted) : undefined;
-  if (!reverted || parents?.length !== 1 || reader.inBase(reverted)) return undefined;
+  if (!reverted || parents?.length !== 1 || !reader.isAncestor(reverted, parent) || reader.inBase(reverted)) return undefined;
   const undone = reader.changes(parents[0]!, reverted);
   return undone !== undefined && undoes(changes, undone) ? { commit: reverted, parent: parents[0]! } : undefined;
 }
@@ -59,10 +60,10 @@ export function quietStep(reader: CommitReader, commit: string): QuietStep | und
   const parent = parents[0]!;
   const changes = reader.changes(parent, commit);
   if (!changes?.length) return undefined;
-  const reverted = revertedPrCommit(reader, commit, changes);
-  if (reverted) return { parent: reverted.commit === parent ? reverted.parent : parent, kinds: ["revert"] };
+  const reverted = revertedPrCommit(reader, commit, parent, changes);
+  if (reverted) return { parent, kinds: ["revert"], cancels: reverted };
   if (!changes.every(quietChange)) return undefined;
-  if (changes.some((change) => change.status !== "D" && importedByCode(reader, commit, change.path))) return undefined;
+  if (changes.some((change) => importedByCode(reader, commit, change.path))) return undefined;
   return { parent, kinds: ["test"] };
 }
 
@@ -96,6 +97,7 @@ export function gitCommitReader(run: Run, baseRefs: () => string[]): CommitReade
       if (result.code !== 0) return undefined;
       return result.stdout.split("\0").filter(Boolean).map((hit) => hit.slice(commit.length + 1));
     },
+    isAncestor: (ancestor, commit) => run(["git", "merge-base", "--is-ancestor", ancestor, commit]).code === 0,
     message: (commit) => output(["git", "log", "-1", "--format=%B", commit]),
     inBase: (commit) => {
       const refs = (() => { try { return baseRefs(); } catch { return []; } })();

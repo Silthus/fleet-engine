@@ -384,7 +384,7 @@ async function storeFindings(directory: string, identity: ProofIdentity, round: 
   await writeJson(join(directory, "round.json"), { ...await readReservation(directory) ?? reservation, reviewer, capturedBy });
 }
 
-export async function respondToReview(home: string, identity: ProofIdentity, round: RoundId, responses: string) {
+export async function respondToReview(home: string, identity: ProofIdentity, round: RoundId, responses: string, ceiling: number) {
   const bytes = await readFile(responses);
   if (!bytes.toString().trim()) throw new Error(`${responses} is empty. Answer each finding: fixed in which commit, or rejected and why`);
   const directory = await roundDirectory(home, identity, round);
@@ -392,6 +392,12 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
   if (findings === undefined) throw new Error(`Review round ${round} has no findings yet`);
   const missing = unanswered(findings, bytes.toString());
   if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>", "${missing[0]}. rejected: <why>", or, at the review budget, "${missing[0]}. known: <why>" for a finding listed under Known issues. Minor and nit findings and TESTS items need no answer`);
+  if (bytes.toString().match(knownItem)) {
+    const reviews = join(pullRequestDirectory(home, identity), "reviews");
+    const started = await reviewNames(reviews);
+    const spent = Math.max(await reviewsSpent(reviews, started, "review"), await reviewsSpent(reviews, started, "babysit"));
+    if (spent < ceiling) throw new Error(`Answer a finding "known" only once the review budget of ${ceiling} reviews is spent; ${spent} ran. Fix or reject it now`);
+  }
   const destination = join(directory, "responses.md");
   const temporary = `${destination}.${crypto.randomUUID()}`;
   await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
@@ -433,6 +439,14 @@ function findingItems(findings: string) {
   const reviewed = reviewedLines(findings);
   const items = reviewed.filter((line) => findingItem.test(line));
   return items.length || reviewed.every((line) => noFinding.test(line.trim())) ? items : [reviewed.join("\n")];
+}
+
+const knownItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**known\b/gim;
+const majorItem = /^\s*(?:[-*]|\d+[.)])\s+(?:[^|\n]*\|)?\s*\**major\**\s*\|/i;
+
+function knownBlockers(findings: string, responses: string) {
+  const known = new Set([...responses.matchAll(knownItem)].map((match) => Number(match[1])));
+  return findingItems(findings).flatMap((item, index) => known.has(index + 1) && !majorItem.test(item) && !flooredItem.test(item) ? [index + 1] : []);
 }
 
 function unanswered(findings: string, responses: string) {
@@ -791,14 +805,18 @@ function reviewedThrough(start: string, reviewed: Set<string>, cleanBaseMerge: C
   const merges: string[] = [];
   const quiet: string[] = [];
   const kinds = new Set<DeltaKind>();
+  const cancelled = new Map<string, string>();
   let commit: string | undefined = start;
   while (commit && merges.length <= maxCarriedMerges && quiet.length <= maxQuietCommits) {
     if (reviewed.has(commit)) return { from: commit, merges, quiet, kinds: [...kinds] };
+    const undone = cancelled.get(commit);
+    if (undone) { commit = undone; continue; }
     const merged = cleanBaseMerge(commit);
     if (merged) { merges.push(commit); commit = merged; continue; }
     const step = quietCommit(commit);
     if (!step) return undefined;
     quiet.push(commit);
+    if (step.cancels) cancelled.set(step.cancels.commit, step.cancels.parent);
     step.kinds.forEach((kind) => kinds.add(kind));
     commit = step.parent;
   }
@@ -859,8 +877,11 @@ async function responseStatuses(home: string, identity: ProofIdentity): Promise<
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   const statuses = await Promise.all((await finishedReviews(home, identity)).map(async ({ name }): Promise<Status | undefined> => {
     const findings = await readFile(join(reviews, name, "findings.md"), "utf8");
-    const missing = unanswered(findings, await readFile(join(reviews, name, "responses.md"), "utf8").catch(() => ""));
-    return missing.length ? { problem: "missing", line: `review: ${reviewLabel(name)} has unanswered findings ${missing.join(", ")}; answer each with fleet proof respond --round ${name} <responses.md>` } : undefined;
+    const responses = await readFile(join(reviews, name, "responses.md"), "utf8").catch(() => "");
+    const missing = unanswered(findings, responses);
+    if (missing.length) return { problem: "missing", line: `review: ${reviewLabel(name)} has unanswered findings ${missing.join(", ")}; answer each with fleet proof respond --round ${name} <responses.md>` };
+    const blockers = knownBlockers(findings, responses);
+    return blockers.length ? { problem: "missing", line: `known issues: ${reviewLabel(name)} answers findings ${blockers.join(", ")} known, and an open blocker holds the merge` } : undefined;
   }));
   return statuses.filter((status) => status !== undefined);
 }
