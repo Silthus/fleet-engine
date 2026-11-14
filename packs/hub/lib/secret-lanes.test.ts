@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
-import { laneEvents } from "./secret-lane-source.ts";
+import { laneSecretLines } from "./secret-lane-source.ts";
 import { eventLogPath, valuesDir } from "./secret-store.ts";
 import { fleet, removeHomes, run, sendKey, values } from "./secret-testing.ts";
 
@@ -171,16 +171,70 @@ test("the sweep deletes only the store's own value files: a pack's files and cur
   machine.expectNoLeak(["made-up-orphan", "made-up-pack-file", "made-up-notes"]);
 });
 
-test("the report reads a lane's put events from the hub: names, whys and revoke links, never a value", async () => {
+test("the report gets each lane secret's latest revoke link and its late puts from the hub, never a value", async () => {
   const machine = fleet();
-  expect(await lanePut(machine, "stripe-test", laneValue(), "--lane", laneA, "--env", "STRIPE_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/a")).toBe(0);
-  expect(await lanePut(machine, "other-test", laneValue(), "--lane", laneB, "--env", "OTHER_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/b")).toBe(0);
+  expect(await lanePut(machine, "stripe-test", laneValue(), "--lane", laneA, "--env", "STRIPE_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/old")).toBe(0);
+  machine.clock.now = new Date("2026-11-14T09:30:00Z");
+  expect(await lanePut(machine, "stripe-test", laneValue(), "--lane", laneA, "--env", "STRIPE_KEY", "--why", "expired", "--revoke", "https://example.com/revoke/new")).toBe(0);
+  expect(await lanePut(machine, "mail-test", laneValue(), "--lane", laneA, "--env", "MAIL_KEY", "--why", "missed", "--expires", "2026-11-16")).toBe(0);
+  expect(await lanePut(machine, "other-test", laneValue(), "--lane", laneB, "--env", "OTHER_KEY", "--why", "missed", "--revoke", "https://example.com/revoke/b")).toBe(0);
   expect(await machine.dev("drop", "--lane", laneA)).toBe(0);
-  const puts = await laneEvents({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA);
-  expect(puts.map(({ name, why, revoke, lane }) => ({ name, why, revoke, lane }))).toEqual([{ name: "stripe-test", why: "intake", revoke: "https://example.com/revoke/a", lane: laneA }]);
+  const expected = {
+    revokes: [`- Revoke stripe-test (lane ${laneA}): https://example.com/revoke/new`],
+    late: ["- stripe-test put 2026-11-14 09:30 UTC, why expired.", "- **Miss:** mail-test put 2026-11-14 09:30 UTC, why missed."],
+  };
+  expect(await laneSecretLines({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA)).toEqual(expected);
+  expect(await laneSecretLines({ home: machine.hubHome, env: machine.hubEnv, ssh: machine.ssh }, laneA)).toEqual(expected);
   machine.reach.hub = false;
-  await expect(laneEvents({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA)).rejects.toThrow("did not send the lane's secret puts (exit 255)");
-  for (const value of values) expect(JSON.stringify(puts)).not.toContain(value);
+  await expect(laneSecretLines({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA)).rejects.toThrow("did not send the lane's secret lines (exit 255)");
+  machine.expectNoLeak();
+});
+
+test("a put whose name, lane or link would show a value the store holds, or whose value the log already shows, is refused", async () => {
+  const machine = fleet();
+  const held = laneValue();
+  expect(await lanePut(machine, "held-key", held, "--lane", laneA, "--env", "HELD_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/a")).toBe(0);
+  expect(await lanePut(machine, "other-test", laneValue(), "--lane", laneB, "--env", "OTHER_KEY", "--why", "intake", "--revoke", `https://example.com/revoke/${held}`)).toBe(1);
+  expect(machine.printed.at(-1)).toBe("Fleet secret: The other-test put's name, lane or links would show a value the store holds. Nothing was stored\n");
+  const shownBefore = "example.com/revoke/abcdef123";
+  expect(await lanePut(machine, "link-test", laneValue(), "--lane", laneB, "--env", "LINK_KEY", "--why", "intake", "--revoke", `https://${shownBefore}`)).toBe(0);
+  expect(await lanePut(machine, "later-test", shownBefore, "--lane", laneB, "--env", "LATER_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/c")).toBe(1);
+  expect(machine.printed.at(-1)).toBe("Fleet secret: Refused, and the reason would show part of the value. Nothing was stored\n");
+  expect(valueFiles(machine.hubHome)).toHaveLength(2);
+  machine.expectNoLeak();
+});
+
+test("a drop or a sweep whose drop event does not land whole keeps the value and says so", async () => {
+  const machine = fleet();
+  const kept = laneValue();
+  expect(await lanePut(machine, "stripe-test", kept, "--lane", laneA, "--env", "STRIPE_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/a")).toBe(0);
+  const tornDrop = () => {
+    let split = false;
+    machine.hooks.write = (file, bytes, offset) => {
+      if (!split && offset === 12 && Buffer.from(bytes).includes('"type":"drop"')) { split = true; machine.offElsewhere("torn drop")(); }
+      return writeSync(file, bytes, offset, 1);
+    };
+  };
+  tornDrop();
+  expect(await machine.dev("drop", "--lane", laneA)).toBe(1);
+  expect(machine.printed.at(-1)).toContain("The drop of stripe-test did not land whole in the event log, so its value stays");
+  expect(valueFiles(machine.hubHome)).toHaveLength(1);
+  machine.hooks.write = undefined;
+  machine.clock.now = new Date("2026-11-21T10:00:00Z");
+  tornDrop();
+  expect(await machine.hub("sweep")).toBe(1);
+  expect(machine.printed.at(-1)).toContain("did not land whole");
+  expect(valueFiles(machine.hubHome)).toHaveLength(1);
+  machine.expectNoLeak();
+});
+
+test("the sweep's own line is withheld when it would spell a stored value", async () => {
+  const machine = fleet();
+  const swept = "Swept 0 lane values";
+  values.push(swept);
+  expect(await lanePut(machine, "stripe-test", swept, "--lane", laneA, "--env", "STRIPE_KEY", "--why", "intake", "--revoke", "https://example.com/revoke/a")).toBe(0);
+  expect(await machine.hub("sweep")).toBe(0);
+  expect(machine.printed.at(-1)).toBe("A line was withheld, as it would show a stored value.\n");
   machine.expectNoLeak();
 });
 
@@ -189,7 +243,7 @@ test("a drop or a report against a hub with an older fleet secret, which answers
   machine.reach.answer = { code: 0, stdout: JSON.stringify({ ok: true, lines: ["Store: on"] }), stderr: "" };
   expect(await machine.dev("drop", "--lane", laneA)).toBe(1);
   expect(machine.printed.at(-1)).toBe("Fleet secret: the hub runs an older fleet secret that has no drop, so nothing was done there. Run fleet update on the hub\n");
-  await expect(laneEvents({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA)).rejects.toThrow("has no lane read");
+  await expect(laneSecretLines({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA)).rejects.toThrow("has no lane read");
 });
 
 test("a value that spells a line Fleet prints later, such as a due line or a drop that names several secrets, never shows", async () => {

@@ -17,6 +17,11 @@ const lineBreak = String.raw`(?:\s|\\[rn])`;
 const lineEnd = String.raw`(?:\r?\n|(?:\\r)?\\n)`;
 const coderToken = "[A-Za-z0-9]{10}-[A-Za-z0-9]{22}";
 const colour = String.raw`(?:(?:\x1b|\\u001[bB])\[[0-9;]*m)*`;
+const quote = String.raw`(?:\\?["'])?`;
+const metabaseCookie = String.raw`metabase\.(?:SESSION|DEVICE)`;
+const metabaseValue = "(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}";
+const gap = String.raw`[ \t]{0,16}`;
+const cookieName = new RegExp(`^${metabaseCookie}$`);
 const shapes: Array<{ kind: string; pattern: RegExp }> = [
   { kind: "PostHog personal API key", pattern: new RegExp(`${start}phx_[A-Za-z0-9]{30,}`, "g") },
   { kind: "PostHog secret API key", pattern: new RegExp(`${start}phs_[A-Za-z0-9]{30,}`, "g") },
@@ -26,9 +31,9 @@ const shapes: Array<{ kind: string; pattern: RegExp }> = [
   { kind: "Slack token", pattern: new RegExp(`${start}x(?:ox[abposre]|app)-[0-9]+-[A-Za-z0-9-]{10,}`, "g") },
   { kind: "Slack webhook URL", pattern: /hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]{20,}/g },
   { kind: "Convex deploy key", pattern: new RegExp(`(?<![A-Za-z0-9_-])(?:prod|dev|preview|project):[A-Za-z0-9:_-]{1,120}\\|[A-Za-z0-9+/=_-]{30,}`, "g") },
-  { kind: "Coder session token", pattern: new RegExp(String.raw`(?:^|(?<=\\[rn]|["']))[ \t]*${colour}${coderToken}${colour}[ \t]*(?=$|\\[rn]|\\?["'])`, "gm") },
+  { kind: "Coder session token", pattern: new RegExp(String.raw`(?:(?<=^${colour}[+-]?)|(?<=\\[rn]${colour}[+-]?|["']))[ \t]*${colour}${coderToken}${colour}[ \t]*(?=$|\\[rn]|\\?["'])`, "gm") },
   { kind: "Coder session token", pattern: new RegExp(String.raw`(?=${coderToken}(?![A-Za-z0-9]))(?<=coder[_-]?session[_-]?token(?:\\?["'])?[ \t]*[:=][ \t]*(?:\\?["'])?)${coderToken}`, "gi") },
-  { kind: "Metabase session cookie", pattern: /(?<![\w.-])metabase\.(?:SESSION|DEVICE)=(?:\\?["'])?[^;\s'"\\]+(?:\\?["'])?/g },
+  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=(?<![\w.-])${metabaseCookie}${quote}(?:${gap}[=:]${gap}|${gap},${gap}${quote}value${quote}${gap}:${gap})${quote})${metabaseValue}`, "g") },
   { kind: "private key", pattern: new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----(?:${lineBreak}*[A-Za-z-]+:[^\\r\\n\\\\]*${lineEnd})*${lineBreak}*[A-Za-z0-9+/=]{20,}(?:[A-Za-z0-9+/=\\s]|\\\\[rn])*(?:-----END [A-Z ]*PRIVATE KEY-----)?`, "g") },
 ];
 
@@ -41,7 +46,18 @@ function mapStrings(value: unknown, change: (text: string) => string): unknown {
 
 function mapProperties(value: object, change: (text: string) => string) {
   const unusedName = uniqueNames();
-  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [unusedName(change(key)), mapStrings(entry, change)]));
+  const name = (value as { name?: unknown }).name;
+  const cookieOf = (key: string) => cookieName.test(key) ? key : key === "value" && typeof name === "string" && cookieName.test(name) ? name : undefined;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
+    const cookie = cookieOf(key);
+    return [unusedName(change(key)), cookie && typeof entry === "string" ? cookieValue(cookie, entry, change) : mapStrings(entry, change)];
+  }));
+}
+
+function cookieValue(cookie: string, entry: string, change: (text: string) => string) {
+  const named = `${cookie}=`;
+  const changed = change(`${named}${entry}`);
+  return changed.startsWith(named) ? changed.slice(named.length) : change(entry);
 }
 
 function uniqueNames() {

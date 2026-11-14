@@ -112,6 +112,49 @@ describe("secret guard", () => {
     expect(JSON.stringify(decision)).not.toContain(value);
   });
 
+  const metabaseSession = `${body(8)}-${body(4)}-${body(4)}-${body(4)}-${body(12)}`;
+  const cookieKey = `metabase${"."}SESSION`;
+
+  test.each([
+    ["a cookie map", { cookies: { [cookieKey]: metabaseSession, theme: "dark" } }, { cookies: { [cookieKey]: "[redacted Metabase session cookie]", theme: "dark" } }],
+    ["a browser cookie list", { cookies: [{ name: cookieKey, value: metabaseSession, domain: "metabase.example.com" }] }, { cookies: [{ name: cookieKey, value: "[redacted Metabase session cookie]", domain: "metabase.example.com" }] }],
+  ])("redacts a Metabase session cookie held in %s and keeps its name", (_, structuredContent, redacted) => {
+    expect(guard("claude", toolEvent({ structuredContent }))!.hookSpecificOutput).toMatchObject({ updatedToolOutput: { structuredContent: redacted } });
+    expect(guard("codex", toolEvent({ structuredContent }))?.decision).toBe("block");
+  });
+
+  test.each([
+    ["a serialized cookie map", JSON.stringify({ [cookieKey]: metabaseSession })],
+    ["a serialized browser cookie", JSON.stringify([{ name: cookieKey, value: metabaseSession }])],
+    ["a JSON-escaped serialized cookie", JSON.stringify({ stdout: JSON.stringify({ name: cookieKey, value: metabaseSession }) })],
+  ])("finds a Metabase session cookie in %s", (_, text) => {
+    expect(guard("claude", promptEvent(text))?.decision).toBe("block");
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: text })));
+    expect(output).toContain("[redacted Metabase session cookie]");
+    expect(output).not.toContain(metabaseSession);
+  });
+
+  test.each([
+    `Set the ${cookieKey}=<session-id> cookie first.`,
+    `curl -b "${cookieKey}=$METABASE_SESSION" https://metabase.example.com`,
+    `Copy ${cookieKey}=YOUR_SESSION_TOKEN_HERE from the browser.`,
+    JSON.stringify({ [cookieKey]: "<redacted>" }),
+  ])("leaves a Metabase cookie placeholder alone: %s", (text) => {
+    expect(guard("claude", promptEvent(text))).toBeUndefined();
+    expect(guard("claude", toolEvent({ stdout: text, structuredContent: { [cookieKey]: "<redacted>" } }))).toBeUndefined();
+  });
+
+  test.each([
+    ["an added diff line", `diff --git a/token b/token\n@@ -0,0 +1 @@\n+${coderToken}\n`, "+[redacted Coder session token]"],
+    ["a removed diff line", `@@ -1 +0,0 @@\n-${coderToken}\n`, "-[redacted Coder session token]"],
+    ["a coloured diff line", `\x1b[32m+${coderToken}\x1b[m\n`, "+[redacted Coder session token]"],
+    ["a JSON-escaped diff line", `{"stdout":"@@ -1 +1 @@\\n+${coderToken}\\n"}`, "+[redacted Coder session token]"],
+  ])("redacts a Coder session token on %s and keeps the marker", (_, stdout, kept) => {
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout }))?.hookSpecificOutput);
+    expect(output).toContain(kept);
+    expect(output).not.toContain(coderToken);
+  });
+
   test.each(["claude", "codex"] as const)("%s guard messages point at request_secret file delivery and fleet secret put --file", (provider) => {
     const decision = guard(provider, toolEvent({ stdout: githubToken }))!;
     for (const reason of [guard(provider, promptEvent(`key: ${githubToken}`))!.reason, decision.reason ?? (decision.hookSpecificOutput as { additionalContext: string }).additionalContext]) {

@@ -6,9 +6,9 @@ import { covers, decisionLine, refText, type DecisionState, type Env, type Ledge
 import { readPullRequest, runIn, type PullRequest } from "./pr-ci.ts";
 import { receiptOf, type GapProof, type ProofSummary } from "./proof.ts";
 import { currentSummary } from "./proof-gate.ts";
-import { latePutLine, revokeLine, isLane, type PutEvent } from "../../hub/lib/secret-store.ts";
+import type { LaneReport } from "../../hub/lib/secret-store.ts";
 
-export type ReportContext = { home: string; cwd: string; env: Env; now?: () => Date; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean>; lanePuts?: (lane: string) => Promise<PutEvent[]> };
+export type ReportContext = { home: string; cwd: string; env: Env; now?: () => Date; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean>; laneSecrets: (lane: string) => Promise<LaneReport> };
 
 export const rolloutLogSetting = "orchestration.rolloutLog";
 
@@ -120,13 +120,8 @@ function proofRow(pr: Row, decisions: DecisionState[]) {
   return `| ${refText(ref)} | ${cell(ran, "none")} | ${cell(deferred, "none")} | ${cell(voided, "none")} | ${receiptCell(summary.receipt)} |`;
 }
 
-function laneSecrets(puts: PutEvent[]) {
-  const latest = new Map(puts.map((put) => [put.name, put]));
-  return { revokes: [...latest.values()].filter(isLane).filter((put) => put.revoke).map(revokeLine), late: puts.filter((put) => put.why !== "intake").map(latePutLine) };
-}
-
 export async function renderReport({ prs, thread, lane }: { prs: PrRef[]; thread?: string; lane?: string }, ledger: Ledger, decisions: DecisionState[], context: ReportContext): Promise<string> {
-  const secrets = lane === undefined ? undefined : laneSecrets(await (context.lanePuts ?? (async () => { throw new Error("this machine cannot read the lane's secret puts"); }))(lane));
+  const secrets = lane === undefined ? undefined : await context.laneSecrets(lane);
   const rows = await Promise.all(prs.map((ref) => lanePr(ref, ledger, context)));
   const card = thread && await (context.pendingCard ?? t3PendingCard(context.home))(thread) ? thread : undefined;
   const ours = decisions.filter((decision) => prs.some((ref) => covers(decision, ref)) || (thread !== undefined && sameThread(decision.where.thread, thread)));

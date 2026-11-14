@@ -1,13 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { appendFileSync, chmodSync, writeSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, chmodSync, writeSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ThreadWord } from "../../pull-requests/lib/proof-answers.ts";
-import type { Ssh, SshResult } from "./hub-transport.ts";
 import { heldLimit, lineRedactor, secretCommand, type SecretContext } from "./secret-cli.ts";
 import { providersSeam, rowsSeam } from "./secret-rows.ts";
-import { eventLogPath, secretFilesDir, type CheckResult, type SecretRow } from "./secret-store.ts";
-import { text, made, sendKey, otherKey, euKey, foreignKey, loginEmail, loginPassword, values, projectKey, testRows, newHome, fleet, run, login, removeHomes } from "./secret-testing.ts";
+import { eventLogPath, secretFilesDir, type CheckResult } from "./secret-store.ts";
+import { text, made, sendKey, otherKey, euKey, foreignKey, loginEmail, loginPassword, values, testRows, newHome, fleet, run, login, removeHomes } from "./secret-testing.ts";
 
 afterEach(removeHomes);
 

@@ -6,9 +6,9 @@ import type { ThreadWords } from "../../pull-requests/lib/proof-answers.ts";
 import { fleetOnHub, HubUnreachable, remoteHub, runSsh, type Env, type Ssh } from "./hub-transport.ts";
 import { checkedRows, injectedRows, rowModules } from "./secret-rows.ts";
 import {
-  currentOff, deliver, droppedLine, dropLane, dueLines, enableOptions, enableQuestion, failureOf, laneDays, lanePuts, listLines, needLines, piecesOf, putValue, secretFilesDir, SecretRefusal, standingDays,
-  olderHub, storedLine, storedValues, sweep, turnOff, turnOn, unshown, whys,
-  type AppendLog, type WriteBytes, type Delivered, type Heard, type PutEvent, type PutInput, type SecretRow, type Store, type Why,
+  currentOff, deliver, droppedLine, dropLane, dueLines, enableOptions, enableQuestion, failureOf, laneDays, laneReport, listLines, needLines, piecesOf, putValue, secretFilesDir, SecretRefusal, standingDays,
+  olderHub, safeLines, storedLine, storedValues, sweep, turnOff, turnOn, unshown, whys,
+  type AppendLog, type WriteBytes, type Delivered, type Heard, type PutInput, type SecretRow, type Store, type Why,
 } from "./secret-store.ts";
 
 export const usage = `Usage:
@@ -58,7 +58,7 @@ type Request =
   | { op: "list"; need?: string[]; due?: boolean; thread?: string; machine?: string }
   | { op: "drop"; lane: string }
   | { op: "lane"; lane: string };
-type Answer = { ok: true; lines?: string[]; delivered?: Delivered[]; puts?: PutEvent[]; dropped?: string[] } | { ok: false; error: string };
+type Answer = { ok: true; lines?: string[]; delivered?: Delivered[]; dropped?: string[]; revokes?: string[]; late?: string[] } | { ok: false; error: string };
 
 const machineOf = (context: SecretContext) => thisMachine(context.env);
 const threadOf = (context: SecretContext) => context.env.T3CODE_THREAD_ID ? { thread: context.env.T3CODE_THREAD_ID } : {};
@@ -75,15 +75,16 @@ async function loadedRows(context: SecretContext): Promise<SecretRow[] | Answer>
 
 const storeOf = (context: SecretContext): Store => ({ home: context.home, rows: [], now: context.now?.() ?? new Date(), ...context.appendLog ? { appendLog: context.appendLog } : {}, ...context.write ? { write: context.write } : {} });
 
-const withheldLine = "A line was withheld, as it would show a stored value.";
-
-async function answer(context: SecretContext, request: Request): Promise<Answer> {
+async function shownSafely(context: SecretContext, extra: string[], reply: () => Promise<Answer>): Promise<Answer> {
   const before = storedValues(context.home);
-  const reply = await answerUnchecked(context, request);
-  const values = [...before, ...storedValues(context.home), ...request.op === "put" ? piecesOf(request.text) : []];
-  if (!reply.ok) return { ok: false, error: unshown([reply.error, "Refused, and the reason would show a stored value", "Refused"], values) };
-  return reply.lines ? { ...reply, lines: reply.lines.map((line) => unshown([line, withheldLine, "Withheld"], values)) } : reply;
+  const answered = await reply();
+  const values = [...before, ...storedValues(context.home), ...extra];
+  if (!answered.ok) return { ok: false, error: unshown([answered.error, "Refused, and the reason would show a stored value", "Refused"], values) };
+  const safe = (lines: string[] | undefined) => lines && safeLines(lines, values);
+  return { ...answered, ...answered.lines ? { lines: safe(answered.lines) } : {}, ...answered.revokes ? { revokes: safe(answered.revokes) } : {}, ...answered.late ? { late: safe(answered.late) } : {} };
 }
+
+const answer = (context: SecretContext, request: Request) => shownSafely(context, request.op === "put" ? piecesOf(request.text) : [], () => answerUnchecked(context, request));
 
 async function answerUnchecked(context: SecretContext, request: Request): Promise<Answer> {
   const store = storeOf(context);
@@ -95,7 +96,7 @@ async function answerUnchecked(context: SecretContext, request: Request): Promis
       return { ok: true, lines: [`The store is on again, by the user's words ${request.words} (thread ${request.thread}).`] };
     }
     if (request.op === "drop") { const dropped = dropLane(store, request.lane); return { ok: true, dropped, lines: [droppedLine(dropped, request.lane)] }; }
-    if (request.op === "lane") return { ok: true, puts: lanePuts(context.home, request.lane) };
+    if (request.op === "lane") return { ok: true, ...laneReport(context.home, request.lane) };
     const rows = await loadedRows(context);
     if (!Array.isArray(rows)) return rows;
     store.rows = rows;
@@ -324,15 +325,16 @@ async function hearOn(args: string[], context: SecretContext) {
   return done(context, await ask(context, { op: "on", ...heard }));
 }
 
-function sweepHere(args: string[], context: SecretContext) {
+async function sweepHere(args: string[], context: SecretContext) {
   noMore(args);
   if (remoteHub(context.home, context.env)) throw new UsageError("fleet secret sweep runs on the hub, from its nightly job");
-  const store = storeOf(context);
-  let counts: ReturnType<typeof sweep>;
-  try { counts = sweep(store); }
-  catch (error) { return done(context, { ok: false, error: failureOf(error) }); }
   const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  return done(context, { ok: true, lines: [`Swept ${count(counts.expired, "lane value", "lane values")} past ${counts.expired === 1 ? "its" : "their"} store expiry and ${count(counts.old, "value file", "value files")} that no current put names.`] });
+  return done(context, await shownSafely(context, [], async () => {
+    try {
+      const counts = sweep(storeOf(context));
+      return { ok: true, lines: [`Swept ${count(counts.expired, "lane value", "lane values")} past ${counts.expired === 1 ? "its" : "their"} store expiry and ${count(counts.old, "value file", "value files")} that no current put names.`] };
+    } catch (error) { return { ok: false, error: failureOf(error) }; }
+  }));
 }
 
 const helpWords = ["help", "--help", "-h"];
@@ -367,7 +369,7 @@ export async function secretCommand(args: string[], outer: SecretContext): Promi
       const reply = await ask(context, { op: "drop", lane });
       return done(context, reply.ok && !Array.isArray(reply.dropped) ? { ok: false, error: olderHub("drop") } : reply);
     }
-    if (name === "sweep") return sweepHere(rest, context);
+    if (name === "sweep") return await sweepHere(rest, context);
     throw new UsageError(`Unknown command ${name}.\n${usage}`);
   } catch (error) {
     if (!(error instanceof UsageError || error instanceof HubUnreachable)) throw error;

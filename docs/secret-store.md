@@ -125,6 +125,8 @@ fleet secret drop --lane example/tickets#401
   that lane's put passes its store expiry. The first put in the log owns the
   name: when two lanes put one name at once, the later put deletes its value
   and is refused.
+- A put is refused when its name, lane, links or reason would spell a value
+  the store already holds, or when the log already shows its value.
 - A put is refused when any line Fleet prints from it would spell the value:
   its list line, card, stored and dropped lines, its due and need lines in
   each expiry state, and the report's revoke and late-put lines. A line that
@@ -135,13 +137,16 @@ fleet secret drop --lane example/tickets#401
   its lane put card.
 - At the lane's end, `drop --lane` deletes every value the lane put. Its put
   events stay, so the report still finds their revoke links. A drop names the
-  put it ends, so a renewal that lands meanwhile stays.
+  put it ends, so a renewal that lands meanwhile stays. A value is deleted
+  only once its drop event is back in the log whole; a torn drop keeps the
+  value, turns the store off, and says so.
 - `fleet decision report --pr <ref>... --lane <key>` lists the revoke link of
   each lane secret under Still yours, and the lane's late puts (any `--why`
-  but `intake`), misses marked. It reads them from the event log on the hub.
+  but `intake`), misses marked. The hub builds these lines from its event log
+  and withholds any line that would show a value it holds.
 
 The hub runs `fleet secret sweep` each night at 02:47 as a pack job. It drops
-each lane value past its store expiry, and deletes each value file that a
+each lane value past its store expiry, by the same drop rule, and deletes each value file that a
 later put or a drop replaced. A value file that no event names waits an hour,
 by the disk's clock, as its put may still be landing; the sweep deletes it
 after that, unless the event log is missing. It touches only the store's own
@@ -189,7 +194,9 @@ settings link.
 Other machines send one JSON request to `fleet secret hub` over SSH stdin and
 read one JSON answer on stdout, so a value never reaches a command line. The hub
 is the only reader of value files, so the switch and the read log cover every
-store read.
+read that hands a value out. The hub's own guard also reads the stored values
+while the store is off, to compare them with a line before it sends the line;
+that comparison never hands a value out.
 
 The hub trusts the caller's report of the user's answer, as the decision
 ledger does. An agent that can reach the hub over SSH can read its files, so a

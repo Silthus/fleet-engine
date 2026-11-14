@@ -19,7 +19,7 @@ export type OffEvent = { type: "off"; id: string; reason: string; at: string; th
 export type SecretEvent =
   | PutEvent
   | { type: "read"; id?: string; name: string; at: string; thread?: string; machine: string; refused?: string; check?: true }
-  | { type: "drop"; name: string; lane: string; put: string; at: string }
+  | { type: "drop"; id?: string; name: string; lane: string; put: string; at: string }
   | OffEvent
   | { type: "on"; off: string; words: string; thread: string; message: string; at: string };
 
@@ -252,8 +252,10 @@ async function checkAndStore(store: Store, row: SecretRow, input: PutInput): Pro
     ...input.thread ? { thread: input.thread } : {}, machine: input.machine, ...checked.unchecked ? { unchecked: checked.unchecked } : {},
     ...input.lane ? { lane: input.lane.key, env: input.lane.env, ...input.lane.revoke ? { revoke: input.lane.revoke } : {} } : {},
   };
-  const shown = [JSON.stringify(event), ...Object.values(event).filter((value): value is string => typeof value === "string"), ...printedLines(store, row, event)].join("\n");
+  const logged = readEvents(store.home).flatMap((logged) => [JSON.stringify(logged), ...stringsOf(logged)]);
+  const shown = [JSON.stringify(event), ...stringsOf(event), ...printedLines(store, row, event), ...logged].join("\n");
   if (showsValue(shown, Object.values(fields))) throw new SecretRefusal(hiddenValue);
+  if (showsValue([JSON.stringify(event), ...stringsOf(event)].join("\n"), storedValues(store.home))) throw new SecretRefusal(`The ${row.name} put's name, lane or links would show a value the store holds. Nothing was stored`);
   writeNewFile(valuePath(store.home, event), row.env.map((key) => `${key}=${fields[key]}\n`).join(""), store.write);
   appendEvents(store, event);
   const events = readEvents(store.home);
@@ -422,13 +424,20 @@ export function listLines(store: Store): string[] {
 }
 
 function printedLines(store: Store, row: SecretRow, put: PutEvent) {
-  const laneLines = isLane(put) ? [droppedLine([put.name], put.lane), revokeLine(put), latePutLine(put)] : [];
+  const laneLines = isLane(put) ? [droppedLine([put.name], put.lane), revokeLine(put), latePutLine(put), JSON.stringify(dropOf(put, put.at)), ...reportHeadings] : [];
   const day = (at: string | undefined) => at?.slice(0, 10) ?? "";
   const ends = [put.storeExpiresAt, put.expiresAt].filter((at): at is string => !!at).sort();
   const states = [...ends.flatMap((at) => [`expires ${day(at)}`, `expired ${day(at)}`]), `past its store expiry ${day(put.storeExpiresAt)}`, "missing its value file", "dropped by its lane", "missing"];
   const stateLines = states.map((state) => `${row.name}: ${state}. ${cardText(row, put)}`);
   return [rowLine(store, row, put), cardText(row, put), storedLine(put), ...laneLines, ...stateLines];
 }
+
+const stringsOf = (event: object) => Object.values(event).filter((value): value is string => typeof value === "string");
+export const reportHeadings = ["### Still yours", "### Late secret puts"];
+const dropOf = (put: PutEvent, at: string): SecretEvent => ({ type: "drop", id: newId("d"), name: put.name, lane: put.lane!, put: put.id, at });
+
+export const withheldLine = "A line was withheld, as it would show a stored value.";
+export const safeLines = (lines: string[], values: string[]) => lines.map((line) => unshown([line, withheldLine, "Withheld"], values));
 
 export function storedValues(home: string): string[] {
   let puts: PutEvent[];
@@ -513,27 +522,41 @@ export function dueLines(store: Store): string[] {
     else if (end !== undefined && end - store.now.getTime() <= (isLane(put) ? laneDueDays : dueDays) * dayMs) state = `expires ${day}`;
     if (state) lines.push(`${row.name}: ${state}. ${cardText(row, put)}`);
   }
-  return lines.length ? lines : [`Nothing due: no secret expires within ${dueDays} days.`];
+  return lines.length ? lines : [`Nothing due: no standing secret expires within ${dueDays} days, and no lane secret within ${laneDueDays} day.`];
 }
 
 const removeValue = (home: string, put: PutEvent) => rmSync(valuePath(home, put), { force: true });
 
+function droppedWhole(store: Store, puts: PutEvent[]) {
+  if (!puts.length) return [];
+  const drops = puts.map((put) => dropOf(put, store.now.toISOString()));
+  appendEvents(store, ...drops);
+  const events = readEvents(store.home);
+  return puts.filter((_, index) => landed(events, drops[index]!) >= 0);
+}
+
+const tornDrop = (puts: PutEvent[]) => new SecretRefusal(`The drop of ${puts.map((put) => put.name).join(", ")} did not land whole in the event log, so ${puts.length === 1 ? "its value stays" : "their values stay"}, and the torn line keeps the store off. Only the user's words turn it on: fleet secret on`);
+
 export function dropLane(store: Store, lane: string): string[] {
   const events = readEvents(store.home);
   const held = [...fold(events).puts.values()].filter((put) => put.lane === lane);
-  if (held.length) appendEvents(store, ...held.map((put): SecretEvent => ({ type: "drop", name: put.name, lane, put: put.id, at: store.now.toISOString() })));
-  for (const event of events) if (event.type === "put" && event.lane === lane) removeValue(store.home, event);
-  return held.map((put) => put.name);
+  const ended = droppedWhole(store, held);
+  const kept = new Set(held.filter((put) => !ended.includes(put)).map((put) => put.id));
+  for (const event of events) if (event.type === "put" && event.lane === lane && !kept.has(event.id)) removeValue(store.home, event);
+  if (kept.size) throw tornDrop(held.filter((put) => kept.has(put.id)));
+  return ended.map((put) => put.name);
 }
 
 const orphanGraceMs = 60 * 60 * 1000;
 const valueFilePattern = /^[a-z0-9][a-z0-9-]*\.p-[0-9a-f]{12}$/;
 
-export function sweep(store: Store, diskNow = Date.now()) {
+export function sweep(store: Store) {
+  const diskNow = Date.now();
   const events = readEvents(store.home);
-  const expired = [...fold(events).puts.values()].filter((put) => put.lane && put.storeExpiresAt && Date.parse(put.storeExpiresAt) <= store.now.getTime());
-  if (expired.length) appendEvents(store, ...expired.map((put): SecretEvent => ({ type: "drop", name: put.name, lane: put.lane!, put: put.id, at: store.now.toISOString() })));
+  const due = [...fold(events).puts.values()].filter((put) => put.lane && put.storeExpiresAt && Date.parse(put.storeExpiresAt) <= store.now.getTime());
+  const expired = droppedWhole(store, due);
   for (const put of expired) removeValue(store.home, put);
+  if (expired.length < due.length) throw tornDrop(due.filter((put) => !expired.includes(put)));
   const current = new Set([...fold(readEvents(store.home)).puts.values()].map((put) => `${put.name}.${put.id}`));
   const named = new Set(events.flatMap((event) => event.type === "put" ? [`${event.name}.${event.id}`] : []));
   const logKept = existsSync(eventLogPath(store.home));
@@ -552,3 +575,12 @@ export function sweep(store: Store, diskNow = Date.now()) {
 }
 
 export const lanePuts = (home: string, lane: string) => readEvents(home).filter((event): event is PutEvent => event.type === "put" && event.lane === lane);
+
+export type LaneReport = { revokes: string[]; late: string[] };
+
+export function laneReport(home: string, lane: string): LaneReport {
+  const puts = lanePuts(home, lane);
+  const latest = [...new Map(puts.map((put) => [put.name, put])).values()].filter(isLane).filter((put) => put.revoke);
+  const values = storedValues(home);
+  return { revokes: safeLines(latest.map(revokeLine), values), late: safeLines(puts.filter((put) => put.why !== "intake").map(latePutLine), values) };
+}

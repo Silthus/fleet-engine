@@ -944,18 +944,14 @@ test("a reversal and a lift fail unless they are in the ledger when Fleet reads 
   await expect(design("Where does the cache go?")).rejects.toThrow("The design class is braked");
 });
 
-test("report --lane adds each lane secret's latest revoke link to still yours and lists its late puts, misses marked", async () => {
+test("report --lane puts the store's revoke lines under still yours and its late puts in their own section", async () => {
   const pr = await checkout();
-  const put = (name: string, id: string, at: string, why: "intake" | "expired" | "missed", revoke?: string) => ({ type: "put" as const, id, name, at, why, storeExpiresAt: "2026-10-30T00:00:00Z", machine: "devbox-1", lane: "example/tickets#401", env: "STRIPE_KEY", ...revoke ? { revoke } : {} });
-  pr.lanePuts.set("example/tickets#401", [
-    put("stripe-test", "p-000000000001", "2026-10-24T09:00:00Z", "intake", "https://example.com/revoke/old"),
-    put("stripe-test", "p-000000000002", "2026-10-25T10:30:00Z", "expired", "https://example.com/revoke/new"),
-    put("mail-test", "p-000000000003", "2026-10-25T11:00:00Z", "missed"),
-  ]);
+  pr.laneSecrets.set("example/tickets#401", { revokes: ["- Revoke stripe-test (lane example/tickets#401): https://example.com/revoke/new"], late: ["- **Miss:** mail-test put 2026-10-25 11:00 UTC, why missed."] });
   const report = (await pr.decide("report", "--pr", "example/product#43", "--lane", "example/tickets#401")).output.split("\n");
   expect(report.filter((line) => line.startsWith("### "))).toEqual(["### Still yours", "### Late secret puts", "### Merged under the narrow grant", "### Decisions", "### Proofs", "### Side fixes started"]);
   const section = (heading: string) => { const from = report.indexOf(heading) + 1; return report.slice(from, report.findIndex((line, index) => index >= from && line.startsWith("### "))).filter(Boolean); };
-  expect(section("### Still yours").filter((line) => line.includes("Revoke"))).toEqual(["- Revoke stripe-test (lane example/tickets#401): https://example.com/revoke/new"]);
-  expect(section("### Late secret puts")).toEqual(["- stripe-test put 2026-10-25 10:30 UTC, why expired.", "- **Miss:** mail-test put 2026-10-25 11:00 UTC, why missed."]);
+  expect(section("### Still yours").at(-1)).toBe("- Revoke stripe-test (lane example/tickets#401): https://example.com/revoke/new");
+  expect(section("### Late secret puts")).toEqual(["- **Miss:** mail-test put 2026-10-25 11:00 UTC, why missed."]);
   expect((await pr.decide("report", "--pr", "example/product#43", "--lane", "example/tickets#402")).output).toContain("### Late secret puts\nNone.");
+  expect((await pr.decide("report", "--pr", "example/product#43")).output).not.toContain("### Late secret puts");
 });

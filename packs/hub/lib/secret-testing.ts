@@ -91,7 +91,7 @@ export function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretR
   };
   const offElsewhere = (reason: string) => () => appendFileSync(eventLogPath(hubHome), `\n${JSON.stringify({ type: "off", id: `o-${reason.replaceAll(" ", "-")}`, reason, at: clock.now.toISOString(), machine: "other-process" })}\n`);
   return {
-    hubHome, devHome, clock, printed, commands, reach, hooks, secretFile, offElsewhere, putElsewhere, ssh, devEnv: env("devbox-1"),
+    hubHome, devHome, clock, printed, commands, reach, hooks, secretFile, offElsewhere, putElsewhere, ssh, devEnv: env("devbox-1"), hubEnv: env("hub"),
     hub: on(hubHome, "hub"), dev: on(devHome, "devbox-1"),
     since(before: number) { return printed.slice(before).join(""); },
     expectNoLeak(extra: string[] = []) {
