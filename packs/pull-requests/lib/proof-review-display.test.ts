@@ -53,3 +53,14 @@ test("an answer that is not a numbered fixed or rejected item shows as written a
   expect(rounds[0]!.other).toBe("4. rejected: an indented answer past the last finding\n3. fixed: a second answer to the same finding\nWill handle B later.\nB needs a rename first.\n4. fixed: an answer past the last finding\n0. rejected: an answer before the first");
   expect(rounds[1]!.findings).toEqual([{ text: "The whole design leaks a token." }]);
 });
+
+test("an unindented line right under a finding continues it, while a line after a blank line or a heading does not", () => {
+  const findings = "## Correctness lens, by review-model\n\nFINDINGS:\n- **high**, `src/a.ts:1`: A drops the row.\nIt happens on every save.\n\nA paragraph after the list.\n- **low**: the name B is unclear.\n## Design lens, by review-model\nFINDINGS:\n- **medium**: C retries forever.\nCOVERED: src/a.ts\n";
+  const [round] = reviewDisplay([{ label: "round 1", commit: "a".repeat(40), reviewer: "gpt-6.1-sol", capturedBy: "fleet", findings, responses: "1. fixed: the row is kept\nand a test reads it back\n" }]);
+  expect(round!.findings).toEqual([
+    { text: "- **high**, `src/a.ts:1`: A drops the row.\nIt happens on every save.", answer: { verdict: "fixed", text: "1. fixed: the row is kept" } },
+    { text: "- **low**: the name B is unclear." },
+    { text: "- **medium**: C retries forever." },
+  ]);
+  expect(round!.other).toBe("and a test reads it back");
+});

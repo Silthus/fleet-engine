@@ -407,20 +407,25 @@ function reviewedLines(findings: string) {
     if (/^COVERED\b/.test(line)) inside = false;
     else if (!lensAnswer && /^#/.test(line)) inside = true;
     return inside ? [line] : [];
-  }).filter((line) => line.trim());
+  });
 }
 
 const continued = /^\s+\S/;
+const lazyContinued = /^[^\s#]/;
 
 export function reviewedFindings(findings: string) {
   const reviewed = reviewedLines(findings);
   const items: string[] = [];
+  let open = false;
   for (const line of reviewed) {
+    const joins: boolean = items.length > 0 && (continued.test(line) || (open && lazyContinued.test(line)));
     if (findingItem.test(line)) items.push(line.trim());
-    else if (items.length && continued.test(line)) items[items.length - 1] += `\n${line.trim()}`;
+    else if (joins) items[items.length - 1] += `\n${line.trim()}`;
+    open = Boolean(line.trim()) && (findingItem.test(line) || joins);
   }
-  if (items.length || reviewed.every((line) => noFinding.test(line.trim()))) return items;
-  return [reviewed.map((line) => line.trim()).join("\n")];
+  const text = reviewed.map((line) => line.trim()).filter(Boolean);
+  if (items.length || text.every((line) => noFinding.test(line))) return items;
+  return [text.join("\n")];
 }
 
 export type Answer = { verdict: "fixed" | "rejected"; text: string };
