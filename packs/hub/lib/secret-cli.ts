@@ -7,7 +7,7 @@ import { fleetOnHub, HubUnreachable, remoteHub, runSsh, type Env, type Ssh } fro
 import { checkedRows, injectedRows, rowModules } from "./secret-rows.ts";
 import {
   currentOff, deliver, droppedLine, dropLane, dueLines, enableOptions, enableQuestion, failureOf, laneDays, lanePuts, listLines, needLines, piecesOf, putValue, secretFilesDir, SecretRefusal, standingDays,
-  storedLine, sweep, turnOff, turnOn, unshown, whys,
+  olderHub, storedLine, sweep, turnOff, turnOn, unshown, whys,
   type AppendLog, type WriteBytes, type Delivered, type Heard, type PutEvent, type PutInput, type SecretRow, type Store, type Why,
 } from "./secret-store.ts";
 
@@ -58,7 +58,7 @@ type Request =
   | { op: "list"; need?: string[]; due?: boolean; thread?: string; machine?: string }
   | { op: "drop"; lane: string }
   | { op: "lane"; lane: string };
-type Answer = { ok: true; lines?: string[]; delivered?: Delivered[]; puts?: PutEvent[] } | { ok: false; error: string };
+type Answer = { ok: true; lines?: string[]; delivered?: Delivered[]; puts?: PutEvent[]; dropped?: string[] } | { ok: false; error: string };
 
 const machineOf = (context: SecretContext) => thisMachine(context.env);
 const threadOf = (context: SecretContext) => context.env.T3CODE_THREAD_ID ? { thread: context.env.T3CODE_THREAD_ID } : {};
@@ -84,7 +84,7 @@ async function answer(context: SecretContext, request: Request): Promise<Answer>
       turnOn(store, currentOff(store), request);
       return { ok: true, lines: [`The store is on again, by the user's words ${request.words} (thread ${request.thread}).`] };
     }
-    if (request.op === "drop") return { ok: true, lines: [droppedLine(dropLane(store, request.lane), request.lane)] };
+    if (request.op === "drop") { const dropped = dropLane(store, request.lane); return { ok: true, dropped, lines: [droppedLine(dropped, request.lane)] }; }
     if (request.op === "lane") return { ok: true, puts: lanePuts(context.home, request.lane) };
     const rows = await loadedRows(context);
     if (!Array.isArray(rows)) return rows;
@@ -354,7 +354,8 @@ export async function secretCommand(args: string[], outer: SecretContext): Promi
       const lane = option(rest, "--lane");
       noMore(rest);
       if (!lane) throw new UsageError(`drop needs --lane with the lane key.\n${usage}`);
-      return done(context, await ask(context, { op: "drop", lane }));
+      const reply = await ask(context, { op: "drop", lane });
+      return done(context, reply.ok && !Array.isArray(reply.dropped) ? { ok: false, error: olderHub("drop") } : reply);
     }
     if (name === "sweep") return sweepHere(rest, context);
     throw new UsageError(`Unknown command ${name}.\n${usage}`);

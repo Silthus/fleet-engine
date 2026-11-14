@@ -183,3 +183,11 @@ test("the report reads a lane's put events from the hub: names, whys and revoke 
   for (const value of values) expect(JSON.stringify(puts)).not.toContain(value);
   machine.expectNoLeak();
 });
+
+test("a drop or a report against a hub with an older fleet secret, which answers with its list, says nothing was done", async () => {
+  const machine = fleet();
+  machine.reach.answer = { code: 0, stdout: JSON.stringify({ ok: true, lines: ["Store: on"] }), stderr: "" };
+  expect(await machine.dev("drop", "--lane", laneA)).toBe(1);
+  expect(machine.printed.at(-1)).toBe("Fleet secret: the hub runs an older fleet secret that has no drop, so nothing was done there. Run fleet update on the hub\n");
+  await expect(laneEvents({ home: machine.devHome, env: machine.devEnv, ssh: machine.ssh }, laneA)).rejects.toThrow("has no lane read");
+});

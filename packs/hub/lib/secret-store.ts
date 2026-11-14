@@ -201,6 +201,8 @@ export const showsValue = (text: string, values: string[]) => values.some((value
 export const unshown = (texts: string[], values: string[]) => texts.find((text) => !showsValue(text, values)) ?? "✗";
 const hiddenValue = "Refused, and the reason would show part of the value. Nothing was stored";
 
+export const olderHub = (op: string) => `the hub runs an older fleet secret that has no ${op}, so nothing was done there. Run fleet update on the hub`;
+
 export function failureOf(error: unknown) {
   if (error instanceof SecretRefusal) return error.message;
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
