@@ -23,66 +23,49 @@ const metabaseValue = "(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}";
 const gap = String.raw`(?:\s|\\[rnt]){0,16}`;
 const cookieName = new RegExp(`^${metabaseCookie}$`);
 const key = (name: string) => String.raw`(?<![\w$-])${quote}${name}${quote}${gap}:${gap}${quote}`;
-const nameKey = new RegExp(key("name"), "g");
-const cookieNameKey = new RegExp(String.raw`${key("name")}${metabaseCookie}(?![\w.-])`, "g");
+const cookieNameKey = new RegExp(String.raw`${key("name")}${metabaseCookie}(?![\w.-])`);
 const valueKey = new RegExp(`${key("value")}(${metabaseValue})`, "g");
-const anyValueKey = new RegExp(key("value"), "g");
+const wholeValue = new RegExp(`^${metabaseValue}$`);
 
-function cookieRecordValues(text: string) {
-  const cookies = new Set([...text.matchAll(cookieNameKey)].map((match) => match.index));
-  if (!cookies.size) return [];
-  const names = [...text.matchAll(nameKey)].map((match) => match.index);
-  const values = [...text.matchAll(valueKey)].map((match) => ({ at: match.index, value: match[1]! }));
-  const valueKeys = [...text.matchAll(anyValueKey)].map((match) => match.index);
-  const records = recordsAt(text, [...names, ...valueKeys]);
-  const recordsWithValue = new Set(valueKeys.map((at) => records.get(at)));
-  const valuesIn = Map.groupBy(values, (value) => records.get(value.at));
-  const namesIn = new Map([...Map.groupBy(names, (at) => records.get(at))].map(([record, owners]) => [record, new Set(owners)]));
-  const between: (typeof values)[] = names.map(() => []).concat([[]]);
-  let slot = 0;
-  for (const value of values) {
-    while (slot < names.length && names[slot]! < value.at) slot++;
-    between[slot]!.push(value);
-  }
-  const ownedElsewhere = (value: (typeof values)[number], cookie: number) => {
-    const owners = namesIn.get(records.get(value.at));
-    return !!owners && !owners.has(cookie);
-  };
-  const cookieRecords = new Set<string | undefined>();
-  const loose = names.flatMap((at, index) => {
-    if (!cookies.has(at)) return [];
-    const record = records.get(at);
-    if (!recordsWithValue.has(record)) return [...between[index]!, ...between[index + 1]!].filter((value) => !ownedElsewhere(value, at));
-    cookieRecords.add(record);
-    return [];
-  });
-  return [...loose, ...[...cookieRecords].flatMap((record) => valuesIn.get(record) ?? [])].map((value) => value.value);
+function cookieRecordValues(text: string): string[] {
+  if (!cookieNameKey.test(text)) return [];
+  const json = parsedJson(text);
+  return json.parsed && keysIn(text) === parsedKeys(json.value) ? jsonCookieValues(json.value) : [...text.matchAll(valueKey)].map((match) => match[1]!);
 }
 
-function escapes(text: string, at: number) {
+function parsedJson(text: string): { parsed: true; value: unknown } | { parsed: false } {
+  try {
+    return { parsed: true, value: JSON.parse(text) };
+  } catch {
+    return { parsed: false };
+  }
+}
+
+function keysIn(json: string) {
   let count = 0;
-  while (text[at - 1 - count] === "\\") count++;
+  let quoted = false;
+  for (let at = 0; at < json.length; at++) {
+    const char = json[at];
+    if (quoted && char === "\\") at++;
+    else if (char === '"') quoted = !quoted;
+    else if (!quoted && char === ":") count++;
+  }
   return count;
 }
 
-function recordsAt(text: string, positions: number[]) {
-  const wanted = [...new Set(positions)].sort((left, right) => left - right);
-  const records = new Map<number, string>();
-  const open: number[] = [];
-  let item = 0;
-  let quoted = false;
-  let lineStart = true;
-  let next = 0;
-  for (let at = 0; next < wanted.length; at++) {
-    while (wanted[next] === at) records.set(wanted[next++]!, `${open.at(-1) ?? -1}:${item}`);
-    const char = text[at];
-    if (char === '"' && escapes(text, at) % 2 === 0) quoted = !quoted;
-    else if (!quoted && char === "{") open.push(at);
-    else if (!quoted && char === "}") open.pop();
-    else if (!quoted && lineStart && char === "-" && text[at + 1] === " ") item++;
-    lineStart = char === "\n" || (lineStart && (char === " " || char === "\t"));
-  }
-  return records;
+function parsedKeys(value: unknown): number {
+  if (Array.isArray(value)) return value.reduce((sum: number, entry) => sum + parsedKeys(entry), 0);
+  if (!value || typeof value !== "object") return 0;
+  return Object.values(value).reduce((sum: number, entry) => sum + 1 + parsedKeys(entry), 0);
+}
+
+function jsonCookieValues(value: unknown): string[] {
+  if (typeof value === "string") return cookieRecordValues(value);
+  if (Array.isArray(value)) return value.flatMap(jsonCookieValues);
+  if (!value || typeof value !== "object") return [];
+  const { name, value: cookie } = value as { name?: unknown; value?: unknown };
+  const own = typeof name === "string" && cookieName.test(name) && typeof cookie === "string" && wholeValue.test(cookie) ? [cookie] : [];
+  return [...own, ...Object.values(value).flatMap(jsonCookieValues)];
 }
 
 type Shape = { kind: string; pattern: RegExp } | { kind: string; values: (text: string) => string[] };

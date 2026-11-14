@@ -144,6 +144,9 @@ describe("secret guard", () => {
     ["a JSON cookie with an escaped backslash before a brace", JSON.stringify([{ name: cookieKey, path: "\\", note: "{", value: metabaseSession }])],
     ["a JSON-escaped pretty-printed cookie", JSON.stringify({ stdout: JSON.stringify([{ name: cookieKey, secure: true, value: metabaseSession }], null, 2) })],
     ["a browser cookie whose path spells a name key", JSON.stringify([{ name: cookieKey, path: "/name: test", value: metabaseSession }])],
+    ["a JavaScript cookie whose path spells a value key and a brace", `{ name: '${cookieKey}', path: '/value: placeholder/{', value: '${metabaseSession}' }`],
+    ["a JSON cookie with a repeated name key", `{"name":"${cookieKey}","value":"${metabaseSession}","name":"theme"}`],
+    ["a JSON cookie with a repeated value key", `{"name":"${cookieKey}","value":"${metabaseSession}","value":"dark"}`],
   ])("finds a Metabase session cookie in %s", (_, text) => {
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: text })));
@@ -154,7 +157,7 @@ describe("secret guard", () => {
   test.each([
     ["a JSON list", (build: string) => JSON.stringify([{ name: "build-id", value: build }, { name: cookieKey, value: metabaseSession }, { name: "trace-id", value: build }], null, 2)],
     ["a JSON list, value first", (build: string) => JSON.stringify([{ value: build, name: "build-id" }, { value: metabaseSession, partitionKey: { site: "https://example.com" }, name: cookieKey }, { value: build, name: "trace-id" }])],
-    ["a YAML list", (build: string) => `- name: build-id\n  value: ${build}\n- name: ${cookieKey}\n  value: ${metabaseSession}\n- name: trace-id\n  value: ${build}\n`],
+    ["a JSON-escaped list", (build: string) => JSON.stringify({ stdout: JSON.stringify([{ name: "build-id", value: build }, { name: cookieKey, value: metabaseSession }, { name: "trace-id", value: build }]) })],
   ])("redacts only the Metabase cookie in %s and keeps its neighbours' long values", (_, shape) => {
     const build = "1234567890".repeat(4);
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: shape(build) }))?.hookSpecificOutput);
@@ -162,11 +165,18 @@ describe("secret guard", () => {
     expect(output.split(build)).toHaveLength(3);
   });
 
+  test("redacts every long value in a text that names a Metabase cookie and is not JSON", () => {
+    const build = "1234567890".repeat(4);
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: `- name: build-id\n  value: ${build}\n- name: ${cookieKey}\n  value: ${metabaseSession}\n` }))?.hookSpecificOutput);
+    expect(output).not.toContain(metabaseSession);
+    expect(output).not.toContain(build);
+  });
+
   test.each([
-    ["a named record", [{ name: "build-id", value: "1234567890".repeat(4) }, { name: cookieKey, value: "<session-id>" }]],
-    ["an unnamed record", [{ name: cookieKey, value: "<session-id>" }, { value: "1234567890".repeat(4) }]],
-  ])("leaves a placeholder cookie record alone when %s next to it holds a long value", (_, records) => {
-    const text = JSON.stringify(records);
+    ["a named record", JSON.stringify([{ name: "build-id", value: "1234567890".repeat(4) }, { name: cookieKey, value: "<session-id>" }])],
+    ["an unnamed record", JSON.stringify([{ name: cookieKey, value: "<session-id>" }, { value: "1234567890".repeat(4) }])],
+    ["a JSON-escaped named record", JSON.stringify({ stdout: JSON.stringify([{ name: cookieKey, value: "<session-id>" }, { name: "build-id", value: "1234567890".repeat(4) }]) })],
+  ])("leaves a placeholder cookie record alone when %s next to it holds a long value", (_, text) => {
     expect(guard("claude", promptEvent(text))).toBeUndefined();
     expect(guard("claude", toolEvent({ stdout: text }))).toBeUndefined();
   });
