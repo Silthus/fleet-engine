@@ -26,13 +26,17 @@ const key = (name: string) => String.raw`(?<![\w$-])${quote}${name}${quote}${gap
 const nameKey = new RegExp(key("name"), "g");
 const cookieNameKey = new RegExp(String.raw`${key("name")}${metabaseCookie}(?![\w.-])`, "g");
 const valueKey = new RegExp(`${key("value")}(${metabaseValue})`, "g");
+const anyValueKey = new RegExp(key("value"), "g");
 
 function cookieRecordValues(text: string) {
   const cookies = new Set([...text.matchAll(cookieNameKey)].map((match) => match.index));
   if (!cookies.size) return [];
   const names = [...text.matchAll(nameKey)].map((match) => match.index);
   const values = [...text.matchAll(valueKey)].map((match) => ({ at: match.index, value: match[1]! }));
-  const records = recordsAt(text, [...names, ...values.map((value) => value.at)]);
+  const valueKeys = [...text.matchAll(anyValueKey)].map((match) => match.index);
+  const records = recordsAt(text, [...names, ...valueKeys]);
+  const recordsWithValue = new Set(valueKeys.map((at) => records.get(at)));
+  const valuesIn = Map.groupBy(values, (value) => records.get(value.at));
   const namesIn = new Map([...Map.groupBy(names, (at) => records.get(at))].map(([record, owners]) => [record, new Set(owners)]));
   const between: (typeof values)[] = names.map(() => []).concat([[]]);
   let slot = 0;
@@ -44,7 +48,15 @@ function cookieRecordValues(text: string) {
     const owners = namesIn.get(records.get(value.at));
     return !!owners && !owners.has(cookie);
   };
-  return names.flatMap((at, index) => cookies.has(at) ? [...between[index]!, ...between[index + 1]!].filter((value) => !ownedElsewhere(value, at)).map((value) => value.value) : []);
+  const cookieRecords = new Set<string | undefined>();
+  const loose = names.flatMap((at, index) => {
+    if (!cookies.has(at)) return [];
+    const record = records.get(at);
+    if (!recordsWithValue.has(record)) return [...between[index]!, ...between[index + 1]!].filter((value) => !ownedElsewhere(value, at));
+    cookieRecords.add(record);
+    return [];
+  });
+  return [...loose, ...[...cookieRecords].flatMap((record) => valuesIn.get(record) ?? [])].map((value) => value.value);
 }
 
 function escapes(text: string, at: number) {
