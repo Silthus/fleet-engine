@@ -445,3 +445,23 @@ test("stored text stays text on the page: command output in lists and quotes is 
   const raw = /<summary>Raw answer of the Correctness lens, by gpt-6\.1-sol<\/summary>\n\n(`+)text\n/.exec(page);
   expect(raw?.[1]).toBe("`````");
 });
+
+test("a single reviewer's findings show their bold severity and backtick location in their own columns", async () => {
+  const { pr, file } = await provedPr(async (pr) => {
+    expect((await pr.fleet("review-start", "--scope", "full")).code).toBe(0);
+    writeFileSync(join(pr.repository, "findings.md"), "- **high**, `feature.txt:1`: Retries twice.\n- **low** — `feature.txt:2`: The name is unclear.\n- A finding without a severity.\n- `bun test feature.test.ts`: 100 passed.\n");
+    expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
+    writeFileSync(join(pr.repository, "responses.md"), "1. fixed: one retry\n2. rejected: the domain term\n3. rejected: not a bug\n4. rejected: a note, not a finding\n");
+    expect((await pr.fleet("respond", "--round", "1", "responses.md")).code).toBe(0);
+  });
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", file("run.log", "delivered\n"));
+  const handler = publisher(pr);
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const rows = pageOf(handler).split("\n").filter((line) => /^\| [1-4] \| /.test(line));
+  expect(rows).toEqual([
+    "| 1 | high | | `feature.txt:1` | Retries twice. | fixed: one retry |",
+    "| 2 | low | | `feature.txt:2` | The name is unclear. | rejected: the domain term |",
+    "| 3 | | | | A finding without a severity. | rejected: not a bug |",
+    "| 4 | | | | `bun test feature.test.ts`: 100 passed. | rejected: a note, not a finding |",
+  ]);
+});

@@ -59,7 +59,10 @@ function findingOf(text: string, answer: string): Finding {
   if (parts.length >= 4 && severities.includes(parts[1]!.trim().toLowerCase())) {
     return { lens: parts[2]!.trim(), severity: parts[1]!.trim().toLowerCase(), where: parts[0]!.trim(), text: parts.slice(3).join(" | ").trim(), answer };
   }
-  return { text: body, answer };
+  const severity = /^\*\*([a-z]+)\*\*(?:,|\s+[—–-])?\s*/i.exec(body);
+  const rest = severity ? body.slice(severity[0].length) : body;
+  const where = severity ? /^`([^`]+)`:?\s*/.exec(rest) : null;
+  return { ...severity ? { severity: severity[1]!.toLowerCase() } : {}, ...where ? { where: where[1] } : {}, text: where ? rest.slice(where[0].length) : rest, answer };
 }
 
 async function roundsOf(reviews: ReceiptReview[]): Promise<Round[]> {
