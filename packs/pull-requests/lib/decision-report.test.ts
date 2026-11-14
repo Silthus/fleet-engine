@@ -55,6 +55,24 @@ test("the report prints the gate's last summary at HEAD, and sends the user to t
   });
 });
 
+test("a closed critical PR with a gap the user has not accepted is no blocker of the user's", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  fakeModel(pr, "JUDGE", verdict({ owed: { verdict: "fail", reason: "feature.txt is code, not docs", citations: ["feature.txt"] } }));
+  await pr.fleet("gap", "--kind", "judge", "--reason", "The judge reads feature.txt as code");
+  expect((await pr.fleet("gate")).code).toBe(3);
+  expect((await reportOf(pr)).stillYours).toEqual(["- **Blocker:** example/product#42 is critical at HEAD and its judge gap is not accepted: The judge reads feature.txt as code."]);
+
+  pr.pullRequestState({ closed: true });
+  expect(await reportOf(pr)).toEqual({
+    stillYours: ["None."],
+    proofs: ["| example/product#42 | none owed (Docs only) | judge: The judge reads feature.txt as code (not accepted) | none | none yet |"],
+  });
+});
+
 test("the report shows a merged PR's post-deploy watch once the gate weighed it as landed", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "greet new members\n");

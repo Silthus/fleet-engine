@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { optionalStringSetting } from "../../base/lib/settings.ts";
-import { findThread, withT3Session } from "../../base/lib/t3/index.ts";
+import { findThread, questionCard, withT3Session } from "../../base/lib/t3/index.ts";
 import { covers, decisionLine, refText, type DecisionState, type Env, type Ledger, type Mark, type PrRef, type Ssh } from "./decision-ledger.ts";
 import { readPullRequest, runIn, type PullRequest } from "./pr-ci.ts";
 import { receiptOf, type GapProof, type ProofSummary } from "./proof.ts";
@@ -36,10 +36,8 @@ async function lanePr(ref: PrRef, ledger: Ledger, context: ReportContext): Promi
   } catch (error) { return { ref, unknown: (error as Error).message }; }
 }
 
-const t3PendingCard = (home: string) => async (thread: string) => {
-  const found = await withT3Session((client) => findThread(client, thread), { home });
-  return (found?.pendingRuntimeRequest as { kind?: string } | null | undefined)?.kind === "user_input";
-};
+const t3PendingCard = (home: string) => async (thread: string) =>
+  questionCard(await withT3Session((client) => findThread(client, thread), { home })) !== undefined;
 
 function acceptedBy(gap: GapProof) {
   const by = gap.accepted;
@@ -58,7 +56,7 @@ function gaps(summary: ProofSummary): { kind: string; gap: GapProof }[] {
 
 function stillYours(rows: Row[], card: string | undefined) {
   const lane = rows.filter(gated);
-  const blockers = lane.filter(({ summary }) => summary.tier === "critical").flatMap(({ ref, summary }) =>
+  const blockers = lane.filter(({ state, summary }) => state !== "closed" && summary.tier === "critical").flatMap(({ ref, summary }) =>
     gaps(summary).filter(({ gap }) => !gap.accepted).map(({ kind, gap }) =>
       `- **Blocker:** ${refText(ref)} is critical at HEAD and its ${kind} gap is not accepted: ${gap.reason ?? "no reason recorded"}${gap.lapsed ? ` (🤖 decision ${gap.lapsed.id} lapsed: ${gap.lapsed.reason})` : ""}.`));
   const unknown = rows.flatMap((pr) => "unknown" in pr ? [`- ${refText(pr.ref)}: its proofs are not known here (${pr.unknown}). Run fleet proof gate.`] : []);

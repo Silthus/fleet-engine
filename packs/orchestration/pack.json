@@ -127,7 +127,7 @@
       "id": "question-guard",
       "name": "Question guard",
       "default": true,
-      "sentence": "A top-level T3 thread that ends its turn with a decision for you in prose is stopped once and told to ask with the question tool, so the decision reaches you even while the thread waits on a watch."
+      "sentence": "A top-level T3 thread that ends its turn with a decision for you in prose is stopped once and told to ask with the question tool, so the decision reaches you even while the thread waits on a watch. An agent message that would interrupt a thread waiting on your answer is turned back once and told to queue, so the question stays open."
     },
     {
       "id": "quality-loop",
@@ -179,6 +179,11 @@
     {
       "path": "hooks/ask-guard.ts",
       "target": ".config/fleet/hooks/Stop/ask-guard.ts",
+      "workflow": "question-guard"
+    },
+    {
+      "path": "hooks/ask-guard.ts",
+      "target": ".config/fleet/hooks/PreToolUse/ask-guard.ts",
       "workflow": "question-guard"
     }
   ],
