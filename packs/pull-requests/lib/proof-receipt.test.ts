@@ -700,3 +700,15 @@ test("a changed receipt heading refreshes the receipt where it is when moving it
     expect((await pr.fleet("receipt")).output).toContain("receipt current");
   }
 });
+
+test("indented code is left out of the page wherever it sits, also when a line starts with a list marker, while nested lists and lazy lines stay", async () => {
+  const { pr, handler, file } = await pagePr();
+  const note = ["Before the code.", "", "    - TOP=list-marker", "    1. NUMBERED=list-marker", "", "> A quote.", ">", ">     - QUOTED=quoted-code", "", "- An item.", "", "        - ITEM=item-code", "",
+    "Tabbed:", "", "\t* TABBED=tab-code", "", "| Step | Result |", "| --- | --- |", "    TABLED=after-table", "", "-     FIRST=item-first", "", "- Outer item.", "", "    - Nested item stays.", "", "A paragraph", "    - lazy line stays.", "", "After the code."].join("\r\n");
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email", "--result", "Delivered", file("indented.md", note));
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const page = pageOf(handler);
+  for (const kept of ["Before the code.", "A quote.", "An item.", "Tabbed:", "| Step | Result |", "Outer item.", "Nested item stays.", "lazy line stays.", "After the code."]) expect(page).toContain(kept);
+  for (const output of ["TOP=", "NUMBERED=", "QUOTED=", "ITEM=", "TABBED=", "TABLED=", "FIRST="]) expect(page).not.toContain(output);
+});
