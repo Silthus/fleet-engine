@@ -30,11 +30,10 @@ const percent = /\p{Nd}\s*(?:%|‰|‱|per\s?cent\b)/iu;
 const figures = [/\p{Nd}{1,3}(?:,\p{Nd}{3})+(?!\p{Nd})/u, /\p{Nd}{4,}/u];
 const entity = /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i;
 const invisible = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]/g;
-const tag = /<\/?[a-z][^>]*>/gi;
-const link = /!?\[([^\][]*)\](?:\([^()]*\)|\[[^\][]*\])/g;
+const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", "#39": "'" };
 
 const spaced = (text: string) => text.replace(/(\p{Nd})[\p{Zs}'’](?=\p{Nd}{3}(?!\p{Nd}))/gu, "$1,").replace(/\p{Zs}/gu, " ");
-const shown = (text: string) => spaced(text.replace(tag, "").replace(link, "$1").replace(/\\([!-/:-@[-`{-~])/g, "$1").replace(/[*_~`]/g, ""));
+const shown = (text: string) => spaced(Bun.markdown.html(text).replace(/<img\b[^>]*\balt="([^"]*)"[^>]*>/gi, "$1").replace(/<[^>]*>/g, "").replace(/&(amp|lt|gt|quot|#39);/g, (_, name: string) => named[name]!));
 
 function views(text: string) {
   const plain = text.normalize("NFKC").replace(invisible, "");
