@@ -73,7 +73,8 @@ A T3 thread that owns an open PR is stopped once when it ends its turn while
 one step still owed, with the command for that PR:
 
 - push the local commits on the PR's branch, then run the gate;
-- commit and push changed tracked files, or restore them;
+- commit and push changed tracked files, or restore them, on the PR's branch
+  or on a detached HEAD that the PR's pushed head contains;
 - push the commits of a detached HEAD in the PR's worktree, when HEAD
   continues the PR's pushed head;
 - run the gate at the pushed head, when no run is recorded there;
@@ -108,7 +109,9 @@ The stop passes when any of these holds:
 - a subagent thread of the thread, such as a delegated task, still runs,
   waits on a question, or awaits work of its own. A fork of the thread is no
   wait;
-- a PR watch has not seen CI settle at the pushed head;
+- a PR watch has not seen CI settle at the pushed head. T3's `checksPending`
+  answers this when the watch has it; otherwise no check has passed or
+  failed yet;
 - the thread was delegated from another machine;
 - the hook runs in a model session that another one started, such as a review
   a lane runs with `codex exec`. The model sessions that Fleet starts (the

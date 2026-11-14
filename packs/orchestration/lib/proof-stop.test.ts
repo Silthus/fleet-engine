@@ -94,6 +94,20 @@ describe("the Stop proof check blocks a lane that owns an open PR", () => {
     expect(reason).toContain(`git push origin HEAD:refs/heads/feat, then run fleet proof gate --repo ${repository} --pr 7 --commit ${detached}`);
   });
 
+  test("when tracked files changed at a detached HEAD on the PR's pushed head", async () => {
+    const { head, gate, git, checkout, check } = await lane();
+    await gate(head, 0);
+    await git("checkout", "-q", "--detach", head);
+    expect(await check()).toBeUndefined();
+    writeFileSync(join(checkout, "app.ts"), "edited\n");
+    expect(await reasonOf(check())).toContain(`${repository}#7 has uncommitted changes to tracked files on a detached HEAD at ${head.slice(0, 7)} in this worktree`);
+  });
+
+  test("when the watch says CI has settled at the pushed head, though no check passed or failed", async () => {
+    const { head, thread, check } = await lane();
+    expect(await check([thread({ pullRequests: [pr(7, "feat", { watch: { headSha: head, passed: false, failedChecks: [], checksPending: false } })] })])).toBeDefined();
+  });
+
   test("when the last gate run at the pushed head failed, quoting its reason", async () => {
     const { head, gate, check } = await lane();
     await gate(head, 1, "ci: red, required failing: test");
@@ -210,6 +224,7 @@ describe("the Stop proof check lets the stop pass", () => {
     ["while a Claude subagent or monitor runs", ({ check }) => check(undefined, { background_tasks: [{ id: "a1", type: "agent", status: "running" }] })],
     ["while a Claude wake-up is scheduled", ({ check }) => check(undefined, { session_crons: [{ id: "c1" }] })],
     ["while the watch waits on CI at the pushed head", ({ head, thread, check }) => check([thread({ pullRequests: [pr(7, "feat", { watch: { headSha: head } })] })])],
+    ["while the watch says checks still run, though the required ones passed", ({ head, thread, check }) => check([thread({ pullRequests: [pr(7, "feat", { watch: { headSha: head, passed: true, checksPending: true } })] })])],
     ["while the watch has not read the pushed head yet", ({ thread, check }) => check([thread({ pullRequests: [pr(7, "feat", { watch: { headSha: "0".repeat(40), passed: true } })] })])],
     ["while a run waits on an approval", ({ head, thread, check }) => check([thread({ pullRequests: [pr(7, "feat", { watch: { headSha: head, failedChecks: ["test"], awaitingApproval: ["deploy"] } })] })])],
     ["for a merged PR", ({ thread, check }) => check([thread({ pullRequests: [pr(7, "feat", { snapshot: { state: "merged", headBranch: "feat" } })] })])],

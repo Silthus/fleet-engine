@@ -5,7 +5,7 @@ import { readLinkedItemText, readLinkedMessages, type LinkedTimelineItem } from 
 import { t3StatePath, t3UserData } from "./server.ts";
 import type { T3Client, T3HttpClient } from "./session.ts";
 
-export type PullRequestWatch = { headSha?: string; passed?: boolean; failedChecks?: string[]; awaitingApproval?: string[] };
+export type PullRequestWatch = { headSha?: string; passed?: boolean; checksPending?: boolean; failedChecks?: string[]; awaitingApproval?: string[] };
 export type ShellPullRequest = { repository: string; number: number; url: string; snapshot?: { state?: string; headBranch?: string } | null; watch?: PullRequestWatch | null };
 
 export type ShellThread = {

@@ -61,9 +61,11 @@ function nestedSession(table: string, pid: number): boolean {
   return false;
 }
 
+const checksRun = (watch: PullRequestWatch) => watch.checksPending ?? (!watch.passed && !watch.failedChecks?.length);
 const awaitsCi = ({ watch, head }: Layer) => Boolean(watch)
-  && (watch!.headSha !== head || (!watch!.passed && !watch!.failedChecks?.length) || Boolean(watch!.awaitingApproval?.length));
+  && (watch!.headSha !== head || checksRun(watch!) || Boolean(watch!.awaitingApproval?.length));
 
+const trackedChanges = async (git: GitIn) => Boolean((await git(["status", "--porcelain", "--untracked-files=no"])).stdout);
 const isAncestor = async (git: GitIn, commit: string, of: string) => (await git(["merge-base", "--is-ancestor", commit, of], [0, 1])).code === 0;
 
 async function layersOf(threads: ShellThread[], threadId: string, git: GitIn): Promise<Layer[]> {
@@ -93,7 +95,7 @@ async function owedStep(layer: Layer, git: GitIn, checkedOut: string | undefined
       return `${name} has ${ahead} local commit(s) on ${branch} past its pushed head. Run git push origin ${branch}, then ${gateAt(layer, local)}`;
     }
   }
-  if (checkedOut === branch && (await git(["status", "--porcelain", "--untracked-files=no"])).stdout) {
+  if (checkedOut === branch && await trackedChanges(git)) {
     return `${name} has uncommitted changes to tracked files on ${branch}. Commit and push them, then run ${gateAt(layer, "<full sha of the new head>")}; or restore them`;
   }
   const record = await lastGateRun(home, { repository: layer.repository, pr: layer.number, commit: head });
@@ -110,7 +112,14 @@ async function detachedStep(layers: Layer[], git: GitIn, worktreePath: string | 
   const top = (await git(["rev-parse", "--show-toplevel"])).stdout;
   if ((await realpath(top)) !== (await realpath(worktreePath).catch(() => worktreePath))) return undefined;
   const here = (await git(["rev-parse", "HEAD"])).stdout;
-  for (const layer of layers) if (await isAncestor(git, here, layer.head)) return undefined;
+  for (const layer of layers) {
+    if (!(await isAncestor(git, here, layer.head))) continue;
+    if (!(await trackedChanges(git))) return undefined;
+    return {
+      pr: nameOf(layer),
+      step: `${nameOf(layer)} has uncommitted changes to tracked files on a detached HEAD at ${here.slice(0, 7)} in this worktree. Commit them and push them to ${layer.branch}, then run ${gateAt(layer, "<full sha of the new head>")}; or restore them`,
+    };
+  }
   let continued: Layer | undefined;
   for (const layer of layers) if (await isAncestor(git, layer.head, here)) continued = layer;
   if (!continued) return undefined;
