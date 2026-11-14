@@ -1,11 +1,10 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { arrivingPath, distinctIdSetting, hostSetting, projectKeySetting, sendingPath, spoolPath, type UsageLine } from "../../../src/usage/usage.ts";
+import { arrivingPath, hostSetting, projectKeySetting, sendingPath, spoolPath, type UsageLine } from "../../../src/usage/usage.ts";
 
-export type FlushIo = { home: string; settings: Record<string, unknown>; send: typeof fetch; wait(ms: number): Promise<void>; print(line: string): void };
-type Destination = { host: string; projectKey: string; distinctId: string };
+export type FlushIo = { home: string; settings: Record<string, unknown>; send: typeof fetch; print(line: string): void };
+type Destination = { host: string; projectKey: string };
 
 const usage = "Usage: fleet usage flush  Send the spooled usage events to your analytics project";
-const tries = 3;
 const loopback = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/;
 
 export async function usageCommand(args: string[], io: FlushIo): Promise<number> {
@@ -22,10 +21,10 @@ function destination(settings: Record<string, unknown>): Destination {
   const projectKey = text(projectKeySetting);
   if (!host.startsWith("https://") && !loopback.test(host)) throw new Error(`${hostSetting} must be an https:// URL. Set it with fleet set ${hostSetting}=<url>.`);
   if (!projectKey) throw new Error(`${projectKeySetting} is empty. Set it with fleet set ${projectKeySetting}=<key>.`);
-  return { host, projectKey, distinctId: text(distinctIdSetting) };
+  return { host, projectKey };
 }
 
-export async function flush(home: string, to: Destination, io: Pick<FlushIo, "send" | "wait">): Promise<number> {
+export async function flush(home: string, to: Destination, io: Pick<FlushIo, "send">): Promise<number> {
   const sending = sendingPath(home);
   fold(home);
   if (existsSync(spoolPath(home))) {
@@ -36,7 +35,7 @@ export async function flush(home: string, to: Destination, io: Pick<FlushIo, "se
   const batch = readLines(readFileSync(sending, "utf8")).map((line) => ({
     event: line.event,
     timestamp: line.timestamp,
-    properties: { ...line.properties, distinct_id: to.distinctId || `fleet-${line.properties.machine ?? "unknown"}`, $process_person_profile: false, $lib: "fleet" },
+    properties: { ...line.properties, distinct_id: `fleet-${line.properties.machine ?? "unknown"}`, $process_person_profile: false, $lib: "fleet" },
   }));
   if (batch.length) await post(to, JSON.stringify({ api_key: to.projectKey, batch }), io);
   rmSync(sending, { force: true });
@@ -64,17 +63,14 @@ function readLines(text: string): UsageLine[] {
   });
 }
 
-async function post(to: Destination, body: string, io: Pick<FlushIo, "send" | "wait">) {
+async function post(to: Destination, body: string, io: Pick<FlushIo, "send">) {
   let problem = "";
-  for (let tried = 1; tried <= tries; tried++) {
-    try {
-      const response = await io.send(`${to.host}/batch/`, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(15_000) });
-      if (response.ok) return;
-      problem = `answered ${response.status}`;
-    } catch (error) {
-      problem = `did not answer (${(error as Error).message})`;
-    }
-    if (tried < tries) await io.wait(tried * 1000);
+  try {
+    const response = await io.send(`${to.host}/batch/`, { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: AbortSignal.timeout(15_000) });
+    if (response.ok) return;
+    problem = `answered ${response.status}`;
+  } catch (error) {
+    problem = `did not answer (${(error as Error).message})`;
   }
-  throw new Error(`${to.host} ${problem} ${tries} times. The events stay in the spool for the next flush.`);
+  throw new Error(`${to.host} ${problem}. The events stay in the spool for the next flush.`);
 }
