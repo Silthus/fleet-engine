@@ -46,8 +46,10 @@ It refuses the user's keep-owed: only their acceptance lifts it.
 reverse records the user's reversal of a decision: their dated, quoted words in a message they typed in the T3 app,
 or their answer to your question tool there. Agents post on GitHub as the user, so a GitHub comment never reverses a
 decision. The message must say the words on the quoted date; when two messages on that date do, --message picks one
-by its id. One answer reverses one decision. The user's words must be newer than the decision, and the reversal takes the time they wrote them. The decision then prints as 👤 with their
-words, the replaced answer struck through, and counts no more at the gate or in list --live; decide or ask again. It
+by its id. One answer reverses one decision. The user's words must be newer than the decision, and the reversal
+takes the time they wrote them. The decision then prints as 👤 with their words, the replaced answer struck through,
+and counts no more at the gate or in list --live; decide or ask again. Once the reversal holds, reverse writes a void
+too, so an older Fleet stops counting the decision; when the hub drops that void, run the same command again. It
 refuses the user's keep-owed, as void does, and a voided decision. Two reversals of 🤖 decisions in one class within
 ${brakeDays} days brake the class from the later of the two: record --mark 🤖 and fleet proof review --agent in it
 are refused until lift records the user's answer to your question tool. The question must name the brake and the
@@ -320,6 +322,13 @@ async function heardInThread(thread: string, words: string, message: string | un
   return onDate[0]!;
 }
 
+async function repairVoid(decision: DecisionState, at: string, events: LedgerEvent[], context: DecisionContext, ledger: Ledger) {
+  if (events.some((event) => event.type === "void" && event.id === decision.id && event.at === at)) throw new Error(`Decision ${decision.id} is already reversed, on ${at.slice(0, 10)}`);
+  await appendHeard(ledger, { type: "void", id: decision.id, reason: `reversed by the user: ${decision.answer}`, at });
+  context.print(`${decisionLine(decision)}\nFleet wrote the void of the reversal of ${decision.id} for older readers: the hub had dropped it.`);
+  return 0;
+}
+
 async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const [id, ...rest] = parsed.positional;
   if (!id || rest.length) throw new Error("Name one decision id. Run fleet decision --help");
@@ -329,7 +338,7 @@ async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger)
   const events = await reachHub(() => ledger.read());
   const decision = fold(events).find((candidate) => candidate.id === id);
   if (!decision) throw new Error(`No decision ${id} in the ledger. Run fleet decision list`);
-  if (decision.reversed) throw new Error(`Decision ${id} is already reversed, on ${decision.reversed.at.slice(0, 10)}`);
+  if (decision.reversed) return repairVoid(decision, decision.reversed.at, events, context, ledger);
   if (decision.voided) throw new Error(`Decision ${id} is voided: ${decision.voided.reason}. It counts no more, so there is nothing to reverse`);
   refuseKeptOwed(decision);
   const word = await heardInThread(thread, words, parsed.options.get("--message"), context);

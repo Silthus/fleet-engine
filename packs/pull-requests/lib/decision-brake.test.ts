@@ -259,6 +259,29 @@ test("when two machines reverse two decisions with one answer at once, the one t
   expect((await pr.decide("list", "--live")).output).toContain(second);
 });
 
+test("when the hub drops a reversal's void for older readers, running the same reversal again writes it", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  hubAt(pr);
+  on(pr, "2026-10-20");
+  const id = idIn((await decideAlone(pr, "design", "First design call?")).output);
+  on(pr, "2026-10-21");
+  pr.say("Undo that one");
+  const ssh = pr.hub.ssh!;
+  let dropped = false;
+  pr.hub.ssh = async (host, command, stdin) => {
+    if (!dropped && stdin?.includes('"type":"void"')) { dropped = true; return { code: 255, stdout: "", stderr: "ssh: connect to host fleet-hub port 22: Connection refused\n" }; }
+    return ssh(host, command, stdin);
+  };
+  const voids = () => readFileSync(join(pr.home, "hub-home/.local/state/fleet/decisions.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.type === "void" && event.id === id);
+
+  await expect(reverse(pr, id, "2026-10-21", "Undo that one")).rejects.toThrow();
+  expect(voids()).toEqual([]);
+  expect((await reverse(pr, id, "2026-10-21", "Undo that one")).output).toContain(`Fleet wrote the void of the reversal of ${id} for older readers`);
+  expect(voids()).toEqual([{ type: "void", id, reason: 'reversed by the user: 2026-10-21 "Undo that one"', at: "2026-10-21T10:00:00.000Z" }]);
+  await expect(reverse(pr, id, "2026-10-21", "Undo that one")).rejects.toThrow(`Decision ${id} is already reversed, on 2026-10-21`);
+});
+
 test("a reversal that another machine wrote with an answer already used counts no more, and neither does its void", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });
