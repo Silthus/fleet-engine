@@ -36,9 +36,9 @@ const usage = `Usage:
   fleet dream scorecard [<memory checkout>]             On the hub: print the memory scorecard
   fleet dream logs [--since 7d]                         Print this machine's Dream sessions, for the deep dream
   fleet dream publish <worktree>                        Push a Dream worktree's commits to main, with the memory sync's guards
-  fleet dream search <word>... [--since 30d] [--repo <repo>]
+  fleet dream search <word>...
                                                         Find the sessions of the last 30 days that name every word`;
-const searchUsage = "Usage: fleet dream search <word>... [--since 30d] [--repo <repo>]";
+const searchUsage = "Usage: fleet dream search <word>...";
 const publishUsage = "Usage: fleet dream publish <worktree>";
 
 const memoryRefusal = "Dream needs the Memory pack: turn it on, then run fleet apply";
@@ -81,10 +81,9 @@ function logs(args: string[], io: DreamIo): number {
 }
 
 async function search(args: string[], io: DreamIo): Promise<number> {
-  const words = args.filter((arg, index) => !["--since", "--repo"].includes(arg) && !["--since", "--repo"].includes(args[index - 1] ?? ""));
-  if (!words.length) return io.say(searchUsage), 2;
+  if (!args.length) return io.say(searchUsage), 2;
   if (readRole(io.home) === "hub") {
-    io.print(searchSessions(stateDir(io.home, io.env), words, { since: parseSince(option(args, "--since") ?? `${sessionKeepDays}d`, io.now()), repo: option(args, "--repo") }));
+    io.print(searchSessions(stateDir(io.home, io.env), args, { since: parseSince(`${sessionKeepDays}d`, io.now()) }));
     return 0;
   }
   const hub = settingsOf(io.env)["hub.alias"];
