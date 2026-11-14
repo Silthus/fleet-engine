@@ -53,21 +53,32 @@ function keysIn(json: string) {
   return count;
 }
 
-function parsedKeys(value: unknown): number {
-  if (Array.isArray(value)) return value.reduce((sum: number, entry) => sum + parsedKeys(entry), 0);
-  if (!value || typeof value !== "object") return 0;
-  return Object.values(value).reduce((sum: number, entry) => sum + 1 + parsedKeys(entry), 0);
+function parsedKeys(value: unknown) {
+  let count = 0;
+  for (const entry of jsonNodes(value)) if (!Array.isArray(entry) && entry && typeof entry === "object") count += Object.keys(entry).length;
+  return count;
 }
 
-function jsonCookieValues(value: unknown): string[] {
-  if (typeof value === "string") return cookieRecordValues(value);
-  if (Array.isArray(value)) return value.flatMap(jsonCookieValues);
-  if (!value || typeof value !== "object") return [];
-  const { name, value: cookie } = value as { name?: unknown; value?: unknown };
+function jsonCookieValues(value: unknown) {
   const isCookieValue = (entry: unknown): entry is string => typeof entry === "string" && wholeValue.test(entry);
-  const record = typeof name === "string" && cookieName.test(name) && isCookieValue(cookie) ? [cookie] : [];
-  const mapped = Object.entries(value).flatMap(([key, entry]) => cookieName.test(key) && isCookieValue(entry) ? [entry] : []);
-  return [...record, ...mapped, ...Object.values(value).flatMap(jsonCookieValues)];
+  const found: string[] = [];
+  for (const entry of jsonNodes(value)) {
+    if (typeof entry === "string") found.push(...cookieRecordValues(entry));
+    if (Array.isArray(entry) || !entry || typeof entry !== "object") continue;
+    const { name, value: cookie } = entry as { name?: unknown; value?: unknown };
+    if (typeof name === "string" && cookieName.test(name) && isCookieValue(cookie)) found.push(cookie);
+    for (const [key, field] of Object.entries(entry)) if (cookieName.test(key) && isCookieValue(field)) found.push(field);
+  }
+  return found;
+}
+
+function* jsonNodes(value: unknown) {
+  const pending = [value];
+  while (pending.length) {
+    const entry = pending.pop();
+    yield entry;
+    if (entry && typeof entry === "object") for (const field of Object.values(entry)) pending.push(field);
+  }
 }
 
 type Shape = { kind: string; pattern: RegExp } | { kind: string; values: (text: string) => string[] };
@@ -174,6 +185,21 @@ function toolOutputDecision(provider: Provider, kinds: string[], output: unknown
 }
 
 export function guard(provider: Provider, event: HookEvent): HookDecision | undefined {
+  try {
+    return checkedGuard(provider, event);
+  } catch {
+    return uncheckedGuard(provider, event);
+  }
+}
+
+function uncheckedGuard(provider: Provider, event: HookEvent): HookDecision {
+  const kinds = ["value Fleet's secret guard could not check"];
+  if (event.hook_event_name === "UserPromptSubmit") return promptDecision(provider, kinds);
+  if (provider === "codex") return toolOutputDecision(provider, kinds, undefined);
+  return { hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: "[withheld: Fleet's secret guard could not check this output]", additionalContext: toolOutputReason(kinds, "withheld") } };
+}
+
+function checkedGuard(provider: Provider, event: HookEvent): HookDecision | undefined {
   if (event.hook_event_name === "UserPromptSubmit") {
     const kinds = secretKinds(event.prompt);
     return kinds.length ? promptDecision(provider, kinds) : undefined;

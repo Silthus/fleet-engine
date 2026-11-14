@@ -187,6 +187,20 @@ describe("secret guard", () => {
     expect(output).not.toContain(metabaseSession.slice(9));
   }
 
+  test("finds a secret inside deeply nested JSON text", () => {
+    const text = `${"[".repeat(20_000)}"${githubToken}"${"]".repeat(20_000)}`;
+    expect(guard("claude", promptEvent(text))?.decision).toBe("block");
+    expect(guard("codex", toolEvent({ stdout: text }))?.decision).toBe("block");
+    expect(JSON.stringify(guard("claude", toolEvent({ stdout: text })))).not.toContain(githubToken);
+  });
+
+  test("withholds a prompt or tool output the guard cannot check", () => {
+    const structuredContent = Array.from({ length: 200_000 }).reduce<unknown>((inner) => [inner], githubToken);
+    expect(guard("claude", toolEvent({ structuredContent }))?.hookSpecificOutput).toMatchObject({ updatedToolOutput: "[withheld: Fleet's secret guard could not check this output]" });
+    expect(guard("codex", toolEvent({ structuredContent }))?.decision).toBe("block");
+    expect(guard("claude", { hook_event_name: "UserPromptSubmit", prompt: structuredContent as string })?.decision).toBe("block");
+  });
+
   test("redacts every long value in a text that names a Metabase cookie and is not JSON", () => {
     const build = "1234567890".repeat(4);
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: `- name: build-id\n  value: ${build}\n- name: ${cookieKey}\n  value: ${metabaseSession}\n` }))?.hookSpecificOutput);
