@@ -193,17 +193,16 @@ async function startFinalRead(home: string, identity: ProofIdentity, base: strin
     let read = 1;
     while (started.includes(finalReadPrefix + read)) read++;
     const name = finalReadPrefix + read;
-    if (await reserveDecided(reviews, name, { ...identity, round: "final", read, scope: "final", base, from, phase, arbiter: verdict, capturedBy }, decision, lock)) return await reservedAlone(home, identity, reviews, started, name, { round: "final", id: name, directory: join(reviews, name) });
+    if (await reserveDecided(reviews, name, { ...identity, round: "final", read, scope: "final", base, from, phase, arbiter: verdict, capturedBy }, decision, lock)) return await reservedAlone(reviews, started, name, { round: "final", id: name, directory: join(reviews, name) });
   }
   throw new Error("Final read limit exceeded");
 }
 
-async function reservedAlone(home: string, identity: ProofIdentity, reviews: string, counted: string[], name: string, reserved: Reserved) {
-  const finished = new Set((await finishedReviews(home, identity)).map((review) => review.name));
-  const other = (await reviewNames(reviews)).find((started) => started !== name && !counted.includes(started) && !finished.has(started));
+async function reservedAlone(reviews: string, counted: string[], name: string, reserved: Reserved) {
+  const other = (await reviewNames(reviews)).find((started) => started !== name && !counted.includes(started));
   if (!other) return reserved;
   await rm(join(reviews, name), { recursive: true, force: true });
-  throw new Error(`Review ${other} started at the same time. Finish it before another review`);
+  throw new Error(`Review ${other} started while this one weighed the budget. Run this one again to weigh it anew`);
 }
 
 const coversReview = (base: string, reviewed: string, cleanBaseMerge: CleanBaseMerge) => reviewedThroughMerges(base, new Set([reviewed]), cleanBaseMerge) !== undefined;
@@ -236,7 +235,7 @@ async function startRound(home: string, identity: ProofIdentity, reviews: string
     const { free, ceiling } = permit.limits;
     const stop = spent >= ceiling ? budgetSpent(permit.limits) : undefined;
     const verdict = await permitReview(home, identity, spent >= free, stop, decision, permit);
-    if (await reserveDecided(reviews, String(round), { ...identity, round, scope, base, from, arbiter: verdict, capturedBy }, decision, lock)) return await reservedAlone(home, identity, reviews, started, String(round), { round, id: String(round), directory });
+    if (await reserveDecided(reviews, String(round), { ...identity, round, scope, base, from, arbiter: verdict, capturedBy }, decision, lock)) return await reservedAlone(reviews, started, String(round), { round, id: String(round), directory });
   }
   throw new Error("Review limit exceeded");
 }

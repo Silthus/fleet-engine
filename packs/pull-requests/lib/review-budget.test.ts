@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { checkout, cleanFixtures, fakeModel, finishRound, graded, markPanel, reviewHead, settings } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
@@ -253,9 +255,10 @@ test("a revert of a reviewed commit carries only from a reviewed commit before i
   expect(back.output).toContain(`final read carried from ${panel.slice(0, 7)}: revert of a PR commit`);
 });
 
-test("a review that starts while another one reserves backs out", async () => {
+test("a review that another one overtakes while it weighs the budget backs out", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical", "medium") });
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 3 });
   await pr.commit("feature.txt", "greet\n");
   await pr.fleet("require", "--none", "--reason", "fixture");
   const panel = await reviewHead(pr);
@@ -264,9 +267,17 @@ test("a review that starts while another one reserves backs out", async () => {
   await finishRound(pr, "2");
   const fixes = await pr.git("rev-parse", "HEAD");
   await pr.commit("feature.txt", "greet the new member\n");
-  const racing = join(pr.pullRequest, "reviews", "final-1");
-  pr.env.FLEET_REVIEW_ARBITER = `cat >/dev/null; mkdir -p "${racing}"; echo '{"phase":"review"}' > "${racing}/round.json"; echo CONTINUE`;
+  const [started, go] = ["started", "go"].map((name) => join(pr.home, name));
+  await spawnAsync(["mkfifo", started, go]);
+  pr.env.FLEET_REVIEW_ARBITER = `cat >/dev/null; if mkdir "${pr.home}/first" 2>/dev/null; then echo > "${started}"; read line < "${go}"; fi; echo CONTINUE`;
 
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", fixes)).rejects.toThrow("Review final-1 started at the same time. Finish it before another review");
+  const slow = pr.fleet("review-start", "--scope", "fixes", "--base", fixes);
+  await readFile(started, "utf8");
+  await pr.fleet("review-start", "--scope", "final", "--base", fixes);
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  await pr.fleet("review-finish", "--round", "final-1", "--reviewer", "gpt-6.1-sol", "findings.md");
+  await writeFile(go, "go\n");
+
+  await expect(slow).rejects.toThrow("Review final-1 started while this one weighed the budget");
   expect(existsSync(join(pr.pullRequest, "reviews", "3"))).toBe(false);
 });
