@@ -35,8 +35,10 @@ function addedNames(diff: string) {
     if (line.startsWith("+++ ")) {
       const path = line.slice(6).replace(/\t$/, "");
       const config = /\.(json|ya?ml|toml)$/.test(path);
-      const unscanned = !authored(path) || /\.mdx?$/.test(path) || (config && (dataFolder.test(path) || previous === "--- /dev/null"));
-      patterns = unscanned ? [] : config ? [configKey] : codeConcepts;
+      const unscanned = !authored(path) || /\.mdx?$/.test(path) || (config && dataFolder.test(path));
+      const newConfig = config && !unscanned && previous === "--- /dev/null";
+      if (newConfig) names.add(path);
+      patterns = unscanned || newConfig ? [] : config ? [configKey] : codeConcepts;
     } else if (line.startsWith("+")) for (const pattern of patterns) for (const match of line.slice(1).matchAll(pattern)) names.add(match[1]!);
     previous = line;
   }

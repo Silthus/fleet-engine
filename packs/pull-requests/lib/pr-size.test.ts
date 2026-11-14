@@ -75,7 +75,7 @@ test("counts flags, env vars and config keys the base does not name yet", async 
     "src/with space.test.ts": "const onlyInTests = process.env.TEST_ONLY_VAR;\n",
   });
 
-  const summary = "size: 10 authored lines, 2 new files (README.md, settings/new.yaml), 6 new concepts (newKey, fresh_setting, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
+  const summary = "size: 10 authored lines, 2 new files (README.md, settings/new.yaml), 7 new concepts (newKey, fresh_setting, settings/new.yaml, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
   expect(await size("--lines", "100", "--concepts", "5")).toMatchObject({ code: 0, out: `${summary}\nwithin the estimate of 100 lines and 5 concepts` });
   subdirectory = "src";
   colored = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "color.ui", GIT_CONFIG_VALUE_0: "always" };
