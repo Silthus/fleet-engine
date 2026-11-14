@@ -178,14 +178,14 @@ test("the body guard refuses figures and emails with the field named, and passes
   }
   expect(patches(pr)).toBe(0);
 
-  await pr.fleet("save", "--kind", "live-run", "--ran", "Ran 1a2b3c4 with v1.2.3 on 2026-10-25", "--result", "Delivered, as #1234 asked");
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Ran 1a2b3c4 with v1.2.3 on 2026-10-25", "--result", "Delivered, as #1234 asked, and the `@example.com` filter held");
   const notChecked = await pr.fleet("receipt", "--not-checked", "Safari", "--not-checked", "Safari on 1,000 accounts");
   expect([notChecked.code, notChecked.output]).toEqual([2, expect.stringContaining("receipt refused: the not-checked item 2 looks like")]);
   expect(patches(pr)).toBe(0);
   expect((await pr.fleet("receipt")).code).toBe(0);
   const section = block(pr.githubBody());
   expect(section).toContain("**Not checked:** none recorded");
-  expect(section).toContain(`| live-run | Ran 1a2b3c4 with v1.2.3 on 2026-10-25 | Delivered, as #1234 asked | \`${short(head)}\` |`);
+  expect(section).toContain(`| live-run | Ran 1a2b3c4 with v1.2.3 on 2026-10-25 | Delivered, as #1234 asked, and the \`@example.com\` filter held | \`${short(head)}\` |`);
   expect(section).not.toContain("48,213");
   expect(section).not.toContain("12%");
 });

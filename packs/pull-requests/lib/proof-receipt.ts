@@ -38,7 +38,7 @@ const shown = (text: string) => spaced(text.replace(tag, "").replace(link, "$1")
 
 function views(text: string) {
   const plain = text.normalize("NFKC").replace(invisible, "");
-  return [shown(plain), spaced(plain)];
+  return [shown(plain), spaced(plain.replace(/`/g, ""))];
 }
 
 export function guardField(field: string, text: string) {
