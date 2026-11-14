@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { modelFor, modelTable, type ModelRow } from "../../base/lib/models.ts";
+import { modelFor, modelSessionEnv, modelTable, type ModelRow } from "../../base/lib/models.ts";
 import { quotaGraceMs, quotaWatch } from "../../base/lib/quota.ts";
 
 export const families = ["claude", "gpt"] as const;
@@ -87,7 +87,7 @@ async function spawnWithLimit(command: string[], request: ModelRequest, env: Rec
   let stalled: string | undefined;
   const watch = quotaWatch(grace, (line) => { stalled = line; if (child) stopGroup(child.pid); });
   try {
-    const running = child = Bun.spawn(command, { cwd: request.cwd, env: env as Record<string, string>, stdin: new Blob([request.prompt]), stdout: "pipe", stderr: "pipe", detached: true });
+    const running = child = Bun.spawn(command, { cwd: request.cwd, env: modelSessionEnv(env), stdin: new Blob([request.prompt]), stdout: "pipe", stderr: "pipe", detached: true });
     stop = setTimeout(() => stopGroup(running.pid), timeout);
     const [stdout, stderr, code] = await Promise.all([watched(child.stdout, watch.stream()), watched(child.stderr, watch.stream()), child.exited, request.started?.(child.pid)]);
     if (stalled) return { cause: `${quotaExhausted}: no progress after "${stalled}"` };

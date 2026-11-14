@@ -127,7 +127,7 @@
       "id": "question-guard",
       "name": "Question guard",
       "default": true,
-      "sentence": "A top-level T3 thread that ends its turn with a decision for you in prose is stopped once and told to ask with the question tool, so the decision reaches you even while the thread waits on a watch. An agent message that would interrupt a thread waiting on your answer is turned back once and told to queue, so the question stays open."
+      "sentence": "A top-level T3 thread that ends its turn with a decision for you in prose is stopped once and told to ask with the question tool, so the decision reaches you even while the thread waits on a watch. An agent message that would interrupt a thread waiting on your answer is turned back once and told to queue, so the question stays open. A T3 thread that owns an open pull request and ends its turn while the proof gate has not passed at the pushed head is sent back once, with the step still owed."
     },
     {
       "id": "quality-loop",

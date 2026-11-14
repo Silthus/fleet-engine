@@ -1,6 +1,6 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { type LinkedThread, listLinkedThreads, matchThread, readSnapshots, type ShellThread, type T3HttpClient, withT3Session } from "../../base/lib/t3/index.ts";
+import { type LinkedThread, listLinkedThreads, matchThread, readSnapshots, type ShellPullRequest, type ShellThread, type T3HttpClient, withT3Session } from "../../base/lib/t3/index.ts";
 import type { Gh } from "./gh.ts";
 
 export type Handover = { pr: string; from: string; to: string; at: string };
@@ -41,18 +41,23 @@ export async function readHandovers(home: string): Promise<Handover[]> {
 }
 
 const live = (thread: ShellThread) => !thread.deletedAt && !thread.archivedAt && !thread.settledAt;
-const rootOf = (thread: ShellThread) => (thread.lineage?.parentThreadId ? thread.lineage.rootThreadId ?? thread.lineage.parentThreadId : undefined);
+const rootOf = (thread: ShellThread) => thread.lineage?.parentThreadId && (thread.lineage.relationshipToParent ?? "subagent") === "subagent"
+  ? thread.lineage.rootThreadId ?? thread.lineage.parentThreadId : undefined;
 const seenOpen = (state: string | undefined) => !["merged", "closed"].includes(state ?? "");
 
 export function ownedLinks(threads: ShellThread[], id: string): string[] {
+  return ownedPullRequests(threads, id).map((pr) => pr.url);
+}
+
+export function ownedPullRequests(threads: ShellThread[], id: string): ShellPullRequest[] {
   const target = matchThread(threads, id, (thread) => thread.id);
   if (!target) return [];
   const root = rootOf(target);
   if (root && threads.some((thread) => thread.id === root && live(thread))) return [];
   const family = threads.filter((thread) => thread.id === target.id || (rootOf(thread) === target.id && live(thread)));
   const others = new Set(threads.filter((thread) => live(thread) && !family.includes(thread)).flatMap((thread) => (thread.pullRequests ?? []).map((pr) => key(pr.url))));
-  const links = new Map(family.flatMap((thread) => thread.pullRequests ?? []).filter((pr) => seenOpen(pr.snapshot?.state)).map((pr) => [key(pr.url), pr.url]));
-  return [...links].filter(([known]) => !others.has(known)).map(([, url]) => url);
+  const links = new Map(family.flatMap((thread) => thread.pullRequests ?? []).filter((pr) => seenOpen(pr.snapshot?.state)).map((pr) => [key(pr.url), pr]));
+  return [...links].filter(([known]) => !others.has(known)).map(([, pr]) => pr);
 }
 
 function handedOverBy(handovers: Handover[], threads: ShellThread[], id: string): Set<string> {

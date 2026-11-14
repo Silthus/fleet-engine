@@ -4,6 +4,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { type Hook, printing, runHook } from "../../base/lib/hook.ts";
 import { findThread, matchThread, questionCard, type ShellThread, t3CliRunner, t3UserData, withT3Session } from "../../base/lib/t3/index.ts";
+import { proofStop, type ProofStopEvent, type ProofStopOptions } from "../lib/proof-stop.ts";
 import { asksForDecision, personName } from "../lib/prose-question.ts";
 
 export type StopEvent = { transcript_path?: string; stop_hook_active?: boolean; last_assistant_message?: string };
@@ -54,6 +55,15 @@ function askedAfterLastMessage(turn: string[], finalMessage: string | undefined)
   const at = finalMessage === undefined ? all.findLastIndex((step) => "text" in step) : all.findLastIndex((step) => "text" in step && step.text === finalMessage);
   const last = finalMessage ?? (at < 0 ? undefined : (all[at] as { text: string }).text);
   return { last, asked: at >= 0 && all.slice(at + 1).some((step) => "asked" in step) };
+}
+
+export async function finalMessage(event: StopEvent): Promise<string | undefined> {
+  if (event.last_assistant_message !== undefined || !event.transcript_path) return event.last_assistant_message;
+  try {
+    return askedAfterLastMessage(currentTurn(await readFile(event.transcript_path, "utf8")), undefined).last;
+  } catch {
+    return undefined;
+  }
 }
 
 export function currentTurn(transcript: string): string[] {
@@ -160,11 +170,20 @@ const t3CallMs = 3_000;
 const liveShell = (home: string): ReadShell => () =>
   withT3Session((client) => client.getShell<{ threads: ShellThread[] }>(), { home, ttl: "1m", timeoutMs: t3CallMs, runCli: t3CliRunner({ timeoutMs: t3CallMs }) });
 
-export const hookWith = (shell: (home: string) => ReadShell): Hook => async (_provider, readInput, home) => {
+export type StopDeps = Partial<Pick<ProofStopOptions, "threadId" | "git" | "processes" | "deadline">> & { topLevel?: IsTopLevel };
+
+async function guardStopAndProof(event: StopEvent & ProofStopEvent, home: string, shell: ReadShell, deps: StopDeps) {
+  const threadId = "threadId" in deps ? deps.threadId : process.env.T3CODE_THREAD_ID;
+  const prose = await guardStop(event, home, threadId, deps.topLevel).catch(() => undefined);
+  if (prose || existsSync(join(home, killSwitch))) return prose;
+  return proofStop({ ...event, last_assistant_message: await finalMessage(event) }, { home, shell, ...deps, threadId });
+}
+
+export const hookWith = (shell: (home: string) => ReadShell, stop: StopDeps = {}): Hook => async (_provider, readInput, home) => {
   try {
-    const event = JSON.parse(await readInput()) as StopEvent & SendEvent;
+    const event = JSON.parse(await readInput()) as StopEvent & ProofStopEvent & SendEvent;
     if (event.tool_name !== undefined) return printing(await guardSend(event, { home, shell: shell(home) }));
-    return printing(await guardStop(event, home));
+    return printing(await guardStopAndProof(event, home, shell(home), stop));
   } catch {
     return printing(undefined);
   }

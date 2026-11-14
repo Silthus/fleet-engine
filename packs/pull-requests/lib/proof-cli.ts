@@ -2,7 +2,7 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, writeJson, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
+import { askGap, authorOf, finishReview, gateRecordPath, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, writeJson, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type GateRecord, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
 import { AnswerTaken, appendOnce, decideAlone, hearUser, ledgerHolds, ledgerOf } from "./decision-cli.ts";
 import { HubUnreachable, refText, type Decision, type Ssh } from "./decision-ledger.ts";
 import { readComment, runIn } from "./pr-ci.ts";
@@ -16,7 +16,7 @@ import { reviewPrompt } from "./proof-review.ts";
 import { leftOutNote, reviewRange } from "./proof-range.ts";
 import { quietCommitIn } from "./proof-delta.ts";
 import { baseTip, cleanBaseMerge, mergeBase, pullRequestDetails, remotesOf, topLevel } from "./proof-checkout.ts";
-import { arbiterOf, finalGate, reviewLimit } from "./proof-gate.ts";
+import { arbiterOf, finalGate, reviewLimit, type FinalGate } from "./proof-gate.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
 import type { ThreadWords } from "./proof-answers.ts";
@@ -324,9 +324,18 @@ when the gate's own checks fail first, with its lines and its judge gap; the lap
 receipt link once one is recorded. The gate's lines and fleet decision report come from the same summary.`,
     examples: ["fleet proof gate", "fleet proof gate --landed", "fleet proof gate --json"], flags: ["--landed", "--json"],
     run: async ({ flags }, identity, context) => {
-      const { print } = context;
+      const { print, home } = context;
       const head = identity();
-      const gate = await finalGate(head, context, { landed: flags.has("--landed") });
+      const record = gateRecordPath(home, head);
+      await rm(record, { force: true });
+      let gate: FinalGate;
+      try {
+        gate = await finalGate(head, context, { landed: flags.has("--landed") });
+      } catch (error) {
+        await writeJson(record, { code: 1, reason: String((error as Error).message ?? error).split("\n")[0] } satisfies GateRecord).catch(() => {});
+        throw error;
+      }
+      await writeJson(record, { code: gate.code, reason: gate.reason } satisfies GateRecord);
       if (flags.has("--json")) print(JSON.stringify(gate.summary));
       else for (const line of [...gate.lines, gate.verdict]) print(line);
       return gate.code;

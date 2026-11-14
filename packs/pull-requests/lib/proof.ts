@@ -26,6 +26,11 @@ export function proofDirectory(home: string, identity: ProofIdentity) {
   return join(pullRequestDirectory(home, identity), identity.commit);
 }
 
+export type GateRecord = { code: number; reason: string };
+
+export const gateRecordPath = (home: string, identity: ProofIdentity) =>
+  join(pullRequestDirectory(home, { ...identity, repository: identity.repository.toLowerCase() }), "gate-record", `${identity.commit}.json`);
+
 const screenshotSignatures = [
   Buffer.from("89504e470d0a1a0a", "hex"),
   Buffer.from("ffd8ff", "hex"),
@@ -909,6 +914,8 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const lapsed = [...new Set(weighed.flatMap((status) => status.problem && status.lapsed ? [status.lapsed] : []))];
   const conditions = weighed.flatMap((status) => status.condition ? [status.condition] : []);
   const code = problems.includes("missing") ? 1 : problems.includes("gap") ? 3 : 0;
+  const held = [{ problem: owed ? undefined : "missing", line: owedPart(owed).line }, ...kinds.map((kind) => ({ problem: kind.problem, line: kind.proof.line })), review, ...responses, head, checks];
+  const failure = held.find((status) => status.problem === (code === 1 ? "missing" : "gap"))?.line?.split("\n")[0];
   const voided = (Array.isArray(decisions) ? decisions : []).filter((decision) => decision.voided && covers(decision, identity)).map((decision) => decision.id);
   const receipt = await receiptOf(home, identity);
   const proofSummary: CheckedSummary = {
@@ -920,7 +927,7 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   };
   const summary = `kinds: ${owed?.kinds.length ? owed.kinds.join(", ") : "none"}; review: ${review.covered}; CI: ${checks.covered}`;
   const evidence = kinds.map(({ proof, evidence }) => ({ kind: proof.kind, line: proof.line, directory: evidence }));
-  return { code, lines: summaryLines(proofSummary), summary, owed, evidence, ci: ciResult, decisions, tier, conditions, voided, proofSummary };
+  return { code, failure, lines: summaryLines(proofSummary), summary, owed, evidence, ci: ciResult, decisions, tier, conditions, voided, proofSummary };
 }
 
 const receiptPath = (home: string, ref: PrRef) => join(prDirectory(home, ref), "receipt.json");
