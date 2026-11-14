@@ -10,7 +10,7 @@ export type ShellPullRequest = { repository: string; number: number; url: string
 
 export type ShellThread = {
   id: string; title: string; projectId: string; status: string;
-  activeRunId?: string | null; activityRunStatus?: string | null; pendingBackgroundTasks?: { kind: string; childThreadId?: string; awaited?: boolean }[];
+  activeRunId?: string | null; activityRunStatus?: string | null; pendingBackgroundTasks?: { kind: string; taskId?: string; childThreadId?: string; awaited?: boolean }[];
   blockedOnThreadWait?: boolean; delegatedFrom?: { environmentId?: string; threadId?: string } | null;
   createdAt?: string; latestUserMessageAt?: string | null; latestRunRequestedAt?: string | null;
   latestRunStartedAt?: string | null; latestRunCompletedAt?: string | null;

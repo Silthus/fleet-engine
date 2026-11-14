@@ -28,8 +28,38 @@ export function proofDirectory(home: string, identity: ProofIdentity) {
 
 export type GateRecord = { code: number; reason: string };
 
-export const gateRecordPath = (home: string, identity: ProofIdentity) =>
-  join(pullRequestDirectory(home, { ...identity, repository: identity.repository.toLowerCase() }), "gate-record", `${identity.commit}.json`);
+export const gateRunDirectory = (home: string, identity: ProofIdentity) =>
+  join(pullRequestDirectory(home, { ...identity, repository: identity.repository.toLowerCase() }), "gate-record", identity.commit);
+
+const unfinishedGateRun: GateRecord = { code: 1, reason: "the gate run has not finished: it still runs, or it stopped without a result" };
+
+async function lastRunNumber(directory: string): Promise<number> {
+  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+  return Math.max(0, ...names.flatMap((name) => /^(\d+)\.json$/.exec(name)?.[1] ?? []).map(Number));
+}
+
+export async function startGateRun(home: string, identity: ProofIdentity): Promise<(record: GateRecord) => Promise<void>> {
+  const directory = gateRunDirectory(home, identity);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  for (let number = await lastRunNumber(directory) + 1; ; number++) {
+    const path = join(directory, `${number}.json`);
+    try {
+      await writeFile(path, JSON.stringify(unfinishedGateRun) + "\n", { flag: "wx", mode: 0o600 });
+      return (record) => writeJson(path, record);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+}
+
+export async function lastGateRun(home: string, identity: ProofIdentity): Promise<GateRecord | undefined> {
+  const directory = gateRunDirectory(home, identity);
+  const last = await lastRunNumber(directory);
+  if (!last) return undefined;
+  const { code, reason } = (await readJson<Partial<GateRecord> | null>(join(directory, `${last}.json`), null)) ?? {};
+  if (!Number.isInteger(code) || typeof reason !== "string") throw new Error(`Malformed gate record ${last}.json in ${directory}`);
+  return { code: code!, reason };
+}
 
 const screenshotSignatures = [
   Buffer.from("89504e470d0a1a0a", "hex"),

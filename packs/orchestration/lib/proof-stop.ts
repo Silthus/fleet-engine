@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { isWaiting, matchThread, type PullRequestWatch, type ShellThread } from "../../base/lib/t3/index.ts";
 import { ownedPullRequests } from "../../pull-requests/lib/pr-owners.ts";
-import { gateRecordPath, readJson } from "../../pull-requests/lib/proof.ts";
+import { lastGateRun } from "../../pull-requests/lib/proof.ts";
 import { needsHuman } from "./lanes.ts";
 import { personName } from "./prose-question.ts";
 
@@ -9,8 +9,8 @@ export type ProofStopEvent = {
   cwd?: string; stop_hook_active?: boolean; last_assistant_message?: string;
   background_tasks?: { id?: string; type?: string; status?: string }[]; session_crons?: unknown[];
 };
-export type Git = (cwd: string, args: string[]) => Promise<{ code: number; stdout: string }>;
-export type ProcessTable = { pid: number; table: () => Promise<string> };
+export type Git = (cwd: string, args: string[], signal?: AbortSignal) => Promise<{ code: number; stdout: string }>;
+export type ProcessTable = { pid: number; table: (signal?: AbortSignal) => Promise<string> };
 export type ProofStopOptions = {
   home: string; threadId?: string; shell: () => Promise<{ threads: ShellThread[] }>;
   deadline?: () => Promise<void>; git?: Git; processes?: ProcessTable;
@@ -19,28 +19,30 @@ export type ProofStopBlock = { decision: "block"; reason: string };
 
 export const proofStopDeadlineMs = 10_000;
 
+type ShellTask = NonNullable<ShellThread["pendingBackgroundTasks"]>[number];
 type Layer = { repository: string; number: number; branch: string; head: string; watch?: PullRequestWatch | null };
 type Owed = { pr: string; step: string };
 type GitIn = (args: string[], answers?: number[]) => Promise<{ code: number; stdout: string }>;
 
-export const realGit: Git = async (cwd, args) => {
-  const child = Bun.spawn(["git", "--no-optional-locks", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+export const realGit: Git = async (cwd, args, signal) => {
+  const child = Bun.spawn(["git", "--no-optional-locks", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "ignore", signal });
   const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
   return { code, stdout: stdout.trim() };
 };
 
 const realProcesses: ProcessTable = {
   pid: process.pid,
-  table: async () => {
-    const child = Bun.spawn(["ps", "-A", "-o", "pid=,ppid=,comm="], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+  table: async (signal) => {
+    const child = Bun.spawn(["ps", "-A", "-o", "pid=,ppid=,comm="], { stdin: "ignore", stdout: "pipe", stderr: "ignore", signal });
     const [table, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
     if (code !== 0) throw new Error(`ps exited ${code}`);
     return table;
   },
 };
 
-const gitIn = (run: Git, cwd: string): GitIn => async (args, answers = [0]) => {
-  const result = await run(cwd, args);
+const gitIn = (run: Git, cwd: string, signal: AbortSignal): GitIn => async (args, answers = [0]) => {
+  signal.throwIfAborted();
+  const result = await run(cwd, args, signal);
   if (!answers.includes(result.code)) throw new Error(`git ${args[0]} exited ${result.code}`);
   return result;
 };
@@ -78,14 +80,6 @@ async function layersOf(threads: ShellThread[], threadId: string, git: GitIn): P
   return layers;
 }
 
-async function gateRecord(home: string, layer: Layer) {
-  const record = await readJson<unknown>(gateRecordPath(home, { repository: layer.repository, pr: layer.number, commit: layer.head }), undefined);
-  if (record === undefined) return undefined;
-  const { code, reason } = (record ?? {}) as { code?: unknown; reason?: unknown };
-  if (!Number.isInteger(code) || typeof reason !== "string") throw new Error("Malformed gate record");
-  return { code: code as number, reason };
-}
-
 const gateAt = ({ repository, number }: Layer, commit: string) => `fleet proof gate --repo ${repository} --pr ${number} --commit ${commit}`;
 const nameOf = ({ repository, number }: Layer) => `${repository}#${number}`;
 
@@ -102,7 +96,7 @@ async function owedStep(layer: Layer, git: GitIn, checkedOut: string | undefined
   if (checkedOut === branch && (await git(["status", "--porcelain", "--untracked-files=no"])).stdout) {
     return `${name} has uncommitted changes to tracked files on ${branch}. Commit and push them, then run ${gateAt(layer, "<full sha of the new head>")}; or restore them`;
   }
-  const record = await gateRecord(home, layer);
+  const record = await lastGateRun(home, { repository: layer.repository, pr: layer.number, commit: head });
   if (!record) return `${name} has no gate run at its pushed head ${head.slice(0, 7)}. Run ${gateAt(layer, head)}`;
   if (record.code === 0) return undefined;
   const next = record.code === 3
@@ -117,8 +111,9 @@ async function detachedStep(layers: Layer[], git: GitIn, worktreePath: string | 
   if ((await realpath(top)) !== (await realpath(worktreePath).catch(() => worktreePath))) return undefined;
   const here = (await git(["rev-parse", "HEAD"])).stdout;
   for (const layer of layers) if (await isAncestor(git, here, layer.head)) return undefined;
-  let continued = layers[0]!;
+  let continued: Layer | undefined;
   for (const layer of layers) if (await isAncestor(git, layer.head, here)) continued = layer;
+  if (!continued) return undefined;
   return {
     pr: nameOf(continued),
     step: `${nameOf(continued)}: this worktree has a detached HEAD ${here.slice(0, 7)} past its pushed head. Push its commits with git push origin HEAD:refs/heads/${continued.branch}, then run ${gateAt(continued, here)}`,
@@ -128,25 +123,35 @@ async function detachedStep(layers: Layer[], git: GitIn, worktreePath: string | 
 const waitsInClaude = (event: ProofStopEvent) =>
   Boolean(event.background_tasks?.some((task) => ["running", "pending"].includes(task.status ?? "") && task.type !== "shell") || event.session_crons?.length);
 
+const runningStatuses = ["preparing", "queued", "starting", "running", "waiting"];
+const settledWatch = (task: ShellTask) => task.taskId?.startsWith("pull-request-watch:") && !task.awaited;
+const runningChild = (threads: ShellThread[], parent: ShellThread) => threads.some((thread) =>
+  thread.lineage?.parentThreadId === parent.id && !thread.settledAt && !thread.archivedAt && !thread.deletedAt
+  && Boolean(thread.activeRunId || runningStatuses.includes(thread.activityRunStatus ?? thread.status)));
+const waits = (threads: ShellThread[], thread: ShellThread) => runningChild(threads, thread)
+  || isWaiting({ ...thread, pendingBackgroundTasks: thread.pendingBackgroundTasks?.filter((task) => !settledWatch(task)) });
+
 export async function proofStop(event: ProofStopEvent, options: ProofStopOptions): Promise<ProofStopBlock | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const cancel = new AbortController();
   const deadline = options.deadline?.() ?? new Promise<void>((resolve) => { timer = setTimeout(resolve, proofStopDeadlineMs); });
   try {
-    return await Promise.race([check(event, options).catch(() => undefined), deadline.then(() => undefined)]);
+    return await Promise.race([check(event, options, cancel.signal).catch(() => undefined), deadline.then(() => undefined)]);
   } finally {
     clearTimeout(timer);
+    cancel.abort();
   }
 }
 
-async function check(event: ProofStopEvent, options: ProofStopOptions): Promise<ProofStopBlock | undefined> {
+async function check(event: ProofStopEvent, options: ProofStopOptions, signal: AbortSignal): Promise<ProofStopBlock | undefined> {
   const { threadId, home } = options;
   if (event.stop_hook_active || !threadId || !event.cwd || waitsInClaude(event) || needsHuman(event.last_assistant_message ?? "")) return undefined;
   const processes = options.processes ?? realProcesses;
-  if (nestedSession(await processes.table(), processes.pid)) return undefined;
+  if (nestedSession(await processes.table(signal), processes.pid)) return undefined;
   const { threads } = await options.shell();
   const thread = matchThread(threads, threadId, (item) => item.id);
-  if (!thread || thread.delegatedFrom || thread.pendingRuntimeRequest || isWaiting(thread)) return undefined;
-  const git = gitIn(options.git ?? realGit, event.cwd);
+  if (!thread || thread.delegatedFrom || thread.pendingRuntimeRequest || waits(threads, thread)) return undefined;
+  const git = gitIn(options.git ?? realGit, event.cwd, signal);
   const layers = await layersOf(threads, thread.id, git);
   if (!layers.length || layers.some(awaitsCi)) return undefined;
   const symbolic = await git(["symbolic-ref", "-q", "--short", "HEAD"], [0, 1]);

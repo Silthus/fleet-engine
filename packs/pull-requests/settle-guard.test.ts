@@ -108,6 +108,18 @@ describe("the settle guard", () => {
     expect(await guardSettle(organize({ action: "settle", threadId: "mcp:kid" }), home, deps(parentOnly))).toBeUndefined();
   });
 
+  test("a fork owns the links of its own subagents, and the thread it forked from does not", async () => {
+    const home = homeWith();
+    const threads = [
+      thread("mcp:root"),
+      thread("mcp:me", { lineage: { parentThreadId: "mcp:root", rootThreadId: "mcp:root", relationshipToParent: "fork" } }),
+      thread("mcp:kid", { lineage: { parentThreadId: "mcp:me", rootThreadId: "mcp:root", relationshipToParent: "subagent" }, pullRequests: [pr(3)] }),
+      thread("mcp:grandkid", { lineage: { parentThreadId: "mcp:kid", rootThreadId: "mcp:root", relationshipToParent: "subagent" }, pullRequests: [pr(14)] }),
+    ];
+    expect(reasonOf(await guardSettle(organize({ action: "settle" }), home, deps(threads)))).toContain("pull/3, https://github.com/acme/app/pull/14,");
+    expect(await guardSettle(organize({ action: "settle", threadId: "mcp:root" }), home, deps(threads))).toBeUndefined();
+  });
+
   test("lets a PR go that another open thread links, under any case or a trailing slash, but not one only a closed thread links", async () => {
     const home = homeWith();
     const shared = { ...pr(5), url: "https://github.com/Acme/App/pull/5/" };

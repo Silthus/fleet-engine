@@ -1,12 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { gateRecordPath, readJson } from "./proof.ts";
+import { lastGateRun, startGateRun } from "./proof.ts";
 import { checkout, cleanFixtures, reviewHead, verdict, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
-const recordAt = (pr: Checkout, commit: string) => readJson<unknown>(gateRecordPath(pr.home, { repository: "example/product", pr: 42, commit }), undefined);
+const identity = (commit: string) => ({ repository: "example/product", pr: 42, commit });
+const recordAt = (pr: Checkout, commit: string) => lastGateRun(pr.home, identity(commit));
 
 async function reviewed() {
   const pr = await checkout();
@@ -45,4 +46,21 @@ test("a gate run that throws replaces an earlier pass with exit 1 and the error'
   rmSync(join(pr.home, ".agents/guides/coding-standards.md"));
   await expect(pr.fleet("gate")).rejects.toThrow("coding-standards.md is missing or empty");
   expect(await recordAt(pr, head)).toEqual({ code: 1, reason: "~/.agents/guides/coding-standards.md is missing or empty; it holds the coding standards to review against" });
+});
+
+test("an older gate run that finishes after a newer one cannot replace the newer run's result", async () => {
+  const { pr, head } = await reviewed();
+  const older = await startGateRun(pr.home, identity(head));
+  const newer = await startGateRun(pr.home, identity(head));
+  await newer({ code: 1, reason: "live-run: missing" });
+  await older({ code: 0, reason: "pass" });
+  expect(await recordAt(pr, head)).toEqual({ code: 1, reason: "live-run: missing" });
+});
+
+test("a gate run that never finished, because it still runs or crashed, records no pass", async () => {
+  const { pr, head } = await reviewed();
+  await reviewHead(pr);
+  expect((await pr.fleet("gate")).code).toBe(0);
+  await startGateRun(pr.home, identity(head));
+  expect(await recordAt(pr, head)).toEqual({ code: 1, reason: "the gate run has not finished: it still runs, or it stopped without a result" });
 });

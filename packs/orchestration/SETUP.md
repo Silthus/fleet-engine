@@ -74,17 +74,22 @@ one step still owed, with the command for that PR:
 
 - push the local commits on the PR's branch, then run the gate;
 - commit and push changed tracked files, or restore them;
-- push the commits of a detached HEAD in the PR's worktree;
+- push the commits of a detached HEAD in the PR's worktree, when HEAD
+  continues the PR's pushed head;
 - run the gate at the pushed head, when no run is recorded there;
 - fix what the last gate run failed on, or, for exit 3, decide each gap by
   tier with `fleet decision record`, or ask the person.
 
 It checks each open PR the thread owns whose repository is the `origin` of the
-thread's checkout. A subagent thread owns nothing while its root thread is
-open; a fork owns its own PRs. `fleet proof gate` records its exit code and
-first failure line for each commit it judges, under
-`~/.local/state/fleet/proof/<owner>/<name>/<pr>/gate-record/`, with the
-repository name in lower case. The check reads that record, T3's shell
+thread's checkout. A subagent thread owns nothing while the thread it belongs
+to is open. A fork owns its own PRs and those of its subagents. Each run of
+`fleet proof gate` records its exit code and first failure line for the commit
+it judges, as its own numbered file under
+`~/.local/state/fleet/proof/<owner>/<name>/<pr>/gate-record/<commit>/`, with
+the repository name in lower case. The run writes the file when it starts, as
+a failure, and replaces it with its result when it ends. The check reads the
+newest file, so an older run that ends late never replaces a newer result,
+and a run that crashed counts as failed. The check reads that record, T3's shell
 snapshot, and local git. It never runs the gate, a test, a model, or a GitHub
 call. It trusts `origin/<branch>` as the pushed head.
 
@@ -98,11 +103,14 @@ The stop passes when any of these holds:
   `NEEDS_HUMAN:`;
 - the thread waits on a child task, a thread wait, or a shell command it
   awaits; on Claude, on a subagent, a monitor, or a scheduled wake-up. A plain
-  background command, such as a dev server, is no wait;
+  background command, such as a dev server, is no wait, and neither is a PR
+  watch whose CI has settled;
+- a child thread of the thread, such as a delegated task, still runs;
 - a PR watch has not seen CI settle at the pushed head;
 - the thread was delegated from another machine;
 - the hook runs in a model session that another one started, such as a review
   a lane runs with `codex exec`. The model sessions that Fleet starts (the
   judge, reviewers, the arbiter, the eval judge, and `fleet context add`) get
   no `T3CODE_THREAD_ID`, so the check never runs in them;
-- any read fails, or the check takes longer than 10 seconds.
+- any read fails, or the check takes longer than 10 seconds. At the deadline
+  it stops the git and `ps` commands it started.

@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gitEnv, spawnGit, tempDirs } from "../../../src/testing/git.ts";
 import type { ShellThread } from "../../base/lib/t3/index.ts";
-import { gateRecordPath, writeJson } from "../../pull-requests/lib/proof.ts";
+import { gateRunDirectory, startGateRun, writeJson } from "../../pull-requests/lib/proof.ts";
 import { hookWith, killSwitch } from "../hooks/ask-guard.ts";
 import { proofStop, type Git, type ProofStopEvent, type ProofStopOptions } from "./proof-stop.ts";
 
@@ -46,7 +46,7 @@ async function lane() {
   const head = await commit("two\n");
   await push();
   const gate = (commit: string, code: number, reason = code === 0 ? "pass" : "head: not pushed", number = 7, name = repository) =>
-    writeJson(gateRecordPath(home, { repository: name, pr: number, commit }), { code, reason });
+    startGateRun(home, { repository: name, pr: number, commit }).then((finish) => finish({ code, reason }));
   const thread = (fields: Partial<ShellThread> = {}): ShellThread =>
     ({ id: "mcp:lane", title: "Lane", projectId: "p", status: "idle", worktreePath: checkout, pullRequests: [pr(7, "feat")], ...fields });
   const event: ProofStopEvent = { cwd: checkout, last_assistant_message: "Done." };
@@ -144,6 +144,28 @@ describe("the Stop proof check blocks a lane that owns an open PR", () => {
     expect(await check([thread()], { background_tasks: [{ id: "b1", type: "shell", status: "running" }] })).toBeDefined();
     expect(await check([thread({ pullRequests: [pr(7, "feat", { watch: { headSha: head, passed: true } })] })])).toBeDefined();
     expect(await check([thread({ pullRequests: [pr(7, "feat", { watch: { headSha: head, failedChecks: ["test"] } })] })])).toBeDefined();
+    const watchTask = { kind: "monitor", taskId: `pull-request-watch:github.com/${repository}#7` };
+    const settled = { pullRequests: [pr(7, "feat", { watch: { headSha: head, passed: true } })] };
+    expect(await check([thread({ ...settled, pendingBackgroundTasks: [watchTask] })])).toBeDefined();
+    expect(await check([thread({ ...settled, pendingBackgroundTasks: [{ ...watchTask, awaited: true }] })])).toBeUndefined();
+  });
+
+  test("once the lane's delegated child has finished", async () => {
+    const { thread, check } = await lane();
+    const child: ShellThread = { id: "thread:delegated-task:review", title: "Review", projectId: "p", status: "completed", activeRunId: null, lineage: { parentThreadId: "mcp:lane", rootThreadId: "mcp:lane", relationshipToParent: "subagent" } };
+    expect(await check([thread(), child])).toBeDefined();
+    expect(await check([thread(), { ...child, status: "running", activeRunId: "run-2" }])).toBeUndefined();
+  });
+
+  test("a fork owns the PRs of its own subagents, and the thread it forked from does not", async () => {
+    const { thread, check } = await lane();
+    const threads = [
+      { id: "mcp:root", title: "Root", projectId: "p", status: "idle" },
+      thread({ pullRequests: [], lineage: { parentThreadId: "mcp:root", rootThreadId: "mcp:root", relationshipToParent: "fork" } }),
+      thread({ id: "mcp:kid", lineage: { parentThreadId: "mcp:lane", rootThreadId: "mcp:root", relationshipToParent: "subagent" } }),
+    ];
+    expect(await check(threads)).toBeDefined();
+    expect(await check(threads, {}, { threadId: "root" })).toBeUndefined();
   });
 });
 
@@ -151,6 +173,14 @@ describe("the Stop proof check lets the stop pass", () => {
   test("when a gate run at the pushed head exited 0 and nothing local is past it", async () => {
     const { head, gate, check } = await lane();
     await gate(head, 0);
+    expect(await check()).toBeUndefined();
+  });
+
+  test("when the worktree has a detached HEAD that no owned PR's pushed head leads to", async () => {
+    const { head, gate, git, check } = await lane();
+    await gate(head, 0);
+    await git("checkout", "-q", "--detach", "main");
+    await git("commit", "-q", "--allow-empty", "-m", "main moved");
     expect(await check()).toBeUndefined();
   });
 
@@ -181,7 +211,7 @@ describe("the Stop proof check lets the stop pass", () => {
     ["when the process table cannot be read", ({ check }) => check(undefined, {}, { processes: { pid: 1, table: async () => { throw new Error("no ps"); } } })],
     ["when git fails", ({ check }) => check(undefined, {}, { git: async () => ({ code: 128, stdout: "" }) })],
     ["when the gate record is malformed", async ({ head, home, check }) => {
-      await writeJson(gateRecordPath(home, { repository, pr: 7, commit: head }), { code: "zero" });
+      await writeJson(join(gateRunDirectory(home, { repository, pr: 7, commit: head }), "1.json"), { code: "zero" });
       return check();
     }],
     ["when T3 answers after the deadline", ({ check }) => check(undefined, {}, { shell: () => new Promise(() => {}), deadline: async () => {} })],
@@ -227,6 +257,30 @@ describe("the installed Stop hook", () => {
 });
 
 describe("the Stop hook process", () => {
+  test("kills the git it started when the deadline cuts the check short, so the process can exit", async () => {
+    const dir = temp.make("stalled-git-");
+    mkdirSync(join(dir, "bin"));
+    writeFileSync(join(dir, "bin/git"), "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+    const script = join(dir, "stop.ts");
+    writeFileSync(script, [
+      `import { proofStop, realGit } from ${JSON.stringify(join(import.meta.dir, "proof-stop.ts"))};`,
+      "let started = () => {};",
+      "const gitStarted = new Promise<void>((resolve) => { started = resolve; });",
+      `const thread = { id: "mcp:lane", title: "Lane", projectId: "p", status: "idle", pullRequests: [] };`,
+      `const answer = await proofStop({ cwd: ${JSON.stringify(dir)} }, {`,
+      `  home: ${JSON.stringify(dir)}, threadId: "lane", shell: async () => ({ threads: [thread] }),`,
+      `  processes: { pid: 30, table: async () => "30 1 bun\\n" }, deadline: () => gitStarted,`,
+      "  git: (cwd, args, signal) => { const result = realGit(cwd, args, signal); started(); return result; },",
+      "});",
+      "console.log(`answer=${answer}`);",
+    ].join("\n"));
+    const child = Bun.spawn([process.execPath, script], { env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}` }, stdout: "pipe", stderr: "pipe" });
+    const exited = await Promise.race([child.exited.then(() => "exited"), Bun.sleep(4_000).then(() => "still running")]);
+    child.kill();
+    expect(exited).toBe("exited");
+    expect(await new Response(child.stdout).text()).toBe("answer=undefined\n");
+  });
+
   test("exits as soon as it has answered, without waiting out the deadline", async () => {
     const env: Record<string, string | undefined> = { ...process.env, HOME: temp.make("home-") };
     delete env.T3CODE_THREAD_ID;
