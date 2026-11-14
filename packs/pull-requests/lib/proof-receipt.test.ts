@@ -144,13 +144,16 @@ test("an empty read, a body edited before the write, broken markers or a lost wr
   pr.pullRequestState({ body: "Adds the greeting." });
   expect((await pr.fleet("receipt")).code).toBe(0);
   const body = pr.githubBody();
-  expect(body).toStartWith("Adds the greeting.\n<!-- fleet-proof-receipt head=");
+  expect(body).toStartWith("Adds the greeting.\n\n<!-- fleet-proof-receipt head=");
   expect(block(body).split("\n")[1]).toBe("## Testing");
   expect(body.endsWith("<!-- /fleet-proof-receipt -->\n")).toBe(true);
   pr.pullRequestState({ body: "Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n#### Detail\n\nMore rationale.\n\n### Screenshots\n\nA picture.\n" });
   expect((await pr.fleet("receipt")).code).toBe(0);
   expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n#### Detail\n\nMore rationale.\n\n<block>\n\n### Screenshots\n\nA picture.\n");
 });
+
+const blockShape = { ...Object.fromEntries(["paragraph", "blockquote", "code", "list", "listItem", "hr", "table", "thead", "tbody", "tr", "th", "td", "html"].map((kind) => [kind, (children: string) => `(${kind}${children})`])), heading: (_: string, meta: { level: number }) => `(h${meta.level})`, text: () => "" };
+const blocksOf = (text: string) => Bun.markdown.render(text, blockShape);
 
 test("the receipt ends the testing section at the next heading GitHub renders, and nowhere else", async () => {
   const cases: [string, string, string][] = [
@@ -161,7 +164,8 @@ test("the receipt ends the testing section at the next heading GitHub renders, a
     ["a heading inside a quote", "> # start the app", "### Screenshots\n\nA picture."],
     ["a heading inside a list item", "- Steps:\n  # start the app", "### Screenshots\n\nA picture."],
     ["an indented heading", "Ran it by hand.", "   ### Screenshots\n\nA picture."],
-    ["an underlined heading", "Ran it by hand.", "Screen\nshots\n-------\n\nA picture."],
+    ["an underlined heading after a link definition, which stays one block", "[ref]: /image.png\n    Screenshots\n---", "### Screenshots\n\nA picture."],
+    ["a body near the GitHub size limit", `<pre>\n${"# a\n".repeat(15000)}</pre>`, "### Screenshots\n\nA picture."],
   ];
   for (const [name, inside, next] of cases) {
     const { pr } = await provedPr();
@@ -169,7 +173,18 @@ test("the receipt ends the testing section at the next heading GitHub renders, a
     pr.pullRequestState({ body: `${before}${next}\n` });
     expect({ name, code: (await pr.fleet("receipt")).code }).toEqual({ name, code: 0 });
     expect({ name, body: pr.githubBody().replace(block(pr.githubBody()), "<block>") }).toEqual({ name, body: `${before}<block>\n\n${next}\n` });
-    expect({ name, table: Bun.markdown.html(pr.githubBody()).includes("<table>") }).toEqual({ name, table: true });
+    expect({ name, blocks: blocksOf(pr.githubBody()).replace(blocksOf(block(pr.githubBody())), "") }).toEqual({ name, blocks: blocksOf(`${before}${next}\n`) });
+  }
+});
+
+test("a receipt added at the end of a body that ends in an HTML block starts a block of its own", async () => {
+  const bodies = ["Adds the greeting.\n\n<details>\n<summary>More</summary>\n\nHidden detail.\n\n</details>", "Adds the greeting.\n\n### Testing\n\n<div>\nRan it by hand.\n</div>"];
+  for (const body of bodies) {
+    const { pr } = await provedPr();
+    pr.pullRequestState({ body });
+    expect((await pr.fleet("receipt")).code).toBe(0);
+    expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe(`${body}\n\n<block>\n`);
+    expect(blocksOf(pr.githubBody()).replace(blocksOf(block(pr.githubBody())), "")).toBe(blocksOf(body));
   }
 });
 

@@ -190,36 +190,23 @@ export function checkPlacement(body: string, heading: string) {
 
 type Heading = { start: number; depth: number; title: string };
 
-const blockKinds = ["paragraph", "blockquote", "list", "html", "code", "table", "hr"] as const;
-const counted = Object.fromEntries([...blockKinds.map((kind) => [kind, () => "\u0001"]), ["heading", () => "\u0002"]]);
-
-function topLevel(text: string) {
-  const marks = Bun.markdown.render(text.replace(/[\u0001\u0002]/g, " "), counted).replace(/[^\u0001\u0002]/g, "");
-  return { blocks: marks.length, headings: marks.replace(/\u0001/g, "").length };
-}
+const atxLine = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))??(?:[ \t]+#+)?[ \t]*$/;
+const lineMark = /(\d+)/g;
+const topLevelHeadings = {
+  ...Object.fromEntries(["paragraph", "blockquote", "code", "list", "hr", "table", "html"].map((kind) => [kind, () => ""])),
+  heading: (children: string) => children,
+};
 
 function headingsOf(body: string) {
-  const lines = body.split("\n");
-  const starts: number[] = [];
-  lines.reduce((start, line) => (starts.push(start), start + line.length + 1), 0);
-  const memo = new Map<number, ReturnType<typeof topLevel>>();
-  const through = (index: number) => {
-    if (index < 0) return { blocks: 0, headings: 0 };
-    if (!memo.has(index)) memo.set(index, topLevel(body.slice(0, starts[index]! + lines[index]!.length)));
-    return memo.get(index)!;
-  };
+  const lines = body.replace(/[]/g, "").split("\n");
+  const marked = lines.map((raw, index) => atxLine.test(raw.replace(/\r$/, "")) ? raw.replace(/\r?$/, (end) => ` ${index}${end}`) : raw);
+  const rendered = new Set([...Bun.markdown.render(marked.join("\n"), topLevelHeadings).matchAll(lineMark)].map((match) => Number(match[1])));
   const found: Heading[] = [];
+  let start = 0;
   lines.forEach((raw, index) => {
-    const line = raw.replace(/\r$/, "");
-    const atx = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))??(?:[ \t]+#+)?[ \t]*$/.exec(line);
-    const underline = /^ {0,3}(=+|-+)[ \t]*$/.exec(line);
-    if (!atx && !underline) return;
-    if (through(index).headings <= through(index - 1).headings) return;
-    if (atx) return found.push({ start: starts[index]!, depth: atx[1]!.length, title: atx[2] ?? "" });
-    let first = index - 1;
-    while (first > 0 && through(first).blocks === through(first - 1).blocks) first--;
-    const title = lines.slice(first, index).map((text) => text.trim()).join(" ");
-    found.push({ start: starts[first]!, depth: underline![1]!.startsWith("=") ? 1 : 2, title });
+    const atx = atxLine.exec(raw.replace(/\r$/, ""));
+    if (atx && rendered.has(index)) found.push({ start, depth: atx[1]!.length, title: atx[2] ?? "" });
+    start += raw.length + 1;
   });
   return found;
 }
@@ -234,6 +221,8 @@ export function placeReceipt(body: string, receipt: Receipt, heading: string) {
   const headings = headingsOf(body);
   const found = headings.find((candidate) => candidate.title === heading);
   const next = found && headings.find((candidate) => candidate.start > found.start && candidate.depth <= found.depth);
-  if (next) return `${body.slice(0, next.start)}${blockOf(receipt, undefined)}\n\n${body.slice(next.start)}`;
-  return `${body}\n${blockOf(receipt, found ? undefined : heading)}\n`;
+  if (next) return `${afterBlankLine(body.slice(0, next.start))}${blockOf(receipt, undefined)}\n\n${body.slice(next.start)}`;
+  return `${afterBlankLine(body)}${blockOf(receipt, found ? undefined : heading)}\n`;
 }
+
+const afterBlankLine = (text: string) => text === "" || /\n[ \t\r]*\n$/.test(text) ? text : `${text.replace(/\n?$/, "\n")}\n`;
