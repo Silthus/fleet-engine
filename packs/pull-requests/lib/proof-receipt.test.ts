@@ -50,10 +50,10 @@ async function provedPr() {
 
 const short = (commit: string) => commit.slice(0, 7);
 
-async function reviewAgain(pr: Checkout, round: number) {
+async function reviewAgain(pr: Checkout, round: number, reviewer = "gpt-6.1-sol") {
   expect((await pr.fleet("review-start", "--scope", "full", "--agent", "the test reviews each new head")).code).toBe(0);
   writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
-  expect((await pr.fleet("review-finish", "--round", String(round), "--reviewer", "gpt-6.1-sol", "findings.md")).code).toBe(0);
+  expect((await pr.fleet("review-finish", "--round", String(round), "--reviewer", reviewer, "findings.md")).code).toBe(0);
 }
 
 function installRiskSkill(pr: Checkout) {
@@ -164,6 +164,11 @@ test("the body guard refuses figures and emails with the field named, and passes
     ["Sent ４８２１３ emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 48 213 emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 4&#56;213 emails", "Delivered", "the what ran of live-run holds an HTML entity"],
+    ["Sent emails", "12.5% bounced", `the result of live-run ${looksLike}`],
+    ["Sent to <someone@example.com>", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent to `<user email=\"someone@example.com\">`", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent [48](https://example.com)[213](https://example.com) emails", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent 48<b></b>213 emails", "Delivered", `the what ran of live-run ${looksLike}`],
   ];
   for (const [ran, result, refusal] of refused) {
     await pr.fleet("save", "--kind", "live-run", "--ran", ran, "--result", result);
@@ -182,6 +187,60 @@ test("the body guard refuses figures and emails with the field named, and passes
   expect(section).toContain(`| live-run | Ran 1a2b3c4 with v1.2.3 on 2026-10-25 | Delivered, as #1234 asked | \`${short(head)}\` |`);
   expect(section).not.toContain("48,213");
   expect(section).not.toContain("12%");
+});
+
+test("a dated model id of a reviewer passes the guard", async () => {
+  const { pr } = await provedPr();
+  await pr.commit("feature.txt", "greet new members by first name\n");
+  await reviewAgain(pr, 2, "claude-sonnet-4-5-20250929");
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(block(pr.githubBody())).toContain("single reviewer (gpt-6.1-sol, claude-sonnet-4-5-20250929)");
+});
+
+test("a fenced code line never starts or ends the testing section, and a tab after the hashes makes a heading", async () => {
+  const { pr } = await provedPr();
+  const body = "Adds the greeting.\n\n```md\n## Testing\n```\n\n##\tTesting\n\nRun it:\n\n```bash\n# start the app\nbun dev\n```\n\n~~~\n# more\n~~~\n\n## Screenshots\n\nA picture.\n";
+  pr.pullRequestState({ body });
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const written = pr.githubBody();
+  expect(written.replace(block(written), "<block>")).toBe(body.replace("## Screenshots", "<block>\n\n## Screenshots"));
+});
+
+test("a block edited by hand with its markers kept is written again", async () => {
+  const { pr } = await provedPr();
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const written = pr.githubBody();
+  pr.pullRequestState({ body: written.replace("Delivered in one attempt", "Delivered twice") });
+  const run = await pr.fleet("receipt");
+  expect(run.output.split("\n").at(-1)).toStartWith("receipt written at");
+  expect(patches(pr)).toBe(2);
+  expect(pr.githubBody()).toBe(written);
+});
+
+test("a judge that passed shows that the gate fails now when CI turns red after it", async () => {
+  const { pr, head } = await provedPr();
+  expect((await pr.fleet("gate")).code).toBe(0);
+  pr.ci([{ name: "test", bucket: "fail" }]);
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(block(pr.githubBody())).toContain(`| Proof judge | an independent model reads the evidence against the diff | ✅ passed at \`${short(head)}\`, but the gate fails now | |`);
+});
+
+test("evidence reused and then carried across a base merge shows the lines of the commit that ran it", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: template });
+  await pr.fleet("require", "--kinds", "live-run");
+  writeFileSync(join(pr.repository, "run.log"), "delivered\n");
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent a test email to the sandbox inbox", "--result", "Delivered in one attempt", "run.log");
+  const ran = await pr.git("rev-parse", "HEAD");
+  const reused = await pr.commit("feature.txt", "greet new members by name\n");
+  await pr.fleet("save", "--kind", "live-run", "--reuse-from", ran, "--reason", "Only the greeting text changed");
+  await pr.advanceBase("base.txt", "base\n");
+  await pr.git("merge", "-q", "--no-edit", "origin/main");
+  const head = await pr.git("rev-parse", "HEAD");
+  const run = await pr.fleet("receipt");
+  expect(run.output).not.toContain("has no line");
+  expect(block(pr.githubBody())).toContain(`| live-run | Sent a test email to the sandbox inbox | Delivered in one attempt | \`${short(head)}\` (carried from \`${short(reused)}\`) |`);
 });
 
 test("an unreachable hub ledger exits 3 and writes nothing", async () => {

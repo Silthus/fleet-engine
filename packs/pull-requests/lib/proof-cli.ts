@@ -13,7 +13,7 @@ import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCas
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { displayLine, recordCaption, recordLines } from "./proof-display.ts";
-import { prodShapeResult, receiptClose, receiptMarker, receiptOpen } from "./proof-receipt.ts";
+import { prodShapeResult, receiptClose, receiptOpen } from "./proof-receipt.ts";
 import { runReceipt } from "./proof-receipt-command.ts";
 import { publisherSeam } from "./proof-receipt-publisher.ts";
 import { reviewPrompt } from "./proof-review.ts";
@@ -375,8 +375,6 @@ receipt link once one is recorded. The gate's lines and fleet decision report co
       const gate = await finalGate(head, context, { landed: flags.has("--landed") });
       if (flags.has("--json")) { print(JSON.stringify(gate.summary)); return gate.code; }
       for (const line of [...gate.lines, gate.verdict]) print(line);
-      const receipt = gate.body === undefined ? undefined : receiptMarker(gate.body);
-      if (receipt && receipt.head !== head.commit) print(`receipt: the PR body shows the receipt of ${receipt.head.slice(0, 7)}, not HEAD ${head.commit.slice(0, 7)}. Refresh it with fleet proof receipt`);
       return gate.code;
     },
   },

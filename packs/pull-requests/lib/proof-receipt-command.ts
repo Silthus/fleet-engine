@@ -8,7 +8,7 @@ import { prDirectory, readDecisions, readJson, recordReceipt, reviewRecords, wri
 import { displayEntry, readDisplay, readNotChecked, recordNotChecked } from "./proof-display.ts";
 import { receiptSummary, type GateContext } from "./proof-gate.ts";
 import { readPlan } from "./proof-panel.ts";
-import { checkPlacement, GuardRefusal, keepCallout, placeReceipt, receiptHash, receiptLink, receiptMarker, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
+import { checkPlacement, GuardRefusal, keepCallout, placeReceipt, receiptHash, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
 import { handlerPublisher, type Published } from "./proof-receipt-publisher.ts";
 import { reviewDisplay } from "./proof-review-display.ts";
 
@@ -66,10 +66,9 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
   const page = `# ${title}\n\n${rendered.section}\n`;
   const hash = receiptHash(rendered.section, page);
   const publish = handlerPublisher(env);
-  const link = receiptLink(first.body);
   const previous = await storedArtifact(home, head);
-  const live = receiptMarker(first.body);
-  if (live?.head === head.commit && live.hash === hash && (!publish || (link && link === previous?.url))) {
+  const place = (url: string | undefined) => placeReceipt(first.body, { head: head.commit, hash, section: url ? withLink(rendered.section, url) : rendered.section }, heading);
+  if ((!publish || previous) && place(publish && previous?.url) === first.body) {
     if (items) await recordNotChecked(home, head, items);
     print("receipt current");
     return 0;
@@ -81,7 +80,7 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
     await writeJson(publishedPath(home, head), published);
     await recordReceipt(home, head, published.url);
   }
-  const intended = keepCallout(first.body, placeReceipt(first.body, { head: head.commit, hash, section: published ? withLink(rendered.section, published.url) : rendered.section }, heading));
+  const intended = keepCallout(first.body, place(published?.url));
   if (readBody(head, context).body !== first.body) throw new Error("The PR body changed while fleet built the receipt. Run the receipt again");
   await writeBody(head, intended, context);
   if (readBody(head, context).body !== intended) throw new Error("The PR body reads back different from the one fleet wrote. Check the body by hand, then run the receipt again");

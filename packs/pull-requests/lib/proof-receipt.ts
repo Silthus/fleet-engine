@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises";
 import { riskCalloutOf, type DecisionState } from "./decision-ledger.ts";
 import type { Display } from "./proof-display.ts";
 import type { ReviewDisplay } from "./proof-review-display.ts";
-import type { GapProof, KindProof, ProofSummary } from "./proof.ts";
+import { summaryGaps, type GapProof, type KindProof, type ProofSummary } from "./proof.ts";
 
 export const receiptOpen = "<!-- fleet-proof-receipt";
 export const receiptClose = "<!-- /fleet-proof-receipt -->";
@@ -25,25 +25,36 @@ export function receiptMarker(body: string) {
 export class GuardRefusal extends Error {}
 
 const kept = [/#\d+\b/g, /\b\d{4}-\d{2}-\d{2}\b/g, /\bv?\d{1,3}(?:\.\d{1,3}){1,3}\b/g, /\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g];
-const email = /[^\s@<>()]+@[^\s@<>()]+\.[\p{L}\p{M}]{2,}/u;
-const numbers = [/\p{Nd}\s*(?:%|‰|‱|per\s?cent\b)/iu, /\p{Nd}{1,3}(?:,\p{Nd}{3})+(?!\p{Nd})/u, /\p{Nd}{4,}/u];
+const email = /[^\s@<>()"'`]+@[^\s@<>()"'`]+\.[\p{L}\p{M}]{2,}/u;
+const percent = /\p{Nd}\s*(?:%|‰|‱|per\s?cent\b)/iu;
+const figures = [/\p{Nd}{1,3}(?:,\p{Nd}{3})+(?!\p{Nd})/u, /\p{Nd}{4,}/u];
 const entity = /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i;
 const invisible = /[­͏؜ᅟᅠ឴឵᠋-᠏​-‏‪-‮⁠-⁯ㅤ︀-️﻿ﾠ]/g;
+const tag = /<\/?[a-z][^>]*>/gi;
+const link = /!?\[([^\][]*)\](?:\([^()]*\)|\[[^\][]*\])/g;
 
-const rendered = (text: string) => text.normalize("NFKC").replace(invisible, "").replace(/<\/?[a-z][^>]*>/gi, "")
-  .replace(/\\([!-/:-@[-`{-~])/g, "$1").replace(/[*_~`]/g, "")
-  .replace(/(\p{Nd})[\p{Zs}'’](?=\p{Nd}{3}(?!\p{Nd}))/gu, "$1,").replace(/\p{Zs}/gu, " ");
+const spaced = (text: string) => text.replace(/(\p{Nd})[\p{Zs}'’](?=\p{Nd}{3}(?!\p{Nd}))/gu, "$1,").replace(/\p{Zs}/gu, " ");
+const shown = (text: string) => spaced(text.replace(tag, "").replace(link, "$1").replace(/\\([!-/:-@[-`{-~])/g, "$1").replace(/[*_~`]/g, ""));
+
+function views(text: string) {
+  const plain = text.normalize("NFKC").replace(invisible, "");
+  return [shown(plain), spaced(plain)];
+}
 
 export function guardField(field: string, text: string) {
   if (text.includes("<!--") || text.includes("-->")) throw new GuardRefusal(`receipt refused: the ${field} holds an HTML comment marker. Remove it.`);
   if (entity.test(text)) throw new GuardRefusal(`receipt refused: the ${field} holds an HTML entity. Write the character itself.`);
-  const seen = rendered(text);
-  const rest = kept.reduce((value, pattern) => value.replace(pattern, " "), seen);
-  if (email.test(seen) || numbers.some((pattern) => pattern.test(rest))) {
-    throw new GuardRefusal(`receipt refused: the ${field} looks like a production figure or an email address. Move the detail into an evidence note, which only the full receipt shows.`);
+  for (const seen of views(text)) {
+    const rest = kept.reduce((value, pattern) => value.replace(pattern, " "), seen);
+    if (email.test(seen) || percent.test(seen) || figures.some((pattern) => pattern.test(rest))) {
+      throw new GuardRefusal(`receipt refused: the ${field} looks like a production figure or an email address. Move the detail into an evidence note, which only the full receipt shows.`);
+    }
   }
   return text;
 }
+
+const modelSnapshot = /-20\d{6}$/;
+const guardModel = (field: string, model: string) => guardField(field, model.replace(modelSnapshot, ""));
 
 const short = (commit: string) => commit.slice(0, 7);
 const at = (commit: string) => `\`${short(commit)}\``;
@@ -60,7 +71,7 @@ export type ReceiptInput = {
 export function kindSource(kind: KindProof, head: string) {
   if (kind.state === "ran") return { commit: head, cell: at(head) };
   if (kind.state === "reused") return { commit: kind.from, cell: `${at(head)} (reused from ${at(kind.from)})` };
-  if (kind.state === "carried") return { commit: kind.from, cell: `${at(head)} (carried from ${at(kind.from)})` };
+  if (kind.state === "carried") return { commit: kind.origin ?? kind.from, cell: `${at(head)} (carried from ${at(kind.from)})` };
   return undefined;
 }
 
@@ -83,8 +94,8 @@ function reviewRow(reviews: ReceiptReview[]) {
   if (!reviews.length) return row(["Review", "no finished review", "", ""]);
   for (const review of reviews) {
     guardField("review label", review.label);
-    for (const model of review.lenses ?? []) guardField(`panel model of ${review.label}`, model);
-    if (!review.lenses && review.reviewer) guardField(`reviewer of ${review.label}`, review.reviewer);
+    for (const model of review.lenses ?? []) guardModel(`panel model of ${review.label}`, model);
+    if (!review.lenses && review.reviewer) guardModel(`reviewer of ${review.label}`, review.reviewer);
   }
   const models = [...new Set(reviews.flatMap((review) => review.lenses ?? (review.reviewer ? [review.reviewer] : [])))];
   const lenses = Math.max(0, ...reviews.map((review) => review.lenses?.length ?? 0));
@@ -95,7 +106,7 @@ function reviewRow(reviews: ReceiptReview[]) {
 }
 
 const judgeResults: Record<ProofSummary["judge"]["state"], string> = { pass: "✅ passed at", fail: "❌ failed at", unavailable: "unavailable at", skipped: "not yet run at" };
-const judgeRow = ({ judge, commit }: ProofSummary) => row(["Proof judge", "an independent model reads the evidence against the diff", `${judgeResults[judge.state]} ${at(commit)}`, ""]);
+const judgeRow = ({ judge, commit, code }: ProofSummary) => row(["Proof judge", "an independent model reads the evidence against the diff", `${judgeResults[judge.state]} ${at(commit)}${judge.state === "pass" && code !== 0 ? ", but the gate fails now" : ""}`, ""]);
 
 function acceptedBy(gap: GapProof, decisions: DecisionState[]) {
   const accepted = gap.accepted;
@@ -105,16 +116,7 @@ function acceptedBy(gap: GapProof, decisions: DecisionState[]) {
   return `accepted by ${accepted.mark ? `${accepted.mark} ` : ""}${accepted.by}${decision ? ` ${decision.at.slice(0, 10)}` : ""}`;
 }
 
-export function receiptGaps({ summary }: Pick<ReceiptInput, "summary">): [string, GapProof][] {
-  return [
-    ...summary.kinds.flatMap((kind): [string, GapProof][] => kind.state === "gap" ? [[kind.kind, kind.gap]] : []),
-    ...summary.review.panelGap ? [["panel", summary.review.panelGap] as [string, GapProof]] : [],
-    ...summary.ci.gap ? [["ci", summary.ci.gap] as [string, GapProof]] : [],
-    ...summary.judge.gap ? [["judge", summary.judge.gap] as [string, GapProof]] : [],
-  ];
-}
-
-const gapLines = (input: ReceiptInput) => receiptGaps(input).map(([kind, gap]) => `${kind}: ${gap.reason ? guardField(`gap reason of ${kind}`, gap.reason) : "no reason recorded"}, ${acceptedBy(gap, input.decisions)}`);
+const gapLines = (input: ReceiptInput) => summaryGaps(input.summary).map(({ kind, gap }) => `${kind}: ${gap.reason ? guardField(`gap reason of ${kind}`, gap.reason) : "no reason recorded"}, ${acceptedBy(gap, input.decisions)}`);
 
 export function renderSection(input: ReceiptInput) {
   const warnings: string[] = [];
@@ -140,13 +142,6 @@ export const receiptHash = (section: string, page: string) => createHash("sha256
 
 const linkLine = "Full receipt: ";
 export const withLink = (section: string, url: string) => `${section}\n${linkLine}${url}`;
-
-export function receiptLink(body: string) {
-  const start = body.indexOf(receiptOpen);
-  const end = body.indexOf(receiptClose);
-  if (start < 0 || end < start) return undefined;
-  return /^Full receipt: (https:\/\/\S+)\s*$/m.exec(body.slice(start, end))?.[1];
-}
 
 export async function screenshotFiles(summary: ProofSummary) {
   return Promise.all(summary.kinds.flatMap((kind) => {
@@ -181,18 +176,36 @@ export function checkPlacement(body: string, heading: string) {
   keepCallout(body, placeReceipt(body, { head: "0".repeat(40), hash: "0", section: "" }, heading));
 }
 
+type Heading = { start: number; depth: number; title: string };
+
+function headingsOf(body: string) {
+  const found: Heading[] = [];
+  let fence: string | undefined;
+  let start = 0;
+  for (const raw of body.split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) { if (opener?.startsWith(fence) && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = undefined; }
+    else if (opener) fence = opener;
+    else {
+      const heading = /^(#{1,6})[ \t]+(\S.*?)[ \t]*$/.exec(line);
+      if (heading) found.push({ start, depth: heading[1]!.length, title: heading[2]! });
+    }
+    start += raw.length + 1;
+  }
+  return found;
+}
+
 export function placeReceipt(body: string, receipt: Receipt, heading: string) {
-  const name = escaped(heading);
   const start = body.indexOf(receiptOpen);
   if (start >= 0) {
     const end = body.indexOf(receiptClose) + receiptClose.length;
-    const inside = new RegExp(String.raw`^[^\n]*-->\r?\n#{1,6}[ \t]+${name}`).test(body.slice(start, end));
+    const inside = new RegExp(String.raw`^[^\n]*-->\r?\n#{1,6}[ \t]+${escaped(heading)}`).test(body.slice(start, end));
     return body.slice(0, start) + blockOf(receipt, inside ? heading : undefined) + body.slice(end);
   }
-  const found = new RegExp(String.raw`^#{1,6}[ \t]+${name}[ \t]*\r?$`, "m").exec(body);
-  const after = found ? found.index + found[0].length : 0;
-  const depth = found ? found[0].indexOf(" ") : 0;
-  const next = found ? new RegExp(String.raw`^#{1,${depth}}[ \t]+\S`, "m").exec(body.slice(after)) : null;
-  if (next) return `${body.slice(0, after + next.index)}${blockOf(receipt, undefined)}\n\n${body.slice(after + next.index)}`;
+  const headings = headingsOf(body);
+  const found = headings.find((candidate) => candidate.title === heading);
+  const next = found && headings.find((candidate) => candidate.start > found.start && candidate.depth <= found.depth);
+  if (next) return `${body.slice(0, next.start)}${blockOf(receipt, undefined)}\n\n${body.slice(next.start)}`;
   return `${body}\n${blockOf(receipt, found ? undefined : heading)}\n`;
 }
