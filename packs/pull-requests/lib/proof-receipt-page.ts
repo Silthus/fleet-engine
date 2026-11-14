@@ -1,11 +1,11 @@
-import { readdir, readFile, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { decisionLine, type DecisionState } from "./decision-ledger.ts";
 import type { Display } from "./proof-display.ts";
 import { storedVerdicts, verdictLines, type JudgeRecord } from "./proof-judge.ts";
 import { receiptGaps, type ReceiptReview } from "./proof-receipt.ts";
 import type { PublishRequest } from "./proof-receipt-publisher.ts";
-import { judgeDirectory, pullRequestDirectory, readJson, reviewedFindings, type GapProof, type ProofIdentity, type ProofKind, type ProofSummary } from "./proof.ts";
+import { entries, judgeDirectory, pullRequestDirectory, readJson, reviewedFindings, type GapProof, type ProofIdentity, type ProofKind, type ProofSummary } from "./proof.ts";
 
 export const receiptBudget = 900_000;
 
@@ -33,11 +33,6 @@ const fenced = (text: string) => {
   const fence = "`".repeat(longest + 1);
   return [`${fence}text`, text, fence].join("\n");
 };
-
-async function entries(directory: string) {
-  try { return await readdir(directory); }
-  catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return []; throw error; }
-}
 
 export function proseOf(text: string) {
   const kept: string[] = [];
