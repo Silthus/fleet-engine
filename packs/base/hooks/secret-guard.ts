@@ -149,7 +149,8 @@ export const replaceSecrets = (text: string, replace: (kind: string, value: stri
     : replaceValues(result, shape.kind, shape.values, replace), text);
 
 function replaceValues(text: string, kind: string, values: (text: string) => string[], replace: (kind: string, value: string) => string) {
-  const replaced = values(text).reduce((changed, value) => changed.split(value).join(replace(kind, value)), text);
+  const longestFirst = [...new Set(values(text))].sort((left, right) => right.length - left.length);
+  const replaced = longestFirst.reduce((changed, value) => changed.split(value).join(replace(kind, value)), text);
   return values(replaced).length ? replace(kind, text) : replaced;
 }
 

@@ -187,6 +187,16 @@ describe("secret guard", () => {
     expect(output).not.toContain(metabaseSession.slice(9));
   }
 
+  test.each([
+    ["the longer value first", (long: string, short: string) => [{ name: cookieKey, value: long }, { name: "metabase.DEVICE", value: short }]],
+    ["the shorter value first", (long: string, short: string) => [{ name: "metabase.DEVICE", value: short }, { name: cookieKey, value: long }]],
+  ])("redacts two cookies whose values overlap, with %s", (_, records) => {
+    const tail = "Z9".repeat(12);
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: JSON.stringify(records(`${metabaseSession}${tail}`, metabaseSession)) }))?.hookSpecificOutput);
+    expect(output).not.toContain(metabaseSession);
+    expect(output).not.toContain(tail);
+  });
+
   test("finds a secret inside deeply nested JSON text", () => {
     const text = `${"[".repeat(20_000)}"${githubToken}"${"]".repeat(20_000)}`;
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");
