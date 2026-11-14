@@ -16,15 +16,20 @@ export type Decision = {
   rejected?: string; reason?: string;
   scope: { prs: string[]; kinds?: string[]; condition?: string };
   effect?: Effect;
-  where: { thread: string; message?: string; machine: string };
+  where: { thread: string; message?: string; machine: string; link?: string };
 };
+export type Reversal = { type: "reverse"; id: string; words: string; thread?: string; message?: string; comment?: string; machine: string; at: string };
+export type Lift = { type: "lift"; class: AskClass; words: string; thread: string; message: string; machine: string; at: string };
 export type LedgerEvent =
   | { type: "decide"; decision: Decision }
-  | { type: "void"; id: string; reason: string; at: string };
+  | { type: "void"; id: string; reason: string; at: string }
+  | Reversal
+  | Lift;
 
 export class HubUnreachable extends Error {}
 
-export type Ledger = { read(): Promise<LedgerEvent[]>; append(event: LedgerEvent): Promise<void> };
+export type Ledger = { read(): Promise<LedgerEvent[]>; append(...events: LedgerEvent[]): Promise<void> };
+const lines = (events: LedgerEvent[]) => events.map((event) => JSON.stringify(event) + "\n").join("");
 
 const relativePath = ".local/state/fleet/decisions.jsonl";
 export const ledgerPath = (home: string) => join(home, relativePath);
@@ -32,10 +37,18 @@ export const ledgerPath = (home: string) => join(home, relativePath);
 const isText = (value: unknown): value is string => typeof value === "string";
 const isTexts = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText);
 const isRef = (value: string) => refPattern.test(value);
+const isFilled = (value: unknown): value is string => isText(value) && value.trim() !== "";
+const isTime = (value: unknown): value is string => isText(value) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value) && Number.isFinite(Date.parse(value));
+
+type RawEvent = { type?: unknown; id?: unknown; class?: unknown; reason?: unknown; words?: unknown; at?: unknown; thread?: unknown; message?: unknown; comment?: unknown; decision?: Partial<Record<keyof Decision, unknown>> } | null;
+const inThread = (event: NonNullable<RawEvent>) => isFilled(event.words) && isTime(event.at) && isFilled(event.thread) && isFilled(event.message);
+const heardEvent = (event: NonNullable<RawEvent>) => inThread(event) || (isFilled(event.words) && isTime(event.at) && isFilled(event.comment));
 
 function validEvent(value: unknown): value is LedgerEvent {
-  const event = value as { type?: unknown; id?: unknown; reason?: unknown; decision?: Partial<Record<keyof Decision, unknown>> } | null;
+  const event = value as RawEvent;
   if (event?.type === "void") return isText(event.id) && isText(event.reason);
+  if (event?.type === "reverse") return isFilled(event.id) && heardEvent(event);
+  if (event?.type === "lift") return (askClasses as readonly unknown[]).includes(event.class) && inThread(event);
   const decision = event?.type === "decide" ? event.decision : undefined;
   if (!decision || !isText(decision.id) || !isText(decision.at) || !isText(decision.question) || !isText(decision.answer)) return false;
   if (!(askClasses as readonly unknown[]).includes(decision.class) || !(marks as readonly unknown[]).includes(decision.mark)) return false;
@@ -62,10 +75,10 @@ export function localLedger(home: string): Ledger {
       try { return parseEvents(await readFile(path, "utf8")); }
       catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
     },
-    append: async (event) => {
+    append: async (...events) => {
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
       const torn = await readFile(path, "utf8").then((text) => text !== "" && !text.endsWith("\n"), () => false);
-      await appendFile(path, (torn ? "\n" : "") + JSON.stringify(event) + "\n", { mode: 0o600 });
+      await appendFile(path, (torn ? "\n" : "") + lines(events), { mode: 0o600 });
     },
   };
 }
@@ -83,8 +96,8 @@ function sshLedger(hub: string, ssh: Ssh): Ledger {
       if (result.code !== 0) throw unreachable(result);
       return parseEvents(result.stdout);
     },
-    append: async (event) => {
-      const result = await ssh(hub, `umask 077 && f=${remoteFile} && mkdir -p "$(dirname "$f")" && t=$(mktemp "$f.XXXXXX") && { [ ! -s "$f" ] || [ -z "$(tail -c 1 "$f")" ] || printf '\\n' >> "$t"; } && cat >> "$t" && cat "$t" >> "$f"; s=$?; rm -f "$t"; exit $s`, JSON.stringify(event) + "\n");
+    append: async (...events) => {
+      const result = await ssh(hub, `umask 077 && f=${remoteFile} && mkdir -p "$(dirname "$f")" && t=$(mktemp "$f.XXXXXX") && { [ ! -s "$f" ] || [ -z "$(tail -c 1 "$f")" ] || printf '\\n' >> "$t"; } && cat >> "$t" && cat "$t" >> "$f"; s=$?; rm -f "$t"; exit $s`, lines(events));
       if (result.code !== 0) throw unreachable(result);
     },
   };
@@ -110,26 +123,69 @@ export function hubLedger(home: string, env: Env, ssh: Ssh = runSsh): Ledger {
 
 export const thisMachine = (env: Env) => env.CODER_WORKSPACE_NAME || hostname();
 
-export type DecisionState = Decision & { voided?: { reason: string; at: string } };
+export type DecisionState = Decision & { voided?: { reason: string; at: string }; reversed?: { at: string; mark: Mark; answer: string; rejected?: string } };
 
 export const messageKey = ({ thread, message }: Decision["where"]) => message && `${thread}/${message}`;
 
-export function fold(events: LedgerEvent[]): DecisionState[] {
+export const brakeDays = 28;
+const dayMs = 24 * 60 * 60 * 1000;
+export type Brake = { ids: [string, string]; at: string };
+
+const liftKey = (lift: Lift) => `${lift.thread}/${lift.message}`;
+export type AnswerUse = { decision: string } | { lift: Lift } | { reversal: string };
+const reversalKey = (reversal: Reversal) => reversal.thread !== undefined && reversal.message !== undefined ? `${reversal.thread}/${reversal.message}` : undefined;
+
+function replay(events: LedgerEvent[]) {
   const decisions = new Map<string, DecisionState>();
-  const messages = new Set<string>();
+  const answers = new Map<string, AnswerUse>();
+  const reversals = new Map<AskClass, { id: string; time: number }[]>();
+  const brakes = new Map<AskClass, Brake>();
+  const lifts = new Set<Lift>();
+  const unheard = new Set<string>();
   for (const event of events) {
     if (event.type === "decide") {
+      const { id, mark, class: decisionClass } = event.decision;
       const message = messageKey(event.decision.where);
-      if (decisions.has(event.decision.id) || (message && messages.has(message))) continue;
-      if (message) messages.add(message);
-      decisions.set(event.decision.id, { ...event.decision });
+      if (decisions.has(id) || (message && answers.has(message)) || (mark === "🤖" && brakes.has(decisionClass))) continue;
+      if (message) answers.set(message, { decision: id });
+      decisions.set(id, { ...event.decision });
     } else if (event.type === "void") {
+      if (unheard.has(`${event.id}@${event.at}`)) continue;
       const decision = decisions.get(event.id);
-      if (decision) decision.voided = { reason: event.reason, at: event.at };
+      if (decision && !decision.reversed) decision.voided = { reason: event.reason, at: event.at };
+    } else if (event.type === "lift") {
+      const brake = brakes.get(event.class);
+      if (!brake || answers.has(liftKey(event)) || Date.parse(event.at) <= Date.parse(brake.at)) continue;
+      answers.set(liftKey(event), { lift: event });
+      lifts.add(event);
+      reversals.delete(event.class);
+      brakes.delete(event.class);
+    } else {
+      const decision = decisions.get(event.id);
+      const answer = reversalKey(event);
+      if (answer && answers.has(answer)) { unheard.add(`${event.id}@${event.at}`); continue; }
+      if (!decision || decision.reversed || decision.voided) continue;
+      if (answer) answers.set(answer, { reversal: event.id });
+      const { rejected, ...rest } = decision;
+      decisions.set(event.id, { ...rest, mark: "👤", answer: event.words, reversed: { at: event.at, mark: decision.mark, answer: decision.answer, ...rejected ? { rejected } : {} } });
+      if (decision.mark !== "🤖") continue;
+      const time = Date.parse(event.at);
+      const earlier = reversals.get(decision.class) ?? [];
+      const close = earlier.find((other) => Math.abs(time - other.time) <= brakeDays * dayMs);
+      if (close && !brakes.has(decision.class)) {
+        const [first, later] = [close, { id: event.id, time }].sort((a, b) => a.time - b.time) as [{ id: string; time: number }, { id: string; time: number }];
+        brakes.set(decision.class, { ids: [first.id, later.id], at: new Date(later.time).toISOString() });
+      }
+      reversals.set(decision.class, [...earlier, { id: event.id, time }]);
     }
   }
-  return [...decisions.values()];
+  return { decisions: [...decisions.values()], brakes, lifts, answers };
 }
+
+export const fold = (events: LedgerEvent[]): DecisionState[] => replay(events).decisions;
+export const brakeOf = (events: LedgerEvent[], decisionClass: AskClass): Brake | undefined => replay(events).brakes.get(decisionClass);
+export const answerUse = (events: LedgerEvent[], message: string | undefined) => message === undefined ? undefined : replay(events).answers.get(message);
+export const liftCounted = (events: LedgerEvent[], lift: Lift) => [...replay(events).lifts].some((counted) => JSON.stringify(counted) === JSON.stringify(lift));
 
 export type PrRef = { repository: string; pr: number };
 const refPattern = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
@@ -159,13 +215,16 @@ export const namesKind = (question: string, kind: string) => new RegExp(`(?<![\\
 
 const who = (mark: Mark) => mark === "🤖" ? "agent" : "the user";
 
+const rejectedText = (rejected: string | undefined) => rejected ? ` Rejected: ${rejected}.` : "";
+
 export function decisionLine(decision: DecisionState) {
-  const rejected = decision.rejected ? ` Rejected: ${decision.rejected}.` : "";
+  const { reversed } = decision;
+  const replaced = reversed ? ` (reversed ${reversed.at.slice(0, 10)} from ~~${reversed.mark} ${reversed.answer}${rejectedText(reversed.rejected)}~~)` : "";
   const state = decision.voided ? ` voided: ${decision.voided.reason}` : "";
-  return `- ${decision.mark} **${decision.question}** ${decision.answer}${rejected} (${who(decision.mark)}, ${decision.class}, thread ${decision.where.thread}) [${decision.id}]${state}`;
+  return `- ${decision.mark} **${decision.question}** ${decision.answer}${rejectedText(decision.rejected)}${replaced} (${who(decision.mark)}, ${decision.class}, thread ${decision.where.thread}) [${decision.id}]${state}`;
 }
 
-export const live = (decision: DecisionState) => !decision.voided;
+export const live = (decision: DecisionState) => !decision.voided && !decision.reversed;
 export const isUsers = (decision: Decision) => decision.mark === "👤" || decision.mark === "👍";
 const gapDecision = (decision: DecisionState, ref: PrRef, kind: string, effect: Effect) =>
   live(decision) && decision.class === "proof-gap" && decision.effect === effect && decision.scope.kinds?.includes(kind) && covers(decision, ref);
@@ -184,8 +243,10 @@ export function keptOwed(decisions: DecisionState[], ref: PrRef, kind: string) {
 
 export type Tier = "critical" | "non-critical" | "ungraded";
 
+export const riskCalloutOf = (body: string) => /<!--\s*merge-risk\s*-->([\s\S]*?)<!--\s*\/merge-risk\s*-->/.exec(body)?.[1];
+
 export function tierOf(body: string): Tier {
-  const callout = /<!--\s*merge-risk\s*-->([\s\S]*?)<!--\s*\/merge-risk\s*-->/.exec(body)?.[1];
+  const callout = riskCalloutOf(body);
   const line = callout && /^[\s>*-]*\**Tier\**:\**\s*\**\s*(non-critical|critical)\b/im.exec(callout);
   return line ? line[1]!.toLowerCase() as Tier : "ungraded";
 }

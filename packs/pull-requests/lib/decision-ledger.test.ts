@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { acceptGap, checkout, cleanFixtures, exitedPid, fakeModel, graded, hubAt, ledgerDecisions, reviewHead, type Checkout } from "./proof-testing.ts";
+import { fold, type LedgerEvent } from "./decision-ledger.ts";
+import { acceptGap, checkout, clean, cleanFixtures, exitedPid, fakeModel, graded, hubAt, ledgerDecisions, reviewHead, settings, type Checkout } from "./proof-testing.ts";
 
 afterEach(cleanFixtures);
 
@@ -589,4 +590,356 @@ test("an agent's acceptance that lapses under real evidence at HEAD is no lapse 
   const gate = await pr.fleet("gate");
   expect(gate.code).toBe(0);
   expect(gate.output).not.toContain("lapsed");
+});
+
+test("gate --json prints the proof summary: each owed kind's state with its accepting decision, the tier, and the lapsed and voided ids; the gate prints its lines from it", async () => {
+  const pr = await checkout();
+  const earlier = await pr.commit("feature.txt", "first\n");
+  writeFileSync(join(pr.repository, "diff.log"), "old and new output match on 200 rows");
+  await pr.fleet("save", "--kind", "shadow-diff", "diff.log");
+  const head = await pr.commit("feature.txt", "second\n");
+  await pr.fleet("save", "--kind", "shadow-diff", "--reuse-from", earlier.slice(0, 8), "--reason", "The later commit only renames a variable");
+  await pr.fleet("require", "--kinds", "live-run,ui-walk,prod-shape,cross-version,shadow-diff,post-deploy-watch");
+  writeFileSync(join(pr.repository, "run.log"), "sent 1 email, delivered");
+  await pr.fleet("save", "--kind", "live-run", "run.log");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access");
+  await pr.fleet("gap", "--kind", "cross-version", "--reason", "No older client to run");
+  await reviewHead(pr);
+  pr.chooseGap("prod-shape", "No production read access");
+  const users = idIn((await acceptGap(pr, "prod-shape")).output);
+  pr.pullRequestState({ body: graded("non-critical") });
+  const lapsed = idIn((await agent(pr, "cross-version")).output);
+  const voided = idIn((await agent(pr, "ui-walk")).output);
+  await pr.decide("void", voided, "--reason", "HEAD now changes the UI");
+  pr.pullRequestState({ body: graded("critical") });
+
+  const json = await pr.fleet("gate", "--json");
+  expect(json.code).toBe(1);
+  const summary = JSON.parse(json.output);
+  expect(summary).toMatchObject({ repository: "example/product", pr: 42, commit: head, tier: "critical", code: 1, lapsed: [lapsed], voided: [voided] });
+  expect(summary.kinds.map(({ line: _, ...kind }: { line: string }) => kind)).toEqual([
+    { kind: "live-run", state: "ran", commit: head, directory: expect.stringContaining("live-run") },
+    { kind: "ui-walk", state: "missing" },
+    { kind: "prod-shape", state: "gap", accepted: true, gap: { commit: head, reason: "No production read access", accepted: { by: "the user", mark: "👤", id: users }, text: `accepted by 👤 decision ${users} (2026-10-25 "Accept the gap")` } },
+    { kind: "cross-version", state: "gap", accepted: false, gap: { commit: head, reason: "No older client to run", lapsed: { id: lapsed, reason: "critical head" }, text: `not accepted (🤖 decision ${lapsed} lapsed: critical head)` } },
+    { kind: "shadow-diff", state: "reused", from: earlier, reason: "The later commit only renames a variable", directory: expect.stringContaining("shadow-diff") },
+    { kind: "post-deploy-watch", state: "pending" },
+  ]);
+  expect(summary.review).toMatchObject({ state: "covered", unanswered: [] });
+  expect(summary.head).toMatchObject({ state: "pushed" });
+  expect(summary.ci).toMatchObject({ state: "green" });
+
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(1);
+  const lines = [summary.owed.line, ...summary.kinds.map((kind: { line: string }) => kind.line), summary.review.line, summary.head.line, summary.ci.line, summary.lapsedLine].filter(Boolean);
+  expect(gate.output.split("\n")).toEqual([...lines, "gate: fail (exit 1)"]);
+  expect(lineOf(gate.output, "cross-version:")).toBe(`cross-version: gap from ${head.slice(0, 7)}, not accepted (🤖 decision ${lapsed} lapsed: critical head): No older client to run`);
+});
+
+const ledgerFile = (pr: Checkout) => join(pr.home, ".local/state/fleet/decisions.jsonl");
+
+test("the user reverses an agent decision with their words in the thread: it prints as 👤 with the replaced answer struck through, and counts no more", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const id = idIn((await agent(pr, "prod-shape")).output);
+  expect((await pr.fleet("gate")).code).toBe(0);
+  pr.say("No, run the prod-shape proof");
+
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Words they never typed"`, "--thread", "thread-1")).rejects.toThrow(`"words they never typed" is not in a message of the user's in thread thread-1`);
+  const reversed = await pr.decide("reverse", id, "--words", `2026-10-25 "No, run the prod-shape proof"`, "--thread", "thread-1");
+  expect(reversed.code).toBe(0);
+  const line = `- 👤 **Accept the prod-shape gap?** 2026-10-25 "No, run the prod-shape proof" (reversed 2026-10-25 from ~~🤖 Accept it Rejected: Ask the user.~~) (the user, proof-gap, thread thread-1) [${id}]`;
+  expect(reversed.output).toBe(line);
+
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(3);
+  expect(lineOf(gate.output, "prod-shape:")).toEndWith(", not accepted: No sandbox");
+  expect((await pr.decide("list", "--live")).output).toBe("No decisions.");
+  expect((await pr.decide("list")).output).toBe(line);
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "No, run the prod-shape proof"`, "--thread", "thread-1")).rejects.toThrow(`Decision ${id} is already reversed`);
+
+  const olderReader = readFileSync(ledgerFile(pr), "utf8").trim().split("\n").map((text) => JSON.parse(text) as LedgerEvent).filter((event) => event.type === "decide" || event.type === "void");
+  expect(fold(olderReader).find((decision) => decision.id === id)?.voided).toBeDefined();
+});
+
+test("a reversal takes only the user's own words in the T3 app, never a GitHub comment, which agents also post as the user", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const id = idIn((await agent(pr, "prod-shape")).output);
+  const reverse = (words = `2026-10-25 "Reverse that one"`) => pr.decide("reverse", id, "--words", words, "--thread", "thread-1");
+
+  pr.githubComment(123, "the-user", "Reverse that one", "2026-10-25T13:00:00Z");
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`, "--comment", "https://github.com/example/product/pull/42#issuecomment-123")).rejects.toThrow("Unknown option --comment");
+  await expect(pr.decide("reverse", id, "--words", `2026-10-25 "Reverse that one"`)).rejects.toThrow("Pass --thread with the T3 thread where the user reversed it");
+  await expect(reverse(`2026-10-25 "***"`)).rejects.toThrow("Quote the user's words with the date they wrote them");
+  await expect(reverse()).rejects.toThrow(`"reverse that one" is not in a message of the user's in thread thread-1`);
+  expect((await pr.fleet("gate")).code).toBe(0);
+
+  pr.clock.now = new Date("2026-10-25T13:00:00Z");
+  pr.say("Reverse that one");
+  expect((await reverse()).output).toStartWith(`- 👤 **Accept the prod-shape gap?** 2026-10-25 "Reverse that one" (reversed 2026-10-25 from ~~🤖 Accept it`);
+  expect((await pr.fleet("gate")).code).toBe(3);
+});
+test("two reversals in one ask class within 28 days brake it until the user lifts it; 29 days apart they do not", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  const design = (question: string) => pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", question, "--answer", "Keep one module", "--rejected", "Split it", "--reason", "Small change");
+  const on = (day: string) => { pr.clock.now = new Date(`${day}T10:00:00Z`); };
+  const reverseOn = (day: string, id: string, words: string) => { on(day); pr.say(words); return pr.decide("reverse", id, "--words", `${day} "${words}"`, "--thread", "thread-1"); };
+  const lift = (day: string, words: string) => pr.decide("lift", "--class", "proof-gap", "--words", `${day} "${words}"`, "--thread", "thread-1");
+  const liftQuestion = "Lift the brake on proof-gap decisions of example/product#42?";
+  const ids: string[] = [];
+  on("2026-09-25");
+  for (let i = 0; i < 3; i++) ids.push(idIn((await agent(pr, "prod-shape")).output));
+  const firstDesign = idIn((await design("Where does the parser go?")).output);
+  const secondDesign = idIn((await design("Where does the printer go?")).output);
+
+  await reverseOn("2026-10-01", ids[0]!, "No");
+  await reverseOn("2026-10-29", ids[1]!, "Not this either");
+  await reverseOn("2026-10-01", firstDesign, "Wrong call");
+  await reverseOn("2026-10-30", secondDesign, "Also wrong");
+  appendFileSync(ledgerFile(pr), ['{"type":"lift","class":"proof-gap","words":"Lift it","thread":"thread-1","message":"m0","at":"z"}', `{"type":"reverse","id":"${ids[2]}","words":"No","thread":"thread-1","message":"m0","at":"2026-10-0"}`].join("\n") + "\n");
+  on("2026-11-01");
+  await expect(agent(pr, "prod-shape")).rejects.toThrow(`The proof-gap class is braked: the user reversed decisions ${ids[0]} and ${ids[1]} within 28 days`);
+  expect((await design("Where does the report go?")).code).toBe(0);
+
+  await expect(pr.decide("lift", "--class", "design", "--words", `2026-11-01 "Lift it"`, "--thread", "thread-1")).rejects.toThrow("The design class is not braked");
+  on("2026-11-05");
+  pr.say("Lift it, decide gaps again");
+  await expect(lift("2026-11-05", "Lift it, decide gaps again")).rejects.toThrow(`"Lift it, decide gaps again" is a message the user typed. Only their answer to your question tool lifts a brake`);
+  pr.choose("Lift it", liftQuestion);
+  const lifted = await lift("2026-11-05", "Lift it");
+  expect(lifted.output).toBe(`Lifted the brake on proof-gap (reversals of ${ids[0]} and ${ids[1]}): the agent decides its asks alone again. (the user, 2026-11-05 "Lift it", thread thread-1)`);
+  const fourth = idIn((await agent(pr, "prod-shape")).output);
+
+  await reverseOn("2026-11-06", ids[2]!, "Wrong again");
+  await reverseOn("2026-11-07", fourth, "And again");
+  await expect(agent(pr, "prod-shape")).rejects.toThrow(`braked: the user reversed decisions ${ids[2]} and ${fourth}`);
+  await expect(lift("2026-11-05", "Lift it")).rejects.toThrow("That message already lifted the proof-gap brake on 2026-11-05. One message lifts one brake");
+  on("2026-11-06");
+  pr.choose("Lift it now", liftQuestion);
+  await expect(lift("2026-11-06", "Lift it now")).rejects.toThrow(`The user wrote that before the brake, which the reversal of ${fourth} set on 2026-11-07. Only an answer after it lifts it`);
+  on("2026-11-08");
+  pr.choose("Lift it once more", liftQuestion);
+  expect((await lift("2026-11-08", "Lift it once more")).code).toBe(0);
+  expect((await agent(pr, "prod-shape")).code).toBe(0);
+});
+
+test("a braked review class refuses review --agent", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  const round = () => pr.decide("record", "--mark", "🤖", "--class", "review", "--pr", "example/product#42", "--question", "Run another round?", "--answer", "Run it", "--rejected", "Ask the user", "--reason", "The arbiter escalated");
+  for (const words of ["Stop the rounds", "No more rounds"]) {
+    const id = idIn((await round()).output);
+    pr.say(words);
+    await pr.decide("reverse", id, "--words", `2026-10-25 "${words}"`, "--thread", "thread-1");
+  }
+  await expect(pr.fleet("review-start", "--scope", "full", "--agent", "The arbiter escalated")).rejects.toThrow("The review class is braked");
+});
+
+test("the user's override takes a round whose agent decision never reached the ledger before its class was braked", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  const hub = hubAt(pr, "drops appends");
+  await expect(pr.fleet("review-start", "--scope", "full", "--agent", "The arbiter escalated")).rejects.toThrow("Not recorded");
+  hub.state.hub = "up";
+  const round = () => pr.decide("record", "--mark", "🤖", "--class", "review", "--pr", "example/product#42", "--question", "Run another round?", "--answer", "Run it", "--rejected", "Ask the user", "--reason", "The arbiter escalated");
+  for (const words of ["Stop the rounds", "No more rounds"]) {
+    const id = idIn((await round()).output);
+    pr.say(words);
+    await pr.decide("reverse", id, "--words", `2026-10-25 "${words}"`, "--thread", "thread-1");
+  }
+  await expect(pr.fleet("review-start", "--scope", "full", "--agent", "The arbiter escalated")).rejects.toThrow("braked");
+
+  pr.choose("Run one more round");
+  const started = await pr.fleet("review-start", "--scope", "full", "--override", `2026-10-25 "Run one more round"`);
+  expect(started.code).toBe(0);
+  const decision = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/1/round.json"), "utf8")).decision.id;
+  expect((await pr.decide("list", "--pr", "example/product#42", "--live")).output).toContain(`👤 **Run one more review round?`);
+  expect((await pr.decide("list", "--pr", "example/product#42", "--live")).output).toContain(`[${decision}]`);
+});
+
+test("an agent decision that lands while another machine brakes its class counts nowhere, and its lane is told", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  await owing(pr, "prod-shape");
+  const first = idIn((await agent(pr, "prod-shape")).output);
+  const second = idIn((await agent(pr, "prod-shape")).output);
+  pr.say("No");
+  await pr.decide("reverse", first, "--words", `2026-10-25 "No"`, "--thread", "thread-1");
+  const reversal = { type: "reverse", id: second, words: `2026-10-25 "Not that either"`, comment: "https://github.com/example/product/pull/42#issuecomment-7", machine: "other-box", at: "2026-10-25T12:00:00.000Z" };
+  pr.whileGithubReadsPull(`printf '%s\\n' '${JSON.stringify(reversal)}' >> "${ledgerFile(pr)}"`);
+
+  await expect(agent(pr, "prod-shape")).rejects.toThrow("The proof-gap class was braked while this decision was recorded, so it counts nowhere");
+  expect((await pr.fleet("gate")).code).toBe(3);
+  expect((await pr.decide("list", "--live")).output).toBe("No decisions.");
+
+  const older = { id: "d-0ld0ld01", at: "2026-10-25T12:30:00.000Z", class: "proof-gap", mark: "🤖", question: "Accept the prod-shape gap?", answer: "Accept it", rejected: "Ask the user", reason: "An older Fleet", scope: { prs: ["example/product#42"], kinds: ["prod-shape"] }, effect: "accept", where: { thread: "thread-1", machine: "old-box" } };
+  appendFileSync(ledgerFile(pr), JSON.stringify({ type: "decide", decision: older }) + "\n");
+  expect((await pr.fleet("gate")).code).toBe(3);
+  expect((await pr.decide("list", "--live")).output).toBe("No decisions.");
+});
+
+async function reviewPr(pr: Checkout, n: number) {
+  fakeModel(pr, "REVIEWER", clean);
+  const target = ["--repo", "example/product", "--pr", String(n)];
+  await pr.fleet("review", "--lens", "correctness", ...target);
+  expect((await pr.fleet("review", "--wait", ...target)).code).toBe(0);
+}
+
+test("the end-of-run report prints its five sections in order: still yours, narrow-grant merges, decisions, proofs, side fixes", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "new\n");
+  const rollouts = join(pr.home, "rollouts.jsonl");
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "orchestration.rolloutLog": rollouts });
+  for (const n of [5, 41, 42, 43]) pr.pullRequestState({ number: n, body: graded("non-critical") });
+
+  await pr.fleet("require", "--kinds", "live-run,prod-shape,shadow-diff", "--repo", "example/product", "--pr", "41");
+  await reviewPr(pr, 41);
+  await pr.fleet("gap", "--kind", "shadow-diff", "--reason", "No old output to diff", "--repo", "example/product", "--pr", "41");
+  writeFileSync(join(pr.repository, "run.log"), "sent 1 email, delivered");
+  await pr.fleet("save", "--kind", "live-run", "run.log", "--repo", "example/product", "--pr", "41");
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No production read access", "--repo", "example/product", "--pr", "41");
+  pr.chooseGap("prod-shape", "No production read access", "Accept the gap", 41);
+  const users = idIn((await pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#41")).output);
+  pr.githubComment(9, "the-user", "Proofs at HEAD: live-run passed.", "2026-10-25T12:00:00Z", 41);
+  await pr.fleet("receipt", "--comment", "https://github.com/example/product/pull/41#issuecomment-9", "--repo", "example/product", "--pr", "41");
+  pr.pullRequestState({ number: 41, merged: true });
+
+  await pr.fleet("require", "--kinds", "prod-shape,cross-version");
+  await reviewPr(pr, 42);
+  await pr.fleet("gap", "--kind", "prod-shape", "--reason", "No sandbox");
+  await pr.fleet("gap", "--kind", "cross-version", "--reason", "No older client to run");
+  const lapsed = idIn((await agent(pr, "cross-version")).output);
+  const reversed = idIn((await pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", "Where does the parser go?", "--answer", "A new module", "--rejected", "The shared parser", "--reason", "Smaller diff")).output);
+  pr.say("Use the shared parser");
+  await pr.decide("reverse", reversed, "--words", `2026-10-25 "Use the shared parser"`, "--thread", "thread-1");
+  await expect(pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", "q", "--answer", "a", "--rejected", "r", "--reason", "why", "--link", "t3-thread://elsewhere")).rejects.toThrow("--link belongs to a scope decision");
+  const side = idIn((await pr.decide("record", "--mark", "🤖", "--class", "scope", "--pr", "example/product#42", "--question", "Fix the flaky clock test on the side?", "--answer", "Yes, in its own thread", "--rejected", "Leave it", "--reason", "It fails one run in ten", "--link", "t3-thread://side-fix")).output);
+  await pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/other#5", "--question", "Another lane's choice?", "--answer", "Theirs", "--rejected", "Ours", "--reason", "Not this lane", "--thread", "other-thread");
+  pr.chooseGap("judge", "The judge times out", "Yes", 41);
+  const recommended = idIn((await pr.decide("record", "--mark", "👍", "--class", "proof-gap", "--kind", "judge", "--pr", "example/product#41")).output);
+  pr.chooseGap("prod-shape", "A side PR without a sandbox", "Accept the gap", 45);
+  const inThread = idIn((await pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", "prod-shape", "--pr", "example/product#45")).output);
+  pr.pullRequestState({ number: 42, body: graded("critical (a migration)") });
+
+  await pr.fleet("require", "--none", "--reason", "docs only", "--repo", "example/product", "--pr", "43");
+  await reviewPr(pr, 43);
+  expect((await pr.fleet("gate", "--repo", "example/product", "--pr", "43")).code).toBe(0);
+  expect((await pr.fleet("gate", "--landed", "--repo", "example/product", "--pr", "41")).code).toBe(3);
+  expect((await pr.fleet("gate", "--repo", "example/product", "--pr", "42")).code).toBe(3);
+  pr.pendingCards.add("thread-1");
+  writeFileSync(rollouts, [
+    { at: "2026-10-25T09:00:00Z", repo: "example/product", pr: 41, stage: "merged", state: "done", note: "standing merge: narrow grant, card" },
+    { at: "2026-10-25T09:05:00Z", repo: "example/product", pr: 44, stage: "merged", state: "done", note: "standing merge: narrow grant" },
+    { at: "2026-10-25T09:10:00Z", repo: "example/product", pr: 42, stage: "deployed", state: "done", note: "standing merge: narrow grant" },
+    { at: "2026-10-25T09:15:00Z", repo: "example/product", pr: 43, stage: "merged", state: "done", note: "the user's merge word" },
+    { at: "yesterday morning", repo: "example/product", pr: 42, stage: "merged", state: "done", note: "standing merge: narrow grant" },
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+
+  const printed = await pr.decide("report", "--pr", "example/product#41", "--pr", "https://github.com/example/product/pull/42", "--pr", "example/product#43", "--thread", "thread-1");
+  expect(printed.code).toBe(0);
+  const report = printed.output.split("\n");
+  expect(report[0]).toBe("## End-of-run report: example/product#41, example/product#42, example/product#43");
+  expect(report.filter((line) => line.startsWith("### "))).toEqual(["### Still yours", "### Merged under the narrow grant", "### Decisions", "### Proofs", "### Side fixes started"]);
+  const section = (heading: string) => { const from = report.indexOf(heading) + 1; const to = report.findIndex((line, index) => index >= from && line.startsWith("### ")); return report.slice(from, to < 0 ? undefined : to).filter(Boolean); };
+
+  expect(section("### Still yours")).toEqual([
+    "- **Blocker:** example/product#42 is critical at HEAD and its prod-shape gap is not accepted: No sandbox.",
+    `- **Blocker:** example/product#42 is critical at HEAD and its cross-version gap is not accepted: No older client to run (🤖 decision ${lapsed} lapsed: critical head).`,
+    "- A question card waits for your answer in thread thread-1.",
+    `- example/product#41: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 3). Run fleet proof gate --landed in its checkout to see why.`,
+    "- Merge example/product#43: its proofs pass, and it waits on your merge word.",
+  ]);
+  expect(section("### Merged under the narrow grant")).toEqual(["- example/product#41 merged 2026-10-25 09:00 UTC (standing merge: narrow grant, card)", "- example/product#42 merged at an unknown time (standing merge: narrow grant)"]);
+  const decisions = section("### Decisions");
+  expect(decisions.map((line) => [line.slice(2, 4).trim(), idIn(line)])).toEqual([["👤", users], ["👤", reversed], ["👤", inThread], ["👍", recommended], ["🤖", lapsed], ["🤖", side]]);
+  expect(decisions[1]).toContain("(reversed 2026-10-25 from ~~🤖 A new module Rejected: The shared parser.~~)");
+  const short = head.slice(0, 7);
+  expect(section("### Proofs")).toEqual([
+    "| PR | Ran | Deferred | Voided | Receipt |",
+    "| --- | --- | --- | --- | --- |",
+    `| example/product#41 | live-run at ${short} | prod-shape: No production read access (accepted by 👤 ${users}); shadow-diff: No old output to diff (not accepted); judge: not run at HEAD | none | [receipt](https://github.com/example/product/pull/41#issuecomment-9) |`,
+    `| example/product#42 | none | prod-shape: No sandbox (not accepted); cross-version: No older client to run (not accepted); judge: not run at HEAD | ${lapsed} lapsed; ${reversed} reversed | none yet |`,
+    "| example/product#43 | none owed (docs only) | none | none | none yet |",
+  ]);
+  expect(section("### Side fixes started")).toEqual([`- Fix the flaky clock test on the side? Yes, in its own thread: t3-thread://side-fix [${side}]`]);
+
+  pr.env.FLEET_SETTINGS = JSON.stringify(settings);
+  const unlogged = (await pr.decide("report", "--pr", "example/product#41")).output.split("\n");
+  expect(unlogged[unlogged.indexOf("### Merged under the narrow grant") + 1]).toBe("- No rollout log: the setting orchestration.rolloutLog is empty, so merges under the grant are unknown.");
+});
+
+test("a reversal refuses the user's keep-owed: only their acceptance lifts it", async () => {
+  const pr = await checkout();
+  await owing(pr, "prod-shape");
+  pr.chooseGap("prod-shape", "No sandbox", "Keep the gap open");
+  const kept = idIn((await acceptGap(pr, "prod-shape", "--keep-owed")).output);
+  pr.say("Drop that, the gap is fine");
+
+  await expect(pr.decide("reverse", kept, "--words", `2026-10-25 "Drop that, the gap is fine"`, "--thread", "thread-1")).rejects.toThrow(`Decision ${kept} keeps the gap owed, and only the user lifts it`);
+  expect((await pr.decide("list", "--live")).output).toContain(kept);
+  expect((await pr.fleet("gate")).code).toBe(3);
+});
+
+test("a reversal and a lift take the time the user wrote their words, not the time the agent records them", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  const design = (question: string) => pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", question, "--answer", "Keep one module", "--rejected", "Split it", "--reason", "Small change");
+  const on = (day: string) => { pr.clock.now = new Date(`${day}T10:00:00Z`); };
+  on("2026-08-25");
+  const first = idIn((await design("Where does the parser go?")).output);
+  const second = idIn((await design("Where does the printer go?")).output);
+  const third = idIn((await design("Where does the report go?")).output);
+  on("2026-09-01");
+  pr.say("Wrong call");
+  on("2026-10-20");
+  pr.say("Also wrong");
+  on("2026-10-25");
+
+  expect((await pr.decide("reverse", first, "--words", `2026-09-01 "Wrong call"`, "--thread", "thread-1")).output).toContain("(reversed 2026-09-01 from ~~🤖 Keep one module");
+  await pr.decide("reverse", second, "--words", `2026-10-20 "Also wrong"`, "--thread", "thread-1");
+  expect((await design("Where does the index go?")).code).toBe(0);
+
+  on("2026-10-21");
+  pr.say("Wrong as well");
+  on("2026-10-25");
+  expect((await pr.decide("reverse", third, "--words", `2026-10-21 "Wrong as well"`, "--thread", "thread-1")).output).toContain("(reversed 2026-10-21 from");
+  await expect(design("Where does the cache go?")).rejects.toThrow(`The design class is braked: the user reversed decisions ${second} and ${third}`);
+
+  on("2026-10-22");
+  pr.choose("Lift it", "Lift the brake on design decisions of example/product#42?");
+  on("2026-10-26");
+  expect((await pr.decide("lift", "--class", "design", "--words", `2026-10-22 "Lift it"`, "--thread", "thread-1")).code).toBe(0);
+  const lift = readFileSync(ledgerFile(pr), "utf8").trim().split("\n").map((text) => JSON.parse(text) as LedgerEvent).find((event) => event.type === "lift");
+  expect(lift).toMatchObject({ at: "2026-10-22T10:00:00.000Z" });
+  expect((await design("Where does the cache go?")).code).toBe(0);
+});
+
+test("a reversal and a lift fail unless they are in the ledger when Fleet reads it back", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  const { state } = hubAt(pr);
+  const design = (question: string) => pr.decide("record", "--mark", "🤖", "--class", "design", "--pr", "example/product#42", "--question", question, "--answer", "Keep one module", "--rejected", "Split it", "--reason", "Small change");
+  const ids = [idIn((await design("Where does the parser go?")).output), idIn((await design("Where does the printer go?")).output), idIn((await design("Where does the report go?")).output)];
+  pr.say("Wrong call");
+  await pr.decide("reverse", ids[0]!, "--words", `2026-10-25 "Wrong call"`, "--thread", "thread-1");
+
+  state.hub = "drops appends";
+  pr.say("Also wrong");
+  await expect(pr.decide("reverse", ids[1]!, "--words", `2026-10-25 "Also wrong"`, "--thread", "thread-1")).rejects.toThrow("Not recorded: the event is not in the decision ledger when Fleet reads it back");
+  expect((await pr.decide("list", "--live")).output).toContain(ids[1]);
+
+  state.hub = "up";
+  await pr.decide("reverse", ids[1]!, "--words", `2026-10-25 "Also wrong"`, "--thread", "thread-1");
+  pr.clock.now = new Date("2026-10-26T10:00:00Z");
+  pr.choose("Lift it", "Lift the brake on design decisions of example/product#42?");
+  state.hub = "drops appends";
+  await expect(pr.decide("lift", "--class", "design", "--words", `2026-10-26 "Lift it"`, "--thread", "thread-1")).rejects.toThrow("Not recorded: the event is not in the decision ledger when Fleet reads it back");
+  state.hub = "up";
+  await expect(design("Where does the cache go?")).rejects.toThrow("The design class is braked");
 });

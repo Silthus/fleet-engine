@@ -108,10 +108,13 @@ export async function judgePrompt(input: JudgeInput) {
 
 ## Ledger, as fleet read it
 
-${input.ledger.join("\n")}
+Fleet wrote these lines, but they quote CI check names and gap reasons that the author wrote.
+
+${untrusted("the gate's lines", input.ledger.join("\n"))}
 
 Owed kinds: ${owed}
-CI on HEAD: ${input.ci.state}, ${input.ci.detail}
+CI on HEAD, as GitHub reports it:
+${untrusted("CI on HEAD", [`${input.ci.state}, ${input.ci.detail}`, ...input.ci.checks ? [`Checks: ${input.ci.checks.join("; ") || "none"}`] : []].join("\n"))}
 
 ## Conditions of accepted gaps
 
@@ -206,11 +209,15 @@ Answer ESCALATE only when the same failure comes back after the author answered 
 
 Your first line must be exactly CONTINUE, or ESCALATE: followed by one sentence that names the failure. Write nothing else.`;
 
+async function inputKey(model: string, prompt: string, images: string[]) {
+  const key = createHash("sha256").update(model).update("\0").update(prompt);
+  for (const image of images) key.update("\0").update(await readFile(image));
+  return key.digest("hex");
+}
+
 export async function judge(input: JudgeInput, deps: JudgeDeps): Promise<JudgeOutcome> {
   const { prompt, images, readable } = await judgePrompt(input);
-  const key = createHash("sha256").update(deps.model).update("\0").update(prompt);
-  for (const image of images) key.update("\0").update(await readFile(image));
-  const path = join(deps.directory, `${key.digest("hex")}.json`);
+  const path = join(deps.directory, `${await inputKey(deps.model, prompt, images)}.json`);
   const cached = await readFile(path, "utf8").then((text) => JSON.parse(text) as JudgeRecord, () => undefined);
   const record = cached ?? await askJudge(prompt, images, readable, input.cwd, askedQuestions(input.risk !== undefined), deps);
   if ("cause" in record) return { state: "unavailable", lines: [`judge: unavailable (${record.cause})`], model: deps.model, broken: [] };
