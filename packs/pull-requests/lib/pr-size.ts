@@ -30,11 +30,15 @@ function count(args: string[], flag: string) {
 function addedNames(diff: string) {
   const names = new Set<string>();
   let patterns: RegExp[] = [];
+  let previous = "";
   for (const line of diff.split("\n")) {
     if (line.startsWith("+++ ")) {
       const path = line.slice(6).replace(/\t$/, "");
-      patterns = !authored(path) || /\.mdx?$/.test(path) ? [] : /\.(json|ya?ml|toml)$/.test(path) && !dataFolder.test(path) ? [configKey] : codeConcepts;
+      const config = /\.(json|ya?ml|toml)$/.test(path);
+      const unscanned = !authored(path) || /\.mdx?$/.test(path) || (config && (dataFolder.test(path) || previous === "--- /dev/null"));
+      patterns = unscanned ? [] : config ? [configKey] : codeConcepts;
     } else if (line.startsWith("+")) for (const pattern of patterns) for (const match of line.slice(1).matchAll(pattern)) names.add(match[1]!);
+    previous = line;
   }
   return [...names];
 }
@@ -54,8 +58,8 @@ export async function prSize(args: string[], cwd: string) {
   }
   const newFiles = (await git(cwd, ...diff, "--name-only", "--diff-filter=A")).stdout.split("\n").filter((path) => path && authored(path));
   const names = addedNames((await git(cwd, ...diff, "-U0")).stdout);
-  const known = names.length ? new Set((await git(cwd, "grep", "--no-color", "-h", "-o", "-w", "-F", ...names.flatMap((name) => ["-e", name]), from, "--", ":(top)")).stdout.split("\n")) : new Set();
-  const newConcepts = names.filter((name) => !known.has(name));
+  const newConcepts = [];
+  for (const name of names) if ((await git(cwd, "grep", "-q", "-w", "-F", "-e", name, from, "--", ":(top)")).exitCode === 1) newConcepts.push(name);
   const counted = (count: number, noun: string, items: string[] = []) => `${count} ${noun}${count === 1 ? "" : "s"}${items.length ? ` (${items.join(", ")})` : ""}`;
   const summary = `size: ${counted(authoredLines, "authored line")}, ${counted(newFiles.length, "new file", newFiles)}, ${counted(newConcepts.length, "new concept", newConcepts)}`;
   if (lines === undefined && concepts === undefined) return { output: `${summary}\nno estimate: the size contract did not run`, exitCode: 0 };

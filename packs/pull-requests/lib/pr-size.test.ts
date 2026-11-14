@@ -71,10 +71,11 @@ test("counts flags, env vars and config keys the base does not name yet", async 
     "locales/en.json": "{\n  \"greeting\": \"hello\"\n}\n",
     "pyproject.toml": "[tool.app]\nold = 1\nfresh_setting = 2\n",
     "README.md": "Run it with `--doc-only-flag` and FOO_VAR.\n",
+    "settings/new.yaml": "fresh_file_key: 1\n",
     "src/with space.test.ts": "const onlyInTests = process.env.TEST_ONLY_VAR;\n",
   });
 
-  const summary = "size: 9 authored lines, 1 new file (README.md), 6 new concepts (newKey, fresh_setting, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
+  const summary = "size: 10 authored lines, 2 new files (README.md, settings/new.yaml), 6 new concepts (newKey, fresh_setting, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
   expect(await size("--lines", "100", "--concepts", "5")).toMatchObject({ code: 0, out: `${summary}\nwithin the estimate of 100 lines and 5 concepts` });
   subdirectory = "src";
   colored = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "color.ui", GIT_CONFIG_VALUE_0: "always" };
