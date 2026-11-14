@@ -22,9 +22,10 @@ const metabaseCookie = String.raw`metabase\.(?:SESSION|DEVICE)`;
 const metabaseValue = "(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}";
 const gap = String.raw`(?:\s|\\[rnt]){0,16}`;
 const cookieName = new RegExp(`^${metabaseCookie}$`);
-const nameKey = new RegExp(String.raw`\\?"name\\?"${gap}:${gap}`, "g");
-const cookieNameKey = new RegExp(String.raw`\\?"name\\?"${gap}:${gap}\\?"${metabaseCookie}\\?"`, "g");
-const valueKey = new RegExp(String.raw`\\?"value\\?"${gap}:${gap}\\?"(${metabaseValue})`, "g");
+const key = (name: string) => String.raw`(?<![\w$-])${quote}${name}${quote}${gap}:${gap}${quote}`;
+const nameKey = new RegExp(key("name"), "g");
+const cookieNameKey = new RegExp(String.raw`${key("name")}${metabaseCookie}(?![\w.-])`, "g");
+const valueKey = new RegExp(`${key("value")}(${metabaseValue})`, "g");
 
 function cookieRecordValues(text: string) {
   const cookies = new Set([...text.matchAll(cookieNameKey)].map((match) => match.index));
@@ -51,7 +52,7 @@ const shapes: Shape[] = [
   { kind: "Convex deploy key", pattern: new RegExp(`(?<![A-Za-z0-9_-])(?:prod|dev|preview|project):[A-Za-z0-9:_-]{1,120}\\|[A-Za-z0-9+/=_-]{30,}`, "g") },
   { kind: "Coder session token", pattern: new RegExp(String.raw`(?:(?<=^${colour}[+-]?)|(?<=\\[rn]${colour}[+-]?|["']))[ \t]*${colour}${coderToken}${colour}[ \t]*(?=$|\\[rn]|\\?["'])`, "gm") },
   { kind: "Coder session token", pattern: new RegExp(String.raw`(?=${coderToken}(?![A-Za-z0-9]))(?<=(?:coder[_-]?session[_-]?token(?:\\?["'])?[ \t]*[:=]|--token[ \t=])[ \t]*(?:\\?["'])?)${coderToken}`, "gi") },
-  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=(?<![\w.-])${metabaseCookie}${quote}${gap}[=:]${gap}${quote})${metabaseValue}`, "g") },
+  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=(?<![\w.-])${metabaseCookie}${quote}(?:${gap}[=:]${gap}|\t+)${quote})${metabaseValue}`, "g") },
   { kind: "Metabase session cookie", values: cookieRecordValues },
   { kind: "private key", pattern: new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----(?:${lineBreak}*[A-Za-z-]+:[^\\r\\n\\\\]*${lineEnd})*${lineBreak}*[A-Za-z0-9+/=]{20,}(?:[A-Za-z0-9+/=\\s]|\\\\[rn])*(?:-----END [A-Z ]*PRIVATE KEY-----)?`, "g") },
 ];

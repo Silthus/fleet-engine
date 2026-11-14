@@ -136,6 +136,9 @@ describe("secret guard", () => {
     ["a browser cookie with a nested partition key", JSON.stringify([{ name: cookieKey, partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: false }, value: metabaseSession }])],
     ["a browser cookie with a nested partition key, value first", JSON.stringify([{ value: metabaseSession, partitionKey: { topLevelSite: "https://example.com" }, path: `/${"p".repeat(4000)}`, name: cookieKey }], null, 2)],
     ["a browser cookie after another cookie", JSON.stringify([{ name: "theme", value: "dark" }, { name: cookieKey, value: metabaseSession }], null, 2)],
+    ["a JavaScript cookie literal", `await context.addCookies([{ name: '${cookieKey}', value: '${metabaseSession}', domain: 'metabase.example.com' }]);`],
+    ["a YAML cookie list", `cookies:\n  - name: ${cookieKey}\n    domain: metabase.example.com\n    value: ${metabaseSession}\n`],
+    ["a Netscape cookies.txt line", `metabase.example.com\tFALSE\t/\tTRUE\t0\t${cookieKey}\t${metabaseSession}\n`],
     ["a JSON-escaped pretty-printed cookie", JSON.stringify({ stdout: JSON.stringify([{ name: cookieKey, secure: true, value: metabaseSession }], null, 2) })],
   ])("finds a Metabase session cookie in %s", (_, text) => {
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");
@@ -150,6 +153,7 @@ describe("secret guard", () => {
     `Copy ${cookieKey}=YOUR_SESSION_TOKEN_HERE from the browser.`,
     JSON.stringify({ [cookieKey]: "<redacted>" }),
     JSON.stringify([{ name: cookieKey, value: "<session-id>" }], null, 2),
+    `username: ${cookieKey}\nvalue: see the browser`,
   ])("leaves a Metabase cookie placeholder alone: %s", (text) => {
     expect(guard("claude", promptEvent(text))).toBeUndefined();
     expect(guard("claude", toolEvent({ stdout: text, structuredContent: { [cookieKey]: "<redacted>" } }))).toBeUndefined();
