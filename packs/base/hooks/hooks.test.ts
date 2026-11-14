@@ -149,6 +149,8 @@ describe("secret guard", () => {
     ["a JSON cookie with a repeated value key", `{"name":"${cookieKey}","value":"${metabaseSession}","value":"dark"}`],
     ["a JSON cookie with wide spacing after its name key", `{"name":${" ".repeat(17)}"${cookieKey}","value":"${metabaseSession}"}`],
     ["a JSON cookie whose name is spelled with a unicode escape", `{"name":"metab\\u0061se.SESSION","value":"${metabaseSession}"}`],
+    ["a JSON cookie with an escaped name and a repeated name key", `{"name":"metab\\u0061se.SESSION","value":"${metabaseSession}","name":"theme"}`],
+    ["a cookie header whose name is spelled with a unicode escape", `metab\\u0061se.SESSION=${metabaseSession}`],
     ["a YAML cookie with wide spacing after its value key", `- name: ${cookieKey}\n  value:${" ".repeat(17)}${metabaseSession}\n`],
     ["a cookie header with wide spacing", `${cookieKey}:${" ".repeat(17)}${metabaseSession}`],
   ])("finds a Metabase session cookie in %s", (_, text) => {
@@ -203,6 +205,13 @@ describe("secret guard", () => {
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: JSON.stringify([{ name: cookieKey, value }]) }))?.hookSpecificOutput);
     expect(output).not.toContain(head);
     expect(output).toContain("[redacted Metabase session cookie]");
+  });
+
+  test("redacts a whole text that names a cookie and spells its value with a unicode escape", () => {
+    const [front, back] = [metabaseSession.slice(0, 12), metabaseSession.slice(12)];
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: `cookie ${cookieKey}=${front}\\u0061${back}` }))?.hookSpecificOutput);
+    expect(output).not.toContain(front);
+    expect(output).not.toContain(back);
   });
 
   test("keeps the cookie's name in a cookie header", () => {

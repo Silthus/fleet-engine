@@ -26,11 +26,13 @@ const cookieMention = new RegExp(metabaseCookie);
 const valueToken = /(?<![A-Za-z0-9._~+/-])(?=[A-Za-z0-9._~+/-]*[0-9])[A-Za-z0-9._~+/-]{20,}={0,2}(?![A-Za-z0-9._~+/=-])/g;
 const wholeValue = new RegExp(`^${metabaseValue}$`);
 const jsonStart = /^\s*[[{"]/;
+const unicodeEscape = /\\u([0-9a-fA-F]{4})/g;
 
 function cookieRecordValues(text: string): string[] {
   const json = jsonStart.test(text) ? parsedJson(text) : { parsed: false as const };
   if (json.parsed && keysIn(text) === parsedKeys(json.value)) return jsonCookieValues(json.value);
-  return cookieMention.test(text) ? text.match(valueToken) ?? [] : [];
+  if (!cookieMention.test(text.replace(unicodeEscape, (_, code: string) => String.fromCharCode(parseInt(code, 16))))) return [];
+  return json.parsed || text.search(unicodeEscape) >= 0 ? [text] : text.match(valueToken) ?? [];
 }
 
 function parsedJson(text: string): { parsed: true; value: unknown } | { parsed: false } {
