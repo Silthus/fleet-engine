@@ -8,7 +8,7 @@ import { prDirectory, readDecisions, readJson, recordReceipt, reviewRecords, wri
 import { displayEntry, readDisplay, readNotChecked, recordNotChecked } from "./proof-display.ts";
 import { receiptSummary, type GateContext } from "./proof-gate.ts";
 import { readPlan } from "./proof-panel.ts";
-import { checkPlacement, GuardRefusal, keepCallout, placeReceipt, receiptHash, receiptLink, receiptMarker, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
+import { checkPlacement, GuardRefusal, keepCallout, placeReceipt, receiptHash, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
 import { fitPage, gatherPage, PageTooLarge, renderPage } from "./proof-receipt-page.ts";
 import { handlerPublisher, type Published, type PublishRequest } from "./proof-receipt-publisher.ts";
 import { reviewDisplay } from "./proof-review-display.ts";
@@ -67,7 +67,6 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
   for (const warning of rendered.warnings) print(warning);
   const title = `Proof receipt: ${head.repository}#${head.pr}`;
   const publish = handlerPublisher(env);
-  const link = receiptLink(first.body);
   const previous = await storedArtifact(home, head);
   const page = await gatherPage(home, head, { summary, title: first.title, decisions: covered, display, notChecked, reviews });
   let request: PublishRequest | undefined;
@@ -83,8 +82,8 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
     await writeFile(local, content, { mode: 0o600 });
     print(`receipt page: ${local}`);
   };
-  const live = receiptMarker(first.body);
-  if (live?.head === head.commit && live.hash === hash && (!publish || (link && link === previous?.url))) {
+  const place = (url: string | undefined) => placeReceipt(first.body, { head: head.commit, hash, section: url ? withLink(rendered.section, url) : rendered.section }, heading);
+  if ((!publish || previous) && place(publish && previous?.url) === first.body) {
     if (!publish && await readFile(local, "utf8").catch(() => undefined) !== content) await saveLocal();
     if (items) await recordNotChecked(home, head, items);
     print("receipt current");
@@ -97,7 +96,7 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
     await writeJson(publishedPath(home, head), published);
     await recordReceipt(home, head, published.url);
   } else await saveLocal();
-  const intended = keepCallout(first.body, placeReceipt(first.body, { head: head.commit, hash, section: published ? withLink(rendered.section, published.url) : rendered.section }, heading));
+  const intended = keepCallout(first.body, place(published?.url));
   if (readBody(head, context).body !== first.body) throw new Error("The PR body changed while fleet built the receipt. Run the receipt again");
   await writeBody(head, intended, context);
   if (readBody(head, context).body !== intended) throw new Error("The PR body reads back different from the one fleet wrote. Check the body by hand, then run the receipt again");

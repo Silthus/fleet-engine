@@ -7,13 +7,14 @@ import { covers, hubLedger, refText, riskCalloutOf, tierOf, type Env, type Ledge
 import { ciOf, readPullRequest, type PullRequest, type Run } from "./pr-ci.ts";
 import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
 import { displayEntry } from "./proof-display.ts";
+import { receiptMarker } from "./proof-receipt.ts";
 import { cleanBaseMerge, diffOf, mergeBase, pullRequestDetails, topLevel } from "./proof-checkout.ts";
 import { quietCommitIn } from "./proof-delta.ts";
 import { judge, readCriticalPaths, type JudgeInput } from "./proof-judge.ts";
 import { askModel, familyOf, modelLabel, readRiskRubric, readRubric, reviewerRow, skillReferences } from "./proof-models.ts";
 
 export type GateContext = { home: string; cwd: string; env: Env; run: Run; now?: () => Date; ssh?: Ssh };
-export type FinalGate = { code: number; lines: string[]; verdict: string; summary: ProofSummary; body?: string };
+export type FinalGate = { code: number; lines: string[]; verdict: string; summary: ProofSummary };
 
 type Checked = Awaited<ReturnType<typeof proofGate>>;
 type Judged = { code: number; lines: string[]; covered: string; judge: JudgeSummary };
@@ -61,14 +62,16 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
     pushedHead, ledger: hubLedger(home, env, ssh), now: now?.(),
   });
   const judged: Judged = checked.code === 0 ? await judgeHead(head, checked, context) : { code: checked.code, lines: [], covered: "", judge: { state: "skipped", lines: [] } };
+  const shown = pull === undefined ? undefined : receiptMarker((pull as PullRequest).body);
+  const stale = shown && shown.head !== head.commit ? [`receipt: the PR body shows the receipt of ${shown.head.slice(0, 7)}, not HEAD ${head.commit.slice(0, 7)}. Refresh it with fleet proof receipt`] : [];
   const gate = {
     code: judged.code,
-    lines: [...checked.lines, ...judged.lines],
+    lines: [...checked.lines, ...judged.lines, ...stale],
     verdict: judged.code === 0 ? `gate: pass (${checked.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`,
     summary: { ...checked.proofSummary, code: judged.code, judge: judged.judge },
   };
   if (pull) await writeJson(savedPath(home, head, head.commit), { key: keyOf(pull, landed, await fingerprintOf(home, head, files, checked.decisions)), gate, conditions: checked.conditions } satisfies SavedGate);
-  return pull ? { ...gate, body: (pull as PullRequest).body } : gate;
+  return gate;
 }
 
 const pushedHeadOf = (head: ProofIdentity, run: Run, seen: (pull: PullRequest) => void = () => {}) => (): PushedHead => {

@@ -3,9 +3,9 @@ import { join } from "node:path";
 import { decisionLine, type DecisionState } from "./decision-ledger.ts";
 import type { Display } from "./proof-display.ts";
 import { storedVerdicts, verdictLines, type JudgeRecord } from "./proof-judge.ts";
-import { receiptGaps, type ReceiptReview } from "./proof-receipt.ts";
+import type { ReceiptReview } from "./proof-receipt.ts";
 import type { PublishRequest } from "./proof-receipt-publisher.ts";
-import { entries, judgeDirectory, pullRequestDirectory, readJson, reviewedFindings, type GapProof, type ProofIdentity, type ProofKind, type ProofSummary } from "./proof.ts";
+import { entries, judgeDirectory, pullRequestDirectory, readJson, reviewedFindings, summaryGaps, type GapProof, type ProofIdentity, type ProofKind, type ProofSummary } from "./proof.ts";
 
 export const receiptBudget = 900_000;
 
@@ -136,7 +136,7 @@ const cuts = ["raw lens answers", "judge reasons", "evidence notes past their fi
 type Cut = (typeof cuts)[number];
 const noteLines = 40;
 
-function gapRow([kind, gap]: [string, GapProof], decisions: DecisionState[]) {
+function gapRow({ kind, gap }: { kind: string; gap: GapProof }, decisions: DecisionState[]) {
   const decision = gap.accepted?.id ? decisions.find((candidate) => candidate.id === gap.accepted!.id) : undefined;
   const who = !gap.accepted ? "not accepted" : gap.accepted.by === "standing rule" ? "a standing rule" : `${gap.accepted.mark ? `${gap.accepted.mark} ` : ""}${gap.accepted.by}`;
   return [kind, gap.commit ? at(gap.commit) : "", gap.reason ?? "no reason recorded", decision?.question ?? "", decision?.answer ?? "", who, decision ? time(decision.at) : "", decision?.where.thread ?? ""];
@@ -206,7 +206,7 @@ export function renderPage(page: Page, applied: readonly Cut[] = []) {
   const judgeState = atHead ? `${atHead.passed ? "✅ passed" : "❌ failed"} (${atHead.model}, ${time(atHead.judgedAt)})` : "not yet run";
   const owed = summary.kinds.map((kind) => kind.kind);
   const notesCut = applied.includes("evidence notes past their first 40 lines");
-  const gaps = receiptGaps({ summary });
+  const gaps = summaryGaps(summary);
   const out: string[] = [
     `# Proof receipt: ${ref}`, "", `[${ref}](https://github.com/${summary.repository}/pull/${summary.pr}): ${plain(page.title)}`, "",
     `**HEAD:** ${at(summary.commit)}  `, `**Owed:** ${owed.join(", ") || "none"}  `, `**Judge at HEAD:** ${judgeState}`, "",
