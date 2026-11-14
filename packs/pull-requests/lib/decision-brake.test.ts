@@ -237,6 +237,28 @@ test("one answer of the user's reverses one decision, and an answer already reco
   expect((await decideAlone(pr, "design", "Third design call?")).code).toBe(0);
 });
 
+test("when two machines reverse two decisions with one answer at once, the one that loses writes no void for older readers", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical") });
+  hubAt(pr);
+  on(pr, "2026-10-20");
+  const first = idIn((await decideAlone(pr, "design", "First design call?")).output);
+  const second = idIn((await decideAlone(pr, "design", "Second design call?")).output);
+  on(pr, "2026-10-21");
+  pr.say("Undo that one");
+  const ssh = pr.hub.ssh!;
+  let raced = false;
+  pr.hub.ssh = async (host, command, stdin) => {
+    if (!raced && stdin?.includes('"type":"reverse"')) { raced = true; await ssh(host, command, stdin.replaceAll(second, first)); }
+    return ssh(host, command, stdin);
+  };
+
+  await expect(reverse(pr, second, "2026-10-21", "Undo that one")).rejects.toThrow(`Not reversed: That answer already reversed decision ${first}`);
+  const events = readFileSync(join(pr.home, "hub-home/.local/state/fleet/decisions.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  expect(events.filter((event) => event.type === "void" && event.id === second)).toEqual([]);
+  expect((await pr.decide("list", "--live")).output).toContain(second);
+});
+
 test("a reversal that another machine wrote with an answer already used counts no more, and neither does its void", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical") });

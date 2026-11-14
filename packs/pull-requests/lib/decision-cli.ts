@@ -339,9 +339,9 @@ async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger)
   const answer = `${heard.thread}/${heard.message}`;
   const earlier = answerUse(events, answer);
   if (earlier) throw alreadyUsed(earlier);
-  const read = await appendHeard(ledger, event, { type: "void", id, reason: `reversed by the user: ${words}`, at: event.at });
-  const use = answerUse(read, answer);
+  const use = answerUse(await appendHeard(ledger, event), answer);
   if (!use || !("reversal" in use) || use.reversal !== id) throw new Error(`Not reversed: ${use ? alreadyUsed(use).message : `another reversal of decision ${id} came first`}`);
+  await appendHeard(ledger, { type: "void", id, reason: `reversed by the user: ${words}`, at: event.at });
   context.print(decisionLine(fold([...events, event]).find((candidate) => candidate.id === id)!));
   return 0;
 }
