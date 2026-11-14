@@ -176,16 +176,28 @@ export function checkMarkers(body: string) {
 export type Receipt = { head: string; hash: string; section: string };
 const blockOf = ({ head, hash, section }: Receipt, heading: string | undefined) => `${receiptOpen} head=${head} hash=${hash} -->\n${heading ? `## ${heading}\n\n` : ""}${section}\n${receiptClose}`;
 
-export function keepCallout(body: string, placed: string) {
+const blockShape = {
+  ...Object.fromEntries(["paragraph", "blockquote", "code", "list", "listItem", "hr", "table", "thead", "tbody", "tr", "th", "td", "html"].map((kind) => [kind, (children: string) => `(${kind}${children})`])),
+  heading: (_: string, meta: { level: number }) => `(h${meta.level})`,
+  text: () => "",
+};
+const blocksOf = (text: string) => Bun.markdown.render(text, blockShape);
+
+export function keepBody(body: string, placed: string) {
   if (riskCalloutOf(placed) !== riskCalloutOf(body)) {
     throw new Error("Writing the receipt would change the merge-risk callout, because the receipt block holds part of it or lands inside it. Move the callout out of the receipt block and the testing section by hand, then run the receipt again");
+  }
+  const receipt = blocksOf(new RegExp(blockText).exec(placed)?.[0] ?? "");
+  const shown = blocksOf(placed);
+  if (!shown.includes(receipt) || shown.replace(receipt, "") !== blocksOf(withoutReceipt(body))) {
+    throw new Error("The receipt would not show as a block of its own, because a code fence, an HTML block or a comment before it stays open, or it would change how GitHub shows the rest of the body. Close the open block by hand, then run the receipt again");
   }
   return placed;
 }
 
 export function checkPlacement(body: string, heading: string) {
   checkMarkers(body);
-  keepCallout(body, placeReceipt(body, { head: "0".repeat(40), hash: "0", section: "" }, heading));
+  keepBody(body, placeReceipt(body, { head: "0".repeat(40), hash: "0", section: "" }, heading));
 }
 
 type Heading = { start: number; depth: number; title: string };

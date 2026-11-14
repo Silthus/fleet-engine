@@ -418,3 +418,14 @@ test("a changed receipt heading moves the receipt to that section and never leav
   expect(block(body).split("\n")[1]).toBe("## Evidence");
   expect(body).not.toContain("Testing");
 });
+
+test("a body that ends inside an open code fence, HTML block or comment refuses the receipt and stays as it is", async () => {
+  const { pr } = await provedPr();
+  const old = `<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n| Proof |\n| --- |\n| old |\n<!-- /fleet-proof-receipt -->`;
+  for (const body of ["Adds the greeting.\n\n### Testing\n\n```sh\necho ok\n", "Adds the greeting.\n\n### Testing\n\n<pre>\necho ok\n", "Adds the greeting.\n\n<!-- a note that never closes\n", `Adds the greeting.\n\n### Testing\n\n\`\`\`sh\n${old}\n`]) {
+    pr.pullRequestState({ body });
+    await expect(pr.fleet("receipt")).rejects.toThrow("would not show as a block of its own");
+    expect(pr.githubBody()).toBe(body);
+  }
+  expect(patches(pr)).toBe(0);
+});
