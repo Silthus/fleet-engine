@@ -281,9 +281,11 @@ test("the report never offers the merge once an optional check fails after the j
   expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
 });
 
-test("the report never offers the merge once another passing check takes the place of the one an accepted gap's condition names", async () => {
+test("the report never offers the merge once another passing check takes the place of the one an accepted gap's condition names, nor after the gate runs again", async () => {
   const pr = await checkout();
   const head = await pr.commit("feature.txt", "greet new members\n");
+  const broken = verdict({ proof: { verdict: "fail", reason: "The test check the condition names no longer runs at HEAD", citations: ["ci"] } });
+  pr.env.FLEET_PROOF_JUDGE = `if grep -q 'test (app 1): pass'; then echo '${verdict()}'; else echo '${broken}'; fi`;
   pr.pullRequestState({ body: graded("non-critical") });
   await reviewHead(pr);
   await pr.fleet("require", "--kinds", "prod-shape");
@@ -295,7 +297,10 @@ test("the report never offers the merge once another passing check takes the pla
   expect((await reportOf(pr)).stillYours).toEqual(["- Merge example/product#42: its proofs pass, and it waits on your merge word."]);
 
   pr.ci([{ name: "lint", bucket: "pass" }]);
-  expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
+  const refused = [`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`];
+  expect((await reportOf(pr)).stillYours).toEqual(refused);
+  expect((await pr.fleet("gate")).code).toBe(1);
+  expect((await reportOf(pr)).stillYours).toEqual(refused);
 });
 
 test("the report keeps the gate of HEAD when a gate of an older commit finishes later", async () => {
