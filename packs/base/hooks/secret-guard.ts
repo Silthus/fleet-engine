@@ -26,16 +26,22 @@ const cookieMention = new RegExp(metabaseCookie);
 const valueToken = /(?<![A-Za-z0-9._~+/-])(?=[A-Za-z0-9._~+/-]*[0-9])[A-Za-z0-9._~+/-]{20,}={0,2}(?![A-Za-z0-9._~+/=-])/g;
 const wholeValue = new RegExp(`^${metabaseValue}$`);
 const jsonStart = /^\s*[[{"]/;
-const valueEscape = /\\u([0-9a-fA-F]{4})|\\\//g;
+const jsonEscape = /\\u([0-9a-fA-F]{4})|\\(["\\/])/g;
 
 function cookieRecordValues(text: string): string[] {
   const json = jsonStart.test(text) ? parsedJson(text) : { parsed: false as const };
   if (json.parsed && keysIn(text) === parsedKeys(json.value)) return jsonCookieValues(json.value);
-  const decoded = text.replace(valueEscape, (_, code?: string) => (code ? String.fromCharCode(parseInt(code, 16)) : "/"));
-  if (!cookieMention.test(decoded)) return [];
-  if (!json.parsed && decoded === text) return text.match(valueToken) ?? [];
-  return decoded.search(valueToken) >= 0 ? [text] : [];
+  const decoded = unescaped(text);
+  return cookieMention.test(decoded) ? decoded.match(valueToken) ?? [] : [];
 }
+
+function unescaped(text: string) {
+  let current = text;
+  for (let next = decodeOnce(current); next !== current; next = decodeOnce(current)) current = next;
+  return current;
+}
+
+const decodeOnce = (text: string) => text.replace(jsonEscape, (_, code?: string, char?: string) => (code ? String.fromCharCode(parseInt(code, 16)) : char!));
 
 function parsedJson(text: string): { parsed: true; value: unknown } | { parsed: false } {
   try {

@@ -214,6 +214,28 @@ describe("secret guard", () => {
     expect(output).not.toContain(back);
   });
 
+  test.each([
+    ["one escaped character", (session: string) => `\\u${session.charCodeAt(0).toString(16).padStart(4, "0")}${session.slice(1)}`],
+    ["every character escaped", (session: string) => [...session].map((char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("")],
+  ])("redacts a cookie whose value has %s and is then escaped again inside other text", (_, spell) => {
+    const inner = `{"name":"${cookieKey}","value":"${spell(metabaseSession)}"}`;
+    const text = `Tool output: ${JSON.stringify({ stdout: inner })}`;
+    const [front, back] = [metabaseSession.slice(1, 13), metabaseSession.slice(13)];
+    expect(guard("claude", promptEvent(text))?.decision).toBe("block");
+    expect(guard("codex", toolEvent({ stdout: text }))?.decision).toBe("block");
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: text }))?.hookSpecificOutput);
+    expect(output).toContain("[redacted Metabase session cookie]");
+    expect(output).not.toContain(front);
+    expect(output).not.toContain(back);
+  });
+
+  test("redacts only the cookie's value in escaped JSON whose value is written plainly", () => {
+    const text = `Tool output: ${JSON.stringify({ stdout: JSON.stringify({ name: cookieKey, value: metabaseSession, theme: "dark" }) })}`;
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: text }))?.hookSpecificOutput);
+    expect(output).not.toContain(metabaseSession);
+    expect(output).toContain("theme");
+  });
+
   test("keeps the cookie's name in a cookie header", () => {
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: `Cookie: ${cookieKey}=${metabaseSession}; theme=dark` }))?.hookSpecificOutput);
     expect(output).toContain(`${cookieKey}=[redacted Metabase session cookie]; theme=dark`);
