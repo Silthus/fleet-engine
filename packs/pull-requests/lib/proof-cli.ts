@@ -2,13 +2,13 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, startGateRun, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, writeJson, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
+import { askGap, authorOf, finishReview, startGateRun, ledgerRoot, listStanding, panelCommit, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, writeJson, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
 import { AnswerTaken, appendOnce, decideAlone, hearUser, ledgerHolds, ledgerOf } from "./decision-cli.ts";
 import { HubUnreachable, refText, type Decision, type Ssh } from "./decision-ledger.ts";
 import { readComment, runIn } from "./pr-ci.ts";
 import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { runProof, type RunIO } from "./proof-run.ts";
-import { lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withRoundLock, withSlot, lockNewRound, processStart, roundLock, RoundBusy, RoundGone, type Lens, type LockOwner, type PanelGuide, type PanelIO, type Plan, type RoundLock, type StartTime } from "./proof-panel.ts";
+import { combinedLens, parseGuide, lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withRoundLock, withSlot, lockNewRound, processStart, roundLock, RoundBusy, RoundGone, type Lens, type LockOwner, type PanelGuide, type PanelIO, type Plan, type RoundLock, type StartTime } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
@@ -16,7 +16,7 @@ import { displayLine, recordCaption, recordLines } from "./proof-display.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { leftOutNote, reviewRange } from "./proof-range.ts";
 import { quietCommitIn } from "./proof-delta.ts";
-import { baseTip, cleanBaseMerge, mergeBase, pullRequestDetails, remotesOf, topLevel } from "./proof-checkout.ts";
+import { baseRefs, baseTip, cleanBaseMerge, mergeBase, pullRequestDetails, remotesOf, smallPr, topLevel } from "./proof-checkout.ts";
 import { arbiterOf, finalGate, reviewLimit, type FinalGate } from "./proof-gate.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
@@ -40,14 +40,14 @@ type Subcommand = {
   run: (parsed: Parsed, identity: () => ProofIdentity, context: CommandContext) => Promise<number>;
 };
 
-const overrideHelp = `--override takes the user's answer to the question that review-start prints when the arbiter escalates, gives no
-verdict, or the ceiling stops the loop. Ask it with your question tool, with the options "Run one more round" and "Stop
+const overrideHelp = `--override takes the user's answer to the question that review-start prints when the arbiter escalates or gives no
+verdict. At the review budget fleet asks nothing, and only the user's --override runs another review. Ask it with your question tool, with the options "Run one more round" and "Stop
 here". Only their choice of "Run one more round" there counts, quoted with the date they gave it, for example
 --override '2026-10-24 "Run one more round"'. --thread names the T3 thread where they answered and defaults to this
 one (T3CODE_THREAD_ID). A typed message, a refusal, or a general rule, such as "ship everything autonomously", does
 not answer a round. The question names the PR, and an answer to the question of another PR does not count. The
 answer lands in the decision ledger as a 👤 review decision; one answer records one decision and starts one round.
---agent takes your own reason for a round that the arbiter escalates or the ceiling refuses. It lands in the ledger
+--agent takes your own reason for a round that the arbiter escalates; it never passes the review budget. It lands in the ledger
 as a 🤖 review decision, refused on a PR whose merge-risk callout has no Tier line at HEAD. --standing is its old
 name. The round keeps the decision and the arbiter's verdict. List decisions with fleet decision list.
 A round starts only once its decision is in the ledger. A round that holds a decision stays reserved until the
@@ -63,8 +63,10 @@ its lock already held. A command that finds another fleet proof command at work 
 process and lock file; wait for it to end, then run the command again, or, on a panel, run fleet proof review --wait,
 which waits for it. A round is taken over when its command is gone, when its process id now names a process that
 started later, or when its lock file stays empty for a minute.
-The settings pull-requests.freeReviews and pull-requests.reviewCeiling set how many rounds, and how many final reads
-per phase, run before the arbiter weighs one more and where the loop stops. The arbiter is the lookup model of your
+The settings pull-requests.freeReviews and pull-requests.reviewCeiling set how many reviews run before the arbiter weighs
+one more and where the loop stops: the panel rounds and the final reads of the review phase count together, and the
+final reads of the babysit phase count apart. The default budget is the panel, the fixes read, and the last read. A
+small PR, docs only or under 50 authored lines with a low merge-risk grade, gets one read. The arbiter is the lookup model of your
 AI plan; FLEET_REVIEW_ARBITER replaces its command.`;
 
 const subcommands: Record<string, Subcommand> = {
@@ -208,7 +210,10 @@ run at once on this machine, and the rest wait. Each raw answer is kept in lense
 a FINDINGS block or a COVERED list of every changed file runs once more, and a lens stopped by spent quota does not;
 when it fails again, the round stays unfinished with the cause, and the same review --lens command reruns the failed
 lenses; :same or :other moves a failed lens to the family that is up when the other has an outage. When every lens
-is done, fleet joins the answers under one heading per lens as the round's findings.
+is done, fleet joins the answers under one heading per lens as the round's findings. On a small PR the lenses run as
+one combined lens.
+A final read, --scope final, reads every fix from the commit of the first panel round to HEAD with the Correctness
+lens of PANEL.md.
 --wait waits up to 9 minutes for the panel of the unfinished round, the latest round, or --round, and prints each
 lens. Exit 0 when the round is finished, with its findings; 1 when a lens failed; 2 when lenses still run, so run
 --wait again; 4 when a lens stopped on spent quota. It restarts a lens whose worker died, and waits while another
@@ -246,15 +251,20 @@ its log while it runs.`,
   respond: {
     usage: "respond --round <number|final-n> <responses.md>",
     summary: `Save your answer to each finding of a finished review: fixed in which commit, or rejected and why. Number the
-answers in the order of the findings, one line each, such as "1. fixed in 1a2b3c4: <how>" or "2. rejected: <why>". Each
+answers in the order of the findings, one line each, such as "1. fixed in 1a2b3c4: <how>" or "2. rejected: <why>". Once
+the review budget is spent, "3. known: <why>" answers a finding that the PR body lists by its file:line under Known
+issues; a known blocker holds the merge. Each
 list item of findings.md is one finding; findings without a list are one. The gate fails while a finding has no
 answer. A new call replaces the earlier answer. A final read takes the id that review-start printed. The judge in fleet proof gate checks
 each answer against HEAD.`,
     examples: ["fleet proof respond --round 1 responses.md", "fleet proof respond --round final-1 responses.md"],
     options: ["--round"],
-    run: async ({ options, files }, identity, { print, home, cwd }) => {
+    run: async ({ options, files }, identity, context) => {
+      const { print, home, cwd } = context;
       if (files.length !== 1) throw usageError("respond", "Pass one responses file");
-      print(await respondToReview(home, identity(), roundId(required(options, "--round", "respond")), resolve(cwd, files[0]!)));
+      const head = identity();
+      const ceiling = isSmall(head, context) ? 1 : numberSetting("pull-requests.reviewCeiling", context.env);
+      print(await respondToReview(home, head, roundId(required(options, "--round", "respond")), resolve(cwd, files[0]!), ceiling));
       return 0;
     },
   },
@@ -302,7 +312,9 @@ HEAD.`,
     usage: "gate [--landed] [--json]",
     summary: `Check the owed proofs, the review and the answers to its findings, and the CI of the commit on GitHub, then let
 the judge weigh them. Exit 0 only on a pass: 1 means the owed proofs are not recorded, a proof is missing, the commit
-is not reviewed, a finding has no answer, the commit is not the PR's head on GitHub, its checks are red or pending,
+is not reviewed, a blocker or major finding has no answer, a "## Known issues" section of the PR body lists a blocker
+or misses a finding answered known,
+the commit is not the PR's head on GitHub, its checks are red or pending,
 or the judge failed or was unavailable; 3 means only unaccepted gaps remain. No gap waives the head check. The last
 line is the verdict and names what it covered. fleet reads the PR and its CI over GitHub's REST API. Only finding the PR of the
 checkout without --repo and --pr uses gh pr view; pass both when GraphQL is out. A check that ran more than once
@@ -313,11 +325,13 @@ requires any, every check counts. On a draft, a required check named "<workflow>
 as withheld from drafts when its workflow reported other checks on the commit and all of them passed. CI is unknown
 when GitHub does not answer for the rulesets or branch protection. A clean merge of the PR's base carries the review and the evidence of
 its other parent forward. The review needs a finished --lens panel round on the PR, and HEAD read by a panel round or
-by a review that finished after one, such as a final read; single-reviewer rounds alone never count. An accepted
-panel gap (gap --kind panel) stands in for the panel. The review also carries across quiet commits: single-parent commits that only change or add
-test files, named *.test.*, *.spec.*, *_test.go, *_test.py or test_*.py, or snapshots in __snapshots__, as regular
-files with an unchanged mode. A deleted test, a mode change, a symlink, a comment, a file in a test folder, or a test
-file whose name other code holds, such as an import of limits.test.ts, needs a review. The gate then prints "final read carried from <sha>: test-only delta", and the receipt in
+by a review that finished after one, such as a final read; single-reviewer rounds alone never count. On a small PR the
+panel's one read covers its fixes too. Only blocker and major findings, findings without a severity, and the items of
+a TESTS block need an answer: minor and nit findings are noted. An accepted
+panel gap (gap --kind panel) stands in for the panel. The review also carries across quiet commits: a git revert of
+an earlier commit of the PR, and single-parent commits that only change, add, or delete test files, named *.test.*, *.spec.*, *_test.go, *_test.py or test_*.py, or snapshots in __snapshots__, as regular
+files with an unchanged mode. A mode change, a symlink, a comment, a file in a test folder, or a test
+file whose name other code holds, such as an import of limits.test.ts, needs a review. The gate then prints "final read carried from <sha>: test-only delta" or "revert of a PR commit", and the receipt in
 carried/<HEAD>.json names the quiet commits and the reason. Evidence does not carry across quiet commits.
 When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
 picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's
@@ -363,19 +377,20 @@ receipt link once one is recorded. The gate's lines and fleet decision report co
     },
   },
   miss: {
-    usage: `miss --source ${missSources.join("|")} --finding <what the reviewer should have flagged> [--file <path> [--line <number>]] [--url <link>]`,
+    usage: `miss --source ${missSources.join("|")} --finding <what the reviewer should have flagged> [--file <path> [--line <number>]] [--url <link>] [--introduced-by-fix]`,
     summary: `Record a reviewer miss: a problem that a human reviewer, a review bot, CI, a rollback, or a revert found after
 fleet proof review read the commit and said nothing about it. --commit is the reviewed commit that already held the
 problem. --finding says in one or two sentences what the reviewer should have flagged; record only a problem a
 person has checked. The CLI refuses a commit that no finished review of the PR read, because then no reviewer
 missed it. Each case keeps the diff range the review read, the PR title and description, and the source, as one
-JSON line in ${missesPath("~")}. fleet proof eval reruns the reviewer on every case.`,
+JSON line in ${missesPath("~")}. fleet proof eval reruns the reviewer on every case. --introduced-by-fix marks a missed line
+that a review fix brought in, between the commit of the first panel round and HEAD.`,
     examples: [
       "fleet proof miss --source human --finding 'The retry loop sends the email twice when the first send times out' --file src/send.ts --line 42 --url https://github.com/owner/name/pull/7#discussion_r1",
       "fleet proof miss --pr 7 --commit 1a2b3c4 --source revert --finding 'The migration drops the index the dashboard query needs'",
     ],
-    options: ["--source", "--finding", "--file", "--line", "--url"],
-    run: async ({ options }, identity, context) => {
+    options: ["--source", "--finding", "--file", "--line", "--url"], flags: ["--introduced-by-fix"],
+    run: async ({ options, flags }, identity, context) => {
       const { home, print, run, now } = context;
       const source = missSource(required(options, "--source", "miss"));
       const finding = required(options, "--finding", "miss");
@@ -390,8 +405,9 @@ JSON line in ${missesPath("~")}. fleet proof eval reruns the reviewer on every c
       const miss = await recordMiss(home, {
         repo: head.repository, pr: head.pr, commit: head.commit, source, finding, file: options.get("--file"), line, url: options.get("--url"),
         base, head: head.commit, scope: review.scope, round: review.label, reviewer: review.reviewer, title: pr.title, body: pr.body,
+        ...flags.has("--introduced-by-fix") ? { introducedByFix: true } : {},
       }, now?.() ?? new Date());
-      print(JSON.stringify({ id: miss.id, repo: miss.repo, pr: miss.pr, commit: miss.commit, source: miss.source, round: miss.round, path: missesPath(home) }));
+      print(JSON.stringify({ id: miss.id, repo: miss.repo, pr: miss.pr, commit: miss.commit, source: miss.source, round: miss.round, ...miss.introducedByFix ? { introducedByFix: true } : {}, path: missesPath(home) }));
       return 0;
     },
   },
@@ -464,7 +480,7 @@ first and needs the hub; a round whose decision is recorded finishes without it.
   },
 };
 
-type SingleRound = { round: number | "final"; id: string; directory: string; scope: string; from?: string };
+type SingleRound = { round: number | "final"; id: string; directory: string; scope: string; base?: string; from?: string; phase?: string };
 
 async function runReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
   const { home, run } = context;
@@ -472,7 +488,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const pending = await unfinishedReview(home, head, "fleet");
   if (pending) requireSameRequest(pending, options, run);
   const reserved: SingleRound = pending
-    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
+    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run), phase: (pending.reservation as { phase?: string }).phase }
     : await reserveFleetReview(options, head, context);
   return roundStep(reserved.directory, context, async () => {
     if (await readPlan(reserved.directory) || await stagedPlan(reserved.directory)) throw new Error(`${reserved.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
@@ -503,7 +519,9 @@ async function askReviewer(reserved: SingleRound, head: ProofIdentity, author: F
   const rules = reviewRules(files, baseTip(head, run), run);
   const diffFile = join(reserved.directory, "diff.patch");
   await writeFile(diffFile, diff, { mode: 0o600 });
-  const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, diffFile, note: leftOutNote(leftOut), crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules });
+  const guide = reserved.round === "final" && (reserved.phase ?? "review") === "review" ? await panelGuideText(home) : undefined;
+  const lens = guide && parseGuide(guide.text, guide.path).lenses.get("correctness")?.text;
+  const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, diffFile, note: leftOutNote(leftOut), crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules, lens });
   const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory] }, env, limit);
   const label = reserved.round === "final" ? "The final read" : `Round ${reserved.round}`;
   if (!answer.ok && isQuotaExhausted(answer.cause)) {
@@ -520,20 +538,24 @@ async function askReviewer(reserved: SingleRound, head: ProofIdentity, author: F
   return 0;
 }
 
-async function reserveFleetReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+async function reserveFleetReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext, panel = false) {
   const scope = options.get("--scope") ?? "full";
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
-  return reserveRound(options, head, context, "fleet");
+  return reserveRound(options, head, context, "fleet", panel);
 }
 
-async function reserveRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext, capturedBy: CapturedBy) {
+async function reserveRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext, capturedBy: CapturedBy, panel = false) {
   await settleStrandedRounds(head, context);
   const scope = options.get("--scope") ?? "full";
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-  const from = rangeStart(scope, base, head, context.run);
+  const lastRead = scope === "final" && (options.get("--phase") ?? "review") === "review";
+  const from = lastRead ? await panelCommit(context.home, head) ?? base : rangeStart(scope, base, head, context.run);
   const { decision, ...permit } = await decisionOf(options, head, context);
-  const reserved = await startReview(context.home, head, { scope, base, from, ...permit, decision, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy, lock: async (directory) => lockNewRound(directory, await context.lock()) });
-  return { ...reserved, scope, from };
+  const small = isSmall(head, context);
+  if (small && capturedBy === "fleet" && !panel && !decision && !await panelCommit(context.home, head)) throw new Error("A small PR gets one read, and it is the panel: run fleet proof review --lens <lens> ..., which runs the lenses as one combined lens");
+  const limits = small ? { ...permit.limits, ceiling: 1, small } : permit.limits;
+  const reserved = await startReview(context.home, head, { scope, base, from, ...permit, limits, decision, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run, () => baseRefs(head, context.run)), capturedBy, lock: async (directory) => lockNewRound(directory, await context.lock()) });
+  return { ...reserved, scope, base, from, phase: options.get("--phase") };
 }
 
 async function unrecordedRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
@@ -593,6 +615,8 @@ async function recordRound(directory: string, context: CommandContext) {
 
 const rangeStart = (scope: string, base: string | undefined, head: ProofIdentity, run: Run) => scope === "full" ? mergeBase(head, run) : base;
 
+const isSmall = (head: ProofIdentity, { run }: CommandContext) => { try { return smallPr(head, run, pullRequestDetails(head, run).body); } catch { return false; } };
+
 const waitPolls = 108;
 const pollInterval = 5_000;
 const proofEntry = resolve(import.meta.dir, "../commands/proof.ts");
@@ -623,8 +647,11 @@ async function runPanel({ options, lists }: Parsed, head: ProofIdentity, context
   const author = await authorOf(home, head);
   const guide = await readPanelGuide(home);
   const knowledge = await knowledgeOf(lists.get("--knowledge") ?? [], context.cwd);
-  const lenses = lists.get("--lens")!.map((argument) => resolveLens(guide, argument, author, knowledge, env));
+  const requested = lists.get("--lens")!.map((argument) => resolveLens(guide, argument, author, knowledge, env));
   const pending = await unfinishedReview(context.home, head, "fleet");
+  const planned = pending && (await readPlan(pending.directory) ?? await stagedPlan(pending.directory));
+  const small = planned ? planned.lenses.map(({ name }) => name).join() === "combined" : isSmall(head, context);
+  const lenses = small ? [combinedLens(requested, author)] : requested;
   if (pending) requireSameRequest(pending, options, context.run);
   const directory = pending ? await rerunPanel(pending, options, head, lenses, guide, context) : await reservePanel(options, head, lenses, guide, context);
   const round = (await readJson<{ round: number | "final" }>(join(directory, "round.json"), { round: 0 })).round;
@@ -637,7 +664,7 @@ const castOf = ({ family, row }: Lens, env: Record<string, string | undefined>) 
 
 async function reservePanel(options: Map<string, string>, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
   const rubric = await readRubric(context.home);
-  const reserved = await reserveFleetReview(options, head, context);
+  const reserved = await reserveFleetReview(options, head, context, true);
   return roundStep(reserved.directory, context, async () => {
     try {
       const { plan, briefs } = await panelBriefs(reserved, head, lenses, guide, rubric, context);

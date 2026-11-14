@@ -1,5 +1,7 @@
 import { readPullRequest, type Run } from "./pr-ci.ts";
 import { reviewedDiff } from "./proof-review.ts";
+import { isTestFile } from "./proof-delta.ts";
+import { riskCalloutOf } from "./decision-ledger.ts";
 import type { CleanBaseMerge, ProofIdentity } from "./proof.ts";
 
 const short = (commit: string) => commit.slice(0, 7);
@@ -30,6 +32,26 @@ export function diffOf(from: string, to: string, run: Run) {
   const diff = run(["git", "diff", "--no-ext-diff", "--no-textconv", "--no-relative", from, to]);
   if (diff.code !== 0) throw new Error(`Cannot diff ${short(from)}..${short(to)} here (${firstLine(diff.stderr)})`);
   return reviewedDiff(diff.stdout);
+}
+
+const docsFile = /\.(md|mdx|markdown|rst)$/i;
+const lockFile = /(^|\/)([^/]+\.lockb?|package-lock\.json|pnpm-lock\.yaml|go\.sum)$/;
+const smallLines = 50;
+
+const mergeRiskOf = (body: string) => /Merge risk:\**\s*(low|medium|high)\b/i.exec(riskCalloutOf(body) ?? "")?.[1]?.toLowerCase();
+
+export function smallPr(identity: ProofIdentity, run: Run, body: string) {
+  const from = baseRefs(identity, run).map((ref) => run(["git", "merge-base", ref, identity.commit])).find((result) => result.code === 0)?.stdout.trim();
+  const stat = from ? run(["git", "diff", "--numstat", "-z", "--no-renames", "--no-relative", from, identity.commit]) : undefined;
+  if (stat?.code !== 0) return false;
+  const files = stat.stdout.split("\0").filter(Boolean).map((entry) => {
+    const [added = "", deleted = "", path = ""] = entry.split("\t");
+    return { lines: Number(added) + Number(deleted), path };
+  });
+  if (!files.length) return false;
+  if (files.every(({ path }) => docsFile.test(path))) return true;
+  const authored = files.filter(({ path }) => !isTestFile(path) && !lockFile.test(path)).reduce((sum, { lines }) => sum + lines, 0);
+  return authored < smallLines && mergeRiskOf(body) === "low";
 }
 
 export function pullRequestDetails(identity: ProofIdentity, run: Run) {

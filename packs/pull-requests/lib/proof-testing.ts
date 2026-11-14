@@ -306,7 +306,7 @@ export function hubAt(pr: Checkout, hub: Hub | boolean = "up") {
 
 export const acceptGap = (pr: Checkout, kind: string, ...more: string[]) => pr.decide("record", "--mark", "👤", "--class", "proof-gap", "--kind", kind, "--pr", "example/product#42", ...more);
 
-export const graded = (tier: string) => `## Merge risk\n\n<!-- merge-risk -->\n> [!NOTE]\n> 🔵 **Merge risk: low** · two-way door\n> - **Tier:** ${tier}\n<!-- /merge-risk -->\n`;
+export const graded = (tier: string, grade = "low") => `## Merge risk\n\n<!-- merge-risk -->\n> [!NOTE]\n> 🔵 **Merge risk: ${grade}** · two-way door\n> - **Tier:** ${tier}\n<!-- /merge-risk -->\n`;
 
 export async function finishRound(pr: Checkout, round: string) {
   writeFileSync(join(pr.repository, "findings.md"), `Findings of ${round}.\n`);

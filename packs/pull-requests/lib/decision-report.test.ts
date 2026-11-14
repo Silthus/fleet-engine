@@ -339,7 +339,7 @@ test("the report never offers the merge once another passing check takes the pla
 test("the report keeps the gate of HEAD when a gate of an older commit finishes later", async () => {
   const pr = await checkout();
   const older = await pr.commit("feature.txt", "greet new members\n");
-  pr.pullRequestState({ body: graded("non-critical") });
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
   await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "Docs only");
   await pr.commit("feature.txt", "greet all new members\n");

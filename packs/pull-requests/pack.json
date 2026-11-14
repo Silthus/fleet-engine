@@ -66,16 +66,16 @@
     },
     {
       "key": "pull-requests.freeReviews",
-      "question": "How many review rounds may run before the review arbiter decides whether another round is worth it?",
+      "question": "How many reviews, panel rounds and final reads together, may run before the review arbiter decides whether another one is worth it?",
       "type": "number",
       "default": 2,
       "ask": "never"
     },
     {
       "key": "pull-requests.reviewCeiling",
-      "question": "After how many review rounds does review stop for good?",
+      "question": "After how many reviews, the panel, the fixes read, and the last read, does review stop for good?",
       "type": "number",
-      "default": 6,
+      "default": 3,
       "ask": "never"
     },
     {

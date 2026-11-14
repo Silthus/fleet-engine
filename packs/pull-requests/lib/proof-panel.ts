@@ -50,7 +50,7 @@ function section(text: string, heading: string) {
   return end < 0 ? rest : rest.slice(0, end);
 }
 
-function parseGuide(text: string, path: string): PanelGuide {
+export function parseGuide(text: string, path: string): PanelGuide {
   const brief = /```md\n([\s\S]*?)\n```/.exec(section(text, "## Brief") ?? "")?.[1];
   const lenses = section(text, "## Lenses");
   const freshEyes = /\*\*Fresh-eyes lane\*\*:.*?It runs (.+?)(?:, with |\. )/.exec(oneLine(text))?.[1];
@@ -83,6 +83,15 @@ export function resolveLens(guide: PanelGuide, argument: string, author: Family,
   return {
     name, title: known?.title ?? name, family: familyOf(row), row,
     text: known?.text ?? extra.join("\n\n"), knowledge: known ? extra.join("\n\n") : "", context: !guide.contextFree.has(name),
+  };
+}
+
+export function combinedLens(lenses: Lens[], author: Family): Lens {
+  const combined = lenses.filter((lens) => lens.name !== sweep);
+  const cast = combined.find((lens) => lens.family !== author) ?? combined[0] ?? lenses[0]!;
+  return {
+    ...cast, name: "combined", title: `Combined: ${combined.map((lens) => lens.title).join(", ")}`, context: true,
+    text: combined.map((lens) => `${lens.title}\n\n${lens.text}`).join("\n\n"), knowledge: combined.map((lens) => lens.knowledge).filter(Boolean).join("\n\n"),
   };
 }
 

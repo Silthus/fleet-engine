@@ -29,7 +29,7 @@ const optional = (check: (value: unknown) => boolean) => (value: unknown) => val
 const rolloutShape: Shape<Rollout> = { repo: text, pr: integer, stage: text, state: text, note: text };
 const missShape: Shape<Miss> = {
   id: text, at: text, repo: text, pr: integer, commit: text, source: (value) => (missSources as readonly unknown[]).includes(value), finding: text,
-  file: optional(text), line: optional(integer), url: optional(text), base: text, head: text, scope: text, round: text, reviewer: optional(text), title: text, body: text,
+  file: optional(text), line: optional(integer), url: optional(text), base: text, head: text, scope: text, round: text, reviewer: optional(text), title: text, body: text, introducedByFix: optional((value) => value === true),
 };
 
 export async function readLessons(ref: MapRef, fetchIssue: FetchIssue, fetchDiscussion: FetchDiscussion, signals: (pullRequests: PullRequest[]) => Promise<Signals>): Promise<string> {
