@@ -70,7 +70,7 @@ saved, only while the PR's head, base and base SHA on GitHub, its tier, --landed
 files, standing rules and ledger decisions are the same. Otherwise it says the gate has not run at HEAD with these
 proofs; a decision recorded after the gate counts as a change. A summary that does not pass now offers no merge,
 and nor does an accepted gap whose condition the saved judge did not weigh, CI checks other than the ones it weighed,
-or a head that moves while the report reads it: run the gate in the PR's checkout (with --landed for a merged PR), where a review carried across commits can
+or a head, base or tier that moves while the report reads it: run the gate in the PR's checkout (with --landed for a merged PR), where a review carried across commits can
 be checked. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 

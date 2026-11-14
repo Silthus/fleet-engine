@@ -216,6 +216,20 @@ test("the report never offers the merge when GitHub moves the PR to a new head w
   expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
 });
 
+test("the report never offers the merge when GitHub moves the PR to a new base while the report reads it", async () => {
+  const pr = await checkout();
+  const head = await pr.commit("feature.txt", "greet new members\n");
+  pr.pullRequestState({ body: graded("non-critical") });
+  await reviewHead(pr);
+  await pr.fleet("require", "--none", "--reason", "Docs only");
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect((await reportOf(pr)).stillYours).toEqual(["- Merge example/product#42: its proofs pass, and it waits on your merge word."]);
+
+  const movedBase = await pr.git("commit-tree", "main^{tree}", "-p", "main", "-m", "Change the base");
+  pr.whileGithubReadsPull(`printf '%s' ${movedBase} > "$(dirname "$0")/base-sha"`);
+  expect((await reportOf(pr)).stillYours).toEqual([`- example/product#42: its proofs are not shown to pass at HEAD ${head.slice(0, 7)} as read now (gate exit 1). Run fleet proof gate in its checkout to see why.`]);
+});
+
 test("the report never offers the merge on an accepted gap whose condition the judge has not weighed", async () => {
   const pr = await checkout();
   const head = await pr.commit("feature.txt", "greet new members\n");
