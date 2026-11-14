@@ -1,13 +1,11 @@
 import { isAbsolute } from "node:path";
-import { blocking, type Hook, quiet, runHook } from "../lib/hook.ts";
+import { type Hook, printing, quiet, runHook } from "../lib/hook.ts";
 import { formatEditedFile, type RunCommand } from "../lib/format-commands.ts";
+import { type ToolEvent, writtenFiles } from "../lib/written-files.ts";
 
 export const budgetMs = 75_000;
 const commandNotFound = 127;
 const shownLines = 40;
-const editTools = /^(Edit|MultiEdit|Write)$/;
-
-type EditEvent = { tool_name?: string; tool_input?: Record<string, unknown> };
 
 export const runCommand: RunCommand = async (command, cwd, timeoutMs) => {
   let child: ReturnType<typeof Bun.spawn>;
@@ -23,17 +21,22 @@ export const runCommand: RunCommand = async (command, cwd, timeoutMs) => {
   return `\`${command.join(" ")}\` failed:\n${output.slice(-shownLines).join("\n")}`;
 };
 
-export async function formatAfterEdit(event: EditEvent, run: RunCommand = runCommand): Promise<string | undefined> {
-  const file = event.tool_input?.file_path;
-  if (!editTools.test(event.tool_name ?? "") || typeof file !== "string" || !isAbsolute(file)) return undefined;
-  const findings = await formatEditedFile(file, run, budgetMs);
-  return findings.length ? `The repository's lint-staged checks found problems in ${file}. Fix them before you commit:\n\n${findings.join("\n\n")}` : undefined;
+export async function formatAfterEdit(event: ToolEvent, run: RunCommand = runCommand): Promise<string | undefined> {
+  const deadline = Date.now() + budgetMs;
+  const problems: string[] = [];
+  for (const file of writtenFiles(event).filter((path) => isAbsolute(path))) {
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    const findings = await formatEditedFile(file, run, left);
+    if (findings.length) problems.push(`The repository's lint-staged checks found problems in ${file}. Fix them before you commit:\n\n${findings.join("\n\n")}`);
+  }
+  return problems.length ? problems.join("\n\n") : undefined;
 }
 
-export const hook: Hook = async (provider, readInput) => {
-  if (provider !== "claude") return quiet;
+export const hook: Hook = async (_provider, readInput) => {
   try {
-    return blocking(await formatAfterEdit(JSON.parse(await readInput()) as EditEvent));
+    const context = await formatAfterEdit(JSON.parse(await readInput()) as ToolEvent);
+    return printing(context ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: context } } : undefined);
   } catch {
     return quiet;
   }

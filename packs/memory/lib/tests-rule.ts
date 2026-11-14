@@ -1,20 +1,13 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { claimNote, clip, type HookInput, logShown } from "./notes.ts";
-import { textsOf } from "./triggers.ts";
+import { writtenFiles } from "../../base/lib/written-files.ts";
 
 const testsRule = "guides/coding-standards.md#tests";
 const guideFile = ".agents/guides/coding-standards.md";
 const ruleLimit = 4000;
 
 const isTestFile = (path: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]*\.py$|_test\.(py|go)$|\.(test|spec)\.[cm]?[jt]sx?$/.test(path);
-
-function editedFiles(input: HookInput): string[] {
-  const filePath = (input.tool_input as { file_path?: unknown } | undefined)?.file_path;
-  if (/^(Write|Edit|MultiEdit)$/.test(input.tool_name ?? "")) return typeof filePath === "string" ? [filePath] : [];
-  if (input.tool_name !== "apply_patch") return [];
-  return textsOf(input.tool_input).flatMap((text) => [...text.matchAll(/^\*\*\* (?:Add File|Update File|Move to): (.+)$/gm)].map((match) => match[1]!.trim()));
-}
 
 function testsSection(home: string): string | undefined {
   let guide: string;
@@ -40,7 +33,7 @@ function testsSection(home: string): string | undefined {
 }
 
 export function testsRuleFor(input: HookInput, home: string, session: string): string | undefined {
-  const file = editedFiles(input).find(isTestFile);
+  const file = writtenFiles({ tool_name: input.tool_name, tool_input: input.tool_input }).find(isTestFile);
   if (!file) return undefined;
   const section = testsSection(home);
   if (!section || !claimNote(home, session, input.agent_id, testsRule)) return undefined;
