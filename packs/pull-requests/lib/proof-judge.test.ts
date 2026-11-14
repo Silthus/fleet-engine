@@ -2,6 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanFixtures, lookup, checkout, type Checkout, verdict, fakeModel, reviewHead, finishRound, recordingModel, stalledOnQuota, acceptGap, graded } from "./proof-testing.ts";
+import { riskCalloutOf, tierOf } from "./decision-ledger.ts";
+import { withoutReceipt } from "./proof-receipt.ts";
 
 afterEach(cleanFixtures);
 
@@ -458,4 +460,27 @@ test("the judge reads the PR body without its receipt block and the blank line a
   pr.pullRequestState({ body: `## Testing\n\n<!-- merge-risk -->\n**Tier:** critical (b: the close in the block)\n<!-- fleet-proof-receipt head=${"f".repeat(40)} hash=06 -->\n<!-- /merge-risk -->\n<!-- /fleet-proof-receipt -->\n` });
   await pr.fleet("gate");
   expect(judge.prompts().at(-1)).toContain("<!-- /merge-risk -->");
+
+  pr.pullRequestState({ body: `## Testing\n\n<!-- merge-risk -->\n<!-- fleet-proof-receipt head=${"0".repeat(40)} hash=07 -->\n**Tier:** non-critical (a receipt inside the callout)\n<!-- /fleet-proof-receipt -->\n**Tier:** critical (b)\n<!-- /merge-risk -->\n` });
+  await pr.fleet("gate");
+  expect(judge.prompts().at(-1)).toContain("**Tier:** non-critical (a receipt inside the callout)");
+});
+
+test("stripping receipts never changes the merge-risk callout or tier the ledger reads, however a receipt and the callout overlap", () => {
+  const receipt = (text: string) => `<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n${text}\n<!-- /fleet-proof-receipt -->\n`;
+  const callout = (text: string, open = "<!-- merge-risk -->", close = "<!-- /merge-risk -->") => `${open}\n${text}\n${close}\n`;
+  const bodies = [
+    `## Testing\n\n${receipt("| live-run | sent |")}\n${callout("**Tier:** critical (b)")}`,
+    `## Testing\n\n${receipt(callout("**Tier:** critical (b)"))}`,
+    `## Testing\n\n${receipt(callout("**Tier:** critical (b)", "<!--merge-risk-->", "<!--/merge-risk-->"))}`,
+    `## Testing\n\n${callout(`${receipt("**Tier:** non-critical")}**Tier:** critical (b)`)}`,
+    `## Testing\n\n<!-- merge-risk -->\n**Tier:** critical (b)\n${receipt("<!-- /merge-risk -->")}`,
+    `## Testing\n\n${receipt("<!-- merge-risk -->\n**Tier:** non-critical")}**Tier:** critical (b)\n<!-- /merge-risk -->\n`,
+    `## Testing\n\n${callout("**Tier:** non-critical")}${receipt(callout("**Tier:** critical (b)"))}`,
+  ];
+  for (const body of bodies) {
+    expect([riskCalloutOf(withoutReceipt(body)), tierOf(withoutReceipt(body))]).toEqual([riskCalloutOf(body), tierOf(body)]);
+  }
+  expect(withoutReceipt(bodies[0]!)).toBe(`## Testing\n\n${callout("**Tier:** critical (b)")}`);
+  expect(withoutReceipt(bodies[6]!)).toBe(`## Testing\n\n${callout("**Tier:** non-critical")}`);
 });
