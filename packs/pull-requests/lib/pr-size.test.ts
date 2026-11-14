@@ -85,7 +85,7 @@ test("counts flags, env vars and config keys the base does not name yet", async 
 test("compares nothing without an estimate", async () => {
   const size = await branch({ "src/old.ts": "export {};\n" }, { "src/a.ts": lines(500, "// a") });
 
-  expect(await size()).toMatchObject({ code: 0, out: "size: 500 authored lines, 1 new file (src/a.ts), 0 new concepts\nno estimate: the size contract did not run" });
+  expect(await size()).toMatchObject({ code: 0, out: "no estimate: the size contract did not run" });
 });
 
 test("refuses a missing base or a count that is not a number", async () => {
