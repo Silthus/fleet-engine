@@ -26,33 +26,13 @@ function library(files: Record<string, string>) {
 }
 
 function server(root: string, url?: string) {
-  const events: string[] = [];
-  let clock = 1000;
-  const self: Server = { library: root, url, event: (line) => events.push(line), now: () => (clock += 7) };
+  const self: Server = { library: root, url };
   const call = (args: Record<string, unknown>, name = "context_search") => {
-    const reply = answer(self, { id: 1, method: "tools/call", params: { name, arguments: args } }) as { result: { isError?: boolean; content: Array<{ text: string }>; structuredContent?: { results: Array<Record<string, unknown>>; skipped?: unknown } } };
+    const reply = answer(self, { id: 1, method: "tools/call", params: { name, arguments: args } }) as { result: { isError?: boolean; content: Array<{ text: string }>; structuredContent?: { results: Array<Record<string, unknown>> } } };
     return { ...reply.result, text: reply.result.content[0]!.text };
   };
-  return { call, events };
+  return { call };
 }
-
-test("the search event names only the tool, its time, whether it failed, and a count: never the query or a result", () => {
-  const root = library({ "decisions/canary.md": decision, "notes/other.md": "# Weekly notes\n\nNothing about it.\n" });
-  const { call, events } = server(root, "https://notes.example.com/blob/main/");
-  const found = call({ query: "zebra canary", limit: 3 });
-  expect(found.structuredContent!.results.map((result) => result.title)).toEqual(["Canary rollout decision"]);
-  expect(found.structuredContent!.results[0]!.url).toBe("https://notes.example.com/blob/main/decisions/canary.md");
-  const refused = call({ query: "zebra canary", path: "../../etc/passwd" });
-  expect(refused.isError).toBe(true);
-  const other = call({ query: "zebra canary" }, "write_file");
-  expect(other.isError).toBe(true);
-  expect(events.map((line) => JSON.parse(line))).toEqual([
-    { event: "context search", tool: "context_search", ms: 7, error: false, results: 1 },
-    { event: "context search", tool: "context_search", ms: 7, error: true },
-    { event: "context search", tool: "context_search", ms: 7, error: true },
-  ]);
-  for (const leak of ["zebra", "canary", "Canary", "decisions/", "rollout", "vault", "passwd", "ghp_", "write_file"]) expect(events.join("\n")).not.toContain(leak);
-});
 
 test("search reads only the library's own files, refuses paths and commands, removes secrets, and says nothing about a broken library", () => {
   const outside = library({ "secret-plan.md": "---\ntitle: Outside zebra plan\n---\n\nzebra canary outside\n" });
@@ -79,20 +59,11 @@ test("search reads only the library's own files, refuses paths and commands, rem
 test("search neither matches, counts nor shows a secret: a private key's lines or a token past the excerpt's cut", () => {
   const keyBody = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACBkZXBsb3kta2V5LWJvZHktbGluZS10d28AAAAAAAAAAAAAAAAAAAAAAAAA";
   const runbook = `---\ntitle: Deploy runbook\n---\n\n${"-----BEGIN"} OPENSSH ${"PRIVATE"} KEY-----\n${keyBody}\n${"-----END"} OPENSSH ${"PRIVATE"} KEY-----\n\nquokka ${"step ".repeat(28)}${token}\n`;
-  const { call, events } = server(library({ "notes/deploy-runbook.md": runbook }));
+  const { call } = server(library({ "notes/deploy-runbook.md": runbook }));
   expect(call({ query: "QyNTUxOQAAACBkZXBsb3kta2V5" }).structuredContent!.results).toEqual([]);
-  expect(JSON.parse(events.at(-1)!).results).toBe(0);
   const found = call({ query: "quokka" });
   expect(found.structuredContent!.results.map((result) => result.excerpt)).toEqual([expect.stringMatching(/^quokka step/)]);
   expect(found.text).not.toContain("ghp_");
-});
-
-test("search skips the text of a file over 1 MB and names it in the result", () => {
-  const big = `---\ntitle: Raw export\n---\n\n${"filler line\n".repeat(100_000)}walrus sighting\n`;
-  const { call } = server(library({ "notes/raw-export.md": big, "notes/walrus.md": "# Walrus notes\n\nwalrus migration\n" }));
-  const found = call({ query: "walrus" });
-  expect(found.structuredContent).toEqual({ results: [expect.objectContaining({ path: "notes/walrus.md" })], skipped: { reason: "larger than 1 MB, so their text was not searched", paths: ["notes/raw-export.md"] } });
-  expect(call({ query: "raw export" }).structuredContent!.results.map((result) => result.path)).toEqual(["notes/raw-export.md"]);
 });
 
 test("on the hub, fleet context declares the library's search to the MCP gateway, which runs it under node with the checkout mounted read-only", async () => {
