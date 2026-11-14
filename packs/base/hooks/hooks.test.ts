@@ -256,6 +256,8 @@ describe("secret guard", () => {
     JSON.stringify({ [cookieKey]: "<redacted>" }),
     JSON.stringify([{ name: cookieKey, value: "<session-id>" }], null, 2),
     `username: ${cookieKey}\nvalue: see the browser`,
+    `Set ${cookieKey}=<session-id> first; \\u001b is the ANSI escape.`,
+    `{"name":"${cookieKey}","value":"<session-id>","name":"theme","path":"\\/"}`,
   ])("leaves a Metabase cookie placeholder alone: %s", (text) => {
     expect(guard("claude", promptEvent(text))).toBeUndefined();
     expect(guard("claude", toolEvent({ stdout: text, structuredContent: { [cookieKey]: "<redacted>" } }))).toBeUndefined();
