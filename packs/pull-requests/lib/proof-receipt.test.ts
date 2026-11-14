@@ -170,6 +170,8 @@ test("the body guard refuses figures and emails with the field named, and passes
     ["Sent [48](https://example.com)[213](https://example.com) emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 48<b></b>213 emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Mailed \"someone\"@example.com", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent [48](https://example.com/a(b))[213](https://example.com) emails", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent ![48](https://example.com/a.png)213 emails", "Delivered", `the what ran of live-run ${looksLike}`],
   ];
   for (const [ran, result, refusal] of refused) {
     await pr.fleet("save", "--kind", "live-run", "--ran", ran, "--result", result);
