@@ -1,8 +1,7 @@
-import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { PrRef } from "./decision-ledger.ts";
 import { publishedUrl } from "./proof-publish.ts";
-import { prDirectory, proofKind, readJson, writeJson, type ProofIdentity, type ProofKind } from "./proof.ts";
+import { entries, prDirectory, proofKind, readJson, writeJson, type ProofIdentity, type ProofKind } from "./proof.ts";
 
 export type ProofLines = { ran: string; result: string };
 type Caption = { caption: string; captionedAt: string; commit: string; name: string };
@@ -33,11 +32,6 @@ export async function recordCaption(home: string, identity: ProofIdentity, saved
   const record: Caption = { caption: displayLine(caption, "--caption"), captionedAt: earlier?.captionedAt ?? now.toISOString(), commit: identity.commit, name };
   await writeJson(path, record);
   return record;
-}
-
-async function entries(directory: string) {
-  try { return await readdir(directory); }
-  catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return []; throw error; }
 }
 
 async function records<T>(directory: string) {

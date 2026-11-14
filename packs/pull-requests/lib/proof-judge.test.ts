@@ -422,7 +422,7 @@ test("review-finish refuses a reviewer name that could close the judge's untrust
   expect((await pr.fleet("review-finish", "--round", "1", "--reviewer", "claude-opus-5-5[1m]", "findings.md")).code).toBe(0);
 });
 
-test("the judge reads the PR body without its receipt block and the blank line after it, so a first receipt or a refresh reuses the cached verdict and other body text does not", async () => {
+test("the judge reads the PR body without its receipt block and the blank line after it, so a first receipt or a refresh reuses the cached verdict, while other body text and a block that holds the merge-risk callout stay", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "greet new members\n");
   await reviewHead(pr);
@@ -444,4 +444,9 @@ test("the judge reads the PR body without its receipt block and the blank line a
   expect((await pr.fleet("gate")).code).toBe(0);
   expect(judge.prompts()).toHaveLength(2);
   expect(judge.prompts()[1]).toContain("an unclosed block");
+
+  pr.pullRequestState({ body: `## Testing\n\n<!-- fleet-proof-receipt head=${"d".repeat(40)} hash=04 -->\n${graded("non-critical")}<!-- /fleet-proof-receipt -->\n` });
+  expect((await pr.fleet("gate")).code).toBe(0);
+  expect(judge.prompts()).toHaveLength(3);
+  expect(judge.prompts()[2]).toContain("**Tier:** non-critical");
 });

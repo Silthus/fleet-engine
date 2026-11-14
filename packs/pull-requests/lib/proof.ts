@@ -392,7 +392,7 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
 }
 
 const findingItem = /^\s*(?:[-*]|\d+[.)])\s+\S/;
-export const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(fixed|rejected)\b/i;
+const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(fixed|rejected)\b/i;
 
 const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
 
@@ -410,17 +410,38 @@ function reviewedLines(findings: string) {
   }).filter((line) => line.trim());
 }
 
+const continued = /^\s+\S/;
+
 export function reviewedFindings(findings: string) {
   const reviewed = reviewedLines(findings);
-  const items = reviewed.filter((line) => findingItem.test(line)).map((line) => line.trim());
+  const items: string[] = [];
+  for (const line of reviewed) {
+    if (findingItem.test(line)) items.push(line.trim());
+    else if (items.length && continued.test(line)) items[items.length - 1] += `\n${line.trim()}`;
+  }
   if (items.length || reviewed.every((line) => noFinding.test(line.trim()))) return items;
   return [reviewed.map((line) => line.trim()).join("\n")];
 }
 
-function unanswered(findings: string, responses: string) {
-  const answered = new Set(responses.split("\n").flatMap((line) => answerItem.exec(line)?.[1] ?? []).map(Number));
-  return Array.from({ length: reviewedFindings(findings).length }, (_, index) => index + 1).filter((number) => !answered.has(number));
+export type Answer = { verdict: "fixed" | "rejected"; text: string };
+
+export function answeredFindings(findings: string, responses: string) {
+  const items = reviewedFindings(findings);
+  const answers = new Map<number, Answer>();
+  const other: string[] = [];
+  let last: Answer | undefined;
+  for (const line of responses.split("\n")) {
+    const match = answerItem.exec(line);
+    const number = Number(match?.[1]);
+    if (match && number >= 1 && number <= items.length && !answers.has(number)) answers.set(number, last = { verdict: match[2]!.toLowerCase() as Answer["verdict"], text: line.trim() });
+    else if (last && continued.test(line)) last.text += `\n${line.trim()}`;
+    else if (line.trim()) { last = undefined; other.push(line.trim()); }
+  }
+  return { findings: items.map((text, index) => ({ text, ...answers.has(index + 1) ? { answer: answers.get(index + 1)! } : {} })), other: other.join("\n") };
 }
+
+const unanswered = (findings: string, responses: string) =>
+  answeredFindings(findings, responses).findings.flatMap((finding, index) => finding.answer ? [] : [index + 1]);
 
 export const proofKinds = ["live-run", "ui-walk", "prod-shape", "cross-version", "shadow-diff", "post-deploy-watch"] as const;
 export type ProofKind = (typeof proofKinds)[number];
@@ -660,7 +681,7 @@ const gapText = (gap: GapProof) => gap.commit ? `gap from ${short(gap.commit)}, 
 
 const short = (commit: string) => commit.slice(0, 7);
 
-async function entries(directory: string) {
+export async function entries(directory: string) {
   try { return await readdir(directory); }
   catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return []; throw error; }
 }
