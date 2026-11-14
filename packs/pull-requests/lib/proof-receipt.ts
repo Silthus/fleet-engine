@@ -25,7 +25,7 @@ export function receiptMarker(body: string) {
 export class GuardRefusal extends Error {}
 
 const kept = [/#\d+\b/g, /\b\d{4}-\d{2}-\d{2}\b/g, /\bv?\d{1,3}(?:\.\d{1,3}){1,3}\b/g, /\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g];
-const email = /[^\s@<>()"'`]+@[^\s@<>()"'`]+\.[\p{L}\p{M}]{2,}/u;
+const email = /[^\s@<>()]+@[^\s@<>()]+\.[\p{L}\p{M}]{2,}/u;
 const percent = /\p{Nd}\s*(?:%|‰|‱|per\s?cent\b)/iu;
 const figures = [/\p{Nd}{1,3}(?:,\p{Nd}{3})+(?!\p{Nd})/u, /\p{Nd}{4,}/u];
 const entity = /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i;
