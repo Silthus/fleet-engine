@@ -243,8 +243,10 @@ export function keptOwed(decisions: DecisionState[], ref: PrRef, kind: string) {
 
 export type Tier = "critical" | "non-critical" | "ungraded";
 
+export const riskCalloutOf = (body: string) => /<!--\s*merge-risk\s*-->([\s\S]*?)<!--\s*\/merge-risk\s*-->/.exec(body)?.[1];
+
 export function tierOf(body: string): Tier {
-  const callout = /<!--\s*merge-risk\s*-->([\s\S]*?)<!--\s*\/merge-risk\s*-->/.exec(body)?.[1];
+  const callout = riskCalloutOf(body);
   const line = callout && /^[\s>*-]*\**Tier\**:\**\s*\**\s*(non-critical|critical)\b/im.exec(callout);
   return line ? line[1]!.toLowerCase() as Tier : "ungraded";
 }

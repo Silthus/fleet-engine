@@ -66,11 +66,11 @@ orchestration.rolloutLog names, whose note names the narrow grant), the lane's d
 row per PR from the proof summary the gate saved at its HEAD on GitHub, with its receipt link, and the side fixes the
 lane started. The report never runs the judge. It builds each PR's proof summary again at HEAD, so CI, standing
 rules, decisions and the tier are read as they are now, and takes the judge's verdict from the summary fleet proof gate
-saved, only while the PR's head, base and base SHA on GitHub, its tier, --landed for a merged PR, and the PR's proof
+saved, only while the PR's head, base and base SHA on GitHub, its tier and merge-risk callout, --landed for a merged PR, and the PR's proof
 files, standing rules and ledger decisions are the same. Otherwise it says the gate has not run at HEAD with these
 proofs; a decision recorded after the gate counts as a change. A summary that does not pass now offers no merge,
 and nor does an accepted gap whose condition the saved judge did not weigh, CI checks other than the ones it weighed,
-or a head, base or tier that moves while the report reads it: run the gate in the PR's checkout (with --landed for a merged PR), where a review carried across commits can
+or a head, base, tier or callout that moves while the report reads it: run the gate in the PR's checkout (with --landed for a merged PR), where a review carried across commits can
 be checked. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 

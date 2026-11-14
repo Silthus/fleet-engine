@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { modelFor, type ModelRow } from "../../base/lib/models.ts";
 import { numberSetting } from "../../base/lib/settings.ts";
-import { covers, hubLedger, refText, tierOf, type Env, type Ledger, type PrRef, type Ssh } from "./decision-ledger.ts";
+import { covers, hubLedger, refText, riskCalloutOf, tierOf, type Env, type Ledger, type PrRef, type Ssh } from "./decision-ledger.ts";
 import { ciOf, readPullRequest, type PullRequest, type Run } from "./pr-ci.ts";
 import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
 import { cleanBaseMerge, diffOf, mergeBase, pullRequestDetails, topLevel } from "./proof-checkout.ts";
@@ -16,7 +16,7 @@ export type FinalGate = { code: number; lines: string[]; verdict: string; summar
 
 type Checked = Awaited<ReturnType<typeof proofGate>>;
 type Judged = { code: number; lines: string[]; covered: string; judge: JudgeSummary };
-type GateKey = { head: string; base: string; baseSha: string; tier: string; landed: boolean; fingerprint: string };
+type GateKey = { head: string; base: string; baseSha: string; tier: string; callout: string; landed: boolean; fingerprint: string };
 type Condition = Checked["conditions"][number];
 type SavedGate = { key: GateKey; gate: FinalGate; conditions: Condition[] };
 
@@ -48,7 +48,7 @@ async function fingerprintOf(home: string, ref: PrRef, files: string, decisions:
 }
 
 const keyOf = (pull: PullRequest, landed: boolean, fingerprint: string): GateKey =>
-  ({ head: pull.head, base: pull.base, baseSha: pull.baseSha, tier: tierOf(pull.body), landed, fingerprint });
+  ({ head: pull.head, base: pull.base, baseSha: pull.baseSha, tier: tierOf(pull.body), callout: createHash("sha256").update(riskCalloutOf(pull.body) ?? "").digest("hex"), landed, fingerprint });
 
 export async function finalGate(head: ProofIdentity, context: GateContext, { landed = false }: { landed?: boolean } = {}): Promise<FinalGate> {
   const { home, env, run, now, ssh } = context;
