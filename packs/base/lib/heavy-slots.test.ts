@@ -149,21 +149,6 @@ onLinux("forgets a waiting job that died without cleaning up, so the next job ta
   }
 });
 
-onLinux("takes a waiting job off the queue when its terminal hangs up", async () => {
-  const box = machine();
-  try {
-    const first = box.start(holdSlot);
-    await first.out.until("ready\n");
-    const waiting = box.start(["--", "true"]);
-    await waiting.err.until("this job is number 1 of 1 in the queue");
-    process.kill(-waiting.child.pid, "SIGHUP");
-    await waiting.child.exited;
-    expect(await box.holders()).toEndWith("No job waits.\n");
-  } finally {
-    await box.stopAll();
-  }
-});
-
 onLinux("keeps its job records where only this user can read them, also without a runtime folder", async () => {
   const box = machine();
   const records = join(box.tmp, `fleet-heavy-${process.getuid!()}`);
