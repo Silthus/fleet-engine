@@ -352,7 +352,7 @@ test("at the review budget fleet asks nothing, --agent cannot pass it, and only 
   expect(ledgerDecisions(pr)).toEqual([]);
   pr.choose("Run one more round");
   expect((await pr.fleet(...fourth, "--override", `2026-11-14 "Run one more round"`, "--thread", "thread-1")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/final-2/round.json"), "utf8"))).toMatchObject({ decision: { mark: "👤" } });
+  expect(ledgerDecisions(pr)).toMatchObject([{ mark: "👤", class: "review" }]);
 });
 
 test("the review settings set how many reviews run free and where the loop stops", async () => {

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkout, cleanFixtures, fakeModel, finishRound, graded, markPanel, reviewHead, settings } from "./proof-testing.ts";
 
@@ -231,4 +231,42 @@ test("a known answer waits for the budget of its own phase", async () => {
 
   writeFileSync(join(pr.repository, "responses.md"), "1. known: listed under Known issues.\n");
   await expect(pr.fleet("respond", "--round", "final-2", "responses.md")).rejects.toThrow("only once the review budget of 2 reviews is spent; 1 ran");
+});
+
+test("a revert of a reviewed commit carries only from a reviewed commit before it", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  const panel = await reviewHead(pr);
+  const first = await pr.commit("feature.txt", "greet the member\n");
+  const second = await pr.commit("feature.txt", "greet the new member\n");
+  await pr.fleet("review-start", "--scope", "final", "--base", panel);
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  await pr.fleet("review-finish", "--round", "final-1", "--reviewer", "gpt-6.1-sol", "findings.md");
+
+  await pr.git("revert", "--no-edit", second);
+  expect((await pr.fleet("gate")).code).toBe(1);
+  await pr.git("revert", "--no-edit", first);
+  const back = await pr.fleet("gate");
+  expect(back.code).toBe(0);
+  expect(back.output).toContain(`final read carried from ${panel.slice(0, 7)}: revert of a PR commit`);
+});
+
+test("a review that starts while another one reserves backs out", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  const panel = await reviewHead(pr);
+  await pr.commit("feature.txt", "greet the member\n");
+  await pr.fleet("review-start", "--scope", "fixes", "--base", panel);
+  await finishRound(pr, "2");
+  const fixes = await pr.git("rev-parse", "HEAD");
+  await pr.commit("feature.txt", "greet the new member\n");
+  const racing = join(pr.pullRequest, "reviews", "final-1");
+  pr.env.FLEET_REVIEW_ARBITER = `cat >/dev/null; mkdir -p "${racing}"; echo '{"phase":"review"}' > "${racing}/round.json"; echo CONTINUE`;
+
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", fixes)).rejects.toThrow("Review final-1 started at the same time. Finish it before another review");
+  expect(existsSync(join(pr.pullRequest, "reviews", "3"))).toBe(false);
 });
