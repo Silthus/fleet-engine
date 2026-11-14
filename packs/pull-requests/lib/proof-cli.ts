@@ -252,8 +252,8 @@ its log while it runs.`,
     usage: "respond --round <number|final-n> <responses.md>",
     summary: `Save your answer to each finding of a finished review: fixed in which commit, or rejected and why. Number the
 answers in the order of the findings, one line each, such as "1. fixed in 1a2b3c4: <how>" or "2. rejected: <why>". Once
-the review budget is spent, "3. known: <why>" answers a finding listed under Known issues; a known blocker holds the
-merge. Each
+the review budget is spent, "3. known: <why>" answers a finding that the PR body lists by its file:line under Known
+issues; a known blocker holds the merge. Each
 list item of findings.md is one finding; findings without a list are one. The gate fails while a finding has no
 answer. A new call replaces the earlier answer. A final read takes the id that review-start printed. The judge in fleet proof gate checks
 each answer against HEAD.`,
@@ -312,7 +312,8 @@ HEAD.`,
     usage: "gate [--landed] [--json]",
     summary: `Check the owed proofs, the review and the answers to its findings, and the CI of the commit on GitHub, then let
 the judge weigh them. Exit 0 only on a pass: 1 means the owed proofs are not recorded, a proof is missing, the commit
-is not reviewed, a blocker or major finding has no answer, a "## Known issues" section of the PR body lists a blocker,
+is not reviewed, a blocker or major finding has no answer, a "## Known issues" section of the PR body lists a blocker
+or misses a finding answered known,
 the commit is not the PR's head on GitHub, its checks are red or pending,
 or the judge failed or was unavailable; 3 means only unaccepted gaps remain. No gap waives the head check. The last
 line is the verdict and names what it covered. fleet reads the PR and its CI over GitHub's REST API. Only finding the PR of the
@@ -325,12 +326,12 @@ as withheld from drafts when its workflow reported other checks on the commit an
 when GitHub does not answer for the rulesets or branch protection. A clean merge of the PR's base carries the review and the evidence of
 its other parent forward. The review needs a finished --lens panel round on the PR, and HEAD read by a panel round or
 by a review that finished after one, such as a final read; single-reviewer rounds alone never count. On a small PR the
-panel's one read covers its fixes too. Only blocker and major findings, and findings without a severity, need an
-answer: minor and nit findings and the items of a TESTS block are noted. An accepted
-panel gap (gap --kind panel) stands in for the panel. The review also carries across quiet commits: single-parent commits that only change or add
-test files, named *.test.*, *.spec.*, *_test.go, *_test.py or test_*.py, or snapshots in __snapshots__, as regular
-files with an unchanged mode. A deleted test, a mode change, a symlink, a comment, a file in a test folder, or a test
-file whose name other code holds, such as an import of limits.test.ts, needs a review. The gate then prints "final read carried from <sha>: test-only delta", and the receipt in
+panel's one read covers its fixes too. Only blocker and major findings, findings without a severity, and the items of
+a TESTS block need an answer: minor and nit findings are noted. An accepted
+panel gap (gap --kind panel) stands in for the panel. The review also carries across quiet commits: a git revert of
+an earlier commit of the PR, and single-parent commits that only change, add, or delete test files, named *.test.*, *.spec.*, *_test.go, *_test.py or test_*.py, or snapshots in __snapshots__, as regular
+files with an unchanged mode. A mode change, a symlink, a comment, a file in a test folder, or a test
+file whose name other code holds, such as an import of limits.test.ts, needs a review. The gate then prints "final read carried from <sha>: test-only delta" or "revert of a PR commit", and the receipt in
 carried/<HEAD>.json names the quiet commits and the reason. Evidence does not carry across quiet commits.
 When those checks pass, the judge runs read-only on the reviewer's row of the model table, as fleet proof review
 picks it. fleet hands it the diff from the merge base, CI, the owed kinds, the counted evidence, every review's
@@ -639,8 +640,10 @@ async function runPanel({ options, lists }: Parsed, head: ProofIdentity, context
   const guide = await readPanelGuide(home);
   const knowledge = await knowledgeOf(lists.get("--knowledge") ?? [], context.cwd);
   const requested = lists.get("--lens")!.map((argument) => resolveLens(guide, argument, author, knowledge, env));
-  const lenses = isSmall(head, context) ? [combinedLens(requested, author)] : requested;
   const pending = await unfinishedReview(context.home, head, "fleet");
+  const planned = pending && (await readPlan(pending.directory) ?? await stagedPlan(pending.directory));
+  const small = planned ? planned.lenses.map(({ name }) => name).join() === "combined" : isSmall(head, context);
+  const lenses = small ? [combinedLens(requested, author)] : requested;
   if (pending) requireSameRequest(pending, options, context.run);
   const directory = pending ? await rerunPanel(pending, options, head, lenses, guide, context) : await reservePanel(options, head, lenses, guide, context);
   const round = (await readJson<{ round: number | "final" }>(join(directory, "round.json"), { round: 0 })).round;

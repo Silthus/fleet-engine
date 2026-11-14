@@ -9,7 +9,7 @@ afterEach(cleanFixtures);
 
 const continueArbiter = (record = "/dev/null") => `cat > "${record}"; echo CONTINUE`;
 
-test("minor and nit findings and TESTS items need no answer, while a blocker, a major, or a finding without severity does, and the arbiter reads only blockers and majors", async () => {
+test("minor and nit findings need no answer, while a blocker, a major, a finding without severity, or a TESTS item does, and the arbiter reads only blockers and majors", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical", "medium") });
   const panel = await pr.commit("feature.txt", "new\n");
@@ -32,12 +32,13 @@ test("minor and nit findings and TESTS items need no answer, while a blocker, a 
 
   const gate = await pr.fleet("gate");
   expect(gate.code).toBe(1);
-  expect(gate.output).toContain("review: round 1 has unanswered findings 1, 4;");
+  expect(gate.output).toContain("review: round 1 has unanswered findings 1, 4, 5;");
   writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n");
-  await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 4 too");
-  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n4. known: listed under Known issues.\n");
+  await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer findings 4, 5 too");
+  const testsFixed = "5. fixed in 2b3c4d5: the test asserts the greeting.\n";
+  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n4. known: listed under Known issues.\n" + testsFixed);
   await expect(pr.fleet("respond", "--round", "1", "responses.md")).rejects.toThrow("Answer a finding \"known\" only once the review budget of 6 reviews is spent; 1 ran");
-  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n4. rejected: the greeting is the fixture's.\n");
+  writeFileSync(join(pr.repository, "responses.md"), "1. fixed in 1a2b3c4: the greeting names the member.\n4. rejected: the greeting is the fixture's.\n" + testsFixed);
   expect((await pr.fleet("respond", "--round", "1", "responses.md")).code).toBe(0);
   expect((await pr.fleet("gate")).code).toBe(0);
 
@@ -95,7 +96,7 @@ test("a docs-only PR, or one under 50 authored lines with low merge risk, gets o
   expect(gate.output).toContain("review: one read of a small PR in round 1; its fixes get no final read");
 });
 
-test("at the budget a known answer settles a major, and a known blocker holds the merge", async () => {
+test("at the budget a known answer settles a major the PR body lists by file:line, and a known blocker holds the merge", async () => {
   const pr = await checkout();
   await pr.commit("README.md", "Greet new members.\n");
   await pr.fleet("require", "--none", "--reason", "docs only");
@@ -105,6 +106,12 @@ test("at the budget a known answer settles a major, and a known blocker holds th
 
   writeFileSync(join(pr.repository, "responses.md"), "1. rejected: the fixture names nobody.\n2. known: listed under Known issues.\n");
   await pr.fleet("respond", "--round", "1", "responses.md");
+  const unlisted = await pr.fleet("gate");
+  expect(unlisted.code).toBe(1);
+  expect(unlisted.output).toContain("known issues: round 1 answers findings 2 known, but the \"## Known issues\" section of the PR body does not list their file:line");
+  pr.pullRequestState({ body: "Greets new members.\n\n## Known issues\n\n- major: feature.txt:1 another finding\n" });
+  expect((await pr.fleet("gate")).code).toBe(1);
+  pr.pullRequestState({ body: "Greets new members.\n\n## Known issues\n\n- major: README.md:1 the page is terse\n" });
   expect((await pr.fleet("gate")).code).toBe(0);
 
   writeFileSync(join(pr.repository, "responses.md"), "1. known: listed under Known issues.\n2. known: listed under Known issues.\n");
@@ -126,6 +133,22 @@ test("a code PR under 50 authored lines gets the combined lens only at low merge
   };
   expect(await lensesAt("low")).toEqual(["combined"]);
   expect(await lensesAt("medium")).toEqual(["correctness", "design"]);
+});
+
+test("an unfinished panel reruns with its own lenses after the merge risk changes", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical", "low") });
+  await pr.commit("feature.ts", "export const greet = (name: string) => `hi ${name}`;\n");
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  const reviewer = fakeModel(pr, "REVIEWER", "Looks fine to me.");
+  await pr.fleet("review", "--lens", "correctness", "--lens", "design");
+  expect((await pr.fleet("review", "--wait")).code).toBe(1);
+
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
+  reviewer.answer("FINDINGS:\n(none)\nCOVERED: feature.ts\n");
+  const rerun = await pr.fleet("review", "--lens", "correctness", "--lens", "design");
+  expect(JSON.parse(rerun.output.split("\n")[0]!).lenses.map(({ name }: { name: string }) => name)).toEqual(["combined"]);
+  expect((await pr.fleet("review", "--wait")).code).toBe(0);
 });
 
 test("the last read reads every fix since the panel commit with the Correctness lens", async () => {
@@ -235,7 +258,7 @@ test("a known answer waits for the budget of its own phase", async () => {
   await expect(pr.fleet("respond", "--round", "final-2", "responses.md")).rejects.toThrow("only once the review budget of 2 reviews is spent; 1 ran");
 });
 
-test("a revert of a reviewed commit carries only from a reviewed commit before it", async () => {
+test("a revert carries only from a reviewed commit before the reverted one", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical", "medium") });
   await pr.commit("feature.txt", "greet\n");
@@ -253,6 +276,16 @@ test("a revert of a reviewed commit carries only from a reviewed commit before i
   const back = await pr.fleet("gate");
   expect(back.code).toBe(0);
   expect(back.output).toContain(`final read carried from ${panel.slice(0, 7)}: revert of a PR commit`);
+
+  const fix = await pr.commit("helper.txt", "names\n");
+  const later = await pr.commit("other.txt", "uses the names\n");
+  pr.env.FLEET_REVIEW_ARBITER = continueArbiter();
+  await pr.fleet("review-start", "--scope", "final", "--base", second);
+  writeFileSync(join(pr.repository, "findings.md"), "No findings.\n");
+  await pr.fleet("review-finish", "--round", "final-2", "--reviewer", "gpt-6.1-sol", "findings.md");
+  expect(await pr.git("rev-parse", "HEAD")).toBe(later);
+  await pr.git("revert", "--no-edit", fix);
+  expect((await pr.fleet("gate")).code).toBe(1);
 });
 
 test("a review that another one overtakes while it weighs the budget backs out", async () => {

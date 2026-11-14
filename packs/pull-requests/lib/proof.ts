@@ -115,7 +115,7 @@ Answer ESCALATE only in one of these cases:
 
 fleet ends some findings with an Anchor check. Its "Seen before" lines name findings that quote the same changed line as a finding of an earlier review: weigh them for case 2.
 
-Only open blockers and majors count. The findings below leave out minor and nit findings and every TESTS block: they need no response and no new read.
+Only open blockers and majors count. The findings below leave out minor and nit findings, which need no response, and every TESTS block, whose items get a test-only fix. None of them needs a new read.
 
 In all other cases answer CONTINUE. New findings, many findings, or findings about new code are not a reason to escalate. A finding whose earlier fix the author's response moved into the module that owns the concept is progress, not a loop.
 
@@ -399,7 +399,7 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
   const findings = await readFile(join(directory, "findings.md"), "utf8").catch(() => undefined);
   if (findings === undefined) throw new Error(`Review round ${round} has no findings yet`);
   const missing = unanswered(findings, bytes.toString());
-  if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>", "${missing[0]}. rejected: <why>", or, at the review budget, "${missing[0]}. known: <why>" for a finding listed under Known issues. Minor and nit findings and TESTS items need no answer`);
+  if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>", "${missing[0]}. rejected: <why>", or, at the review budget, "${missing[0]}. known: <why>" for a finding listed under Known issues. Minor and nit findings need no answer; a TESTS item gets a test-only rewrite or delete`);
   if (answeredFindings(findings, bytes.toString()).findings.some(({ answer }) => answer?.verdict === "known")) {
     const reviews = join(pullRequestDirectory(home, identity), "reviews");
     const started = await reviewNames(reviews);
@@ -429,7 +429,8 @@ function reviewedLines(findings: string) {
   let inside = !lensAnswer;
   return lines.flatMap((line) => {
     if (findingsBlock.test(line)) { inside = true; return [line.replace(findingsBlock, "")]; }
-    if (/^COVERED\b/.test(line) || testsBlock.test(line)) inside = false;
+    if (testsBlock.test(line)) { inside = true; return []; }
+    if (/^COVERED\b/.test(line)) inside = false;
     else if (!lensAnswer && /^#/.test(line)) inside = true;
     return inside ? [line] : [];
   });
@@ -483,6 +484,14 @@ const majorItem = /^\s*(?:[-*]|\d+[.)])\s+(?:[^|\n]*\|)?\s*\**major\**\s*\|/i;
 
 const knownBlockers = (findings: string, responses: string) =>
   answeredFindings(findings, responses).findings.flatMap(({ text, answer }, index) => answer?.verdict === "known" && !majorItem.test(text) && !flooredItem.test(text) ? [index + 1] : []);
+
+const locationOf = (text: string) => /[\w./-]+:\d+/.exec(text)?.[0];
+
+const unlistedKnown = (findings: string, responses: string, listed: string[]) =>
+  answeredFindings(findings, responses).findings.flatMap(({ text, answer }, index) => {
+    const location = locationOf(text);
+    return answer?.verdict === "known" && !listed.some((item) => !location || item.includes(location)) ? [index + 1] : [];
+  });
 
 const unanswered = (findings: string, responses: string) =>
   answeredFindings(findings, responses).findings.flatMap(({ text, answer }, index) => answer || flooredItem.test(text) ? [] : [index + 1]);
@@ -842,8 +851,8 @@ function reviewedThrough(start: string, reviewed: Set<string>, cleanBaseMerge: C
   let commit: string | undefined = start;
   while (commit && merges.length <= maxCarriedMerges && quiet.length <= maxQuietCommits) {
     const undone = cancelled.get(commit);
-    if (undone) { commit = undone; continue; }
-    if (reviewed.has(commit)) return { from: commit, merges, quiet, kinds: [...kinds] };
+    if (undone) { cancelled.delete(commit); commit = undone; continue; }
+    if (reviewed.has(commit) && !cancelled.size) return { from: commit, merges, quiet, kinds: [...kinds] };
     const merged = cleanBaseMerge(commit);
     if (merged) { merges.push(commit); commit = merged; continue; }
     const step = quietCommit(commit);
@@ -906,13 +915,15 @@ async function headReview(home: string, identity: ProofIdentity, finished: Finis
   return { problem: "missing", line: latest ? `review: HEAD not reviewed, last review covered ${short(latest.commit)}` : "review: HEAD not reviewed" };
 }
 
-async function responseStatuses(home: string, identity: ProofIdentity): Promise<Status[]> {
+async function responseStatuses(home: string, identity: ProofIdentity, body: string | undefined): Promise<Status[]> {
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   const statuses = await Promise.all((await finishedReviews(home, identity)).map(async ({ name }): Promise<Status | undefined> => {
     const findings = await readFile(join(reviews, name, "findings.md"), "utf8");
     const responses = await readFile(join(reviews, name, "responses.md"), "utf8").catch(() => "");
     const missing = unanswered(findings, responses);
     if (missing.length) return { problem: "missing", line: `review: ${reviewLabel(name)} has unanswered findings ${missing.join(", ")}; answer each with fleet proof respond --round ${name} <responses.md>` };
+    const unlisted = body === undefined ? [] : unlistedKnown(findings, responses, knownIssues(body));
+    if (unlisted.length) return { problem: "missing", line: `known issues: ${reviewLabel(name)} answers findings ${unlisted.join(", ")} known, but the "## Known issues" section of the PR body does not list their file:line` };
     const blockers = knownBlockers(findings, responses);
     return blockers.length ? { problem: "missing", line: `known issues: ${reviewLabel(name)} answers findings ${blockers.join(", ")} known, and an open blocker holds the merge` } : undefined;
   }));
@@ -944,7 +955,8 @@ function headStatus(identity: ProofIdentity, before: PushedHead, after: PushedHe
 
 export type GateOptions = { ci: () => CiResult; pushedHead: () => PushedHead; ledger: Ledger; landed?: boolean; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; small?: (body: string) => boolean; now?: Date };
 
-const knownBlocker = (body: string) => /^#+\s*Known issues\b.*$([\s\S]*?)(?=^#|(?![\s\S]))/im.exec(body)?.[1]!.split("\n").find((line) => /^\s*[-*]\s+\**blocker\b/i.test(line))?.trim();
+const knownIssues = (body: string) => (/^#+\s*Known issues\b.*$([\s\S]*?)(?=^#|(?![\s\S]))/im.exec(body)?.[1] ?? "").split("\n").filter((line) => /^\s*[-*]\s+\S/.test(line)).map((line) => line.trim());
+const knownBlocker = (body: string) => knownIssues(body).find((line) => /^[-*]\s+\**blocker\b/i.test(line));
 
 function heldStatus(head: PushedHead): Status | undefined {
   const blocker = "body" in head && head.body !== undefined ? knownBlocker(head.body) : undefined;
@@ -985,7 +997,7 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const owed = await readOwed(home, identity);
   const kinds = await Promise.all((owed?.kinds ?? []).map((kind) => kindStatus(weigh, kind, landed, cleanBaseMerge)));
   const review = await reviewStatus(weigh, cleanBaseMerge, quietCommit, () => "body" in before && before.body !== undefined && small(before.body));
-  const responses = await responseStatuses(home, identity);
+  const responses = await responseStatuses(home, identity, landed || !("body" in before) ? undefined : before.body ?? "");
   const ciResult = ci();
   const head = headStatus(identity, before, pushedHead());
   const checks = await ciStatus(weigh, ciResult);
