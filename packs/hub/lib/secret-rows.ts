@@ -34,6 +34,8 @@ export function checkedRows(rows: SecretRow[]): SecretRow[] {
   return rows;
 }
 
+export const rowModules = (env: Env) => [handlers(env)[rowsSeam], handlers(env)[providersSeam]].filter((path): path is string => !!path);
+
 export async function injectedRows(env: Env): Promise<SecretRow[]> {
   const { [rowsSeam]: rowsPath, [providersSeam]: providersPath } = handlers(env);
   if (!rowsPath) return [];

@@ -33,8 +33,10 @@ your company's brings the providers.
 `provider(name, options)` in a rows module returns that provider. When no pack
 on the hub brings it, the provider's check refuses every put. A provider
 without a check stores the value with the note "its provider has no check",
-which `list` shows. A rows module that fails to load makes every command but
-`off` and `on` print why.
+which `list` shows. When the rows or providers fail to load, every command
+but `off` and `on` refuses. A row that breaks a store rule, such as two rows
+that set one variable, is named with its rule. Any other load error only names
+the modules to load with bun on the hub, as its own text could hold a value.
 
 ```ts
 export const rows = (provider) => [

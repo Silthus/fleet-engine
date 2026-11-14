@@ -164,6 +164,20 @@ test("the output redactor keeps every other byte of binary output, and streams a
   expect(Buffer.concat(written).toString("utf8")).toBe(`${"y".repeat(heldLimit - 5)}[redacted]abc`);
 });
 
+test("output pieces never join into a value, and a run of one repeated value still streams", () => {
+  const written: Uint8Array[] = [];
+  const joined = lineRedactor([{ value: "12345678", label: "[redacted row]" }, { value: "X[redacted row]", label: "[redacted row]" }], (bytes) => written.push(bytes));
+  joined.push(Buffer.from(`${"z".repeat(heldLimit)}X12345678zzzzzz`));
+  joined.end();
+  expect(Buffer.concat(written).toString("utf8")).not.toContain("X[redacted row]");
+  written.length = 0;
+  const repeated = lineRedactor([{ value: "aaaaaaaa", label: "[redacted]" }], (bytes) => written.push(bytes));
+  for (let piece = 0; piece < 4; piece++) repeated.push(Buffer.alloc(heldLimit, "a"));
+  expect(Buffer.concat(written).toString("utf8")).toContain("[redacted]");
+  repeated.end();
+  expect(Buffer.concat(written).toString("utf8")).not.toContain("aaaaaaaa");
+});
+
 test("a value with a line break is refused, and the request_secret file is gone after a refused put", async () => {
   const machine = fleet();
   const file = machine.secretFile(machine.devHome, `${sendKey}\n${otherKey}\n`);
@@ -708,25 +722,39 @@ test("an off that lands while the hub reads a value withholds the value, and log
 test("off and on work while the rows fail to load, and a rows module that fails says why", async () => {
   const dir = newHome();
   const rows = join(dir, "rows.ts");
-  writeFileSync(rows, `export const rows = () => { throw new Error("the rows module has a typo"); };\n`);
+  const inError = made("token=");
+  writeFileSync(rows, `export const rows = () => { throw new Error("cannot reach https://user:${inError}@example.com"); };\n`);
   const machine = fleet({ rows: "injected", handlers: { [rowsSeam]: rows }, words: [answer("m-yes", "Yes, turn it on", "2026-11-13T11:00:00Z")] });
   expect(await machine.dev("off", "suspected leak")).toBe(0);
   machine.clock.now = new Date("2026-11-13T12:00:00Z");
   expect(await machine.dev("on", "--words", '2026-11-13 "Yes, turn it on"', "--thread", "users-thread")).toBe(0);
   const before = machine.printed.length;
   expect(await machine.dev("list")).toBe(1);
-  expect(machine.since(before)).toContain("The secret rows did not load: the rows module has a typo");
+  expect(machine.since(before)).toContain(`The secret rows or providers did not load; the error's own text is not shown, as it could hold a value. Load ${rows} with bun on the hub to see it`);
+  machine.expectNoLeak([inError]);
 });
 
 test("an off that lands before list --need logs its read keeps the value from the provider's check", async () => {
-  const checked: string[] = [];
-  const machine = fleet({ rows: echoing("chat-app", async (values) => { checked.push(...Object.keys(values)); return { ok: true }; }) });
-  hubFile(machine.hubHome, ".config/fleet/chat-app.json", JSON.stringify(chatTokens));
-  machine.hooks.beforeAppend = machine.offElsewhere("leak seen before the check");
-  expect(await machine.dev("list", "--need", "chat-app")).toBe(1);
-  expect(machine.printed.join("")).toContain("No check ran with chat-app's value");
-  expect(checked).toEqual([]);
-  machine.expectNoLeak(Object.values(chatTokens));
+  const heard: string[] = [];
+  const service = Bun.serve({ port: 0, fetch: (request) => (heard.push(request.headers.get("Authorization") ?? ""), Response.json({ ok: true })) });
+  const check = async (values: Record<string, string>) => {
+    const response = await fetch(service.url, { headers: { Authorization: `Bearer ${values.CHAT_BOT_TOKEN}` } });
+    return response.ok ? { ok: true as const } : { ok: false as const, reason: "the example service refused" };
+  };
+  try {
+    const machine = fleet({ rows: echoing("chat-app", check) });
+    hubFile(machine.hubHome, ".config/fleet/chat-app.json", JSON.stringify(chatTokens));
+    expect(await machine.dev("list", "--need", "chat-app")).toBe(0);
+    expect(heard).toEqual([`Bearer ${chatTokens.botToken}`]);
+    heard.length = 0;
+    machine.hooks.beforeAppend = machine.offElsewhere("leak seen before the check");
+    expect(await machine.dev("list", "--need", "chat-app")).toBe(1);
+    expect(machine.printed.join("")).toContain("No check ran with chat-app's value");
+    expect(heard).toEqual([]);
+    machine.expectNoLeak(Object.values(chatTokens));
+  } finally {
+    service.stop(true);
+  }
 });
 
 test("a stored value whose row now sets other variables is refused until it is put again", async () => {
