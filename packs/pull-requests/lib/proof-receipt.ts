@@ -38,7 +38,7 @@ const shown = (text: string) => spaced(Bun.markdown.html(text).replace(/<img\b[^
 
 function views(text: string) {
   const plain = text.normalize("NFKC").replace(invisible, "");
-  return [shown(plain), spaced(plain.replace(/`/g, ""))];
+  return [shown(plain), spaced(plain.replace(/[`*_~]/g, ""))];
 }
 
 export function guardField(field: string, text: string) {
