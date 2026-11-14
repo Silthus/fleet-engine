@@ -9,6 +9,7 @@ const codeConcepts = [
   /["'`](--[a-z][a-z0-9-]+)\b/g,
   /(?:[Ff]eature|[Ff]lag)\w*\(\s*["'`]([\w.-]+)["'`]/g,
 ];
+const dataFolder = /(^|\/)(__)?(fixtures?|locales?|i18n|testdata)(__)?\//;
 const configKey = /^\s*["']?([A-Za-z_][\w.-]*)["']?\s*[:=]/g;
 
 async function git(cwd: string, ...args: string[]) {
@@ -32,7 +33,7 @@ function addedNames(diff: string) {
   for (const line of diff.split("\n")) {
     if (line.startsWith("+++ ")) {
       const path = line.slice(6);
-      patterns = !authored(path) || /\.mdx?$/.test(path) ? [] : /(config|settings)[^/]*\.(json|ya?ml|toml)$/i.test(path) ? [configKey] : codeConcepts;
+      patterns = !authored(path) || /\.mdx?$/.test(path) ? [] : /\.(json|ya?ml|toml)$/.test(path) && !dataFolder.test(path) ? [configKey] : codeConcepts;
     } else if (line.startsWith("+")) for (const pattern of patterns) for (const match of line.slice(1).matchAll(pattern)) names.add(match[1]!);
   }
   return [...names];
@@ -44,9 +45,13 @@ export async function prSize(args: string[], cwd: string) {
   const lines = count(args, "--lines");
   const concepts = count(args, "--concepts");
   const from = (await git(cwd, "merge-base", base, "HEAD")).stdout.trim();
-  const diff = ["diff", "--no-color", "--no-renames", from, "HEAD"];
-  const numstat = (await git(cwd, ...diff, "--numstat")).stdout.split("\n").map((row) => row.split("\t"));
-  const authoredLines = numstat.filter(([, , path]) => path && authored(path)).reduce((sum, [added]) => sum + (Number(added) || 0), 0);
+  const diff = ["diff", "--no-color", from, "HEAD"];
+  const numstat = (await git(cwd, ...diff, "--numstat", "-z")).stdout.split("\0");
+  let authoredLines = 0;
+  for (let at = 0; at < numstat.length - 1; at++) {
+    const [added, , path] = numstat[at]!.split("\t");
+    if (authored(path || numstat[(at += 2)]!)) authoredLines += Number(added) || 0;
+  }
   const newFiles = (await git(cwd, ...diff, "--name-only", "--diff-filter=A")).stdout.split("\n").filter((path) => path && authored(path));
   const names = addedNames((await git(cwd, ...diff, "-U0")).stdout);
   const known = names.length ? new Set((await git(cwd, "grep", "--no-color", "-h", "-o", "-w", "-F", ...names.flatMap((name) => ["-e", name]), from, "--", ":(top)")).stdout.split("\n")) : new Set();

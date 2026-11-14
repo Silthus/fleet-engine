@@ -45,7 +45,9 @@ afterEach(() => {
 const lines = (count: number, line: string) => Array.from({ length: count }, (_, n) => `${line} ${n}`).join("\n") + "\n";
 
 test("counts authored lines without tests or lockfiles and runs the delete pass over 1.5 times the estimate", async () => {
-  const size = await branch({ "src/old.ts": "export {};\n", "src/gone.test.ts": lines(30, "// renamed") }, {
+  const size = await branch({ "src/old.ts": "export {};\n", "src/gone.test.ts": lines(30, "// renamed"), "src/moving.ts": lines(12, "// moved") }, {
+    "src/moving.ts": null,
+    "lib/moved.ts": lines(12, "// moved"),
     "src/gone.test.ts": null,
     "src/moved.test.ts": lines(30, "// renamed") + lines(20, "// grown"),
     "src/café.test.ts": lines(20, "// quoted"),
@@ -59,7 +61,7 @@ test("counts authored lines without tests or lockfiles and runs the delete pass 
 });
 
 test("counts flags, env vars and config keys the base does not name yet", async () => {
-  const size = await branch({ "src/old.ts": "const old = process.env.OLD_VAR;\n", "config.json": "{\n  \"newKeyLonger\": 0,\n  \"oldKey\": 1\n}\n", "locales/en.json": "{}\n" }, {
+  const size = await branch({ "src/old.ts": "const old = process.env.OLD_VAR;\n", "config.json": "{\n  \"newKeyLonger\": 0,\n  \"oldKey\": 1\n}\n", "locales/en.json": "{}\n", "pyproject.toml": "[tool.app]\nold = 1\n" }, {
     "src/old.ts": [
       "const old = process.env.OLD_VAR;",
       "const fresh = Bun.env.NEW_VAR ?? os.environ.get(\"PY_VAR\");",
@@ -67,10 +69,11 @@ test("counts flags, env vars and config keys the base does not name yet", async 
     ].join("\n") + "\n",
     "config.json": "{\n  \"newKeyLonger\": 0,\n  \"oldKey\": 1,\n  \"newKey\": 2\n}\n",
     "locales/en.json": "{\n  \"greeting\": \"hello\"\n}\n",
+    "pyproject.toml": "[tool.app]\nold = 1\nfresh_setting = 2\n",
     "README.md": "Run it with `--doc-only-flag` and FOO_VAR.\n",
   });
 
-  const summary = "size: 8 authored lines, 1 new file (README.md), 5 new concepts (newKey, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
+  const summary = "size: 9 authored lines, 1 new file (README.md), 6 new concepts (newKey, fresh_setting, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
   expect(await size("--lines", "100", "--concepts", "5")).toMatchObject({ code: 0, out: `${summary}\nwithin the estimate of 100 lines and 5 concepts` });
   subdirectory = "src";
   colored = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "color.ui", GIT_CONFIG_VALUE_0: "always" };
