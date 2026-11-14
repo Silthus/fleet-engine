@@ -9,7 +9,7 @@
     "@modelcontextprotocol/server": "2.3.1",
     "@modelcontextprotocol/server-legacy": "2.3.1",
     "express": "4.22.3",
-    "hono": "4.13.14"
+    "hono": "4.13.16"
   },
   "pnpm": {
     "overrides": {
