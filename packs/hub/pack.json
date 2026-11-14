@@ -379,6 +379,18 @@
       "workflow": "boxes"
     },
     {
+      "id": "secret-sweep",
+      "command": [
+        "fleet",
+        "secret",
+        "sweep"
+      ],
+      "schedule": {
+        "every": "1d",
+        "at": "02:47"
+      }
+    },
+    {
       "id": "dream",
       "command": [
         "fleet",
@@ -765,6 +777,8 @@
       "list",
       "off",
       "on",
+      "drop",
+      "sweep",
       "hub",
       "help"
     ],
