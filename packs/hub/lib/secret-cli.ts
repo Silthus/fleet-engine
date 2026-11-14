@@ -264,7 +264,9 @@ async function run(args: string[], context: SecretContext) {
   const label = (name: string) => all.some((value) => `[redacted ${name}]`.includes(value)) ? plainLabel : `[redacted ${name}]`;
   const secrets = delivered.flatMap(({ name, values }) => Object.values(values).filter(Boolean).map((value) => ({ value, label: label(name) })));
   const env = { ...process.env, ...Object.assign({}, ...delivered.map(({ values }) => values)) as Record<string, string> };
-  const child = Bun.spawn(command, { env, stdin: "inherit", stdout: "pipe", stderr: "pipe" });
+  let child: Bun.Subprocess<"inherit", "pipe", "pipe">;
+  try { child = Bun.spawn(command, { env, stdin: "inherit", stdout: "pipe", stderr: "pipe" }); }
+  catch { return done(context, { ok: false, error: `could not start ${command[0]}; its error is not shown, as it could hold a value` }); }
   await Promise.all([pump(child.stdout, lineRedactor(secrets, context.out)), pump(child.stderr, lineRedactor(secrets, context.err))]);
   return await child.exited;
 }

@@ -444,6 +444,35 @@ test("an existing secret file that others can read is refused, and a put over an
   machine.expectNoLeak(Object.values(chatTokens));
 });
 
+test("a value with a null character is refused on put, in an existing file, and from the hub, and no part of it is printed", async () => {
+  const tail = made("after-null-");
+  const withNull = `${made("key_")}\u0000${tail}`;
+  const machine = fleet();
+  expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, withNull))).toBe(1);
+  expect(machine.printed.join("")).toContain("holds a null character");
+  expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).text).toContain("send-us: missing");
+  hubFile(machine.hubHome, ".config/fleet/chat-app.json", JSON.stringify({ ...chatTokens, botToken: withNull }));
+  const existing = await run(machine.dev, machine.printed, ["chat-app"], "echo child-ran");
+  expect(existing.code).toBe(1);
+  expect(existing.text).toContain("holds a null character, so run could not pass it");
+  machine.reach.answer = { code: 0, stderr: "", stdout: JSON.stringify({ ok: true, delivered: [{ name: "send-us", values: { EXAMPLE_API_KEY: withNull } }] }) };
+  const delivered = await run(machine.dev, machine.printed, ["send-us"], "echo child-ran");
+  expect(delivered.code).toBe(1);
+  expect(delivered.text).toContain("could not start sh");
+  expect(delivered.text).not.toContain("child-ran");
+  machine.expectNoLeak([tail, ...Object.values(chatTokens)]);
+});
+
+test("the fleet secret command prints a fixed message for an error that escapes it, never the error's text", async () => {
+  const inSettings = made("key_");
+  const entry = join(import.meta.dir, "../commands/secret.ts");
+  const child = Bun.spawn([process.execPath, entry, "list"], { env: { ...process.env, HOME: newHome(), FLEET_SETTINGS: `{"hub": {"alias": "${inSettings}"`, FLEET_DEBUG: "1" }, stdout: "pipe", stderr: "pipe" });
+  const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code).toBe(1);
+  expect(stderr).toBe("fleet secret: The store failed; its message is not shown, as it could hold a value\n");
+  expect(stdout + stderr).not.toContain(inSettings);
+});
+
 test("list --need prints the card for each missing or failing secret, nothing for one that is held and passes, and logs each check's read", async () => {
   const rows = testRows().map((row) => row.name !== "chat-app" ? row : { ...row, provider: { name: "chat-app", check: async () => ({ ok: false as const, reason: "the chat service answered invalid_auth" }) } });
   const machine = fleet({ rows });

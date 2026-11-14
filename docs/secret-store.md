@@ -92,7 +92,8 @@ fleet secret run example-send -- <command>
 (`~/.t3/userdata/secrets/files`). It deletes the file on success, on failure
 and on an interrupt, and never prints it. A value is one line of at least 8
 characters. A value that the put's own record or `list` line would spell is
-refused. A new value replaces the stored one only after the check passes; on
+refused, and so is a value with a null character, which no environment
+variable can carry. A new value replaces the stored one only after the check passes; on
 failure the old value stays.
 
 `--expires <date>` is the provider's expiry: a real calendar date such as

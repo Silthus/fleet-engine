@@ -141,6 +141,8 @@ function fieldsOf(row: SecretRow, text: string): Record<string, string> {
   }
   const missing = row.env.filter((key) => !fields[key]);
   if (missing.length) throw new SecretRefusal(`The ${row.name} file has no value for ${missing.join(", ")}. Nothing was stored`);
+  const nulled = row.env.filter((key) => fields[key]!.includes("\u0000"));
+  if (nulled.length) throw new SecretRefusal(`The ${row.name} value of ${nulled.join(", ")} holds a null character, which no environment variable can carry. Nothing was stored`);
   const short = row.env.filter((key) => fields[key]!.length < minimumLength);
   if (short.length) throw new SecretRefusal(`The ${row.name} value of ${short.join(", ")} is shorter than ${minimumLength} characters, too short to redact from output safely. Nothing was stored`);
   return fields;
@@ -252,6 +254,7 @@ function fileValues(home: string, row: FileRow): Record<string, string> | string
   for (const [key, variable] of Object.entries(fields)) {
     const value = source[key];
     if (typeof value !== "string" || !value) return refuse(`missing ${key} in ~/${row.file.path}`);
+    if (value.includes("\u0000")) return refuse(`${key} in ~/${row.file.path} holds a null character, so run could not pass it`);
     if (/[\r\n]/.test(value)) return refuse(`${key} in ~/${row.file.path} holds a line break, so run could not redact it`);
     if (value.length < minimumLength) return refuse(`${key} in ~/${row.file.path} is shorter than ${minimumLength} characters, so run could not redact it`);
     values[variable] = value;
