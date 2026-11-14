@@ -841,7 +841,7 @@ async function responseStatuses(home: string, identity: ProofIdentity): Promise<
   return statuses.filter((status) => status !== undefined);
 }
 
-export type CiResult = { state: "green" | "red" | "pending" | "none" | "unknown"; detail: string };
+export type CiResult = { state: "green" | "red" | "pending" | "none" | "unknown"; detail: string; checks?: string[] };
 
 async function ciStatus(weigh: Weigh, ci: CiResult): Promise<Status & { gap?: GapProof }> {
   const { home, identity, decisions } = weigh;
@@ -872,7 +872,7 @@ export type ProofSummary = {
   kinds: KindProof[];
   review: { state: "covered" | "missing" | "gap"; covered?: string; panelGap?: GapProof; unanswered: string[]; line: string };
   head: { state: "pushed" | "missing"; line: string };
-  ci: { state: CiResult["state"]; detail: string; gap?: GapProof; line: string };
+  ci: { state: CiResult["state"]; detail: string; checks?: string[]; gap?: GapProof; line: string };
   judge: JudgeSummary;
   lapsed: string[]; lapsedLine?: string; voided: string[]; receipt?: string;
 };
@@ -915,7 +915,7 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
     repository: identity.repository, pr: identity.pr, commit: identity.commit, tier, code, owed: owedPart(owed), kinds: kinds.map((kind) => kind.proof),
     review: { state: review.problem ?? "covered", ...review.covered ? { covered: review.covered } : {}, ...review.panelGap ? { panelGap: review.panelGap } : {}, unanswered: responses.map((response) => response.line), line: review.line },
     head: { state: head.problem ? "missing" : "pushed", line: head.line },
-    ci: { state: ciResult.state, detail: ciResult.detail, ...checks.gap ? { gap: checks.gap } : {}, line: checks.line },
+    ci: { state: ciResult.state, detail: ciResult.detail, ...ciResult.checks ? { checks: ciResult.checks } : {}, ...checks.gap ? { gap: checks.gap } : {}, line: checks.line },
     lapsed, ...lapsed.length ? { lapsedLine: lapsedLine(lapsed) } : {}, voided, ...receipt ? { receipt } : {},
   };
   const summary = `kinds: ${owed?.kinds.length ? owed.kinds.join(", ") : "none"}; review: ${review.covered}; CI: ${checks.covered}`;

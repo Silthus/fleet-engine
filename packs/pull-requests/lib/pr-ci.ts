@@ -169,6 +169,8 @@ function requiredVerdict(entries: Entry[], required: RequiredCheck[], draft: boo
   return verdict;
 }
 
+const checksOf = (entries: Entry[]) => [...new Set(entries.map((entry) => `${entry.name}${entry.status ? " (status)" : entry.appId === undefined ? "" : ` (app ${entry.appId})`}: ${entry.outcome}`))].sort();
+
 export function ciOf(home: string, identity: ProofIdentity, run: Run, now: Date): CiResult {
   try {
     const pr = readPullRequest(identity, run);
@@ -176,9 +178,10 @@ export function ciOf(home: string, identity: ProofIdentity, run: Run, now: Date)
     const stacked = !required.length && pr.defaultBranch !== undefined && pr.defaultBranch !== pr.base;
     if (stacked) required = requiredChecks(home, identity.repository, pr.defaultBranch!, run, now);
     const entries = entriesOf(identity, run);
-    if (!required.length) return everyCheck(entries, identity.commit);
+    const checks = checksOf(entries);
+    if (!required.length) return { ...everyCheck(entries, identity.commit), checks };
     const verdict = requiredVerdict(entries, required, pr.draft);
-    return stacked ? { ...verdict, detail: `${verdict.detail} (required by ${pr.defaultBranch}; the base ${pr.base} requires none)` } : verdict;
+    return { ...stacked ? { ...verdict, detail: `${verdict.detail} (required by ${pr.defaultBranch}; the base ${pr.base} requires none)` } : verdict, checks };
   } catch (error) {
     return { state: "unknown", detail: (error as Error).message };
   }

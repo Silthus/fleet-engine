@@ -90,7 +90,7 @@ export async function currentSummary(ref: PrRef, pull: PullRequest, ledger: Ledg
     pushedHead: pushedHeadOf(head, run, (read) => { readAsSaved &&= JSON.stringify(keyOf(read, saved.key.landed, saved.key.fingerprint)) === JSON.stringify(saved.key); }),
     ledger, now: now?.(),
   });
-  const judged = readAsSaved && JSON.stringify(live.conditions) === JSON.stringify(saved.conditions) && live.proofSummary.ci.line === saved.gate.summary.ci.line;
+  const judged = readAsSaved && JSON.stringify(live.conditions) === JSON.stringify(saved.conditions) && live.proofSummary.ci.line === saved.gate.summary.ci.line && JSON.stringify(live.proofSummary.ci.checks) === JSON.stringify(saved.gate.summary.ci.checks);
   const receipt = await receiptOf(home, ref);
   return { ...saved.gate.summary, ...receipt ? { receipt } : {}, ...live.proofSummary, code: live.code !== 0 ? live.code : judged ? saved.gate.code : 1 };
 }
