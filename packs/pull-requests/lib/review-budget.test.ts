@@ -173,6 +173,32 @@ test("the last read reads every fix since the panel commit with the Correctness 
   expect(prompt).toContain("-greet\n+greet the new member");
 });
 
+test("the gate reports HEAD unreviewed when GitHub fails while it weighs the PR's size", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical", "low") });
+  await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  await reviewHead(pr);
+  await pr.commit("feature.txt", "greet the member\n");
+  pr.whileGithubReadsPull(`printf '%s' 'echo "HTTP 502" > "$(dirname "$0")/pull-error-42"' > "$(dirname "$0")/while-reading"`);
+  const gate = await pr.fleet("gate");
+  expect(gate.code).toBe(1);
+  expect(gate.output).toContain("review: HEAD not reviewed");
+});
+
+test("a first final read from the panel commit reads with the Correctness lens too", async () => {
+  const pr = await checkout();
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
+  const panel = await pr.commit("feature.txt", "greet\n");
+  await pr.fleet("require", "--none", "--reason", "fixture");
+  await reviewHead(pr);
+  await pr.commit("feature.txt", "greet the member\n");
+  const reviewer = fakeModel(pr, "REVIEWER", "No findings.");
+
+  expect((await pr.fleet("review", "--scope", "final", "--base", panel)).code).toBe(0);
+  expect(reviewer.prompts().at(-1)!).toContain("This is the last read: the diff holds every fix since the panel. Read it with the Correctness lens");
+});
+
 test("fleet proof miss records --introduced-by-fix on the case", async () => {
   const pr = await checkout();
   await pr.commit("feature.txt", "greet the new member\n");

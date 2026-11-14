@@ -480,7 +480,7 @@ first and needs the hub; a round whose decision is recorded finishes without it.
   },
 };
 
-type SingleRound = { round: number | "final"; id: string; directory: string; scope: string; base?: string; from?: string };
+type SingleRound = { round: number | "final"; id: string; directory: string; scope: string; base?: string; from?: string; phase?: string };
 
 async function runReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
   const { home, run } = context;
@@ -488,7 +488,7 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
   const pending = await unfinishedReview(home, head, "fleet");
   if (pending) requireSameRequest(pending, options, run);
   const reserved: SingleRound = pending
-    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
+    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, base: pending.reservation.base, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run), phase: (pending.reservation as { phase?: string }).phase }
     : await reserveFleetReview(options, head, context);
   return roundStep(reserved.directory, context, async () => {
     if (await readPlan(reserved.directory) || await stagedPlan(reserved.directory)) throw new Error(`${reserved.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
@@ -519,7 +519,7 @@ async function askReviewer(reserved: SingleRound, head: ProofIdentity, author: F
   const rules = reviewRules(files, baseTip(head, run), run);
   const diffFile = join(reserved.directory, "diff.patch");
   await writeFile(diffFile, diff, { mode: 0o600 });
-  const guide = reserved.round === "final" && reserved.from !== reserved.base ? await panelGuideText(home) : undefined;
+  const guide = reserved.round === "final" && (reserved.phase ?? "review") === "review" ? await panelGuideText(home) : undefined;
   const lens = guide && parseGuide(guide.text, guide.path).lenses.get("correctness")?.text;
   const prompt = reviewPrompt({ scope: reserved.scope, from, commit: head.commit, diff, diffFile, note: leftOutNote(leftOut), crossFamily: familyOf(row) !== author, title: pr.title, body: pr.body, rubric, references: skillReferences(home), reviewRules: rules, lens });
   const answer = await askModel("reviewer", row, { prompt, cwd: topLevel(run) ?? cwd, readable: [join(home, ".agents/skills"), reserved.directory] }, env, limit);
@@ -555,7 +555,7 @@ async function reserveRound(options: Map<string, string>, head: ProofIdentity, c
   if (small && capturedBy === "fleet" && !panel && !decision && !await panelCommit(context.home, head)) throw new Error("A small PR gets one read, and it is the panel: run fleet proof review --lens <lens> ..., which runs the lenses as one combined lens");
   const limits = small ? { ...permit.limits, ceiling: 1, small } : permit.limits;
   const reserved = await startReview(context.home, head, { scope, base, from, ...permit, limits, decision, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run, () => baseRefs(head, context.run)), capturedBy, lock: async (directory) => lockNewRound(directory, await context.lock()) });
-  return { ...reserved, scope, base, from };
+  return { ...reserved, scope, base, from, phase: options.get("--phase") };
 }
 
 async function unrecordedRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
