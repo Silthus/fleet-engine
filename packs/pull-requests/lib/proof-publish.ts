@@ -1,6 +1,6 @@
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { isScreenshot, saveProof, type ProofIdentity } from "./proof.ts";
+import { entries, isScreenshot, saveProof, type ProofIdentity } from "./proof.ts";
 
 export type GitHub = (path: string, body?: unknown, method?: string) => Promise<unknown>;
 
@@ -14,8 +14,7 @@ const publishedRecord = (saved: string, repository: string) => `${saved}.${repos
 
 export async function publishedUrl(saved: string) {
   const [directory, name] = [dirname(saved), basename(saved)];
-  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => { if (["ENOENT", "ENOTDIR"].includes(error.code ?? "")) return [] as string[]; throw error; });
-  for (const record of names.filter((file) => file.startsWith(`${name}.`) && file.endsWith(publishedSuffix)).sort()) {
+  for (const record of (await entries(directory)).filter((file) => file.startsWith(`${name}.`) && file.endsWith(publishedSuffix)).sort()) {
     const url = (await cached(join(directory, record)))?.url;
     if (typeof url === "string") return url;
   }

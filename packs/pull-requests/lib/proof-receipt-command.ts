@@ -8,7 +8,7 @@ import { prDirectory, readDecisions, readJson, reviewRecords, writeJson, type Pr
 import { readDisplay, readNotChecked, recordNotChecked } from "./proof-display.ts";
 import { receiptSummary, type GateContext } from "./proof-gate.ts";
 import { readPlan } from "./proof-panel.ts";
-import { checkMarkers, GuardRefusal, placeReceipt, receiptHash, receiptLink, receiptMarker, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
+import { checkPlacement, GuardRefusal, keepCallout, placeReceipt, receiptHash, receiptLink, receiptMarker, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
 import { handlerPublisher, type Published } from "./proof-receipt-publisher.ts";
 import { reviewDisplay } from "./proof-review-display.ts";
 
@@ -52,7 +52,8 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
   const ledger = hubLedger(home, env, ssh);
   const decisions = await readDecisions(ledger);
   if (!Array.isArray(decisions)) { print(`receipt: the hub ledger cannot be reached (${decisions.unreachable}); nothing written`); return 3; }
-  checkMarkers(first.body);
+  const heading = stringSetting("pull-requests.receiptHeading", env);
+  checkPlacement(first.body, heading);
   const summary = await receiptSummary(head, first, ledger, context);
   const display = await readDisplay(home, head);
   const notChecked = items ?? await readNotChecked(home, head);
@@ -79,7 +80,7 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
     catch (error) { print((error as Error).message); return 1; }
     await writeJson(publishedPath(home, head), published);
   }
-  const intended = placeReceipt(first.body, { head: head.commit, hash, section: published ? withLink(rendered.section, published.url) : rendered.section }, stringSetting("pull-requests.receiptHeading", env));
+  const intended = keepCallout(first.body, placeReceipt(first.body, { head: head.commit, hash, section: published ? withLink(rendered.section, published.url) : rendered.section }, heading));
   if (readBody(head, context).body !== first.body) throw new Error("The PR body changed while fleet built the receipt. Run the receipt again");
   await writeBody(head, intended, context);
   if (readBody(head, context).body !== intended) throw new Error("The PR body reads back different from the one fleet wrote. Check the body by hand, then run the receipt again");

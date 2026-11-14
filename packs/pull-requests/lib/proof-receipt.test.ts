@@ -121,8 +121,20 @@ test("an empty read, a body edited before the write, broken markers or a lost wr
     pr.pullRequestState({ body: `Adds the greeting.\n\n${broken}\n` });
     await expect(pr.fleet("receipt")).rejects.toThrow("broken receipt markers");
   }
+  for (const overlapping of [`${open}\n${graded("critical")}<!-- /fleet-proof-receipt -->\n`, `## Testing\n\n<!-- merge-risk -->\n> **Tier:** critical (b)\n\n## Rollout\n\n- **Stages:** one\n<!-- /merge-risk -->\n`]) {
+    pr.pullRequestState({ body: `Adds the greeting.\n\n${overlapping}` });
+    await expect(pr.fleet("receipt")).rejects.toThrow("would change the merge-risk callout");
+  }
   expect(patches(pr)).toBe(0);
   expect(handler.requests()).toHaveLength(0);
+
+  const marking = join(pr.home, "marking.ts");
+  writeFileSync(marking, `await Bun.stdin.text();\nconsole.log(JSON.stringify({ id: "r1", url: "https://receipts.example/r/<!--/merge-risk-->" }));\n`);
+  pr.env.FLEET_HANDLERS = JSON.stringify({ "proof-receipt": marking });
+  pr.pullRequestState({ body: `Adds the greeting.\n\n<!-- merge-risk -->\n> **Tier:** critical (b)\n` });
+  await expect(pr.fleet("receipt")).rejects.toThrow("would change the merge-risk callout");
+  expect(patches(pr)).toBe(0);
+  publisher(pr);
 
   pr.pullRequestState({ body: "Adds the greeting." });
   pr.githubFault("patch-mangle", "\nAn edit that raced the write.");

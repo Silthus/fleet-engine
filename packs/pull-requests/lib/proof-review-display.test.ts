@@ -38,7 +38,7 @@ test("each answer fleet proof respond takes counts for the finding it numbers, a
 test("an answer that is not a numbered fixed or rejected item shows as written and counts as unknown", () => {
   const commit = "a".repeat(40);
   const rounds = reviewDisplay([
-    { label: "round 1", directory: "round-1", commit, reviewer: "gpt-6.1-sol", capturedBy: "fleet", findings: lensFindings, responses: "1. fixed in 1a2b3c4: the row is kept\n- 3: rejected, retries are capped upstream\nWill handle B later.\n" },
+    { label: "round 1", directory: "round-1", commit, reviewer: "gpt-6.1-sol", capturedBy: "fleet", findings: lensFindings.replace("A drops the row.", "A drops the row.\n  It happens on every save."), responses: "1. fixed in 1a2b3c4: the row is kept\n\n   and a test reads it back\n  4. rejected: an indented answer past the last finding\n- 3: rejected, retries are capped upstream\n  3. fixed: a second answer to the same finding\nWill handle B later.\n  B needs a rename first.\n4. fixed: an answer past the last finding\n0. rejected: an answer before the first\n" },
     { label: "final read 1", directory: "final-1", commit, reviewer: undefined, capturedBy: "author", findings: "The whole design leaks a token.", responses: undefined },
     { label: "round 2", directory: "round-2", commit, reviewer: undefined, capturedBy: "fleet", findings: "No findings.", responses: undefined },
   ]);
@@ -47,8 +47,20 @@ test("an answer that is not a numbered fixed or rejected item shows as written a
     ["final read 1", { findings: 1, fixed: 0, rejected: 0, unknown: 1 }],
     ["round 2", { findings: 0, fixed: 0, rejected: 0, unknown: 0 }],
   ]);
+  expect(rounds[0]!.findings[0]).toEqual({ text: "- **high**, `src/a.ts:1`: A drops the row.\nIt happens on every save.", answer: { verdict: "fixed", text: "1. fixed in 1a2b3c4: the row is kept\nand a test reads it back" } });
   expect(rounds[0]!.findings[1]!.answer).toBeUndefined();
   expect(rounds[0]!.findings[2]!.answer).toEqual({ verdict: "rejected", text: "- 3: rejected, retries are capped upstream" });
-  expect(rounds[0]!.other).toBe("Will handle B later.");
+  expect(rounds[0]!.other).toBe("4. rejected: an indented answer past the last finding\n3. fixed: a second answer to the same finding\nWill handle B later.\nB needs a rename first.\n4. fixed: an answer past the last finding\n0. rejected: an answer before the first");
   expect(rounds[1]!.findings).toEqual([{ text: "The whole design leaks a token." }]);
+});
+
+test("an unindented line right under a finding continues it, while a line after a blank line or a heading does not", () => {
+  const findings = "## Correctness lens, by review-model\n\nFINDINGS:\n- **high**, `src/a.ts:1`: A drops the row.\nIt happens on every save.\n\nA paragraph after the list.\n- **low**: the name B is unclear.\n## Design lens, by review-model\nFINDINGS:\n- **medium**: C retries forever.\nCOVERED: src/a.ts\n";
+  const [round] = reviewDisplay([{ label: "round 1", directory: "round-1", commit: "a".repeat(40), reviewer: "gpt-6.1-sol", capturedBy: "fleet", findings, responses: "1. fixed: the row is kept\nand a test reads it back\n" }]);
+  expect(round!.findings).toEqual([
+    { text: "- **high**, `src/a.ts:1`: A drops the row.\nIt happens on every save.", answer: { verdict: "fixed", text: "1. fixed: the row is kept" } },
+    { text: "- **low**: the name B is unclear." },
+    { text: "- **medium**: C retries forever." },
+  ]);
+  expect(round!.other).toBe("and a test reads it back");
 });

@@ -1,17 +1,21 @@
 import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
-import type { DecisionState } from "./decision-ledger.ts";
+import { riskCalloutOf, type DecisionState } from "./decision-ledger.ts";
 import type { Display } from "./proof-display.ts";
 import type { ReviewDisplay } from "./proof-review-display.ts";
 import type { GapProof, KindProof, ProofSummary } from "./proof.ts";
 
 export const receiptOpen = "<!-- fleet-proof-receipt";
 export const receiptClose = "<!-- /fleet-proof-receipt -->";
-const blockText = String.raw`<!-- fleet-proof-receipt\b[^>]*-->(?:(?!<!-- fleet-proof-receipt)[\s\S])*?<!-- \/fleet-proof-receipt -->`;
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+const blockText = String.raw`${escaped(receiptOpen)}\b[^>]*-->(?:(?!${escaped(receiptOpen)})[\s\S])*?${escaped(receiptClose)}`;
 const blockAndBreak = new RegExp(String.raw`${blockText}(?:\r?\n){0,2}`, "g");
 const marker = /<!-- fleet-proof-receipt head=([0-9a-f]{40}) hash=([0-9a-f]+) -->/;
 
-export const withoutReceipt = (body: string) => body.replace(blockAndBreak, "");
+export function withoutReceipt(body: string) {
+  const stripped = body.replace(blockAndBreak, "");
+  return riskCalloutOf(stripped) === riskCalloutOf(body) ? stripped : body;
+}
 
 export function receiptMarker(body: string) {
   const match = marker.exec(body);
@@ -163,8 +167,19 @@ export function checkMarkers(body: string) {
 }
 
 export type Receipt = { head: string; hash: string; section: string };
-const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const blockOf = ({ head, hash, section }: Receipt, heading: string | undefined) => `${receiptOpen} head=${head} hash=${hash} -->\n${heading ? `## ${heading}\n\n` : ""}${section}\n${receiptClose}`;
+
+export function keepCallout(body: string, placed: string) {
+  if (riskCalloutOf(placed) !== riskCalloutOf(body)) {
+    throw new Error("Writing the receipt would change the merge-risk callout, because the receipt block holds part of it or lands inside it. Move the callout out of the receipt block and the testing section by hand, then run the receipt again");
+  }
+  return placed;
+}
+
+export function checkPlacement(body: string, heading: string) {
+  checkMarkers(body);
+  keepCallout(body, placeReceipt(body, { head: "0".repeat(40), hash: "0", section: "" }, heading));
+}
 
 export function placeReceipt(body: string, receipt: Receipt, heading: string) {
   const name = escaped(heading);
