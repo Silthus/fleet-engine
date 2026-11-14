@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { riskCalloutOf, type DecisionState } from "./decision-ledger.ts";
+import type { Plan } from "./proof-panel.ts";
 import type { Display } from "./proof-display.ts";
 import type { ReviewDisplay } from "./proof-review-display.ts";
 import { summaryGaps, type GapProof, type KindProof, type ProofSummary } from "./proof.ts";
@@ -70,13 +71,13 @@ function guardModel(field: string, model: string) {
   return literal(model);
 }
 
-const short = (commit: string) => commit.slice(0, 7);
-const at = (commit: string) => `\`${short(commit)}\``;
+export const short = (commit: string) => commit.slice(0, 7);
+export const at = (commit: string) => `\`${short(commit)}\``;
 const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\r?\n/g, "<br>");
 const row = (cells: string[]) => `|${cells.map((text) => text ? ` ${cell(text)} ` : " ").join("|")}|`;
 export const prodShapeResult = "measured on production; details in the receipt";
 
-export type ReceiptReview = ReviewDisplay & { lenses?: string[] };
+export type ReceiptReview = ReviewDisplay & { lenses?: Plan["lenses"] };
 export type ReceiptInput = {
   summary: ProofSummary; decisions: DecisionState[]; display: Display; notChecked: string[]; reviews: ReceiptReview[];
   screenshots: { commit: string; names: string[] }[];
@@ -107,7 +108,7 @@ function kindRow(kind: KindProof, input: ReceiptInput, warnings: string[]) {
 function reviewRow(reviews: ReceiptReview[]) {
   if (!reviews.length) return row(["Review", "no finished review", "", ""]);
   const models = [...new Set(reviews.flatMap((review) => review.lenses
-    ? review.lenses.map((model) => guardModel(`panel model of ${review.label}`, model))
+    ? review.lenses.map(({ model }) => guardModel(`panel model of ${review.label}`, model))
     : review.reviewer ? [guardModel(`reviewer of ${review.label}`, review.reviewer)] : []))];
   const labels = reviews.map((review) => guardField("review label", review.label));
   const lenses = Math.max(0, ...reviews.map((review) => review.lenses?.length ?? 0));
@@ -253,9 +254,11 @@ export function placeReceipt(body: string, receipt: Receipt, heading: string): s
     const generated = /^[^\n]*-->\r?\n#{1,6}[ \t]+([^\r\n]*?)[ \t]*\r?\n/.exec(body.slice(start, end))?.[1];
     const { found, next } = sectionOf(body, heading);
     const inSection = found !== undefined && found.start < start && (!next || start < next.start);
-    const inPlace = body.slice(0, start) + blockOf(receipt, generated) + body.slice(end);
-    if ((generated === heading || (generated === undefined && inSection)) && blocksAround(body, { start, end }) !== undefined) return inPlace;
-    return placeReceipt(lifted(body, start, end), receipt, heading);
+    const around = blocksAround(body, { start, end });
+    const rest = lifted(body, start, end);
+    const stays = generated === heading || (generated === undefined && inSection) || blocksOf(rest) !== around;
+    if (around !== undefined && stays) return body.slice(0, start) + blockOf(receipt, generated && heading) + body.slice(end);
+    return placeReceipt(rest, receipt, heading);
   }
   const { found, next } = sectionOf(body, heading);
   if (next) return `${afterBlankLine(body.slice(0, next.start))}${blockOf(receipt, undefined)}\n\n${body.slice(next.start)}`;

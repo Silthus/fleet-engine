@@ -15,6 +15,7 @@ import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
 import { displayLine, recordCaption, recordLines } from "./proof-display.ts";
 import { prodShapeResult, receiptClose, receiptOpen } from "./proof-receipt.ts";
 import { runReceipt } from "./proof-receipt-command.ts";
+import { receiptBudget } from "./proof-receipt-page.ts";
 import { publisherSeam } from "./proof-receipt-publisher.ts";
 import { reviewPrompt } from "./proof-review.ts";
 import { leftOutNote, reviewRange } from "./proof-range.ts";
@@ -157,7 +158,8 @@ again after you change the repository's access.`,
     summary: `Write the PR's public-safe proof receipt into its body, and publish the full receipt when a pack offers a
 publisher. The block sits at the end of the section under the heading the setting pull-requests.receiptHeading names,
 or with that heading at the end of the body. Only a # heading that GitHub shows at the top level of the body starts
-or ends that section, never an underlined one. When the setting changes, the next run moves the block. It holds a row per owed proof (what ran, the result, the commit or the commit it
+or ends that section, never an underlined one. When the setting changes, the next run moves the block,
+unless taking it out would join the lists or code blocks around it: then it stays and takes the new heading. It holds a row per owed proof (what ran, the result, the commit or the commit it
 was reused from), a review row, a judge row, what was not checked, and each gap with who accepted it. It reads the
 proof summary the gate saved at HEAD and the decision ledger, never a proof's pass or fail itself. The block sits
 between ${receiptOpen} head=<sha> hash=<hex> --> and ${receiptClose}; the rest of the body stays as it is, and the
@@ -169,10 +171,17 @@ it; move such detail into an evidence note. The prod-shape result always reads "
 ${publisherSeam} handler publishes the full receipt: it reads {repository, pr, title, page, previous: {id, url}} as
 JSON on stdin and prints {id, url}, or {failed}, as its last line; the block then links the URL, and the next run
 on this machine passes it back as previous. A machine that did not publish it sends no previous, so the handler
-publishes a new page. fleet refuses an empty body read, a body that changed between its read and the write,
+publishes a new page. Without a handler, fleet writes the page to display/receipt.md in the PR's proof store,
+prints its path, links nothing in the block, and records the PR itself as the receipt unless one is recorded. The
+page shows the proof of each commit in the order it was proved or reviewed, each review round with its lenses and
+findings, the judge verdicts, the gaps with their decisions, the screenshots, the lines and notes of each owed proof,
+the decisions, and what was not checked. Notes keep their prose only: fenced and indented code, command transcripts
+through their exit line, and HTML are left out or shown as text, and their headings show as bold lines. When the handler's request is over ${receiptBudget}
+bytes, the page leaves out the raw lens answers, then the judge reasons, then note lines past the 40th, and says so.
+fleet refuses an empty body read, a body that changed between its read and the write,
 broken markers, a write that would change the merge-risk callout, and a body that reads back different. It warns about each proof without a line and each screenshot
 without a caption or a published URL. Exit 0 when the receipt is current or written; 1 when publishing or GitHub
-fails; 2 when the guard refuses a field; 3 when the hub ledger cannot be reached. --comment records a comment you
+fails, or the page is still over the budget; 2 when the guard refuses a field; 3 when the hub ledger cannot be reached. --comment records a comment you
 posted on the PR as its receipt instead: GitHub must show the comment on this PR. fleet proof gate --json and fleet
 decision report link the receipt.`,
     examples: ["fleet proof receipt --not-checked 'Safari' --not-checked 'the mobile layout'", "fleet proof receipt", "fleet proof receipt --comment https://github.com/owner/name/pull/7#issuecomment-1"],
