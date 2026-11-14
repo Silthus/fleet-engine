@@ -86,6 +86,15 @@ export function resolveLens(guide: PanelGuide, argument: string, author: Family,
   };
 }
 
+export function combinedLens(lenses: Lens[], author: Family): Lens {
+  const combined = lenses.filter((lens) => lens.name !== sweep);
+  const cast = combined.find((lens) => lens.family !== author) ?? combined[0] ?? lenses[0]!;
+  return {
+    ...cast, name: "combined", title: `Combined: ${combined.map((lens) => lens.title).join(", ")}`, context: true,
+    text: combined.map((lens) => `${lens.title}\n\n${lens.text}`).join("\n\n"), knowledge: combined.map((lens) => lens.knowledge).filter(Boolean).join("\n\n"),
+  };
+}
+
 export function lensBrief(guide: PanelGuide, lens: Lens, input: BriefInput) {
   const fromDescription = "see the PR description";
   const fills: Record<string, string> = {

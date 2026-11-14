@@ -8,7 +8,7 @@ export type MissSource = (typeof missSources)[number];
 
 export type Miss = {
   id: string; at: string; repo: string; pr: number; commit: string; source: MissSource; finding: string;
-  file?: string; line?: number; url?: string;
+  file?: string; line?: number; url?: string; introducedByFix?: boolean;
   base: string; head: string; scope: string; round: string; reviewer?: string; title: string; body: string;
 };
 

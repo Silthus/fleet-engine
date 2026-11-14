@@ -97,10 +97,11 @@ function finalReadPhase(value: string): FinalReadPhase {
   return value as FinalReadPhase;
 }
 
-async function finalReadsInPhase(reviews: string, started: string[], phase: FinalReadPhase) {
+async function reviewsSpent(reviews: string, started: string[], phase: FinalReadPhase) {
   const reads = started.filter((name) => name.startsWith(finalReadPrefix));
+  const rounds = phase === "review" ? started.length - reads.length : 0;
   const phases = await Promise.all(reads.map(async (name) => (JSON.parse(await readFile(join(reviews, name, "round.json"), "utf8")) as { phase?: FinalReadPhase }).phase ?? "review"));
-  return phases.filter((readPhase) => readPhase === phase).length;
+  return rounds + phases.filter((readPhase) => readPhase === phase).length;
 }
 
 export type ArbiterVerdict = { verdict: "continue" | "escalate" | "unavailable"; reason: string; model: string };
@@ -114,6 +115,8 @@ Answer ESCALATE only in one of these cases:
 
 fleet ends some findings with an Anchor check. Its "Seen before" lines name findings that quote the same changed line as a finding of an earlier review: weigh them for case 2.
 
+Only open blockers and majors count. The findings below leave out minor and nit findings and every TESTS block: they need no response and no new read.
+
 In all other cases answer CONTINUE. New findings, many findings, or findings about new code are not a reason to escalate. A finding whose earlier fix the author's response moved into the module that owns the concept is progress, not a loop.
 
 Your first line must be exactly CONTINUE, or ESCALATE: followed by one sentence that names the findings and their reviews. Write nothing else.`;
@@ -124,7 +127,7 @@ const cut = (text: string, cap: number) => text.length > cap ? text.slice(0, cap
 async function arbiterPrompt(home: string, identity: ProofIdentity) {
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   const sections = await Promise.all((await finishedReviews(home, identity)).map(async ({ name }) => {
-    const findings = (await readFile(join(reviews, name, "findings.md"), "utf8")).trim();
+    const findings = ladderFindings(await readFile(join(reviews, name, "findings.md"), "utf8")).trim();
     const responses = (await readFile(join(reviews, name, "responses.md"), "utf8").catch(() => "")).trim();
     return `# ${reviewLabel(name)}\n\n${cut(findings, findingsCap)}${responses ? `\n\n# Responses to ${reviewLabel(name)}\n\n${cut(responses, responsesCap)}` : ""}`;
   }));
@@ -139,11 +142,15 @@ export function parseVerdict(output: string, model: string): ArbiterVerdict {
   return { verdict: "unavailable", reason: `unparseable answer: ${line.slice(0, 200)}`, model };
 }
 
-export type ReviewLimits = { free: number; ceiling: number };
+export type ReviewLimits = { free: number; ceiling: number; small?: boolean };
+
+export const atCeiling = `fleet proof asks nothing more. For each open blocker or major, revert the fix that brought it in, or list it in a "## Known issues" section of the PR body, one "- <blocker|major>: <file:line> <finding>" item each. A blocker or major that the last read found in the fixes since the panel is reverted, never listed. An open blocker holds the merge; the user's merge word accepts the rest. Only the user's --override runs another review`;
+
+const budgetSpent = ({ ceiling, small }: ReviewLimits) => `${small ? "A small PR gets one read and no final read." : `The review budget is spent: ${ceiling} reviews, the panel, the fixes read, and the last read.`} ${atCeiling}`;
 
 async function permitReview(home: string, identity: ProofIdentity, due: boolean, ceiling: string | undefined, decision: DecisionMark | undefined, { arbiter }: Permit) {
   if (decision?.mark === "👤") return undefined;
-  if (ceiling && !decision) throw new Error(askUser(identity, ceiling));
+  if (ceiling) throw new Error(ceiling);
   if (!due) return undefined;
   const verdict = await arbiter(await arbiterPrompt(home, identity));
   if (verdict.verdict !== "continue" && !decision) throw new Error(askUser(identity, verdict.verdict === "escalate" ? `The arbiter escalates: ${verdict.reason}.` : `The arbiter gave no verdict: ${verdict.reason}.`));
@@ -179,10 +186,10 @@ async function startFinalRead(home: string, identity: ProofIdentity, base: strin
     const latest = finished.at(-1);
     if (!latest) throw new Error("A final read needs a finished earlier review");
     if (!coversReview(base, latest.commit, cleanBaseMerge)) throw new Error(`Final read base must be the latest reviewed commit ${latest.commit}, or a clean base merge the gate carried it to`);
-    const done = await finalReadsInPhase(reviews, started, phase);
+    const spent = await reviewsSpent(reviews, started, phase);
     const { free, ceiling } = permit.limits;
-    const stop = done >= ceiling ? `The loop did not converge: ${ceiling} final reads done in the ${phase} phase.` : undefined;
-    const verdict = await permitReview(home, identity, done >= free, stop, decision, permit);
+    const stop = spent >= ceiling ? budgetSpent(permit.limits) : undefined;
+    const verdict = await permitReview(home, identity, spent >= free, stop, decision, permit);
     let read = 1;
     while (started.includes(finalReadPrefix + read)) read++;
     const name = finalReadPrefix + read;
@@ -216,9 +223,10 @@ async function startRound(home: string, identity: ProofIdentity, reviews: string
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if (round === 1 && scope !== "full") throw new Error("Round 1 is --scope full: it reviews the whole PR diff. Drop --base");
     if (round > 1) await checkLaterRound(reviews, round, scope, base, decision, cleanBaseMerge);
+    const spent = await reviewsSpent(reviews, await reviewNames(reviews), "review");
     const { free, ceiling } = permit.limits;
-    const stop = round > ceiling ? `The loop did not converge: ${ceiling} panel rounds done.` : undefined;
-    const verdict = await permitReview(home, identity, round > free, stop, decision, permit);
+    const stop = spent >= ceiling ? budgetSpent(permit.limits) : undefined;
+    const verdict = await permitReview(home, identity, spent >= free, stop, decision, permit);
     if (await reserveDecided(reviews, String(round), { ...identity, round, scope, base, from, arbiter: verdict, capturedBy }, decision, lock)) return { round, id: String(round), directory };
   }
   throw new Error("Review limit exceeded");
@@ -383,7 +391,7 @@ export async function respondToReview(home: string, identity: ProofIdentity, rou
   const findings = await readFile(join(directory, "findings.md"), "utf8").catch(() => undefined);
   if (findings === undefined) throw new Error(`Review round ${round} has no findings yet`);
   const missing = unanswered(findings, bytes.toString());
-  if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>" or "${missing[0]}. rejected: <why>"`);
+  if (missing.length) throw new Error(`Answer findings ${missing.join(", ")} too: one line each, numbered in the order of findings.md, such as "${missing[0]}. fixed in 1a2b3c4: <how>" or "${missing[0]}. rejected: <why>". Minor and nit findings and TESTS items need no answer`);
   const destination = join(directory, "responses.md");
   const temporary = `${destination}.${crypto.randomUUID()}`;
   await writeFile(temporary, bytes, { flag: "wx", mode: 0o600 });
@@ -397,6 +405,8 @@ const answerItem = /^\s*(?:[-*]\s+)?(\d+)[.):]\s+\**(?:fixed|rejected)\b/gim;
 const noFinding = /^(?:#.*|no findings\.?|findings:?|\(none\))$/i;
 
 const findingsBlock = /^\s*FINDINGS\b:?/;
+const testsBlock = /^\s*TESTS\b/;
+const flooredItem = /^\s*(?:[-*]|\d+[.)])\s+(?:[^|\n]*\|)?\s*\**(?:minor|nit)\**\s*\|/i;
 
 function reviewedLines(findings: string) {
   const lines = findings.split("\n");
@@ -404,21 +414,30 @@ function reviewedLines(findings: string) {
   let inside = !lensAnswer;
   return lines.flatMap((line) => {
     if (findingsBlock.test(line)) { inside = true; return [line.replace(findingsBlock, "")]; }
-    if (/^COVERED\b/.test(line)) inside = false;
+    if (/^COVERED\b/.test(line) || testsBlock.test(line)) inside = false;
     else if (!lensAnswer && /^#/.test(line)) inside = true;
     return inside ? [line] : [];
   }).filter((line) => line.trim());
 }
 
-function findingCount(findings: string) {
+function ladderFindings(findings: string) {
+  let tests = false;
+  return findings.split("\n").filter((line) => {
+    if (testsBlock.test(line)) tests = true;
+    else if (findingsBlock.test(line) || /^(COVERED\b|#)/.test(line)) tests = false;
+    return !tests && !flooredItem.test(line);
+  }).join("\n");
+}
+
+function findingItems(findings: string) {
   const reviewed = reviewedLines(findings);
-  const items = reviewed.filter((line) => findingItem.test(line)).length;
-  return items || (reviewed.every((line) => noFinding.test(line.trim())) ? 0 : 1);
+  const items = reviewed.filter((line) => findingItem.test(line));
+  return items.length || reviewed.every((line) => noFinding.test(line.trim())) ? items : [reviewed.join("\n")];
 }
 
 function unanswered(findings: string, responses: string) {
   const answered = new Set([...responses.matchAll(answerItem)].map((match) => Number(match[1])));
-  return Array.from({ length: findingCount(findings) }, (_, index) => index + 1).filter((number) => !answered.has(number));
+  return findingItems(findings).flatMap((item, index) => flooredItem.test(item) || answered.has(index + 1) ? [] : [index + 1]);
 }
 
 export const proofKinds = ["live-run", "ui-walk", "prod-shape", "cross-version", "shadow-diff", "post-deploy-watch"] as const;
@@ -797,11 +816,16 @@ async function carryForward(home: string, identity: ProofIdentity, reviewed: Set
 
 const panelHint = "Run the qa-swarm panel with fleet proof review --lens <lens> --lens <lens> ..., or, for a PR that the user's rules exempt from the swarm, record fleet proof gap --kind panel --reason <the exception>";
 
-async function reviewStatus(weigh: Weigh, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit): Promise<Status & { panelGap?: GapProof }> {
+async function reviewStatus(weigh: Weigh, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, small: () => boolean): Promise<Status & { panelGap?: GapProof }> {
   const { home, identity, decisions } = weigh;
   const all = await finishedReviews(home, identity);
   const firstPanel = all.find((review) => review.panel);
-  if (firstPanel) return headReview(home, identity, all.filter((review) => review.finishedAt >= firstPanel.finishedAt), cleanBaseMerge, quietCommit);
+  if (firstPanel) {
+    const head = await headReview(home, identity, all.filter((review) => review.finishedAt >= firstPanel.finishedAt), cleanBaseMerge, quietCommit);
+    if (!head.problem || !small()) return head;
+    const covered = `one read of a small PR in ${reviewLabel(firstPanel.name)}`;
+    return { problem: undefined, line: `review: ${covered}; its fixes get no final read`, covered };
+  }
   const gap = await readJson<Gap | undefined>(gapPath(home, identity, "panel"), undefined);
   const weighed = await gapAcceptance(weigh, gap, "panel");
   const acceptance = weighed.acceptance;
@@ -864,7 +888,14 @@ function headStatus(identity: ProofIdentity, before: PushedHead, after: PushedHe
   return { problem: undefined, line: `head: ${short(identity.commit)} is the PR's head on GitHub` };
 }
 
-export type GateOptions = { ci: () => CiResult; pushedHead: () => PushedHead; ledger: Ledger; landed?: boolean; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; now?: Date };
+export type GateOptions = { ci: () => CiResult; pushedHead: () => PushedHead; ledger: Ledger; landed?: boolean; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; small?: (body: string) => boolean; now?: Date };
+
+const knownBlocker = (body: string) => /^#+\s*Known issues\s*$([\s\S]*?)(?=^#|(?![\s\S]))/im.exec(body)?.[1]!.split("\n").find((line) => /^\s*[-*]\s+\**blocker\b/i.test(line))?.trim();
+
+function heldStatus(head: PushedHead): Status | undefined {
+  const blocker = "body" in head && head.body !== undefined ? knownBlocker(head.body) : undefined;
+  return blocker ? { problem: "missing", line: `known issues: an open blocker holds the merge: ${blocker}` } : undefined;
+}
 
 export type ProofSummary = {
   repository: string; pr: number; commit: string; tier: Tier; code: number;
@@ -874,7 +905,7 @@ export type ProofSummary = {
   head: { state: "pushed" | "missing"; line: string };
   ci: { state: CiResult["state"]; detail: string; checks?: string[]; gap?: GapProof; line: string };
   judge: JudgeSummary;
-  lapsed: string[]; lapsedLine?: string; voided: string[]; receipt?: string;
+  lapsed: string[]; lapsedLine?: string; voided: string[]; receipt?: string; held?: string;
 };
 
 export type JudgeSummary = { state: "pass" | "fail" | "unavailable" | "skipped"; model?: string; gap?: GapProof; lines: string[] };
@@ -882,7 +913,7 @@ export type CheckedSummary = Omit<ProofSummary, "judge">;
 
 export const summaryLines = (summary: CheckedSummary) => [
   ...summary.owed.line ? [summary.owed.line] : [], ...summary.kinds.map((kind) => kind.line), summary.review.line, ...summary.review.unanswered,
-  summary.head.line, summary.ci.line, ...summary.lapsedLine ? [summary.lapsedLine] : [],
+  summary.head.line, summary.ci.line, ...summary.lapsedLine ? [summary.lapsedLine] : [], ...summary.held ? [summary.held] : [],
 ];
 
 const owedPart = (owed: Owed | undefined): CheckedSummary["owed"] =>
@@ -892,19 +923,20 @@ const owedPart = (owed: Owed | undefined): CheckedSummary["owed"] =>
 
 const lapsedLine = (ids: string[]) => ids.length ? `lapsed: ${ids.map((id) => `🤖 decision ${id}`).join(", ")} no longer count${ids.length === 1 ? "s" : ""}; ask the user, or decide again once the reason is gone` : undefined;
 
-export async function proofGate(home: string, identity: ProofIdentity, { ci, pushedHead, ledger, landed = false, cleanBaseMerge = () => undefined, quietCommit = () => undefined, now = new Date() }: GateOptions) {
+export async function proofGate(home: string, identity: ProofIdentity, { ci, pushedHead, ledger, landed = false, cleanBaseMerge = () => undefined, quietCommit = () => undefined, small = () => false, now = new Date() }: GateOptions) {
   const before = pushedHead();
   const tier = "error" in before || before.body === undefined ? "ungraded" : tierOf(before.body);
   const decisions = await readDecisions(ledger);
   const weigh: Weigh = { home, identity, now, decisions, tier };
   const owed = await readOwed(home, identity);
   const kinds = await Promise.all((owed?.kinds ?? []).map((kind) => kindStatus(weigh, kind, landed, cleanBaseMerge)));
-  const review = await reviewStatus(weigh, cleanBaseMerge, quietCommit);
+  const review = await reviewStatus(weigh, cleanBaseMerge, quietCommit, () => "body" in before && before.body !== undefined && small(before.body));
   const responses = await responseStatuses(home, identity);
   const ciResult = ci();
   const head = headStatus(identity, before, pushedHead());
   const checks = await ciStatus(weigh, ciResult);
-  const problems = [owed ? undefined : "missing", ...kinds.map((kind) => kind.problem), review.problem, ...responses.map((response) => response.problem), head.problem, checks.problem];
+  const held = landed ? undefined : heldStatus(before);
+  const problems = [owed ? undefined : "missing", ...kinds.map((kind) => kind.problem), review.problem, ...responses.map((response) => response.problem), head.problem, checks.problem, held?.problem];
   const weighed = [...kinds, review, checks];
   const lapsed = [...new Set(weighed.flatMap((status) => status.problem && status.lapsed ? [status.lapsed] : []))];
   const conditions = weighed.flatMap((status) => status.condition ? [status.condition] : []);
@@ -916,7 +948,7 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
     review: { state: review.problem ?? "covered", ...review.covered ? { covered: review.covered } : {}, ...review.panelGap ? { panelGap: review.panelGap } : {}, unanswered: responses.map((response) => response.line), line: review.line },
     head: { state: head.problem ? "missing" : "pushed", line: head.line },
     ci: { state: ciResult.state, detail: ciResult.detail, ...ciResult.checks ? { checks: ciResult.checks } : {}, ...checks.gap ? { gap: checks.gap } : {}, line: checks.line },
-    lapsed, ...lapsed.length ? { lapsedLine: lapsedLine(lapsed) } : {}, voided, ...receipt ? { receipt } : {},
+    lapsed, ...lapsed.length ? { lapsedLine: lapsedLine(lapsed) } : {}, voided, ...receipt ? { receipt } : {}, ...held ? { held: held.line } : {},
   };
   const summary = `kinds: ${owed?.kinds.length ? owed.kinds.join(", ") : "none"}; review: ${review.covered}; CI: ${checks.covered}`;
   const evidence = kinds.map(({ proof, evidence }) => ({ kind: proof.kind, line: proof.line, directory: evidence }));
@@ -938,6 +970,8 @@ export async function reviewRecords(home: string, identity: ProofIdentity) {
     };
   }));
 }
+
+export const panelCommit = async (home: string, identity: ProofIdentity) => (await finishedReviews(home, identity)).find((review) => review.panel)?.commit;
 
 export async function reviewOfCommit(home: string, identity: ProofIdentity) {
   const review = (await finishedReviews(home, identity)).filter((finished) => finished.commit === identity.commit).at(-1);

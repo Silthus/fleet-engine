@@ -480,6 +480,7 @@ test("a round after the PR merged its base reads and demands only the files the 
   await pr.advanceBase("base.md", "the base moves on\n");
   await pr.git("merge", "-q", "--no-edit", "main");
   const fixed = await pr.commit("feature.txt", "greet the member\n");
+  pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
 
   await pr.fleet("review", "--lens", "correctness", "--scope", "fixes", "--base", reviewed);
   expect((await pr.fleet("review", "--wait")).code).toBe(0);
@@ -750,6 +751,7 @@ test("a review at a newer commit leaves alone the panel round that a command at 
   const older = await pr.commit("feature.txt", "greet the member\n");
   const reviewer = fakeModel(pr, "REVIEWER", clean);
   const hub = hubAt(pr, "stalls after it lands an append");
+  pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
   pr.choose("Run one more round");
   const first = pr.fleet("review", "--scope", "final", "--base", reviewed, "--lens", "correctness", "--override", `2026-10-25 "Run one more round"`);
   await hub.appendStalled;

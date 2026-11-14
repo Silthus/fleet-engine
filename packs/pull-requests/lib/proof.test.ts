@@ -69,7 +69,7 @@ test("a clean merge of the base carries the review of the PR forward and records
 
 test("commits that change only test files carry the final read, and a final read of them needs a decision", async () => {
   const pr = await checkout();
-  pr.pullRequestState({ body: graded("non-critical") });
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
   await pr.commit("feature.ts", "export const greet = (name: string) => `hi ${name}`;\n");
   const reviewed = await reviewHead(pr);
   await pr.fleet("require", "--none", "--reason", "fixture");
@@ -320,7 +320,7 @@ test("an agent answers an arbiter escalation itself with --agent on a graded PR,
   expect(existsSync(join(pr.pullRequest, "reviews/3"))).toBe(false);
   expect(ledgerDecisions(pr)).toEqual([]);
 
-  pr.pullRequestState({ body: graded("critical") });
+  pr.pullRequestState({ body: graded("critical", "medium") });
   expect((await pr.fleet(...third, "--agent", reason)).code).toBe(0);
   const round = JSON.parse(readFileSync(join(pr.pullRequest, "reviews/3/round.json"), "utf8"));
   expect(round).toMatchObject({ arbiter: { verdict: "escalate", reason: "Round 2 undoes the rename round 1 asked for" }, decision: { mark: "🤖" } });
@@ -329,28 +329,31 @@ test("an agent answers an arbiter escalation itself with --agent on a graded PR,
   expect((await pr.fleet("show", "--round", "3")).output).toContain(`decided by 🤖 decision ${round.decision.id}`);
 });
 
-test("an agent runs a final read past the ceiling itself with --agent on a graded PR", async () => {
+test("at the review budget fleet asks nothing, --agent cannot pass it, and only the user's --override runs another review", async () => {
   const pr = await checkout();
-  pr.pullRequestState({ body: graded("non-critical") });
+  pr.env.FLEET_SETTINGS = JSON.stringify({ ...settings, "pull-requests.reviewCeiling": 3 });
+  pr.pullRequestState({ body: graded("non-critical", "medium") });
   const reviewed = await pr.commit("feature.txt", "new\n");
   await pr.fleet("review-start", "--scope", "full");
   await finishRound(pr, "1");
   pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
-  let base = reviewed;
-  for (let read = 1; read <= 6; read++) {
-    const fixed = await pr.commit("feature.txt", `fix ${read}\n`);
-    await pr.fleet("review-start", "--scope", "final", "--base", base);
-    await finishRound(pr, `final-${read}`);
-    base = fixed;
-  }
-  await pr.commit("feature.txt", "fix 7\n");
-  const seventh = ["review-start", "--scope", "final", "--base", base];
+  const fixes = await pr.commit("feature.txt", "fix 1\n");
+  await pr.fleet("review-start", "--scope", "fixes", "--base", reviewed);
+  await finishRound(pr, "2");
+  const last = await pr.commit("feature.txt", "fix 2\n");
+  await pr.fleet("review-start", "--scope", "final", "--base", fixes);
+  await finishRound(pr, "final-1");
+  await pr.commit("feature.txt", "fix 3\n");
+  const fourth = ["review-start", "--scope", "final", "--base", last];
 
-  await expect(pr.fleet(...seventh)).rejects.toThrow("6 final reads done in the review phase. Ask the user with your question tool");
-  await expect(pr.fleet(...seventh)).rejects.toThrow("Or decide the round yourself with --agent");
-  expect((await pr.fleet(...seventh, "--agent", "Read 6 found one real bug in new code; one more read checks its fix.")).code).toBe(0);
-  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/final-7/round.json"), "utf8"))).toMatchObject({ arbiter: { verdict: "continue" }, decision: { mark: "🤖" } });
-  await expect(pr.fleet(...seventh, "--standing", "anything", "--override", `2026-10-29 "Run it."`, "--thread", "thread-1")).rejects.toThrow("--agent with your reason, not both");
+  const refusal = pr.fleet(...fourth);
+  await expect(refusal).rejects.toThrow("The review budget is spent: 3 reviews, the panel, the fixes read, and the last read. fleet proof asks nothing more. For each open blocker or major, revert the fix that brought it in, or list it in a \"## Known issues\" section of the PR body");
+  await expect(pr.fleet(...fourth)).rejects.not.toThrow("question tool");
+  await expect(pr.fleet(...fourth, "--agent", "One more read checks the last fix.")).rejects.toThrow("The review budget is spent");
+  expect(ledgerDecisions(pr)).toEqual([]);
+  pr.choose("Run one more round");
+  expect((await pr.fleet(...fourth, "--override", `2026-11-14 "Run one more round"`, "--thread", "thread-1")).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(pr.pullRequest, "reviews/final-2/round.json"), "utf8"))).toMatchObject({ decision: { mark: "👤" } });
 });
 
 test("the review settings set how many reviews run free and where the loop stops", async () => {
@@ -364,7 +367,10 @@ test("the review settings set how many reviews run free and where the loop stops
   pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
   await pr.fleet("review-start", "--scope", "fixes", "--base", head);
   await finishRound(pr, "2");
-  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head)).rejects.toThrow("2 panel rounds done. Ask the user with your question tool");
+  await expect(pr.fleet("review-start", "--scope", "fixes", "--base", head)).rejects.toThrow("The review budget is spent: 2 reviews");
+  await pr.commit("feature.txt", "fixed\n");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", head)).rejects.toThrow("The review budget is spent: 2 reviews");
+  await expect(pr.fleet("review-start", "--scope", "final", "--base", head, "--phase", "babysit")).resolves.toMatchObject({ code: 0 });
 });
 
 test("without a replacement command, the arbiter runs the lookup row of the model table with its provider, model, and effort", async () => {
@@ -618,6 +624,7 @@ test("respond and review-finish take the id of the final read review-start print
   const pr = await checkout();
   const reviewed = await pr.commit("feature.txt", "new\n");
   await reviewHead(pr);
+  pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
   await pr.commit("feature.txt", "fix 1\n");
   const first = JSON.parse((await pr.fleet("review-start", "--scope", "final", "--base", reviewed)).output);
   expect(first).toMatchObject({ round: "final", id: "final-1" });

@@ -22,7 +22,7 @@ describe("the Pull requests pack", () => {
     expect(result.files.map((file) => file.target)).toEqual(expect.arrayContaining([".agents/guides/pull-requests.md", ".agents/guides/standing-rules.md"]));
     expect(result.unanswered).toEqual([]);
     expect(fileContent(result, ".agents/guides/skill-settings.md")).toContain("- `pull-requests.mergeCommand`: not set. Which command merges a pull request when the repo names no merge method? Leave it empty to merge as the rollout skill says.");
-    expect(result.settings).toMatchObject({ "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 6, "pull-requests.reviewTimeoutMinutes": 20, "pull-requests.panelSlots": 3 });
+    expect(result.settings).toMatchObject({ "pull-requests.freeReviews": 2, "pull-requests.reviewCeiling": 3, "pull-requests.reviewTimeoutMinutes": 20, "pull-requests.panelSlots": 3 });
   });
 
   test("links each pull-request skill, and tdd from the pinned third-party source, for Claude and for other agents", () => {

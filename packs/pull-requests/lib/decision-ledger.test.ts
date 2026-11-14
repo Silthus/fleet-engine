@@ -508,6 +508,7 @@ test("while the hub is down, a round at an older commit whose decision is not re
   const reviewed = await reviewHead(pr);
   await pr.commit("feature.txt", "newer\n");
   const hub = hubAt(pr, "drops appends");
+  pr.env.FLEET_REVIEW_ARBITER = "cat >/dev/null; echo CONTINUE";
   pr.choose("Run one more round");
   await expect(pr.fleet("review-start", "--scope", "final", "--base", reviewed, "--override", `2026-10-25 "Run one more round"`)).rejects.toThrow("Not recorded");
   const stranded = readFileSync(join(pr.pullRequest, "reviews/final-1/round.json"), "utf8");
