@@ -14,10 +14,10 @@ import { judge, readCriticalPaths, type JudgeInput } from "./proof-judge.ts";
 import { askModel, familyOf, modelLabel, readRiskRubric, readRubric, reviewerRow, skillReferences } from "./proof-models.ts";
 
 export type GateContext = { home: string; cwd: string; env: Env; run: Run; now?: () => Date; ssh?: Ssh };
-export type FinalGate = { code: number; lines: string[]; verdict: string; summary: ProofSummary };
+export type FinalGate = { code: number; reason: string; lines: string[]; verdict: string; summary: ProofSummary };
 
 type Checked = Awaited<ReturnType<typeof proofGate>>;
-type Judged = { code: number; lines: string[]; covered: string; judge: JudgeSummary };
+type Judged = { code: number; lines: string[]; covered: string; judge: JudgeSummary; reason?: string };
 type GateKey = { head: string; base: string; baseSha: string; tier: string; callout: string; landed: boolean; fingerprint: string };
 type Condition = Checked["conditions"][number];
 type SavedGate = { key: GateKey; gate: FinalGate; conditions: Condition[] };
@@ -32,7 +32,7 @@ export const arbiterOf = ({ env, cwd }: Pick<GateContext, "env" | "cwd">): Arbit
 };
 
 const savedPath = (home: string, ref: PrRef, commit: string) => join(pullRequestDirectory(home, { ...ref, commit }), "gate-outcome", `${commit}.json`);
-const unhashed = new Set(["gate-outcome", "judge", "carried", "receipt.json", displayEntry]);
+const unhashed = new Set(["gate-outcome", "gate-record", "judge", "carried", "receipt.json", displayEntry]);
 
 async function proofFiles(home: string, ref: PrRef) {
   const root = prDirectory(home, ref);
@@ -61,11 +61,12 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
     landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()),
     pushedHead, ledger: hubLedger(home, env, ssh), now: now?.(),
   });
-  const judged: Judged = checked.code === 0 ? await judgeHead(head, checked, context) : { code: checked.code, lines: [], covered: "", judge: { state: "skipped", lines: [] } };
+  const judged: Judged = checked.code === 0 ? await judgeHead(head, checked, context) : { code: checked.code, lines: [], covered: "", judge: { state: "skipped", lines: [] }, reason: checked.failure };
   const shown = pull === undefined ? undefined : receiptMarker((pull as PullRequest).body);
   const stale = shown && shown.head !== head.commit ? [`receipt: the PR body shows the receipt of ${shown.head.slice(0, 7)}, not HEAD ${head.commit.slice(0, 7)}. Refresh it with fleet proof receipt`] : [];
   const gate = {
     code: judged.code,
+    reason: judged.code === 0 ? "pass" : judged.reason ?? `exit ${judged.code}`,
     lines: [...checked.lines, ...judged.lines, ...stale],
     verdict: judged.code === 0 ? `gate: pass (${checked.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`,
     summary: { ...checked.proofSummary, code: judged.code, judge: judged.judge },
@@ -133,6 +134,7 @@ async function judgeHead(head: ProofIdentity, checked: Checked, context: GateCon
   const outcome = await judgeDiff(head, known, row, context);
   const verdict = (lines: string[], gap?: JudgeSummary["gap"]): JudgeSummary => ({ state: outcome.state, model: outcome.model, ...gap ? { gap } : {}, lines });
   if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
+  const reason = outcome.lines.find((line) => /^judge [a-z]+: fail\b/.test(line)) ?? outcome.lines[0];
   if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}`, judge: verdict(outcome.lines) };
   const gap = weighedGap && withBrokenConditions(weighedGap, outcome.broken);
   if (gap?.acceptance) {
@@ -141,13 +143,13 @@ async function judgeHead(head: ProofIdentity, checked: Checked, context: GateCon
   }
   if (gap) {
     const lines = [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${gap.broken ? voidBroken(gap.broken) : askGap(head, "judge", gap.reason)}`];
-    return { code: 3, lines, covered: "", judge: verdict(lines, judgeGapProof(head.commit, gap)) };
+    return { code: 3, lines, covered: "", judge: verdict(lines, judgeGapProof(head.commit, gap)), reason: `judge gap: ${gap.line}: ${gap.reason}` };
   }
   const hint = checked.tier === "ungraded"
     ? "judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and ask the user; an agent never decides on an ungraded PR"
     : `judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and decide it with fleet decision record --mark 🤖 --class proof-gap --kind judge --pr ${refText(head)} --question <q> --answer <a> --rejected <option> --reason <why>, or ask the user`;
   const lines = [...outcome.lines, hint];
-  return { code: 1, lines, covered: "", judge: verdict(lines) };
+  return { code: 1, lines, covered: "", judge: verdict(lines), reason };
 }
 
 async function judgeDiff(head: ProofIdentity, known: Omit<JudgeInput, "cwd" | "from" | "diff">, row: ModelRow, context: GateContext) {
