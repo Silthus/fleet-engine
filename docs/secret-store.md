@@ -18,8 +18,9 @@ command. Without a hub (`hub.alias` unset), the store lives on this machine.
 
 ## Rows and providers
 
-The store holds no row of its own. Packs and the profile declare them through
-two handler seams in `pack.json`:
+The store holds no row of its own. Two handler seams in `pack.json` bring
+them, each from one pack: the profile declares the rows, and a pack such as
+your company's brings the providers.
 
 - `secret-rows`: a module that exports `rows(provider)`. It returns the rows:
   name, provider, scope, project, region, settings link, variables, and for an
@@ -30,8 +31,10 @@ two handler seams in `pack.json`:
   runs in process with the values, so no value reaches an argv.
 
 `provider(name, options)` in a rows module returns that provider. When no pack
-on the hub brings it, the provider's check refuses every put, so a value is
-never stored unchecked.
+on the hub brings it, the provider's check refuses every put. A provider
+without a check stores the value with the note "its provider has no check",
+which `list` shows. A rows module that fails to load makes every command but
+`off` and `on` print why.
 
 ```ts
 export const rows = (provider) => [
@@ -58,17 +61,20 @@ fleet secret run example-send -- <command>
 - `run <name>... -- <command>` sets each secret's variables in the command's
   environment. It replaces each value in the command's stdout and stderr with
   `[redacted <name>]` (`[redacted]` when that label would spell a value), and
-  exits with the command's code. A line whose redaction would still show a
-  value is withheld whole. A value that the command encodes, splits, or writes
+  exits with the command's code. Every other byte passes unchanged, binary
+  output included, and a long line without a line break streams in pieces of
+  64 KiB. A line whose redaction would still show a value is withheld whole. A value that the command encodes, splits, or writes
   to a file is not redacted. Pass credentials through the environment or stdin,
   never argv.
 - `run` refuses when the store is off, a name is unknown, its value is missing
-  or past its store expiry, or two names set the same variable.
+  or past its store expiry, its row now sets other variables than the stored
+  value holds, or two names set the same variable.
 - `list --need <name>...` prints, for each named secret that is missing or
   fails its live check, the text of the `request_secret` card to ask the user
   with. The checks run on the hub, and each appends a read event marked
-  `check`. A check that throws counts as failing, and its message is not
-  shown. An `off` that lands during a check stops the rest and withholds the
+  `check`, before the check gets the value: an `off` before that read event
+  keeps the value from the check. A check that throws counts as failing, and
+  its message is not shown. An `off` that lands during a check stops the rest and withholds the
   answers.
 - `list --due` names each secret within 7 days of its expiry, past it, or
   missing, with the same card text.
@@ -97,7 +103,7 @@ and 90 days after the put. `--why` names a late reason: `intake` (the default),
 
 ```sh
 fleet secret off "suspected leak in <thread>"
-fleet secret on --words '2026-11-13 "Turn it back on"' --thread <id>
+fleet secret on --words '2026-11-13 "Yes, turn it on"' --thread <id>
 ```
 
 Any agent may turn the store off. To turn it on, ask the user with the

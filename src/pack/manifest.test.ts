@@ -150,6 +150,7 @@ describe("loadPacks", () => {
   test("accepts a handler only for a seam the engine knows, with a path", async () => {
     const handler = { seam: "review-bot", path: "lib/review-bot.ts" };
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [handler] } }))).resolves.toHaveLength(1);
+    await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ seam: "secret-rows", path: "lib/rows.ts" }, { seam: "secret-providers", path: "lib/providers.ts" }] } }))).resolves.toHaveLength(1);
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, seam: "deploy-bot" }] } }))).rejects.toThrow("handlers deploy-bot: seam must be one of review-bot, heavy-route, pr-command");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, path: "" }] } }))).rejects.toThrow("handlers review-bot: needs a path");
     await expect(loadPacks(sourceWith({ base: { ...base, handlers: [{ ...handler, workflow: "nope" }] } }))).rejects.toThrow("handlers review-bot names unknown workflow nope");

@@ -1,4 +1,4 @@
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const whys = ["intake", "failed-check", "expired", "revoked", "scope", "missed"] as const;
@@ -26,8 +26,6 @@ export const eventLogPath = (home: string) => join(home, ".local/state/fleet/sec
 
 export class SecretRefusal extends Error {}
 
-export const temporaryMarker = ".tmp-";
-
 function synced(path: string, flag: string, write: (file: number) => void, mode = 0o600) {
   const file = openSync(path, flag, mode);
   try {
@@ -36,16 +34,21 @@ function synced(path: string, flag: string, write: (file: number) => void, mode 
   } finally { closeSync(file); }
 }
 
-export function writeFileAtomic(path: string, data: string, mode = 0o600) {
-  const temporary = `${path}${temporaryMarker}${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
-  try {
-    synced(temporary, "wx", (file) => writeSync(file, data), mode);
-    renameSync(temporary, path);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
-  }
-  synced(dirname(path), "r", () => undefined);
+const syncDir = (dir: string) => synced(dir, "r", () => undefined);
+
+function madeDir(dir: string) {
+  const missing: string[] = [];
+  for (let at = dir; !existsSync(at); at = dirname(at)) missing.push(at);
+  if (!missing.length) return false;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const created of missing) syncDir(dirname(created));
+  return true;
+}
+
+export function writeNewFile(path: string, data: string) {
+  madeDir(dirname(path));
+  synced(path, "wx", (file) => writeSync(file, data));
+  syncDir(dirname(path));
 }
 
 const isText = (value: unknown): value is string => typeof value === "string" && value !== "";
@@ -82,9 +85,15 @@ export function readEvents(home: string): SecretEvent[] {
   return events;
 }
 
-export function appendEvents(home: string, ...events: SecretEvent[]) {
-  mkdirSync(dirname(eventLogPath(home)), { recursive: true, mode: 0o700 });
-  synced(eventLogPath(home), "a", (file) => writeSync(file, `\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`));
+export type AppendLog = (path: string, text: string) => void;
+export const appendToLog: AppendLog = (path, text) => synced(path, "a", (file) => writeSync(file, text));
+type LogStore = { home: string; appendLog?: AppendLog };
+
+export function appendEvents(store: LogStore, ...events: SecretEvent[]) {
+  const path = eventLogPath(store.home);
+  const fresh = madeDir(dirname(path)) || !existsSync(path);
+  (store.appendLog ?? appendToLog)(path, `\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
+  if (fresh) syncDir(dirname(path));
 }
 
 export const heardKey = ({ thread, message }: { thread: string; message: string }) => `${thread}/${message}`;
@@ -101,12 +110,12 @@ export function fold(events: SecretEvent[]) {
   return { puts, off, heard };
 }
 
-export type Store = { home: string; rows: SecretRow[]; now: Date; beforeAppend?: () => Promise<void> };
+export type Store = LogStore & { rows: SecretRow[]; now: Date };
 
 function switchState(store: Store) {
   const state = fold(readEvents(store.home));
   if (!state.off?.id.startsWith(damagedPrefix)) return state;
-  appendEvents(store.home, { type: "off", id: newId("o"), reason: `${damagedReason}, found at byte ${state.off.id.slice(damagedPrefix.length)}`, at: store.now.toISOString(), machine: "hub" });
+  appendEvents(store, { type: "off", id: newId("o"), reason: `${damagedReason}, found at byte ${state.off.id.slice(damagedPrefix.length)}`, at: store.now.toISOString(), machine: "hub" });
   return fold(readEvents(store.home));
 }
 const dayMs = 24 * 60 * 60 * 1000;
@@ -171,7 +180,7 @@ export function failureOf(error: unknown) {
 }
 
 async function checkOf(provider: Provider, values: Record<string, string>): Promise<CheckResult> {
-  try { return provider.check ? await provider.check(values) : { ok: true }; }
+  try { return provider.check ? await provider.check(values) : { ok: true, unchecked: "its provider has no check" }; }
   catch { return { ok: false, reason: "the check failed with an error it does not show" }; }
 }
 
@@ -200,10 +209,8 @@ async function checkAndStore(store: Store, row: SecretRow, input: PutInput): Pro
   };
   const shown = [JSON.stringify(event), ...Object.values(event).filter((value): value is string => typeof value === "string"), ...printedLines(store, row, event)].join("\n");
   if (showsValue(shown, Object.values(fields))) throw new SecretRefusal(hiddenValue);
-  mkdirSync(valuesDir(store.home), { recursive: true, mode: 0o700 });
-  writeFileAtomic(valuePath(store.home, event), row.env.map((key) => `${key}=${fields[key]}\n`).join(""));
-  await store.beforeAppend?.();
-  appendEvents(store.home, event);
+  writeNewFile(valuePath(store.home, event), row.env.map((key) => `${key}=${fields[key]}\n`).join(""));
+  appendEvents(store, event);
   return event;
 }
 
@@ -265,13 +272,25 @@ function currentValues(store: Store, row: SecretRow, put: PutEvent | undefined):
   if (isFileRow(row)) return fileValues(store.home, row);
   if (!put) return "missing";
   if (put.storeExpiresAt && Date.parse(put.storeExpiresAt) <= store.now.getTime()) return `past its store expiry ${put.storeExpiresAt.slice(0, 10)}`;
-  try { return parseValues(readFileSync(valuePath(store.home, put), "utf8")); }
+  let values: Record<string, string>;
+  try { values = parseValues(readFileSync(valuePath(store.home, put), "utf8")); }
   catch { return "missing its value file"; }
+  const stored = Object.keys(values);
+  if (stored.length !== row.env.length || row.env.some((key) => !values[key])) return `stored for ${stored.join(" ")}, but its row now sets ${row.env.join(" ")}; put it again`;
+  return values;
 }
 
 export type Delivered = { name: string; values: Record<string, string> };
 
-export async function deliver(store: Store, input: { names: string[]; thread?: string; machine: string }): Promise<Delivered[]> {
+function offBefore(store: Store, read: SecretEvent) {
+  const events = readEvents(store.home);
+  const id = (read as { id: string }).id;
+  return fold(events.slice(0, events.findIndex((event) => event.type === "read" && event.id === id) + 1)).off;
+}
+
+const wentOff = "the store went off before this read";
+
+export function deliver(store: Store, input: { names: string[]; thread?: string; machine: string }): Delivered[] {
   const { puts, off } = switchState(store);
   const names = [...new Set(input.names)];
   const delivered: Delivered[] = [];
@@ -297,15 +316,12 @@ export async function deliver(store: Store, input: { names: string[]; thread?: s
   const at = store.now.toISOString();
   const read = (name: string, refused = reasons.get(name)): SecretEvent => ({ type: "read", id: newId("r"), name, at, ...input.thread ? { thread: input.thread } : {}, machine: input.machine, ...refused ? { refused } : {} });
   const reads = names.map((name) => read(name));
-  await store.beforeAppend?.();
-  appendEvents(store.home, ...reads);
+  appendEvents(store, ...reads);
   if (off) throw new SecretRefusal(offRefusal(off));
   if (reasons.size) throw new SecretRefusal([...reasons].map(([name, reason]) => `${name}: ${reason}`).join("; "));
-  const events = readEvents(store.home);
-  const last = (reads.at(-1) as { id: string }).id;
-  const before = fold(events.slice(0, events.findIndex((event) => event.type === "read" && event.id === last) + 1)).off;
+  const before = offBefore(store, reads.at(-1)!);
   if (before) {
-    appendEvents(store.home, ...names.map((name) => read(name, "the store went off before this read")));
+    appendEvents(store, ...names.map((name) => read(name, wentOff)));
     throw new SecretRefusal(offRefusal(before));
   }
   return delivered;
@@ -314,7 +330,7 @@ export async function deliver(store: Store, input: { names: string[]; thread?: s
 const offRefusal = (off: OffEvent) => `The store is off since ${off.at.slice(0, 16)}Z (${off.reason}). Only the user's words turn it on: fleet secret on`;
 
 export function turnOff(store: Store, input: { reason: string; thread?: string; machine: string }) {
-  appendEvents(store.home, { type: "off", id: newId("o"), reason: input.reason, at: store.now.toISOString(), ...input.thread ? { thread: input.thread } : {}, machine: input.machine });
+  appendEvents(store, { type: "off", id: newId("o"), reason: input.reason, at: store.now.toISOString(), ...input.thread ? { thread: input.thread } : {}, machine: input.machine });
 }
 
 export function currentOff(store: Store) {
@@ -329,13 +345,12 @@ const plainWords = (text: string) => text.toLowerCase().replace(/[`*_"“”‘�
 export const enableOptions = ["Yes, turn it on", "No, keep it off"];
 const yeses = ["yes", enableOptions[0]!].map(plainWords);
 
-export async function turnOn(store: Store, off: OffEvent, heard: Heard) {
+export function turnOn(store: Store, off: OffEvent, heard: Heard) {
   if (plainWords(heard.question) !== plainWords(enableQuestion)) throw new SecretRefusal(`The user answered "${heard.question}", not "${enableQuestion}". Ask them that question with the question tool, with the options "${enableOptions.join('" and "')}"`);
   if (!yeses.includes(plainWords(heard.answer))) throw new SecretRefusal(`The user answered "${heard.answer}", not "${enableOptions[0]}", so the store stays off`);
   if (fold(readEvents(store.home)).heard.has(heardKey(heard))) throw new SecretRefusal("That message of the user's already turned the store on once. Ask them again");
   if (Date.parse(heard.at) <= Date.parse(off.at)) throw new SecretRefusal(`The user wrote that before the store went off on ${off.at.slice(0, 16)}Z. Only an answer after it turns the store on; ask them`);
-  await store.beforeAppend?.();
-  appendEvents(store.home, { type: "on", off: off.id, words: heard.words, thread: heard.thread, message: heard.message, at: store.now.toISOString() });
+  appendEvents(store, { type: "on", off: off.id, words: heard.words, thread: heard.thread, message: heard.message, at: store.now.toISOString() });
   const after = fold(readEvents(store.home)).off;
   if (after) throw new SecretRefusal(`The store went off again on ${after.at.slice(0, 16)}Z (${after.reason}) while the user's words were read, so it stays off. Ask them again`);
 }
@@ -374,17 +389,23 @@ export async function needLines(store: Store, input: { names: string[]; thread?:
   const names = [...new Set(input.names)];
   const unknown = names.filter((name) => !rowOf(store, name));
   if (unknown.length) throw new SecretRefusal(`No declared secret ${unknown.join(", ")}. fleet secret list shows the names`);
-  const read = (name: string, refused?: string): SecretEvent => ({ type: "read", name, at: store.now.toISOString(), ...input.thread ? { thread: input.thread } : {}, machine: input.machine, check: true, ...refused ? { refused } : {} });
+  const read = (name: string, refused?: string): SecretEvent => ({ type: "read", id: newId("r"), name, at: store.now.toISOString(), ...input.thread ? { thread: input.thread } : {}, machine: input.machine, check: true, ...refused ? { refused } : {} });
   const lines: string[] = [];
   for (const [index, name] of names.entries()) {
     const now = switchState(store);
     if (now.off) {
-      appendEvents(store.home, ...names.slice(index).map((rest) => read(rest, "the store is off")));
+      appendEvents(store, ...names.slice(index).map((rest) => read(rest, "the store is off")));
       throw new SecretRefusal(`The store is off since ${now.off.at.slice(0, 16)}Z (${now.off.reason}), so no check runs. Only the user's words turn it on: fleet secret on`);
     }
     const row = rowOf(store, name)!;
     const values = currentValues(store, row, now.puts.get(name));
-    appendEvents(store.home, read(name, typeof values === "string" ? values : undefined));
+    const logged = read(name, typeof values === "string" ? values : undefined);
+    appendEvents(store, logged);
+    const before = typeof values === "string" ? undefined : offBefore(store, logged);
+    if (before) {
+      appendEvents(store, ...names.slice(index).map((rest) => read(rest, wentOff)));
+      throw new SecretRefusal(`${offRefusal(before)}. No check ran with ${name}'s value`);
+    }
     const checked = typeof values === "string" ? undefined : await checkOf(row.provider, values);
     if (typeof values === "string") lines.push(`${name}: ${values}. ${cardText(row)}`);
     else if (checked && !checked.ok) lines.push(`${name}: failing its check (${unshown([checked.reason, "its reason would show part of the value"], Object.values(values))}). ${cardText(row)}`);

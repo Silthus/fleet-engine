@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ThreadWord } from "../../pull-requests/lib/proof-answers.ts";
 import type { Ssh, SshResult } from "./hub-transport.ts";
-import { lineRedactor, secretCommand, type SecretContext } from "./secret-cli.ts";
+import { heldLimit, lineRedactor, secretCommand, type SecretContext } from "./secret-cli.ts";
 import { providersSeam, rowsSeam } from "./secret-rows.ts";
-import { eventLogPath, secretFilesDir, type CheckResult, type SecretRow } from "./secret-store.ts";
+import { appendToLog, eventLogPath, secretFilesDir, type CheckResult, type SecretRow } from "./secret-store.ts";
 
 const homes: string[] = [];
 afterEach(() => homes.splice(0).forEach((home) => rmSync(home, { recursive: true, force: true })));
@@ -47,6 +47,7 @@ function filesUnder(path: string): string[] {
 }
 
 const hubSettings = JSON.stringify({ "hub.alias": "hub" });
+const text = (shown: string | Uint8Array) => typeof shown === "string" ? shown : Buffer.from(shown).toString("utf8");
 
 function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretRow[] | "injected", handlers = undefined as Record<string, string> | undefined } = {}) {
   const hubHome = newHome();
@@ -57,12 +58,12 @@ function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretRow[] | 
   const printed: string[] = [];
   const commands: string[] = [];
   const reach: { hub: boolean; answer?: SshResult } = { hub: true };
-  const hooks: { whileHearing?: () => Promise<unknown>; beforeAppend?: () => Promise<unknown> } = {};
+  const hooks: { whileHearing?: () => Promise<unknown>; beforeAppend?: () => void } = {};
   const threadWords = async () => { const step = hooks.whileHearing; hooks.whileHearing = undefined; await step?.(); return words; };
   const env = (machine: string) => ({ FLEET_SETTINGS: hubSettings, CODER_WORKSPACE_NAME: machine, T3CODE_THREAD_ID: "lane-thread", ...handlers ? { FLEET_HANDLERS: JSON.stringify(handlers) } : {} });
   const context = (home: string, machine: string): SecretContext => ({
-    home, env: env(machine), now: () => clock.now, threadWords, out: (text) => printed.push(text), err: (text) => printed.push(text), ssh,
-    beforeAppend: async () => { const step = hooks.beforeAppend; hooks.beforeAppend = undefined; await step?.(); }, ...rows === "injected" ? {} : { rows },
+    home, env: env(machine), now: () => clock.now, threadWords, out: (shown) => printed.push(text(shown)), err: (shown) => printed.push(text(shown)), ssh,
+    appendLog: (path, line) => { const step = hooks.beforeAppend; hooks.beforeAppend = undefined; step?.(); appendToLog(path, line); }, ...rows === "injected" ? {} : { rows },
   });
   const ssh: Ssh = async (host, command, stdin) => {
     commands.push(command);
@@ -70,7 +71,7 @@ function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretRow[] | 
     if (reach.answer) return reach.answer;
     const out: string[] = [];
     const err: string[] = [];
-    const code = await secretCommand(["hub"], { ...context(hubHome, "hub"), stdin: async () => stdin ?? "", out: (text) => out.push(text), err: (text) => err.push(text) });
+    const code = await secretCommand(["hub"], { ...context(hubHome, "hub"), stdin: async () => stdin ?? "", out: (shown) => out.push(text(shown)), err: (shown) => err.push(text(shown)) });
     return { code, stdout: out.join(""), stderr: err.join("") };
   };
   const secretFile = (home: string, text: string) => {
@@ -81,8 +82,9 @@ function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretRow[] | 
     return path;
   };
   const on = (home: string, machine: string) => (...args: string[]) => secretCommand(args, context(home, machine));
+  const offElsewhere = (reason: string) => () => appendFileSync(eventLogPath(hubHome), `\n${JSON.stringify({ type: "off", id: `o-${reason.replaceAll(" ", "-")}`, reason, at: clock.now.toISOString(), machine: "other-process" })}\n`);
   return {
-    hubHome, devHome, clock, printed, commands, reach, hooks, secretFile,
+    hubHome, devHome, clock, printed, commands, reach, hooks, secretFile, offElsewhere,
     hub: on(hubHome, "hub"), dev: on(devHome, "devbox-1"),
     since(before: number) { return printed.slice(before).join(""); },
     expectNoLeak(extra: string[] = []) {
@@ -135,10 +137,31 @@ test("the output redactor joins a value split across chunks, inside a multibyte 
   const bytes = new TextEncoder().encode(`pass ${value}\r\nnext ${value}`);
   const inside = new TextEncoder().encode(`pass ${value.slice(0, value.indexOf("é"))}`).length + 1;
   const written: string[] = [];
-  const redactor = lineRedactor([{ value, label: "[redacted sandbox-login]" }], (text) => written.push(text));
+  const redactor = lineRedactor([{ value, label: "[redacted sandbox-login]" }], (bytes) => written.push(text(bytes)));
   for (const [start, end] of [[0, 7], [7, inside], [inside, inside + 2], [inside + 2, bytes.length]] as const) redactor.push(bytes.slice(start, end));
   redactor.end();
   expect(written.join("")).toBe("pass [redacted sandbox-login]\r\nnext [redacted sandbox-login]");
+});
+
+test("the output redactor keeps every other byte of binary output, and streams a long line without a line break in bounded pieces", () => {
+  const value = made("key_");
+  const written: Uint8Array[] = [];
+  const redactor = lineRedactor([{ value, label: "[redacted]" }], (bytes) => written.push(bytes));
+  redactor.push(Buffer.concat([Buffer.from([0xff, 0xfe, 0x00, 0xc3]), Buffer.from(` ${value} `), Buffer.from([0x80, 0x0a])]));
+  expect(Buffer.concat(written)).toEqual(Buffer.concat([Buffer.from([0xff, 0xfe, 0x00, 0xc3]), Buffer.from(" [redacted] "), Buffer.from([0x80, 0x0a])]));
+  written.length = 0;
+  const filler = "x".repeat(heldLimit);
+  redactor.push(Buffer.from(`${filler}${value.slice(0, 10)}`));
+  const early = written.length;
+  redactor.push(Buffer.from(`${value.slice(10)}${filler}`));
+  expect(early).toBeGreaterThan(0);
+  redactor.end();
+  const all = Buffer.concat(written).toString("utf8");
+  expect(all).toBe(`${filler}[redacted]${filler}`);
+  expect(Math.max(...written.map((piece) => piece.length))).toBeLessThanOrEqual(heldLimit + value.length + 10);  written.length = 0;
+  redactor.push(Buffer.from(`${"y".repeat(heldLimit - 5)}${value}abc`));
+  redactor.end();
+  expect(Buffer.concat(written).toString("utf8")).toBe(`${"y".repeat(heldLimit - 5)}[redacted]abc`);
 });
 
 test("a value with a line break is refused, and the request_secret file is gone after a refused put", async () => {
@@ -248,7 +271,7 @@ test("an off that lands between the hub's read of the switch and its on event le
   expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(0);
   expect(await machine.dev("off", "first leak")).toBe(0);
   machine.clock.now = new Date("2026-11-13T12:00:00Z");
-  machine.hooks.beforeAppend = () => machine.hub("off", "racing leak");
+  machine.hooks.beforeAppend = machine.offElsewhere("racing leak");
   const before = machine.printed.length;
   expect(await machine.dev("on", "--words", '2026-11-13 "Yes"', "--thread", "users-thread")).toBe(1);
   expect(machine.since(before)).toContain("(racing leak) while the user's words were read, so it stays off");
@@ -520,7 +543,7 @@ test("rows and providers come from the packs' handlers, and a row whose provider
 test("without a hub alias the store lives on this machine, and only the hub serves fleet secret hub", async () => {
   const home = newHome();
   const printed: string[] = [];
-  const context: SecretContext = { home, env: { FLEET_SETTINGS: "{}" }, rows: testRows(), out: (text) => printed.push(text), err: (text) => printed.push(text), now: () => new Date("2026-11-13T10:00:00Z") };
+  const context: SecretContext = { home, env: { FLEET_SETTINGS: "{}" }, rows: testRows(), out: (shown) => printed.push(text(shown)), err: (shown) => printed.push(text(shown)), now: () => new Date("2026-11-13T10:00:00Z") };
   const dir = secretFilesDir(home);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "card"), sendKey);
@@ -672,7 +695,7 @@ test("a damaged line found after an earlier off needs a yes given after it was f
 test("an off that lands while the hub reads a value withholds the value, and logs the read as refused", async () => {
   const machine = fleet();
   expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(0);
-  machine.hooks.beforeAppend = () => machine.hub("off", "leak seen mid-read");
+  machine.hooks.beforeAppend = machine.offElsewhere("leak seen mid-read");
   const result = await run(machine.dev, machine.printed, ["send-us"], "echo child-ran");
   expect(result.code).toBe(1);
   expect(result.text).toContain("leak seen mid-read");
@@ -680,4 +703,47 @@ test("an off that lands while the hub reads a value withholds the value, and log
   const events = readFileSync(eventLogPath(machine.hubHome), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
   expect(events.map(({ type, refused }) => [type, refused ?? null])).toEqual([["put", null], ["off", null], ["read", null], ["read", "the store went off before this read"]]);
   machine.expectNoLeak();
+});
+
+test("off and on work while the rows fail to load, and a rows module that fails says why", async () => {
+  const dir = newHome();
+  const rows = join(dir, "rows.ts");
+  writeFileSync(rows, `export const rows = () => { throw new Error("the rows module has a typo"); };\n`);
+  const machine = fleet({ rows: "injected", handlers: { [rowsSeam]: rows }, words: [answer("m-yes", "Yes, turn it on", "2026-11-13T11:00:00Z")] });
+  expect(await machine.dev("off", "suspected leak")).toBe(0);
+  machine.clock.now = new Date("2026-11-13T12:00:00Z");
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes, turn it on"', "--thread", "users-thread")).toBe(0);
+  const before = machine.printed.length;
+  expect(await machine.dev("list")).toBe(1);
+  expect(machine.since(before)).toContain("The secret rows did not load: the rows module has a typo");
+});
+
+test("an off that lands before list --need logs its read keeps the value from the provider's check", async () => {
+  const checked: string[] = [];
+  const machine = fleet({ rows: echoing("chat-app", async (values) => { checked.push(...Object.keys(values)); return { ok: true }; }) });
+  hubFile(machine.hubHome, ".config/fleet/chat-app.json", JSON.stringify(chatTokens));
+  machine.hooks.beforeAppend = machine.offElsewhere("leak seen before the check");
+  expect(await machine.dev("list", "--need", "chat-app")).toBe(1);
+  expect(machine.printed.join("")).toContain("No check ran with chat-app's value");
+  expect(checked).toEqual([]);
+  machine.expectNoLeak(Object.values(chatTokens));
+});
+
+test("a stored value whose row now sets other variables is refused until it is put again", async () => {
+  const rows = testRows();
+  const machine = fleet({ rows });
+  expect(await machine.dev("put", "sandbox-login", "--file", machine.secretFile(machine.devHome, login()))).toBe(0);
+  rows[2] = { ...rows[2]!, env: ["LOGIN_EMAIL", "LOGIN_PASSWORD", "LOGIN_CODE"] };
+  const result = await run(machine.dev, machine.printed, ["sandbox-login"], "echo child-ran");
+  expect(result.code).toBe(1);
+  expect(result.text).toContain("stored for LOGIN_EMAIL LOGIN_PASSWORD, but its row now sets LOGIN_EMAIL LOGIN_PASSWORD LOGIN_CODE; put it again");
+  machine.expectNoLeak();
+});
+
+test("a put through a provider without a check is stored with a note that it went unchecked", async () => {
+  const machine = fleet();
+  expect(await machine.dev("put", "sandbox-login", "--file", machine.secretFile(machine.devHome, login()))).toBe(0);
+  const before = machine.printed.length;
+  expect(await machine.dev("list")).toBe(0);
+  expect(machine.since(before)).toContain("sandbox-login: standing, example-login, project Sandbox, scope the sandbox project only (unchecked: its provider has no check), stored");
 });

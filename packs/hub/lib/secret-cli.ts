@@ -7,7 +7,7 @@ import { fleetOnHub, HubUnreachable, remoteHub, runSsh, type Env, type Ssh } fro
 import { checkedRows, injectedRows } from "./secret-rows.ts";
 import {
   currentOff, deliver, dueLines, enableOptions, enableQuestion, failureOf, listLines, needLines, piecesOf, putValue, secretFilesDir, standingDays, storedLine, turnOff, turnOn, unshown, whys,
-  type Delivered, type Heard, type PutInput, type SecretRow, type Store, type Why,
+  type AppendLog, type Delivered, type Heard, type PutInput, type SecretRow, type Store, type Why,
 } from "./secret-store.ts";
 
 export const usage = `Usage:
@@ -33,10 +33,10 @@ the question "${enableQuestion}", asked with your question tool in the T3 thread
 
 export type SecretContext = {
   home: string; env: Env;
-  out: (text: string) => void; err: (text: string) => void;
+  out: (text: string | Uint8Array) => void; err: (text: string | Uint8Array) => void;
   stdin?: () => Promise<string>;
   ssh?: Ssh; now?: () => Date; threadWords?: ThreadWords; rows?: SecretRow[];
-  beforeAppend?: () => Promise<void>;
+  appendLog?: AppendLog;
 };
 
 class UsageError extends Error {}
@@ -54,17 +54,24 @@ const threadOf = (context: SecretContext) => context.env.T3CODE_THREAD_ID ? { th
 const slowCallMs = 180_000;
 const sshFailed = 255;
 
+async function loadedRows(context: SecretContext): Promise<SecretRow[] | Answer> {
+  try { return context.rows ? checkedRows(context.rows) : await injectedRows(context.env); }
+  catch (error) { return { ok: false, error: `The secret rows did not load: ${(error as Error).message}` }; }
+}
+
 async function answer(context: SecretContext, request: Request): Promise<Answer> {
+  const store: Store = { home: context.home, rows: [], now: context.now?.() ?? new Date(), ...context.appendLog ? { appendLog: context.appendLog } : {} };
   try {
-    const rows = context.rows ? checkedRows(context.rows) : await injectedRows(context.env);
-    const store: Store = { home: context.home, rows, now: context.now?.() ?? new Date(), ...context.beforeAppend ? { beforeAppend: context.beforeAppend } : {} };
-    if (request.op === "put") return { ok: true, lines: [storedLine(await putValue(store, request))] };
-    if (request.op === "deliver") return { ok: true, delivered: await deliver(store, request) };
     if (request.op === "off") { turnOff(store, request); return { ok: true, lines: ["The store is off: every read is refused until the user's words turn it on (fleet secret on)."] }; }
     if (request.op === "on") {
-      await turnOn(store, currentOff(store), request);
+      turnOn(store, currentOff(store), request);
       return { ok: true, lines: [`The store is on again, by the user's words ${request.words} (thread ${request.thread}).`] };
     }
+    const rows = await loadedRows(context);
+    if (!Array.isArray(rows)) return rows;
+    store.rows = rows;
+    if (request.op === "put") return { ok: true, lines: [storedLine(await putValue(store, request))] };
+    if (request.op === "deliver") return { ok: true, delivered: deliver(store, request) };
     if (request.need) return { ok: true, lines: await needLines(store, { names: request.need, ...request.thread ? { thread: request.thread } : {}, machine: request.machine ?? "unknown" }) };
     if (request.due) return { ok: true, lines: dueLines(store) };
     return { ok: true, lines: listLines(store) };
@@ -133,7 +140,7 @@ function fileOptions(args: string[]) {
 }
 
 function guarded(context: SecretContext, values: string[]): SecretContext {
-  const safe = (write: (text: string) => void) => (text: string) => write(unshown([text, "Fleet secret: refused, and the message would show part of the value\n", "Refused\n"], values));
+  const safe = (write: SecretContext["out"]) => (text: string | Uint8Array) => write(typeof text === "string" ? unshown([text, "Fleet secret: refused, and the message would show part of the value\n", "Refused\n"], values) : text);
   return { ...context, out: safe(context.out), err: safe(context.err) };
 }
 
@@ -163,45 +170,67 @@ async function put(args: string[], context: SecretContext, given: string[]) {
   }
 }
 
-export function redactExact(text: string, secrets: { value: string; label: string }[]) {
-  const spans: { start: number; end: number; label: string }[] = [];
+type Encoded = { value: Buffer; label: Buffer };
+
+export function redactBytes(bytes: Buffer, secrets: Encoded[]) {
+  const spans: { start: number; end: number; label: Buffer }[] = [];
   for (const { value, label } of secrets) {
-    if (!value) continue;
-    for (let start = text.indexOf(value); start >= 0; start = text.indexOf(value, start + 1)) spans.push({ start, end: start + value.length, label });
+    for (let start = bytes.indexOf(value); start >= 0; start = bytes.indexOf(value, start + 1)) spans.push({ start, end: start + value.length, label });
   }
   spans.sort((a, b) => a.start - b.start || b.end - a.end);
-  let result = "";
+  const parts: Buffer[] = [];
   let at = 0;
   for (let index = 0; index < spans.length;) {
     const { start, label } = spans[index]!;
     let end = spans[index]!.end;
     while (++index < spans.length && spans[index]!.start < end) end = Math.max(end, spans[index]!.end);
-    result += text.slice(at, start) + label;
+    parts.push(bytes.subarray(at, start), label);
     at = end;
   }
-  return result + text.slice(at);
+  return Buffer.concat([...parts, bytes.subarray(at)]);
 }
 
 const plainLabel = "[redacted]";
-const withheld = "[fleet secret: a line of output was withheld, because its redaction would still show a stored value]\n";
+const withheld = Buffer.from("[fleet secret: a line of output was withheld, because its redaction would still show a stored value]\n");
+export const heldLimit = 64 * 1024;
 
-export function lineRedactor(secrets: { value: string; label: string }[], write: (text: string) => void) {
-  const safe = (text: string) => secrets.some(({ value }) => text.includes(value)) ? undefined : text;
-  const show = (text: string) => write(safe(redactExact(text, secrets)) ?? safe(withheld) ?? "");
-  const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
-  let held = "";
+function cutOutside(bytes: Buffer, secrets: Encoded[], wanted: number) {
+  let cut = wanted;
+  for (let moved = true; moved && cut > 0;) {
+    moved = false;
+    for (const { value } of secrets) {
+      const start = bytes.indexOf(value, Math.max(0, cut - value.length + 1));
+      if (start >= 0 && start < cut) { cut = start; moved = true; }
+    }
+  }
+  return cut;
+}
+
+export function lineRedactor(secrets: { value: string; label: string }[], write: (bytes: Uint8Array) => void) {
+  const encoded = secrets.filter(({ value }) => value).map(({ value, label }) => ({ value: Buffer.from(value), label: Buffer.from(label) }));
+  const longest = Math.max(1, ...encoded.map(({ value }) => value.length));
+  const shows = (bytes: Buffer) => encoded.some(({ value }) => bytes.includes(value));
+  const show = (bytes: Buffer) => {
+    const redacted = redactBytes(bytes, encoded);
+    write(!shows(redacted) ? redacted : !shows(withheld) ? withheld : Buffer.alloc(0));
+  };
+  let held = Buffer.alloc(0);
   return {
     push(chunk: Uint8Array) {
-      held += decoder.decode(chunk, { stream: true });
-      const cut = held.lastIndexOf("\n");
-      if (cut < 0) return;
-      for (const line of held.slice(0, cut + 1).split(/(?<=\n)/)) show(line);
-      held = held.slice(cut + 1);
+      held = Buffer.concat([held, chunk]);
+      for (let cut = held.indexOf(0x0a); cut >= 0; cut = held.indexOf(0x0a)) {
+        show(held.subarray(0, cut + 1));
+        held = held.subarray(cut + 1);
+      }
+      if (held.length <= heldLimit) return;
+      const cut = cutOutside(held, encoded, held.length - longest + 1);
+      if (cut <= 0) return;
+      show(held.subarray(0, cut));
+      held = held.subarray(cut);
     },
     end() {
-      held += decoder.decode();
-      if (held) show(held);
-      held = "";
+      if (held.length) show(held);
+      held = Buffer.alloc(0);
     },
   };
 }
