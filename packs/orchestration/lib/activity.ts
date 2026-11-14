@@ -1,5 +1,5 @@
 import {
-  lastActivityAt, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedMessages, readLinkedThread, readLinkedThreadWords, readSnapshots, readThread, readThreadWords, readTurnItems, withT3Session,
+  isWaiting, lastActivityAt, listLinkedProjects, listLinkedThreads, readLinkedItemText, readLinkedMessages, readLinkedThread, readLinkedThreadWords, readSnapshots, readThread, readThreadWords, readTurnItems, withT3Session,
   type LinkedThread, type ShellPullRequest, type ShellSnapshot, type ShellThread, type T3Client, type T3HttpClient, type T3SessionOptions, type ThreadWord,
 } from "../../base/lib/t3/index.ts";
 import { liveStatuses, pickMachine, readEachMachine, readMachines, type MachineReport } from "./machines.ts";
@@ -42,7 +42,7 @@ export async function readActivity(client: T3Client, limit: number): Promise<Act
   const projects = new Map([...archive.projects, ...shell.projects].map((project) => [project.id, project]));
   const threads = [...shell.threads, ...archive.threads].filter((thread) => !thread.deletedAt).map((thread): Activity => {
     const status = thread.activityRunStatus ?? thread.status;
-    const busy = Boolean(thread.activeRunId || thread.pendingRuntimeRequest || thread.pendingBackgroundTasks?.some((task) => task.kind !== "command")) || liveStatuses.includes(status);
+    const busy = Boolean(thread.activeRunId || thread.pendingRuntimeRequest || isWaiting(thread)) || liveStatuses.includes(status);
     return {
       id: thread.id, title: thread.title, project: projects.get(thread.projectId)?.title ?? thread.projectId,
       status, busy, updatedAt: lastActivityAt(thread), archived: Boolean(thread.archivedAt),
@@ -89,7 +89,7 @@ const parkedTail = 20;
 const parkedTextCap = 4000;
 
 function parkedOnWatch(thread: ShellThread): boolean {
-  return !thread.activeRunId && !thread.pendingRuntimeRequest && (thread.pendingBackgroundTasks ?? []).some((task) => task.kind !== "command");
+  return !thread.activeRunId && !thread.pendingRuntimeRequest && isWaiting(thread);
 }
 
 export async function readParkedThreads(client: T3HttpClient): Promise<ParkedThreads> {

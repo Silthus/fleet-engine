@@ -302,6 +302,24 @@ describe("fleet context add", () => {
     expect(allowed.filter((rule) => !rule.startsWith("mcp__"))).toEqual([`Read(/${cwd}/**)`, `Edit(/${cwd}/**)`, "WebFetch(domain:example.slack.com)"]);
   });
 
+  test("the capture agent starts without the lane's T3 thread id, and the lane keeps it", async () => {
+    const machine = library();
+    await fleetContext(machine, ["sync"]);
+    const bin = temp.make("claude-bin-");
+    const seen = join(bin, "thread.txt");
+    writeFileSync(join(bin, "claude"), `#!/usr/bin/env bun\nawait Bun.write(${JSON.stringify(seen)}, process.env.T3CODE_THREAD_ID ?? "none");\nawait Bun.write("notes/sprint-planning-2026-11-11.md", ${JSON.stringify(planning())});\n`, { mode: 0o755 });
+    const { captureAgent } = await import("./lib/capture.ts");
+    const saved = process.env.T3CODE_THREAD_ID;
+    process.env.T3CODE_THREAD_ID = "mcp:lane";
+    try {
+      expect((await fleetContext(machine, ["add", slackSource], captureAgent({ role: "survey", work: "", provider: "claude", model: "claude-sonnet", effort: "high" }, join(bin, "claude")))).code).toBe(0);
+      expect(process.env.T3CODE_THREAD_ID).toBe("mcp:lane");
+    } finally {
+      if (saved === undefined) delete process.env.T3CODE_THREAD_ID; else process.env.T3CODE_THREAD_ID = saved;
+    }
+    expect(readFileSync(seen, "utf8")).toBe("none");
+  });
+
   test("saves nothing when the agent changes another file, names another source, or writes a secret", async () => {
     const machine = library();
     await fleetContext(machine, ["sync"]);

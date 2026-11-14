@@ -5,7 +5,7 @@ import type { AvailableSource } from "../../../src/pack/types.ts";
 import { spawnGit, tempDirs } from "../../../src/testing/git.ts";
 import { devbox, engineSource, resolveEngine, skillSources } from "../../../src/testing/packs.ts";
 import { formatCommands, formatEditedFile, type RunCommand } from "../lib/format-commands.ts";
-import { formatAfterEdit, hook } from "./format-on-edit.ts";
+import { budgetMs, formatAfterEdit, hook } from "./format-on-edit.ts";
 
 const temp = tempDirs();
 afterEach(() => temp.cleanup());
@@ -95,15 +95,34 @@ describe("the format-on-edit hook", () => {
     expect(readFileSync(file, "utf8")).toBe("formatted\n");
   });
 
-  test("hands Claude what a fixer could not fix, from a repo config in package.json", async () => {
+  test("hands Claude what a fixer could not fix as context, from a repo config in package.json", async () => {
     const repo = await repository({ "lint-staged": { "*.ts": "eslint --fix" } });
     tool(repo, "eslint", 'echo "x.ts:1 unused variable" >&2; exit 1');
     const file = join(repo, "src/x.ts");
     writeFileSync(file, "let a");
     const result = await hook("claude", async () => JSON.stringify({ tool_name: "Write", tool_input: { file_path: file } }), repo);
-    expect(result.code).toBe(2);
-    expect(result.stderr).toContain(`found problems in ${file}`);
-    expect(result.stderr).toContain("x.ts:1 unused variable");
+    expect(result.code).toBe(0);
+    const context = JSON.parse(result.stdout).hookSpecificOutput;
+    expect(context.hookEventName).toBe("PostToolUse");
+    expect(context.additionalContext).toContain(`found problems in ${file}`);
+    expect(context.additionalContext).toContain("x.ts:1 unused variable");
+  });
+
+  test("formats each file a Codex patch adds, updates or moves, a move at its destination, and hands Codex the findings as context", async () => {
+    const repo = await repository(undefined, { "*.ts": "prettier --write" });
+    tool(repo, "prettier", 'case "$2" in *broken.ts) echo "broken.ts:1 syntax error" >&2; exit 1;; esac; printf "formatted\\n" > "$2"');
+    for (const name of ["kept.ts", "broken.ts", "moved-to.ts"]) writeFileSync(join(repo, "src", name), "messy");
+    writeFileSync(join(repo, "src/added.ts"), "messy");
+    const patch = [
+      "*** Begin Patch", "*** Add File: src/added.ts", "+messy", "*** Update File: src/kept.ts", "@@", "-old", "+messy",
+      "*** Update File: src/broken.ts", "@@", "-old", "+messy", "*** Update File: src/moved-from.ts", "*** Move to: src/moved-to.ts", "@@", "-old", "+messy",
+      "*** Delete File: src/gone.ts", "*** End Patch",
+    ].join("\n");
+    const result = await hook("codex", async () => JSON.stringify({ tool_name: "apply_patch", cwd: repo, tool_input: { command: patch } }), repo);
+    for (const name of ["added.ts", "kept.ts", "moved-to.ts"]) expect(readFileSync(join(repo, "src", name), "utf8")).toBe("formatted\n");
+    expect(existsSync(join(repo, "src/moved-from.ts"))).toBe(false);
+    expect(existsSync(join(repo, "src/gone.ts"))).toBe(false);
+    expect(JSON.parse(result.stdout).hookSpecificOutput.additionalContext).toContain("broken.ts:1 syntax error");
   });
 
   test("ignores a formatter whose shell says a tool it needs is not found", async () => {
@@ -145,16 +164,17 @@ describe("the format-on-edit hook", () => {
     expect(ran).toBe(false);
   });
 
-  test("stays quiet for Codex and for input that is not JSON", async () => {
-    expect(await hook("codex", async () => JSON.stringify({ tool_name: "Edit", tool_input: { file_path: "/x.ts" } }), "/")).toEqual({ code: 0, stdout: "", stderr: "" });
+  test("stays quiet for input that is not JSON", async () => {
     expect(await hook("claude", async () => "not json", "/")).toEqual({ code: 0, stdout: "", stderr: "" });
   });
 
-  test("is off by default, and installs for Claude only once turned on", () => {
+  test("is off by default, and once turned on installs for a Claude, a Codex or a both plan, with a PostToolUse timeout that fits its budget", () => {
     const target = ".config/fleet/hooks/PostToolUse/format-on-edit.ts";
-    const plan = (workflows: Record<string, boolean>, aiPlan: "claude" | "codex") => resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { workflows, plan: aiPlan }, devbox).files.map((file) => file.target);
-    expect(plan({}, "claude")).not.toContain(target);
-    expect(plan({ "format-on-edit": true }, "claude")).toContain(target);
-    expect(plan({ "format-on-edit": true }, "codex")).not.toContain(target);
+    const resolved = (workflows: Record<string, boolean>, aiPlan: "claude" | "codex" | "both") => resolveEngine([engine, ...skillSources(temp.make("skills-"), engine)], { workflows, plan: aiPlan }, devbox);
+    expect(resolved({}, "claude").files.map((file) => file.target)).not.toContain(target);
+    for (const aiPlan of ["claude", "codex", "both"] as const) expect(resolved({ "format-on-edit": true }, aiPlan).files.map((file) => file.target)).toContain(target);
+    const postToolUse = resolved({ "format-on-edit": true }, "codex").config.find((entry) => entry.provider === "codex" && entry.key === "hooks.PostToolUse");
+    const timeouts = (postToolUse?.value as { hooks: { timeout: number }[] }[]).flatMap((group) => group.hooks.map((handler) => handler.timeout * 1000));
+    expect(Math.min(...timeouts)).toBeGreaterThan(budgetMs);
   });
 });

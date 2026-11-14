@@ -288,7 +288,7 @@
       "id": "format-on-edit",
       "name": "Format on edit",
       "default": false,
-      "sentence": "After Claude edits a file, the repository's own lint-staged formatters and fixers rewrite it, and Claude sees what they could not fix.",
+      "sentence": "After Claude or Codex edits a file, the repository's own lint-staged formatters and fixers rewrite it, and the agent sees what they could not fix.",
       "risk": "It runs after every edit in every repository, before you review the change, not only at commit. It runs only known formatters (Prettier, Biome, ESLint, Ruff, Black, gofmt, rustfmt and a few more) that the repository's lint-staged config names, from the repository's node_modules/.bin or your PATH. It never runs package runners such as bunx or npx, interpreters, shells, scripts, or Git. A formatter still loads the repository's own config, and some configs, such as eslint.config.js, are code."
     }
   ],
@@ -415,7 +415,7 @@
             {
               "type": "command",
               "command": "sh \"$HOME/.config/fleet/hooks/run.sh\" codex PostToolUse",
-              "timeout": 30
+              "timeout": 90
             }
           ]
         }
@@ -643,10 +643,6 @@
     {
       "path": "hooks/format-on-edit.ts",
       "target": ".config/fleet/hooks/PostToolUse/format-on-edit.ts",
-      "plans": [
-        "claude",
-        "both"
-      ],
       "workflow": "format-on-edit"
     },
     {

@@ -26,6 +26,41 @@ export function proofDirectory(home: string, identity: ProofIdentity) {
   return join(pullRequestDirectory(home, identity), identity.commit);
 }
 
+export type GateRecord = { code: number; reason: string };
+
+export const gateRunDirectory = (home: string, identity: ProofIdentity) =>
+  join(pullRequestDirectory(home, { ...identity, repository: identity.repository.toLowerCase() }), "gate-record", identity.commit);
+
+const unfinishedGateRun: GateRecord = { code: 1, reason: "the gate run has not finished: it still runs, or it stopped without a result" };
+
+async function lastRunNumber(directory: string): Promise<number> {
+  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return []; throw error; });
+  return Math.max(0, ...names.flatMap((name) => /^(\d+)\.json$/.exec(name)?.[1] ?? []).map(Number));
+}
+
+export async function startGateRun(home: string, identity: ProofIdentity): Promise<(record: GateRecord) => Promise<void>> {
+  const directory = gateRunDirectory(home, identity);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  for (let number = await lastRunNumber(directory) + 1; ; number++) {
+    const path = join(directory, `${number}.json`);
+    try {
+      await writeFile(path, JSON.stringify(unfinishedGateRun) + "\n", { flag: "wx", mode: 0o600 });
+      return (record) => writeJson(path, record);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  }
+}
+
+export async function lastGateRun(home: string, identity: ProofIdentity): Promise<GateRecord | undefined> {
+  const directory = gateRunDirectory(home, identity);
+  const last = await lastRunNumber(directory);
+  if (!last) return undefined;
+  const { code, reason } = (await readJson<Partial<GateRecord> | null>(join(directory, `${last}.json`), null)) ?? {};
+  if (!Number.isInteger(code) || typeof reason !== "string") throw new Error(`Malformed gate record ${last}.json in ${directory}`);
+  return { code: code!, reason };
+}
+
 const screenshotSignatures = [
   Buffer.from("89504e470d0a1a0a", "hex"),
   Buffer.from("ffd8ff", "hex"),
@@ -1001,12 +1036,13 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const ciResult = ci();
   const head = headStatus(identity, before, pushedHead());
   const checks = await ciStatus(weigh, ciResult);
-  const held = landed ? undefined : heldStatus(before);
-  const problems = [owed ? undefined : "missing", ...kinds.map((kind) => kind.problem), review.problem, ...responses.map((response) => response.problem), head.problem, checks.problem, held?.problem];
+  const knownHold = landed ? undefined : heldStatus(before);
+  const held = [{ problem: owed ? undefined : "missing", line: owedPart(owed).line }, ...kinds.map((kind) => ({ problem: kind.problem, line: kind.proof.line })), review, ...responses, head, checks, ...knownHold ? [knownHold] : []];
   const weighed = [...kinds, review, checks];
   const lapsed = [...new Set(weighed.flatMap((status) => status.problem && status.lapsed ? [status.lapsed] : []))];
   const conditions = weighed.flatMap((status) => status.condition ? [status.condition] : []);
-  const code = problems.includes("missing") ? 1 : problems.includes("gap") ? 3 : 0;
+  const code = held.some((status) => status.problem === "missing") ? 1 : held.some((status) => status.problem === "gap") ? 3 : 0;
+  const failure = held.find((status) => status.problem === (code === 1 ? "missing" : "gap"))?.line?.split("\n")[0];
   const voided = (Array.isArray(decisions) ? decisions : []).filter((decision) => decision.voided && covers(decision, identity)).map((decision) => decision.id);
   const receipt = await receiptOf(home, identity);
   const proofSummary: CheckedSummary = {
@@ -1014,11 +1050,11 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
     review: { state: review.problem ?? "covered", ...review.covered ? { covered: review.covered } : {}, ...review.panelGap ? { panelGap: review.panelGap } : {}, unanswered: responses.map((response) => response.line), line: review.line },
     head: { state: head.problem ? "missing" : "pushed", line: head.line },
     ci: { state: ciResult.state, detail: ciResult.detail, ...ciResult.checks ? { checks: ciResult.checks } : {}, ...checks.gap ? { gap: checks.gap } : {}, line: checks.line },
-    lapsed, ...lapsed.length ? { lapsedLine: lapsedLine(lapsed) } : {}, voided, ...receipt ? { receipt } : {}, ...held ? { held: held.line } : {},
+    lapsed, ...lapsed.length ? { lapsedLine: lapsedLine(lapsed) } : {}, voided, ...receipt ? { receipt } : {}, ...knownHold ? { held: knownHold.line } : {},
   };
   const summary = `kinds: ${owed?.kinds.length ? owed.kinds.join(", ") : "none"}; review: ${review.covered}; CI: ${checks.covered}`;
   const evidence = kinds.map(({ proof, evidence }) => ({ kind: proof.kind, line: proof.line, directory: evidence }));
-  return { code, lines: summaryLines(proofSummary), summary, owed, evidence, ci: ciResult, decisions, tier, conditions, voided, proofSummary };
+  return { code, failure, lines: summaryLines(proofSummary), summary, owed, evidence, ci: ciResult, decisions, tier, conditions, voided, proofSummary };
 }
 
 const receiptPath = (home: string, ref: PrRef) => join(prDirectory(home, ref), "receipt.json");
