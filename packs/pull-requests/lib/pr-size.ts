@@ -51,7 +51,7 @@ export async function prSize(args: string[], cwd: string) {
   const lines = count(args, "--lines");
   const concepts = count(args, "--concepts");
   const from = (await git(cwd, "merge-base", base, "HEAD")).stdout.trim();
-  const diff = ["diff", "--no-color", from, "HEAD"];
+  const diff = ["diff", "--no-color", "--no-relative", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", from, "HEAD"];
   const numstat = (await git(cwd, ...diff, "--numstat", "-z")).stdout.split("\0");
   let authoredLines = 0;
   for (let at = 0; at < numstat.length - 1; at++) {

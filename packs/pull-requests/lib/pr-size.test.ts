@@ -30,16 +30,16 @@ async function branch(base: Record<string, string>, change: Record<string, strin
   await spawnGit(repo, "add", "-A");
   await spawnGit(repo, "commit", "-qm", "work");
   return async (...args: string[]) => {
-    const result = await spawnAsync([process.execPath, command, "size", ...args, "--base", "main"], { cwd: join(repo, subdirectory), env: { ...gitEnv, ...colored, FLEET_HANDLERS: "{}" } });
+    const result = await spawnAsync([process.execPath, command, "size", ...args, "--base", "main"], { cwd: join(repo, subdirectory), env: { ...gitEnv, ...configured, FLEET_HANDLERS: "{}" } });
     return { code: result.exitCode, out: result.stdout.trim(), err: result.stderr.trim() };
   };
 }
 
 let subdirectory = "";
-let colored = {};
+let configured = {};
 afterEach(() => {
   subdirectory = "";
-  colored = {};
+  configured = {};
 });
 
 const lines = (count: number, line: string) => Array.from({ length: count }, (_, n) => `${line} ${n}`).join("\n") + "\n";
@@ -78,7 +78,7 @@ test("counts flags, env vars and config keys the base does not name yet", async 
   const summary = "size: 10 authored lines, 2 new files (README.md, settings/new.yaml), 7 new concepts (newKey, fresh_setting, settings/new.yaml, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
   expect(await size("--lines", "100", "--concepts", "5")).toMatchObject({ code: 0, out: `${summary}\nwithin the estimate of 100 lines and 5 concepts` });
   subdirectory = "src";
-  colored = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "color.ui", GIT_CONFIG_VALUE_0: "always" };
+  configured = { GIT_CONFIG_COUNT: "4", GIT_CONFIG_KEY_0: "color.ui", GIT_CONFIG_VALUE_0: "always", GIT_CONFIG_KEY_1: "diff.relative", GIT_CONFIG_VALUE_1: "true", GIT_CONFIG_KEY_2: "diff.noprefix", GIT_CONFIG_VALUE_2: "true", GIT_CONFIG_KEY_3: "diff.external", GIT_CONFIG_VALUE_3: "false" };
   expect(await size("--lines", "100", "--concepts", "1")).toMatchObject({ code: 1, out: `${summary}\nover 1.5 times the estimate of 100 lines and 1 concept: run the delete pass` });
 });
 
