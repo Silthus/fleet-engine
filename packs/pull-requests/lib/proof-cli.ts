@@ -2,20 +2,21 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { askGap, authorOf, finishReview, recordReviewDecision, withBrokenConditions, judgeDirectory, judgeGap, ledgerRoot, listStanding, parseVerdict, proofDirectory, proofGate, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedFleetReview, type Arbiter, type CleanBaseMerge, type ProofIdentity, type ReviewDecision } from "./proof.ts";
-import { appendDecision, decideAlone, hearUser, ledgerOf } from "./decision-cli.ts";
-import { refText, type Ssh } from "./decision-ledger.ts";
-import { ciOf, pushedHeadOf, readPullRequest, runIn } from "./pr-ci.ts";
-import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRiskRubric, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
-import { judge, readCriticalPaths } from "./proof-judge.ts";
+import { askGap, authorOf, finishReview, ledgerRoot, listStanding, proofDirectory, readJson, readOwed, recordGap, recordGapCommand, recordStanding, requireChoice, requireNone, requireProofs, requireReservation, respondToReview, reuseProof, reviewDirectory, reviewOfCommit, reviewRecords, roundId, roundQuestion, runOption, saveProof, startReview, stopOption, storeCapturedFindings, unfinishedReview, writeJson, markRecorded, readReservation, recordReceipt, roundDirectories, unrecordedElsewhere, type Arbiter, type Reservation, type CapturedBy, type ProofIdentity } from "./proof.ts";
+import { AnswerTaken, appendOnce, decideAlone, hearUser, ledgerHolds, ledgerOf } from "./decision-cli.ts";
+import { HubUnreachable, refText, type Decision, type Ssh } from "./decision-ledger.ts";
+import { readComment, runIn } from "./pr-ci.ts";
+import { askModel, family, familyOf, isQuotaExhausted, modelLabel, quotaExitCode, readRubric, reviewerRow, sessionFamily, skillReferences, type Family } from "./proof-models.ts";
 import { runProof, type RunIO } from "./proof-run.ts";
-import { lensBrief, lensLog, panelGuideText, panelLines, planPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, waitForPanel, withSlot, type Lens, type PanelGuide, type PanelIO, type Plan } from "./proof-panel.ts";
+import { lensBrief, lensIdle, lensLog, panelGuideText, panelLines, publishPanel, readPanelGuide, readPlan, recordWorker, requeueFailed, resolveLens, runLens, stagedPlan, stagePanel, waitForPanel, withRoundLock, withSlot, lockNewRound, processStart, roundLock, RoundBusy, RoundGone, type Lens, type LockOwner, type PanelGuide, type PanelIO, type Plan, type RoundLock, type StartTime } from "./proof-panel.ts";
 import { evalsPath, promptTemplateHash, readRuns, reportLines, saveRun, scoreCases, type EvalIO } from "./proof-eval.ts";
 import { hashOf, missesPath, missSource, missSources, readMisses, recordMiss } from "./proof-misses.ts";
 import { githubRequest, publishProof, type GitHub } from "./proof-publish.ts";
-import { reviewedDiff, reviewPrompt } from "./proof-review.ts";
+import { reviewPrompt } from "./proof-review.ts";
 import { leftOutNote, reviewRange } from "./proof-range.ts";
 import { quietCommitIn } from "./proof-delta.ts";
+import { baseTip, cleanBaseMerge, mergeBase, pullRequestDetails, remotesOf, topLevel } from "./proof-checkout.ts";
+import { arbiterOf, finalGate, reviewLimit } from "./proof-gate.ts";
 import { anchorCheck } from "./finding-anchors.ts";
 import { reviewRules } from "./review-rules.ts";
 import type { ThreadWords } from "./proof-answers.ts";
@@ -27,12 +28,12 @@ export type { RunIO };
 export type ProofContext = {
   home: string; cwd: string; env: Record<string, string | undefined>; print: (text: string) => void; now?: () => Date; threadWords?: ThreadWords;
   detach?: (args: string[], log: string) => Promise<number>; pause?: () => Promise<void>; github?: GitHub; runIO?: RunIO;
-  ssh?: Ssh;
+  ssh?: Ssh; pid?: number; startTime?: StartTime;
 };
 type Result = { code: number; stdout: string; stderr: string };
 type Run = (command: string[]) => Result;
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; files: string[]; command?: string[] };
-type CommandContext = ProofContext & { run: Run };
+type CommandContext = ProofContext & { run: Run; lock: () => Promise<RoundLock> };
 type Subcommand = {
   usage: string; summary: string; examples: string[]; options?: string[]; repeatable?: string[]; flags?: string[]; hidden?: boolean; takesCommand?: boolean;
   run: (parsed: Parsed, identity: () => ProofIdentity, context: CommandContext) => Promise<number>;
@@ -47,7 +48,20 @@ not answer a round. The question names the PR, and an answer to the question of 
 answer lands in the decision ledger as a 👤 review decision; one answer records one decision and starts one round.
 --agent takes your own reason for a round that the arbiter escalates or the ceiling refuses. It lands in the ledger
 as a 🤖 review decision, refused on a PR whose merge-risk callout has no Tier line at HEAD. --standing is its old
-name. The round keeps the decision id and the arbiter's verdict. List decisions with fleet decision list.
+name. The round keeps the decision and the arbiter's verdict. List decisions with fleet decision list.
+A round starts only once its decision is in the ledger. A round that holds a decision stays reserved until the
+ledger holds another decision for the same answer. A round of another commit whose decision is still not in the
+ledger is dropped when the next round starts: its decision never counted. It stays reserved while the hub is down or
+while another command works on it, and the next round starts anyway. When the hub fails or the command stops
+before the decision is recorded, run the same command again: it records the same decision, appends it only when the
+ledger does not hold it yet, asks for no new answer, and goes on with that round. A panel whose lenses never started
+starts them on the same command or on --wait, with or without --round, and each lens starts once. A single-reviewer
+round whose findings are saved prints them and runs no reviewer again. review-finish records the round's decision
+first when its review-start ended before it did. Commands on one round take turns, and a new round is reserved with
+its lock already held. A command that finds another fleet proof command at work on the round stops and names its
+process and lock file; wait for it to end, then run the command again, or, on a panel, run fleet proof review --wait,
+which waits for it. A round is taken over when its command is gone, when its process id now names a process that
+started later, or when its lock file stays empty for a minute.
 The settings pull-requests.freeReviews and pull-requests.reviewCeiling set how many rounds, and how many final reads
 per phase, run before the arbiter weighs one more and where the loop stops. The arbiter is the lookup model of your
 AI plan; FLEET_REVIEW_ARBITER replaces its command.`;
@@ -113,6 +127,21 @@ again after you change the repository's access.`,
       return 0;
     },
   },
+  receipt: {
+    usage: "receipt --comment <url>",
+    summary: `Record the PR's proof receipt: the comment you posted on the PR with the gate's result. GitHub must show the
+comment on this PR. fleet proof gate --json and fleet decision report link it.`,
+    examples: ["fleet proof receipt --comment https://github.com/owner/name/pull/7#issuecomment-1"], options: ["--comment"],
+    run: async ({ options }, identity, { home, print, run }) => {
+      const url = required(options, "--comment", "receipt");
+      const comment = readComment(url, run);
+      const { repository, pr } = identity();
+      if (`${comment.repository}#${comment.pr}`.toLowerCase() !== refText({ repository, pr }).toLowerCase()) throw new Error(`The comment ${url} is on ${comment.repository}#${comment.pr}, not on ${refText({ repository, pr })}`);
+      await recordReceipt(home, { repository, pr }, url);
+      print(`receipt: ${url}`);
+      return 0;
+    },
+  },
   require: {
     usage: "require (--kinds <kind,kind> | --none --reason <why>) [--author claude|gpt]",
     summary: `Record the proof kinds the PR owes. Repeated calls add kinds. A PR that owes none records --none with the
@@ -160,7 +189,8 @@ lenses; :same or :other moves a failed lens to the family that is up when the ot
 is done, fleet joins the answers under one heading per lens as the round's findings.
 --wait waits up to 9 minutes for the panel of the unfinished round, the latest round, or --round, and prints each
 lens. Exit 0 when the round is finished, with its findings; 1 when a lens failed; 2 when lenses still run, so run
---wait again; 4 when a lens stopped on spent quota. It restarts a lens whose worker died.
+--wait again; 4 when a lens stopped on spent quota. It restarts a lens whose worker died, and waits while another
+fleet proof command works on the round.
 ${overrideHelp}`,
     examples: ["fleet proof review", "fleet proof review --scope fixes --base 1a2b3c4", "fleet proof review --lens fresh-eyes --lens correctness --lens design --knowledge correctness=incidents.md", "fleet proof review --wait"],
     options: ["--scope", "--base", "--phase", "--override", "--thread", "--agent", "--standing", "--round"], repeatable: ["--lens", "--knowledge"], flags: ["--wait"],
@@ -274,9 +304,11 @@ does the evidence prove HEAD, do the owed kinds fit the diff, does the review ho
 holds when it is fixed, rejected for a sound reason, or parked with a reach read for a problem the diff did not
 introduce. When the merge-risk skill is installed at ~/.agents/skills/merge-risk/SKILL.md, the judge also gets the PR
 body and that skill, and answers a fifth question: does the merge-risk callout's grade and door follow from what the
-diff measurably changes. A body without a callout passes it. A failed
-question or a high quality finding fails the gate; medium and low findings are listed. The verdict is cached per set
-of inputs. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
+diff measurably changes. A body without a callout passes it. A failed question or a high quality finding fails the
+gate; medium and low findings are listed. The verdict is cached per set of inputs, and a later run asks an unavailable
+judge again. Each run saves its proof summary for its commit, with the PR's head, base and base SHA on GitHub, the tier,
+--landed, and a fingerprint of the PR's proof files, the standing rules and the ledger decisions that cover the PR.
+fleet decision report prints that summary only while all of them still match. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
 --kind judge) lets the gate pass once a decision in the ledger accepts it: the user's answer, recorded with fleet
 decision record --mark 👤, or your own 🤖 decision when the PR's tier lets you. A refusal or a typed message never
 accepts it. The judge reads the condition of each accepted gap and fails one that HEAD breaks; the setting
@@ -285,22 +317,19 @@ the hub and the tier from the merge-risk callout at HEAD; with the hub unreachab
 gate fails closed. It prints each 🤖 acceptance that lapsed. The setting
 pull-requests.reviewTimeoutMinutes limits the judge, and spent quota stops it early, as for fleet proof review.
 FLEET_PROOF_JUDGE replaces its command, and FLEET_PROOF_JUDGE_MODEL its model.
---json prints the proof summary instead of the lines, with the exit code and the judge's verdict at HEAD: each owed
-kind as pending, ran, reused, carried, gap (with the decision that accepts it, or the 🤖 decision that lapsed), or
-missing; the review and its unanswered findings; the head; CI; the tier; the lapsed and voided decision ids; and the
-receipt link once one is recorded. The gate's lines come from the same summary.`,
+--json prints the proof summary instead of the lines, with the gate's exit code: each owed kind as pending, ran,
+reused, carried, gap (with the decision that accepts it, or the 🤖 decision that lapsed and why), or missing; the
+review and its unanswered findings; the head; CI; the tier; the judge at HEAD as pass, fail, unavailable, or skipped
+when the gate's own checks fail first, with its lines and its judge gap; the lapsed and voided decision ids; and the
+receipt link once one is recorded. The gate's lines and fleet decision report come from the same summary.`,
     examples: ["fleet proof gate", "fleet proof gate --landed", "fleet proof gate --json"], flags: ["--landed", "--json"],
     run: async ({ flags }, identity, context) => {
       const { print } = context;
       const head = identity();
-      const gate = await gateAt(head, context, flags.has("--landed"));
-      const json = flags.has("--json");
-      if (!json) for (const line of gate.lines) print(line);
-      const judged = gate.code === 0 ? await judgeHead(head, gate, context) : { code: gate.code, lines: [], covered: "", judge: undefined };
-      if (json) { print(JSON.stringify({ ...gate.proofSummary, code: judged.code, ...judged.judge ? { judge: judged.judge } : {} })); return judged.code; }
-      for (const line of judged.lines) print(line);
-      print(judged.code === 0 ? `gate: pass (${gate.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`);
-      return judged.code;
+      const gate = await finalGate(head, context, { landed: flags.has("--landed") });
+      if (flags.has("--json")) print(JSON.stringify(gate.summary));
+      else for (const line of [...gate.lines, gate.verdict]) print(line);
+      return gate.code;
     },
   },
   miss: {
@@ -371,12 +400,12 @@ ${overrideHelp}`,
     options: ["--scope", "--base", "--phase", "--override", "--thread", "--agent", "--standing"],
     run: async ({ options }, identity, context) => {
       const head = identity();
-      const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
-      const scope = options.get("--scope") ?? "full";
-      const decided = await decisionOf(options, head, context);
-      const reserved = await startReview(context.home, head, { scope, base, from: rangeStart(scope, base, head, context.run), ...decided, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run) });
-      await recordReviewDecision(reserved, decided.decision);
-      context.print(JSON.stringify(reserved));
+      const { round, id, directory } = await unrecordedRound(options, head, context) ?? await reserveRound(options, head, context, "author");
+      await roundStep(directory, context, async () => {
+        await takeOverride(directory, options, head, context);
+        await recordRound(directory, context);
+      });
+      context.print(JSON.stringify({ round, id, directory }));
       return 0;
     },
   },
@@ -384,31 +413,60 @@ ${overrideHelp}`,
     usage: "review-finish --round <number|final-n> --reviewer <model> <findings.md>",
     summary: `Save the findings of a reserved round after its reviewers finish. --round takes the id that review-start
 printed. --reviewer names the model that wrote them; the gate prints it. The findings file must not be empty; write
-"No findings." when the reviewer found none.`,
+"No findings." when the reviewer found none. When the round's decision is not recorded yet, review-finish records it
+first and needs the hub; a round whose decision is recorded finishes without it.`,
     examples: ["fleet proof review-finish --round 1 --reviewer gpt-6.1-sol findings.md", "fleet proof review-finish --round final-1 --reviewer claude-opus-5-5 findings.md"],
     options: ["--round", "--findings", "--reviewer"],
-    run: async ({ options, files }, identity, { print, home, cwd }) => {
+    run: async ({ options, files }, identity, context) => {
       const findings = options.has("--findings") ? [options.get("--findings")!, ...files] : files;
       if (findings.length !== 1) throw usageError("review-finish", "Pass one findings file");
       const round = roundId(required(options, "--round", "review-finish"));
       const reviewer = required(options, "--reviewer", "review-finish");
-      print(await finishReview(home, identity(), round, resolve(cwd, findings[0]!), reviewer));
+      const head = identity();
+      const directory = await reviewDirectory(context.home, head, round);
+      await requireReservation(directory);
+      await roundStep(directory, context, async () => {
+        await recordRound(directory, context);
+        context.print(await finishReview(context.home, head, round, resolve(context.cwd, findings[0]!), reviewer));
+      });
       return 0;
     },
   },
 };
 
+type SingleRound = { round: number | "final"; id: string; directory: string; scope: string; from?: string };
+
 async function runReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
-  const { print, home, cwd, env, run } = context;
+  const { home, run } = context;
   const author = await authorOf(home, head);
+  const pending = await unfinishedReview(home, head, "fleet");
+  if (pending) requireSameRequest(pending, options, run);
+  const reserved: SingleRound = pending
+    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
+    : await reserveFleetReview(options, head, context);
+  return roundStep(reserved.directory, context, async () => {
+    if (await readPlan(reserved.directory) || await stagedPlan(reserved.directory)) throw new Error(`${reserved.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
+    await takeOverride(reserved.directory, options, head, context);
+    await recordRound(reserved.directory, context);
+    if (existsSync(join(reserved.directory, "findings.md"))) return printSavedReview(reserved, context);
+    return askReviewer(reserved, head, author, context);
+  });
+}
+
+async function printSavedReview({ round, id, directory }: SingleRound, { print }: CommandContext) {
+  const reservation = await readReservation(directory);
+  print(JSON.stringify({ round, id, directory, reviewer: reservation?.reviewer }));
+  print((await readFile(join(directory, "findings.md"), "utf8")).trim());
+  const anchors = await readFile(join(directory, "anchors.md"), "utf8").catch(() => "");
+  if (anchors) print(`\n${anchors.trim()}`);
+  return 0;
+}
+
+async function askReviewer(reserved: SingleRound, head: ProofIdentity, author: Family, context: CommandContext) {
+  const { print, home, cwd, env, run } = context;
   const row = reviewerRow(author, env);
   const limit = numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
   const rubric = await readRubric(home);
-  const pending = await unfinishedFleetReview(home, head);
-  if (pending && await readPlan(pending.directory)) throw new Error(`${pending.directory} is an unfinished panel. Rerun it with the same fleet proof review --lens command, or wait for it with --wait`);
-  const reserved = pending
-    ? { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory, scope: pending.reservation.scope, from: pending.reservation.from ?? rangeStart(pending.reservation.scope, pending.reservation.base, head, run) }
-    : await reserveFleetReview(options, head, context).then(async (fresh) => { await recordReviewDecision(fresh, fresh.decision); return fresh; });
   const from = reserved.from!;
   const pr = pullRequestDetails(head, run);
   const { files, leftOut, diff } = reviewRange(run, from, head.commit, mergeBase(head, run));
@@ -435,11 +493,72 @@ async function runReview(options: Map<string, string>, head: ProofIdentity, cont
 async function reserveFleetReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
   const scope = options.get("--scope") ?? "full";
   if (["fixes", "final"].includes(scope) && !options.has("--base")) throw usageError("review", "--scope fixes and --scope final need --base with the commit of the latest finished review");
+  return reserveRound(options, head, context, "fleet");
+}
+
+async function reserveRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext, capturedBy: CapturedBy) {
+  await settleStrandedRounds(head, context);
+  const scope = options.get("--scope") ?? "full";
   const base = options.has("--base") ? resolveCommit(options.get("--base")!, context.run) : undefined;
   const from = rangeStart(scope, base, head, context.run);
-  const decided = await decisionOf(options, head, context);
-  const reserved = await startReview(context.home, head, { scope, base, from, ...decided, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy: "fleet" });
-  return { ...reserved, scope, from, decision: decided.decision };
+  const { decision, ...permit } = await decisionOf(options, head, context);
+  const reserved = await startReview(context.home, head, { scope, base, from, ...permit, decision, phase: options.get("--phase"), cleanBaseMerge: cleanBaseMerge(head, context.run), quietCommit: quietCommitIn(context.run), capturedBy, lock: async (directory) => lockNewRound(directory, await context.lock()) });
+  return { ...reserved, scope, from };
+}
+
+async function unrecordedRound(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+  const pending = await unfinishedReview(context.home, head, "author");
+  if (!pending?.reservation.decision || pending.reservation.recorded) return undefined;
+  requireSameRequest(pending, options, context.run);
+  return { round: pending.reservation.round, id: basename(pending.directory), directory: pending.directory };
+}
+
+function requireSameRequest({ reservation, directory }: { reservation: Reservation; directory: string }, options: Map<string, string>, run: Run) {
+  if (!reservation.decision || reservation.recorded) return;
+  const reserved = reservedOptions(reservation);
+  if (reserved !== requestedOptions(options, reservation, run)) throw new Error(`Review round ${basename(directory)} at this HEAD is reserved with ${reserved}, and its decision is not recorded yet. Run its command again with ${reserved} to record it, or remove ${directory} to drop it`);
+}
+
+const reservedOptions = ({ scope, base, phase }: Reservation & { phase?: string }) =>
+  [`--scope ${scope}`, base && `--base ${base}`, scope === "final" && `--phase ${phase ?? "review"}`].filter(Boolean).join(" ");
+
+function requestedOptions(options: Map<string, string>, reservation: Reservation, run: Run) {
+  const scope = options.get("--scope") ?? "full";
+  const base = options.has("--base") ? resolveCommit(options.get("--base")!, run) : undefined;
+  return reservedOptions({ ...reservation, scope, base, phase: options.get("--phase") });
+}
+
+async function settleStrandedRounds(head: ProofIdentity, context: CommandContext) {
+  for (const directory of await roundDirectories(context.home, head)) {
+    if (!await unrecordedElsewhere(directory, head.commit)) continue;
+    await roundStep(directory, context, async () => {
+      const decision = await unrecordedElsewhere(directory, head.commit);
+      if (!decision) return;
+      if (await ledgerHolds(ledgerOf(context), decision.id)) await markRecorded(directory);
+      else await rm(directory, { recursive: true, force: true });
+    }).catch(unless(RoundBusy, HubUnreachable, RoundGone));
+  }
+}
+
+const unless = (...kinds: (new (...args: never[]) => Error)[]) => (error: unknown) => { if (!kinds.some((kind) => error instanceof kind)) throw error; };
+
+const lockOwner = (context: ProofContext): LockOwner => ({ pid: context.pid ?? process.pid, now: context.now ?? (() => new Date()), startTime: context.startTime ?? processStart });
+
+const roundStep = async <T>(directory: string, context: CommandContext, step: () => Promise<T>) => withRoundLock(directory, await context.lock(), step);
+
+async function takeOverride(directory: string, options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
+  const reservation = await readReservation(directory);
+  if (!options.has("--override") || !reservation?.decision || reservation.recorded || reservation.decision.mark !== "🤖") return;
+  const { decision } = await decisionOf(options, head, context);
+  await writeJson(join(directory, "round.json"), { ...reservation, decision } satisfies Reservation);
+}
+
+async function recordRound(directory: string, context: CommandContext) {
+  const reservation = await readReservation(directory);
+  if (!reservation?.decision || reservation.recorded) return;
+  try { await appendOnce(ledgerOf(context), reservation.decision); }
+  catch (error) { if (error instanceof AnswerTaken) await rm(directory, { recursive: true, force: true }); throw error; }
+  await markRecorded(directory);
 }
 
 const rangeStart = (scope: string, base: string | undefined, head: ProofIdentity, run: Run) => scope === "full" ? mergeBase(head, run) : base;
@@ -448,12 +567,12 @@ const waitPolls = 108;
 const pollInterval = 5_000;
 const proofEntry = resolve(import.meta.dir, "../commands/proof.ts");
 
-const reviewLimit = (env: Record<string, string | undefined>) => numberSetting("pull-requests.reviewTimeoutMinutes", env) * 60_000;
-
-const panelIO = ({ home, env, now, pause }: CommandContext): PanelIO => ({
-  env, now: now ?? (() => new Date()), pause: pause ?? (() => Bun.sleep(pollInterval)), slots: join(ledgerRoot(home), ".panel-slots"),
-  slotCount: numberSetting("pull-requests.panelSlots", env), pid: process.pid, limit: reviewLimit(env),
+const panelIO = (context: CommandContext): PanelIO => ({
+  ...lockOwner(context), pid: process.pid, env: context.env, pause: pausing(context), slots: join(ledgerRoot(context.home), ".panel-slots"),
+  slotCount: numberSetting("pull-requests.panelSlots", context.env), limit: reviewLimit(context.env),
 });
+
+const pausing = ({ pause }: ProofContext) => pause ?? (() => Bun.sleep(pollInterval));
 
 async function startLens(directory: string, name: string, context: CommandContext) {
   const detach = context.detach ?? detachFleet(context);
@@ -475,8 +594,9 @@ async function runPanel({ options, lists }: Parsed, head: ProofIdentity, context
   const guide = await readPanelGuide(home);
   const knowledge = await knowledgeOf(lists.get("--knowledge") ?? [], context.cwd);
   const lenses = lists.get("--lens")!.map((argument) => resolveLens(guide, argument, author, knowledge, env));
-  const pending = await unfinishedFleetReview(home, head);
-  const directory = pending ? await rerunPanel(pending, head, lenses, guide, context) : await reservePanel(options, head, lenses, guide, context);
+  const pending = await unfinishedReview(context.home, head, "fleet");
+  if (pending) requireSameRequest(pending, options, context.run);
+  const directory = pending ? await rerunPanel(pending, options, head, lenses, guide, context) : await reservePanel(options, head, lenses, guide, context);
   const round = (await readJson<{ round: number | "final" }>(join(directory, "round.json"), { round: 0 })).round;
   print(JSON.stringify({ round, directory, lenses: lenses.map(({ name, family }) => ({ name, family })) }));
   print("The lenses run in the background. Run fleet proof review --wait for the findings, and fleet proof show to see each lens.");
@@ -488,16 +608,27 @@ const castOf = ({ family, row }: Lens, env: Record<string, string | undefined>) 
 async function reservePanel(options: Map<string, string>, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
   const rubric = await readRubric(context.home);
   const reserved = await reserveFleetReview(options, head, context);
-  try {
-    const { plan, briefs } = await panelBriefs(reserved, head, lenses, guide, rubric, context);
-    await planPanel(reserved.directory, plan, briefs);
-    await recordReviewDecision(reserved, reserved.decision);
-  } catch (error) {
-    await rm(reserved.directory, { recursive: true, force: true });
-    throw error;
-  }
-  for (const lens of lenses) await startLens(reserved.directory, lens.name, context);
-  return reserved.directory;
+  return roundStep(reserved.directory, context, async () => {
+    try {
+      const { plan, briefs } = await panelBriefs(reserved, head, lenses, guide, rubric, context);
+      await stagePanel(reserved.directory, plan, briefs);
+    } catch (error) {
+      await rm(reserved.directory, { recursive: true, force: true });
+      throw error;
+    }
+    return recordAndStart(reserved.directory, context);
+  });
+}
+
+async function recordAndStart(directory: string, context: CommandContext) {
+  await recordRound(directory, context);
+  return startIdleLenses(directory, context);
+}
+
+async function startIdleLenses(directory: string, context: CommandContext) {
+  await publishPanel(directory);
+  for (const lens of (await readPlan(directory))!.lenses) if (await lensIdle(directory, lens.name)) await startLens(directory, lens.name, context);
+  return directory;
 }
 
 async function panelBriefs(reserved: { directory: string; from?: string }, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, rubric: string, context: CommandContext) {
@@ -522,17 +653,22 @@ async function panelBriefs(reserved: { directory: string; from?: string }, head:
   return { plan, briefs: new Map(briefed.map((lens) => [lens.name, lensBrief(guide, lens, input)])) };
 }
 
-async function rerunPanel(pending: { directory: string; reservation: { scope: string; base?: string; from?: string } }, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
+async function rerunPanel(pending: { directory: string; reservation: { scope: string; base?: string; from?: string } }, options: Map<string, string>, head: ProofIdentity, lenses: Lens[], guide: PanelGuide, context: CommandContext) {
   const { directory, reservation } = pending;
-  const plan = await readPlan(directory);
+  const plan = await readPlan(directory) ?? await stagedPlan(directory);
   if (!plan) throw new Error(`${directory} is reserved for one reviewer. Run fleet proof review without --lens to retry it`);
   const planned = plan.lenses.map((lens) => lens.name);
   if (lenses.map((lens) => lens.name).sort().join() !== [...planned].sort().join()) throw new Error(`The unfinished round runs the lenses ${planned.join(", ")}. Pass the same --lens set to rerun its failed lenses`);
-  const casts = new Map(lenses.map((lens) => [lens.name, castOf(lens, context.env)]));
-  const from = reservation.from ?? rangeStart(reservation.scope, reservation.base, head, context.run);
-  const fresh = await panelBriefs({ directory, from }, head, lenses, guide, await readRubric(context.home), context);
-  for (const name of await requeueFailed(directory, casts, fresh)) await startLens(directory, name, context);
-  return directory;
+  return roundStep(directory, context, async () => {
+    await takeOverride(directory, options, head, context);
+    await recordRound(directory, context);
+    if (await readPlan(directory)) {
+      const casts = new Map(lenses.map((lens) => [lens.name, castOf(lens, context.env)]));
+      const from = reservation.from ?? rangeStart(reservation.scope, reservation.base, head, context.run);
+      await requeueFailed(directory, casts, await panelBriefs({ directory, from }, head, lenses, guide, await readRubric(context.home), context));
+    }
+    return startIdleLenses(directory, context);
+  });
 }
 
 async function knowledgeOf(values: string[], cwd: string) {
@@ -547,14 +683,26 @@ async function knowledgeOf(values: string[], cwd: string) {
 }
 
 async function waitForReview(options: Map<string, string>, head: ProofIdentity, context: CommandContext) {
-  const directory = options.has("--round") ? await reviewDirectory(context.home, head, roundOption(options)) : (await unfinishedFleetReview(context.home, head))?.directory ?? await reviewDirectory(context.home, head);
-  const code = await waitForPanel(directory, panelIO(context), (name) => startLens(directory, name, context), waitPolls);
+  const pending = options.has("--round") ? undefined : await unfinishedReview(context.home, head, "fleet");
+  const directory = pending?.directory ?? await reviewDirectory(context.home, head, roundOption(options));
+  await requireReservation(directory);
+  await startStaged(directory, context);
+  const restart = (name: string) => roundStep(directory, context, async () => { if (await lensIdle(directory, name)) await startLens(directory, name, context); }).catch(unless(RoundBusy));
+  const code = await waitForPanel(directory, panelIO(context), restart, waitPolls);
   for (const line of await roundLines(directory, context)) context.print(line);
   if (code === 0) context.print(await readFile(join(directory, "findings.md"), "utf8"));
   if (code === 1) context.print("A lens failed, and the round stays unfinished. Run the same fleet proof review --lens command to rerun the failed lenses.");
   if (code === 2) context.print("Lenses still run. Run fleet proof review --wait again.");
   if (code === quotaExitCode) context.print("A lens stopped on spent quota, and the round stays unfinished. Run the same fleet proof review --lens command once the quota is back, or move the lens to the family that is up with :same or :other.");
   return code;
+}
+
+async function startStaged(directory: string, context: CommandContext) {
+  for (let poll = 0; !await readPlan(directory); poll++) {
+    try { await roundStep(directory, context, async () => { if (await stagedPlan(directory)) await recordAndStart(directory, context); }); return; }
+    catch (error) { if (!(error instanceof RoundBusy) || poll >= waitPolls) throw error; }
+    await pausing(context)();
+  }
 }
 
 const evalJudgeLimit = 180_000;
@@ -611,51 +759,6 @@ function positive(value: string, option: string, name: string) {
   return number;
 }
 
-type Gate = Awaited<ReturnType<typeof proofGate>>;
-
-export async function proofSummaryAt(head: ProofIdentity, context: ProofContext) {
-  return (await gateAt(head, { ...context, run: runIn(context.cwd, context.env) })).proofSummary;
-}
-
-function gateAt(head: ProofIdentity, context: CommandContext, landed = false) {
-  const { home, run, now } = context;
-  return proofGate(home, head, { landed, cleanBaseMerge: cleanBaseMerge(head, run), quietCommit: quietCommitIn(run), ci: () => ciOf(home, head, run, now?.() ?? new Date()), pushedHead: () => pushedHeadOf(head, run), ledger: ledgerOf(context), now: now?.() });
-}
-
-async function judgeHead(head: ProofIdentity, gate: Gate, context: CommandContext) {
-  const { home, cwd, env, run, now } = context;
-  const author = await authorOf(home, head);
-  const row = reviewerRow(author, env);
-  const limit = reviewLimit(env);
-  const from = mergeBase(head, run);
-  const riskRubric = await readRiskRubric(home);
-  const today = now?.() ?? new Date();
-  const weighedGap = await judgeGap(home, head, today, gate.decisions, gate.tier);
-  const input = {
-    risk: riskRubric === undefined ? undefined : { rubric: riskRubric, body: pullRequestDetails(head, run).body },
-    cwd: topLevel(run) ?? cwd, from, commit: head.commit, diff: diffOf(from, head.commit, run), crossFamily: familyOf(row) !== author, ci: gate.ci, owed: gate.owed!, ledger: gate.lines,
-    evidence: gate.evidence, reviews: await reviewRecords(home, head), rubric: await readRubric(home), references: skillReferences(home),
-    conditions: [...gate.conditions, ...weighedGap?.condition ? [weighedGap.condition] : []], criticalPaths: await readCriticalPaths(home, head.repository, env),
-  };
-  const outcome = await judge(input, {
-    ask: (request) => askModel("judge", row, request, env, limit), model: modelLabel("judge", row, env), arbiter: arbiterOf(context),
-    directory: judgeDirectory(home, head), commit: head.commit, now: today,
-  });
-  if (riskRubric === undefined) outcome.lines.push("judge risk: not asked; ~/.agents/skills/merge-risk/SKILL.md is not installed");
-  const verdict = { state: outcome.state, model: outcome.model, lines: outcome.lines };
-  if (outcome.state === "pass") return { code: 0, lines: outcome.lines, covered: `pass by ${outcome.model}`, judge: verdict };
-  const gap = weighedGap && withBrokenConditions(weighedGap, outcome.broken);
-  const judged = gap && { ...verdict, gap: { commit: head.commit, reason: gap.reason, ...gap.acceptance ? { accepted: { by: gap.acceptance.by, ...gap.acceptance.mark ? { mark: gap.acceptance.mark } : {}, ...gap.acceptance.id ? { id: gap.acceptance.id } : {} } } : {}, text: gap.line } };
-  if (gap?.acceptance) return { code: 0, lines: [...outcome.lines, `judge gap: ${gap.acceptance.line}: ${gap.reason}`], covered: `${outcome.state} accepted by ${gap.acceptance.by}`, judge: judged };
-  if (gap) return { code: 3, lines: [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${gap.broken ? voidBroken(gap.broken) : askGap(head, "judge", gap.reason)}`], covered: "", judge: judged };
-  const hint = gate.tier === "ungraded"
-    ? "judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and ask the user; an agent never decides on an ungraded PR"
-    : `judge gap: when the judge is wrong, record fleet proof gap --kind judge --reason <why> and decide it with fleet decision record --mark 🤖 --class proof-gap --kind judge --pr ${refText(head)} --question <q> --answer <a> --rejected <option> --reason <why>, or ask the user`;
-  return { code: 1, lines: [...outcome.lines, hint], covered: "", judge: verdict };
-}
-
-const voidBroken = (ids: string[]) => `End ${ids.map((id) => `decision ${id}`).join(" and ")} with fleet decision void <id> --reason <why its condition no longer holds>, then decide or ask again`;
-
 async function roundLines(directory: string, { now }: CommandContext) {
   const round = await readJson<{ round: number | "final"; commit: string; reviewer?: string; capturedBy?: string; standing?: { reason: string; until: string }; decision?: { mark: string; id: string } } | undefined>(join(directory, "round.json"), undefined);
   if (!round) throw new Error(`${directory} has no reservation`);
@@ -672,29 +775,21 @@ function roundOption(options: Map<string, string>) {
   return round === undefined ? undefined : round === "final" ? "final" : roundId(round);
 }
 
-const arbiterLimit = 180_000;
-
-const arbiterOf = ({ env, cwd }: CommandContext): Arbiter => async (prompt) => {
-  const answer = await askModel("arbiter", modelFor("lookup", env), { prompt, cwd }, env, arbiterLimit);
-  return answer.ok ? parseVerdict(answer.text, answer.model) : { verdict: "unavailable", reason: answer.cause, model: answer.model };
-};
-
-async function decisionOf(options: Map<string, string>, head: ProofIdentity, context: CommandContext): Promise<{ arbiter: Arbiter; limits: { free: number; ceiling: number }; decision?: ReviewDecision }> {
+async function decisionOf(options: Map<string, string>, head: ProofIdentity, context: CommandContext): Promise<{ arbiter: Arbiter; limits: { free: number; ceiling: number }; decision?: Decision }> {
   const rest = { arbiter: arbiterOf(context), limits: { free: numberSetting("pull-requests.freeReviews", context.env), ceiling: numberSetting("pull-requests.reviewCeiling", context.env) } };
   const words = options.get("--override");
   const reason = options.get("--agent") ?? options.get("--standing");
   if (options.has("--agent") && options.has("--standing")) throw new Error("Pass --agent, not --standing too: --standing is its old name");
   if (words !== undefined && reason !== undefined) throw new Error("Pass --override with the user's answer or --agent with your reason, not both");
   if (words === undefined && reason === undefined) return rest;
-  const ledger = ledgerOf(context);
   const ask = { class: "review" as const, prs: [head] };
   const lead = `${roundQuestion} ${head.repository}#${head.pr}:`;
   if (reason !== undefined && !reason.trim()) throw new Error("--agent needs your reason for this review");
+  const ledger = ledgerOf(context);
   const decision = words !== undefined
     ? await hearUser({ ...ask, mark: "👤", words, thread: options.get("--thread"), fits: (heard) => requireChoice(heard, lead, [runOption, stopOption], "Stop the review loop") }, context, ledger)
     : await decideAlone({ ...ask, question: `Run another review round of ${refText(head)} at ${short(head.commit)}?`, answer: `Run it: ${reason}`, rejected: "Ask the user", reason: reason!, thread: options.get("--thread") }, context, ledger);
-  const reviewDecision: ReviewDecision = { mark: decision.mark, id: decision.id, record: () => appendDecision(ledger, decision) };
-  return { ...rest, decision: reviewDecision };
+  return { ...rest, decision };
 }
 
 function resolveAuthor(requested: string | undefined, env: Record<string, string | undefined>): Family | undefined {
@@ -775,65 +870,6 @@ function resolveIdentity(options: Map<string, string>, run: Run): ProofIdentity 
   return { ...resolvePullRequest(options.get("--repo"), options.get("--pr"), run), commit };
 }
 
-function topLevel(run: Run) {
-  const result = run(["git", "rev-parse", "--show-toplevel"]);
-  return result.code === 0 ? result.stdout.trim() : undefined;
-}
-
-function mergeBase(identity: ProofIdentity, run: Run) {
-  for (const ref of baseRefs(identity, run)) {
-    const result = run(["git", "merge-base", ref, identity.commit]);
-    if (result.code === 0) return result.stdout.trim();
-  }
-  throw new Error(`Cannot find where ${identity.repository}#${identity.pr} branched from its base here. Fetch the base branch from a remote of ${identity.repository}`);
-}
-
-function baseTip(identity: ProofIdentity, run: Run) {
-  for (const ref of baseRefs(identity, run)) {
-    const result = run(["git", "rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
-    if (result.code === 0) return result.stdout.trim();
-  }
-  throw new Error(`Cannot find the base branch of ${identity.repository}#${identity.pr} here. Fetch it from a remote of ${identity.repository}`);
-}
-
-function diffOf(from: string, to: string, run: Run) {
-  const diff = run(["git", "diff", "--no-ext-diff", "--no-textconv", "--no-relative", from, to]);
-  if (diff.code !== 0) throw new Error(`Cannot diff ${short(from)}..${short(to)} here (${firstLine(diff.stderr)})`);
-  return reviewedDiff(diff.stdout);
-}
-
-function pullRequestDetails(identity: ProofIdentity, run: Run) {
-  try {
-    const { title, body, base } = readPullRequest(identity, run);
-    return { title, body, baseRefName: base };
-  } catch (error) {
-    throw new Error(`Cannot read ${identity.repository}#${identity.pr} over GitHub's REST API (${(error as Error).message})`);
-  }
-}
-
-function baseRefs(identity: ProofIdentity, run: Run) {
-  const base = pullRequestDetails(identity, run).baseRefName;
-  return remotesOf(identity.repository, run).map((remote) => `refs/remotes/${remote}/${base}`);
-}
-
-function remotesOf(repository: string, run: Run) {
-  const remotes = run(["git", "remote"]).stdout.split("\n").filter(Boolean);
-  return remotes.filter((remote) => new RegExp(`github\\.com[:/]${repository.replace(/\./g, "\\.")}(\\.git)?/?$`, "i").test(run(["git", "remote", "get-url", remote]).stdout.trim()));
-}
-
-function cleanBaseMerge(identity: ProofIdentity, run: Run): CleanBaseMerge {
-  let bases: string[] | undefined;
-  return (commit) => {
-    const parents = run(["git", "rev-list", "--parents", "-n", "1", commit]);
-    const [, reviewedSide, baseSide, ...more] = parents.code === 0 ? parents.stdout.trim().split(" ") : [];
-    if (!reviewedSide || !baseSide || more.length) return undefined;
-    bases ??= baseRefs(identity, run);
-    if (!bases.some((ref) => run(["git", "merge-base", "--is-ancestor", baseSide, ref]).code === 0)) return undefined;
-    const remerge = run(["git", "show", "--remerge-diff", "--format=", "--no-relative", "--no-ext-diff", "--no-textconv", commit]);
-    return remerge.code === 0 && !remerge.stdout.trim() ? reviewedSide : undefined;
-  };
-}
-
 const short = (commit: string) => commit.slice(0, 7);
 
 export async function proofCommand(args: string[], context: ProofContext): Promise<number> {
@@ -852,5 +888,6 @@ export async function proofCommand(args: string[], context: ProofContext): Promi
   const run = runIn(context.cwd, context.env);
   const parsed = { ...parse(name, command, own), ...split >= 0 ? { command: args.slice(split + 1) } : {} };
   let identity: ProofIdentity | undefined;
-  return command.run(parsed, () => identity ??= resolveIdentity(parsed.options, run), { ...context, run });
+  let lock: Promise<RoundLock> | undefined;
+  return command.run(parsed, () => identity ??= resolveIdentity(parsed.options, run), { ...context, run, lock: () => lock ??= roundLock(lockOwner(context)) });
 }

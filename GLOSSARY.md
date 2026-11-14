@@ -97,17 +97,17 @@ The gate no longer counts an agent's acceptance, because the tier changed, CI ra
 _Avoid_: Expiry, revoke
 
 **Reversal**:
-The user's own words, in a T3 thread or on a GitHub comment they wrote, that replace a decision's answer. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more. A reversal takes the time the user wrote their words. A gap the user keeps owed takes no reversal: only their acceptance lifts it.
+The user's own words in a T3 thread, a message they typed in the T3 app or their answer to a question tool, that replace a decision's answer. A GitHub comment never counts, since agents post on GitHub as the user. A reversed decision prints as 👤 with the replaced answer struck through, and counts no more. A reversal takes the time the user wrote their words, and those words must be newer than the decision. One answer reverses one decision. A gap the user keeps owed and a voided decision take no reversal.
 _Avoid_: Undo, override
 
 **Brake**:
-Two reversals in one ask class within 28 days. While it holds, an agent decides nothing alone in that class. Only the user's answer, given after the brake, lifts it.
+Two reversals of the agent's decisions in one ask class within 28 days. The brake holds from the later reversal. While it holds, an agent decides nothing alone in that class. Only the user's answer to a question that names the brake and the class lifts it, and only when it comes after the brake. An answer that starts with "Lift" lifts it. A "Yes" lifts it only when the question starts with "Lift the brake on <class>". One answer lifts one brake or records one decision, never both.
 _Avoid_: Lock, freeze
 
 **Proof summary**:
-The proof state of a pull request at HEAD that the gate builds: each owed kind, the review, the head, CI, the tier, and the lapsed and voided decisions. The gate prints its lines from it, `fleet proof gate --json` prints it, and the end-of-run report reads it.
+The proof state of a pull request at HEAD that the gate builds: each owed kind, the review, the head, CI, the tier, the judge's verdict, and the lapsed and voided decisions. The gate prints its lines from it, and `fleet proof gate --json` prints it. Each `fleet proof gate` saves its summary for its commit, with the pull request's head, base and base SHA on GitHub, the tier, `--landed`, and a fingerprint of the pull request's proof files, the standing rules and the ledger decisions that cover it. The end-of-run report uses a saved summary for its judge's verdict only while all of these still match.
 _Avoid_: Proof status, gate result
 
 **End-of-run report**:
-The Markdown that `fleet decision report` prints when a lane ends: what is still the user's, merges under the narrow grant, the lane's decisions, one proofs row per pull request, and the side fixes it started.
+The Markdown that `fleet decision report` prints when a lane ends: what is still the user's, merges under the narrow grant, the lane's decisions, one proofs row per pull request, and the side fixes it started. It never runs the judge. It builds the proof summary again at HEAD, so CI, the standing rules, the decisions and the tier are read as they are now, and it takes the judge's verdict from the summary the gate saved at HEAD. When a decision was recorded after the gate, or the head, base, merge-risk callout or proofs changed, it says the gate has not run at HEAD with these proofs. When the summary it builds does not pass, such as after a check fails, outside the checkout where a review carried across commits cannot be checked, when an accepted gap now rests on a condition the saved judge did not weigh, when CI shows other checks than the ones the judge weighed, or when the head, base or tier moves while the report reads it, it sends the user to the gate and offers no merge. This holds for a merged pull request too, which it sends to `fleet proof gate --landed`. A pull request whose proofs Fleet cannot read is still the user's, with the reason, and the other rows still print.
 _Avoid_: Summary, wrap-up

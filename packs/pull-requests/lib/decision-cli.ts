@@ -1,9 +1,10 @@
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
-import { readPullRequest, restJson, runIn } from "./pr-ci.ts";
+import { renderReport } from "./decision-report.ts";
+import { readPullRequest, runIn } from "./pr-ci.ts";
 import { gapKind, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
-  agentRefusal, askClasses, brakeDays, brakeOf, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
-  type AskClass, type Decision, type DecisionState, type Env, type Ledger, type LedgerEvent, type Lift, type PrRef, type Reversal, type Ssh, type UsersMark,
+  agentRefusal, answerUse, askClasses, brakeDays, brakeOf, covers, decisionLine, fold, hubLedger, HubUnreachable, isUsers, liftCounted, live, messageKey, namesKind, namesPr, panelRefusal, prRef, refText, thisMachine, tierOf,
+  type AnswerUse, type AskClass, type Decision, type DecisionState, type Env, type Ledger, type LedgerEvent, type Lift, type PrRef, type Reversal, type Ssh, type UsersMark,
 } from "./decision-ledger.ts";
 
 export type DecisionContext = {
@@ -16,8 +17,8 @@ const usage = `Usage:
   fleet decision record --mark 🤖 --class <class> --pr <owner/repo#n>... --question <q> --answer <a> --rejected <option> --reason <why> [--kind <kind>...] [--condition <text>] [--thread <id>] [--link <side-fix thread>]
   fleet decision list [--pr <owner/repo#n>] [--class <class>] [--live]
   fleet decision void <id> --reason <why its condition no longer holds>
-  fleet decision reverse <id> --words '<date> "<the user's words>"' (--thread <id> | --comment <url>)
-  fleet decision lift --class <class> --words '<date> "<the user's answer>"' --thread <id>
+  fleet decision reverse <id> --words '<date> "<the user's words>"' --thread <id> [--message <id>]
+  fleet decision lift --class <class> --words '<date> "<the user's answer>"' --thread <id> [--message <id>]
   fleet decision report --pr <owner/repo#n>... [--thread <id>]
 
 The decision ledger holds every decision about a pull request's proof and process. It lives on the Fleet hub that
@@ -31,7 +32,8 @@ question tool in the T3 app count; a typed message does not. Each --pr must be n
 repo#n, owner/repo#n, or its URL), so one answer covers every PR its question named and no other. One answer
 records one decision. With --class proof-gap and --kind, the decision accepts those gaps of each PR, and the user's
 choice must start with "Accept", or be "Yes" to a question that starts with "Accept the <kind> gap?"; with --keep-owed, it
-keeps them owed whatever an agent decides. A decision of the user's takes the time they answered. --condition names
+keeps them owed whatever an agent decides. A decision of the user's takes the time they answered: record a gap with
+fleet proof gap before you ask, since a judge gap counts only answers given after it was recorded. --condition names
 what must stay true at HEAD; the judge checks it. Classes: ${askClasses.join(", ")}.
 record with 🤖 records the agent's own decision with the option it rejected. Fleet reads each PR's Tier line in its
 merge-risk callout at HEAD: it refuses an ungraded PR, and on a critical PR anything but process (review and status
@@ -41,19 +43,35 @@ that stays open.
 list prints the decisions as decision lines with their ids. Run it before you ask.
 void ends a decision whose condition HEAD no longer meets, such as when the judge fails it; then decide or ask again.
 It refuses the user's keep-owed: only their acceptance lifts it.
-reverse records the user's reversal of a decision: their dated, quoted words in a message of theirs in the T3 thread,
-or on a GitHub comment written by the account gh is signed in as, which must hold each quoted part. The reversal
-takes the time the user wrote them. The decision then prints as 👤 with their words, the replaced answer struck
-through, and counts no more at the gate or in list --live; decide or ask again. It refuses the user's keep-owed, as
-void does. Two reversals in one class within ${brakeDays} days brake the class: record --mark 🤖 and fleet proof
-review --agent in it are refused until lift records the user's answer to your question tool, given after the brake.
-One answer lifts one brake. A 🤖 decision that lands while its class is braked counts nowhere.
+reverse records the user's reversal of a decision: their dated, quoted words in a message they typed in the T3 app,
+or their answer to your question tool there. Agents post on GitHub as the user, so a GitHub comment never reverses a
+decision. The message must say the words on the quoted date; when two messages on that date do, --message picks one
+by its id. One answer reverses one decision. The user's words must be newer than the decision, and the reversal
+takes the time they wrote them. The decision then prints as 👤 with their words, the replaced answer struck through,
+and counts no more at the gate or in list --live; decide or ask again. Once the reversal holds, reverse writes a void
+too, so an older Fleet stops counting the decision; when the hub drops that void, run the same command again. It
+refuses the user's keep-owed, as void does, and a voided decision. Two reversals of 🤖 decisions in one class within
+${brakeDays} days brake the class from the later of the two: record --mark 🤖 and fleet proof review --agent in it
+are refused until lift records the user's answer to your question tool. The question must name the brake and the
+class, and the answer must be given after the brake. An answer that starts with "Lift" lifts it; a "Yes" lifts it only
+when the question starts with "Lift the brake on <class>", such as "Lift the brake on design decisions?". One answer
+lifts one brake or records one decision, never both: record refuses an answer a lift used, lift refuses one a decision
+used, and each reads the ledger back and fails when the other used it first. A 🤖 decision that lands while its class is braked counts nowhere.
 record --mark 🤖 --class scope takes --link with the T3 thread a side fix started in.
 report prints the lane's end-of-run report in Markdown, in five sections: still yours (unaccepted gaps on critical
-heads first, a question card that waits in --thread, then open PRs whose proofs pass and wait on the user's merge
-word), PRs merged under the narrow grant (merged lines of the rollout log that orchestration.rolloutLog names, whose
-note names the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs row per PR from its proof summary at
-its HEAD on GitHub with its receipt link, and the side fixes the lane started. --thread defaults to this T3 thread.
+heads first, judge gaps too, a question card that waits in --thread, PRs whose proofs it cannot read, PRs that no
+gate has judged at their HEAD with their current proofs, open PRs whose proofs do not pass as read now, then open
+PRs whose full gate passed, judge included, and wait on the user's merge word), PRs merged under the narrow grant (merged lines of the rollout log that
+orchestration.rolloutLog names, whose note names the narrow grant), the lane's decisions sorted 👤 👍 🤖, one proofs
+row per PR from the proof summary the gate saved at its HEAD on GitHub, with its receipt link, and the side fixes the
+lane started. The report never runs the judge. It builds each PR's proof summary again at HEAD, so CI, standing
+rules, decisions and the tier are read as they are now, and takes the judge's verdict from the summary fleet proof gate
+saved, only while the PR's head, base and base SHA on GitHub, its tier and merge-risk callout, --landed for a merged PR, and the PR's proof
+files, standing rules and ledger decisions are the same. Otherwise it says the gate has not run at HEAD with these
+proofs; a decision recorded after the gate counts as a change. A summary that does not pass now offers no merge,
+and nor does an accepted gap whose condition the saved judge did not weigh, CI checks other than the ones it weighed,
+or a head, base, tier or callout that moves while the report reads it: run the gate in the PR's checkout (with --landed for a merged PR), where a review carried across commits can
+be checked. --thread defaults to this T3 thread.
 Send it as the lane's final message, and post it once on the lane's ticket or bottom PR.`;
 
 type Parsed = { options: Map<string, string>; lists: Map<string, string[]>; flags: Set<string>; positional: string[] };
@@ -96,8 +114,11 @@ async function reachHub<T>(step: () => Promise<T>) {
 
 const newId = () => `d-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
 const at = (context: DecisionContext) => (context.now?.() ?? new Date()).toISOString();
-const alreadyRecorded = (id: string) => new Error(`That answer is already recorded as decision ${id}. One answer records one decision; it covers the PRs its question named. Ask the user again`);
-const recordedFor = async (ledger: Ledger, where: Decision["where"]) => fold(await reachHub(() => ledger.read())).find((decision) => messageKey(decision.where) === messageKey(where));
+export class AnswerTaken extends Error {}
+const alreadyRecorded = (id: string) => new AnswerTaken(`That answer is already recorded as decision ${id}. One answer records one decision; it covers the PRs its question named. Ask the user again`);
+const alreadyLifted = (lifted: Lift) => new AnswerTaken(`That answer already lifted the ${lifted.class} brake on ${lifted.at.slice(0, 10)}. One answer lifts one brake or records one decision; ask the user again`);
+const alreadyReversed = (id: string) => new AnswerTaken(`That answer already reversed decision ${id}. One answer reverses one decision; ask the user about this one`);
+const alreadyUsed = (use: AnswerUse) => "decision" in use ? alreadyRecorded(use.decision) : "lift" in use ? alreadyLifted(use.lift) : alreadyReversed(use.reversal);
 
 export type Scope = { class: AskClass; prs: PrRef[]; kinds?: string[]; condition?: string };
 const scopeOf = ({ prs, kinds, condition }: Scope): Decision["scope"] => ({ prs: prs.map(refText), ...kinds?.length ? { kinds } : {}, ...condition ? { condition } : {} });
@@ -128,8 +149,8 @@ export async function hearUser(input: Hearing, context: DecisionContext, ledger:
     try {
       fits(heard, input);
       const where = { thread: word.thread, message: word.id, machine: thisMachine(context.env) };
-      const earlier = await recordedFor(ledger, where);
-      if (earlier) { used ??= alreadyRecorded(earlier.id); continue; }
+      const earlier = answerUse(await reachHub(() => ledger.read()), messageKey(where));
+      if (earlier) { used ??= alreadyUsed(earlier); continue; }
       const usedOn = await usedAnswer(context.home, heard);
       if (usedOn) { used ??= new Error(usedOn); continue; }
       return {
@@ -188,6 +209,8 @@ export async function appendDecision(ledger: Ledger, decision: Decision) {
   const winner = decision.where.message && decisions.find((recorded) => messageKey(recorded.where) === messageKey(decision.where));
   if (winner && winner.id !== decision.id) throw alreadyRecorded(winner.id);
   if (decisions.some((recorded) => recorded.id === decision.id)) return decision.id;
+  const lifted = answerUse(events, messageKey(decision.where));
+  if (lifted && "lift" in lifted) throw alreadyLifted(lifted.lift);
   if (unacknowledged) notRecorded(unacknowledged);
   if (decision.mark === "🤖" && brakeOf(events, decision.class)) {
     throw new Error(`The ${decision.class} class was braked while this decision was recorded, so it counts nowhere. An agent decides no ${decision.class} ask alone until the user lifts the brake; ask them`);
@@ -197,10 +220,19 @@ export async function appendDecision(ledger: Ledger, decision: Decision) {
 
 async function appendHeard(ledger: Ledger, ...events: LedgerEvent[]) {
   const unacknowledged = await ledger.append(...events).then(() => undefined, unreachableOnly);
-  const recorded = new Set((await reachHub(() => ledger.read())).map((event) => JSON.stringify(event)));
-  if (events.every((event) => recorded.has(JSON.stringify(event)))) return;
+  const read = await reachHub(() => ledger.read());
+  const recorded = new Set(read.map((event) => JSON.stringify(event)));
+  if (events.every((event) => recorded.has(JSON.stringify(event)))) return read;
   if (unacknowledged) notRecorded(unacknowledged);
   throw new Error("Not recorded: the event is not in the decision ledger when Fleet reads it back. Run the same command again");
+}
+
+export const ledgerHolds = async (ledger: Ledger, id: string) => fold(await ledger.read()).some((recorded) => recorded.id === id);
+export const inLedger = (ledger: Ledger, id: string) => reachHub(() => ledgerHolds(ledger, id));
+
+export async function appendOnce(ledger: Ledger, decision: Decision) {
+  if (await inLedger(ledger, decision.id)) return decision.id;
+  return appendDecision(ledger, decision);
 }
 
 const unreachableOnly = (error: unknown) => { if (error instanceof HubUnreachable) return error; throw error; };
@@ -268,33 +300,33 @@ const refuseKeptOwed = (decision: DecisionState) => {
   if (isUsers(decision) && decision.effect === "keep-owed") throw new Error(`Decision ${decision.id} keeps the gap owed, and only the user lifts it: ask them with your question tool, and record their acceptance with --mark 👤`);
 };
 
-const commentPattern = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:issues|pull)\/[1-9]\d*#issuecomment-(\d+)$/;
 const quoteWithDate = () => new Error(`Quote the user's words with the date they wrote them, such as '2026-10-24 "Reverse that."'`);
+const quotedDate = (words: string) => /\b\d{4}-\d{2}-\d{2}\b/.exec(words)![0];
 
-async function heardInThread(thread: string, words: string, context: DecisionContext) {
+async function heardInThread(thread: string, words: string, message: string | undefined, context: DecisionContext) {
   if (!isDatedQuote(words)) throw quoteWithDate();
   await refuseInstructionQuote(context.home, words);
-  const said = (await (context.threadWords ?? t3ThreadWords(context.home))(thread)).filter((word) => normalized(word.text) === quotes(words).join(" "));
-  const word = said.at(-1);
-  if (!word) throw new Error(`"${quotes(words).join('" … "')}" is not in a message of the user's in thread ${thread}. Quote their whole message`);
-  return word;
+  const text = quotes(words).join(" ");
+  const date = quotedDate(words);
+  const answers = await (context.threadWords ?? t3ThreadWords(context.home))(thread);
+  if (message !== undefined) {
+    const named = answers.find((word) => word.id === message);
+    if (!named || normalized(named.text) !== text || named.at.slice(0, 10) !== date) throw new Error(`Message ${message} of the user's in thread ${thread} does not say "${text}" on ${date}`);
+    return named;
+  }
+  const said = answers.filter((word) => normalized(word.text) === text);
+  if (!said.length) throw new Error(`"${quotes(words).join('" … "')}" is not in a message of the user's in thread ${thread}. Quote their whole message`);
+  const onDate = said.filter((word) => word.at.slice(0, 10) === date);
+  if (!onDate.length) throw new Error(`The user did not write "${text}" on ${date} in thread ${thread}. Quote the date they wrote it`);
+  if (onDate.length > 1) throw new Error(`${onDate.length} messages of the user's in thread ${thread} on ${date} say "${text}". Pass --message with the id of the one they meant: ${onDate.map((word) => word.id).join(", ")}`);
+  return onDate[0]!;
 }
 
-async function heardOnComment(url: string, words: string, context: DecisionContext) {
-  const [, repository, id] = commentPattern.exec(url) ?? [];
-  if (!repository || !id) throw new Error(`--comment takes the URL of a GitHub issue or PR comment, such as https://github.com/owner/repo/issues/1#issuecomment-2, not ${url}`);
-  if (!isDatedQuote(words)) throw quoteWithDate();
-  const run = runIn(context.cwd, context.env);
-  const login = restJson<{ login: string }>("user", run).login;
-  const comment = restJson<{ user?: { login?: string }; body?: string; created_at?: string }>(`repos/${repository}/issues/comments/${id}`, run);
-  const author = comment.user?.login ?? "";
-  if (author.toLowerCase() !== login.toLowerCase()) throw new Error(`The comment is by ${author || "nobody"}, not the user (${login}). Only the user's own words reverse a decision`);
-  const body = normalized(comment.body ?? "");
-  const missing = quotes(words).find((quote) => !body.includes(quote));
-  if (missing) throw new Error(`"${missing}" is not in the comment ${url}. Quote the user's words as they wrote them`);
-  const time = Date.parse(comment.created_at ?? "");
-  if (Number.isNaN(time)) throw new Error(`GitHub gives no time for the comment ${url}. Run the same command again`);
-  return { comment: url, at: new Date(time).toISOString() };
+async function repairVoid(decision: DecisionState, at: string, events: LedgerEvent[], context: DecisionContext, ledger: Ledger) {
+  if (events.some((event) => event.type === "void" && event.id === decision.id && event.at === at)) throw new Error(`Decision ${decision.id} is already reversed, on ${at.slice(0, 10)}`);
+  await appendHeard(ledger, { type: "void", id: decision.id, reason: `reversed by the user: ${decision.answer}`, at });
+  context.print(`${decisionLine(decision)}\nFleet wrote the void of the reversal of ${decision.id} for older readers: the hub had dropped it.`);
+  return 0;
 }
 
 async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
@@ -302,20 +334,38 @@ async function reverse(parsed: Parsed, context: DecisionContext, ledger: Ledger)
   if (!id || rest.length) throw new Error("Name one decision id. Run fleet decision --help");
   const words = required(parsed, "--words");
   const thread = parsed.options.get("--thread");
-  const comment = parsed.options.get("--comment");
-  if ((thread === undefined) === (comment === undefined)) throw new Error("Pass --thread with the T3 thread where the user reversed it, or --comment with the GitHub comment where they did. Run fleet decision --help");
+  if (thread === undefined) throw new Error("Pass --thread with the T3 thread where the user reversed it. Run fleet decision --help");
   const events = await reachHub(() => ledger.read());
   const decision = fold(events).find((candidate) => candidate.id === id);
   if (!decision) throw new Error(`No decision ${id} in the ledger. Run fleet decision list`);
-  if (decision.reversed) throw new Error(`Decision ${id} is already reversed, on ${decision.reversed.at.slice(0, 10)}`);
+  if (decision.reversed) return repairVoid(decision, decision.reversed.at, events, context, ledger);
+  if (decision.voided) throw new Error(`Decision ${id} is voided: ${decision.voided.reason}. It counts no more, so there is nothing to reverse`);
   refuseKeptOwed(decision);
-  const heard = thread !== undefined
-    ? await heardInThread(thread, words, context).then((word) => ({ thread, message: word.id, at: answeredAt(word) }))
-    : await heardOnComment(comment!, words, context);
+  const word = await heardInThread(thread, words, parsed.options.get("--message"), context);
+  const heard = { thread: word.thread, message: word.id, at: answeredAt(word) };
+  if (Date.parse(heard.at) < Date.parse(decision.at)) throw new Error(`The user wrote that on ${heard.at.slice(0, 10)}, before decision ${id} was recorded on ${decision.at.slice(0, 10)}. Only their words after it reverse it`);
   const event: Reversal = { type: "reverse", id, words, ...heard, machine: thisMachine(context.env) };
-  await appendHeard(ledger, event, { type: "void", id, reason: `reversed by the user: ${words}`, at: event.at });
+  const answer = `${heard.thread}/${heard.message}`;
+  const earlier = answerUse(events, answer);
+  if (earlier) throw alreadyUsed(earlier);
+  const after = await appendHeard(ledger, event);
+  const use = answerUse(after, answer);
+  if (!use && fold(after).find((candidate) => candidate.id === id)?.voided) throw new Error(`Not reversed: decision ${id} was voided first, so it counts no more`);
+  if (!use || !("reversal" in use) || use.reversal !== id) throw new Error(`Not reversed: ${use ? alreadyUsed(use).message : `another reversal of decision ${id} came first`}`);
+  await appendHeard(ledger, { type: "void", id, reason: `reversed by the user: ${words}`, at: event.at });
   context.print(decisionLine(fold([...events, event]).find((candidate) => candidate.id === id)!));
   return 0;
+}
+
+const namesBrake = (question: string, decisionClass: AskClass) => /\bbrake\b/i.test(question) && namesKind(question, decisionClass);
+const liftQuestion = (decisionClass: AskClass) => `Lift the brake on ${decisionClass}`;
+
+function refuseUnlifting(heard: ThreadWord, decisionClass: AskClass) {
+  if (!namesBrake(heard.answered, decisionClass)) throw new Error(`The question the user answered does not ask to lift the ${decisionClass} brake. The question: ${heard.answered}`);
+  const answer = normalized(heard.text);
+  if (/^lift\b/.test(answer)) return;
+  if (!/^yes\b/.test(answer)) throw new Error(`The user chose "${heard.text}", which does not lift the ${decisionClass} brake. It stays on`);
+  if (!normalized(heard.answered).startsWith(normalized(liftQuestion(decisionClass)))) throw new Error(`The user chose "${heard.text}" to a question that does not start with "${liftQuestion(decisionClass)}". A plain yes lifts only the question that asks it; the brake stays on. The question: ${heard.answered}`);
 }
 
 async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
@@ -325,13 +375,24 @@ async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const events = await reachHub(() => ledger.read());
   const brake = brakeOf(events, decisionClass);
   if (!brake) throw new Error(`The ${decisionClass} class is not braked, so there is nothing to lift`);
-  const heard = await heardInThread(thread, words, context);
+  const heard = await heardInThread(thread, words, parsed.options.get("--message"), context);
   if (heard.source !== "question") throw new Error(`"${heard.text}" is a message the user typed. Only their answer to your question tool lifts a brake: ask them with it`);
+  refuseUnlifting(heard, decisionClass);
+  const decided = fold(events).find((decision) => messageKey(decision.where) === `${heard.thread}/${heard.id}`);
+  if (decided) throw alreadyRecorded(decided.id);
+  const usedOn = await usedAnswer(context.home, heardAnswer(heard));
+  if (usedOn) throw new Error(usedOn);
   const earlier = events.find((event): event is Lift => event.type === "lift" && event.thread === heard.thread && event.message === heard.id);
   if (earlier) throw new Error(`That message already lifted the ${earlier.class} brake on ${earlier.at.slice(0, 10)}. One message lifts one brake; ask the user about this one`);
   const answered = answeredAt(heard);
   if (Date.parse(answered) <= Date.parse(brake.at)) throw new Error(`The user wrote that before the brake, which the reversal of ${brake.ids[1]} set on ${brake.at.slice(0, 10)}. Only an answer after it lifts it; ask them`);
-  await appendHeard(ledger, { type: "lift", class: decisionClass, words, thread: heard.thread, message: heard.id, machine: thisMachine(context.env), at: answered });
+  const event: Lift = { type: "lift", class: decisionClass, words, thread: heard.thread, message: heard.id, machine: thisMachine(context.env), at: answered };
+  const read = await appendHeard(ledger, event);
+  if (!liftCounted(read, event)) {
+    const use = answerUse(read, `${heard.thread}/${heard.id}`);
+    if (use && "decision" in use) throw new Error(`Not lifted: decision ${use.decision} used that answer first. One answer lifts one brake or records one decision; ask the user again`);
+    throw new Error("Not lifted: another lift used that answer first, or the brake changed while Fleet recorded it. One answer lifts one brake; ask the user again");
+  }
   context.print(`Lifted the brake on ${decisionClass} (reversals of ${brake.ids[0]} and ${brake.ids[1]}): the agent decides its asks alone again. (the user, ${words}, thread ${thread})`);
   return 0;
 }
@@ -339,8 +400,9 @@ async function lift(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
 async function report(parsed: Parsed, context: DecisionContext, ledger: Ledger) {
   const prs = prsOf(parsed);
   if (!prs.length) throw new Error("--pr is required: name each PR of the lane. Run fleet decision --help");
-  const { renderReport } = await import("./decision-report.ts");
-  context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID }, fold(await reachHub(() => ledger.read())), context));
+  const events = await reachHub(() => ledger.read());
+  const read: Ledger = { read: async () => events, append: (...added) => ledger.append(...added) };
+  context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID }, read, fold(events), context));
   return 0;
 }
 
@@ -365,8 +427,8 @@ export async function decisionCommand(args: string[], context: DecisionContext):
   if (name === "record") return record(parse(args, ["--mark", "--words", "--message", "--thread", "--class", "--condition", "--question", "--answer", "--rejected", "--reason", "--link"], ["--pr", "--kind"], ["--keep-owed"]), context, ledger);
   if (name === "list") return list(parse(args, ["--pr", "--class"], [], ["--live"]), context, ledger);
   if (name === "void") return voidDecision(parse(args, ["--reason"], [], []), context, ledger);
-  if (name === "reverse") return reverse(parse(args, ["--words", "--thread", "--comment"], [], []), context, ledger);
-  if (name === "lift") return lift(parse(args, ["--class", "--words", "--thread"], [], []), context, ledger);
+  if (name === "reverse") return reverse(parse(args, ["--words", "--thread", "--message"], [], []), context, ledger);
+  if (name === "lift") return lift(parse(args, ["--class", "--words", "--thread", "--message"], [], []), context, ledger);
   if (name === "report") return report(parse(args, ["--thread"], ["--pr"], []), context, ledger);
   throw new Error(`Unknown command ${name}. Run fleet decision --help`);
 }

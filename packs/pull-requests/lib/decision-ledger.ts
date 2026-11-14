@@ -131,41 +131,61 @@ export const brakeDays = 28;
 const dayMs = 24 * 60 * 60 * 1000;
 export type Brake = { ids: [string, string]; at: string };
 
+const liftKey = (lift: Lift) => `${lift.thread}/${lift.message}`;
+export type AnswerUse = { decision: string } | { lift: Lift } | { reversal: string };
+const reversalKey = (reversal: Reversal) => reversal.thread !== undefined && reversal.message !== undefined ? `${reversal.thread}/${reversal.message}` : undefined;
+
 function replay(events: LedgerEvent[]) {
   const decisions = new Map<string, DecisionState>();
-  const messages = new Set<string>();
+  const answers = new Map<string, AnswerUse>();
   const reversals = new Map<AskClass, { id: string; time: number }[]>();
   const brakes = new Map<AskClass, Brake>();
+  const lifts = new Set<Lift>();
+  const unheard = new Set<string>();
   for (const event of events) {
     if (event.type === "decide") {
       const { id, mark, class: decisionClass } = event.decision;
       const message = messageKey(event.decision.where);
-      if (decisions.has(id) || (message && messages.has(message)) || (mark === "🤖" && brakes.has(decisionClass))) continue;
-      if (message) messages.add(message);
+      if (decisions.has(id) || (message && answers.has(message)) || (mark === "🤖" && brakes.has(decisionClass))) continue;
+      if (message) answers.set(message, { decision: id });
       decisions.set(id, { ...event.decision });
     } else if (event.type === "void") {
+      if (unheard.has(`${event.id}@${event.at}`)) continue;
       const decision = decisions.get(event.id);
       if (decision && !decision.reversed) decision.voided = { reason: event.reason, at: event.at };
     } else if (event.type === "lift") {
+      const brake = brakes.get(event.class);
+      if (!brake || answers.has(liftKey(event)) || Date.parse(event.at) <= Date.parse(brake.at)) continue;
+      answers.set(liftKey(event), { lift: event });
+      lifts.add(event);
       reversals.delete(event.class);
       brakes.delete(event.class);
     } else {
       const decision = decisions.get(event.id);
-      if (!decision || decision.reversed) continue;
+      const answer = reversalKey(event);
+      if (answer && answers.has(answer)) { unheard.add(`${event.id}@${event.at}`); continue; }
+      if (!decision || decision.reversed || decision.voided) continue;
+      if (answer) answers.set(answer, { reversal: event.id });
       const { rejected, ...rest } = decision;
       decisions.set(event.id, { ...rest, mark: "👤", answer: event.words, reversed: { at: event.at, mark: decision.mark, answer: decision.answer, ...rejected ? { rejected } : {} } });
+      if (decision.mark !== "🤖") continue;
       const time = Date.parse(event.at);
       const earlier = reversals.get(decision.class) ?? [];
       const close = earlier.find((other) => Math.abs(time - other.time) <= brakeDays * dayMs);
-      if (close && !brakes.has(decision.class)) brakes.set(decision.class, { ids: [close.id, event.id], at: event.at });
+      if (close && !brakes.has(decision.class)) {
+        const [first, later] = [close, { id: event.id, time }].sort((a, b) => a.time - b.time) as [{ id: string; time: number }, { id: string; time: number }];
+        brakes.set(decision.class, { ids: [first.id, later.id], at: new Date(later.time).toISOString() });
+      }
       reversals.set(decision.class, [...earlier, { id: event.id, time }]);
     }
   }
-  return { decisions: [...decisions.values()], brakes };
+  return { decisions: [...decisions.values()], brakes, lifts, answers };
 }
 
 export const fold = (events: LedgerEvent[]): DecisionState[] => replay(events).decisions;
 export const brakeOf = (events: LedgerEvent[], decisionClass: AskClass): Brake | undefined => replay(events).brakes.get(decisionClass);
+export const answerUse = (events: LedgerEvent[], message: string | undefined) => message === undefined ? undefined : replay(events).answers.get(message);
+export const liftCounted = (events: LedgerEvent[], lift: Lift) => [...replay(events).lifts].some((counted) => JSON.stringify(counted) === JSON.stringify(lift));
 
 export type PrRef = { repository: string; pr: number };
 const refPattern = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#([1-9]\d*)$/;
@@ -223,8 +243,10 @@ export function keptOwed(decisions: DecisionState[], ref: PrRef, kind: string) {
 
 export type Tier = "critical" | "non-critical" | "ungraded";
 
+export const riskCalloutOf = (body: string) => /<!--\s*merge-risk\s*-->([\s\S]*?)<!--\s*\/merge-risk\s*-->/.exec(body)?.[1];
+
 export function tierOf(body: string): Tier {
-  const callout = /<!--\s*merge-risk\s*-->([\s\S]*?)<!--\s*\/merge-risk\s*-->/.exec(body)?.[1];
+  const callout = riskCalloutOf(body);
   const line = callout && /^[\s>*-]*\**Tier\**:\**\s*\**\s*(non-critical|critical)\b/im.exec(callout);
   return line ? line[1]!.toLowerCase() as Tier : "ungraded";
 }

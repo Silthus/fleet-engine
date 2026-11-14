@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { accessSync, constants as fileModes, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, existsSync, constants as fileModes, readFileSync, realpathSync, statSync } from "node:fs";
 import { constants, homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -148,13 +148,56 @@ async function relay(stdout: NodeJS.ReadableStream, proxy: Proxy, args: string[]
   }
 }
 
+type ClaudeLaunch = { args: string[]; env: NodeJS.ProcessEnv };
+
+const agentThreadHiddenTools = ["Artifact", "Workflow", "ScheduleWakeup", "ReportFindings"];
+const convexPlugin = "convex@claude-plugins-official";
+const userCreatedThread = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function withSettings(args: string[], change: (settings: Record<string, unknown>) => void): string[] {
+  const index = args.findIndex((arg) => arg === "--settings" || arg.startsWith("--settings="));
+  const inline = index >= 0 && args[index]!.startsWith("--settings=");
+  const raw = index < 0 ? "{}" : inline ? args[index]!.slice("--settings=".length) : args[index + 1];
+  let settings: unknown;
+  try {
+    settings = JSON.parse(raw ?? "");
+  } catch {
+    return args;
+  }
+  if (typeof settings !== "object" || settings === null || Array.isArray(settings)) return args;
+  change(settings as Record<string, unknown>);
+  const value = JSON.stringify(settings);
+  if (index < 0) return [...args, "--settings", value];
+  return inline ? args.with(index, `--settings=${value}`) : args.with(index + 1, value);
+}
+
+function isConvexProject(cwd: string): boolean {
+  return existsSync(join(cwd, "convex")) || existsSync(join(cwd, "convex.json"));
+}
+
+function shapeClaudeLaunch(args: string[], env: NodeJS.ProcessEnv, cwd: string): ClaudeLaunch {
+  const shapedEnv = env.CLAUDE_CODE_ENTRYPOINT === "t3-code" ? { ...env, CLAUDE_CODE_ENTRYPOINT: "sdk-ts" } : env;
+  const thread = env.T3CODE_THREAD_ID;
+  if (!thread) return { args, env: shapedEnv };
+  let shaped = args;
+  if (!userCreatedThread.test(thread)) shaped = [...shaped, "--disallowedTools", agentThreadHiddenTools.join(",")];
+  if (!isConvexProject(cwd)) {
+    shaped = withSettings(shaped, (settings) => {
+      const plugins = settings.enabledPlugins;
+      settings.enabledPlugins = { ...(typeof plugins === "object" && plugins !== null ? plugins : {}), [convexPlugin]: false };
+    });
+  }
+  return { args: shaped, env: shapedEnv };
+}
+
 async function main(args: string[]): Promise<number> {
   const home = process.env.HOME || homedir();
   const streamJson = optionValue(args, "--output-format") === "stream-json";
   const proxy = streamJson ? proxyConfiguration(home) : undefined;
   const { FLEET_CLAUDE_CWD: launchedIn, ...env } = process.env;
   const cwd = launchedIn || process.cwd();
-  const child = spawn(claudeExecutable(home, cwd), args, { cwd, env, stdio: ["inherit", proxy ? "pipe" : "inherit", "inherit"] });
+  const launch = shapeClaudeLaunch(args, env, cwd);
+  const child = spawn(claudeExecutable(home, cwd), launch.args, { cwd, env: launch.env, stdio: ["inherit", proxy ? "pipe" : "inherit", "inherit"] });
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code, signal) => resolve({ code, signal }));

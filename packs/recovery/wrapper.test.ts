@@ -150,6 +150,61 @@ async function t3With(providerInstances: Record<string, Instance>) {
   return { settings, run, lines, wrapperPath: join(home, ".config/fleet/recovery/claude") };
 }
 
+describe("how the wrapper starts Claude for T3", () => {
+  function recordingClaude(dir: string) {
+    const path = join(dir, "claude");
+    writeFileSync(path, `#!/bin/sh\nprintf '%s\\n' "$CLAUDE_CODE_ENTRYPOINT" > "${dir}/entrypoint"\nprintf '%s\\n' "$@" > "${dir}/argv"\nexit 0\n`);
+    chmodSync(path, 0o755);
+    return path;
+  }
+
+  async function launch(args: string[], env: Record<string, string>, project?: (dir: string) => void) {
+    const dir = temp.make("claude-");
+    const cwd = join(dir, "project");
+    mkdirSync(cwd);
+    project?.(cwd);
+    const child = Bun.spawn([wrapper, ...args], { cwd, env: { PATH: Bun.env.PATH ?? "", HOME: dir, FLEET_CLAUDE_EXECUTABLE: recordingClaude(dir), ...env }, timeout: 4000 });
+    expect(await child.exited).toBe(0);
+    const argv = readFileSync(join(dir, "argv"), "utf8").trimEnd().split("\n");
+    const settingsAt = argv.indexOf("--settings");
+    return {
+      entrypoint: readFileSync(join(dir, "entrypoint"), "utf8").trim(),
+      argv,
+      settings: settingsAt >= 0 && argv[settingsAt + 1]!.startsWith("{") ? JSON.parse(argv[settingsAt + 1]!) as Record<string, unknown> : undefined,
+    };
+  }
+
+  const userThread = "0f45baed-4c6f-4b66-bd93-606e05c532a3";
+  const agentThread = { T3CODE_THREAD_ID: "mcp:launch:1" };
+
+  test("starts Claude with the SDK's native entrypoint in place of t3-code, so the proxy passes requests through", async () => {
+    expect((await launch(["-p", "go"], { CLAUDE_CODE_ENTRYPOINT: "t3-code" })).entrypoint).toBe("sdk-ts");
+    expect((await launch(["-p", "go"], { CLAUDE_CODE_ENTRYPOINT: "cli" })).entrypoint).toBe("cli");
+  });
+
+  test("starts a thread an agent launched without the tools only people use", async () => {
+    const agent = await launch(["-p", "go"], { T3CODE_THREAD_ID: "thread:delegated-task:command%3Amcp%3A1" });
+    expect(agent.argv.slice(agent.argv.indexOf("--disallowedTools"), agent.argv.indexOf("--disallowedTools") + 2))
+      .toEqual(["--disallowedTools", "Artifact,Workflow,ScheduleWakeup,ReportFindings"]);
+    expect((await launch(["-p", "go"], { T3CODE_THREAD_ID: userThread })).argv).not.toContain("--disallowedTools");
+  });
+
+  test("leaves a launch outside T3 as it is", async () => {
+    expect((await launch(["-p", "go"], {})).argv).toEqual(["-p", "go"]);
+  });
+
+  test("turns the Convex plugin off outside a Convex project and keeps T3's other settings", async () => {
+    const plain = await launch(["-p", "go", "--settings", '{"fastMode":false,"enabledPlugins":{"other@x":true}}'], { T3CODE_THREAD_ID: userThread });
+    expect(plain.settings).toEqual({ fastMode: false, enabledPlugins: { "other@x": true, "convex@claude-plugins-official": false } });
+    const inline = await launch(["-p", "go", '--settings={"fastMode":true}'], agentThread);
+    expect(inline.argv).toContain('--settings={"fastMode":true,"enabledPlugins":{"convex@claude-plugins-official":false}}');
+    expect((await launch(["-p", "go"], agentThread)).settings).toEqual({ enabledPlugins: { "convex@claude-plugins-official": false } });
+    const convex = await launch(["-p", "go", "--settings", '{"fastMode":false}'], agentThread, (cwd) => mkdirSync(join(cwd, "convex")));
+    expect(convex.settings).toEqual({ fastMode: false });
+    expect((await launch(["-p", "go", "--settings", "/path/to/settings.json"], agentThread)).argv).toContain("/path/to/settings.json");
+  });
+});
+
 describe("fleet claude-wrapper", () => {
   test("binds T3's default Claude to the wrapper and keeps the instance's other config", async () => {
     const t3 = await t3With({
