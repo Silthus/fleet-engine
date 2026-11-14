@@ -16,7 +16,7 @@ export type PutEvent = {
 export type OffEvent = { type: "off"; id: string; reason: string; at: string; thread?: string; machine: string };
 export type SecretEvent =
   | PutEvent
-  | { type: "read"; name: string; at: string; thread?: string; machine: string; refused?: string; check?: true }
+  | { type: "read"; id?: string; name: string; at: string; thread?: string; machine: string; refused?: string; check?: true }
   | OffEvent
   | { type: "on"; off: string; words: string; thread: string; message: string; at: string };
 
@@ -28,15 +28,24 @@ export class SecretRefusal extends Error {}
 
 export const temporaryMarker = ".tmp-";
 
+function synced(path: string, flag: string, write: (file: number) => void, mode = 0o600) {
+  const file = openSync(path, flag, mode);
+  try {
+    write(file);
+    fsyncSync(file);
+  } finally { closeSync(file); }
+}
+
 export function writeFileAtomic(path: string, data: string, mode = 0o600) {
   const temporary = `${path}${temporaryMarker}${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
   try {
-    writeFileSync(temporary, data, { mode, flag: "wx" });
+    synced(temporary, "wx", (file) => writeSync(file, data), mode);
     renameSync(temporary, path);
   } catch (error) {
     rmSync(temporary, { force: true });
     throw error;
   }
+  synced(dirname(path), "r", () => undefined);
 }
 
 const isText = (value: unknown): value is string => typeof value === "string" && value !== "";
@@ -48,6 +57,7 @@ const shapes: Record<SecretEvent["type"], (event: Record<string, unknown>) => bo
 };
 
 export const damagedReason = "a damaged line in the event log, which may be a torn off";
+const damagedPrefix = "damaged-";
 
 function parsed(line: string): Record<string, unknown> | undefined {
   try {
@@ -66,7 +76,7 @@ export function readEvents(home: string): SecretEvent[] {
     const event = parsed(line);
     const known = event && shapes[event.type as SecretEvent["type"]];
     if (known && known(event)) events.push(event as SecretEvent);
-    else if (line.trim() && (!event || event.type === "off")) events.push({ type: "off", id: `damaged-${offset}`, reason: damagedReason, at: events.at(-1)?.at ?? new Date(0).toISOString(), machine: "unknown" });
+    else if (line.trim() && (!event || event.type === "off")) events.push({ type: "off", id: `${damagedPrefix}${offset}`, reason: damagedReason, at: events.at(-1)?.at ?? new Date(0).toISOString(), machine: "unknown" });
     offset += Buffer.byteLength(line) + 1;
   }
   return events;
@@ -74,11 +84,7 @@ export function readEvents(home: string): SecretEvent[] {
 
 export function appendEvents(home: string, ...events: SecretEvent[]) {
   mkdirSync(dirname(eventLogPath(home)), { recursive: true, mode: 0o700 });
-  const file = openSync(eventLogPath(home), "a", 0o600);
-  try {
-    writeSync(file, `\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`);
-    fsyncSync(file);
-  } finally { closeSync(file); }
+  synced(eventLogPath(home), "a", (file) => writeSync(file, `\n${events.map((event) => JSON.stringify(event)).join("\n")}\n`));
 }
 
 export const heardKey = ({ thread, message }: { thread: string; message: string }) => `${thread}/${message}`;
@@ -96,6 +102,13 @@ export function fold(events: SecretEvent[]) {
 }
 
 export type Store = { home: string; rows: SecretRow[]; now: Date; beforeAppend?: () => Promise<void> };
+
+function switchState(store: Store) {
+  const state = fold(readEvents(store.home));
+  if (!state.off?.id.startsWith(damagedPrefix)) return state;
+  appendEvents(store.home, { type: "off", id: newId("o"), reason: `${damagedReason}, found at byte ${state.off.id.slice(damagedPrefix.length)}`, at: store.now.toISOString(), machine: "hub" });
+  return fold(readEvents(store.home));
+}
 const dayMs = 24 * 60 * 60 * 1000;
 export const standingDays = 90;
 export const minimumLength = 8;
@@ -162,14 +175,15 @@ async function checkOf(provider: Provider, values: Record<string, string>): Prom
   catch { return { ok: false, reason: "the check failed with an error it does not show" }; }
 }
 
+export const piecesOf = (text: string) => text.split(/\r?\n/).flatMap((line) => line.includes("=") ? [line, line.slice(line.indexOf("=") + 1)] : [line]);
+
 export async function putValue(store: Store, input: PutInput): Promise<PutEvent> {
   try {
     const row = rowOf(store, input.name);
     if (!row || row.file) throw new SecretRefusal(`No declared secret ${input.name} is kept by the store. fleet secret list shows the names`);
     return await checkAndStore(store, row, input);
   } catch (error) {
-    const pieces = input.text.split(/\r?\n/).flatMap((line) => line.includes("=") ? [line, line.slice(line.indexOf("=") + 1)] : [line]);
-    throw new SecretRefusal(unshown([error instanceof SecretRefusal ? error.message : `${failureOf(error)}. Nothing was stored`, hiddenValue, "Refused"], pieces));
+    throw new SecretRefusal(unshown([error instanceof SecretRefusal ? error.message : `${failureOf(error)}. Nothing was stored`, hiddenValue, "Refused"], piecesOf(input.text)));
   }
 }
 
@@ -257,8 +271,8 @@ function currentValues(store: Store, row: SecretRow, put: PutEvent | undefined):
 
 export type Delivered = { name: string; values: Record<string, string> };
 
-export function deliver(store: Store, input: { names: string[]; thread?: string; machine: string }): Delivered[] {
-  const { puts, off } = fold(readEvents(store.home));
+export async function deliver(store: Store, input: { names: string[]; thread?: string; machine: string }): Promise<Delivered[]> {
+  const { puts, off } = switchState(store);
   const names = [...new Set(input.names)];
   const delivered: Delivered[] = [];
   const reasons = new Map<string, string>();
@@ -281,20 +295,30 @@ export function deliver(store: Store, input: { names: string[]; thread?: string;
     if (reason) reasons.set(name, reason);
   }
   const at = store.now.toISOString();
-  appendEvents(store.home, ...names.map((name): SecretEvent => ({
-    type: "read", name, at, ...input.thread ? { thread: input.thread } : {}, machine: input.machine, ...reasons.has(name) ? { refused: reasons.get(name) } : {},
-  })));
-  if (off) throw new SecretRefusal(`The store is off since ${off.at.slice(0, 16)}Z (${off.reason}). Only the user's words turn it on: fleet secret on`);
+  const read = (name: string, refused = reasons.get(name)): SecretEvent => ({ type: "read", id: newId("r"), name, at, ...input.thread ? { thread: input.thread } : {}, machine: input.machine, ...refused ? { refused } : {} });
+  const reads = names.map((name) => read(name));
+  await store.beforeAppend?.();
+  appendEvents(store.home, ...reads);
+  if (off) throw new SecretRefusal(offRefusal(off));
   if (reasons.size) throw new SecretRefusal([...reasons].map(([name, reason]) => `${name}: ${reason}`).join("; "));
+  const events = readEvents(store.home);
+  const last = (reads.at(-1) as { id: string }).id;
+  const before = fold(events.slice(0, events.findIndex((event) => event.type === "read" && event.id === last) + 1)).off;
+  if (before) {
+    appendEvents(store.home, ...names.map((name) => read(name, "the store went off before this read")));
+    throw new SecretRefusal(offRefusal(before));
+  }
   return delivered;
 }
+
+const offRefusal = (off: OffEvent) => `The store is off since ${off.at.slice(0, 16)}Z (${off.reason}). Only the user's words turn it on: fleet secret on`;
 
 export function turnOff(store: Store, input: { reason: string; thread?: string; machine: string }) {
   appendEvents(store.home, { type: "off", id: newId("o"), reason: input.reason, at: store.now.toISOString(), ...input.thread ? { thread: input.thread } : {}, machine: input.machine });
 }
 
 export function currentOff(store: Store) {
-  const { off } = fold(readEvents(store.home));
+  const { off } = switchState(store);
   if (!off) throw new SecretRefusal("The store is on, so there is nothing to turn on");
   return off;
 }
@@ -302,10 +326,12 @@ export function currentOff(store: Store) {
 export const enableQuestion = "Turn the secret store back on?";
 export type Heard = { words: string; thread: string; message: string; at: string; question: string; answer: string };
 const plainWords = (text: string) => text.toLowerCase().replace(/[`*_"“”‘’'?.!,]/g, " ").replace(/\s+/g, " ").trim();
+export const enableOptions = ["Yes, turn it on", "No, keep it off"];
+const yeses = ["yes", enableOptions[0]!].map(plainWords);
 
 export async function turnOn(store: Store, off: OffEvent, heard: Heard) {
-  if (!plainWords(heard.question).includes(plainWords(enableQuestion))) throw new SecretRefusal(`The user answered "${heard.question}", not "${enableQuestion}". Ask them that question with the question tool, with the options "Yes, turn it on" and "No, keep it off"`);
-  if (!/^yes\b/.test(plainWords(heard.answer))) throw new SecretRefusal(`The user answered "${heard.answer}", not yes, so the store stays off`);
+  if (plainWords(heard.question) !== plainWords(enableQuestion)) throw new SecretRefusal(`The user answered "${heard.question}", not "${enableQuestion}". Ask them that question with the question tool, with the options "${enableOptions.join('" and "')}"`);
+  if (!yeses.includes(plainWords(heard.answer))) throw new SecretRefusal(`The user answered "${heard.answer}", not "${enableOptions[0]}", so the store stays off`);
   if (fold(readEvents(store.home)).heard.has(heardKey(heard))) throw new SecretRefusal("That message of the user's already turned the store on once. Ask them again");
   if (Date.parse(heard.at) <= Date.parse(off.at)) throw new SecretRefusal(`The user wrote that before the store went off on ${off.at.slice(0, 16)}Z. Only an answer after it turns the store on; ask them`);
   await store.beforeAppend?.();
@@ -351,7 +377,7 @@ export async function needLines(store: Store, input: { names: string[]; thread?:
   const read = (name: string, refused?: string): SecretEvent => ({ type: "read", name, at: store.now.toISOString(), ...input.thread ? { thread: input.thread } : {}, machine: input.machine, check: true, ...refused ? { refused } : {} });
   const lines: string[] = [];
   for (const [index, name] of names.entries()) {
-    const now = fold(readEvents(store.home));
+    const now = switchState(store);
     if (now.off) {
       appendEvents(store.home, ...names.slice(index).map((rest) => read(rest, "the store is off")));
       throw new SecretRefusal(`The store is off since ${now.off.at.slice(0, 16)}Z (${now.off.reason}), so no check runs. Only the user's words turn it on: fleet secret on`);

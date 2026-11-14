@@ -156,7 +156,7 @@ test("put deletes the request_secret file when the hub cannot be reached or its 
   const file = machine.secretFile(machine.devHome, `${sendKey}\n`);
   expect(await machine.dev("put", "send-us", "--file", file)).toBe(1);
   expect(existsSync(file)).toBe(false);
-  expect(machine.printed.join("")).toContain("did not answer over SSH");
+  expect(machine.printed.join("")).toContain("the hub hub did not answer (exit 255, so SSH to it likely failed)");
   machine.reach.hub = true;
   const wrong = machine.secretFile(machine.devHome, sendKey);
   expect(await machine.dev("put", "send-us", "--file", wrong, "--why", "because")).toBe(2);
@@ -214,7 +214,7 @@ test("puts of two different names both survive, and two secrets that set one var
 const answer = (id: string, text: string, at: string, source: ThreadWord["source"] = "question"): ThreadWord => ({ thread: "users-thread", id, text, answered: "Turn the secret store back on?", at, source });
 
 test("after off, run refuses on and off the hub, and only the user's answer given after it turns the store on", async () => {
-  const machine = fleet({ words: [answer("m-before", "Yes, turn it on", "2026-11-13T09:00:00Z"), answer("m-typed", "Turn it on now", "2026-11-13T11:00:00Z", "typed"), answer("m-after", "Yes, turn it back on", "2026-11-13T11:00:00Z")] });
+  const machine = fleet({ words: [answer("m-before", "Yes, turn it on", "2026-11-13T09:00:00Z"), answer("m-typed", "Turn it on now", "2026-11-13T11:00:00Z", "typed"), answer("m-after", "Yes", "2026-11-13T11:00:00Z")] });
   expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(0);
   expect(await machine.dev("off", "suspected leak in a transcript")).toBe(0);
   machine.clock.now = new Date("2026-11-13T12:00:00Z");
@@ -232,25 +232,25 @@ test("after off, run refuses on and off the hub, and only the user's answer give
   expect(await machine.dev("on", "--words", '2026-11-13 "Turn it on now"', "--thread", "users-thread")).toBe(1);
   expect(machine.printed.join("")).toContain("is a message the user typed");
   expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).code).toBe(1);
-  expect(await machine.dev("on", "--words", '2026-11-13 "Yes, turn it back on"', "--thread", "users-thread")).toBe(0);
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes"', "--thread", "users-thread")).toBe(0);
   expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).text).toContain("child-ran");
   machine.clock.now = new Date("2026-11-13T10:30:00Z");
   expect(await machine.dev("off", "second leak")).toBe(0);
   const before = machine.printed.length;
-  expect(await machine.dev("on", "--words", '2026-11-13 "Yes, turn it back on"', "--thread", "users-thread")).toBe(1);
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes"', "--thread", "users-thread")).toBe(1);
   expect(machine.since(before)).toContain("That message of the user's already turned the store on once");
   expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).code).toBe(1);
   machine.expectNoLeak();
 });
 
 test("an off that lands between the hub's read of the switch and its on event leaves the store off", async () => {
-  const machine = fleet({ words: [answer("m-after", "Yes, turn it back on", "2026-11-13T11:00:00Z")] });
+  const machine = fleet({ words: [answer("m-after", "Yes", "2026-11-13T11:00:00Z")] });
   expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(0);
   expect(await machine.dev("off", "first leak")).toBe(0);
   machine.clock.now = new Date("2026-11-13T12:00:00Z");
   machine.hooks.beforeAppend = () => machine.hub("off", "racing leak");
   const before = machine.printed.length;
-  expect(await machine.dev("on", "--words", '2026-11-13 "Yes, turn it back on"', "--thread", "users-thread")).toBe(1);
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes"', "--thread", "users-thread")).toBe(1);
   expect(machine.since(before)).toContain("(racing leak) while the user's words were read, so it stays off");
   const result = await run(machine.dev, machine.printed, ["send-us"], "echo child-ran");
   expect(result.code).toBe(1);
@@ -284,12 +284,12 @@ test("an off appended after a torn last line of the log still stops every read",
 });
 
 test("an on whose off was followed by a newer off while the user's words were read leaves the store off", async () => {
-  const machine = fleet({ words: [answer("m-after", "Yes, turn it back on", "2026-11-13T11:00:00Z")] });
+  const machine = fleet({ words: [answer("m-after", "Yes", "2026-11-13T11:00:00Z")] });
   expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(0);
   expect(await machine.dev("off", "first leak")).toBe(0);
   machine.clock.now = new Date("2026-11-13T12:00:00Z");
   machine.hooks.whileHearing = () => machine.hub("off", "second leak");
-  expect(await machine.dev("on", "--words", '2026-11-13 "Yes, turn it back on"', "--thread", "users-thread")).toBe(1);
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes"', "--thread", "users-thread")).toBe(1);
   const result = await run(machine.dev, machine.printed, ["send-us"], "echo child-ran");
   expect(result.code).toBe(1);
   expect(result.text).toContain("second leak");
@@ -544,17 +544,21 @@ test("a provider that throws with a value, or a hub that fails with one on stder
   expect(machine.printed.join("")).toContain("chat-app: failing its check (the check failed with an error it does not show).");
   machine.expectNoLeak(Object.values(chatTokens));
   machine = fleet();
-  machine.reach.answer = { code: 1, stdout: "", stderr: `Error: provider failed: ${sendKey}\n` };
-  expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(1);
-  expect(machine.printed.join("")).toContain("fleet secret hub failed on the hub hub (exit 1)");
+  for (const code of [1, 255]) {
+    machine.reach.answer = { code, stdout: "", stderr: `Error: provider failed: ${sendKey}\n` };
+    expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(1);
+  }
+  expect(machine.printed.join("")).toContain("the hub hub did not answer (exit 1). Its output is not shown");
   machine.expectNoLeak();
 });
 
-test("a refusal whose fixed fallback would spell the value falls back to a bare refusal", async () => {
-  const spelled = "Nothing was stored";
-  const machine = fleet({ rows: echoing("send-us", async ({ EXAMPLE_API_KEY: key = "" }) => ({ ok: false, reason: `the service rejected ${key}` })) });
-  expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, spelled))).toBe(1);
-  expect(machine.printed.join("")).toBe("Fleet secret: Refused\n");
+test("a refusal whose fixed fallback or printed prefix would spell the value falls back to a bare refusal", async () => {
+  for (const spelled of ["Nothing was stored", "Fleet secret"]) {
+    const machine = fleet({ rows: echoing("send-us", async ({ EXAMPLE_API_KEY: key = "" }) => ({ ok: false, reason: `the service rejected ${key}` })) });
+    expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, spelled))).toBe(1);
+    expect(machine.printed.join("")).not.toContain(spelled);
+    expect(machine.printed.join("")).toContain("efused");
+  }
 });
 
 test("a torn off line, or an off line without its fields, keeps the store off until the user's yes turns it on", async () => {
@@ -573,8 +577,8 @@ test("a torn off line, or an off line without its fields, keeps the store off un
 });
 
 test("one message id turns the store on once per thread", async () => {
-  const machine = fleet({ words: [answer("m-1", "Yes, turn it on", "2026-11-13T11:00:00Z"), { ...answer("m-1", "Yes, turn it back on", "2026-11-13T11:00:00Z"), thread: "other-thread" }] });
-  for (const [thread, words] of [["users-thread", "Yes, turn it on"], ["other-thread", "Yes, turn it back on"]]) {
+  const machine = fleet({ words: [answer("m-1", "Yes, turn it on", "2026-11-13T11:00:00Z"), { ...answer("m-1", "Yes", "2026-11-13T11:00:00Z"), thread: "other-thread" }] });
+  for (const [thread, words] of [["users-thread", "Yes, turn it on"], ["other-thread", "Yes"]]) {
     machine.clock.now = new Date("2026-11-13T10:30:00Z");
     expect(await machine.dev("off", "suspected leak")).toBe(0);
     machine.clock.now = new Date("2026-11-13T12:00:00Z");
@@ -582,13 +586,15 @@ test("one message id turns the store on once per thread", async () => {
   }
 });
 
-test("on refuses a no, and a yes to another question", async () => {
-  const machine = fleet({ words: [answer("m-no", "No, keep it off", "2026-11-13T11:00:00Z"), { ...answer("m-other", "Yes, ship it", "2026-11-13T11:00:00Z"), answered: "Merge the pull request?" }] });
+test("on refuses a no, a yes to another question, and a yes to a question that only holds the enable question", async () => {
+  const machine = fleet({ words: [answer("m-no", "No, keep it off", "2026-11-13T11:00:00Z"), { ...answer("m-other", "Yes, ship it", "2026-11-13T11:00:00Z"), answered: "Merge the pull request?" }, { ...answer("m-negated", "Yes", "2026-11-13T11:00:00Z"), answered: "Do not turn the secret store back on?" }, answer("m-yes-off", "Yes, keep it off", "2026-11-13T11:00:00Z")] });
   expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(0);
   expect(await machine.dev("off", "suspected leak")).toBe(0);
   machine.clock.now = new Date("2026-11-13T12:00:00Z");
   expect(await machine.dev("on", "--words", '2026-11-13 "No, keep it off"', "--thread", "users-thread")).toBe(1);
-  expect(machine.printed.join("")).toContain("not yes, so the store stays off");
+  expect(machine.printed.join("")).toContain('not "Yes, turn it on", so the store stays off');
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes, keep it off"', "--thread", "users-thread")).toBe(1);
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes"', "--thread", "users-thread")).toBe(1);
   expect(await machine.dev("on", "--words", '2026-11-13 "Yes, ship it"', "--thread", "users-thread")).toBe(1);
   expect(machine.printed.join("")).toContain('not "Turn the secret store back on?"');
   expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).code).toBe(1);
@@ -644,5 +650,34 @@ test("put with two --file options deletes both request_secret files and stores n
   expect(await machine.dev("put", "send-us", "--file", first, "--file", second)).toBe(2);
   expect([existsSync(first), existsSync(second)]).toEqual([false, false]);
   expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).code).toBe(1);
+  machine.expectNoLeak();
+});
+
+test("a damaged line found after an earlier off needs a yes given after it was found", async () => {
+  const machine = fleet({ words: [answer("m-old", "Yes", "2026-11-13T11:00:00Z"), answer("m-new", "Yes, turn it on", "2026-11-13T13:30:00Z")] });
+  expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(0);
+  machine.clock.now = new Date("2026-11-13T10:30:00Z");
+  expect(await machine.dev("off", "earlier incident")).toBe(0);
+  appendFileSync(eventLogPath(machine.hubHome), '\n{"type":"off","id":"o-torn","reason":"later incident","at":"2026-11-13T12:00');
+  machine.clock.now = new Date("2026-11-13T13:00:00Z");
+  const before = machine.printed.length;
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes"', "--thread", "users-thread")).toBe(1);
+  expect(machine.since(before)).toContain("before the store went off on 2026-11-13T13:00Z");
+  expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).code).toBe(1);
+  machine.clock.now = new Date("2026-11-13T14:00:00Z");
+  expect(await machine.dev("on", "--words", '2026-11-13 "Yes, turn it on"', "--thread", "users-thread")).toBe(0);
+  expect((await run(machine.dev, machine.printed, ["send-us"], "echo child-ran")).text).toContain("child-ran");
+});
+
+test("an off that lands while the hub reads a value withholds the value, and logs the read as refused", async () => {
+  const machine = fleet();
+  expect(await machine.dev("put", "send-us", "--file", machine.secretFile(machine.devHome, sendKey))).toBe(0);
+  machine.hooks.beforeAppend = () => machine.hub("off", "leak seen mid-read");
+  const result = await run(machine.dev, machine.printed, ["send-us"], "echo child-ran");
+  expect(result.code).toBe(1);
+  expect(result.text).toContain("leak seen mid-read");
+  expect(result.text).not.toContain("child-ran");
+  const events = readFileSync(eventLogPath(machine.hubHome), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  expect(events.map(({ type, refused }) => [type, refused ?? null])).toEqual([["put", null], ["off", null], ["read", null], ["read", "the store went off before this read"]]);
   machine.expectNoLeak();
 });

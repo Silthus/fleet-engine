@@ -3,10 +3,10 @@ import { sep } from "node:path";
 import { answeredAt, heardInThread } from "../../pull-requests/lib/decision-cli.ts";
 import { thisMachine } from "../../pull-requests/lib/decision-ledger.ts";
 import type { ThreadWords } from "../../pull-requests/lib/proof-answers.ts";
-import { fleetOnHub, HubUnreachable, lastLine, remoteHub, runSsh, type Env, type Ssh } from "./hub-transport.ts";
+import { fleetOnHub, HubUnreachable, remoteHub, runSsh, type Env, type Ssh } from "./hub-transport.ts";
 import { checkedRows, injectedRows } from "./secret-rows.ts";
 import {
-  currentOff, deliver, dueLines, enableQuestion, failureOf, listLines, needLines, putValue, secretFilesDir, standingDays, storedLine, turnOff, turnOn, whys,
+  currentOff, deliver, dueLines, enableOptions, enableQuestion, failureOf, listLines, needLines, piecesOf, putValue, secretFilesDir, standingDays, storedLine, turnOff, turnOn, unshown, whys,
   type Delivered, type Heard, type PutInput, type SecretRow, type Store, type Why,
 } from "./secret-store.ts";
 
@@ -28,8 +28,8 @@ run sets each secret's variables in the command's environment only, and replaces
 list shows each secret's kind, project, region, scope and state, never a value. --need prints the request_secret
 card text of each named secret that is missing or fails its check. --due lists each secret within 7 days of its
 expiry, past it, or missing, with its card text.
-off stops every store read at once; any agent may run it. on needs the user's dated, quoted "Yes" to the question
-"${enableQuestion}", asked with your question tool in the T3 thread after the store went off.`;
+off stops every store read at once; any agent may run it. on needs the user's dated, quoted "${enableOptions[0]}" to
+the question "${enableQuestion}", asked with your question tool in the T3 thread after the store went off.`;
 
 export type SecretContext = {
   home: string; env: Env;
@@ -59,7 +59,7 @@ async function answer(context: SecretContext, request: Request): Promise<Answer>
     const rows = context.rows ? checkedRows(context.rows) : await injectedRows(context.env);
     const store: Store = { home: context.home, rows, now: context.now?.() ?? new Date(), ...context.beforeAppend ? { beforeAppend: context.beforeAppend } : {} };
     if (request.op === "put") return { ok: true, lines: [storedLine(await putValue(store, request))] };
-    if (request.op === "deliver") return { ok: true, delivered: deliver(store, request) };
+    if (request.op === "deliver") return { ok: true, delivered: await deliver(store, request) };
     if (request.op === "off") { turnOff(store, request); return { ok: true, lines: ["The store is off: every read is refused until the user's words turn it on (fleet secret on)."] }; }
     if (request.op === "on") {
       await turnOn(store, currentOff(store), request);
@@ -78,8 +78,7 @@ async function ask(context: SecretContext, request: Request): Promise<Answer> {
   if (!hub) return answer(context, request);
   const slow = request.op === "put" || (request.op === "list" && request.need !== undefined);
   const result = await (context.ssh ?? runSsh)(hub, fleetOnHub(hub, ["secret", "hub"]), JSON.stringify(request), slow ? slowCallMs : undefined);
-  if (result.code === sshFailed) throw new HubUnreachable(`the hub ${hub} did not answer over SSH (exit ${result.code}${lastLine(result.stderr) ? `: ${lastLine(result.stderr)}` : ""})`);
-  if (result.code !== 0) throw new HubUnreachable(`fleet secret hub failed on the hub ${hub} (exit ${result.code}). Its output is not shown, as it could hold a value; run fleet update there, then look at it on the hub`);
+  if (result.code !== 0) throw new HubUnreachable(`the hub ${hub} did not answer (exit ${result.code}${result.code === sshFailed ? ", so SSH to it likely failed" : ""}). Its output is not shown, as it could hold a value; check it with ssh ${hub} fleet secret list`);
   try { return JSON.parse(result.stdout) as Answer; }
   catch { throw new HubUnreachable(`the hub ${hub} sent no answer the store understands; run fleet update there`); }
 }
@@ -133,7 +132,12 @@ function fileOptions(args: string[]) {
   return paths;
 }
 
-async function put(args: string[], context: SecretContext) {
+function guarded(context: SecretContext, values: string[]): SecretContext {
+  const safe = (write: (text: string) => void) => (text: string) => write(unshown([text, "Fleet secret: refused, and the message would show part of the value\n", "Refused\n"], values));
+  return { ...context, out: safe(context.out), err: safe(context.err) };
+}
+
+async function put(args: string[], context: SecretContext, given: string[]) {
   const paths = fileOptions(args);
   const cards = paths.flatMap((path) => { try { return [secretFile(path, context.home)]; } catch { return []; } });
   const remove = () => cards.forEach((card) => rmSync(card, { force: true }));
@@ -150,6 +154,7 @@ async function put(args: string[], context: SecretContext) {
     if (!name || name.startsWith("-")) throw new UsageError(`put needs the secret's name.\n${usage}`);
     if (!(whys as readonly string[]).includes(why)) throw new UsageError(`--why takes one of ${whys.join(", ")}`);
     const text = readFileSync(real, "utf8");
+    given.push(...piecesOf(text));
     return done(context, await ask(context, { op: "put", name, text, ...expires ? { expires } : {}, why: why as Why, ...threadOf(context), machine: machineOf(context) }));
   } finally {
     remove();
@@ -246,12 +251,14 @@ async function hearOn(args: string[], context: SecretContext) {
 
 const helpWords = ["help", "--help", "-h"];
 
-export async function secretCommand(args: string[], context: SecretContext): Promise<number> {
+export async function secretCommand(args: string[], outer: SecretContext): Promise<number> {
   const [name, ...rest] = args;
+  const given: string[] = [];
+  const context = guarded(outer, given);
   try {
     if (name === undefined || helpWords.includes(name)) { context.out(`${usage}\n`); return name === undefined ? 1 : 0; }
     if (name === "hub") return await serve(context);
-    if (name === "put") return await put(rest, context);
+    if (name === "put") return await put(rest, context, given);
     if (name === "run") return await run(rest, context);
     if (name === "list") {
       const due = rest[0] === "--due";

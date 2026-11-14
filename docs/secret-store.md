@@ -102,20 +102,23 @@ fleet secret on --words '2026-11-13 "Turn it back on"' --thread <id>
 
 Any agent may turn the store off. To turn it on, ask the user with the
 question tool: "Turn the secret store back on?", with the options "Yes, turn it
-on" and "No, keep it off". Only a yes to that question in the given T3 thread,
-given after the store went off, turns it on, and each answer turns it on once.
+on" and "No, keep it off". Only "Yes, turn it on" (or "Yes") to that exact
+question in the given T3 thread, given after the store went off, turns it on,
+and each answer turns it on once.
 `off --help` prints the usage, and `off` refuses a reason that starts with `-`.
 
 A line of the event log that is not JSON, or an `off` line without its fields,
-counts as an `off`: an interrupted `off` keeps the store off. The user's yes
-turns it on as for any other `off`.
+counts as an `off`: an interrupted `off` keeps the store off. The hub records
+an `off` for it when it finds it, so only a yes given after that turns the
+store on. A reader that catches another command's write half done also sees
+such a line; that costs one more question, never a read.
 
 ## Threat model
 
 The store guards against accidental exposure: a value in a transcript, in tool
 output, or on a devbox's disk. A failure that is not a refusal prints a fixed
 message, never the error's own text, and a caller never shows the hub's
-stderr. It does not guard against the hub's own user
+stderr. `put` checks every line it prints against the values it read. It does not guard against the hub's own user
 reading a value file, or a value that a command encodes, splits, or writes to a
 file. After a suspected leak, run `off` first, then rotate the secret at its
 settings link.
@@ -135,6 +138,8 @@ store read.
 The hub trusts the caller's report of the user's answer, as the decision
 ledger does. An agent that can reach the hub over SSH can read its files, so a
 check on the hub would not stop a hostile agent; the store guards against
-mistakes. Each change is one append to the log, and the order of the log
-decides: an `on` checks the log again after its append and stays off when a
-newer `off` landed.
+mistakes. Each change is one append to the log, synced to disk, and the order
+of the log decides. A read hands out its values only when no `off` stands
+before its read event in the log, and an `on` stays off when a newer `off`
+landed before it. Value files and their directory are synced before the put
+event names them.

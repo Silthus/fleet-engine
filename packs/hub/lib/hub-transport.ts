@@ -27,4 +27,3 @@ export function remoteHub(home: string, env: Env) {
 
 export const fleetOnHub = (hub: string, args: string[]) => onHub(hub, args).at(-1)!;
 
-export const lastLine = (stderr: string) => stderr.trim().split("\n").at(-1);
