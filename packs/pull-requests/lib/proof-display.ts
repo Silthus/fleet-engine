@@ -1,6 +1,7 @@
 import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { PrRef } from "./decision-ledger.ts";
+import { publishedUrl } from "./proof-publish.ts";
 import { prDirectory, proofKind, readJson, writeJson, type ProofIdentity, type ProofKind } from "./proof.ts";
 
 export type ProofLines = { ran: string; result: string };
@@ -39,16 +40,6 @@ async function entries(directory: string) {
   catch (error) { if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return []; throw error; }
 }
 
-async function publishedUrl(home: string, ref: PrRef, { commit, name }: Caption) {
-  const directory = join(prDirectory(home, ref), commit);
-  const records = (await entries(directory)).filter((file) => file.startsWith(`${name}.`) && file.endsWith(".published.json")).sort();
-  for (const record of records) {
-    const url = (await readJson<{ url?: unknown } | undefined>(join(directory, record), undefined))?.url;
-    if (typeof url === "string") return url;
-  }
-  return undefined;
-}
-
 async function records<T>(directory: string) {
   const found: { commit: string; file: string; record: T }[] = [];
   for (const commit of await entries(directory)) {
@@ -67,7 +58,7 @@ export async function readDisplay(home: string, ref: PrRef): Promise<Display> {
   const captions = (await records<Caption>(join(root, "captions"))).map(({ record }) => record);
   captions.sort((a, b) => a.captionedAt.localeCompare(b.captionedAt) || a.name.localeCompare(b.name));
   const screenshots = await Promise.all(captions.map(async (caption) => {
-    const url = await publishedUrl(home, ref, caption);
+    const url = await publishedUrl(join(prDirectory(home, ref), caption.commit, caption.name));
     return url === undefined ? caption : { ...caption, url };
   }));
   return { lines, screenshots };
