@@ -21,9 +21,26 @@ const quote = String.raw`(?:\\?["'])?`;
 const metabaseCookie = String.raw`metabase\.(?:SESSION|DEVICE)`;
 const metabaseValue = "(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}";
 const gap = String.raw`(?:\s|\\[rnt]){0,16}`;
-const sameRecord = "[^{}]{0,400}";
 const cookieName = new RegExp(`^${metabaseCookie}$`);
-const shapes: Array<{ kind: string; pattern: RegExp }> = [
+const nameKey = new RegExp(String.raw`\\?"name\\?"${gap}:${gap}`, "g");
+const cookieNameKey = new RegExp(String.raw`\\?"name\\?"${gap}:${gap}\\?"${metabaseCookie}\\?"`, "g");
+const valueKey = new RegExp(String.raw`\\?"value\\?"${gap}:${gap}\\?"(${metabaseValue})`, "g");
+
+function cookieRecordValues(text: string) {
+  const cookies = new Set([...text.matchAll(cookieNameKey)].map((match) => match.index));
+  if (!cookies.size) return [];
+  const names = [...text.matchAll(nameKey)].map((match) => match.index);
+  const between: string[][] = names.map(() => []).concat([[]]);
+  let slot = 0;
+  for (const match of text.matchAll(valueKey)) {
+    while (slot < names.length && names[slot]! < match.index) slot++;
+    between[slot]!.push(match[1]!);
+  }
+  return names.flatMap((at, index) => cookies.has(at) ? [...between[index]!, ...between[index + 1]!] : []);
+}
+
+type Shape = { kind: string; pattern: RegExp } | { kind: string; values: (text: string) => string[] };
+const shapes: Shape[] = [
   { kind: "PostHog personal API key", pattern: new RegExp(`${start}phx_[A-Za-z0-9]{30,}`, "g") },
   { kind: "PostHog secret API key", pattern: new RegExp(`${start}phs_[A-Za-z0-9]{30,}`, "g") },
   { kind: "PostHog OAuth token", pattern: new RegExp(`${start}ph[ar]_[A-Za-z0-9]{30,}`, "g") },
@@ -34,8 +51,8 @@ const shapes: Array<{ kind: string; pattern: RegExp }> = [
   { kind: "Convex deploy key", pattern: new RegExp(`(?<![A-Za-z0-9_-])(?:prod|dev|preview|project):[A-Za-z0-9:_-]{1,120}\\|[A-Za-z0-9+/=_-]{30,}`, "g") },
   { kind: "Coder session token", pattern: new RegExp(String.raw`(?:(?<=^${colour}[+-]?)|(?<=\\[rn]${colour}[+-]?|["']))[ \t]*${colour}${coderToken}${colour}[ \t]*(?=$|\\[rn]|\\?["'])`, "gm") },
   { kind: "Coder session token", pattern: new RegExp(String.raw`(?=${coderToken}(?![A-Za-z0-9]))(?<=(?:coder[_-]?session[_-]?token(?:\\?["'])?[ \t]*[:=]|--token[ \t=])[ \t]*(?:\\?["'])?)${coderToken}`, "gi") },
-  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=(?<![\w.-])${metabaseCookie}${quote}(?:${gap}[=:]${gap}|${sameRecord}${quote}value${quote}${gap}:${gap})${quote})${metabaseValue}`, "g") },
-  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=${quote}value${quote}${gap}:${gap}${quote})${metabaseValue}(?=${quote}${sameRecord}${quote}name${quote}${gap}:${gap}${quote}${metabaseCookie}${quote})`, "g") },
+  { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=(?<![\w.-])${metabaseCookie}${quote}${gap}[=:]${gap}${quote})${metabaseValue}`, "g") },
+  { kind: "Metabase session cookie", values: cookieRecordValues },
   { kind: "private key", pattern: new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----(?:${lineBreak}*[A-Za-z-]+:[^\\r\\n\\\\]*${lineEnd})*${lineBreak}*[A-Za-z0-9+/=]{20,}(?:[A-Za-z0-9+/=\\s]|\\\\[rn])*(?:-----END [A-Z ]*PRIVATE KEY-----)?`, "g") },
 ];
 
@@ -78,14 +95,16 @@ function uniqueNames() {
 export function secretKinds(value: unknown): string[] {
   const kinds = new Set<string>();
   mapStrings(value, (text) => {
-    for (const { kind, pattern } of shapes) if (text.match(pattern)) kinds.add(kind);
+    for (const shape of shapes) if ("pattern" in shape ? text.match(shape.pattern) : shape.values(text).length) kinds.add(shape.kind);
     return text;
   });
   return [...kinds];
 }
 
 export const replaceSecrets = (text: string, replace: (kind: string, value: string) => string) =>
-  shapes.reduce((result, { kind, pattern }) => result.replace(pattern, (value) => replace(kind, value)), text);
+  shapes.reduce((result, shape) => "pattern" in shape
+    ? result.replace(shape.pattern, (value) => replace(shape.kind, value))
+    : shape.values(result).reduce((changed, value) => changed.split(value).join(replace(shape.kind, value)), result), text);
 
 /** Replaces every secret-shaped value in a text with its kind. */
 export const redactSecrets = (text: string) => replaceSecrets(text, (kind) => `[redacted ${kind}]`);

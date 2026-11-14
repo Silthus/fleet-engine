@@ -132,6 +132,10 @@ describe("secret guard", () => {
     ["a pretty-printed browser cookie list", JSON.stringify([{ name: cookieKey, value: metabaseSession }], null, 2)],
     ["a browser cookie with properties between its name and value", JSON.stringify([{ name: cookieKey, domain: "metabase.example.com", path: "/", httpOnly: true, value: metabaseSession }], null, 2)],
     ["a browser cookie whose value comes before its name", JSON.stringify([{ domain: "metabase.example.com", value: metabaseSession, path: "/", name: cookieKey }], null, 2)],
+    ["a browser cookie with a long path", JSON.stringify([{ name: cookieKey, path: `/${"p".repeat(4000)}`, value: metabaseSession }], null, 2)],
+    ["a browser cookie with a nested partition key", JSON.stringify([{ name: cookieKey, partitionKey: { topLevelSite: "https://example.com", hasCrossSiteAncestor: false }, value: metabaseSession }])],
+    ["a browser cookie with a nested partition key, value first", JSON.stringify([{ value: metabaseSession, partitionKey: { topLevelSite: "https://example.com" }, path: `/${"p".repeat(4000)}`, name: cookieKey }], null, 2)],
+    ["a browser cookie after another cookie", JSON.stringify([{ name: "theme", value: "dark" }, { name: cookieKey, value: metabaseSession }], null, 2)],
     ["a JSON-escaped pretty-printed cookie", JSON.stringify({ stdout: JSON.stringify([{ name: cookieKey, secure: true, value: metabaseSession }], null, 2) })],
   ])("finds a Metabase session cookie in %s", (_, text) => {
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");
@@ -145,6 +149,7 @@ describe("secret guard", () => {
     `curl -b "${cookieKey}=$METABASE_SESSION" https://metabase.example.com`,
     `Copy ${cookieKey}=YOUR_SESSION_TOKEN_HERE from the browser.`,
     JSON.stringify({ [cookieKey]: "<redacted>" }),
+    JSON.stringify([{ name: cookieKey, value: "<session-id>" }], null, 2),
   ])("leaves a Metabase cookie placeholder alone: %s", (text) => {
     expect(guard("claude", promptEvent(text))).toBeUndefined();
     expect(guard("claude", toolEvent({ stdout: text, structuredContent: { [cookieKey]: "<redacted>" } }))).toBeUndefined();
