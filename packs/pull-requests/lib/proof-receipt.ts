@@ -190,24 +190,37 @@ export function checkPlacement(body: string, heading: string) {
 
 type Heading = { start: number; depth: number; title: string };
 
+const blockKinds = ["paragraph", "blockquote", "list", "html", "code", "table", "hr"] as const;
+const counted = Object.fromEntries([...blockKinds.map((kind) => [kind, () => "\u0001"]), ["heading", () => "\u0002"]]);
+
+function topLevel(text: string) {
+  const marks = Bun.markdown.render(text.replace(/[\u0001\u0002]/g, " "), counted).replace(/[^\u0001\u0002]/g, "");
+  return { blocks: marks.length, headings: marks.replace(/\u0001/g, "").length };
+}
+
 function headingsOf(body: string) {
+  const lines = body.split("\n");
+  const starts: number[] = [];
+  lines.reduce((start, line) => (starts.push(start), start + line.length + 1), 0);
+  const memo = new Map<number, ReturnType<typeof topLevel>>();
+  const through = (index: number) => {
+    if (index < 0) return { blocks: 0, headings: 0 };
+    if (!memo.has(index)) memo.set(index, topLevel(body.slice(0, starts[index]! + lines[index]!.length)));
+    return memo.get(index)!;
+  };
   const found: Heading[] = [];
-  let fence: string | undefined;
-  let comment = false;
-  let start = 0;
-  for (const raw of body.split("\n")) {
+  lines.forEach((raw, index) => {
     const line = raw.replace(/\r$/, "");
-    const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (comment) comment = !line.includes("-->");
-    else if (fence) { if (opener?.startsWith(fence) && /^ {0,3}[`~]+[ \t]*$/.test(line)) fence = undefined; }
-    else if (opener) fence = opener;
-    else if (/^ {0,3}<!--/.test(line)) comment = !line.slice(line.indexOf("<!--") + 4).includes("-->");
-    else {
-      const heading = /^(#{1,6})[ \t]+(\S.*?)[ \t]*$/.exec(line);
-      if (heading) found.push({ start, depth: heading[1]!.length, title: heading[2]! });
-    }
-    start += raw.length + 1;
-  }
+    const atx = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))??(?:[ \t]+#+)?[ \t]*$/.exec(line);
+    const underline = /^ {0,3}(=+|-+)[ \t]*$/.exec(line);
+    if (!atx && !underline) return;
+    if (through(index).headings <= through(index - 1).headings) return;
+    if (atx) return found.push({ start: starts[index]!, depth: atx[1]!.length, title: atx[2] ?? "" });
+    let first = index - 1;
+    while (first > 0 && through(first).blocks === through(first - 1).blocks) first--;
+    const title = lines.slice(first, index).map((text) => text.trim()).join(" ");
+    found.push({ start: starts[first]!, depth: underline![1]!.startsWith("=") ? 1 : 2, title });
+  });
   return found;
 }
 

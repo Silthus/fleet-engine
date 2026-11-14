@@ -152,12 +152,25 @@ test("an empty read, a body edited before the write, broken markers or a lost wr
   expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n#### Detail\n\nMore rationale.\n\n<block>\n\n### Screenshots\n\nA picture.\n");
 });
 
-test("a heading inside an HTML comment does not end the testing section, so the receipt never lands inside the comment", async () => {
-  const { pr } = await provedPr();
-  pr.pullRequestState({ body: "Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n<!--\n# Hidden instructions\nKeep this hidden.\n-->\n\n### Screenshots\n\nA picture.\n" });
-  expect((await pr.fleet("receipt")).code).toBe(0);
-  expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n<!--\n# Hidden instructions\nKeep this hidden.\n-->\n\n<block>\n\n### Screenshots\n\nA picture.\n");
-  expect(Bun.markdown.html(pr.githubBody()).replace(/<!--[\s\S]*?-->/g, "")).not.toContain("Keep this hidden");
+test("the receipt ends the testing section at the next heading GitHub renders, and nowhere else", async () => {
+  const cases: [string, string, string][] = [
+    ["a heading inside an HTML comment", "<!--\n# Hidden instructions\nKeep this hidden.\n-->", "### Screenshots\n\nA picture."],
+    ["a heading inside a pre block", "<pre>\n# start the app\nbun run dev\n</pre>", "### Screenshots\n\nA picture."],
+    ["a heading inside a div before its blank line", "<div>\n# start the app\n</div>", "### Screenshots\n\nA picture."],
+    ["a heading inside a fenced code block", "```sh\n# start the app\n```", "### Screenshots\n\nA picture."],
+    ["a heading inside a quote", "> # start the app", "### Screenshots\n\nA picture."],
+    ["a heading inside a list item", "- Steps:\n  # start the app", "### Screenshots\n\nA picture."],
+    ["an indented heading", "Ran it by hand.", "   ### Screenshots\n\nA picture."],
+    ["an underlined heading", "Ran it by hand.", "Screen\nshots\n-------\n\nA picture."],
+  ];
+  for (const [name, inside, next] of cases) {
+    const { pr } = await provedPr();
+    const before = `Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n${inside}\n\n`;
+    pr.pullRequestState({ body: `${before}${next}\n` });
+    expect({ name, code: (await pr.fleet("receipt")).code }).toEqual({ name, code: 0 });
+    expect({ name, body: pr.githubBody().replace(block(pr.githubBody()), "<block>") }).toEqual({ name, body: `${before}<block>\n\n${next}\n` });
+    expect({ name, table: Bun.markdown.html(pr.githubBody()).includes("<table>") }).toEqual({ name, table: true });
+  }
 });
 
 test("the body guard refuses figures and emails with the field named, and passes SHAs, versions, dates and references", async () => {
