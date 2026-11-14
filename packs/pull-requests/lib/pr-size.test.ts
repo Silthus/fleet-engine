@@ -98,5 +98,5 @@ test("refuses a missing base or a count that is not a number", async () => {
   expect(notANumber.stderr).toContain("Usage: fleet pr size");
   const size = await branch({ "a.ts": "\n" }, { "b.ts": "\n" });
 
-  expect((await size("--base", "nowhere")).err).toContain("git merge-base nowhere HEAD");
+  expect((await size("--base", "nowhere", "--lines", "1")).err).toContain("git merge-base nowhere HEAD");
 });
