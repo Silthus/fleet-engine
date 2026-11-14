@@ -16,6 +16,7 @@ profile=
 install_only=
 bun_version=1.4.2
 gh_mac_version=2.103.3
+homebrew_bins=${FLEET_HOMEBREW_BINS:-/opt/homebrew/bin:/usr/local/bin}
 
 say() { printf 'Fleet: %s\n' "$*" >&2; }
 fail() {
@@ -67,7 +68,7 @@ download() {
 }
 
 mac_tools() {
-  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+  export PATH="$homebrew_bins:$PATH"
   if ! xcode-select -p >/dev/null 2>&1; then
     say "Installing the Command Line Tools. Finish the window that opens; this script waits."
     needed_you=needed-you

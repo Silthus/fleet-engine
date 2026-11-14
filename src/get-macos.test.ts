@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { git } from "./testing/git.ts";
 import { getShHarness, onLinuxHost, repoRoot, type Sandbox } from "./testing/get-sh.ts";
 
-const { temp, engine, sandbox, profile, getSh } = getShHarness();
+const { temp, sandbox, profile, getSh } = getShHarness();
 
 function loggingEngine(box: Sandbox) {
   const dir = temp.make("fake-engine-");
@@ -32,10 +32,19 @@ describe("get.sh", () => {
   onLinuxHost("under curl | sh, gives the Homebrew installer the terminal so it can ask for the password", () => {
     const box = sandbox("Darwin");
     const command = `printf 'piped script\\n' | sh ${join(repoRoot, "get.sh")} --ref v0.1.0 --install-only`;
-    const env = { PATH: box.bin, HOME: box.home, SHELL: "/bin/sh", FLEET_ENGINE_REPO: engine.repo, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    const env = { ...box.env, SHELL: "/bin/sh" };
     const result = Bun.spawnSync([Bun.which("script") ?? "script", "-qec", command, "/dev/null"], { env, stdin: "ignore" });
     expect(result.exitCode).toBe(0);
     expect(readFileSync(box.log, "utf8")).toContain("brew installer stdin=tty");
+  });
+
+  onLinuxHost("on macOS puts Homebrew's folders, /opt/homebrew/bin and /usr/local/bin, first on PATH", () => {
+    const box = sandbox("Darwin");
+    const seen = join(box.root, "seen-path");
+    box.stub("xcode-select", `echo "$PATH" > "${seen}"; kill -TERM $PPID`);
+    const { FLEET_HOMEBREW_BINS: _, ...env } = box.env;
+    Bun.spawnSync(["sh", join(repoRoot, "get.sh"), "--ref", "v0.1.0", "--install-only"], { env, stdin: "ignore" });
+    expect(readFileSync(seen, "utf8")).toStartWith("/opt/homebrew/bin:/usr/local/bin:");
   });
 
   onLinuxHost("on macOS installs the Command Line Tools first and waits until they are there", () => {
@@ -109,7 +118,7 @@ describe("get.sh", () => {
     const box = sandbox("Darwin");
     const fakeEngine = loggingEngine(box);
     const command = `printf 'piped script\\n' | sh ${join(repoRoot, "get.sh")} --ref main -- --preset starter`;
-    const env = { PATH: box.bin, HOME: box.home, SHELL: "/bin/sh", FLEET_ENGINE_REPO: fakeEngine, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+    const env = { ...box.env, SHELL: "/bin/sh", FLEET_ENGINE_REPO: fakeEngine };
     const result = Bun.spawnSync([Bun.which("script") ?? "script", "-qec", command, "/dev/null"], { env, stdin: "ignore" });
     expect(result.exitCode).toBe(0);
     expect(readFileSync(box.log, "utf8").split("\n")).toContain("fleet setup --preset starter stdin=tty");
