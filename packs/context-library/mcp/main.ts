@@ -6,7 +6,7 @@ if (!library) {
   process.exit(2);
 }
 await serve(
-  { library, url: process.env.FLEET_CONTEXT_URL || undefined, event: (line) => process.stderr.write(`${line}\n`), now: () => performance.now() },
+  { library, url: process.env.FLEET_CONTEXT_URL || undefined },
   process.stdin,
   (line) => process.stdout.write(`${line}\n`),
 );
