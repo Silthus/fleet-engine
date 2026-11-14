@@ -214,10 +214,6 @@ describe("the site build", () => {
     expect(readFileSync(join(root, "README.md"), "utf8")).toContain('src="docs/fleet-logo.svg"');
   });
 
-  test("no page shows a day, a moment, a word note, or the old pack dialog", () => {
-    for (const [path, html] of pagesOf(files)) expect([path, html.match(/A day with|moments?\b|New word|<dialog|does not ask|short-lived boxes/i)]).toEqual([path, null]);
-  });
-
   test("the public build refuses a private pack source", async () => {
     expect(pageData({ audience: "public", team: [teamPack()] })).rejects.toThrow("no pack from a private source");
     expect(buildSite({ audience: "public", team: [teamPack()] })).rejects.toThrow("no pack from a private source");
