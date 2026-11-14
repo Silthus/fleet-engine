@@ -32,7 +32,7 @@ function addedNames(diff: string) {
   let patterns: RegExp[] = [];
   for (const line of diff.split("\n")) {
     if (line.startsWith("+++ ")) {
-      const path = line.slice(6);
+      const path = line.slice(6).replace(/\t$/, "");
       patterns = !authored(path) || /\.mdx?$/.test(path) ? [] : /\.(json|ya?ml|toml)$/.test(path) && !dataFolder.test(path) ? [configKey] : codeConcepts;
     } else if (line.startsWith("+")) for (const pattern of patterns) for (const match of line.slice(1).matchAll(pattern)) names.add(match[1]!);
   }

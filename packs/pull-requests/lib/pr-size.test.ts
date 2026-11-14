@@ -71,6 +71,7 @@ test("counts flags, env vars and config keys the base does not name yet", async 
     "locales/en.json": "{\n  \"greeting\": \"hello\"\n}\n",
     "pyproject.toml": "[tool.app]\nold = 1\nfresh_setting = 2\n",
     "README.md": "Run it with `--doc-only-flag` and FOO_VAR.\n",
+    "src/with space.test.ts": "const onlyInTests = process.env.TEST_ONLY_VAR;\n",
   });
 
   const summary = "size: 9 authored lines, 1 new file (README.md), 6 new concepts (newKey, fresh_setting, NEW_VAR, PY_VAR, --fresh-flag, new-rollout)";
