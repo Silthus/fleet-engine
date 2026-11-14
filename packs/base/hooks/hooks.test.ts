@@ -236,6 +236,21 @@ describe("secret guard", () => {
     expect(output).toContain("theme");
   });
 
+  test("redacts a whole cookie header whose value holds an escape, so no tail is left", () => {
+    const [front, tail] = ["a1B2c3D4e5".repeat(3), "Z9privateTail"];
+    const output = JSON.stringify(guard("claude", toolEvent({ stdout: `Cookie: ${cookieKey}=${front}\\/${tail}` }))?.hookSpecificOutput);
+    expect(output).toContain("[redacted Metabase session cookie]");
+    expect(output).not.toContain(front);
+    expect(output).not.toContain(tail);
+  });
+
+  test("withholds text escaped too deeply to check", () => {
+    const text = `\\u005c${"u005c".repeat(100_000)}u0061`;
+    expect(guard("codex", toolEvent({ stdout: text }))?.decision).toBe("block");
+    expect(JSON.stringify(guard("claude", toolEvent({ stdout: text }))?.hookSpecificOutput)).toContain("[redacted text escaped too deeply to check]");
+    expect(guard("claude", toolEvent({ stdout: `\\u005c${"u005c".repeat(3)}u0061` }))).toBeUndefined();
+  });
+
   test("keeps the cookie's name in a cookie header", () => {
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: `Cookie: ${cookieKey}=${metabaseSession}; theme=dark` }))?.hookSpecificOutput);
     expect(output).toContain(`${cookieKey}=[redacted Metabase session cookie]; theme=dark`);

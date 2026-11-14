@@ -27,18 +27,23 @@ const valueToken = /(?<![A-Za-z0-9._~+/-])(?=[A-Za-z0-9._~+/-]*[0-9])[A-Za-z0-9.
 const wholeValue = new RegExp(`^${metabaseValue}$`);
 const jsonStart = /^\s*[[{"]/;
 const jsonEscape = /\\u([0-9a-fA-F]{4})|\\(["\\/])/g;
+const decodePasses = 8;
 
 function cookieRecordValues(text: string): string[] {
   const json = jsonStart.test(text) ? parsedJson(text) : { parsed: false as const };
   if (json.parsed && keysIn(text) === parsedKeys(json.value)) return jsonCookieValues(json.value);
   const decoded = unescaped(text);
-  return cookieMention.test(decoded) ? decoded.match(valueToken) ?? [] : [];
+  return decoded !== undefined && cookieMention.test(decoded) ? decoded.match(valueToken) ?? [] : [];
 }
 
 function unescaped(text: string) {
   let current = text;
-  for (let next = decodeOnce(current); next !== current; next = decodeOnce(current)) current = next;
-  return current;
+  for (let pass = 0; pass < decodePasses; pass++) {
+    const next = decodeOnce(current);
+    if (next === current) return current;
+    current = next;
+  }
+  return undefined;
 }
 
 const decodeOnce = (text: string) => text.replace(jsonEscape, (_, code?: string, char?: string) => (code ? String.fromCharCode(parseInt(code, 16)) : char!));
@@ -105,6 +110,7 @@ const shapes: Shape[] = [
   { kind: "Coder session token", pattern: new RegExp(String.raw`(?=${coderToken}(?![A-Za-z0-9]))(?<=(?:coder[_-]?session[_-]?token(?:\\?["'])?[ \t]*[:=]|--token[ \t=])[ \t]*(?:\\?["'])?)${coderToken}`, "gi") },
   { kind: "Metabase session cookie", pattern: new RegExp(String.raw`(?<=(?<![\w.-])${metabaseCookie}${quote}(?:${gap}[=:]${gap}|\t+)${quote})${metabaseValue}`, "g") },
   { kind: "Metabase session cookie", values: cookieRecordValues },
+  { kind: "text escaped too deeply to check", values: (text) => (unescaped(text) === undefined ? [text] : []) },
   { kind: "private key", pattern: new RegExp(`-----BEGIN [A-Z ]*PRIVATE KEY-----(?:${lineBreak}*[A-Za-z-]+:[^\\r\\n\\\\]*${lineEnd})*${lineBreak}*[A-Za-z0-9+/=]{20,}(?:[A-Za-z0-9+/=\\s]|\\\\[rn])*(?:-----END [A-Z ]*PRIVATE KEY-----)?`, "g") },
 ];
 
@@ -159,6 +165,8 @@ const secretsIn = (text: string) =>
 export function replaceSecrets(text: string, replace: (kind: string, value: string) => string) {
   const kinds = new Map<string, string>();
   for (const { kind, value } of secretsIn(text)) if (!kinds.has(value)) kinds.set(value, kind);
+  const unreplaceable = [...kinds].find(([value]) => !text.includes(value));
+  if (unreplaceable) return replace(unreplaceable[1], text);
   const longestFirst = [...kinds].sort(([left], [right]) => right.length - left.length);
   const replaced = longestFirst.reduce((changed, [value, kind]) => changed.split(value).join(replace(kind, value)), text);
   const left = secretsIn(replaced)[0];
