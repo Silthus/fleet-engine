@@ -38,7 +38,8 @@ The `question-guard` workflow is on by default. It installs one hook file,
 `hooks/ask-guard.ts`, for two events in Claude and Codex:
 
 - **Stop.** A top-level T3 thread that ends its turn with a decision in prose
-  is stopped once and told to ask with the question tool.
+  is stopped once and told to ask with the question tool. When that check lets
+  the stop pass, the proof check below runs.
 - **PreToolUse on `t3_thread_send`.** An agent sends to a thread on this
   machine whose running turn waits on a question card. When the send's mode is
   `auto`, `steer` or `restart`, or has no mode, it interrupts that turn, and T3
@@ -62,5 +63,61 @@ The send guard never traps an agent:
   the send names another machine's `environmentId`. The hook makes three T3
   calls: it opens a session, reads the shell snapshot, and closes the session.
   So a send waits at most about 9 seconds.
-- While `~/.config/fleet/ask-guard.off` exists, every send passes. The Stop
-  check stays on.
+- While `~/.config/fleet/ask-guard.off` exists, every send passes. The prose
+  Stop check stays on.
+
+### Proof check at Stop
+
+A T3 thread that owns an open PR is stopped once when it ends its turn while
+`fleet proof gate` has not passed at the PR's pushed head. The reason names the
+one step still owed, with the command for that PR:
+
+- push the local commits on the PR's branch, then run the gate;
+- commit and push changed tracked files, or restore them, on the PR's branch
+  or on a detached HEAD at the PR's pushed head;
+- push the commits of a detached HEAD in the PR's worktree, when HEAD
+  continues the PR's pushed head. On a stack, that is the nearest layer that
+  HEAD continues;
+- run the gate at the pushed head, when no run is recorded there;
+- fix what the last gate run failed on, or, for exit 3, decide each gap by
+  tier with `fleet decision record`, or ask the person.
+
+It checks each open PR the thread owns whose repository is the `origin` of the
+thread's checkout. A subagent thread owns nothing while the thread it belongs
+to is open. A fork owns its own PRs and those of its subagents. Each run of
+`fleet proof gate` records its exit code and first failure line for the commit
+it judges, as its own numbered file under
+`~/.local/state/fleet/proof/<owner>/<name>/<pr>/gate-record/<commit>/`, with
+the repository name in lower case. The run writes the file when it starts, as
+a failure, and replaces it with its result when it ends. The check reads the
+newest file, so an older run that ends late never replaces a newer result,
+and a run that crashed counts as failed. The check reads that record, T3's shell
+snapshot, and local git. It never runs the gate, a test, a model, or a GitHub
+call. It trusts `origin/<branch>` as the pushed head.
+
+The stop passes when any of these holds:
+
+- `~/.config/fleet/ask-guard.off` exists. It turns off the send guard and this
+  check;
+- a stop hook already continued this turn (`stop_hook_active`), so the check
+  blocks at most once per turn;
+- the thread waits on a question card, or its last line starts with
+  `NEEDS_HUMAN:`;
+- the thread waits on a child task, a thread wait, or a command or monitor
+  it awaits; on Claude, on a subagent, a monitor, or a scheduled wake-up. A
+  command or monitor the thread does not await, such as a dev server or a PR
+  watch whose CI has settled, is no wait, as in T3;
+- a subagent thread of the thread, such as a delegated task, still runs,
+  waits on a question, or awaits work of its own. A fork of the thread is no
+  wait;
+- a PR watch has not seen CI settle at the pushed head. T3's `checksPending`
+  answers this when the watch has it; otherwise no check has passed or
+  failed yet;
+- the thread was delegated from another machine;
+- the hook runs in a model session that another one started, such as a review
+  a lane runs with `codex exec`. The model sessions that Fleet starts (the
+  judge, reviewers, the arbiter, the eval judge, and `fleet context add`) get
+  no `T3CODE_THREAD_ID`, so the check never runs in them;
+- any read fails, or the check takes longer than 10 seconds. At the deadline
+  it stops the git and `ps` commands it started, and the hook process exits
+  once it has answered, even when a helper of those commands still runs.

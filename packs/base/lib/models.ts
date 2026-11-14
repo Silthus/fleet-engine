@@ -23,3 +23,8 @@ function isRow(value: unknown): value is ModelRow {
   return typeof row?.role === "string" && typeof row.model === "string" && typeof row.work === "string"
     && (row.provider === "claude" || row.provider === "codex") && efforts.includes(row.effort as string);
 }
+
+export function modelSessionEnv(env: Record<string, string | undefined>) {
+  const { T3CODE_THREAD_ID: _lane, ...rest } = env;
+  return rest;
+}

@@ -5,18 +5,20 @@ import { readLinkedItemText, readLinkedMessages, type LinkedTimelineItem } from 
 import { t3StatePath, t3UserData } from "./server.ts";
 import type { T3Client, T3HttpClient } from "./session.ts";
 
-export type ShellPullRequest = { repository: string; number: number; url: string; snapshot?: { state?: string } | null };
+export type PullRequestWatch = { headSha?: string; passed?: boolean; checksPending?: boolean; failedChecks?: string[]; awaitingApproval?: string[] };
+export type ShellPullRequest = { repository: string; number: number; url: string; snapshot?: { state?: string; headBranch?: string } | null; watch?: PullRequestWatch | null };
 
 export type ShellThread = {
   id: string; title: string; projectId: string; status: string;
-  activeRunId?: string | null; activityRunStatus?: string | null; pendingBackgroundTasks?: { kind: string; childThreadId?: string }[];
+  activeRunId?: string | null; activityRunStatus?: string | null; pendingBackgroundTasks?: { kind: string; taskId?: string; childThreadId?: string; awaited?: boolean }[];
+  blockedOnThreadWait?: boolean; delegatedFrom?: { environmentId?: string; threadId?: string } | null;
   createdAt?: string; latestUserMessageAt?: string | null; latestRunRequestedAt?: string | null;
   latestRunStartedAt?: string | null; latestRunCompletedAt?: string | null;
   archivedAt?: string | null; deletedAt?: string | null; settledAt?: string | null; snoozedUntil?: string | null; worktreePath?: string | null;
   modelSelection?: { model: string }; lastError?: string | null;
   pendingRuntimeRequest?: unknown; latestVisibleMessage?: { updatedAt: string; text: string } | null;
   branch?: string | null; latestUserAuthoredMessageAt?: string | null;
-  lineage?: { parentThreadId?: string | null; rootThreadId?: string | null }; pullRequests?: ShellPullRequest[];
+  lineage?: { parentThreadId?: string | null; rootThreadId?: string | null; relationshipToParent?: string | null }; pullRequests?: ShellPullRequest[];
 };
 
 export type ShellProject = { id: string; title: string; workspaceRoot: string };
@@ -40,6 +42,11 @@ export function readSnapshots(client: T3Client): Promise<[ShellSnapshot, ShellSn
 
 export function matchThread<T>(threads: T[], value: string, id: (thread: T) => string): T | undefined {
   return threads.find((thread) => id(thread) === value) ?? threads.find((thread) => id(thread).endsWith(`:${value}`));
+}
+
+export function isWaiting(thread: ShellThread, { childTasks = true } = {}): boolean {
+  return Boolean(thread.blockedOnThreadWait) || (thread.pendingBackgroundTasks ?? []).some((task) =>
+    (task.kind !== "command" || task.awaited) && (childTasks || !task.childThreadId));
 }
 
 export function questionCard(thread: ShellThread | undefined): string | undefined {
