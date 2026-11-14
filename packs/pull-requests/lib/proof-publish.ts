@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { isScreenshot, saveProof, type ProofIdentity } from "./proof.ts";
 
@@ -9,12 +9,25 @@ async function cached(path: string): Promise<Record<string, unknown> | undefined
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
 }
 
+const publishedSuffix = ".published.json";
+const publishedRecord = (saved: string, repository: string) => `${saved}.${repository.replace("/", "_")}${publishedSuffix}`;
+
+export async function publishedUrl(saved: string) {
+  const [directory, name] = [dirname(saved), basename(saved)];
+  const names = await readdir(directory).catch((error: NodeJS.ErrnoException) => { if (["ENOENT", "ENOTDIR"].includes(error.code ?? "")) return [] as string[]; throw error; });
+  for (const record of names.filter((file) => file.startsWith(`${name}.`) && file.endsWith(publishedSuffix)).sort()) {
+    const url = (await cached(join(directory, record)))?.url;
+    if (typeof url === "string") return url;
+  }
+  return undefined;
+}
+
 export async function publishProof(home: string, identity: ProofIdentity, source: string, repository: string, github: GitHub, recheck = false): Promise<string> {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || repository.split("/").some((part) => part === "." || part === "..")) throw new Error("Invalid asset repository");
   const saved = await saveProof(home, identity, source);
   const bytes = await readFile(saved);
   if (!isScreenshot(saved, bytes)) throw new Error("Publish only screenshots with invented test data");
-  const receiptPath = `${saved}.${repository.replace("/", "_")}.published.json`;
+  const receiptPath = publishedRecord(saved, repository);
   const receipt = await cached(receiptPath);
   if (typeof receipt?.url === "string") return receipt.url;
   const { login } = await github("user") as { login: string };
