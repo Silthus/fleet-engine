@@ -140,12 +140,9 @@ export const localTarget = /^\/fleet-[a-z0-9][a-z0-9-]*$/;
 const reservedTargets = ["/fleet-local"];
 
 function localProblem(value: Field): string | undefined {
-  if (typeof value.script !== "string" || !value.script.startsWith("/") || !/\.[cm]?[jt]s$/.test(value.script)) return "script must be the absolute path of a TypeScript or JavaScript file";
   const mounts = value.mounts ?? [];
   if (!Array.isArray(mounts) || !mounts.every((mount: Field) => typeof mount?.source === "string" && mount.source.startsWith("/") && typeof mount.target === "string" && localTarget.test(mount.target) && !reservedTargets.includes(mount.target))) {
     return "mounts must give each folder an absolute source and a target such as /fleet-notes";
   }
   if (new Set(mounts.map((mount: Field) => mount.target)).size !== mounts.length) return "mounts must not share a target";
-  const env = value.env ?? {};
-  if (typeof env !== "object" || env === null || Array.isArray(env) || !Object.entries(env).every(([key, item]) => /^FLEET_[A-Z0-9_]+$/.test(key) && typeof item === "string")) return "env must map FLEET_ names to text";
 }

@@ -24,9 +24,8 @@ export function memoryTemp(env: Record<string, string | undefined>, { memory, pi
 
 function mountedNoexec(path: string, mounts: string) {
   let covering: { point: string; options: string[] } | undefined;
-  for (const [, escaped, , options] of mounts.split("\n").map((line) => line.split(" "))) {
-    if (escaped === undefined || options === undefined) continue;
-    const point = escaped.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
+  for (const [, point, , options] of mounts.split("\n").map((line) => line.split(" "))) {
+    if (point === undefined || options === undefined) continue;
     const holds = path === point || path.startsWith(point.endsWith("/") ? point : `${point}/`);
     if (holds && point.length >= (covering?.point.length ?? 0)) covering = { point, options: options.split(",") };
   }

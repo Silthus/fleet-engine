@@ -157,7 +157,8 @@ again after you change the repository's access.`,
     usage: "receipt [--not-checked <item>]... | receipt --comment <url>",
     summary: `Write the PR's public-safe proof receipt into its body, and publish the full receipt when a pack offers a
 publisher. The block sits at the end of the section under the heading the setting pull-requests.receiptHeading names,
-or with that heading at the end of the body: a row per owed proof (what ran, the result, the commit or the commit it
+or with that heading at the end of the body. Only a # heading that GitHub shows at the top level of the body starts
+or ends that section, never an underlined one. When the setting changes, the next run moves the block. It holds a row per owed proof (what ran, the result, the commit or the commit it
 was reused from), a review row, a judge row, what was not checked, and each gap with who accepted it. It reads the
 proof summary the gate saved at HEAD and the decision ledger, never a proof's pass or fail itself. The block sits
 between ${receiptOpen} head=<sha> hash=<hex> --> and ${receiptClose}; the rest of the body stays as it is, and the

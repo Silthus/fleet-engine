@@ -209,13 +209,6 @@
       "type": "string"
     },
     {
-      "key": "base.usageDistinctId",
-      "question": "Which id should every usage event carry? Leave it empty to give each machine its own id, fleet-<machine>.",
-      "type": "string",
-      "default": "",
-      "ask": "never"
-    },
-    {
       "key": "base.t3TimeZone",
       "question": "Which time zone should T3 Code's service on Linux run in, so a scheduled task set to 03:00 runs at 03:00 there? Use an IANA name, such as Europe/Berlin. Leave it empty to keep the machine's zone.",
       "type": "string",
@@ -278,8 +271,7 @@
       "default": false,
       "settings": [
         "base.usageHost",
-        "base.usageProjectKey",
-        "base.usageDistinctId"
+        "base.usageProjectKey"
       ],
       "sentence": "Fleet counts how often you and your agents run its commands and recall memory, and sends the counts to your own analytics project every five minutes.",
       "risk": "Command names, counts, and the machine name leave the machine for the analytics project you name. Arguments, prompts, file contents, and secrets never do."

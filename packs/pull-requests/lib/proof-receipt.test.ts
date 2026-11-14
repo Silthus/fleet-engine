@@ -144,12 +144,55 @@ test("an empty read, a body edited before the write, broken markers or a lost wr
   pr.pullRequestState({ body: "Adds the greeting." });
   expect((await pr.fleet("receipt")).code).toBe(0);
   const body = pr.githubBody();
-  expect(body).toStartWith("Adds the greeting.\n<!-- fleet-proof-receipt head=");
+  expect(body).toStartWith("Adds the greeting.\n\n<!-- fleet-proof-receipt head=");
   expect(block(body).split("\n")[1]).toBe("## Testing");
   expect(body.endsWith("<!-- /fleet-proof-receipt -->\n")).toBe(true);
   pr.pullRequestState({ body: "Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n#### Detail\n\nMore rationale.\n\n### Screenshots\n\nA picture.\n" });
   expect((await pr.fleet("receipt")).code).toBe(0);
   expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n#### Detail\n\nMore rationale.\n\n<block>\n\n### Screenshots\n\nA picture.\n");
+});
+
+const blockShape = { ...Object.fromEntries(["paragraph", "blockquote", "code", "list", "listItem", "hr", "table", "thead", "tbody", "tr", "th", "td", "html"].map((kind) => [kind, (children: string) => `(${kind}${children})`])), heading: (_: string, meta: { level: number }) => `(h${meta.level})`, text: () => "" };
+const blocksOf = (text: string) => Bun.markdown.render(text, blockShape);
+
+test("the receipt ends the testing section at the next heading GitHub renders, and nowhere else", async () => {
+  const cases: [string, string, string][] = [
+    ["two template comments before the receipt", "<!-- a template note -->\n<!-- another note -->\n\nMore rationale.", "### Screenshots\n\nA picture."],
+    ["a heading inside an HTML comment", "<!--\n# Hidden instructions\nKeep this hidden.\n-->", "### Screenshots\n\nA picture."],
+    ["a heading inside a pre block", "<pre>\n# start the app\nbun run dev\n</pre>", "### Screenshots\n\nA picture."],
+    ["a heading inside a div before its blank line", "<div>\n# start the app\n</div>", "### Screenshots\n\nA picture."],
+    ["a heading inside a fenced code block", "```sh\n# start the app\n```", "### Screenshots\n\nA picture."],
+    ["a heading inside a quote", "> # start the app", "### Screenshots\n\nA picture."],
+    ["a heading inside a list item", "- Steps:\n  # start the app", "### Screenshots\n\nA picture."],
+    ["an indented heading", "Ran it by hand.", "   ### Screenshots\n\nA picture."],
+    ["an underlined heading after a link definition, which stays one block", "[ref]: /image.png\n    Screenshots\n---", "### Screenshots\n\nA picture."],
+    ["a body near the GitHub size limit", `<pre>\n${"# a\n".repeat(15000)}</pre>`, "### Screenshots\n\nA picture."],
+  ];
+  for (const [name, inside, next] of cases) {
+    const { pr } = await provedPr();
+    const before = `Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n${inside}\n\n`;
+    pr.pullRequestState({ body: `${before}${next}\n` });
+    expect({ name, code: (await pr.fleet("receipt")).code }).toEqual({ name, code: 0 });
+    expect({ name, body: pr.githubBody().replace(block(pr.githubBody()), "<block>") }).toEqual({ name, body: `${before}<block>\n\n${next}\n` });
+    expect({ name, blocks: blocksOf(pr.githubBody()).replace(blocksOf(block(pr.githubBody())), "") }).toEqual({ name, blocks: blocksOf(`${before}${next}\n`) });
+  }
+});
+
+test("a receipt added at the end of a body that ends in an HTML block starts a block of its own", async () => {
+  const bodies = ["Adds the greeting.\n\n<details>\n<summary>More</summary>\n\nHidden detail.\n\n</details>", "Adds the greeting.\n\n### Testing\n\n<div>\nRan it by hand.\n</div>"];
+  for (const body of bodies) {
+    const { pr } = await provedPr();
+    pr.pullRequestState({ body });
+    expect((await pr.fleet("receipt")).code).toBe(0);
+    expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe(`${body}\n\n<block>\n`);
+    expect(blocksOf(pr.githubBody()).replace(blocksOf(block(pr.githubBody())), "")).toBe(blocksOf(body));
+  }
+  const details = "Adds the greeting.\n\n<details>\n<summary>More</summary>\n\nHidden detail.\n\n</details>";
+  const { pr } = await provedPr();
+  pr.pullRequestState({ body: `${details}\n<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n## Testing\n\n| Proof |\n| --- |\n| old |\n<!-- /fleet-proof-receipt -->\n` });
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe(`${details}\n\n<block>\n`);
+  expect(block(pr.githubBody()).split("\n")[1]).toBe("## Testing");
 });
 
 test("the body guard refuses figures and emails with the field named, and passes SHAs, versions, dates and references", async () => {
@@ -162,6 +205,13 @@ test("the body guard refuses figures and emails with the field named, and passes
     ["Mailed someone@example.com", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 4**8**213 emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent ４８２１３ emails", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent \u0664\u0668\u066c\u0662\u0661\u0663 emails", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent 48\u066c213 emails", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent 48\u060c213 emails", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Sent emails", "\u0661\u0662\u066a bounced", `the result of live-run ${looksLike}`],
+    ["Sent emails", "12\u0609 bounced", `the result of live-run ${looksLike}`],
+    ["Sent emails", "12 pct bounced", `the result of live-run ${looksLike}`],
+    ["Ran on \u0968 hosts", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 48 213 emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 4&#56;213 emails", "Delivered", "the what ran of live-run holds an HTML entity"],
     ["Sent emails", "12.5% bounced", `the result of live-run ${looksLike}`],
@@ -587,4 +637,49 @@ test("a single reviewer's findings show their bold severity and backtick locatio
     "| 3 | | | | A finding without a severity. | rejected: not a bug |",
     "| 4 | | | | `bun test feature.test.ts`: 100 passed. | rejected: a note, not a finding |",
   ]);
+});
+
+test("a changed receipt heading moves the receipt to that section and never leaves or drops a heading", async () => {
+  const evidence = JSON.stringify({ "pull-requests.receiptHeading": "Evidence" });
+  const sections = "Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n### Evidence\n\nA picture.\n";
+  const moved = await provedPr();
+  moved.pr.pullRequestState({ body: sections });
+  expect((await moved.pr.fleet("receipt")).code).toBe(0);
+  expect(moved.pr.githubBody().replace(block(moved.pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n<block>\n\n### Evidence\n\nA picture.\n");
+  moved.pr.env.FLEET_SETTINGS = evidence;
+  expect((await moved.pr.fleet("receipt")).output).toContain("receipt written");
+  expect(moved.pr.githubBody().replace(block(moved.pr.githubBody()), "<block>")).toBe("Adds the greeting.\n\n### Testing\n\nTest rationale.\n\n### Evidence\n\nA picture.\n\n<block>\n");
+  expect((await moved.pr.fleet("receipt")).output).toContain("receipt current");
+
+  const generated = await provedPr();
+  generated.pr.pullRequestState({ body: "Adds the greeting.\n" });
+  expect((await generated.pr.fleet("receipt")).code).toBe(0);
+  expect(block(generated.pr.githubBody()).split("\n")[1]).toBe("## Testing");
+  generated.pr.env.FLEET_SETTINGS = evidence;
+  expect((await generated.pr.fleet("receipt")).output).toContain("receipt written");
+  const body = generated.pr.githubBody();
+  expect(body.replace(block(body), "<block>")).toBe("Adds the greeting.\n\n<block>\n");
+  expect(block(body).split("\n")[1]).toBe("## Evidence");
+  expect(body).not.toContain("Testing");
+});
+
+test("a body that ends inside an open code fence, HTML block or comment refuses the receipt and stays as it is", async () => {
+  const { pr } = await provedPr();
+  const old = `<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n| Proof |\n| --- |\n| old |\n<!-- /fleet-proof-receipt -->`;
+  for (const body of ["Adds the greeting.\n\n### Testing\n\n```sh\necho ok\n", "Adds the greeting.\n\n### Testing\n\n<pre>\necho ok\n", "Adds the greeting.\n\n<!-- a note that never closes\n", `Adds the greeting.\n\n### Testing\n\n\`\`\`sh\n${old}\n`]) {
+    pr.pullRequestState({ body });
+    await expect(pr.fleet("receipt")).rejects.toThrow("would not show as a block of its own");
+    expect(pr.githubBody()).toBe(body);
+  }
+  expect(patches(pr)).toBe(0);
+});
+
+test("a receipt between two ordered lists refreshes where it is and keeps both lists", async () => {
+  const { pr } = await provedPr();
+  const old = `<!-- fleet-proof-receipt head=${"a".repeat(40)} hash=01 -->\n| Proof |\n| --- |\n| old |\n<!-- /fleet-proof-receipt -->`;
+  const body = `Adds the greeting.\n\n### Testing\n\n1. First\n\n${old}\n\n7. Seventh\n`;
+  pr.pullRequestState({ body });
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  expect(pr.githubBody().replace(block(pr.githubBody()), "<block>")).toBe(body.replace(old, "<block>"));
+  expect(Bun.markdown.html(pr.githubBody())).toContain('<ol start="7">');
 });

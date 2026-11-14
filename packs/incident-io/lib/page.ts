@@ -97,11 +97,9 @@ function parseFlags(args: string[]) {
 function eventOf(flags: Flags): PageEvent {
   const key = flags.key?.trim();
   if (!key) throw new InputError("--key is required, so a retry never pages twice");
-  if (key.length > 200) throw new InputError("--key must be at most 200 characters");
   const title = flags.title?.trim() || (flags.resolve ? `Resolved: ${key}` : "");
   if (!title) throw new InputError("--title is required");
   const sourceUrl = flags["source-url"];
-  if (sourceUrl !== undefined && !/^https?:\/\/\S+$/.test(sourceUrl)) throw new InputError("--source-url must be an http or https URL");
   const description = flags.description?.trim();
   return {
     title,

@@ -8,7 +8,7 @@ import { receiptOf, prDirectory, readDecisions, readJson, recordReceipt, reviewR
 import { displayEntry, readDisplay, readNotChecked, recordNotChecked } from "./proof-display.ts";
 import { receiptSummary, type GateContext } from "./proof-gate.ts";
 import { readPlan } from "./proof-panel.ts";
-import { checkPlacement, GuardRefusal, keepCallout, placeReceipt, receiptHash, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
+import { checkPlacement, GuardRefusal, keepBody, placeReceipt, receiptHash, renderSection, screenshotFiles, withLink, type ReceiptReview } from "./proof-receipt.ts";
 import { fitPage, gatherPage, PageTooLarge, renderPage } from "./proof-receipt-page.ts";
 import { handlerPublisher, type Published, type PublishRequest } from "./proof-receipt-publisher.ts";
 import { reviewDisplay } from "./proof-review-display.ts";
@@ -98,7 +98,7 @@ export async function runReceipt(head: ProofIdentity, items: string[] | undefine
     await writeJson(publishedPath(home, head), published);
     await recordReceipt(home, head, published.url);
   } else await saveLocal();
-  const intended = keepCallout(first.body, place(published?.url));
+  const intended = keepBody(first.body, place(published?.url));
   if (readBody(head, context).body !== first.body) throw new Error("The PR body changed while fleet built the receipt. Run the receipt again");
   await writeBody(head, intended, context);
   if (readBody(head, context).body !== intended) throw new Error("The PR body reads back different from the one fleet wrote. Check the body by hand, then run the receipt again");

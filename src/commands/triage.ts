@@ -26,9 +26,6 @@ export type TriageReport = { title: string; body: string; clean(text: string): s
 
 const transcriptLines = 400;
 const bodyLimit = 60_000;
-const noteLimit = 4_000;
-const factsLimit = 12_000;
-const doctorLimit = 12_000;
 const issueUrl = `https://github.com/${engineRepo}/issues/new`;
 
 /** fleet triage: builds a redacted report of this machine's setup, shows it, and with a yes opens an issue on the engine repo or saves it to a file. */
@@ -78,9 +75,9 @@ export async function triageReport(context: TriageContext, note?: string): Promi
   ]);
   const known = knownNames(context.hostname, machine, profile, gitName, origin);
   const clean = (text: string) => redact(text, context.home, known);
-  const described = note?.trim() ? shortenTo(clean(note.trim()), noteLimit) : "Not described.";
-  const facts = shortenTo(clean([...setupLines(machine, failure, timings), "", "## Versions", "", ...versions].join("\n")), factsLimit);
-  const checked = keepFirst(clean(doctor.join("\n")).split("\n"), doctorLimit);
+  const described = note?.trim() ? clean(note.trim()) : "Not described.";
+  const facts = clean([...setupLines(machine, failure, timings), "", "## Versions", "", ...versions].join("\n"));
+  const checked = clean(doctor.join("\n")).split("\n");
   const head = ["## What happened", "", described, "", "## Setup", "", facts, "", "## fleet doctor", "", fence(checked), "", ""].join("\n");
   const ending = "\n\nMade by `fleet triage`.";
   const transcript = transcriptTail(context.home, transcriptLines);
@@ -94,18 +91,6 @@ export async function triageReport(context: TriageContext, note?: string): Promi
   const tail = [`## Setup transcript${cut ? ` (newest ${shown.length} lines)` : ""}`, "", shown.length ? fence(shown) : lines.length ? "The setup transcript is too long to include." : "No setup transcript on this machine."].join("\n");
   const title = shortenTo(clean(`fleet triage: ${note?.trim() || (failure ? `setup failed: ${failure.error}` : "setup report")}`).split("\n")[0]!, 120);
   return { title, body: `${head}${tail}${ending}`, clean };
-}
-
-/** The first lines of a text that fit in a number of characters. */
-function keepFirst(lines: string[], limit: number) {
-  const kept: string[] = [];
-  let size = 0;
-  for (const line of lines) {
-    if (size + line.length + 1 > limit) return [...kept, `(${lines.length - kept.length} more lines cut)`];
-    kept.push(line);
-    size += line.length + 1;
-  }
-  return kept;
 }
 
 function setupLines(machine: MachineFile | undefined, failure: ReturnType<typeof readFailure>, timings: SetupTimings | undefined) {
