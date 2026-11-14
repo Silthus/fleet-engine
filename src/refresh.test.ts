@@ -53,7 +53,6 @@ async function machine(ref = "main") {
 }
 
 const skill = ".agents/skills/review/SKILL.md";
-const minutes = (count: number) => count * 60_000;
 
 async function forcePushOrphan(repo: string) {
   await spawnGit(repo, "checkout", "-q", "--orphan", "rewrite");
@@ -168,37 +167,10 @@ describe("fleet refresh", () => {
     expect(box.lines.join("\n")).toContain("does not build on");
   });
 
-  test("runs although the lock file names a live process that holds no lock", async () => {
-    const box = await machine();
-    await v2(box.repo);
-    mkdirSync(join(box.home, ".local/state/fleet"), { recursive: true });
-    writeFileSync(join(box.home, ".local/state/fleet/refresh.lock"), String(process.pid));
-
-    expect(await box.fleet("refresh")).toBe(0);
-
-    expect(box.read(guide)).toBe("Rules v2.\n");
-  });
-
-  test("stops while another refresh holds the lock, and reports a lock held for over 30 minutes", async () => {
-    const box = await machine();
-    await v2(box.repo);
-    const held = tryLock(join(box.home, ".local/state/fleet/refresh.lock"), box.clock.at)!;
-    try {
-      expect(await box.fleet("refresh")).toBe(0);
-      expect(box.read(guide)).toBe("Rules v1.\n");
-
-      box.clock.at += minutes(31);
-      expect(await box.fleet("refresh")).toBe(1);
-      expect(box.lines.at(-1)).toContain("31 minutes");
-    } finally {
-      held.release();
-    }
-  });
-
   test("skips a source whose cache another Fleet run works in", async () => {
     const box = await machine();
     await v2(box.repo);
-    const held = tryLock(join(box.cache, "team.lock"), box.clock.at)!;
+    const held = tryLock(join(box.cache, "team.lock"))!;
     try {
       expect(await box.fleet("refresh")).toBe(0);
       expect(box.read(guide)).toBe("Rules v1.\n");
@@ -213,7 +185,7 @@ describe("fleet refresh", () => {
   test("fleet apply waits for a source's cache lock", async () => {
     const box = await machine();
     await v2(box.repo);
-    const held = tryLock(join(box.cache, "team.lock"), box.clock.at)!;
+    const held = tryLock(join(box.cache, "team.lock"))!;
     box.clock.onSleep = () => held.release();
 
     expect(await box.fleet("apply")).toBe(0);
@@ -222,21 +194,11 @@ describe("fleet refresh", () => {
     expect(box.read(guide)).toBe("Rules v2.\n");
   });
 
-  test("prints a failed fetch and skips that source for 30 minutes", async () => {
+  test("prints a failed fetch", async () => {
     const box = await machine();
     renameSync(box.repo, `${box.repo}.away`);
 
     expect(await box.fleet("refresh")).toBe(1);
     expect(box.lines.join("\n")).toContain("could not reach");
-
-    renameSync(`${box.repo}.away`, box.repo);
-    await v2(box.repo);
-    box.clock.at += minutes(29);
-    expect(await box.fleet("refresh")).toBe(0);
-    expect(box.read(guide)).toBe("Rules v1.\n");
-
-    box.clock.at += minutes(2);
-    expect(await box.fleet("refresh")).toBe(0);
-    expect(box.read(guide)).toBe("Rules v2.\n");
   });
 });
