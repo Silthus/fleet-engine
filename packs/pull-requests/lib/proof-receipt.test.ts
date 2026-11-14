@@ -181,6 +181,7 @@ test("the body guard refuses figures and emails with the field named, and passes
     ["Sent 48213<b>abc</b> emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent 48213~~abc~~ emails", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent [48213](https://example.com)abc emails", "Delivered", `the what ran of live-run ${looksLike}`],
+    ["Mailed someone@[192.0.2.1]", "Delivered", `the what ran of live-run ${looksLike}`],
     ["Sent <a href=\"https://example.com/48213\">a list</a>", "Delivered", `the what ran of live-run ${looksLike}`],
   ];
   for (const [ran, result, refusal] of refused) {
@@ -200,6 +201,17 @@ test("the body guard refuses figures and emails with the field named, and passes
   expect(section).toContain(`| live-run | Ran 1a2b3c4 with v1.2.3 on 2026-10-25 | Delivered, as #1234 asked, and the \`@example.com\` filter held | \`${short(head)}\` |`);
   expect(section).not.toContain("48,213");
   expect(section).not.toContain("12%");
+});
+
+test("a field shows in the body as written, so markup and the body's link definitions cannot rebuild a figure", async () => {
+  const { pr } = await provedPr();
+  pr.pullRequestState({ body: "Adds the greeting.\n\n[r]: https://example.com\n\n### Testing\n\nTest rationale.\n" });
+  await pr.fleet("save", "--kind", "live-run", "--ran", "Sent [48][r][213][r] emails", "--result", "Saw <b>it</b> & **this** in `a*b`");
+  expect((await pr.fleet("receipt")).code).toBe(0);
+  const shown = Bun.markdown.html(pr.githubBody()).replace(/<[^>]*>/g, "");
+  expect(shown).not.toContain("48213");
+  expect(shown).toContain("Sent [48][r][213][r] emails");
+  expect(shown).toContain("Saw &lt;b&gt;it&lt;/b&gt; &amp; **this** in a*b");
 });
 
 test("a dated model id of a reviewer passes the guard", async () => {

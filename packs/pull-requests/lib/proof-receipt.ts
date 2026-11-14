@@ -25,7 +25,7 @@ export function receiptMarker(body: string) {
 export class GuardRefusal extends Error {}
 
 const kept = [/#\d+\b/g, /\b\d{4}-\d{2}-\d{2}\b/g, /\bv?\d{1,3}(?:\.\d{1,3}){1,3}\b/g, /\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b/g];
-const email = /[^\s@<>()]+@[^\s@<>()]+\.[\p{L}\p{M}]{2,}/u;
+const email = /[^\s@<>()]+@(?:[^\s@<>()]+\.[\p{L}\p{M}]{2,}|\[[^\]\s]+\])/u;
 const percent = /\p{Nd}\s*(?:%|‰|‱|per\s?cent\b)/iu;
 const figures = [/\p{Nd}{1,3}(?:,\p{Nd}{3})+(?!\p{Nd})/u, /\p{Nd}{4,}/u];
 const entity = /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]*);/i;
@@ -42,6 +42,18 @@ function views(text: string) {
 
 const holdsFigure = (seen: string) => figures.some((pattern) => pattern.test(kept.reduce((value, exempt) => value.replace(exempt, " "), seen)));
 
+const codeSpan = /(`+)(?!`)[\s\S]*?[^`]\1(?!`)/g;
+const escapeMarkup = (text: string) => text.replace(/[\\`*_~[\]<>&!]/g, "\\$&");
+function literal(text: string) {
+  let out = "";
+  let last = 0;
+  for (const span of text.matchAll(codeSpan)) {
+    out += escapeMarkup(text.slice(last, span.index)) + span[0];
+    last = span.index + span[0].length;
+  }
+  return out + escapeMarkup(text.slice(last));
+}
+
 export function guardField(field: string, text: string) {
   if (text.includes("<!--") || text.includes("-->")) throw new GuardRefusal(`receipt refused: the ${field} holds an HTML comment marker. Remove it.`);
   if (entity.test(text)) throw new GuardRefusal(`receipt refused: the ${field} holds an HTML entity. Write the character itself.`);
@@ -49,11 +61,14 @@ export function guardField(field: string, text: string) {
   if (holdsFigure(written) || read.some((seen) => email.test(seen) || percent.test(seen) || holdsFigure(seen))) {
     throw new GuardRefusal(`receipt refused: the ${field} looks like a production figure or an email address. Move the detail into an evidence note, which only the full receipt shows.`);
   }
-  return text;
+  return literal(text);
 }
 
 const modelSnapshot = /-20\d{6}$/;
-const guardModel = (field: string, model: string) => guardField(field, model.replace(modelSnapshot, ""));
+function guardModel(field: string, model: string) {
+  guardField(field, model.replace(modelSnapshot, ""));
+  return literal(model);
+}
 
 const short = (commit: string) => commit.slice(0, 7);
 const at = (commit: string) => `\`${short(commit)}\``;
@@ -91,17 +106,15 @@ function kindRow(kind: KindProof, input: ReceiptInput, warnings: string[]) {
 
 function reviewRow(reviews: ReceiptReview[]) {
   if (!reviews.length) return row(["Review", "no finished review", "", ""]);
-  for (const review of reviews) {
-    guardField("review label", review.label);
-    for (const model of review.lenses ?? []) guardModel(`panel model of ${review.label}`, model);
-    if (!review.lenses && review.reviewer) guardModel(`reviewer of ${review.label}`, review.reviewer);
-  }
-  const models = [...new Set(reviews.flatMap((review) => review.lenses ?? (review.reviewer ? [review.reviewer] : [])))];
+  const models = [...new Set(reviews.flatMap((review) => review.lenses
+    ? review.lenses.map((model) => guardModel(`panel model of ${review.label}`, model))
+    : review.reviewer ? [guardModel(`reviewer of ${review.label}`, review.reviewer)] : []))];
+  const labels = reviews.map((review) => guardField("review label", review.label));
   const lenses = Math.max(0, ...reviews.map((review) => review.lenses?.length ?? 0));
   const who = lenses ? `${lenses}-lens panel (${models.join(", ")})` : `single reviewer (${models.join(", ") || "unnamed"})`;
   const sum = (key: keyof ReviewDisplay["counts"]) => reviews.reduce((total, review) => total + review.counts[key], 0);
   const [first, last] = [reviews[0]!.commit, reviews.at(-1)!.commit];
-  return row(["Review", `${who}, ${reviews.map((review) => review.label).join(", ")}`, `${sum("findings")} findings: ${sum("fixed")} fixed, ${sum("rejected")} rejected, ${sum("unknown")} other`, first === last ? at(last) : `${at(first)} to ${at(last)}`]);
+  return row(["Review", `${who}, ${labels.join(", ")}`, `${sum("findings")} findings: ${sum("fixed")} fixed, ${sum("rejected")} rejected, ${sum("unknown")} other`, first === last ? at(last) : `${at(first)} to ${at(last)}`]);
 }
 
 const judgeResults: Record<ProofSummary["judge"]["state"], string> = { pass: "✅ passed at", fail: "❌ failed at", unavailable: "unavailable at", skipped: "not yet run at" };
