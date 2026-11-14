@@ -388,10 +388,7 @@
       "schedule": {
         "every": "1d",
         "at": "02:47"
-      },
-      "roles": [
-        "hub"
-      ]
+      }
     },
     {
       "id": "dream",

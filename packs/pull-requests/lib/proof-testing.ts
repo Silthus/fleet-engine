@@ -7,7 +7,6 @@ import { spawnAsync } from "../../../src/testing/spawn.ts";
 import { proofCommand, type ProofContext } from "./proof-cli.ts";
 import type { ThreadWord, ThreadWords } from "./proof-answers.ts";
 import { decisionCommand } from "./decision-cli.ts";
-import type { LaneReport } from "../../hub/lib/secret-store.ts";
 import type { Ssh, SshResult } from "./decision-ledger.ts";
 
 const fixtures: string[] = [];
@@ -145,7 +144,6 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const reader: { words?: ThreadWords } = { words: threadWords };
   const hub: { ssh?: Ssh } = {};
   const pendingCards = new Set<string>();
-  const laneSecrets = new Map<string, LaneReport>();
   const panel: { lostWorkers: boolean; onPause?: () => Promise<void>; beforeWorker?: () => Promise<void> } = { lostWorkers: false };
   const startTimes = new Map<number, string>();
   const fleetAt = async (cwd: string, pid: number, args: string[]) => {
@@ -172,13 +170,13 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const fleetAs = (pid: number, ...args: string[]) => fleetAt(repository, pid, args);
   const decideIn = async (cwd: string, ...args: string[]) => {
     const lines: string[] = [];
-    const code = await decisionCommand(args, { home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh, pendingCard: async (thread) => pendingCards.has(thread), laneSecrets: async (lane) => laneSecrets.get(lane) ?? { revokes: [], late: [] } });
+    const code = await decisionCommand(args, { home, cwd, env, print: (line) => lines.push(line), now: () => clock.now, threadWords: reader.words, ssh: hub.ssh, pendingCard: async (thread) => pendingCards.has(thread) });
     return { code, output: lines.join("\n") };
   };
   const decide = (...args: string[]) => decideIn(repository, ...args);
   const pullRequest = join(home, ".local/state/fleet/proof/example/product/42");
   await seedRepository(repository);
-  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, fleetAs, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, laneSecrets, decide, decideIn, startTimes };
+  return { home, repository, pullRequest, env, git, commit, advanceBase, fleet, fleetIn, fleetAs, ci, statuses, required, pullRequestState, githubHead, githubCalls, githubComment, whileGithubReadsPull, clock, say, choose, chooseGap, reader, panel, hub, pendingCards, decide, decideIn, startTimes };
 }
 
 export type Checkout = Awaited<ReturnType<typeof checkout>>;

@@ -8,7 +8,7 @@ import { checkedRows, injectedRows, rowModules } from "./secret-rows.ts";
 import {
   currentOff, deliver, droppedLine, dropLane, dueLines, enableOptions, enableQuestion, failureOf, laneDays, laneReport, listLines, needLines, piecesOf, putValue, secretFilesDir, SecretRefusal, standingDays,
   olderHub, safeLines, storedLine, storedValues, sweep, turnOff, turnOn, unshown, whys,
-  type AppendLog, type WriteBytes, type Delivered, type Heard, type PutInput, type SecretRow, type Store, type Why,
+  type AppendLog, type WriteBytes, type Delivered, type Heard, type LaneInput, type PutInput, type SecretRow, type Store, type Why,
 } from "./secret-store.ts";
 
 export const usage = `Usage:
@@ -37,8 +37,9 @@ the question "${enableQuestion}", asked with your question tool in the T3 thread
 A lane put keeps a secret that no pack declares for one lane, keyed by its stack ticket (owner/repo#n) or its thread
 id. --env names its one variable, --why is required (intake at kickoff), and it needs --expires within ${laneDays} days or
 --revoke with the https link where the user revokes it. Its store expiry is at most ${laneDays} days. A declared name, or
-a name that another lane holds, is refused. drop deletes a lane's values at its end. sweep runs on the hub each night:
-it drops lane values past their store expiry and deletes value files that no current put names.`;
+a name that another lane holds, is refused. drop deletes a lane's values at its end. sweep runs each night on every
+machine with this pack: where this machine keeps the store, it drops lane values past their store expiry and deletes
+value files that no current put names; where the hub keeps it, it does nothing.`;
 
 export type SecretContext = {
   home: string; env: Env;
@@ -52,13 +53,14 @@ class UsageError extends Error {}
 
 type Request =
   | ({ op: "put" } & PutInput)
+  | ({ op: "lane-put" } & PutInput & { lane: LaneInput })
   | { op: "deliver"; names: string[]; thread?: string; machine: string }
   | { op: "off"; reason: string; thread?: string; machine: string }
   | ({ op: "on" } & Heard)
   | { op: "list"; need?: string[]; due?: boolean; thread?: string; machine?: string }
   | { op: "drop"; lane: string }
   | { op: "lane"; lane: string };
-type Answer = { ok: true; lines?: string[]; delivered?: Delivered[]; dropped?: string[]; revokes?: string[]; late?: string[] } | { ok: false; error: string };
+type Answer = { ok: true; lines?: string[]; lanePut?: true; delivered?: Delivered[]; dropped?: string[]; revokes?: string[]; late?: string[] } | { ok: false; error: string };
 
 const machineOf = (context: SecretContext) => thisMachine(context.env);
 const threadOf = (context: SecretContext) => context.env.T3CODE_THREAD_ID ? { thread: context.env.T3CODE_THREAD_ID } : {};
@@ -84,7 +86,7 @@ async function shownSafely(context: SecretContext, extra: string[], reply: () =>
   return { ...answered, ...answered.lines ? { lines: safe(answered.lines) } : {}, ...answered.revokes ? { revokes: safe(answered.revokes) } : {}, ...answered.late ? { late: safe(answered.late) } : {} };
 }
 
-const answer = (context: SecretContext, request: Request) => shownSafely(context, request.op === "put" ? piecesOf(request.text) : [], () => answerUnchecked(context, request));
+const answer = (context: SecretContext, request: Request) => shownSafely(context, request.op === "put" || request.op === "lane-put" ? piecesOf(request.text) : [], () => answerUnchecked(context, request));
 
 async function answerUnchecked(context: SecretContext, request: Request): Promise<Answer> {
   const store = storeOf(context);
@@ -101,6 +103,7 @@ async function answerUnchecked(context: SecretContext, request: Request): Promis
     if (!Array.isArray(rows)) return rows;
     store.rows = rows;
     if (request.op === "put") return { ok: true, lines: [storedLine(await putValue(store, request))] };
+    if (request.op === "lane-put") return { ok: true, lanePut: true, lines: [storedLine(await putValue(store, request))] };
     if (request.op === "deliver") return { ok: true, delivered: deliver(store, request) };
     if (request.need) return { ok: true, lines: await needLines(store, { names: request.need, ...request.thread ? { thread: request.thread } : {}, machine: request.machine ?? "unknown" }) };
     if (request.due) return { ok: true, lines: dueLines(store) };
@@ -113,7 +116,7 @@ async function answerUnchecked(context: SecretContext, request: Request): Promis
 async function ask(context: SecretContext, request: Request): Promise<Answer> {
   const hub = remoteHub(context.home, context.env);
   if (!hub) return answer(context, request);
-  const slow = request.op === "put" || (request.op === "list" && request.need !== undefined);
+  const slow = request.op === "put" || request.op === "lane-put" || (request.op === "list" && request.need !== undefined);
   const result = await (context.ssh ?? runSsh)(hub, fleetOnHub(hub, ["secret", "hub"]), JSON.stringify(request), slow ? slowCallMs : undefined);
   if (result.code !== 0) throw new HubUnreachable(`the hub ${hub} did not answer (exit ${result.code}${result.code === sshFailed ? ", so SSH to it likely failed" : ""}). Its output is not shown, as it could hold a value; check it with ssh ${hub} fleet secret list`);
   try { return JSON.parse(result.stdout) as Answer; }
@@ -198,10 +201,10 @@ async function put(args: string[], context: SecretContext, given: string[]) {
     if (lane && (!env || !givenWhy || !(expires || revoke))) throw new UsageError(`A lane put needs --env, --why, and --expires within ${laneDays} days or --revoke.\n${usage}`);
     const text = readFileSync(real, "utf8");
     given.push(...piecesOf(text));
-    return done(context, await ask(context, {
-      op: "put", name, text, ...expires ? { expires } : {}, why: why as Why, ...threadOf(context), machine: machineOf(context),
-      ...lane && env ? { lane: { key: lane, env, ...revoke ? { revoke } : {} } } : {},
-    }));
+    const request = { name, text, ...expires ? { expires } : {}, why: why as Why, ...threadOf(context), machine: machineOf(context) };
+    if (!lane || !env) return done(context, await ask(context, { op: "put", ...request }));
+    const reply = await ask(context, { op: "lane-put", ...request, lane: { key: lane, env, ...revoke ? { revoke } : {} } });
+    return done(context, reply.ok && !reply.lanePut ? { ok: false, error: olderHub("lane put") } : reply);
   } finally {
     remove();
     process.off("SIGINT", interrupted);
@@ -327,7 +330,8 @@ async function hearOn(args: string[], context: SecretContext) {
 
 async function sweepHere(args: string[], context: SecretContext) {
   noMore(args);
-  if (remoteHub(context.home, context.env)) throw new UsageError("fleet secret sweep runs on the hub, from its nightly job");
+  const hub = remoteHub(context.home, context.env);
+  if (hub) { context.out(`The hub ${hub} keeps this machine's secrets and sweeps them each night; nothing to sweep here.\n`); return 0; }
   const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   return done(context, await shownSafely(context, [], async () => {
     try {

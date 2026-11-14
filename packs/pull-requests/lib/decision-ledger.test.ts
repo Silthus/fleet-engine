@@ -944,14 +944,26 @@ test("a reversal and a lift fail unless they are in the ledger when Fleet reads 
   await expect(design("Where does the cache go?")).rejects.toThrow("The design class is braked");
 });
 
-test("report --lane puts the store's revoke lines under still yours and its late puts in their own section", async () => {
+test("report --lane reads the lane's revoke lines and late puts from the hub's secret log, under still yours and in their own section", async () => {
   const pr = await checkout();
-  pr.laneSecrets.set("example/tickets#401", { revokes: ["- Revoke stripe-test (lane example/tickets#401): https://example.com/revoke/new"], late: ["- **Miss:** mail-test put 2026-10-25 11:00 UTC, why missed."] });
+  const { remote } = hubAt(pr);
+  mkdirSync(join(remote, ".config/fleet"), { recursive: true });
+  writeFileSync(join(remote, ".config/fleet/machine.json"), JSON.stringify({ role: "hub" }));
+  mkdirSync(join(remote, ".local/share/fleet/engine"), { recursive: true });
+  writeFileSync(join(remote, ".local/share/fleet/engine/fleet"), `shift\nFLEET_SETTINGS={} FLEET_HANDLERS={} exec bun ${JSON.stringify(join(import.meta.dir, "../../hub/commands/secret.ts"))} "$@"\n`);
+  const put = (id: string, name: string, at: string, why: string, lane: string, revoke?: string) => ({ type: "put", id, name, at, why, storeExpiresAt: "2026-10-31T09:00:00.000Z", machine: "box-a", lane, env: "STRIPE_KEY", ...revoke ? { revoke } : {} });
+  mkdirSync(join(remote, ".local/state/fleet"), { recursive: true });
+  writeFileSync(join(remote, ".local/state/fleet/secrets.jsonl"), [
+    put("p-000000000001", "stripe-test", "2026-10-24T09:00:00.000Z", "intake", "example/tickets#401", "https://example.com/revoke/old"),
+    put("p-000000000002", "stripe-test", "2026-10-25T09:00:00.000Z", "expired", "example/tickets#401", "https://example.com/revoke/new"),
+    put("p-000000000003", "mail-test", "2026-10-25T11:00:00.000Z", "missed", "example/tickets#401"),
+    put("p-000000000004", "other-test", "2026-10-25T11:00:00.000Z", "missed", "example/tickets#402", "https://example.com/revoke/b"),
+  ].map((event) => JSON.stringify(event)).join("\n") + "\n");
   const report = (await pr.decide("report", "--pr", "example/product#43", "--lane", "example/tickets#401")).output.split("\n");
   expect(report.filter((line) => line.startsWith("### "))).toEqual(["### Still yours", "### Late secret puts", "### Merged under the narrow grant", "### Decisions", "### Proofs", "### Side fixes started"]);
   const section = (heading: string) => { const from = report.indexOf(heading) + 1; return report.slice(from, report.findIndex((line, index) => index >= from && line.startsWith("### "))).filter(Boolean); };
   expect(section("### Still yours").at(-1)).toBe("- Revoke stripe-test (lane example/tickets#401): https://example.com/revoke/new");
-  expect(section("### Late secret puts")).toEqual(["- **Miss:** mail-test put 2026-10-25 11:00 UTC, why missed."]);
-  expect((await pr.decide("report", "--pr", "example/product#43", "--lane", "example/tickets#402")).output).toContain("### Late secret puts\nNone.");
+  expect(section("### Late secret puts")).toEqual(["- stripe-test put 2026-10-25 09:00 UTC, why expired.", "- **Miss:** mail-test put 2026-10-25 11:00 UTC, why missed."]);
+  expect((await pr.decide("report", "--pr", "example/product#43", "--lane", "example/tickets#403")).output).toContain("### Late secret puts\nNone.");
   expect((await pr.decide("report", "--pr", "example/product#43")).output).not.toContain("### Late secret puts");
 });

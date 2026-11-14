@@ -1,7 +1,7 @@
 import { expect } from "bun:test";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ThreadWord } from "../../pull-requests/lib/proof-answers.ts";
 import type { Ssh, SshResult } from "./hub-transport.ts";
 import { secretCommand, type SecretContext } from "./secret-cli.ts";
@@ -45,6 +45,7 @@ export function filesUnder(path: string): string[] {
   return readdirSync(path).flatMap((name) => filesUnder(join(path, name)));
 }
 
+const olderOps = ["put", "deliver", "off", "on", "list"];
 export const hubSettings = JSON.stringify({ "hub.alias": "hub" });
 export const text = (shown: string | Uint8Array) => typeof shown === "string" ? shown : Buffer.from(shown).toString("utf8");
 
@@ -56,7 +57,7 @@ export function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretR
   const clock = { now: new Date("2026-11-13T10:00:00Z") };
   const printed: string[] = [];
   const commands: string[] = [];
-  const reach: { hub: boolean; answer?: SshResult } = { hub: true };
+  const reach: { hub: boolean; answer?: SshResult; older?: boolean } = { hub: true };
   const hooks: { whileHearing?: () => Promise<unknown>; beforeAppend?: () => void; write?: WriteBytes } = {};
   const write: WriteBytes = (file, bytes, offset) => (hooks.write ?? ((at, all, from) => writeSync(at, all, from)))(file, bytes, offset);
   const threadWords = async () => { const step = hooks.whileHearing; hooks.whileHearing = undefined; await step?.(); return words; };
@@ -69,6 +70,11 @@ export function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretR
     commands.push(command);
     if (host !== "hub" || !reach.hub) return { code: 255, stdout: "", stderr: "ssh: connect to host hub port 22: Connection timed out" };
     if (reach.answer) return reach.answer;
+    if (reach.older) {
+      const { lane: _ignored, ...request } = JSON.parse(stdin ?? "{}") as { op: string; lane?: unknown };
+      if (!olderOps.includes(request.op)) return { code: 0, stdout: JSON.stringify({ ok: true, lines: ["Store: on"] }), stderr: "" };
+      stdin = JSON.stringify(request);
+    }
     const out: string[] = [];
     const err: string[] = [];
     const code = await secretCommand(["hub"], { ...context(hubHome, "hub"), stdin: async () => stdin ?? "", out: (shown) => out.push(text(shown)), err: (shown) => err.push(text(shown)) });
@@ -82,12 +88,13 @@ export function fleet({ words = [] as ThreadWord[], rows = testRows() as SecretR
     return path;
   };
   const on = (home: string, machine: string) => (...args: string[]) => secretCommand(args, context(home, machine));
-  const putElsewhere = ({ name, lane, env, value }: { name: string; lane: string; env: string; value: string }) => {
+  const putElsewhere = ({ name, lane, env, value, revoke }: { name: string; lane: string; env: string; value: string; revoke?: string }) => {
     const id = `p-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
     mkdirSync(valuesDir(hubHome), { recursive: true, mode: 0o700 });
+    mkdirSync(dirname(eventLogPath(hubHome)), { recursive: true });
     writeFileSync(join(valuesDir(hubHome), `${name}.${id}`), `${env}=${value}\n`, { mode: 0o600 });
     const storeExpiresAt = new Date(clock.now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
-    appendFileSync(eventLogPath(hubHome), `\n${JSON.stringify({ type: "put", id, name, at: clock.now.toISOString(), why: "intake", storeExpiresAt, machine: "other-process", lane, env })}\n`);
+    appendFileSync(eventLogPath(hubHome), `\n${JSON.stringify({ type: "put", id, name, at: clock.now.toISOString(), why: "intake", storeExpiresAt, machine: "other-process", lane, env, ...revoke ? { revoke } : {} })}\n`);
   };
   const offElsewhere = (reason: string) => () => appendFileSync(eventLogPath(hubHome), `\n${JSON.stringify({ type: "off", id: `o-${reason.replaceAll(" ", "-")}`, reason, at: clock.now.toISOString(), machine: "other-process" })}\n`);
   return {

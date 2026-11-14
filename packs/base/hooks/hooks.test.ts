@@ -70,6 +70,8 @@ describe("secret guard", () => {
     ["a JSON field", JSON.stringify({ coder_session_token: coderToken, user: "me" })],
     ["a JSON-escaped coloured line", JSON.stringify({ stdout: `\x1b[32m${coderToken}\x1b[0m\n` })],
     ["a single-quoted string", `token='${coderToken}'`],
+    ["coder login's token flag", `coder login https://coder.example.com --token ${coderToken}`],
+    ["coder login's token flag with =", `coder login https://coder.example.com --token="${coderToken}"`],
     ["a header with wide whitespace", `curl -H 'Coder-Session-Token:${" ".repeat(12)}${coderToken}' https://coder.example.com`],
   ])("redacts a Coder session token in %s", (_, stdout) => {
     const claude = guard("claude", toolEvent({ stdout }))!;

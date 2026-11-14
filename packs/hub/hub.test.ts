@@ -132,11 +132,11 @@ describe("the Hub pack", () => {
     expect(withBoxes({}, hub).jobs.find((job) => job.id === "box-nightly")?.command).toEqual(["fleet", "box", "nightly"]);
   });
 
-  test("plans the nightly secret sweep on the hub only", () => {
+  test("plans the nightly secret sweep on every machine, as a machine without a hub keeps its own store", () => {
     const sweeps = (machine: MachineFile) => plan({ packs: ["hub"] }, machine).jobs.filter((job) => job.id === "secret-sweep").map((job) => `${job.command.join(" ")} every ${job.schedule.every} at ${job.schedule.at}`);
     expect(sweeps({ schema: 1, role: "hub" })).toEqual(["fleet secret sweep every 1d at 02:47"]);
-    expect(sweeps(devbox)).toEqual([]);
-    expect(sweeps(mac)).toEqual([]);
+    expect(sweeps(devbox)).toEqual(["fleet secret sweep every 1d at 02:47"]);
+    expect(sweeps(mac)).toEqual(["fleet secret sweep every 1d at 02:47"]);
   });
 
   test("fleet doctor on the hub names the fix when Coder rejects the hub's Coder session", async () => {

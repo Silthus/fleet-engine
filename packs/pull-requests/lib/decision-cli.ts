@@ -1,7 +1,6 @@
 import { normalized, t3ThreadWords, type HeardAnswer, type ThreadWord, type ThreadWords } from "./proof-answers.ts";
 import { renderReport } from "./decision-report.ts";
 import { laneSecretLines } from "../../hub/lib/secret-lane-source.ts";
-import type { LaneReport } from "../../hub/lib/secret-store.ts";
 import { readPullRequest, runIn } from "./pr-ci.ts";
 import { gapKind, refuseInstructionQuote, usedAnswer } from "./proof.ts";
 import {
@@ -11,7 +10,7 @@ import {
 
 export type DecisionContext = {
   home: string; cwd: string; env: Env; print: (text: string) => void; now?: () => Date;
-  threadWords?: ThreadWords; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean>; laneSecrets?: (lane: string) => Promise<LaneReport>;
+  threadWords?: ThreadWords; ssh?: Ssh; pendingCard?: (thread: string) => Promise<boolean>;
 };
 
 const usage = `Usage:
@@ -407,8 +406,7 @@ async function report(parsed: Parsed, context: DecisionContext, ledger: Ledger) 
   const events = await reachHub(() => ledger.read());
   const read: Ledger = { read: async () => events, append: (...added) => ledger.append(...added) };
   const lane = parsed.options.get("--lane");
-  const laneSecrets = context.laneSecrets ?? ((key: string) => laneSecretLines(context, key));
-  context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID, ...lane === undefined ? {} : { lane } }, read, fold(events), { ...context, laneSecrets }));
+  context.print(await renderReport({ prs, thread: parsed.options.get("--thread") ?? context.env.T3CODE_THREAD_ID, ...lane === undefined ? {} : { lane } }, read, fold(events), { ...context, laneSecrets: (key: string) => laneSecretLines(context, key) }));
   return 0;
 }
 

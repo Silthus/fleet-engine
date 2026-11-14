@@ -145,7 +145,9 @@ fleet secret drop --lane example/tickets#401
   but `intake`), misses marked. The hub builds these lines from its event log
   and withholds any line that would show a value it holds.
 
-The hub runs `fleet secret sweep` each night at 02:47 as a pack job. It drops
+Each machine with the Hub pack runs `fleet secret sweep` each night at 02:47
+as a pack job. On a machine whose secrets the hub keeps, it does nothing. On
+the hub, and on a machine without a hub, it drops
 each lane value past its store expiry, by the same drop rule, and deletes each value file that a
 later put or a drop replaced. A value file that no event names waits an hour,
 by the disk's clock, as its put may still be landing; the sweep deletes it
