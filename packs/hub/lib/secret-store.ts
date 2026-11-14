@@ -225,6 +225,7 @@ async function checkAndStore(store: Store, row: SecretRow, input: PutInput): Pro
   if (showsValue(shown, Object.values(fields))) throw new SecretRefusal(hiddenValue);
   writeNewFile(valuePath(store.home, event), row.env.map((key) => `${key}=${fields[key]}\n`).join(""), store.write);
   appendEvents(store, event);
+  if (landed(readEvents(store.home), event) < 0) throw new SecretRefusal(`The ${row.name} put's event did not land whole in the event log, so it was not stored, and the torn line keeps the store off. Only the user's words turn it on: fleet secret on`);
   return event;
 }
 
@@ -297,10 +298,13 @@ function currentValues(store: Store, row: SecretRow, put: PutEvent | undefined):
 
 export type Delivered = { name: string; values: Record<string, string> };
 
-function offBefore(store: Store, read: SecretEvent) {
+const landed = (events: SecretEvent[], event: SecretEvent) => events.findIndex((logged) => logged.type === event.type && "id" in logged && "id" in event && logged.id === event.id);
+
+function offBefore(store: Store, read: SecretEvent): OffEvent | undefined {
   const events = readEvents(store.home);
-  const id = (read as { id: string }).id;
-  return fold(events.slice(0, events.findIndex((event) => event.type === "read" && event.id === id) + 1)).off;
+  const at = landed(events, read);
+  if (at < 0) return { type: "off", id: `torn-${(read as { id: string }).id}`, reason: "this read's own event did not land whole in the event log", at: store.now.toISOString(), machine: "unknown" };
+  return fold(events.slice(0, at + 1)).off;
 }
 
 const wentOff = "the store went off before this read";

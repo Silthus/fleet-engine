@@ -149,7 +149,9 @@ ledger does. An agent that can reach the hub over SSH can read its files, so a
 check on the hub would not stop a hostile agent; the store guards against
 mistakes. Each change is one append to the log, written whole and synced to
 disk before it is acknowledged, and the order
-of the log decides. A read hands out its values only when no `off` stands
-before its read event in the log, and an `on` stays off when a newer `off`
+of the log decides. A change counts only once the log shows its own event
+whole. A read hands out its values only when its read event landed whole and
+no `off` stands before it in the log, a put whose event was torn stores
+nothing, and an `on` stays off when a newer `off`
 landed before it. Value files and their directory are synced before the put
 event names them.

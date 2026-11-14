@@ -503,6 +503,29 @@ test("a disk that writes one byte at a time still stores the whole value and a w
   stuck.expectNoLeak();
 });
 
+test("an off that lands between the pieces of a read or put event keeps the value from the reader, and the put reports nothing stored", async () => {
+  const offMidway = (machine: ReturnType<typeof fleet>, kind: string) => {
+    let split = false;
+    machine.hooks.write = (file, bytes, offset) => {
+      if (!split && offset === 12 && Buffer.from(bytes).includes(`"type":"${kind}"`)) { split = true; machine.offElsewhere(`leak seen mid ${kind}`)(); }
+      return writeSync(file, bytes, offset, 1);
+    };
+  };
+  const reader = fleet();
+  expect(await reader.dev("put", "send-us", "--file", reader.secretFile(reader.devHome, sendKey))).toBe(0);
+  offMidway(reader, "read");
+  const result = await run(reader.dev, reader.printed, ["send-us"], "echo child-ran");
+  expect(result.code).toBe(1);
+  expect(result.text).toContain("did not land whole in the event log");
+  expect(result.text).not.toContain("child-ran");
+  const putter = fleet();
+  offMidway(putter, "put");
+  expect(await putter.dev("put", "send-us", "--file", putter.secretFile(putter.devHome, sendKey))).toBe(1);
+  expect(putter.printed.join("")).toContain("did not land whole in the event log, so it was not stored");
+  reader.expectNoLeak();
+  putter.expectNoLeak();
+});
+
 test("list --need prints the card for each missing or failing secret, nothing for one that is held and passes, and logs each check's read", async () => {
   const rows = testRows().map((row) => row.name !== "chat-app" ? row : { ...row, provider: { name: "chat-app", check: async () => ({ ok: false as const, reason: "the chat service answered invalid_auth" }) } });
   const machine = fleet({ rows });
