@@ -43,11 +43,11 @@ export function proseOf(text: string) {
   lines.forEach((line, index) => {
     const inner = line.replace(quoted, "");
     const marker = /^(`{3,}|~{3,})/.exec(inner)?.[1];
-    if (index <= through) left++;
-    else if (fence) {
+    if (fence) {
       left++;
       if (marker && marker[0] === fence[0] && marker.length >= fence.length && inner.trim() === marker) fence = undefined;
     } else if (marker) { fence = marker; left++; }
+    else if (index <= through) left++;
     else if (inner.startsWith("$ ")) {
       left++;
       const exit = lines.findIndex((later, at) => at > index && later.replace(quoted, "").startsWith("exit="));
