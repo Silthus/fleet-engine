@@ -147,6 +147,10 @@ describe("secret guard", () => {
     ["a JavaScript cookie whose path spells a value key and a brace", `{ name: '${cookieKey}', path: '/value: placeholder/{', value: '${metabaseSession}' }`],
     ["a JSON cookie with a repeated name key", `{"name":"${cookieKey}","value":"${metabaseSession}","name":"theme"}`],
     ["a JSON cookie with a repeated value key", `{"name":"${cookieKey}","value":"${metabaseSession}","value":"dark"}`],
+    ["a JSON cookie with wide spacing after its name key", `{"name":${" ".repeat(17)}"${cookieKey}","value":"${metabaseSession}"}`],
+    ["a JSON cookie whose name is spelled with a unicode escape", `{"name":"metab\\u0061se.SESSION","value":"${metabaseSession}"}`],
+    ["a YAML cookie with wide spacing after its value key", `- name: ${cookieKey}\n  value:${" ".repeat(17)}${metabaseSession}\n`],
+    ["a cookie header with wide spacing", `${cookieKey}:${" ".repeat(17)}${metabaseSession}`],
   ])("finds a Metabase session cookie in %s", (_, text) => {
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: text })));
@@ -170,15 +174,18 @@ describe("secret guard", () => {
     ["a unicode escape", (session: string) => `\\u0061${session}`],
   ])("withholds a JSON cookie whose value is spelled with %s, as the text holds no literal copy to redact", (_, spell) => {
     const spelled = spell(metabaseSession);
-    const text = `{"name":"${cookieKey}","value":"${spelled}"}`;
-    const decoded = (JSON.parse(text) as { value: string }).value;
+    for (const text of [`{"name":"${cookieKey}","value":"${spelled}"}`, `{"${cookieKey}":"${spelled}"}`]) withholds(text, spelled);
+  });
+
+  function withholds(text: string, spelled: string) {
+    const decoded = Object.values(JSON.parse(text) as Record<string, string>).at(-1)!;
     expect(guard("claude", promptEvent(text))?.decision).toBe("block");
     const output = JSON.stringify(guard("claude", toolEvent({ stdout: text }))?.hookSpecificOutput);
     expect(output).toContain("[redacted Metabase session cookie]");
     expect(output).not.toContain(decoded);
     expect(output).not.toContain(JSON.stringify(spelled).slice(1, -1));
     expect(output).not.toContain(metabaseSession.slice(9));
-  });
+  }
 
   test("redacts every long value in a text that names a Metabase cookie and is not JSON", () => {
     const build = "1234567890".repeat(4);

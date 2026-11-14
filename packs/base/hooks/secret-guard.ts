@@ -22,15 +22,15 @@ const metabaseCookie = String.raw`metabase\.(?:SESSION|DEVICE)`;
 const metabaseValue = "(?=[A-Za-z0-9._~+/=-]*[0-9])[A-Za-z0-9._~+/=-]{20,}";
 const gap = String.raw`(?:\s|\\[rnt]){0,16}`;
 const cookieName = new RegExp(`^${metabaseCookie}$`);
-const key = (name: string) => String.raw`(?<![\w$-])${quote}${name}${quote}${gap}:${gap}${quote}`;
-const cookieNameKey = new RegExp(String.raw`${key("name")}${metabaseCookie}(?![\w.-])`);
-const valueKey = new RegExp(`${key("value")}(${metabaseValue})`, "g");
+const cookieMention = new RegExp(metabaseCookie);
+const valueToken = new RegExp(`(?<![A-Za-z0-9._~+/=-])${metabaseValue}(?![A-Za-z0-9._~+/=-])`, "g");
 const wholeValue = new RegExp(`^${metabaseValue}$`);
+const jsonStart = /^\s*[[{"]/;
 
 function cookieRecordValues(text: string): string[] {
-  if (!cookieNameKey.test(text)) return [];
-  const json = parsedJson(text);
-  return json.parsed && keysIn(text) === parsedKeys(json.value) ? jsonCookieValues(json.value) : [...text.matchAll(valueKey)].map((match) => match[1]!);
+  const json = jsonStart.test(text) ? parsedJson(text) : { parsed: false as const };
+  if (json.parsed && keysIn(text) === parsedKeys(json.value)) return jsonCookieValues(json.value);
+  return cookieMention.test(text) ? text.match(valueToken) ?? [] : [];
 }
 
 function parsedJson(text: string): { parsed: true; value: unknown } | { parsed: false } {
@@ -64,8 +64,10 @@ function jsonCookieValues(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(jsonCookieValues);
   if (!value || typeof value !== "object") return [];
   const { name, value: cookie } = value as { name?: unknown; value?: unknown };
-  const own = typeof name === "string" && cookieName.test(name) && typeof cookie === "string" && wholeValue.test(cookie) ? [cookie] : [];
-  return [...own, ...Object.values(value).flatMap(jsonCookieValues)];
+  const isCookieValue = (entry: unknown): entry is string => typeof entry === "string" && wholeValue.test(entry);
+  const record = typeof name === "string" && cookieName.test(name) && isCookieValue(cookie) ? [cookie] : [];
+  const mapped = Object.entries(value).flatMap(([key, entry]) => cookieName.test(key) && isCookieValue(entry) ? [entry] : []);
+  return [...record, ...mapped, ...Object.values(value).flatMap(jsonCookieValues)];
 }
 
 type Shape = { kind: string; pattern: RegExp } | { kind: string; values: (text: string) => string[] };
