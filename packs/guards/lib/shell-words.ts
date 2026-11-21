@@ -12,7 +12,10 @@ export type Command = {
   stdin?: { body: string; substitutions: string[] };
   outputs: string[];
   writes: string[];
+  redirects: string[];
   bare: string[];
+  rawArgs: string[];
+  keywords: string[];
   inLoop: boolean;
   tested: boolean;
   after?: string;
@@ -33,7 +36,7 @@ const operators = ["&&", "||", ";;", "|&", ";", "|", "&", "(", ")", "\n"];
 const keywords = new Set(["then", "do", "else", "elif", "if", "!", "{", "while", "until"]);
 const declarations = new Set(["export", "declare", "typeset", "readonly", "local"]);
 const loops = new Set(["for", "select", "while", "until"]);
-const tests = new Set(["if", "elif", "while", "until", "!"]);
+const tests = new Set(["if", "elif", "while", "until"]);
 const assignment = /^([A-Za-z_]\w*)=(.*)$/s;
 const redirect = /^(\d+|&)?(>>|>\||>&|<&|<>|>|<)(?!\()/;
 const wrappers: Record<string, { valued: string[]; operands?: number; chdir?: string[] }> = {
@@ -338,6 +341,7 @@ function withoutRedirects(words: Word[]) {
   const kept: Word[] = [];
   const outputs: string[] = [];
   const fileWrites: string[] = [];
+  const redirects: string[] = [];
   for (let index = 0; index < words.length; index++) {
     const match = words[index].raw.match(redirect);
     if (!match) {
@@ -345,12 +349,14 @@ function withoutRedirects(words: Word[]) {
       continue;
     }
     const [operator, descriptor = "", direction] = match;
-    const target = words[index].text.slice(operator.length) || words[++index]?.text || "";
+    const attached = words[index].text.slice(operator.length);
+    redirects.push(attached ? words[index].raw : `${words[index].raw}${words[index + 1]?.raw ?? ""}`);
+    const target = attached || words[++index]?.text || "";
     const writes = direction !== "<" && direction !== "<&" && direction !== ">&" && (descriptor === "" || descriptor === "1" || descriptor === "&");
     if (writes) outputs.push(target);
     if (/^(?:>>|>\||<>|>)$/.test(direction) || (direction === ">&" && !/^(?:\d+-?|-)$/.test(target))) fileWrites.push(target);
   }
-  return { kept, outputs, writes: fileWrites };
+  return { kept, outputs, writes: fileWrites, redirects };
 }
 
 function wrapperOption(texts: string[], index: number, valued: string[]): { width: number; name: string; value?: string } {
@@ -401,15 +407,21 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
   let hereString = false;
   let loopDepth = 0;
   let scope: Scope = context.scope ?? {};
+  let closedGroup = false;
 
   const finishCommand = (after?: string) => {
-    if (words.length === 0 && !stdin) return;
-    const { kept, outputs, writes } = withoutRedirects(words);
+    if (words.length === 0 && !stdin) {
+      const group = closedGroup ? pipelines.at(-1)?.at(-1) : undefined;
+      if (group && after) group.after = after;
+      return;
+    }
+    const { kept, outputs, writes, redirects } = withoutRedirects(words);
     const texts = kept.map((word) => word.text);
     const commandEnv = new Map(env);
     const assigned = new Map<string, string>();
     let chdir: string | undefined;
     let tested = false;
+    const stripped: string[] = [];
     let index = 0;
     while (index < texts.length) {
       const text = texts[index];
@@ -421,6 +433,7 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
       } else if (keywords.has(text)) {
         if (loops.has(text)) loopDepth++;
         if (tests.has(text)) tested = true;
+        stripped.push(text);
         index++;
       } else if (wrappers[basename(text)]) {
         const wrapper = skipWrapper(texts, index, commandEnv);
@@ -441,7 +454,8 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
     const leadingSubstitutions = kept.slice(0, index + 1).flatMap((word) => word.substitutions);
     const argSubstitutions = kept.slice(index + 1).map((word) => word.substitutions);
     const bare = kept.slice(index).map((word) => word.bare);
-    pipeline.push({ name, args, env: commandEnv, substitutions, leadingSubstitutions, argSubstitutions, stdin, outputs, writes, bare, inLoop, tested, ...(after && { after }), scope, chdir });
+    const rawArgs = kept.slice(index + 1).map((word) => word.raw);
+    pipeline.push({ name, args, env: commandEnv, substitutions, leadingSubstitutions, argSubstitutions, stdin, outputs, writes, redirects, bare, rawArgs, keywords: stripped, inLoop, tested, ...(after && { after }), scope, chdir });
     words = [];
     stdin = undefined;
   };
@@ -452,6 +466,7 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
   };
 
   for (const token of tokenize(program)) {
+    if (!("operator" in token)) closedGroup = false;
     if ("word" in token && hereString) {
       stdin = { body: token.word.text, substitutions: token.word.substitutions };
       hereString = false;
@@ -464,6 +479,7 @@ export function parse(program: string, context: Context = { env: new Map(), inLo
       if (token.operator === "(") scope = { parent: scope };
       if (token.operator === ")") scope = scope.parent ?? scope;
     }
+    if ("operator" in token) closedGroup = token.operator === ")";
   }
   finishPipeline();
   const last = pipelines.at(-1)?.at(-1);
@@ -517,17 +533,19 @@ function output(pipeline: Command[], index: number): string | undefined {
   return passes ? command.stdin?.body ?? output(pipeline, index - 1) : undefined;
 }
 
-function nestedPrograms(command: Command, piped?: string): { program: string; scope: Scope }[] {
+function nestedPrograms(command: Command, piped?: string): { program: string; scope: Scope; substituted?: true }[] {
   const input = shellInput(command);
   const child = { parent: command.scope, chdir: command.chdir };
   const stdin = command.stdin?.body ?? piped;
   return [
-    ...command.substitutions.map((program) => ({ program, scope: { parent: command.scope } })),
+    ...command.substitutions.map((program) => ({ program, scope: { parent: command.scope }, substituted: true as const })),
     ...(input && "program" in input ? [{ program: input.program, scope: child }] : []),
     ...(input && "stdin" in input && stdin !== undefined ? [{ program: stdin, scope: child }] : []),
     ...(command.name === "eval" ? [{ program: command.args.join(" "), scope: command.scope }] : []),
   ];
 }
+
+export const nestedProgramsAt = (pipeline: Command[], index: number) => nestedPrograms(pipeline[index], output(pipeline, index - 1));
 
 /** Every pipeline a command line runs, including those in `sh -c` programs, `$(...)` and backtick substitutions, `eval`,
  * heredocs fed to a shell, and `echo`, `printf` or `cat` text piped into one. A nested program comes before the command
