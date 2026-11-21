@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Final reads and the judge stop at the review budget
+
+- At the review ceiling, `hedge proof review --scope final` no longer reads
+  a production fix that came after the last read. It says the budget is
+  spent and what to do: revert each commit of the PR since the last read
+  that changes production code, never a merge of the base, and list the
+  finding under `## Known issues`. The gate carries the revert. Only the
+  user's `--override` runs one more read. A
+  HEAD whose commits since the last read are only clean base merges and
+  quiet commits, past what the gate carries, still gets its final read.
+- The judge in `hedge proof gate` fails at most
+  `pull-requests.reviewCeiling` times on a pull request. After that the gate
+  runs it no more and says the judge budget is spent. A judge gap on HEAD
+  that a decision accepts ends it, as before. A cached verdict still shows.
+  A gate holds the lock of the pull request's judge directory while it asks
+  the judge, so a second gate at the same moment that finds no saved
+  verdict for its inputs stops and names the command that holds it, and gates at once never pass the cap. A gate whose
+  process ended leaves its lock to the next gate.
+
 ### Threads that ask in prose
 
 - The setting `orchestration.proseTitles` names title starts, such as `⚠️, 🚨`,

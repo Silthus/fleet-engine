@@ -50,8 +50,9 @@ type Subcommand = {
 };
 
 const overrideHelp = `--override takes the user's answer to the question that review-start prints when the arbiter escalates or gives no
-verdict. At the review budget hedge asks nothing, and only the user's --override runs another review, or a final read
-of a HEAD that the gate does not carry. Ask it with your question tool, with the options "Run one more round" and "Stop
+verdict. At the review budget hedge asks nothing, and only the user's --override runs another review or final read,
+except a final read of a HEAD whose commits since the last read are only clean base merges and quiet commits past what
+the gate carries. Ask it with your question tool, with the options "Run one more round" and "Stop
 here". Only their choice of "Run one more round" there counts, quoted with the date they gave it, for example
 --override '2026-10-24 "Run one more round"'. --thread names the T3 thread where they answered and defaults to this
 one (T3CODE_THREAD_ID). A typed message, a refusal, or a general rule, such as "ship everything autonomously", does
@@ -80,11 +81,12 @@ The settings pull-requests.freeReviews and pull-requests.reviewCeiling set how m
 one more and where the loop stops: the panel rounds and the final reads of the review phase count together, and the
 final reads of the babysit phase count apart. Only a review that leads to fixes counts: a finished review
 counts when the gate asks for an answer to one of its findings, so one with only minor and nit findings spends nothing,
-and an unfinished one counts. The
-budget never refuses a final read of a HEAD that the gate does not carry; a blocker or major that it finds still
-counts, so the fixes rounds after it stop at the ceiling. The default budget is the panel, the fixes read, and the last read. On
-a PR of the Read tier the ceiling is two reviews that count: its one read and one final read of its fixes. At the
-ceiling, a further final read runs only when the gate does not carry HEAD; below it, --agent still reads a carried HEAD. The arbiter is the lookup model of your AI plan;
+and an unfinished one counts. The default budget is the panel, the fixes read, and the last read. On a PR of the Read
+tier the ceiling is two reviews that count: its one read and one final read of its fixes. At the ceiling no review or
+final read runs without the user's --override. A production fix of the PR after the last read is then reverted, and the finding
+it fixed is listed under Known issues; the gate carries the revert. One final read still runs at the ceiling: of a
+HEAD whose commits since the last read are only clean base merges and quiet commits, past what the gate carries. Below
+the ceiling, --agent still reads a carried HEAD. The arbiter is the lookup model of your AI plan;
 HEDGE_REVIEW_ARBITER replaces its command.`;
 
 const subcommands: Record<string, Subcommand> = {
@@ -245,7 +247,7 @@ with the merge time and the time it was saved.`,
     summary: `Without --lens, --scope full runs the panel of the PR's review tier, which hedge picks from the merge-risk grade
 of the PR description and the authored production lines of the diff: lines outside tests, docs, lockfiles, and
 generated files. Read: grade low or no grade, and under 50 authored lines; one combined Correctness and Risk lens on the
-other family, and one final read of its fixes that counts; at that ceiling, more run only when the gate does not carry HEAD. Pair:
+other family, and one final read of its fixes that counts; at that ceiling, only the user's --override runs another read, except a final read of a HEAD whose commits since the last read are only clean base merges and quiet commits past what the gate carries. Pair:
 any other grade but high, or a grade hedge cannot read; the lenses correctness:other, risk:other, and fresh-eyes:same.
 Panel: grade high; the lenses fresh-eyes, correctness, risk, design, and anti-overengineering. --lens adds lenses to the tier's set, such as security, ui, systems, or a
 Team perspective; it never removes one. The output and hedge proof show name the tier and why. An unfinished panel
@@ -444,7 +446,10 @@ diff measurably changes. A body without a callout passes it. A failed question o
 gate; medium and low findings are listed. The verdict is cached per set of inputs, and a later run asks an unavailable
 judge again. Each run saves its proof summary for its commit, with the PR's head, base and base SHA on GitHub, the tier,
 --landed, and a fingerprint of the PR's proof files, the standing rules and the ledger decisions that cover the PR.
-hedge decision report prints that summary only while all of them still match. From the third failing verdict on a PR, the arbiter may escalate to the user; a judge gap on HEAD (gap
+hedge decision report prints that summary only while all of them still match. From the third failing verdict on a PR, the arbiter may escalate to the user. Once the judge failed as often
+as pull-requests.reviewCeiling allows on a PR, the gate runs it no more and says the judge budget is spent. A gate holds
+the lock of the PR's judge directory while it asks the judge, and a second gate of that PR that finds no saved verdict for its
+inputs stops and names the command that holds it. A gate whose process ended leaves its lock to the next gate. A judge gap on HEAD (gap
 --kind judge) lets the gate pass once a decision in the ledger accepts it: the user's answer, recorded with hedge
 decision record --mark 👤, or your own 🤖 decision when the PR's tier lets you. A refusal or a typed message never
 accepts it. The judge reads the condition of each accepted gap and fails one that HEAD breaks; the setting

@@ -368,7 +368,7 @@ test("the review settings set how many reviews run free and where the loop stops
   await finishRound(pr, "2");
   await expect(pr.hedge("review-start", "--scope", "fixes", "--base", head)).rejects.toThrow("The review budget of 2 reviews is spent");
   await pr.commit("feature.txt", "fixed\n");
-  await expect(pr.hedge("review-start", "--scope", "final", "--base", head)).resolves.toMatchObject({ code: 0 });
+  await expect(pr.hedge("review-start", "--scope", "final", "--base", head)).rejects.toThrow("The review budget of 2 reviews is spent");
 });
 
 test("without a replacement command, the arbiter runs the lookup row of the model table with its provider, model, and effort", async () => {
