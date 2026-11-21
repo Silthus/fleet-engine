@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### A final read never reads nothing
+
+- `hedge proof review --scope final` refuses a final read when the commits
+  since the last read change no file of the pull request, as after a clean
+  merge of the base. It says whether `hedge proof gate` carries the review
+  to HEAD. Before, the read ran on an empty diff, and the judge could count
+  that read against a gap's condition.
+- The diff of a fixes round or a final read keeps a file that a commit puts
+  back to the base's text. Before, it left such a file out as if a merge of
+  the base had brought it in.
+- When the judge finds the condition of a standing rule broken, the gate
+  names the standing rule and asks to meet its condition. Before, it called
+  the rule a decision and asked to void it with `hedge decision void`, which
+  takes only decision ids. When a decision breaks too, the gate names both
+  steps.
+
 ### Threads that ask in prose
 
 - The setting `orchestration.proseTitles` names title starts, such as `⚠️, 🚨`,

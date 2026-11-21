@@ -5,7 +5,7 @@ import { modelFor, type ModelRow } from "../../base/lib/models.ts";
 import { numberSetting } from "../../base/lib/settings.ts";
 import { covers, hubLedger, refText, riskCalloutOf, tierOf, type Env, type Ledger, type PrRef, type Ssh } from "./decision-ledger.ts";
 import { ciOf, readPullRequest, type PullRequest, type Run } from "./pr-ci.ts";
-import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
+import { askGap, authorOf, conditionName, isStandingCondition, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
 import { displayEntry } from "./proof-display.ts";
 import { receiptMarker } from "./proof-receipt.ts";
 import { baseRefs, cleanBaseMerge, devPullOf, diffOf, mergeBase, pullRequestDetails, remotesOf, topLevel } from "./proof-checkout.ts";
@@ -160,7 +160,7 @@ async function judgeHead(head: ProofIdentity, checked: Checked, context: GateCon
     return { code: 0, lines, covered: `${outcome.state} accepted by ${gap.acceptance.by}`, judge: verdict(lines, judgeGapProof(head.commit, gap)) };
   }
   if (gap) {
-    const lines = [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${gap.broken ? voidBroken(gap.broken) : askGap(head, "judge", gap.reason, gap.kept ? "ask" : autonomyOf(context.env, () => checked.grade, "proof-gap", ["judge"]))}`];
+    const lines = [...outcome.lines, `judge gap: ${gap.line}: ${gap.reason}. ${gap.broken ? endBroken(gap.broken) : askGap(head, "judge", gap.reason, gap.kept ? "ask" : autonomyOf(context.env, () => checked.grade, "proof-gap", ["judge"]))}`];
     return { code: 3, lines, covered: "", judge: verdict(lines, judgeGapProof(head.commit, gap)), reason: `judge gap: ${gap.line}: ${gap.reason}` };
   }
   const hint = checked.tier === "ungraded" || checked.grade.oneWay
@@ -179,4 +179,11 @@ async function judgeDiff(head: ProofIdentity, known: Omit<JudgeInput, "cwd" | "f
   });
 }
 
-const voidBroken = (ids: string[]) => `End ${ids.map((id) => `decision ${id}`).join(" and ")} with hedge decision void <id> --reason <why its condition no longer holds>, then decide or ask again`;
+function endBroken(ids: string[]) {
+  const decisions = ids.filter((id) => !isStandingCondition(id));
+  const rules = ids.filter(isStandingCondition);
+  return [
+    ...decisions.length ? [`End ${decisions.map(conditionName).join(" and ")} with hedge decision void <id> --reason <why its condition no longer holds>, then decide or ask again`] : [],
+    ...rules.length ? [`Meet the condition of ${rules.join(" and ")} that the judge names, then run hedge proof gate again`] : [],
+  ].join(". ");
+}

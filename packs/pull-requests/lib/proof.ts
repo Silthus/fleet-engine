@@ -262,7 +262,7 @@ function askUser(identity: ProofIdentity, stop: string, autonomy: Autonomy) {
 export type CapturedBy = "hedge" | "author";
 export type DecisionMark = Pick<Decision, "mark" | "id">;
 export type DropRead = (directory: string) => Promise<boolean>;
-export type ReviewRequest = { dropUnanswered?: DropRead; autonomy?: () => Autonomy; opening?: () => Promise<boolean>; sanity?: () => Promise<void>; scope: string; base?: string; from?: string; forkBase?: string; decision?: Decision; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; capturedBy?: CapturedBy; lock?: LockRound; lockBudget: LockBudget; now: () => Date };
+export type ReviewRequest = { dropUnanswered?: DropRead; autonomy?: () => Autonomy; opening?: () => Promise<boolean>; sanity?: () => Promise<void>; scope: string; base?: string; from?: string; forkBase?: string; decision?: Decision; phase?: string; arbiter: Arbiter; limits: ReviewLimits; cleanBaseMerge?: CleanBaseMerge; quietCommit?: QuietCommit; capturedBy?: CapturedBy; lock?: LockRound; lockBudget: LockBudget; now: () => Date; emptyRange?: () => boolean };
 export type Reserved = { round: number | "final"; id: string; directory: string };
 type Permit = { arbiter: Arbiter; limits: ReviewLimits; autonomy?: () => Autonomy };
 
@@ -271,7 +271,7 @@ async function reserveDecided(reviews: string, name: string, record: object, dec
 }
 
 type Stamping = { lock: LockRound | undefined; now: () => Date };
-type Reserving = Stamping & { lockBudget: LockBudget; dropUnanswered?: DropRead };
+type Reserving = Stamping & { lockBudget: LockBudget; dropUnanswered?: DropRead; emptyRange?: () => boolean };
 
 async function droppableReads(reviews: string, identity: ProofIdentity, dropUnanswered: DropRead | undefined) {
   if (!dropUnanswered) return [];
@@ -280,7 +280,7 @@ async function droppableReads(reviews: string, identity: ProofIdentity, dropUnan
   return names.filter((_, index) => unanswered[index]);
 }
 
-async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: Decision | undefined, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, capturedBy: CapturedBy, from: string | undefined, { lockBudget, dropUnanswered, ...stamping }: Reserving): Promise<Reserved> {
+async function startFinalRead(home: string, identity: ProofIdentity, base: string | undefined, decision: Decision | undefined, phase: FinalReadPhase, permit: Permit, cleanBaseMerge: CleanBaseMerge, quietCommit: QuietCommit, capturedBy: CapturedBy, from: string | undefined, { lockBudget, dropUnanswered, emptyRange, ...stamping }: Reserving): Promise<Reserved> {
   if (base === undefined) throw new Error("A final read needs --base with the latest reviewed commit");
   if (base === identity.commit) throw new Error("HEAD is already reviewed. Skip the final read.");
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
@@ -297,6 +297,7 @@ async function startFinalRead(home: string, identity: ProofIdentity, base: strin
     if (!coversReview(base, latest.commit, cleanBaseMerge)) throw new Error(`Final read base must be the latest reviewed commit ${latest.commit}, or a clean base merge the gate carried it to`);
     const unfinished = (await Promise.all(names.map(async (name) => !saved.includes(name) || await panelOutcome(join(reviews, name)) === "unfinished"))).some(Boolean);
     const retry = unfinished ? "" : ` To read it anyway, pass ${spent < ceiling ? "--agent '<your reason>', or " : ""}the user's --override`;
+    if (emptyRange?.()) throw new Error(nothingToRead(from ?? base, carried));
     if (!decision && carried?.quiet.length) throw new Error(`HEAD needs no final read: final read carried from ${short(carried.from)}: ${quietReason(carried.kinds)}. hedge proof gate counts the carry.${retry}`);
     if (unfinished) throw new Error("A review is unfinished. Finish it before a final read.");
     return permitReview(home, identity, spent >= free, carried && spent >= ceiling ? budgetSpent(permit.limits) : undefined, decision, permit);
@@ -312,6 +313,12 @@ async function startFinalRead(home: string, identity: ProofIdentity, base: strin
   });
 }
 
+const nothingToRead = (from: string, carried: ReturnType<typeof reviewedThrough>) => `HEAD needs no final read: the commits since ${short(from)} change no file of the PR, so the read would see nothing. ${carried
+  ? carried.quiet.length
+    ? `hedge proof gate counts the carry: final read carried from ${short(carried.from)}: ${quietReason(carried.kinds)}`
+    : `hedge proof gate carries the review of ${short(carried.from)} across ${carried.merges.length} clean merge(s) of the base`
+  : "hedge proof gate does not carry the review to HEAD: run a full round, which reads the whole PR"}`;
+
 const coversReview = (base: string, reviewed: string, cleanBaseMerge: CleanBaseMerge) => reviewedThroughMerges(base, new Set([reviewed]), cleanBaseMerge) !== undefined;
 
 export async function startReview(home: string, identity: ProofIdentity, request: ReviewRequest): Promise<Reserved> {
@@ -324,7 +331,7 @@ export async function startReview(home: string, identity: ProofIdentity, request
   if (base !== undefined && scope === "full") throw new Error("--scope full reads the diff from the merge base. Drop --base");
   const reviews = join(pullRequestDirectory(home, identity), "reviews");
   await mkdir(reviews, { recursive: true, mode: 0o700 });
-  if (scope === "final") return startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, quietCommit, capturedBy, from, { lock, lockBudget, now, dropUnanswered: request.dropUnanswered });
+  if (scope === "final") return startFinalRead(home, identity, base, decision, finalReadPhase(phase ?? "review"), permit, cleanBaseMerge, quietCommit, capturedBy, from, { lock, lockBudget, now, dropUnanswered: request.dropUnanswered, emptyRange: request.emptyRange });
   return startRound(home, identity, reviews, { scope, base, from, forkBase: request.forkBase, decision, permit, cleanBaseMerge, capturedBy, opening: request.opening ?? (async () => false), sanity: request.sanity ?? (async () => {}), reserving: { lock, lockBudget, now } });
 }
 
@@ -991,8 +998,12 @@ export type JudgeGap = NonNullable<Awaited<ReturnType<typeof judgeGap>>>;
 
 export function withBrokenConditions(gap: JudgeGap, broken: string[]): JudgeGap & { broken?: string[] } {
   if (!gap.acceptance || !broken.length) return gap;
-  return { ...gap, acceptance: undefined, line: `not accepted (the judge finds the condition of decision ${broken.join(", ")} broken)`, broken };
+  return { ...gap, acceptance: undefined, line: `not accepted (the judge finds the condition of ${broken.map(conditionName).join(", ")} broken)`, broken };
 }
+
+const standingConditionPrefix = "standing rule ";
+export const isStandingCondition = (id: string) => id.startsWith(standingConditionPrefix);
+export const conditionName = (id: string) => isStandingCondition(id) ? id : `decision ${id}`;
 
 export const judgeGapProof = (commit: string, gap: JudgeGap): GapProof => ({
   commit, reason: gap.reason, ...acceptedPart(gap.acceptance), ...!gap.acceptance && gap.lapsed ? { lapsed: gap.lapsed } : {}, text: gap.line,
@@ -1031,7 +1042,7 @@ async function gapAcceptance(weigh: Weigh, gap: Gap | undefined, kind: GapKind):
   const lapsed = agent && lapse ? { id: agent.id, reason: lapse } : undefined;
   const standing = kept || !Array.isArray(decisions) ? undefined : await standingFor(home, kind, now, identity.repository);
   if (!standing) return { lapsed, ...kept ? { kept: kept.id } : {} };
-  const scoped = standing.repositories ? { condition: { id: `standing rule ${kind} until ${standing.until}`, kind, condition: standing.rule } } : {};
+  const scoped = standing.repositories ? { condition: { id: `${standingConditionPrefix}${kind} until ${standing.until}`, kind, condition: standing.rule } } : {};
   return { acceptance: { by: "standing rule", line: `accepted by standing rule until ${standing.until}${standing.repositories ? ` for ${standing.repositories.join(", ")}` : ""}` }, ...scoped };
 }
 

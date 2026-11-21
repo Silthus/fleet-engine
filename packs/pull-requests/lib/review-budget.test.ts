@@ -1135,20 +1135,19 @@ test("the ceiling never refuses a final read of a HEAD the gate does not carry, 
   await expect(pr.hedge("review-start", "--scope", "final", "--base", await pr.git("rev-parse", "HEAD~1"), "--agent", "One more read checks the test.")).rejects.toThrow("The review budget of 2 reviews is spent");
 });
 
-test("a HEAD that the gate carries across a revert of the latest reviewed fix needs no final read, and with --agent meets the ceiling, while a --base that is not the latest reviewed commit is refused first", async () => {
+test("a HEAD that the gate carries across a revert of the latest reviewed fix has nothing to read, with or without --agent, and offers no retry, while a --base that is not the latest reviewed commit is refused first", async () => {
   const pr = await checkout();
   const { panel, fix } = await atCeiling(pr);
   await pr.git("revert", "--no-edit", fix);
 
   expect((await pr.hedge("gate")).output).toContain(`review: final read carried from ${panel.slice(0, 7)}: revert of a PR commit`);
   const refused = await pr.hedge("review-start", "--scope", "final", "--base", fix).then(() => "", (error: Error) => error.message);
-  expect(refused).toContain(`HEAD needs no final read: final read carried from ${panel.slice(0, 7)}: revert of a PR commit. hedge proof gate counts the carry. To read it anyway, pass the user's --override`);
-  expect(refused).not.toContain("--agent");
+  expect(refused).toBe(`HEAD needs no final read: the commits since ${panel.slice(0, 7)} change no file of the PR, so the read would see nothing. hedge proof gate counts the carry: final read carried from ${panel.slice(0, 7)}: revert of a PR commit`);
   await expect(pr.hedge("review-start", "--scope", "final", "--base", panel)).rejects.toThrow(`Final read base must be the latest reviewed commit ${fix}`);
-  await expect(pr.hedge("review-start", "--scope", "final", "--base", fix, "--agent", "The revert needs a read.")).rejects.toThrow("The review budget of 2 reviews is spent");
+  await expect(pr.hedge("review-start", "--scope", "final", "--base", fix, "--agent", "The revert needs a read.")).rejects.toThrow(`HEAD needs no final read: the commits since ${panel.slice(0, 7)} change no file of the PR, so the read would see nothing. hedge proof gate counts the carry: final read carried from ${panel.slice(0, 7)}: revert of a PR commit`);
 });
 
-test("with as many finished rounds as the ceiling but budget left by a clean panel, a HEAD the gate carries gets its needs-no-final-read answer with the --agent and --override retry advice", async () => {
+test("with as many finished rounds as the ceiling but budget left by a clean panel, a HEAD the gate carries across a test-only commit gets its needs-no-final-read answer with the --agent and --override retry advice", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical", "medium") });
   pr.env.HEDGE_SETTINGS = JSON.stringify({ ...settings, "pull-requests.freeReviews": 10, "pull-requests.reviewCeiling": 2 });
@@ -1158,14 +1157,13 @@ test("with as many finished rounds as the ceiling but budget left by a clean pan
   const fix = await pr.commit("feature.txt", "greet the member\n");
   await pr.hedge("review-start", "--scope", "final", "--base", panel);
   await finishWith(pr, "final-1", major("the member goes unnamed"));
-  const change = await pr.commit("feature.txt", "greet the new member\n");
-  await pr.git("revert", "--no-edit", change);
+  await pr.commit("feature.test.ts", "expect(greet(\"a\")).toBe(\"hi a\");\n");
 
   const refused = await pr.hedge("review-start", "--scope", "final", "--base", fix).then(() => "", (error: Error) => error.message);
-  expect(refused).toContain(`HEAD needs no final read: final read carried from ${fix.slice(0, 7)}: revert of a PR commit. hedge proof gate counts the carry. To read it anyway, pass --agent '<your reason>', or the user's --override`);
+  expect(refused).toContain(`HEAD needs no final read: final read carried from ${fix.slice(0, 7)}: test-only delta. hedge proof gate counts the carry. To read it anyway, pass --agent '<your reason>', or the user's --override`);
 });
 
-test("a final read whose round.json is gone while its directory stays leaves the needs-no-final-read answer for a carried HEAD, with the --agent and --override retry advice", async () => {
+test("a final read whose round.json is gone while its directory stays leaves the needs-no-final-read answer for a HEAD carried across a revert and a test-only commit, with the --agent and --override retry advice", async () => {
   const pr = await checkout();
   pr.pullRequestState({ body: graded("non-critical", "medium") });
   pr.env.HEDGE_SETTINGS = JSON.stringify({ ...settings, "pull-requests.freeReviews": 10, "pull-requests.reviewCeiling": 10 });
@@ -1180,9 +1178,10 @@ test("a final read whose round.json is gone while its directory stays leaves the
   expect(reserved).toMatchObject({ round: "final", id: "final-1" });
   rmSync(join(reserved.directory, "round.json"));
   await pr.git("revert", "--no-edit", change);
+  await pr.commit("feature.test.ts", "expect(greet(\"a\")).toBe(\"hi a\");\n");
 
   const refused = await pr.hedge("review-start", "--scope", "final", "--base", fix).then(() => "", (error: Error) => error.message);
-  expect(refused).toBe(`HEAD needs no final read: final read carried from ${fix.slice(0, 7)}: revert of a PR commit. hedge proof gate counts the carry. To read it anyway, pass --agent '<your reason>', or the user's --override`);
+  expect(refused).toBe(`HEAD needs no final read: final read carried from ${fix.slice(0, 7)}: test-only delta and revert of a PR commit. hedge proof gate counts the carry. To read it anyway, pass --agent '<your reason>', or the user's --override`);
 });
 
 test("a final read skips a slot whose directory lost its round.json but keeps its lock, and takes the next one", async () => {
