@@ -143,9 +143,9 @@ function everyCheck(entries: Entry[], commit: string): CiResult {
   return { state: "green", detail: `${entries.length} check(s) on ${short(commit)}` };
 }
 
-function notRequired(entries: Entry[]) {
+function notRequired(entries: Entry[], { countRunning = true } = {}) {
   const failing = entries.filter((entry) => entry.outcome === "fail").map((entry) => entry.name);
-  const running = new Set(entries.filter((entry) => entry.outcome === "pending").map((entry) => entry.name)).size;
+  const running = countRunning ? new Set(entries.filter((entry) => entry.outcome === "pending").map((entry) => entry.name)).size : 0;
   const parts = [failing.length ? `failing: ${listOf(failing)}` : "", running ? `${running} still running` : ""].filter(Boolean);
   return parts.length ? `; not required: ${parts.join("; ")}` : "";
 }
@@ -165,7 +165,7 @@ function requiredVerdict(entries: Entry[], required: RequiredCheck[], draft: boo
     : pending.length || missing.length ? { state: "pending", detail: [pending.length ? `required waiting on: ${listOf(pending)}` : "", missing.length ? `required not reported yet: ${listOf(missing)}` : ""].filter(Boolean).join("; ") }
     : { state: "green", detail: `${required.length - withheld.length} required check(s) pass` };
   if (withheld.length) verdict.detail += `; withheld from drafts, required once ready: ${listOf(withheld)} (its workflow finished without posting it)`;
-  if (verdict.state === "green") verdict.detail += notRequired(entries.filter((entry) => !counted.has(entry)));
+  verdict.detail += notRequired(entries.filter((entry) => !counted.has(entry)), { countRunning: verdict.state === "green" });
   return verdict;
 }
 

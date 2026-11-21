@@ -1311,16 +1311,21 @@ async function responseStatuses(home: string, identity: ProofIdentity, body: str
 
 export type CiResult = { state: "green" | "red" | "pending" | "none" | "unknown"; detail: string; checks?: string[] };
 
-async function ciStatus(weigh: Weigh, ci: CiResult): Promise<Status & { gap?: GapProof }> {
+type CiStatus = Omit<Status, "problem"> & { problem: Status["problem"] | "pending"; gap?: GapProof };
+
+async function ciStatus(weigh: Weigh, ci: CiResult): Promise<CiStatus> {
   const { home, identity, decisions } = weigh;
   const line = `ci: ${ci.state}, ${ci.detail}`;
   if (ci.state === "green") return { problem: undefined, line, covered: "green" };
   const gap = await readJson<Gap | undefined>(gapPath(home, identity, "ci"), undefined);
   const weighed = await gapAcceptance({ ...weigh, ci }, gap, "ci");
-  if (!gap && weighed.acceptance?.by !== "the user") return { problem: "missing", line: ci.state === "pending" ? line : `${line}. Fix it, or record hedge proof gap --kind ci --reason <why CI cannot run> when it cannot run here`, ...lapseOf(weighed) };
+  if (!gap && weighed.acceptance?.by !== "the user") return ci.state === "pending" ? { problem: "pending", line, ...lapseOf(weighed) } : { problem: "missing", line: `${line}. Fix it, or record hedge proof gap --kind ci --reason <why CI cannot run> when it cannot run here`, ...lapseOf(weighed) };
   const recorded = gapProof(gap, weighed, decisions);
   return { problem: weighed.acceptance ? undefined : "gap", line: `${line}; ${gapText(recorded)}`, covered: "gap accepted", gap: recorded, ...countedGap(weighed) };
 }
+
+export const ciRunningCode = 75;
+const gateCodes = { missing: 1, gap: 3, pending: ciRunningCode } as const;
 
 export type PushedHead = { commit: string; body?: string } | { error: string };
 
@@ -1408,8 +1413,9 @@ export async function proofGate(home: string, identity: ProofIdentity, { ci, pus
   const weighed = [...kinds, review, checks];
   const lapsed = [...new Set(weighed.flatMap((status) => status.problem && status.lapsed ? [status.lapsed] : []))];
   const conditions = weighed.flatMap((status) => status.condition ? [status.condition] : []);
-  const code = held.some((status) => status.problem === "missing") ? 1 : held.some((status) => status.problem === "gap") ? 3 : 0;
-  const failure = held.find((status) => status.problem === (code === 1 ? "missing" : "gap"))?.line?.split("\n")[0];
+  const holding = (["missing", "gap", "pending"] as const).find((problem) => held.some((status) => status.problem === problem));
+  const code = holding ? gateCodes[holding] : 0;
+  const failure = holding === "pending" ? `CI is still running: ${ciResult.detail}` : held.find((status) => status.problem === holding)?.line?.split("\n")[0];
   const voided = (Array.isArray(decisions) ? decisions : []).filter((decision) => decision.voided && covers(decision, identity)).map((decision) => decision.id);
   const receipt = await receiptOf(home, identity);
   const proofSummary: CheckedSummary = {

@@ -29,7 +29,7 @@ test("only the base branch's required checks decide CI, and the rest print as no
 
   pr.ci([{ name: "lint", bucket: "pass" }]);
   const missing = await pr.hedge("gate");
-  expect(missing.code).toBe(1);
+  expect(missing.code).toBe(75);
   expect(ciLine(missing.output)).toBe("ci: pending, required not reported yet: test");
 });
 
@@ -40,7 +40,7 @@ test("classic branch protection adds required checks, and a check from another a
 
   pr.ci([{ name: "build", bucket: "pass", app: 9 }]);
   const spoofed = await pr.hedge("gate");
-  expect(spoofed.code).toBe(1);
+  expect(spoofed.code).toBe(75);
   expect(ciLine(spoofed.output)).toBe("ci: pending, required not reported yet: build");
 
   pr.ci([{ name: "build", bucket: "pass", app: 7 }]);
@@ -66,13 +66,15 @@ test("a draft passes without a required check its workflow withholds from drafts
   expect(ciLine((await pr.hedge("gate")).output)).toBe("ci: pending, required not reported yet: Backend / Test results");
 });
 
-test("on a draft, a failed sibling does not withhold a required check", async () => {
+test("on a draft, a failed sibling does not withhold a required check, and the wait for it names the failure", async () => {
   const { pr } = await reviewed();
   pr.pullRequestState({ draft: true });
 
   pr.required("main", [{ context: "Backend / Test results" }]);
   pr.ci([{ name: "Backend / Unit (1)", bucket: "pass" }, { name: "Backend / Unit (2)", bucket: "fail" }]);
-  expect((await pr.hedge("gate")).code).toBe(1);
+  const gate = await pr.hedge("gate");
+  expect(gate.code).toBe(75);
+  expect(ciLine(gate.output)).toBe("ci: pending, required not reported yet: Backend / Test results; not required: failing: Backend / Unit (2)");
 });
 
 test("on a draft, a check from another app than the pinned one neither passes nor withholds it", async () => {
@@ -81,7 +83,7 @@ test("on a draft, a check from another app than the pinned one neither passes no
   pr.required("main", [{ context: "CI / test", integration_id: 7 }]);
   pr.ci([{ name: "CI / test", bucket: "pass", app: 9 }, { name: "CI / lint", bucket: "pass", app: 7 }]);
   const spoofed = await pr.hedge("gate");
-  expect(spoofed.code).toBe(1);
+  expect(spoofed.code).toBe(75);
   expect(ciLine(spoofed.output)).toBe("ci: pending, required not reported yet: CI / test");
 
   pr.ci([{ name: "CI / lint", bucket: "pass", app: 9 }]);

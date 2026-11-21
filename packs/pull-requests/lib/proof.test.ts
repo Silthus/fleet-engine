@@ -31,8 +31,8 @@ test("hedge proof explains each command and fails closed with one line when it c
 
   const gate = await run("gate", "--commit", "a".repeat(40));
   expect(gate.code).not.toBe(0);
-  expect(gate.stdout).toBe("");
-  expect(gate.stderr.trim().split("\n")).toEqual([expect.stringContaining("no git remotes found). Pass --repo owner/name --pr number")]);
+  expect(gate.stderr).toBe("");
+  expect(gate.stdout.trim().split("\n")).toEqual([expect.stringMatching(/^gate: fail \(exit 1\): .*no git remotes found\)\. Pass --repo owner\/name --pr number$/)]);
 
   const unknown = await run("review-finish", "--findings");
   expect(unknown.code).not.toBe(0);

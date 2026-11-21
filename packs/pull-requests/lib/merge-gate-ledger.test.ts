@@ -94,7 +94,7 @@ test("a gate run that throws after a pass at the same head is shared, so another
     expect(await mergeThere()).toBeUndefined();
     pr.clock.now = new Date(pr.clock.now.getTime() + 60_000);
     rmSync(join(pr.home, ".agents/guides/coding-standards.md"));
-    await expect(pr.hedge("gate")).rejects.toThrow("coding-standards.md is missing or empty");
+    expect((await pr.hedge("gate")).code).toBe(1);
     expect((await mergeThere())?.hookSpecificOutput.permissionDecisionReason).toContain("has not passed at the head of example/product#42");
   } finally { rmSync(other, { recursive: true, force: true }); }
 });
@@ -109,4 +109,66 @@ test("a gate result in the ledger carries the time its run started, the order th
   Object.defineProperty(pr.clock, "now", { get: () => new Date(start + 60_000 * reads++), configurable: true });
   expect((await pr.hedge("gate")).code).toBe(0);
   expect(events(pr.home).filter((event) => event.type === "gate").at(-1)).toMatchObject({ passed: true, at: new Date(start).toISOString() });
+});
+
+test("while --wait waits for CI at a head that passed before, another machine's merge gate refuses the merge until the wait ends in a pass", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await reviewHead(pr);
+  await pr.hedge("require", "--none", "--reason", "docs only");
+  const head = await pr.git("rev-parse", "HEAD");
+  const other = join(tmpdir(), `merge-gate-other-${process.pid}-${Date.now()}`);
+  mkdirSync(join(other, ".local/state/hedge"), { recursive: true });
+  writeFileSync(join(other, ".local/state/hedge/settings.json"), "{}");
+  const github = { pull: async () => ({ head, base: "main", defaultBranch: "main", open: true }), pullFor: async () => undefined };
+  const mergeThere = async () => {
+    writeFileSync(join(other, ".local/state/hedge/decisions.jsonl"), readFileSync(ledgerFile(pr.home), "utf8"));
+    return mergeGate({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --repo example/product" }, cwd: "/" }, { home: other, env: { HEDGE_SETTINGS: undefined }, github });
+  };
+  try {
+    expect((await pr.hedge("gate")).code).toBe(0);
+    pr.clock.now = new Date(pr.clock.now.getTime() + 60_000);
+    pr.ci([{ name: "test", bucket: "pending" }]);
+    const whileWaiting: (string | undefined)[] = [];
+    pr.panel.onPause = async (ms = 0) => {
+      whileWaiting.push((await mergeThere())?.hookSpecificOutput.permissionDecisionReason);
+      pr.clock.now = new Date(pr.clock.now.getTime() + ms);
+      pr.ci([{ name: "test", bucket: "pass" }]);
+    };
+    expect((await pr.hedge("gate", "--wait", "10")).code).toBe(0);
+    expect(whileWaiting[0]).toContain("has not passed at the head of example/product#42");
+    expect(await mergeThere()).toBeUndefined();
+  } finally { rmSync(other, { recursive: true, force: true }); }
+});
+
+test("a pass that another gate run shared after this run started still yields to this run's wait on running CI", async () => {
+  const pr = await checkout();
+  await pr.commit("feature.txt", "new\n");
+  await reviewHead(pr);
+  await pr.hedge("require", "--none", "--reason", "docs only");
+  const head = await pr.git("rev-parse", "HEAD");
+  const other = join(tmpdir(), `merge-gate-other-${process.pid}-${Date.now()}`);
+  mkdirSync(join(other, ".local/state/hedge"), { recursive: true });
+  writeFileSync(join(other, ".local/state/hedge/settings.json"), "{}");
+  const github = { pull: async () => ({ head, base: "main", defaultBranch: "main", open: true }), pullFor: async () => undefined };
+  const mergeThere = async () => {
+    writeFileSync(join(other, ".local/state/hedge/decisions.jsonl"), readFileSync(ledgerFile(pr.home), "utf8"));
+    return mergeGate({ tool_name: "Bash", tool_input: { command: "gh pr merge 42 --repo example/product" }, cwd: "/" }, { home: other, env: { HEDGE_SETTINGS: undefined }, github });
+  };
+  try {
+    const start = pr.clock.now.getTime();
+    const laterPass = { type: "gate", repository: "example/product", pr: 42, commit: head, passed: true, machine: "another-box", at: new Date(start + 500).toISOString() };
+    mkdirSync(join(pr.home, ".local/state/hedge"), { recursive: true });
+    writeFileSync(ledgerFile(pr.home), (existsSync(ledgerFile(pr.home)) ? readFileSync(ledgerFile(pr.home), "utf8") : "") + JSON.stringify(laterPass) + "\n");
+    let reads = 0;
+    Object.defineProperty(pr.clock, "now", { get: () => new Date(start + 1_000 * reads++), configurable: true });
+    pr.ci([{ name: "test", bucket: "pending" }]);
+    const whileWaiting: (string | undefined)[] = [];
+    pr.panel.onPause = async () => {
+      whileWaiting.push((await mergeThere())?.hookSpecificOutput.permissionDecisionReason);
+      pr.ci([{ name: "test", bucket: "pass" }]);
+    };
+    expect((await pr.hedge("gate", "--wait", "10")).code).toBe(0);
+    expect(whileWaiting[0]).toContain("has not passed at the head of example/product#42");
+  } finally { rmSync(other, { recursive: true, force: true }); }
 });

@@ -74,7 +74,7 @@ test("once the mechanical gate passes, the other family's judge weighs the evide
   expect(failed.code).toBe(1);
   expect(failed.output).toContain("judge review: fail: The findings ignore feature.txt");
   expect(failed.output).toContain("judge quality: fail, high: greet has no test (feature.txt:1)");
-  expect(failed.output.split("\n").at(-1)).toBe("gate: fail (exit 1)");
+  expect(failed.output.split("\n").at(-1)).toBe("gate: fail (exit 1): judge review: fail: The findings ignore feature.txt");
 });
 
 test("a judge that keeps failing goes to the arbiter, and only the user's accepted judge gap on HEAD lets the gate pass", async () => {
@@ -187,7 +187,9 @@ test("a configured critical-path file the gate cannot read fails the gate and na
   await reviewHead(pr);
   await pr.hedge("require", "--none", "--reason", "Docs only");
   pr.env.HEDGE_SETTINGS = JSON.stringify({ ...JSON.parse(pr.env.HEDGE_SETTINGS!), "pull-requests.criticalPathFiles": "example/product=critical-paths.md" });
-  await expect(pr.hedge("gate")).rejects.toThrow(`Cannot read the critical-path file ${join(pr.home, "critical-paths.md")} of example/product`);
+  const gate = await pr.hedge("gate");
+  expect(gate.code).toBe(1);
+  expect(gate.output).toStartWith(`gate: fail (exit 1): Cannot read the critical-path file ${join(pr.home, "critical-paths.md")} of example/product`);
 });
 
 test("an answer the user gave before the judge gap was recorded never accepts it", async () => {

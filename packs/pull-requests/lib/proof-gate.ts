@@ -5,7 +5,7 @@ import { modelFor, type ModelRow } from "../../base/lib/models.ts";
 import { numberSetting } from "../../base/lib/settings.ts";
 import { covers, hubLedger, refText, riskCalloutOf, tierOf, type Env, type Ledger, type PrRef, type Ssh } from "./decision-ledger.ts";
 import { ciOf, readPullRequest, type PullRequest, type Run } from "./pr-ci.ts";
-import { askGap, authorOf, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
+import { askGap, authorOf, ciRunningCode, judgeDirectory, judgeGap, judgeGapProof, listStanding, parseVerdict, prDirectory, proofGate, pullRequestDirectory, readDecisions, readJson, receiptOf, reviewRecords, withBrokenConditions, writeJson, type Arbiter, type Decisions, type JudgeSummary, type ProofIdentity, type ProofSummary, type PushedHead } from "./proof.ts";
 import { displayEntry } from "./proof-display.ts";
 import { receiptMarker } from "./proof-receipt.ts";
 import { baseRefs, cleanBaseMerge, devPullOf, diffOf, mergeBase, pullRequestDetails, remotesOf, topLevel } from "./proof-checkout.ts";
@@ -69,17 +69,22 @@ export async function finalGate(head: ProofIdentity, context: GateContext, { lan
   const shown = pull === undefined ? undefined : receiptMarker((pull as PullRequest).body);
   const stale = shown && shown.head !== head.commit ? [`receipt: the PR body shows the receipt of ${shown.head.slice(0, 7)}, not HEAD ${head.commit.slice(0, 7)}. Refresh it with hedge proof receipt`] : [];
   const growth = await grownBy(home, head, run, pull);
+  const reason = judged.code === 0 ? "pass" : judged.reason ?? `exit ${judged.code}`;
   const gate = {
     code: judged.code,
-    reason: judged.code === 0 ? "pass" : judged.reason ?? `exit ${judged.code}`,
+    reason,
     lines: [...checked.lines, ...judged.lines, ...stale, ...unmeasured(head, run, pull, growth, landed)],
-    verdict: judged.code === 0 ? `gate: pass (${checked.summary}; judge: ${judged.covered})` : `gate: fail (exit ${judged.code})`,
+    verdict: verdictOf(judged.code, reason, `${checked.summary}; judge: ${judged.covered}`),
     summary: { ...checked.proofSummary, code: judged.code, judge: judged.judge, growth },
   };
   if (pull) await writeJson(savedPath(home, head, head.commit), { key: keyOf(pull, landed, await fingerprintOf(home, head, files, checked.decisions)), gate, conditions: checked.conditions } satisfies SavedGate);
   return gate;
 }
 
+const verdictOf = (code: number, reason: string, covered: string) =>
+  code === 0 ? `gate: pass (${covered})`
+    : code === ciRunningCode ? `gate: pending (exit ${code}): ${reason}. Run the gate again with --wait <minutes>, such as --wait 10, to wait for CI to finish`
+    : `gate: fail (exit ${code}): ${reason}`;
 
 function unmeasured(head: ProofIdentity, run: Run, pull: PullRequest | undefined, growth: Growth, landed: boolean) {
   if (growth.final || !isCommitSha(pull?.baseSha) || run(["env", "GIT_NO_LAZY_FETCH=1", "git", "cat-file", "-e", `${pull.baseSha}^{commit}`]).code === 0) return [];

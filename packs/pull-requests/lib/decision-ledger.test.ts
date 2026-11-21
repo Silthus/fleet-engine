@@ -666,7 +666,7 @@ test("gate --json prints the proof summary: each owed kind's state with its acce
   const gate = await pr.hedge("gate");
   expect(gate.code).toBe(1);
   const lines = [summary.owed.line, ...summary.kinds.map((kind: { line: string }) => kind.line), summary.review.line, summary.head.line, summary.ci.line, summary.lapsedLine].filter(Boolean);
-  expect(gate.output.split("\n")).toEqual([...lines, "gate: fail (exit 1)"]);
+  expect(gate.output.split("\n")).toEqual([...lines, `gate: fail (exit 1): ${lineOf(gate.output, "ui-walk:")}`]);
   expect(lineOf(gate.output, "cross-version:")).toBe(`cross-version: gap from ${head.slice(0, 7)}, not accepted (🤖 decision ${lapsed} lapsed: critical head): No older client to run`);
 });
 

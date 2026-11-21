@@ -44,7 +44,7 @@ test("a gate run that throws replaces an earlier pass with exit 1 and the error'
   await reviewHead(pr);
   expect((await pr.hedge("gate")).code).toBe(0);
   rmSync(join(pr.home, ".agents/guides/coding-standards.md"));
-  await expect(pr.hedge("gate")).rejects.toThrow("coding-standards.md is missing or empty");
+  expect((await pr.hedge("gate")).code).toBe(1);
   expect(await recordAt(pr, head)).toEqual({ code: 1, reason: "~/.agents/guides/coding-standards.md is missing or empty; it holds the coding standards to review against" });
 });
 

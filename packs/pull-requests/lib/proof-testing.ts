@@ -152,7 +152,7 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
   const reader: { words?: ThreadWords } = { words: threadWords };
   const hub: { ssh?: Ssh } = {};
   const pendingCards = new Set<string>();
-  const panel: { lostWorkers: boolean; onPause?: () => Promise<void>; beforeWorker?: () => Promise<void> } = { lostWorkers: false };
+  const panel: { lostWorkers: boolean; onPause?: (ms?: number) => Promise<void>; beforeWorker?: () => Promise<void> } = { lostWorkers: false };
   const startTimes = new Map<number, string>();
   const hedgeAt = async (cwd: string, pid: number, args: string[]) => {
     const lines: string[] = [];
@@ -165,9 +165,9 @@ printf '{"number":42,"url":"https://github.com/example/product/pull/42","baseRef
         await proofCommand([...worker], { ...context, print: () => {} });
         return process.pid;
       },
-      pause: async () => {
+      pause: async (ms) => {
         if (!panel.onPause) throw new Error("The test did not expect a wait");
-        await panel.onPause();
+        await panel.onPause(ms);
       },
     };
     const code = await proofCommand(args, context);

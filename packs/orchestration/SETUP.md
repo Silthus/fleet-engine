@@ -97,7 +97,8 @@ one step still owed, with the command for that PR:
   HEAD continues;
 - run the gate at the pushed head, when no run is recorded there;
 - fix what the last gate run failed on, or, for exit 3, decide each gap by
-  tier with `hedge decision record`, or ask the person.
+  tier with `hedge decision record`, or ask the person, or, for exit 75, wait
+  for CI with `hedge proof gate --wait 10`.
 
 It checks each open PR the thread owns whose repository is the `origin` of the
 thread's checkout. A subagent thread owns nothing while the thread it belongs
